@@ -298,15 +298,15 @@ def processTracking(motion, nest):
                 else:
                     actions.append(action)
                 
-        else:
-            action = getAction(movement, nest, 3, 20)
-            if action:
-                #for a in action:
-                if type(action) == list:
-                    for a in action:
-                        actions.append(a)
-                else:
-                    actions.append(action)
+        # else:
+        #     action = getAction(movement, nest, 3, 20)
+        #     if action:
+        #         #for a in action:
+        #         if type(action) == list:
+        #             for a in action:
+        #                 actions.append(a)
+        #         else:
+        #             actions.append(action)
 
         
 
@@ -345,15 +345,15 @@ def processYoloTracks(movements, nest):
                 else:
                     actions.append(action)
                 
-        else:
-            action = getAction(movement, nest, 3, 20)
-            if action:
-                #for a in action:
-                if type(action) == list:
-                    for a in action:
-                        actions.append(a)
-                else:
-                    actions.append(action)
+        # else:
+        #     action = getAction(movement, nest, 3, 20)
+        #     if action:
+        #         #for a in action:
+        #         if type(action) == list:
+        #             for a in action:
+        #                 actions.append(a)
+        #         else:
+        #             actions.append(action)
 
         
 

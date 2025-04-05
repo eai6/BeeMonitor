@@ -190,7 +190,7 @@ class Track:
         return self.track_id, trajectory_centroids, trajectory, trajectory_frame_numbers
 
 class Tracker:
-    def __init__(self, max_age=30, track_start_id = 0, distance_threshold=50, association_threshold=150):
+    def __init__(self, max_age=30, track_start_id = 0, distance_threshold=100, association_threshold=200):
         self.max_age = max_age
         self.objects = []
         self.next_id = track_start_id
