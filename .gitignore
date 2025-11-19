@@ -1,5 +1,11 @@
 venv
-Experiments/CVPR_Evaluation_Video_Data/*
-Experiments/output/*
-src/__pycache__
-#models/*
+models/*
+
+# Python
+__pycache__/
+*.pyc
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
