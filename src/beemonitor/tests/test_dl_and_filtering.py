@@ -23,12 +23,39 @@ class TestYOLODetector(unittest.TestCase):
         """Load YOLO model once for all tests."""
         try:
             from ultralytics import YOLO
-            cls.yolo_model = YOLO('path/to/your/tracking_model.pt')
+            # Try to get model path from config or find available model
+            config = Config.default()
+            model_path = None
+            
+            # Try config path first
+            if hasattr(config.models, 'tracking'):
+                config_path = config.models.tracking
+                if Path(config_path).exists():
+                    model_path = config_path
+            
+            # If config path doesn't exist, try relative paths
+            if model_path is None:
+                alt_paths = [
+                    'models/bee_tracking.pt',
+                    'models/bee_tracking_back_up.pt',
+                    'models/bee_tracking_back_up_Full_Mode.pt',
+                    'models/bee_detection.pt',
+                ]
+                for path in alt_paths:
+                    if Path(path).exists():
+                        model_path = path
+                        break
+            
+            if model_path is None:
+                raise FileNotFoundError("No YOLO model file found. Please ensure a model file exists in models/ directory")
+            
+            cls.yolo_model = YOLO(model_path)
             cls.has_model = True
-        except:
+            print(f"Loaded YOLO model from: {model_path}")
+        except Exception as e:
             cls.yolo_model = None
             cls.has_model = False
-            print("WARNING: YOLO model not available, tests will be skipped")
+            print(f"WARNING: YOLO model not available ({e}), tests will be skipped")
     
     def setUp(self):
         """Create test frame."""
@@ -256,11 +283,39 @@ class TestDLWithNoiseFilterPipeline(unittest.TestCase):
         """Load models."""
         try:
             from ultralytics import YOLO
-            cls.yolo_model = YOLO('path/to/tracking_model.pt')
+            # Try to get model path from config or find available model
+            config = Config.default()
+            model_path = None
+            
+            # Try config path first
+            if hasattr(config.models, 'tracking'):
+                config_path = config.models.tracking
+                if Path(config_path).exists():
+                    model_path = config_path
+            
+            # If config path doesn't exist, try relative paths
+            if model_path is None:
+                alt_paths = [
+                    'models/bee_tracking.pt',
+                    'models/bee_tracking_back_up.pt',
+                    'models/bee_tracking_back_up_Full_Mode.pt',
+                    'models/bee_detection.pt',
+                ]
+                for path in alt_paths:
+                    if Path(path).exists():
+                        model_path = path
+                        break
+            
+            if model_path is None:
+                raise FileNotFoundError("No YOLO model file found. Please ensure a model file exists in models/ directory")
+            
+            cls.yolo_model = YOLO(model_path)
             cls.has_yolo = True
-        except:
+            print(f"Loaded YOLO model from: {model_path}")
+        except Exception as e:
             cls.yolo_model = None
             cls.has_yolo = False
+            print(f"WARNING: YOLO model not available ({e})")
     
     def setUp(self):
         """Create test frame."""
@@ -312,9 +367,36 @@ def run_visual_test():
     
     try:
         from ultralytics import YOLO
-        yolo_model = YOLO('path/to/tracking_model.pt')
-    except:
-        print("YOLO model not available, skipping visual test")
+        # Try to get model path from config or find available model
+        config = Config.default()
+        model_path = None
+        
+        # Try config path first
+        if hasattr(config.models, 'tracking'):
+            config_path = config.models.tracking
+            if Path(config_path).exists():
+                model_path = config_path
+        
+        # If config path doesn't exist, try relative paths
+        if model_path is None:
+            alt_paths = [
+                'models/bee_tracking.pt',
+                'models/bee_tracking_back_up.pt',
+                'models/bee_tracking_back_up_Full_Mode.pt',
+                'models/bee_detection.pt',
+            ]
+            for path in alt_paths:
+                if Path(path).exists():
+                    model_path = path
+                    break
+        
+        if model_path is None:
+            raise FileNotFoundError("No YOLO model file found. Please ensure a model file exists in models/ directory")
+        
+        yolo_model = YOLO(model_path)
+        print(f"Loaded YOLO model from: {model_path}")
+    except Exception as e:
+        print(f"YOLO model not available ({e}), skipping visual test")
         return
     
     # Create test frame
