@@ -102,9 +102,9 @@ class VideoConfig:
 @dataclass
 class ModelConfig:
     """Model paths configuration."""
-    nest_detection: str = "models/nest_detection.pt"
-    bee_detection : str = "models/bee_tracking_back_up_Full_Mode.pt"
-    blob_noise_classifier: str = "models/blob_noise_classifier.pth"
+    nest_detection: str = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/nest_detection.pt"
+    tracking : str = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/bee_tracking_back_up_Full_Mode.pt"
+    blob_noise_classifier: str = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/blob_noise_classifier.pth"
     bee_classifier: Optional[str] = None
 
 

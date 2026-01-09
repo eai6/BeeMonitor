@@ -1,6 +1,6 @@
 """Base interface for Multiple Object Tracking (MOT) algorithms.
 
-Allows easy swapping between different MOT implementations (BeeTracker, ByteTrack, etc.)
+Allows easy swapping between different MOT implementations (Kalman, ByteTrack, etc.)
 """
 
 from abc import ABC, abstractmethod
@@ -33,7 +33,7 @@ class Track:
     frames_without_detection: int
     last_confirmation_frame: int
     trajectory: List[Tuple[int, Point]]  # [(frame, centroid), ...]
-    velocity: Optional[Tuple[float, float]] = None # (vx, vy) why just one velocity?
+    velocity: Optional[Tuple[float, float]] = None
     
     
 class BaseMOT(ABC):

@@ -1499,24 +1499,174 @@ class BeeMonitor:
             visualize: Whether to save visualization
             
         Returns:
-            DataFrame with tracking results
+            DataFrame with tracking results in grouped format (frame_number, tracks, detections)
         """
         # Import here to avoid circular imports
-        from beemonitor.detection.motion_tracking import MotionTracking
+        from beemonitor.tracking.bee_tracking import BeeTracking, DetectionMode
+        from beemonitor.tracking.mot.bee_tracker import BeeTracker
         
-        tracker = MotionTracking(
-            model=self.tracking_model,
+        # Initialize MOT algorithm
+        # Convert class IDs to class names using label_map
+        tracking_class_names = []
+        if hasattr(self.config.tracking, 'label_map'):
+            for class_id in self.config.tracking.tracking_classes:
+                class_name = self.config.tracking.label_map.get(class_id, f'class_{class_id}')
+                tracking_class_names.append(class_name)
+        else:
+            # Fallback: use class IDs as strings
+            tracking_class_names = [str(cid) for cid in self.config.tracking.tracking_classes]
+        
+        mot_algorithm = BeeTracker(
+            config=self.config,
+            tracking_classes=tracking_class_names
+        )
+        
+        # Initialize BeeTracking system
+        tracker = BeeTracking(
+            mot_algorithm=mot_algorithm,
+            yolo_model=self.tracking_model,
+            detection_mode=DetectionMode.FGBG_YOLO,  # Use FG/BG + YOLO confirmation
+            use_noise_filter=True,
+            noise_filter_model=None,  # Can be added if noise filter model is available
             config=self.config
         )
         
-        return tracker.detect_and_track(
+        # Process video - returns flat DataFrame
+        tracking_df = tracker.process_video(
             video_path=video_path,
-            site_roi=hotel_roi,
-            res_height=self.res_height,
-            res_width=self.res_width,
-            visualize=visualize,
-            output_folder=output_folder
+            roi=hotel_roi
         )
+        
+        # Convert to grouped format expected by event_processor
+        return self._convert_tracking_to_grouped_format(tracking_df)
+    
+    def _convert_tracking_to_grouped_format(self, tracking_df: pd.DataFrame) -> pd.DataFrame:
+        """Convert flat tracking DataFrame to grouped format expected by event_processor.
+        
+        Args:
+            tracking_df: DataFrame with columns: frame, track_id, x1, y1, x2, y2, species, confidence
+            
+        Returns:
+            DataFrame with columns: frame_number, tracks, detections
+            - frame_number: tuple of (min_frame, max_frame) for the period
+            - tracks: list of tuples (track_id, centroids, bboxes, frame_numbers)
+            - detections: dict mapping frame_num to {'boxes': [...], 'label': [...]}
+        """
+        if tracking_df.empty:
+            return pd.DataFrame(columns=['frame_number', 'tracks', 'detections'])
+        
+        # Group into periods based on gaps
+        gap_threshold = int(self.config.tracking.max_age * 1.1)
+        periods = self._split_into_periods(tracking_df, gap_threshold)
+        
+        result_rows = []
+        for period_df in periods:
+            track_groups = {}
+            
+            # Group by track_id
+            for track_id in period_df['track_id'].unique():
+                track_df = period_df[period_df['track_id'] == track_id].sort_values('frame')
+                
+                # Split track by gaps
+                segments = self._split_track_by_gaps(track_df, gap_threshold=self.config.tracking.max_age)
+                
+                for seg_idx, seg_df in enumerate(segments):
+                    unique_id = f"{track_id}_{seg_idx}" if len(segments) > 1 else track_id
+                    
+                    # Extract centroids, bboxes, frame_numbers
+                    centroids = [((row['x1'] + row['x2']) / 2, (row['y1'] + row['y2']) / 2)
+                                for _, row in seg_df.iterrows()]
+                    bboxes = [(row['x1'], row['y1'], row['x2'], row['y2'])
+                             for _, row in seg_df.iterrows()]
+                    frame_numbers = seg_df['frame'].tolist()
+                    
+                    # Only include tracks that meet minimum length
+                    if len(frame_numbers) >= self.config.tracking.min_track_length:
+                        track_groups[unique_id] = (unique_id, centroids, bboxes, frame_numbers)
+            
+            if not track_groups:
+                continue
+            
+            all_tracks = list(track_groups.values())
+            min_frame = int(period_df['frame'].min())
+            max_frame = int(period_df['frame'].max())
+            
+            # Create frame detections dictionary
+            frame_detections = {}
+            for frame_num in period_df['frame'].unique():
+                frame_df = period_df[period_df['frame'] == frame_num]
+                frame_detections[int(frame_num)] = {
+                    'boxes': [(row['x1'], row['y1'], row['x2'], row['y2'])
+                             for _, row in frame_df.iterrows()],
+                    'label': frame_df['species'].tolist() if 'species' in frame_df.columns else ['bee'] * len(frame_df)
+                }
+            
+            result_rows.append({
+                'frame_number': (min_frame, max_frame),
+                'tracks': all_tracks,
+                'detections': frame_detections
+            })
+        
+        return pd.DataFrame(result_rows) if result_rows else pd.DataFrame(columns=['frame_number', 'tracks', 'detections'])
+    
+    def _split_into_periods(self, df: pd.DataFrame, gap_threshold: int = 100) -> List[pd.DataFrame]:
+        """Split detections into activity periods based on frame gaps.
+        
+        Args:
+            df: Tracking DataFrame
+            gap_threshold: Maximum gap between frames to consider same period
+            
+        Returns:
+            List of DataFrames, one per period
+        """
+        df = df.sort_values('frame')
+        frames = df['frame'].tolist()
+        
+        if not frames:
+            return []
+        
+        periods = []
+        current_start = 0
+        
+        for i in range(len(frames) - 1):
+            gap = frames[i + 1] - frames[i]
+            if gap > gap_threshold:
+                periods.append(df.iloc[current_start:i+1].copy())
+                current_start = i + 1
+        
+        if current_start < len(df):
+            periods.append(df.iloc[current_start:].copy())
+        
+        return periods if periods else [df]
+    
+    def _split_track_by_gaps(self, track_df: pd.DataFrame, gap_threshold: int = 30) -> List[pd.DataFrame]:
+        """Split track into segments by gaps.
+        
+        Args:
+            track_df: DataFrame for a single track
+            gap_threshold: Maximum gap between frames to consider same segment
+            
+        Returns:
+            List of DataFrames, one per segment
+        """
+        frames = track_df['frame'].tolist()
+        
+        if not frames:
+            return []
+        
+        segments = []
+        current_start = 0
+        
+        for i in range(len(frames) - 1):
+            gap = frames[i + 1] - frames[i]
+            if gap > gap_threshold:
+                segments.append(track_df.iloc[current_start:i+1].copy())
+                current_start = i + 1
+        
+        if current_start < len(track_df):
+            segments.append(track_df.iloc[current_start:].copy())
+        
+        return segments if segments else [track_df]
     
     def process_motion_tracking(
         self,
