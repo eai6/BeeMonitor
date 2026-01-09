@@ -3,3 +3,7 @@ Experiments/CVPR_Evaluation_Video_Data/*
 Experiments/output/*
 src/__pycache__
 #models/*
+
+# macOS
+.DS_Store
+**/.DS_Store

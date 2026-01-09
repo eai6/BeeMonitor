@@ -1,0 +1,2 @@
+[console_scripts]
+bee-monitor = bee_monitor.cli:main
