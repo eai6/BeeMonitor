@@ -1,8 +1,14 @@
 venv
 Experiments/CVPR_Evaluation_Video_Data/*
 Experiments/output/*
-src/__pycache__
 #models/*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
 
 # macOS
 .DS_Store
