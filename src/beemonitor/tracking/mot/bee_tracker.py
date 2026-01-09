@@ -13,7 +13,7 @@ from typing import Dict, List, Tuple, Optional
 import cv2
 import numpy as np
 
-from base_mot import BaseMOT, Detection, Track, BBox, Point
+from beemonitor.tracking.mot.base_mot import BaseMOT, Detection, Track, BBox, Point
 
 logger = logging.getLogger(__name__)
 
