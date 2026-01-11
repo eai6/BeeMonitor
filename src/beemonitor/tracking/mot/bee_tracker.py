@@ -27,8 +27,8 @@ class BeeTracker(BaseMOT):
         config, 
         tracking_classes: List[str],
         require_yolo_confirmation: bool = False,
-        max_pending_age: int = 15,
-        resurrection_window: int = 300  # Increased for stationary bees (6 sec @ 30fps)
+        max_pending_age: int = 30,
+        resurrection_window: int = 30  # Increased for stationary bees (6 sec @ 30fps)
     ):
         """Initialize bee tracker with unified Hungarian matching.
         
