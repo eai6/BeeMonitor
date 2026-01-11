@@ -18,7 +18,6 @@ class ControlPanel(QScrollArea):
     
     # Signals
     test_detection_requested = pyqtSignal()
-    initialize_background_requested = pyqtSignal()
     run_analysis_requested = pyqtSignal()
     load_video_requested = pyqtSignal()
     parameters_changed = pyqtSignal(dict)
@@ -31,6 +30,8 @@ class ControlPanel(QScrollArea):
         
         container = QWidget()
         layout = QVBoxLayout()
+        layout.setContentsMargins(5, 5, 5, 5)  # Small margins
+        layout.setSpacing(10)  # Consistent spacing
         container.setLayout(layout)
         
         # Add sections
@@ -120,10 +121,6 @@ class ControlPanel(QScrollArea):
         """Create action buttons."""
         actions_group = QGroupBox("Actions")
         actions_layout = QVBoxLayout()
-        
-        init_bg_btn = QPushButton("Initialize Background")
-        init_bg_btn.clicked.connect(self.initialize_background_requested.emit)
-        actions_layout.addWidget(init_bg_btn)
         
         test_btn = QPushButton("Test Detection (Space)")
         test_btn.clicked.connect(self.test_detection_requested.emit)

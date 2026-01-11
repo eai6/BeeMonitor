@@ -3,11 +3,12 @@ Video Panel
 ===========
 
 Right panel with video display and playback controls.
+Simplified - detections and tracks always show (no toggle controls).
 """
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLabel, QSlider, QCheckBox
+    QLabel, QSlider
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 
@@ -22,15 +23,14 @@ class VideoPanel(QWidget):
     frame_step_requested = pyqtSignal(int)  # delta
     frame_changed = pyqtSignal(int)  # frame index
     speed_changed = pyqtSignal(int)  # speed value
-    show_detections_changed = pyqtSignal(bool)
-    show_tracks_changed = pyqtSignal(bool)
-    show_sources_changed = pyqtSignal(bool)  # NEW!
     
     def __init__(self):
         """Initialize video panel."""
         super().__init__()
         
         layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)  # Remove margins
+        layout.setSpacing(5)  # Tight spacing
         self.setLayout(layout)
         
         # Video canvas
@@ -81,7 +81,7 @@ class VideoPanel(QWidget):
         return controls_layout
     
     def _create_info_bar(self):
-        """Create info bar with frame info and checkboxes."""
+        """Create info bar with frame info and data status."""
         info_layout = QHBoxLayout()
         
         self.frame_label = QLabel("Frame: 0 / 0")
@@ -93,38 +93,10 @@ class VideoPanel(QWidget):
         
         info_layout.addStretch()
         
-        # Show Detections checkbox
-        self.show_detections_cb = QCheckBox("Show Detections")
-        self.show_detections_cb.stateChanged.connect(
-            lambda state: self.show_detections_changed.emit(
-                state == Qt.CheckState.Checked
-            )
-        )
-        info_layout.addWidget(self.show_detections_cb)
-        
-        # Show Tracks checkbox
-        self.show_tracks_cb = QCheckBox("Show Tracks")
-        self.show_tracks_cb.stateChanged.connect(
-            lambda state: self.show_tracks_changed.emit(
-                state == Qt.CheckState.Checked
-            )
-        )
-        info_layout.addWidget(self.show_tracks_cb)
-        
-        # NEW: Show Detection Sources checkbox
-        self.show_sources_cb = QCheckBox("Show Sources")
-        self.show_sources_cb.setToolTip(
-            "Color-code detections by source:\n"
-            "🔴 RED = Blob/FG-BG (motion)\n"
-            "🟢 GREEN = SIFT (stationary)\n"
-            "🔵 BLUE = YOLO (deep learning)"
-        )
-        self.show_sources_cb.stateChanged.connect(
-            lambda state: self.show_sources_changed.emit(
-                state == Qt.CheckState.Checked
-            )
-        )
-        info_layout.addWidget(self.show_sources_cb)
+        # Note: Detections and tracks always show (no toggles)
+        note_label = QLabel("💡 Detections & tracks always visible")
+        note_label.setStyleSheet("color: #666; font-size: 9pt; font-style: italic;")
+        info_layout.addWidget(note_label)
         
         return info_layout
     

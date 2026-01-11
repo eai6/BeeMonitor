@@ -102,6 +102,19 @@ class BlobDetector(BaseDetector):
         self.min_extent = min_extent
         self.morph_kernel_size = morph_kernel_size
         self.morph_iterations = morph_iterations
+
+
+         # === ONLINE LEARNING (add these lines) ===
+        self.online_learning_enabled = True
+        self.confirmed_bee_blobs = []
+        self.learning_buffer_size = 100
+        self.update_interval = 30
+        self.min_samples_for_update = 20
+        self.smoothing_factor = 0.7
+        self.researched_min_area = min_area
+        self.researched_min_solidity = min_solidity
+        self.updates_count = 0
+
         
         # Initialize background subtractor
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
@@ -1461,3 +1474,122 @@ class BlobDetector(BaseDetector):
         logger.info("✓ Learned thresholds applied to blob detector")
         
         return thresholds
+
+    def update_with_yolo_confirmation(self, blob_detection, frame_num=None):
+        """
+        Update online learning with YOLO-confirmed bee blob.
+        
+        Call during tracking when blob matches YOLO detection.
+        
+        Args:
+            blob_detection: Detection from blob detector
+            frame_num: Frame number (optional)
+        """
+        if not self.online_learning_enabled:
+            return
+        
+        self.confirmed_bee_blobs.append({
+            'area': blob_detection.metadata.get('area', 0),
+            'solidity': blob_detection.metadata.get('solidity', 0),
+            'frame': frame_num if frame_num else 0
+        })
+        
+        if len(self.confirmed_bee_blobs) > self.learning_buffer_size:
+            self.confirmed_bee_blobs = self.confirmed_bee_blobs[-self.learning_buffer_size:]
+        
+        if len(self.confirmed_bee_blobs) >= self.min_samples_for_update and \
+           len(self.confirmed_bee_blobs) % self.update_interval == 0:
+            self._update_thresholds_from_confirmed_bees()
+    
+    def _update_thresholds_from_confirmed_bees(self):
+        """Update thresholds from confirmed bees with exponential smoothing."""
+        import numpy as np
+        
+        if len(self.confirmed_bee_blobs) < self.min_samples_for_update:
+            return
+        
+        areas = [b['area'] for b in self.confirmed_bee_blobs if b['area'] > 0]
+        solidities = [b['solidity'] for b in self.confirmed_bee_blobs if b['solidity'] > 0]
+        
+        if len(areas) == 0 or len(solidities) == 0:
+            return
+        
+        new_min_area = float(np.percentile(areas, 5.0)) * 0.5
+        new_min_solidity = float(np.percentile(solidities, 5.0)) * 0.8
+        
+        old_area = self.min_area
+        old_solidity = self.min_solidity
+        
+        self.min_area = (self.smoothing_factor * new_min_area + 
+                        (1 - self.smoothing_factor) * self.min_area)
+        self.min_solidity = (self.smoothing_factor * new_min_solidity + 
+                            (1 - self.smoothing_factor) * self.min_solidity)
+        
+        self.updates_count += 1
+        
+        print(f"\n📊 ADAPTIVE UPDATE #{self.updates_count}")
+        print(f"   Samples: {len(self.confirmed_bee_blobs)} confirmed bees")
+        print(f"   min_area: {old_area:.1f} → {self.min_area:.1f} "
+              f"({((self.min_area - old_area) / old_area * 100):+.1f}%)")
+        print(f"   min_solidity: {old_solidity:.3f} → {self.min_solidity:.3f} "
+              f"({((self.min_solidity - old_solidity) / old_solidity * 100):+.1f}%)")
+    
+    def reset_online_learning(self):
+        """Reset to researched defaults."""
+        self.confirmed_bee_blobs = []
+        self.min_area = self.researched_min_area
+        self.min_solidity = self.researched_min_solidity
+        self.updates_count = 0
+        print(f"\n🔄 Reset to defaults: area={self.min_area:.1f}, solidity={self.min_solidity:.3f}")
+    
+    def get_learning_stats(self):
+        """Get learning statistics."""
+        if len(self.confirmed_bee_blobs) == 0:
+            return {
+                'samples_collected': 0,
+                'updates_count': self.updates_count,
+                'current_min_area': self.min_area,
+                'current_min_solidity': self.min_solidity,
+                'researched_min_area': self.researched_min_area,
+                'researched_min_solidity': self.researched_min_solidity,
+                'area_adaptation': 0.0,
+                'solidity_adaptation': 0.0
+            }
+        
+        return {
+            'samples_collected': len(self.confirmed_bee_blobs),
+            'updates_count': self.updates_count,
+            'current_min_area': self.min_area,
+            'current_min_solidity': self.min_solidity,
+            'researched_min_area': self.researched_min_area,
+            'researched_min_solidity': self.researched_min_solidity,
+            'area_adaptation': (self.min_area - self.researched_min_area) / self.researched_min_area * 100,
+            'solidity_adaptation': (self.min_solidity - self.researched_min_solidity) / self.researched_min_solidity * 100
+        }
+    
+    def enable_online_learning(self, enable=True):
+        """Enable/disable online learning."""
+        self.online_learning_enabled = enable
+        print(f"{'✓' if enable else '✗'} Online learning {'ENABLED' if enable else 'DISABLED'}")
+    
+    @staticmethod
+    def compute_iou(bbox1, bbox2):
+        """Compute IoU between two bboxes."""
+        x1_1, y1_1, x2_1, y2_1 = bbox1
+        x1_2, y1_2, x2_2, y2_2 = bbox2
+        
+        x1_i = max(x1_1, x1_2)
+        y1_i = max(y1_1, y1_2)
+        x2_i = min(x2_1, x2_2)
+        y2_i = min(y2_1, y2_2)
+        
+        if x2_i < x1_i or y2_i < y1_i:
+            return 0.0
+        
+        intersection = (x2_i - x1_i) * (y2_i - y1_i)
+        area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
+        area2 = (x2_2 - x1_2) * (y2_2 - y1_2)
+        union = area1 + area2 - intersection
+        
+        return intersection / union if union > 0 else 0.0
+

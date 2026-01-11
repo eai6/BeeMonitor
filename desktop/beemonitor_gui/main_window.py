@@ -1,9 +1,4 @@
-"""
-Main Window
-===========
-
-Main application window orchestrating all components.
-"""
+"""Main Window - BeeMonitor Desktop App"""
 
 import os
 import json
@@ -45,7 +40,6 @@ class BeeMonitorGUI(QMainWindow):
         self.setWindowTitle(TITLE)
         self.setGeometry(100, 100, *DEFAULT_WINDOW_SIZE)
         
-        # Video state
         self.video_path = None
         self.video_cap = None
         self.current_frame = None
@@ -53,68 +47,53 @@ class BeeMonitorGUI(QMainWindow):
         self.total_frames = 0
         self.fps = 0
         
-        # Playback state
         self.playing = False
         self.playback_timer = QTimer()
         self.playback_timer.timeout.connect(self.play_next_frame)
         
-        # Analysis results
         self.tracking_results = None
         self.results_loaded = False
         
-        # Config and detectors
         self.config = Config.default()
         self.blob_detector = None
-        self.sift_detector = None
-        self.yolo_detector = None
+        self.yolo_detector_test = None  # For test detection (reusable)
         self.output_folder = None
         
         self.analysis_thread = None
         
-        # Create panels
         self.control_panel = ControlPanel()
         self.video_panel = VideoPanel()
         self.video_canvas = self.video_panel.get_canvas()
         
-        # Connect signals
         self._connect_signals()
-        
-        # Setup UI
         self._create_menu_bar()
         self._create_main_widget()
         
-        # Sync initial checkbox states with VideoCanvas
-        self.video_canvas.show_detections = self.video_panel.show_detections_cb.isChecked()
-        self.video_canvas.show_tracks = self.video_panel.show_tracks_cb.isChecked()
-        self.video_canvas.show_detection_sources = self.video_panel.show_sources_cb.isChecked()
+        # Always show detections, tracks, and sources
+        self.video_canvas.show_detections = True
+        self.video_canvas.show_tracks = True
+        self.video_canvas.show_detection_sources = True
         
         self.statusBar().showMessage("Ready - Load a video to begin")
         
-        print(f"✓ BeeMonitor GUI v{VERSION} initialized (Modular with Detection Sources)")
+        print(f"✓ BeeMonitor GUI v{VERSION} initialized")
     
     def _connect_signals(self):
         """Connect all signals from panels to methods."""
-        # Control panel signals
         self.control_panel.load_video_requested.connect(self.load_video)
         self.control_panel.test_detection_requested.connect(self.test_detection)
-        self.control_panel.initialize_background_requested.connect(self.initialize_background)
         self.control_panel.run_analysis_requested.connect(self.run_analysis)
         self.control_panel.parameters_changed.connect(self.on_parameters_changed)
         
-        # Video panel signals
         self.video_panel.play_pause_toggled.connect(self.toggle_play_pause)
         self.video_panel.frame_changed.connect(self.on_frame_slider_change)
         self.video_panel.frame_step_requested.connect(self.jump_frame)
         self.video_panel.speed_changed.connect(self.on_speed_change)
-        self.video_panel.show_detections_changed.connect(self.on_show_detections_changed)
-        self.video_panel.show_tracks_changed.connect(self.on_show_tracks_changed)
-        self.video_panel.show_sources_changed.connect(self.on_show_sources_changed)  # NEW!
     
     def _create_menu_bar(self):
         """Create menu bar."""
         menubar = self.menuBar()
         
-        # File menu
         file_menu = menubar.addMenu("&File")
         
         load_action = QAction("&Load Video...", self)
@@ -161,20 +140,6 @@ class BeeMonitorGUI(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
         
-        # View menu
-        view_menu = menubar.addMenu("&View")
-        
-        self.show_detections_action = QAction("Show &Detections", self, checkable=True)
-        self.show_detections_action.triggered.connect(
-            lambda checked: self.video_panel.show_detections_cb.setChecked(checked))
-        view_menu.addAction(self.show_detections_action)
-        
-        self.show_tracks_action = QAction("Show &Tracks", self, checkable=True)
-        self.show_tracks_action.triggered.connect(
-            lambda checked: self.video_panel.show_tracks_cb.setChecked(checked))
-        view_menu.addAction(self.show_tracks_action)
-        
-        # Help menu
         help_menu = menubar.addMenu("&Help")
         
         guide_action = QAction("Parameter &Guide", self)
@@ -191,20 +156,17 @@ class BeeMonitorGUI(QMainWindow):
         self.setCentralWidget(central_widget)
         
         main_layout = QHBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)  # No margins
+        main_layout.setSpacing(0)  # No spacing between panels
         central_widget.setLayout(main_layout)
         
         splitter = QSplitter(Qt.Orientation.Horizontal)
         main_layout.addWidget(splitter)
         
-        # Add panels
         splitter.addWidget(self.control_panel)
         splitter.addWidget(self.video_panel)
         
         splitter.setSizes([400, 1000])
-    
-    # ========================================================================
-    # Video Management
-    # ========================================================================
     
     def load_video(self):
         """Load video file."""
@@ -230,25 +192,21 @@ class BeeMonitorGUI(QMainWindow):
         width = int(self.video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(self.video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
-        # Update control panel video info
         self.control_panel.set_video_info(
             f"<b>{Path(filepath).name}</b><br>"
             f"{width}x{height} @ {self.fps:.1f} FPS<br>"
             f"{self.total_frames} frames ({self.total_frames/self.fps:.1f}s)"
         )
         
-        # Set output folder to video directory
         video_dir = Path(filepath).parent
         video_name = Path(filepath).stem
         self.output_folder = str(video_dir / f"{video_name}_output")
         os.makedirs(self.output_folder, exist_ok=True)
         
-        # Update output folder label
         self.control_panel.set_output_folder_info(
             f"<b>Output:</b> {Path(self.output_folder).name}/"
         )
         
-        # Update video panel
         self.video_panel.set_frame_range(self.total_frames - 1)
         self.current_frame_idx = 0
         
@@ -260,6 +218,9 @@ class BeeMonitorGUI(QMainWindow):
         )
         
         print(f"✓ Video loaded: {filepath}")
+        
+        # Auto-initialize background for blob detection
+        self._initialize_background()
     
     def load_frame(self, frame_idx):
         """Load specific frame."""
@@ -276,14 +237,11 @@ class BeeMonitorGUI(QMainWindow):
             self.video_panel.set_frame_info(frame_idx, self.total_frames - 1)
             self.video_panel.set_frame_slider_value(frame_idx)
             
-            # Load tracks and detections for this frame if results loaded
             tracks_for_frame = self.get_tracks_for_frame(frame_idx)
             detections_for_frame = self.get_detections_for_frame(frame_idx)
             
-            # Update data status
             self._update_data_status(tracks_for_frame)
             
-            # Pass both tracks AND detections to canvas
             self.video_canvas.set_frame(
                 frame, 
                 detections=detections_for_frame,
@@ -337,11 +295,14 @@ class BeeMonitorGUI(QMainWindow):
             self.statusBar().showMessage("Playing...")
     
     def play_next_frame(self):
-        """Play next frame during playback."""
+        """Play next frame during playback. Auto-loops when reaching end."""
         if self.current_frame_idx < self.total_frames - 1:
             self.jump_frame(1)
         else:
-            self.toggle_play_pause()
+            # Loop back to start (auto-replay)
+            self.current_frame_idx = 0
+            self.load_frame(0)
+            self.video_panel.set_frame_slider_value(0)
     
     def on_speed_change(self, value):
         """Handle playback speed change."""
@@ -349,96 +310,57 @@ class BeeMonitorGUI(QMainWindow):
             interval = int(1000 / (self.fps * value / 5))
             self.playback_timer.setInterval(interval)
     
-    # ========================================================================
-    # Detection
-    # ========================================================================
-    
     def on_parameters_changed(self, params):
         """Handle parameter changes from control panel."""
-        if self.blob_detector is not None:
-            # Auto-test if detector is ready
-            QTimer.singleShot(500, self.test_detection)
+        # No auto-testing - let user manually test when ready
+        pass
     
-    # def initialize_background(self):
-    #     """Initialize background model."""
-    #     if self.video_path is None:
-    #         QMessageBox.warning(self, "Warning", "Load a video first")
-    #         return
+    def _initialize_background(self):
+        """Initialize background with researched optimal thresholds.
         
-    #     self.statusBar().showMessage("Initializing background...")
-    #     QApplication.processEvents()
+        Uses proven values from ablation study:
+        - min_area = 30.0 (conservative, catches most bees)
+        - min_solidity = 0.56 (80% of typical 0.7, proven F1=53.0%)
         
-    #     try:
-    #         params = self.control_panel.get_parameters()
-        
-    #         # Get detection mode from control panel
-    #         detection_mode = params.get("detection_mode", "yolo_only")
-            
-    #         # Use defaults - these will be learned in Phase 1b anyway
-    #         self.blob_detector = BlobDetector(
-    #             min_area=120.0,  # Default, will be overridden by learned values
-    #             min_solidity=0.7  # Default, will be overridden by learned values
-    #         )
-            
-    #         self.blob_detector.initialize_from_video(
-    #             video_path=self.video_path,
-    #             num_frames=100,
-    #             start_frame=0
-    #         )
-            
-    #         self.statusBar().showMessage("✓ Background initialized")
-    #         QMessageBox.information(self, "Success", "Background model initialized")
-            
-    #     except Exception as e:
-    #         QMessageBox.critical(self, "Error", f"Failed to initialize background:\n{e}")
-    #         self.statusBar().showMessage("✗ Background initialization failed")
-
-
-    def initialize_background(self):
-        """Initialize background model."""
-        if self.video_path is None:
-            QMessageBox.warning(self, "Warning", "Load a video first")
-            return
-        
+        These adapt during full analysis if YOLO confirms different characteristics.
+        """
         self.statusBar().showMessage("Initializing background...")
         QApplication.processEvents()
         
         try:
-            from beemonitor.detection import BlobDetector
+            # RESEARCHED OPTIMAL values from ablation study
+            RESEARCHED_MIN_AREA = 30.0
+            RESEARCHED_MIN_SOLIDITY = 0.56
             
-            # Use defaults - these will be learned in Phase 1b during analysis
+            print("\n" + "="*70)
+            print("BACKGROUND INITIALIZATION (Researched Optimal Defaults)")
+            print("="*70)
+            print(f"\nUsing researched optimal thresholds:")
+            print(f"  min_area: {RESEARCHED_MIN_AREA} (from ablation study)")
+            print(f"  min_solidity: {RESEARCHED_MIN_SOLIDITY} (80% scaling, proven F1=53.0%)")
+            
             self.blob_detector = BlobDetector(
-                min_area=120.0,  # Default, will be overridden by learned values
-                min_solidity=0.7  # Default, will be overridden by learned values
+                min_area=RESEARCHED_MIN_AREA,
+                min_solidity=RESEARCHED_MIN_SOLIDITY
             )
             
             self.blob_detector.initialize_from_video(
                 video_path=self.video_path,
-                num_frames=30,  # Quick init for testing
+                num_frames=100,
                 start_frame=0
             )
             
-            self.statusBar().showMessage("✓ Background initialized")
-            QMessageBox.information(
-                self, 
-                "Success", 
-                "Background model initialized!\n\n"
-                "Note: During full analysis:\n"
-                "• Blob morphology will be learned (Phase 1b)\n"
-                "• CNN filter will be applied automatically\n"
-                "• Learned solidity filter will be applied"
-            )
+            self.statusBar().showMessage("✓ Background initialized (researched optimal thresholds)")
+            print("✓ Background initialized (100 frames)")
+            print("✓ Ready for detection with optimal thresholds")
+            print("="*70 + "\n")
             
         except Exception as e:
             import traceback
-            QMessageBox.critical(self, "Error", 
-                f"Failed to initialize background:\n{e}\n\n{traceback.format_exc()}")
+            print(f"✗ Background initialization failed: {e}")
+            print(traceback.format_exc())
             self.statusBar().showMessage("✗ Background initialization failed")
-
-
-    # ============================================================================
-    # Change 4: Replace test_detection() method
-    # ============================================================================
+    
     def test_detection(self):
         """Test detection on current frame using selected mode."""
         if self.current_frame is None:
@@ -451,37 +373,50 @@ class BeeMonitorGUI(QMainWindow):
             
             detections = []
             
-            # Handle mode
             if detection_mode in ['fgbg', 'fgbg_yolo']:
-                # Blob-based modes: need background
                 if self.blob_detector is None:
-                    reply = QMessageBox.question(
+                    QMessageBox.warning(
                         self,
-                        "Background Not Initialized",
-                        "Blob detection requires initialized background.\n\n"
-                        "During full analysis:\n"
-                        "• CNN noise filter will be applied automatically\n"
-                        "• Solidity threshold will be learned automatically\n\n"
-                        "Initialize background now for testing?",
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                        "Background Not Ready",
+                        "Background model is not initialized.\n\n"
+                        "This shouldn't happen - background is initialized automatically when you load a video.\n\n"
+                        "Try reloading the video or check the terminal for errors."
                     )
-                    if reply == QMessageBox.StandardButton.Yes:
-                        self.initialize_background()
-                    else:
-                        return
+                    return
                 
-                # Use blob detector (shows raw blobs in test)
                 detections = self.blob_detector.detect(self.current_frame)
             
             elif detection_mode == 'yolo_only':
-                # Pure YOLO (no blob/CNN/solidity)
-                from beemonitor.detection import YOLODetector
-                from ultralytics import YOLO
-                model = YOLO('yolo11n.pt')
-                yolo = YOLODetector(model, tracking_classes=['bee'], conf_threshold=0.25)
-                detections = yolo.detect(self.current_frame)
+                # Create YOLO detector if needed (reuse if exists)
+                if not hasattr(self, 'yolo_detector_test') or self.yolo_detector_test is None:
+                    self.statusBar().showMessage("⏳ Loading YOLO model (first time, takes ~5-10 seconds)...")
+                    QApplication.processEvents()
+                    
+                    try:
+                        from beemonitor.detection import YOLODetector
+                        from ultralytics import YOLO
+                        
+                        print("Loading YOLO model for test detection...")
+                        model = YOLO('yolo11n.pt')
+                        self.yolo_detector_test = YOLODetector(
+                            model, 
+                            tracking_classes=['bee'], 
+                            conf_threshold=0.25
+                        )
+                        print("✓ YOLO model loaded")
+                        self.statusBar().showMessage("✓ YOLO model loaded, running detection...")
+                    except Exception as e:
+                        QMessageBox.critical(
+                            self, 
+                            "YOLO Error",
+                            f"Failed to load YOLO model:\n{e}\n\n"
+                            f"Make sure yolo11n.pt is available."
+                        )
+                        return
+                
+                QApplication.processEvents()
+                detections = self.yolo_detector_test.detect(self.current_frame)
             
-            # Update display
             self.control_panel.set_detection_count(len(detections))
             tracks_for_frame = self.get_tracks_for_frame(self.current_frame_idx)
             self._update_data_status(tracks_for_frame)
@@ -492,15 +427,6 @@ class BeeMonitorGUI(QMainWindow):
                 tracks=tracks_for_frame
             )
             
-            # Auto-enable detection display
-            if len(detections) > 0 and not self.video_panel.show_detections_cb.isChecked():
-                self.video_panel.show_detections_cb.blockSignals(True)
-                self.video_panel.show_detections_cb.setChecked(True)
-                self.video_panel.show_detections_cb.blockSignals(False)
-                self.video_canvas.show_detections = True
-                self.video_canvas._draw_frame()
-            
-            # Status message
             mode_names = {
                 'fgbg': 'Motion',
                 'fgbg_yolo': 'Motion+YOLO', 
@@ -508,116 +434,55 @@ class BeeMonitorGUI(QMainWindow):
             }
             mode_name = mode_names.get(detection_mode, detection_mode)
             
-            # Note about filtering
-            note = " (raw blobs - CNN+solidity in full analysis)" if detection_mode in ['fgbg', 'fgbg_yolo'] else ""
+            if detection_mode in ['fgbg', 'fgbg_yolo']:
+                note = " (raw blobs - CNN+solidity filters in full analysis)"
+                print(f"\n⚠ Test Detection: {len(detections)} raw blobs (no CNN filter)")
+                print("   Full analysis will apply CNN + learned solidity filters")
+                print("   Expected: ~66% reduction in final results\n")
+            else:
+                note = ""
+            
             self.statusBar().showMessage(f"✓ {mode_name}: {len(detections)} detections{note}")
             
         except Exception as e:
             import traceback
             QMessageBox.critical(self, "Error", 
                 f"Detection failed:\n{e}\n\n{traceback.format_exc()}")
-
-
-    # ============================================================================
-    # Change 5: Replace run_analysis() method
-    # ============================================================================
+    
     def run_analysis(self):
-        """Run full video analysis with automatic CNN + solidity filtering."""
-        from pathlib import Path
-        import os
-        from beemonitor.core.video_analyzer import BeeMonitor
-        from .analysis_thread import AnalysisThread
-        
+        """Run full video analysis - auto-initializes everything in background."""
         if self.video_path is None:
             QMessageBox.warning(self, "Warning", "Load a video first")
             return
         
-        # Get detection mode
         params = self.control_panel.get_parameters()
         detection_mode = params.get("detection_mode", "fgbg")
         
-        # Set output folder if not set
         if not self.output_folder:
             video_dir = Path(self.video_path).parent
             video_name = Path(self.video_path).stem
             self.output_folder = str(video_dir / f"{video_name}_output")
             os.makedirs(self.output_folder, exist_ok=True)
         
-        # Check background init if needed
-        if detection_mode in ['fgbg', 'fgbg_yolo']:
-            if self.blob_detector is None:
-                reply = QMessageBox.question(
-                    self,
-                    "Background Not Initialized",
-                    "Blob detection requires background initialization.\n\n"
-                    "During analysis:\n"
-                    "• Background will be initialized (Phase 1)\n"
-                    "• Blob morphology will be learned (Phase 1b)\n"
-                    "• CNN noise filter will be applied automatically\n"
-                    "• Learned solidity filter will be applied automatically\n\n"
-                    "Initialize background now (recommended for testing)?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                )
-                
-                if reply == QMessageBox.StandardButton.Yes:
-                    self.initialize_background()
-                else:
-                    QMessageBox.information(
-                        self,
-                        "Automatic Initialization",
-                        "No problem! Background will be initialized automatically\n"
-                        "during the full analysis."
-                    )
-        
-        # Build mode description
-        mode_desc = {
-            'fgbg': (
-                '<b>Motion Detection (Recommended)</b><br>'
-                '• Background initialization<br>'
-                '• Morphology learning (solidity threshold)<br>'
-                '• CNN noise filter (66% reduction)<br>'
-                '• Learned solidity filter (safety net)'
-            ),
-            'fgbg_yolo': (
-                '<b>Motion + YOLO (High Accuracy)</b><br>'
-                '• Background initialization<br>'
-                '• Morphology learning<br>'
-                '• CNN noise filter<br>'
-                '• Learned solidity filter<br>'
-                '• YOLO confirmation + species ID'
-            ),
-            'yolo_only': (
-                '<b>YOLO Only (Highest Accuracy)</b><br>'
-                '• Deep learning every frame<br>'
-                '• No background/CNN/solidity needed<br>'
-                '• Slowest but most accurate'
-            )
+        mode_names = {
+            'fgbg': 'Motion Detection',
+            'fgbg_yolo': 'Motion + YOLO',
+            'yolo_only': 'YOLO Only'
         }
+        mode_name = mode_names.get(detection_mode, detection_mode)
         
-        # Confirm analysis
-        reply = QMessageBox.question(
-            self,
-            "Run Analysis",
-            f"<b>Video:</b> {Path(self.video_path).name}<br><br>"
-            f"{mode_desc.get(detection_mode, '')}<br><br>"
-            f"<b>Output:</b> {self.output_folder}<br><br>"
-            f"⚠️ <i>This may take several minutes.</i><br><br>"
-            f"Continue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        self.statusBar().showMessage(
+            f"Starting analysis ({mode_name})... "
+            f"Background initialization, CNN filtering, and tracking will run automatically."
         )
         
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-        
-        # Create monitor with config
         monitor = BeeMonitor(config=self.config)
         
-        # Create analysis thread with detection_mode parameter
         self.analysis_thread = AnalysisThread(
             monitor,
             self.video_path,
             self.output_folder,
-            detection_mode=detection_mode  # Pass mode to BeeMonitor
+            detection_mode=detection_mode
         )
         
         self.analysis_thread.progress.connect(
@@ -627,171 +492,10 @@ class BeeMonitorGUI(QMainWindow):
             lambda err: QMessageBox.critical(self, "Analysis Error", err))
         
         self.analysis_thread.start()
-        self.statusBar().showMessage(f"Running analysis ({detection_mode})...")
-    
-    def test_detection(self):
-        """Test detection on current frame using selected mode."""
-        if self.current_frame is None:
-            QMessageBox.warning(self, "Warning", "Load a video first")
-            return
         
-        try:
-            params = self.control_panel.get_parameters()
-            detection_mode = params.get("detection_mode", "fgbg_sift_yolo")
-            
-            detections = []
-            
-            # Dispatch to correct detector(s) based on mode
-            if detection_mode in ['fgbg', 'fgbg_only', 'fgbg_sift', 'fgbg_yolo', 'fgbg_sift_yolo']:
-                # Need blob detector
-                if self.blob_detector is None:
-                    reply = QMessageBox.question(
-                        self,
-                        "Background Not Initialized",
-                        "Blob detection requires initialized background.\nInitialize now?",
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                    )
-                    if reply == QMessageBox.StandardButton.Yes:
-                        self.initialize_background()
-                    else:
-                        return
-                
-                # Use blob detector
-                blob_dets = self.blob_detector.detect(self.current_frame)
-                detections.extend(blob_dets)
-            
-            if detection_mode in ['sift', 'sift_only', 'fgbg_sift', 'sift_yolo', 'fgbg_sift_yolo']:
-                # Need SIFT detector
-                if self.sift_detector is None:
-                    QMessageBox.warning(
-                        self,
-                        "SIFT Not Initialized",
-                        "SIFT detection requires template initialization.\n"
-                        "Please run full analysis first, or select a different mode."
-                    )
-                    # Don't return - try other modes if available
-                else:
-                    sift_dets = self.sift_detector.detect(self.current_frame, use_templates=True)
-                    detections.extend(sift_dets)
-            
-            if detection_mode in ['yolo', 'yolo_only', 'fgbg_yolo', 'sift_yolo', 'fgbg_sift_yolo']:
-                # Need YOLO detector
-                if self.yolo_detector is None:
-                    from beemonitor.detection import YOLODetector
-                    from ultralytics import YOLO
-                    model = YOLO('yolo11n.pt')
-                    self.yolo_detector = YOLODetector(
-                        model=model,
-                        tracking_classes=['bee'],
-                        conf_threshold=0.25
-                    )
-                
-                yolo_dets = self.yolo_detector.detect(self.current_frame)
-                detections.extend(yolo_dets)
-            
-            # Update detection count
-            self.control_panel.set_detection_count(len(detections))
-            
-            # Get tracks if results loaded
-            tracks_for_frame = self.get_tracks_for_frame(self.current_frame_idx)
-            
-            # Update data status
-            self._update_data_status(tracks_for_frame)
-            
-            # Pass detections to canvas
-            self.video_canvas.set_frame(
-                self.current_frame,
-                detections=detections,
-                tracks=tracks_for_frame
-            )
-            
-            # Auto-enable detection display if we have detections
-            if len(detections) > 0:
-                if not self.video_panel.show_detections_cb.isChecked():
-                    print("Auto-enabling detection display - setting checkbox to True")
-                    # Block signals to prevent loops
-                    self.video_panel.show_detections_cb.blockSignals(True)
-                    self.video_panel.show_detections_cb.setChecked(True)
-                    self.video_panel.show_detections_cb.blockSignals(False)
-                    # Manually trigger the display
-                    self.video_canvas.show_detections = True
-                    self.video_canvas._draw_frame()
-                    print("Detection display enabled and redrawn")
-                else:
-                    # Checkbox already checked - force redraw to ensure it displays
-                    print(f"Detections already enabled, forcing sync")
-                    self.video_canvas.show_detections = True
-                    self.video_canvas._draw_frame()
-            
-            # Display mode-specific message
-            mode_names = {
-                'fgbg': 'Motion',
-                'fgbg_only': 'Motion',
-                'sift': 'SIFT',
-                'sift_only': 'SIFT',
-                'yolo': 'YOLO',
-                'yolo_only': 'YOLO',
-                'fgbg_sift': 'Motion+SIFT',
-                'fgbg_yolo': 'Motion+YOLO',
-                'sift_yolo': 'SIFT+YOLO',
-                'fgbg_sift_yolo': 'Motion+SIFT+YOLO'
-            }
-            mode_name = mode_names.get(detection_mode, detection_mode)
-            
-            self.statusBar().showMessage(
-                f"✓ {mode_name}: {len(detections)} detections "
-                f"(shown in {'color-coded' if self.video_canvas.show_detection_sources else 'green'})"
-            )
-            
-        except Exception as e:
-            import traceback
-            QMessageBox.critical(self, "Error", 
-                f"Detection failed:\n{e}\n\n{traceback.format_exc()}")
-    
-    # ========================================================================
-    # NEW: Detection Source Visualization
-    # ========================================================================
-    
-    def on_show_detections_changed(self, enabled):
-        """Handle Show Detections checkbox change."""
-        print(f"on_show_detections_changed called: enabled={enabled}")
-        self.video_canvas.toggle_detections(enabled)
-        if enabled:
-            self.statusBar().showMessage("Detection overlay: ENABLED")
-            # Force redraw if we have detections
-            if self.video_canvas.detections:
-                print(f"  -> Have {len(self.video_canvas.detections)} detections, forcing redraw")
-                self.video_canvas._draw_frame()
-    
-    def on_show_tracks_changed(self, enabled):
-        """Handle Show Tracks checkbox change."""
-        print(f"on_show_tracks_changed called: enabled={enabled}")
-        self.video_canvas.toggle_tracks(enabled)
-        if enabled:
-            self.statusBar().showMessage("Track overlay: ENABLED")
-            # Force redraw if we have tracks
-            if self.video_canvas.tracks:
-                print(f"  -> Have {len(self.video_canvas.tracks)} tracks, forcing redraw")
-                self.video_canvas._draw_frame()
-    
-    def on_show_sources_changed(self, enabled):
-        """Handle detection source visualization toggle."""
-        print(f"on_show_sources_changed called: enabled={enabled}")
-        self.video_canvas.toggle_detection_sources(enabled)
-        if enabled:
-            self.statusBar().showMessage(
-                "Detection sources: ENABLED (RED=Blob, GREEN=SIFT, BLUE=YOLO)"
-            )
-            # Force redraw if we have detections
-            if self.video_canvas.detections:
-                print(f"  -> Have {len(self.video_canvas.detections)} detections, forcing redraw")
-                self.video_canvas._draw_frame()
-        else:
-            self.statusBar().showMessage("Detection sources: DISABLED")
-    
-    # ========================================================================
-    # Results Loading and Visualization
-    # ========================================================================
+        print(f"\n{'='*70}")
+        print(f"STARTING ANALYSIS - Watch for CNN filter logs below")
+        print(f"{'='*70}\n")
     
     def load_results(self):
         """Load tracking results CSV."""
@@ -808,59 +512,31 @@ class BeeMonitorGUI(QMainWindow):
             return
         
         try:
-            # Check if file is empty
-            import os
             if os.path.getsize(filepath) == 0:
                 QMessageBox.critical(
                     self,
                     "Empty File",
-                    f"The tracking results file is empty!\n\n"
-                    f"File: {Path(filepath).name}\n\n"
-                    f"This means the analysis didn't produce any results.\n\n"
-                    f"Possible reasons:\n"
-                    f"  • No detections found in video\n"
-                    f"  • Analysis failed silently\n"
-                    f"  • Detection parameters too strict\n\n"
-                    f"Try:\n"
-                    f"  1. Test detection on a frame first\n"
-                    f"  2. Lower detection thresholds\n"
-                    f"  3. Check analysis error messages"
+                    "The tracking results file is empty!\n\n"
+                    "This means the analysis didn't produce any results."
                 )
                 return
             
             df = pd.read_csv(filepath)
             
-            # Debug: Print CSV info
-            print(f"\n{'='*60}")
-            print(f"Loading CSV: {Path(filepath).name}")
-            print(f"Shape: {df.shape} (rows={len(df)}, cols={len(df.columns)})")
-            print(f"Columns: {list(df.columns)}")
-            if len(df) > 0:
-                print(f"First row: {df.iloc[0].to_dict()}")
-            print(f"{'='*60}\n")
-            
-            # Check if this is the events file instead of tracking file
             if 'action' in df.columns and 'nest' in df.columns:
                 QMessageBox.warning(
                     self,
                     "Wrong File",
-                    "This appears to be an <b>events CSV</b> file.\n\n"
-                    "For visualization, you need the <b>tracking results CSV</b>.\n\n"
-                    "Look for a file named:\n"
-                    "  • tracking_results.csv\n"
-                    "  • tracks.csv\n"
-                    "  • <video_name>_tracks.csv"
+                    "This appears to be an events CSV file.\n\n"
+                    "For visualization, you need the tracking results CSV."
                 )
                 
-                # Try to find the tracking file automatically
                 tracking_file = find_tracking_file(filepath)
                 if tracking_file:
                     reply = QMessageBox.question(
                         self,
                         "Found Tracking File",
-                        f"I found a tracking results file:\n\n"
-                        f"{Path(tracking_file).name}\n\n"
-                        f"Would you like to load it instead?",
+                        f"Load {Path(tracking_file).name} instead?",
                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
                     )
                     
@@ -872,12 +548,10 @@ class BeeMonitorGUI(QMainWindow):
                 else:
                     return
             
-            # Validate required columns
             if 'track_id' not in df.columns:
                 QMessageBox.warning(self, "Invalid File", "Missing 'track_id' column")
                 return
             
-            # Handle different frame column names
             frame_col = None
             for possible in ['frame', 'frame_number', 'frame_num', 'frame_id', 'frame_idx']:
                 if possible in df.columns:
@@ -885,47 +559,17 @@ class BeeMonitorGUI(QMainWindow):
                     break
             
             if frame_col is None:
-                # Show available columns for debugging
                 QMessageBox.critical(
                     self,
                     "Invalid CSV Format",
                     f"Missing frame column in CSV!\n\n"
-                    f"Available columns:\n{', '.join(df.columns)}\n\n"
-                    f"Expected one of:\n"
-                    f"  • frame\n"
-                    f"  • frame_number\n"
-                    f"  • frame_num\n"
-                    f"  • frame_id\n\n"
-                    f"This CSV may not be a tracking results file."
+                    f"Available columns:\n{', '.join(df.columns)}"
                 )
                 return
             
-            # Rename to standard 'frame'
             if frame_col != 'frame':
-                try:
-                    df = df.rename(columns={frame_col: 'frame'})
-                    print(f"Renamed column '{frame_col}' to 'frame'")
-                except Exception as e:
-                    QMessageBox.critical(
-                        self,
-                        "Column Rename Failed",
-                        f"Failed to rename '{frame_col}' to 'frame':\n{e}\n\n"
-                        f"Columns: {list(df.columns)}"
-                    )
-                    return
+                df = df.rename(columns={frame_col: 'frame'})
             
-            # Verify frame column exists after rename
-            if 'frame' not in df.columns:
-                QMessageBox.critical(
-                    self,
-                    "Frame Column Missing",
-                    f"Frame column disappeared after processing!\n\n"
-                    f"Original column: {frame_col}\n"
-                    f"Current columns: {list(df.columns)}"
-                )
-                return
-            
-            # Check for position columns
             has_bbox = all(col in df.columns for col in ['x1', 'y1', 'x2', 'y2'])
             has_xy = all(col in df.columns for col in ['x', 'y'])
             has_centroid = all(col in df.columns for col in ['centroid_x', 'centroid_y'])
@@ -934,7 +578,6 @@ class BeeMonitorGUI(QMainWindow):
                 QMessageBox.warning(self, "Invalid File", "Missing position data")
                 return
             
-            # Success!
             self.tracking_results = df
             self.results_loaded = True
             
@@ -946,55 +589,18 @@ class BeeMonitorGUI(QMainWindow):
                 f"File: {Path(filepath).name}\n\n"
                 f"Total tracks: {total_tracks}\n"
                 f"Total frames: {total_frames}\n"
-                f"Total detections: {len(df)}\n\n"
-                f"Enable 'Show Tracks' checkbox to visualize."
+                f"Total detections: {len(df)}"
             )
             
             QMessageBox.information(self, "Results Loaded", msg)
             
-            # ============================================================
-            # CRITICAL FIX: Enable visualization with signal blocking
-            # ============================================================
-            
-            # Block signals to prevent unwanted state changes
-            self.video_panel.show_tracks_cb.blockSignals(True)
-            self.video_panel.show_detections_cb.blockSignals(True)
-            self.video_panel.show_sources_cb.blockSignals(True)
-            
-            # Set checkbox visual state
-            self.video_panel.show_tracks_cb.setChecked(True)
-            self.video_panel.show_detections_cb.setChecked(True)
-            self.video_panel.show_sources_cb.setChecked(True)
-            
-            # Unblock signals
-            self.video_panel.show_tracks_cb.blockSignals(False)
-            self.video_panel.show_detections_cb.blockSignals(False)
-            self.video_panel.show_sources_cb.blockSignals(False)
-            
-            # CRITICAL: Directly set canvas flags (don't rely on signals)
-            self.video_canvas.show_detections = True
-            self.video_canvas.show_tracks = True
-            self.video_canvas.show_detection_sources = True
-            
-            print(f"✓ Visualization enabled:")
-            print(f"  Checkboxes: Detections={self.video_panel.show_detections_cb.isChecked()}, "
-                  f"Tracks={self.video_panel.show_tracks_cb.isChecked()}, "
-                  f"Sources={self.video_panel.show_sources_cb.isChecked()}")
-            print(f"  Canvas flags: show_detections={self.video_canvas.show_detections}, "
-                  f"show_tracks={self.video_canvas.show_tracks}, "
-                  f"show_detection_sources={self.video_canvas.show_detection_sources}")
-            
-            # Refresh current frame to display overlays
+            # Detections and tracks are always shown (no toggles)
             if self.current_frame is not None:
                 self.load_frame(self.current_frame_idx)
             
             self.statusBar().showMessage(
                 f"✓ Results loaded: {total_tracks} tracks across {total_frames} frames"
             )
-            
-            print(f"Results loaded: {filepath}")
-            print(f"  Tracks: {total_tracks}")
-            print(f"  Frames: {total_frames}")
             
         except Exception as e:
             import traceback
@@ -1006,13 +612,9 @@ class BeeMonitorGUI(QMainWindow):
         if not self.results_loaded or self.tracking_results is None:
             return {}
         
-        # Check if frame column exists
         if 'frame' not in self.tracking_results.columns:
-            print(f"WARNING: 'frame' column not found in tracking results")
-            print(f"Available columns: {list(self.tracking_results.columns)}")
             return {}
         
-        # Get all detections for this frame
         frame_data = self.tracking_results[
             self.tracking_results['frame'] == frame_idx
         ]
@@ -1020,7 +622,6 @@ class BeeMonitorGUI(QMainWindow):
         if len(frame_data) == 0:
             return {}
         
-        # Build track trajectories (last N frames for each visible track)
         tracks = {}
         
         for track_id in frame_data['track_id'].unique():
@@ -1047,11 +648,9 @@ class BeeMonitorGUI(QMainWindow):
         if not self.results_loaded or self.tracking_results is None:
             return []
         
-        # Check if frame column exists
         if 'frame' not in self.tracking_results.columns:
             return []
         
-        # Get all detections for this frame
         frame_data = self.tracking_results[
             self.tracking_results['frame'] == frame_idx
         ]
@@ -1059,117 +658,24 @@ class BeeMonitorGUI(QMainWindow):
         if len(frame_data) == 0:
             return []
         
-        # Convert CSV rows to Detection objects
         detections = []
         
         for _, row in frame_data.iterrows():
-            # Check if we have bounding box columns
             if all(col in row.index for col in ['x1', 'y1', 'x2', 'y2']):
                 bbox = (row['x1'], row['y1'], row['x2'], row['y2'])
                 centroid = ((row['x1'] + row['x2']) / 2, (row['y1'] + row['y2']) / 2)
                 
-                # Create Detection object
                 det = Detection(
                     bbox=bbox,
                     centroid=centroid,
                     confidence=row.get('confidence', 1.0),
                     label=row.get('species', 'bee'),
-                    source=row.get('source', 'blob')  # Use source from CSV, default to blob
+                    source=row.get('source', 'blob')
                 )
                 
                 detections.append(det)
         
         return detections
-    
-    # ========================================================================
-    # Analysis
-    # ========================================================================
-    
-    def run_analysis(self):
-        """Run full video analysis."""
-        if self.video_path is None:
-            QMessageBox.warning(self, "Warning", "Load a video first")
-            return
-        
-        # Check if detection has been tested
-        if self.blob_detector is None:
-            reply = QMessageBox.question(
-                self,
-                "Background Not Initialized",
-                "Background model not initialized.\n\n"
-                "Initialize background now before running analysis?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            
-            if reply == QMessageBox.StandardButton.Yes:
-                self.initialize_background()
-                
-                # Suggest testing
-                test_reply = QMessageBox.question(
-                    self,
-                    "Test Detection First?",
-                    "It's recommended to test detection on a frame first\n"
-                    "to verify parameters work correctly.\n\n"
-                    "Test detection now?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                )
-                
-                if test_reply == QMessageBox.StandardButton.Yes:
-                    return  # Let them test first
-            else:
-                return
-        
-        if not self.output_folder:
-            video_dir = Path(self.video_path).parent
-            video_name = Path(self.video_path).stem
-            self.output_folder = str(video_dir / f"{video_name}_output")
-            os.makedirs(self.output_folder, exist_ok=True)
-        
-        reply = QMessageBox.question(
-            self,
-            "Run Analysis",
-            f"Run full analysis on:\n{Path(self.video_path).name}\n\n"
-            f"Output folder:\n{self.output_folder}\n\n"
-            f"⚠️  Make sure test detection works before running full analysis!\n"
-            f"If test detection shows 0 detections, the tracking file will be empty.\n\n"
-            f"This may take several minutes. Continue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-        
-        params = self.control_panel.get_parameters()
-        
-        # Get detection mode from control panel
-        detection_mode = params.get("detection_mode", "yolo_only")
-        
-        # Use defaults - these will be learned automatically in Phase 1b
-        self.config.detection.min_area = 120.0
-        self.config.detection.min_solidity = 0.7
-        self.config.detection.max_area = 4000.0
-        
-        self.config.detection.sync_to_tracking(self.config.tracking)
-        
-        os.makedirs(self.output_folder, exist_ok=True)
-        
-        monitor = BeeMonitor(config=self.config)
-        
-        self.analysis_thread = AnalysisThread(
-            monitor,
-            self.video_path,
-            self.output_folder,
-            detection_mode=detection_mode
-        )
-        
-        self.analysis_thread.progress.connect(
-            lambda msg: self.statusBar().showMessage(msg))
-        self.analysis_thread.finished.connect(self.on_analysis_finished)
-        self.analysis_thread.error.connect(
-            lambda err: QMessageBox.critical(self, "Analysis Error", err))
-        
-        self.analysis_thread.start()
-        self.statusBar().showMessage("Running analysis...")
     
     def on_analysis_finished(self, result, csv_path):
         """Handle analysis completion."""
@@ -1186,7 +692,6 @@ class BeeMonitorGUI(QMainWindow):
         
         QMessageBox.information(self, "Analysis Complete", msg)
         
-        # Offer to load results automatically
         if os.path.exists(csv_path):
             auto_load = QMessageBox.question(
                 self,
@@ -1199,8 +704,6 @@ class BeeMonitorGUI(QMainWindow):
                 try:
                     self.tracking_results = pd.read_csv(csv_path)
                     self.results_loaded = True
-                    
-                    self.video_panel.show_tracks_cb.setChecked(True)
                     
                     if self.current_frame is not None:
                         self.load_frame(self.current_frame_idx)
@@ -1221,15 +724,13 @@ class BeeMonitorGUI(QMainWindow):
         )
         
         if filepath:
-            # Reuse load_video logic
-            self.load_video.__wrapped__(self, filepath)
+            self.load_video()
             
             QMessageBox.information(
                 self,
                 "Output Video Loaded",
                 "This is a pre-rendered visualization video.\n\n"
-                "Tracks/detections are already drawn on the video.\n"
-                "You don't need to enable overlays."
+                "Tracks/detections are already drawn on the video."
             )
     
     def save_visualization_video(self):
@@ -1263,15 +764,16 @@ class BeeMonitorGUI(QMainWindow):
         if not output_path:
             return
         
-        include_detections = self.video_panel.show_detections_cb.isChecked()
-        include_tracks = self.video_panel.show_tracks_cb.isChecked()
+        # Always include detections and tracks
+        include_detections = True
+        include_tracks = True
         
         reply = QMessageBox.question(
             self,
-            "Visualization Options",
-            f"Include in video:\n"
-            f"  • Detections: {'Yes' if include_detections else 'No'}\n"
-            f"  • Tracks: {'Yes' if include_tracks else 'No'}\n\n"
+            "Save Visualization Video",
+            f"This will save the video with:\n"
+            f"  • Detections overlay\n"
+            f"  • Track trajectories\n\n"
             f"This will process the entire video.\n"
             f"Continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
@@ -1306,7 +808,6 @@ class BeeMonitorGUI(QMainWindow):
                 
                 vis_frame = frame.copy()
                 
-                # Draw detections
                 if include_detections and self.blob_detector:
                     try:
                         detections = self.blob_detector.detect(frame)
@@ -1316,7 +817,6 @@ class BeeMonitorGUI(QMainWindow):
                     except:
                         pass
                 
-                # Draw tracks
                 if include_tracks and self.results_loaded:
                     tracks = self.get_tracks_for_frame(frame_idx)
                     colors = [(255, 0, 0), (0, 255, 255), (255, 0, 255), 
@@ -1360,10 +860,6 @@ class BeeMonitorGUI(QMainWindow):
             QMessageBox.critical(self, "Error", 
                 f"Failed to save video:\n{e}\n\n{traceback.format_exc()}")
     
-    # ========================================================================
-    # Utility
-    # ========================================================================
-    
     def set_output_folder(self):
         """Set output folder."""
         current = self.output_folder if self.output_folder else str(Path.home())
@@ -1385,9 +881,6 @@ class BeeMonitorGUI(QMainWindow):
             return
         
         params = self.control_panel.get_parameters()
-        
-        # Get detection mode from control panel
-        detection_mode = params.get("detection_mode", "yolo_only")
         
         config_data = {
             "detection": params,

@@ -6,9 +6,12 @@ based on both video resolution AND the hotel box position/distance from camera.
 
 import yaml
 from pathlib import Path
-from typing import List, Optional, Tuple, Callable, Dict, Any
+from typing import List, Optional, Tuple, Callable, Dict, Any, TYPE_CHECKING
 from dataclasses import dataclass, field
 import logging
+
+if TYPE_CHECKING:
+    import numpy as np
 
 logger = logging.getLogger(__name__)
 
