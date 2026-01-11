@@ -367,7 +367,7 @@ class BeeTracking(BaseTracking):
                 detections = self.yolo_detector.detect(frame)
             else:
                 # Periodic YOLO confirmation
-                if frame_num % 10 == 0:
+                if frame_num % 5 == 0:
                     yolo_dets = self.yolo_detector.detect(frame)
                     detections.extend(yolo_dets)
         

@@ -791,10 +791,25 @@ class BeeMonitor:
         )
         
         # Initialize MOT algorithm
+        # Enable YOLO confirmation if YOLO is in the detection mode
+        use_yolo_confirmation = detection_mode_enum in [
+            DetectionMode.FGBG_YOLO, 
+            DetectionMode.YOLO_ONLY,
+            DetectionMode.SIFT_YOLO,
+            DetectionMode.FGBG_SIFT_YOLO
+        ]
+        
         mot_algorithm = BeeTracker(
             config=self.config,
-            tracking_classes=tracking_class_names
+            tracking_classes=tracking_class_names,
+            require_yolo_confirmation=use_yolo_confirmation,  # Enable for YOLO modes
+            max_pending_age=30  # Max frames to wait for confirmation
         )
+        
+        if use_yolo_confirmation:
+            print(f"  ✓ YOLO confirmation ENABLED (new tracks require YOLO verification)")
+        else:
+            print(f"  ℹ YOLO confirmation DISABLED (legacy mode, any detection can create track)")
         
         # =====================================================================
         # Enable noise filter for ALL blob-based modes (AUTOMATIC)
@@ -933,6 +948,25 @@ class BeeMonitor:
                 print(f"  min_solidity: {stats['current_min_solidity']:.3f} "
                       f"(started: {stats['researched_min_solidity']:.3f}, "
                       f"adapted: {stats['solidity_adaptation']:+.1f}%)")
+                print(f"{'='*70}\n")
+        
+        # Print YOLO confirmation statistics (if enabled)
+        if hasattr(tracker, 'mot') and hasattr(tracker.mot, 'get_statistics'):
+            mot_stats = tracker.mot.get_statistics()
+            
+            # Only show if YOLO confirmation was enabled
+            if mot_stats.get('yolo_confirmed_tracks', 0) > 0 or mot_stats.get('pending_aged_out', 0) > 0:
+                print(f"\n{'='*70}")
+                print("YOLO CONFIRMATION STATISTICS")
+                print(f"{'='*70}")
+                print(f"Total tracks created: {mot_stats['total_tracks_created']}")
+                print(f"YOLO-confirmed tracks: {mot_stats['yolo_confirmed_tracks']} "
+                      f"({mot_stats['confirmation_rate']*100:.1f}% confirmation rate)")
+                if mot_stats['pending_confirmed'] > 0:
+                    print(f"  - Pending confirmed: {mot_stats['pending_confirmed']}")
+                print(f"Pending aged out: {mot_stats['pending_aged_out']} (noise filtered!)")
+                print(f"\n✓ Track quality: {mot_stats['confirmation_rate']*100:.1f}% of tracks were YOLO-verified")
+                print(f"✓ Noise reduction: {mot_stats['pending_aged_out']} false positives prevented")
                 print(f"{'='*70}\n")
         
         return tracking_df, grouped_df

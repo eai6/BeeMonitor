@@ -1,4 +1,4 @@
-"""Kalman filter-based MOT with adaptive cold-start and resurrection logic.
+"""Kalman filter-based MOT with adaptive cold-start, resurrection, and YOLO confirmation.
 
 Features:
 - Kalman filtering with velocity damping
@@ -6,6 +6,7 @@ Features:
 - Dynamic cold-start handling
 - Track resurrection for temporarily lost tracks
 - Plausibility checks (max speed, acceleration limits)
+- YOLO-confirmed track creation (NEW!)
 """
 
 import logging
@@ -19,14 +20,22 @@ logger = logging.getLogger(__name__)
 
 
 class BeeTracker(BaseMOT):
-    """Kalman filter-based bee tracker with adaptive parameters."""
+    """Kalman filter-based bee tracker with adaptive parameters and YOLO confirmation."""
     
-    def __init__(self, config, tracking_classes: List[str]):
+    def __init__(
+        self, 
+        config, 
+        tracking_classes: List[str],
+        require_yolo_confirmation: bool = False,
+        max_pending_age: int = 30
+    ):
         """Initialize Kalman-based bee tracker.
         
         Args:
             config: Configuration object
             tracking_classes: List of class names to track
+            require_yolo_confirmation: Only create new tracks from YOLO-confirmed detections
+            max_pending_age: Maximum frames to keep pending detection
         """
         self.config = config
         self.tracking_classes = tracking_classes
@@ -36,13 +45,28 @@ class BeeTracker(BaseMOT):
         self._next_track_id = 0
         
         # Adaptive parameters
-        self.d_initial = getattr(config.tracking, 'initial_distance_threshold', 30.0)
+        self.d_initial = getattr(config.tracking, 'initial_distance_threshold', 20.0)
         self.d_max = self.d_initial
         self.recorded_speeds = []
         self.max_speed_dynamic = 50.0  # Learned from 99th percentile
         self.max_acceleration = 30.0   # px/frame
         
+        # YOLO confirmation (NEW!)
+        self.require_yolo_confirmation = require_yolo_confirmation
+        self.max_pending_age = max_pending_age
+        self.pending_detections: List[Dict] = []
+        
+        # Statistics
+        self.stats = {
+            'total_tracks_created': 0,
+            'yolo_confirmed_tracks': 0,
+            'pending_confirmed': 0,
+            'pending_aged_out': 0,
+            'current_pending': 0
+        }
+        
         logger.info(f"BeeTracker initialized for classes: {tracking_classes}")
+        logger.info(f"  YOLO confirmation: {require_yolo_confirmation}")
     
     def predict(self, frame_num: int) -> Dict[int, Track]:
         """Predict track positions using Kalman filters."""
@@ -90,9 +114,12 @@ class BeeTracker(BaseMOT):
         
         # Handle new detections
         if not self._tracks:
-            # Initialize new tracks
-            for det in detections:
-                self._create_track(det, frame_num)
+            # Initialize new tracks (with YOLO confirmation if enabled)
+            if self.require_yolo_confirmation:
+                self._handle_initial_detections_with_confirmation(detections, frame_num)
+            else:
+                for det in detections:
+                    self._create_track(det, frame_num)
             return self.get_tracks()
         
         # Association: match detections to tracks
@@ -142,11 +169,82 @@ class BeeTracker(BaseMOT):
             if track_state.frames_without_detection > self.config.tracking.max_age:
                 del self._tracks[track_id]
         
-        # Create new tracks from unmatched detections
-        for det_idx in unmatched_dets:
-            det = detections[det_idx]
+        # Create new tracks from unmatched detections (with YOLO confirmation if enabled)
+        if self.require_yolo_confirmation:
+            self._handle_unmatched_with_yolo_confirmation(
+                detections, unmatched_dets, frame_num
+            )
+        else:
+            for det_idx in unmatched_dets:
+                det = detections[det_idx]
+                
+                # Check if too close to existing tracks (anti-duplicate)
+                too_close = False
+                for track_state in self._tracks.values():
+                    dist = np.sqrt(
+                        (det.centroid[0] - track_state.centroid[0])**2 +
+                        (det.centroid[1] - track_state.centroid[1])**2
+                    )
+                    if dist < self.d_initial:
+                        too_close = True
+                        break
+                
+                if not too_close:
+                    self._create_track(det, frame_num)
+        
+        # Update dynamic max speed
+        if len(self.recorded_speeds) > 100:
+            self.max_speed_dynamic = float(np.percentile(self.recorded_speeds, 99))
+            self.max_speed_dynamic = max(20.0, self.max_speed_dynamic)
+        
+        # Update statistics
+        self.stats['current_pending'] = len(self.pending_detections)
+        
+        return self.get_tracks()
+    
+    def _handle_initial_detections_with_confirmation(
+        self, detections: List[Detection], frame_num: int
+    ):
+        """Handle initial detections when no tracks exist yet (with YOLO confirmation).
+        
+        Args:
+            detections: List of detections
+            frame_num: Current frame number
+        """
+        yolo_dets = [d for d in detections if d.source == 'yolo']
+        other_dets = [d for d in detections if d.source != 'yolo']
+        
+        # Create tracks from YOLO detections immediately
+        for det in yolo_dets:
+            self._create_track(det, frame_num, is_yolo_confirmed=True)
+        
+        # Add other detections to pending buffer
+        for det in other_dets:
+            self.pending_detections.append({
+                'detection': det,
+                'frame_num': frame_num,
+                'age': 0
+            })
+    
+    def _handle_unmatched_with_yolo_confirmation(
+        self, detections: List[Detection], unmatched_indices: List[int], frame_num: int
+    ):
+        """Handle unmatched detections with YOLO confirmation logic.
+        
+        Args:
+            detections: List of all detections
+            unmatched_indices: Indices of unmatched detections
+            frame_num: Current frame number
+        """
+        # Separate YOLO from other detections
+        yolo_indices = [i for i in unmatched_indices if detections[i].source == 'yolo']
+        other_indices = [i for i in unmatched_indices if detections[i].source != 'yolo']
+        
+        # YOLO detections create tracks immediately (pre-confirmed)
+        for idx in yolo_indices:
+            det = detections[idx]
             
-            # Check if too close to existing tracks (anti-duplicate)
+            # Anti-duplicate check
             too_close = False
             for track_state in self._tracks.values():
                 dist = np.sqrt(
@@ -158,14 +256,92 @@ class BeeTracker(BaseMOT):
                     break
             
             if not too_close:
-                self._create_track(det, frame_num)
+                self._create_track(det, frame_num, is_yolo_confirmed=True)
         
-        # Update dynamic max speed
-        if len(self.recorded_speeds) > 100:
-            self.max_speed_dynamic = float(np.percentile(self.recorded_speeds, 99))
-            self.max_speed_dynamic = max(20.0, self.max_speed_dynamic)  # Minimum threshold
+        # If YOLO is running, check pending buffer for confirmations
+        if len(yolo_indices) > 0:
+            yolo_dets = [detections[i] for i in yolo_indices]
+            self._confirm_pending_detections(yolo_dets, frame_num)
         
-        return self.get_tracks()
+        # Add other unmatched detections to pending buffer
+        for idx in other_indices:
+            det = detections[idx]
+            self.pending_detections.append({
+                'detection': det,
+                'frame_num': frame_num,
+                'age': 0
+            })
+        
+        # Age out old pending detections
+        self._age_out_pending(frame_num)
+    
+    def _confirm_pending_detections(self, yolo_dets: List[Detection], frame_num: int):
+        """Confirm pending detections by matching to YOLO.
+        
+        Args:
+            yolo_dets: List of YOLO detections
+            frame_num: Current frame number
+        """
+        if len(self.pending_detections) == 0:
+            return
+        
+        confirmed_indices = []
+        
+        for i, pending in enumerate(self.pending_detections):
+            # Check if pending detection matches any YOLO detection
+            for yolo_det in yolo_dets:
+                iou = self._compute_iou(pending['detection'].bbox, yolo_det.bbox)
+                
+                if iou >= 0.3:  # Match threshold
+                    # CONFIRMED! Create track
+                    self._create_track(pending['detection'], frame_num, is_yolo_confirmed=True)
+                    self.stats['pending_confirmed'] += 1
+                    confirmed_indices.append(i)
+                    break
+        
+        # Remove confirmed detections from pending buffer
+        for i in reversed(confirmed_indices):
+            del self.pending_detections[i]
+    
+    def _age_out_pending(self, frame_num: int):
+        """Remove pending detections that are too old.
+        
+        Args:
+            frame_num: Current frame number
+        """
+        aged_out_indices = []
+        
+        for i, pending in enumerate(self.pending_detections):
+            age = frame_num - pending['frame_num']
+            
+            if age > self.max_pending_age:
+                aged_out_indices.append(i)
+                self.stats['pending_aged_out'] += 1
+        
+        # Remove aged-out detections
+        for i in reversed(aged_out_indices):
+            del self.pending_detections[i]
+    
+    @staticmethod
+    def _compute_iou(bbox1, bbox2):
+        """Compute IoU between two bounding boxes."""
+        x1_1, y1_1, x2_1, y2_1 = bbox1
+        x1_2, y1_2, x2_2, y2_2 = bbox2
+        
+        x1_i = max(x1_1, x1_2)
+        y1_i = max(y1_1, y1_2)
+        x2_i = min(x2_1, x2_2)
+        y2_i = min(y2_1, y2_2)
+        
+        if x2_i < x1_i or y2_i < y1_i:
+            return 0.0
+        
+        intersection = (x2_i - x1_i) * (y2_i - y1_i)
+        area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
+        area2 = (x2_2 - x1_2) * (y2_2 - y1_2)
+        union = area1 + area2 - intersection
+        
+        return intersection / union if union > 0 else 0.0
     
     def get_tracks(self) -> Dict[int, Track]:
         """Get all active tracks."""
@@ -196,6 +372,14 @@ class BeeTracker(BaseMOT):
         self.recorded_speeds.clear()
         self.d_max = self.d_initial
         self.max_speed_dynamic = 50.0
+        self.pending_detections.clear()
+        self.stats = {
+            'total_tracks_created': 0,
+            'yolo_confirmed_tracks': 0,
+            'pending_confirmed': 0,
+            'pending_aged_out': 0,
+            'current_pending': 0
+        }
         logger.info("BeeTracker reset")
     
     def get_search_regions(self, frame_num: int) -> Dict[int, Dict]:
@@ -239,7 +423,16 @@ class BeeTracker(BaseMOT):
         
         return regions
     
-    def _create_track(self, det: Detection, frame_num: int):
+    def get_statistics(self):
+        """Get tracking statistics including YOLO confirmation stats."""
+        stats = self.stats.copy()
+        stats['active_tracks'] = len(self._tracks)
+        stats['confirmation_rate'] = (
+            self.stats['yolo_confirmed_tracks'] / max(1, self.stats['total_tracks_created'])
+        )
+        return stats
+    
+    def _create_track(self, det: Detection, frame_num: int, is_yolo_confirmed: bool = False):
         """Create new track from detection."""
         track_id = self._next_track_id
         self._next_track_id += 1
@@ -273,10 +466,15 @@ class BeeTracker(BaseMOT):
             age=0,
             last_yolo_confirmation=frame_num if det.source == 'yolo' else -999,
             trajectory_history=[(frame_num, det.centroid)],
-            source=det.source  # Preserve detection source
+            source=det.source
         )
         
-        logger.debug(f"Created track {track_id} at {det.centroid}")
+        # Update statistics
+        self.stats['total_tracks_created'] += 1
+        if is_yolo_confirmed or det.source == 'yolo':
+            self.stats['yolo_confirmed_tracks'] += 1
+        
+        logger.debug(f"Created track {track_id} from {det.source} (YOLO confirmed: {is_yolo_confirmed})")
     
     def _associate_detections(
         self,
