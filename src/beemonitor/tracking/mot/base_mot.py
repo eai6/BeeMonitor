@@ -34,6 +34,7 @@ class Track:
     last_confirmation_frame: int
     trajectory: List[Tuple[int, Point]]  # [(frame, centroid), ...]
     velocity: Optional[Tuple[float, float]] = None
+    source: str = 'unknown'  # Detection source: 'blob', 'sift', 'yolo'
     
     
 class BaseMOT(ABC):

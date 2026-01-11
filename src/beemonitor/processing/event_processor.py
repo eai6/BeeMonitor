@@ -202,7 +202,12 @@ class EventProcessor:
         label_votes = movement[5] if len(movement) > 5 else {}
         
         # Determine species name
-        if label_map and label_class is not None:
+        # label_class can be either a class ID (int) or species name (str)
+        if isinstance(label_class, str):
+            # Already a species name
+            label_name = label_class
+        elif label_map and label_class is not None:
+            # Map class ID to name
             label_name = label_map.get(label_class, 'unknown')
         else:
             label_name = 'unknown'

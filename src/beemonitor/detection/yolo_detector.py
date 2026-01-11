@@ -31,7 +31,8 @@ class YOLODetector(BaseDetector):
         conf_threshold: float = 0.25,
         iou_threshold: float = 0.7,
         tracking_classes: Optional[List[str]] = None,
-        label_map: Optional[dict] = None
+        label_map: Optional[dict] = None,
+        imgsz: int = 640  # Add this parameter
     ):
         """Initialize YOLO detector.
         
@@ -41,21 +42,39 @@ class YOLODetector(BaseDetector):
             iou_threshold: IOU threshold for NMS
             tracking_classes: List of class names to detect
             label_map: Mapping {yolo_class: output_label}
+            imgsz: Image size for inference (640=default, 320=fast)
         """
         self.model = model
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
         self.tracking_classes = set(tracking_classes) if tracking_classes else None
         self.label_map = label_map or {}
+        self.imgsz = imgsz  # Store image size
         
-        logger.info(f"YOLODetector initialized: conf={conf_threshold}, classes={tracking_classes}")
+        logger.info(f"YOLODetector initialized: conf={conf_threshold}, imgsz={imgsz}, classes={tracking_classes}")
     
+    # def detect(self, frame: np.ndarray, **kwargs) -> List[Detection]:
+    #     """Detect objects using YOLO.
+        
+    #     Args:
+    #         frame: Input frame (BGR)
+    #         **kwargs: Optional overrides (conf, iou)
+            
+    #     Returns:
+    #         List of YOLO detections
+    #     """
+    #     # Override thresholds if provided
+    #     conf = kwargs.get('conf', self.conf_threshold)
+    #     iou = kwargs.get('iou', self.iou_threshold)
+        
+    #     # Run YOLO inference
+    #     results = self.model(frame, conf=conf, iou=iou, verbose=False)
     def detect(self, frame: np.ndarray, **kwargs) -> List[Detection]:
         """Detect objects using YOLO.
         
         Args:
             frame: Input frame (BGR)
-            **kwargs: Optional overrides (conf, iou)
+            **kwargs: Optional overrides (conf, iou, imgsz)
             
         Returns:
             List of YOLO detections
@@ -63,9 +82,12 @@ class YOLODetector(BaseDetector):
         # Override thresholds if provided
         conf = kwargs.get('conf', self.conf_threshold)
         iou = kwargs.get('iou', self.iou_threshold)
+        imgsz = kwargs.get('imgsz', self.imgsz)  # Add this
         
-        # Run YOLO inference
-        results = self.model(frame, conf=conf, iou=iou, verbose=False)
+        # Run YOLO inference with image size
+        results = self.model(frame, conf=conf, iou=iou, imgsz=imgsz, verbose=False)
+        
+        # ... rest stays the same
         
         detections = []
         
@@ -109,11 +131,12 @@ class YOLODetector(BaseDetector):
         
         return detections
     
+   
     def configure(self, **kwargs) -> None:
         """Configure YOLO detector parameters.
         
         Args:
-            **kwargs: conf_threshold, iou_threshold, tracking_classes, label_map
+            **kwargs: conf_threshold, iou_threshold, tracking_classes, label_map, imgsz
         """
         if 'conf_threshold' in kwargs:
             self.conf_threshold = kwargs['conf_threshold']
@@ -123,6 +146,8 @@ class YOLODetector(BaseDetector):
             self.tracking_classes = set(kwargs['tracking_classes'])
         if 'label_map' in kwargs:
             self.label_map = kwargs['label_map']
+        if 'imgsz' in kwargs:  # Add this
+            self.imgsz = kwargs['imgsz']
         
         logger.debug(f"YOLODetector configured: {kwargs}")
     

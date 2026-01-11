@@ -1,6 +1,6 @@
 """BeeTracking - High-level tracking system for bee hotels.
 
-Combines detection methods (FG/BG, SIFT, YOLO) with MOT algorithms
+Combines detection methods (FG/BG, YOLO) with MOT algorithms
 to track bees in bee hotel videos.
 """
 
@@ -22,21 +22,31 @@ logger = logging.getLogger(__name__)
 
 
 class DetectionMode(Enum):
-    """Detection modes for BeeTracking."""
-    FGBG_ONLY = "fgbg"              # FG/BG blob detection only
-    SIFT_ONLY = "sift"              # SIFT-based detection only
-    FGBG_SIFT = "fgbg_sift"         # Both FG/BG and SIFT
-    FGBG_YOLO = "fgbg_yolo"         # FG/BG with YOLO confirmation
-    SIFT_YOLO = "sift_yolo"         # SIFT with YOLO confirmation
-    FGBG_SIFT_YOLO = "fgbg_sift_yolo"  # All three methods
-    YOLO_ONLY = "yolo"              # YOLO every frame (expensive)
+    """Detection modes for BeeTracking.
+    
+    Modes:
+        FGBG_ONLY: Motion detection only (fast, misses stationary bees)
+        SIFT_ONLY: SIFT keypoint detection only (slower, finds stationary)
+        YOLO_ONLY: Deep learning every frame (slowest, most accurate)
+        FGBG_SIFT: Motion + SIFT (balanced speed + stationary detection)
+        FGBG_YOLO: Motion + periodic YOLO (good balance)
+        SIFT_YOLO: SIFT + periodic YOLO (stationary + species ID)
+        FGBG_SIFT_YOLO: All three methods (comprehensive, RECOMMENDED)
+    """
+    FGBG_ONLY = "fgbg"                      # FG/BG blob detection only
+    SIFT_ONLY = "sift"                      # SIFT keypoint detection only
+    YOLO_ONLY = "yolo"                      # YOLO every frame
+    FGBG_SIFT = "fgbg_sift"                 # FG/BG + SIFT
+    FGBG_YOLO = "fgbg_yolo"                 # FG/BG + YOLO confirmation
+    SIFT_YOLO = "sift_yolo"                 # SIFT + YOLO confirmation
+    FGBG_SIFT_YOLO = "fgbg_sift_yolo"       # All three (RECOMMENDED)
 
 
 class BeeTracking(BaseTracking):
     """High-level tracking system for bee hotels.
     
     Designed specifically for solitary bee hotels with:
-    - Configurable detection pipeline (FG/BG, SIFT, YOLO)
+    - Configurable detection pipeline (FG/BG, YOLO)
     - Noise filtering (CNN)
     - Pluggable MOT algorithm
     - Adaptive mode switching (motion detection ↔ tracking)
@@ -46,7 +56,6 @@ class BeeTracking(BaseTracking):
         mot_algorithm: MOT algorithm (BeeTracker, ByteTrack, etc.)
         detection_mode: Which detectors to use
         blob_detector: FG/BG blob detector
-        sift_detector: SIFT-based detector
         yolo_detector: YOLO detector
         noise_filter: CNN noise filter
     """
@@ -56,7 +65,7 @@ class BeeTracking(BaseTracking):
         mot_algorithm,
         yolo_model = None,
         detection_mode: DetectionMode = DetectionMode.FGBG_YOLO,
-        use_noise_filter: bool = True,
+        use_noise_filter: bool = False,
         noise_filter_model = None,
         config = None
     ):
@@ -105,8 +114,8 @@ class BeeTracking(BaseTracking):
         mode = self.detection_mode
         
         # FG/BG blob detector
-        if mode in [DetectionMode.FGBG_ONLY, DetectionMode.FGBG_SIFT,
-                    DetectionMode.FGBG_YOLO, DetectionMode.FGBG_SIFT_YOLO]:
+        if mode in [DetectionMode.FGBG_ONLY, DetectionMode.FGBG_YOLO, 
+                    DetectionMode.FGBG_SIFT, DetectionMode.FGBG_SIFT_YOLO]:
             self.blob_detector = BlobDetector(
                 min_area=50.0,
                 min_solidity=0.5
@@ -114,26 +123,41 @@ class BeeTracking(BaseTracking):
         else:
             self.blob_detector = None
         
-        # SIFT detector
+        # SIFT detector (for stationary bee detection)
+        # NOTE: Must be initialized with learn_from_video() before use!
         if mode in [DetectionMode.SIFT_ONLY, DetectionMode.FGBG_SIFT,
                     DetectionMode.SIFT_YOLO, DetectionMode.FGBG_SIFT_YOLO]:
             self.sift_detector = SIFTDetector(
                 min_keypoints=3,
-                cluster_eps=30.0
+                use_templates=True,
+                require_movement=True  # Filter out static nest holes
             )
+            logger.info("  SIFT detector created (needs initialization before use)")
         else:
             self.sift_detector = None
         
         # YOLO detector
-        if mode in [DetectionMode.FGBG_YOLO, DetectionMode.SIFT_YOLO,
-                    DetectionMode.FGBG_SIFT_YOLO, DetectionMode.YOLO_ONLY]:
+        if mode in [DetectionMode.FGBG_YOLO, DetectionMode.YOLO_ONLY,
+                    DetectionMode.SIFT_YOLO, DetectionMode.FGBG_SIFT_YOLO]:
             if yolo_model is None:
                 raise ValueError("YOLO model required for this detection mode")
+            
+            # Convert class IDs to class names
+            if self.config is None:
+                tracking_classes = ['bee', 'wasp']
+            else:
+                tracking_classes = []
+                if hasattr(self.config.tracking, 'label_map'):
+                    for class_id in self.config.tracking.tracking_classes:
+                        class_name = self.config.tracking.label_map.get(class_id, f'class_{class_id}')
+                        tracking_classes.append(class_name)
+                else:
+                    tracking_classes = [str(cid) for cid in self.config.tracking.tracking_classes]
+            
             self.yolo_detector = YOLODetector(
                 model=yolo_model,
                 conf_threshold=0.25,
-                tracking_classes=['bee', 'wasp'] if self.config is None 
-                    else self.config.tracking.tracking_classes
+                tracking_classes=tracking_classes
             )
         else:
             self.yolo_detector = None
@@ -198,7 +222,8 @@ class BeeTracking(BaseTracking):
                     'x2': track.bbox[2],
                     'y2': track.bbox[3],
                     'species': track.label,
-                    'confidence': 1.0
+                    'confidence': 1.0,
+                    'source': track.source if hasattr(track, 'source') else 'unknown'
                 })
             
             frame_num += 1
@@ -206,7 +231,7 @@ class BeeTracking(BaseTracking):
         
         cap.release()
         
-        # Convert to grouped format
+        # Convert to DataFrame
         return self._convert_to_dataframe(all_detections)
     
     def process_frame(
@@ -279,12 +304,12 @@ class BeeTracking(BaseTracking):
             blob_dets = self.blob_detector.detect(frame)
             detections.extend(blob_dets)
         
-        # SIFT detection
+        # SIFT stationary detection
         if self.sift_detector:
-            sift_dets = self.sift_detector.detect(frame)
+            sift_dets = self.sift_detector.detect(frame, use_templates=True)
             detections.extend(sift_dets)
         
-        # Apply noise filter if enabled
+        # Apply noise filter if enabled (to blob and SIFT detections)
         if self.noise_filter and detections:
             detections = self.noise_filter.filter_detections(frame, detections)
         
@@ -306,9 +331,6 @@ class BeeTracking(BaseTracking):
         if 'blob_min_area' in kwargs and self.blob_detector:
             self.blob_detector.configure(min_area=kwargs['blob_min_area'])
         
-        if 'sift_min_keypoints' in kwargs and self.sift_detector:
-            self.sift_detector.configure(min_keypoints=kwargs['sift_min_keypoints'])
-        
         if 'yolo_conf' in kwargs and self.yolo_detector:
             self.yolo_detector.configure(conf_threshold=kwargs['yolo_conf'])
         
@@ -326,8 +348,6 @@ class BeeTracking(BaseTracking):
         """Reset tracking system."""
         if self.blob_detector:
             self.blob_detector.reset()
-        if self.sift_detector:
-            self.sift_detector.reset()
         if self.yolo_detector:
             self.yolo_detector.reset()
         
@@ -360,6 +380,6 @@ class BeeTracking(BaseTracking):
     def _convert_to_dataframe(self, detections: List[dict]) -> pd.DataFrame:
         """Convert detections to DataFrame."""
         if not detections:
-            return pd.DataFrame(columns=['frame', 'track_id', 'x1', 'y1', 'x2', 'y2', 'species'])
+            return pd.DataFrame(columns=['frame', 'track_id', 'x1', 'y1', 'x2', 'y2', 'species', 'confidence', 'source'])
         
         return pd.DataFrame(detections)

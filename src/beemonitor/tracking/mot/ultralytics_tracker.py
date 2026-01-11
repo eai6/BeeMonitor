@@ -129,7 +129,8 @@ class UltralyticsTracker(BaseMOT):
                         frames_without_detection=0,
                         last_confirmation_frame=frame_num,
                         trajectory=[(frame_num, centroid)],
-                        confidence=conf
+                        confidence=conf,
+                        source='yolo'  # UltralyticsTracker always uses YOLO
                     )
                 else:
                     track_info = self._tracks[track_id]
@@ -167,7 +168,8 @@ class UltralyticsTracker(BaseMOT):
                 frames_without_detection=track_info.frames_without_detection,
                 last_confirmation_frame=track_info.last_confirmation_frame,
                 trajectory=track_info.trajectory.copy(),
-                velocity=velocity
+                velocity=velocity,
+                source=track_info.source  # Preserve source
             )
         
         return tracks
@@ -213,7 +215,8 @@ class TrackInfo:
         frames_without_detection: int,
         last_confirmation_frame: int,
         trajectory: List,
-        confidence: float
+        confidence: float,
+        source: str = 'yolo'  # UltralyticsTracker always uses YOLO
     ):
         self.track_id = track_id
         self.bbox = bbox
@@ -224,6 +227,7 @@ class TrackInfo:
         self.last_confirmation_frame = last_confirmation_frame
         self.trajectory = trajectory
         self.confidence = confidence
+        self.source = source
 
 
 # Convenience functions for common trackers

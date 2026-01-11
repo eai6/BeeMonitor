@@ -367,6 +367,62 @@ class NestConfig:
 
 
 @dataclass
+class DetectionConfig:
+    """Detection configuration for GUI compatibility.
+    
+    These parameters are used by the GUI and can be synced to TrackingConfig.
+    Keeps detection and tracking configuration separate while allowing coordination.
+    """
+    # Basic blob detection parameters
+    min_area: float = 120.0  # Minimum blob area in pixels
+    min_solidity: float = 0.7  # Minimum solidity (convex hull area / contour area, 0-1)
+    max_area: float = 4000.0  # Maximum blob area in pixels
+    
+    # Morphological operations
+    erosion_kernel_size: int = 3  # Kernel size for morphological erosion
+    dilation_kernel_size: int = 5  # Kernel size for morphological dilation
+    
+    # Detection mode
+    detection_mode: str = "fgbg_sift_yolo"  # Options: fgbg, sift, yolo, fgbg_sift, fgbg_yolo, sift_yolo, fgbg_sift_yolo
+    
+    # Noise filtering
+    use_noise_filter: bool = False  # Enable CNN-based noise filtering
+    noise_filter_threshold: float = 0.9  # Threshold for noise filter (higher = more conservative)
+    
+    # Background initialization
+    background_init_frames: int = 100  # Number of frames to use for background model initialization
+    
+    # YOLO parameters
+    yolo_interval: int = 10  # Run YOLO detection every N frames (0 = every frame)
+    yolo_conf_threshold: float = 0.3  # YOLO confidence threshold
+    
+    def sync_to_tracking(self, tracking_config: 'TrackingConfig') -> None:
+        """Sync detection parameters to tracking config.
+        
+        This allows GUI-controlled detection parameters to flow into the
+        tracking configuration while keeping them logically separated.
+        
+        Args:
+            tracking_config: TrackingConfig instance to update
+        """
+        tracking_config.min_blob_area_pixels = self.min_area
+        tracking_config.min_blob_solidity = self.min_solidity
+        tracking_config.max_blob_area_pixels = self.max_area
+    
+    def to_tracking_params(self) -> Dict[str, Any]:
+        """Convert detection params to tracking config params.
+        
+        Returns:
+            Dictionary of tracking config parameter mappings
+        """
+        return {
+            'min_blob_area_pixels': self.min_area,
+            'min_blob_solidity': self.min_solidity,
+            'max_blob_area_pixels': self.max_area,
+        }
+
+
+@dataclass
 class TrackingConfig:
     """Enhanced tracking configuration for HyDaT system with hotel-aware scaling."""
 
@@ -742,6 +798,7 @@ class Config:
     hotel_box: HotelBoxConfig = field(default_factory=HotelBoxConfig)
     models: ModelConfig = field(default_factory=ModelConfig)
     nest: NestConfig = field(default_factory=NestConfig)
+    detection: DetectionConfig = field(default_factory=DetectionConfig)
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
     processing: ProcessingConfig = field(default_factory=ProcessingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
@@ -796,6 +853,14 @@ class Config:
             'min_trajectory_length': self.processing.min_trajectory_length,
         }
     
+    def sync_detection_to_tracking(self) -> None:
+        """Sync detection parameters to tracking configuration.
+        
+        Call this after updating detection parameters from GUI to ensure
+        tracking uses the updated values.
+        """
+        self.detection.sync_to_tracking(self.tracking)
+    
     def print_scaled_values(self) -> None:
         """Print all scaled parameter values for current resolution and hotel box."""
         width, height = self.resolution
@@ -812,6 +877,12 @@ class Config:
         print(f"  Position: ({self.hotel_box.x_center:.2f}, {self.hotel_box.y_center:.2f})")
         print(f"  Size: {self.hotel_box.width_ratio:.2f} x {self.hotel_box.height_ratio:.2f}")
         print(f"  Bounds: {bounds}")
+        print()
+        
+        print("Detection Configuration:")
+        print(f"  min_area: {self.detection.min_area}")
+        print(f"  min_solidity: {self.detection.min_solidity}")
+        print(f"  max_area: {self.detection.max_area}")
         print()
         
         print("Nest Detection Parameters:")
@@ -876,6 +947,7 @@ class Config:
         hotel_box_config = HotelBoxConfig(**config_dict.get('hotel_box', {}))
         models_config = ModelConfig(**config_dict.get('models', {}))
         nest_config = NestConfig(**config_dict.get('nest', {}))
+        detection_config = DetectionConfig(**config_dict.get('detection', {}))
         tracking_config = TrackingConfig(**config_dict.get('tracking', {}))
         processing_config = ProcessingConfig(**config_dict.get('processing', {}))
         output_config = OutputConfig(**config_dict.get('output', {}))
@@ -885,6 +957,7 @@ class Config:
             hotel_box=hotel_box_config,
             models=models_config,
             nest=nest_config,
+            detection=detection_config,
             tracking=tracking_config,
             processing=processing_config,
             output=output_config

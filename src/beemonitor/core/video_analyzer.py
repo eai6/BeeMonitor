@@ -891,26 +891,47 @@ class AnalysisResults:
         self.config = config
     
     def to_csv(self, output_folder: str = "output", columns: Optional[List[str]] = None) -> None:
-        """Export events to CSV file.
+        """Export events and tracking results to CSV files.
+        
+        Saves two files:
+        - *_events.csv: Entry/exit events
+        - *_tracking_results.csv: Frame-by-frame tracking data
         
         Args:
-            filename: Output CSV file path
-            columns: Columns to include (default: all)
+            output_folder: Directory for output files
+            columns: Columns to include in events CSV (default: all)
             
         Example:
-            >>> results.to_csv("output/events.csv")
-            >>> results.to_csv("output/events.csv", columns=["timestamp", "nest", "action"])
+            >>> results.to_csv("output")
+            >>> results.to_csv("output", columns=["timestamp", "nest", "action"])
         """
-        filename = self.video_path.replace(".mp4", "_events.csv") 
-        filename = filename.split("/")[-1]
-        filename = str(Path(output_folder) / Path(filename).name)
+        # Create output folder
+        Path(output_folder).mkdir(parents=True, exist_ok=True)
+        
+        # Base filename from video
+        base_filename = self.video_path.replace(".mp4", "")
+        base_filename = Path(base_filename).name
+        
+        # === SAVE EVENTS ===
+        events_filename = str(Path(output_folder) / f"{base_filename}_events.csv")
+        
         if columns is None:
-            self.events.to_csv(filename, index=False)
+            self.events.to_csv(events_filename, index=False)
         else:
             available_cols = [col for col in columns if col in self.events.columns]
-            self.events[available_cols].to_csv(filename, index=False)
+            self.events[available_cols].to_csv(events_filename, index=False)
         
-        logger.info(f"Saved {len(self.events)} events to {filename}")
+        logger.info(f"Saved {len(self.events)} events to {events_filename}")
+        
+        # === SAVE TRACKING RESULTS ===
+        tracking_filename = str(Path(output_folder) / f"{base_filename}_tracking_results.csv")
+        
+        if self.tracks is not None and isinstance(self.tracks, pd.DataFrame) and not self.tracks.empty:
+            # Tracks is already a flat DataFrame - just save it!
+            self.tracks.to_csv(tracking_filename, index=False)
+            logger.info(f"Saved {len(self.tracks)} tracking records to {tracking_filename}")
+        else:
+            logger.warning("No tracking results to save (tracks is not a valid DataFrame)")
     
     def save_video(self, output_folder: str = "output") -> None:
         """Save annotated video with tracking visualization.
@@ -1167,7 +1188,8 @@ class BeeMonitor:
         video_path: str,
         nest_video_path: Optional[str] = None,
         output_folder: Optional[str] = None,
-        visualize: Optional[bool] = None 
+        visualize: Optional[bool] = None,
+        detection_mode: str = 'fgbg'
     ) -> AnalysisResults:
         """Analyze a video to detect and track bee activity.
         
@@ -1223,24 +1245,25 @@ class BeeMonitor:
         
         # Step 3: Detect motion and track bees
         logger.info("Step 2/3: Detecting motion and tracking bees...")
-        motion_data = self.get_motion_tracking(
+        flat_tracking_df, grouped_tracking_df = self.get_motion_tracking(
             video_path,
             nests['hotel'],
             output_folder,
-            visualize=visualize
+            visualize=visualize,
+            detection_mode=detection_mode
         )
 
         # visualize
         #self.visualize_motion(motion_data)
 
         # Validate motion_data
-        if motion_data is None:
+        if flat_tracking_df is None or flat_tracking_df.empty:
             logger.warning("No motion tracking data returned, skipping video analysis")
             return None
         
-        # Step 4: Process tracks to get events
+        # Step 4: Process tracks to get events (uses grouped format)
         logger.info("Step 3/3: Processing tracks to identify events...")
-        events = self.process_motion_tracking(motion_data, nests)
+        events = self.process_motion_tracking(grouped_tracking_df, nests)
 
         # Synthesize CSV
         events = self.synthesize_csv(
@@ -1248,13 +1271,13 @@ class BeeMonitor:
             video_path
         )
         
-        # Create results object
+        # Create results object (use flat DataFrame for saving!)
         results = AnalysisResults(
             events=events,
-            tracks=motion_data.get('tracks', []) if isinstance(motion_data, dict) else motion_data['tracks'].tolist(),
+            tracks=flat_tracking_df,  # Flat DataFrame for CSV export
             nests=nests,
             video_path=video_path,
-            motion_data=motion_data, 
+            motion_data=grouped_tracking_df,  # Grouped for compatibility
             config=self.config
         )
 
@@ -1482,63 +1505,271 @@ class BeeMonitor:
             return sorted_paths[prev_idx]
         return None
 
-    
+    # def get_motion_tracking(
+    #     self,
+    #     video_path: str,
+    #     hotel_roi: Tuple[float, float, float, float],
+    #     output_folder: str,
+    #     visualize: bool = False
+    # ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    #     """Detect motion and track bees with 2-phase initialization.
+        
+    #     Phase 1: Background initialization (blob detector)
+    #     Phase 2: Full tracking with blob + YOLO
+        
+    #     Args:
+    #         video_path: Path to video file
+    #         hotel_roi: Region of interest (x1, y1, x2, y2)
+    #         output_folder: Directory for output files
+    #         visualize: Whether to save visualization
+            
+    #     Returns:
+    #         Tuple of (flat_df, grouped_df):
+    #         - flat_df: DataFrame with columns: frame, track_id, x1, y1, x2, y2, species, confidence, source
+    #         - grouped_df: DataFrame in grouped format for event processing
+    #     """
+    #     from beemonitor.tracking.bee_tracking import BeeTracking, DetectionMode
+    #     from beemonitor.tracking.mot.bee_tracker import BeeTracker
+    #     from beemonitor.detection import BlobDetector, YOLODetector
+        
+    #     logger.info("\n" + "="*70)
+    #     logger.info("2-PHASE DETECTION INITIALIZATION")
+    #     logger.info("="*70)
+        
+    #     # =====================================================================
+    #     # PHASE 1: Initialize Background Model (Blob Detector)
+    #     # =====================================================================
+    #     logger.info("\nPhase 1: Background Initialization")
+    #     logger.info("-" * 70)
+        
+    #     blob_detector = BlobDetector(
+    #         min_area=self.config.detection.min_area if hasattr(self.config.detection, 'min_area') else 50.0,
+    #         min_solidity=self.config.detection.min_solidity if hasattr(self.config.detection, 'min_solidity') else 0.5
+    #     )
+        
+    #     try:
+    #         # Use first 100 frames for background (should be bee-free or early morning)
+    #         blob_detector.initialize_from_video(
+    #             video_path=video_path,
+    #             num_frames=100,
+    #             start_frame=0
+    #         )
+    #         logger.info("✓ Background model initialized (100 frames)")
+    #     except Exception as e:
+    #         logger.warning(f"Background initialization failed: {e}")
+    #         logger.warning("Continuing with default background model")
+        
+    #     # =====================================================================
+    #     # PHASE 2: Full Tracking with Blob + YOLO
+    #     # =====================================================================
+    #     logger.info("\nPhase 2: Full Video Analysis")
+    #     logger.info("-" * 70)
+    #     logger.info("Detection mode: FGBG + YOLO (motion + deep learning)")
+    #     logger.info(f"  - Blob detector: {'✓ Initialized' if blob_detector else '✗ Not initialized'}")
+    #     logger.info(f"  - YOLO detector: ✓ Periodic confirmation")
+    #     logger.info("")
+        
+    #     # Convert class IDs to class names for YOLO
+    #     tracking_class_names = []
+    #     if hasattr(self.config.tracking, 'label_map'):
+    #         for class_id in self.config.tracking.tracking_classes:
+    #             class_name = self.config.tracking.label_map.get(class_id, f'class_{class_id}')
+    #             tracking_class_names.append(class_name)
+    #     else:
+    #         tracking_class_names = [str(cid) for cid in self.config.tracking.tracking_classes]
+        
+    #     # Initialize MOT algorithm
+    #     mot_algorithm = BeeTracker(
+    #         config=self.config,
+    #         tracking_classes=tracking_class_names
+    #     )
+        
+    #     # Initialize BeeTracking system with FGBG_YOLO mode
+    #     tracker = BeeTracking(
+    #         mot_algorithm=mot_algorithm,
+    #         yolo_model=self.tracking_model,
+    #         #detection_mode=DetectionMode.FGBG_YOLO,  # Motion + YOLO only
+    #         detection_mode=DetectionMode.YOLO_ONLY,
+    #         use_noise_filter=False,
+    #         noise_filter_model=None,
+    #         config=self.config
+    #     )
+        
+    #     # *** CRITICAL: Use initialized blob detector ***
+    #     tracker.blob_detector = blob_detector
+        
+    #     logger.info("✓ Tracking system initialized with blob + YOLO")
+    #     logger.info("="*70 + "\n")
+        
+    #     # Process video - returns flat DataFrame
+    #     tracking_df = tracker.process_video(
+    #         video_path=video_path,
+    #         roi=hotel_roi
+    #     )
+        
+    #     # Convert to grouped format for event processing
+    #     grouped_df = self._convert_tracking_to_grouped_format(tracking_df)
+        
+    #     logger.info(f"\n✓ Tracking complete:")
+    #     logger.info(f"  Total detections: {len(tracking_df)}")
+    #     logger.info(f"  Unique tracks: {tracking_df['track_id'].nunique() if not tracking_df.empty else 0}")
+        
+    #     return tracking_df, grouped_df
+
     def get_motion_tracking(
         self,
         video_path: str,
         hotel_roi: Tuple[float, float, float, float],
         output_folder: str,
-        visualize: bool = False
-    ) -> pd.DataFrame:
-        """Detect motion and track bees in the video.
+        visualize: bool = False,
+        detection_mode: str = 'fgbg'
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Detect motion and track bees.
+        
+        CNN noise filter + learned solidity are AUTOMATICALLY applied 
+        to all blob-based modes (fgbg, fgbg_yolo).
         
         Args:
             video_path: Path to video file
-            hotel_roi: Region of interest (x1, y1, x2, y2)
+            hotel_roi: Hotel region of interest (x1, y1, x2, y2)
             output_folder: Directory for output files
             visualize: Whether to save visualization
+            detection_mode: 'fgbg', 'fgbg_yolo', or 'yolo_only'
             
         Returns:
-            DataFrame with tracking results in grouped format (frame_number, tracks, detections)
+            Tuple of (flat_df, grouped_df)
         """
-        # Import here to avoid circular imports
         from beemonitor.tracking.bee_tracking import BeeTracking, DetectionMode
         from beemonitor.tracking.mot.bee_tracker import BeeTracker
+        from beemonitor.detection import BlobDetector, YOLODetector
         
-        # Initialize MOT algorithm
-        # Convert class IDs to class names using label_map
+        # Map string detection mode to enum
+        mode_map = {
+            'fgbg': DetectionMode.FGBG_ONLY,
+            'fgbg_yolo': DetectionMode.FGBG_YOLO,
+            'yolo': DetectionMode.YOLO_ONLY,
+            'yolo_only': DetectionMode.YOLO_ONLY,
+        }
+        detection_mode_enum = mode_map.get(detection_mode, DetectionMode.FGBG_ONLY)
+        
+        logger.info("\n" + "="*70)
+        logger.info(f"DETECTION MODE: {detection_mode.upper()}")
+        logger.info(f"  CNN noise filter: {'AUTO' if detection_mode in ['fgbg', 'fgbg_yolo'] else 'N/A'}")
+        logger.info(f"  Learned solidity: {'AUTO' if detection_mode in ['fgbg', 'fgbg_yolo'] else 'N/A'}")
+        logger.info("="*70)
+        
+        # =====================================================================
+        # PHASE 1: Initialize Background Model (Blob Detector)
+        # =====================================================================
+        logger.info("\nPhase 1: Background Initialization")
+        logger.info("-" * 70)
+        
+        blob_detector = BlobDetector(
+            min_area=self.config.detection.min_area if hasattr(self.config.detection, 'min_area') else 50.0,
+            min_solidity=self.config.detection.min_solidity if hasattr(self.config.detection, 'min_solidity') else 0.5
+        )
+        
+        try:
+            blob_detector.initialize_from_video(
+                video_path=video_path,
+                num_frames=100,
+                start_frame=0
+            )
+            logger.info("✓ Background model initialized (100 frames)")
+        except Exception as e:
+            logger.warning(f"Background initialization failed: {e}")
+            logger.warning("Continuing with default background model")
+        
+        # =====================================================================
+        # PHASE 2: Full Tracking with Blob + YOLO
+        # =====================================================================
+        logger.info("\nPhase 2: Full Video Analysis")
+        logger.info("-" * 70)
+        logger.info("Detection mode: YOLO only")
+        logger.info("")
+        
+        # Convert class IDs to class names
         tracking_class_names = []
         if hasattr(self.config.tracking, 'label_map'):
             for class_id in self.config.tracking.tracking_classes:
                 class_name = self.config.tracking.label_map.get(class_id, f'class_{class_id}')
                 tracking_class_names.append(class_name)
         else:
-            # Fallback: use class IDs as strings
             tracking_class_names = [str(cid) for cid in self.config.tracking.tracking_classes]
         
+        # Create YOLO detector with correct class names
+        yolo_detector = YOLODetector(
+            model=self.tracking_model,
+            conf_threshold=0.25,
+            tracking_classes=None #tracking_class_names
+        )
+        
+        # Initialize MOT algorithm
         mot_algorithm = BeeTracker(
             config=self.config,
             tracking_classes=tracking_class_names
         )
         
+        # =====================================================================
+        # Enable noise filter for ALL blob-based modes (AUTOMATIC)
+        # =====================================================================
+        use_noise_filter = detection_mode_enum in [DetectionMode.FGBG_ONLY, DetectionMode.FGBG_YOLO]
+        noise_filter_model = None
+
+        if use_noise_filter:
+            try:
+                from beemonitor.detection.noise_filter import BeeNoiseFilter
+                model_path = self.config.models.blob_noise_classifier if hasattr(self.config.models, 'blob_noise_classifier') else None
+                if model_path and Path(model_path).exists():
+                    noise_filter_model = BeeNoiseFilter(
+                        model_path=model_path,
+                        noise_threshold=0.9  # High threshold = strict filtering
+                    )
+                    logger.info(f"✓ CNN noise filter enabled (automatic for blob modes): {model_path}")
+                else:
+                    if model_path:
+                        logger.warning(f"Noise filter model not found: {model_path}")
+                    else:
+                        logger.info("⚠ Noise filter model not configured in config.models.blob_noise_classifier")
+                    logger.info("Continuing with morphological filtering only")
+                    use_noise_filter = False
+            except Exception as e:
+                logger.warning(f"Could not load noise filter: {e}")
+                logger.info("Continuing with morphological filtering only")
+                use_noise_filter = False
+        
         # Initialize BeeTracking system
         tracker = BeeTracking(
             mot_algorithm=mot_algorithm,
             yolo_model=self.tracking_model,
-            detection_mode=DetectionMode.FGBG_YOLO,  # Use FG/BG + YOLO confirmation
-            use_noise_filter=True,
-            noise_filter_model=None,  # Can be added if noise filter model is available
+            detection_mode=detection_mode_enum,  # Use enum from mode mapping
+            use_noise_filter=use_noise_filter,   # Auto-set based on mode
+            noise_filter_model=noise_filter_model,
             config=self.config
         )
         
-        # Process video - returns flat DataFrame
+        # *** Use our initialized detectors ***
+        tracker.blob_detector = blob_detector
+        tracker.yolo_detector = yolo_detector
+        
+        logger.info("✓ Tracking system initialized")
+        logger.info("="*70 + "\n")
+        
+        # Process video
         tracking_df = tracker.process_video(
             video_path=video_path,
             roi=hotel_roi
         )
         
-        # Convert to grouped format expected by event_processor
-        return self._convert_tracking_to_grouped_format(tracking_df)
+        # Convert to grouped format
+        grouped_df = self._convert_tracking_to_grouped_format(tracking_df)
+        
+        logger.info(f"\n✓ Tracking complete:")
+        logger.info(f"  Total detections: {len(tracking_df)}")
+        logger.info(f"  Unique tracks: {tracking_df['track_id'].nunique() if not tracking_df.empty else 0}")
+        
+        return tracking_df, grouped_df
+
     
     def _convert_tracking_to_grouped_format(self, tracking_df: pd.DataFrame) -> pd.DataFrame:
         """Convert flat tracking DataFrame to grouped format expected by event_processor.
@@ -1580,9 +1811,31 @@ class BeeMonitor:
                              for _, row in seg_df.iterrows()]
                     frame_numbers = seg_df['frame'].tolist()
                     
+                    # Extract species information (for event processor)
+                    if 'species' in seg_df.columns:
+                        # Get most common species for this track
+                        species_list = seg_df['species'].tolist()
+                        species_votes = {}
+                        for species in species_list:
+                            species_votes[species] = species_votes.get(species, 0) + 1
+                        
+                        # Most voted species
+                        most_common_species = max(species_votes, key=species_votes.get)
+                    else:
+                        most_common_species = 'unknown'
+                        species_votes = {'unknown': len(frame_numbers)}
+                    
                     # Only include tracks that meet minimum length
                     if len(frame_numbers) >= self.config.tracking.min_track_length:
-                        track_groups[unique_id] = (unique_id, centroids, bboxes, frame_numbers)
+                        # Event processor expects: (track_id, centroids, bboxes, frame_numbers, species, species_votes)
+                        track_groups[unique_id] = (
+                            unique_id, 
+                            centroids, 
+                            bboxes, 
+                            frame_numbers,
+                            most_common_species,  # Species as string (not class ID)
+                            species_votes
+                        )
             
             if not track_groups:
                 continue

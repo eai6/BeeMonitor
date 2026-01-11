@@ -74,7 +74,8 @@ class BeeTracker(BaseMOT):
                 frames_without_detection=track_state.frames_without_detection,
                 last_confirmation_frame=track_state.last_yolo_confirmation,
                 trajectory=track_state.trajectory_history.copy(),
-                velocity=(vx, vy)
+                velocity=(vx, vy),
+                source=track_state.source
             )
         
         return predictions
@@ -182,7 +183,8 @@ class BeeTracker(BaseMOT):
                 frames_without_detection=track_state.frames_without_detection,
                 last_confirmation_frame=track_state.last_yolo_confirmation,
                 trajectory=track_state.trajectory_history.copy(),
-                velocity=(vx, vy)
+                velocity=(vx, vy),
+                source=track_state.source
             )
         
         return tracks
@@ -270,7 +272,8 @@ class BeeTracker(BaseMOT):
             label=det.label,
             age=0,
             last_yolo_confirmation=frame_num if det.source == 'yolo' else -999,
-            trajectory_history=[(frame_num, det.centroid)]
+            trajectory_history=[(frame_num, det.centroid)],
+            source=det.source  # Preserve detection source
         )
         
         logger.debug(f"Created track {track_id} at {det.centroid}")
@@ -347,7 +350,7 @@ class BeeTracker(BaseMOT):
 class TrackState:
     """Internal track state for KalmanMOT."""
     def __init__(self, track_id, bbox, centroid, kalman, frames_without_detection,
-                 label, age, last_yolo_confirmation, trajectory_history):
+                 label, age, last_yolo_confirmation, trajectory_history, source='unknown'):
         self.track_id = track_id
         self.bbox = bbox
         self.centroid = centroid
@@ -357,3 +360,4 @@ class TrackState:
         self.age = age
         self.last_yolo_confirmation = last_yolo_confirmation
         self.trajectory_history = trajectory_history
+        self.source = source  # Detection source: 'blob', 'sift', 'yolo'

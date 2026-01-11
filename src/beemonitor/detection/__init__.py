@@ -25,7 +25,7 @@ from beemonitor.detection.blob_detector import BlobDetector
 from beemonitor.detection.sift_detector import SIFTDetector
 from beemonitor.detection.yolo_detector import YOLODetector
 from beemonitor.detection.nest_detector import NestDetector
-from beemonitor.detection.noise_filter import NoiseFilter
+from beemonitor.detection.noise_filter import NoiseFilter, BeeNoiseFilter
 
 __all__ = [
     'BaseDetector',
@@ -35,4 +35,5 @@ __all__ = [
     'YOLODetector',
     'NestDetector',
     'NoiseFilter',
+    'BeeNoiseFilter',
 ]

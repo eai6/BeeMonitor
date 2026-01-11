@@ -60,27 +60,95 @@ class AnalysisResults:
         self.config = config
     
     def to_csv(self, output_folder: str = "output", columns: Optional[List[str]] = None) -> None:
-        """Export events to CSV file.
+        """Export events and tracking results to CSV files.
+        
+        Saves two files:
+        - *_events.csv: Entry/exit events
+        - *_tracking_results.csv: Frame-by-frame tracking data
         
         Args:
             output_folder: Directory for output files
-            columns: Columns to include (default: all)
+            columns: Columns to include in events CSV (default: all)
             
         Example:
             >>> results.to_csv("output")
             >>> results.to_csv("output", columns=["timestamp", "nest", "action"])
         """
-        filename = self.video_path.replace(".mp4", "_events.csv") 
-        filename = filename.split("/")[-1]
-        filename = str(Path(output_folder) / Path(filename).name)
+        # Create output folder if needed
+        Path(output_folder).mkdir(parents=True, exist_ok=True)
+        
+        # Base filename from video
+        base_filename = self.video_path.replace(".mp4", "")
+        base_filename = Path(base_filename).name
+        
+        # === SAVE EVENTS ===
+        events_filename = str(Path(output_folder) / f"{base_filename}_events.csv")
         
         if columns is None:
-            self.events.to_csv(filename, index=False)
+            self.events.to_csv(events_filename, index=False)
         else:
             available_cols = [col for col in columns if col in self.events.columns]
-            self.events[available_cols].to_csv(filename, index=False)
+            self.events[available_cols].to_csv(events_filename, index=False)
         
-        logger.info(f"Saved {len(self.events)} events to {filename}")
+        logger.info(f"Saved {len(self.events)} events to {events_filename}")
+        
+        # === SAVE TRACKING RESULTS ===
+        tracking_filename = str(Path(output_folder) / f"{base_filename}_tracking_results.csv")
+        
+        if self.tracks is not None:
+            # Convert tracks to DataFrame if needed
+            if isinstance(self.tracks, pd.DataFrame):
+                tracks_df = self.tracks
+            
+            elif isinstance(self.tracks, dict):
+                # Extract from Track objects (dict format)
+                track_rows = []
+                
+                for track_id, track_obj in self.tracks.items():
+                    # Handle Track object with trajectory and bboxes
+                    if hasattr(track_obj, 'trajectory') and hasattr(track_obj, 'bboxes'):
+                        for i, (frame, centroid) in enumerate(track_obj.trajectory):
+                            if i < len(track_obj.bboxes):
+                                x, y = centroid
+                                x1, y1, x2, y2 = track_obj.bboxes[i]
+                                
+                                track_rows.append({
+                                    'frame': int(frame),
+                                    'track_id': int(track_id),
+                                    'x': float(x),
+                                    'y': float(y),
+                                    'x1': float(x1),
+                                    'y1': float(y1),
+                                    'x2': float(x2),
+                                    'y2': float(y2)
+                                })
+                
+                if track_rows:
+                    tracks_df = pd.DataFrame(track_rows)
+                    tracks_df = tracks_df.sort_values(['frame', 'track_id']).reset_index(drop=True)
+                else:
+                    logger.warning("No tracking data extracted from Track objects")
+                    tracks_df = None
+            
+            elif isinstance(self.tracks, list):
+                tracks_df = pd.DataFrame(self.tracks)
+            
+            else:
+                # Try to convert whatever it is
+                try:
+                    tracks_df = pd.DataFrame(self.tracks)
+                except:
+                    logger.warning(f"Could not convert tracks to DataFrame (type: {type(self.tracks)})")
+                    tracks_df = None
+            
+            # Save tracking DataFrame
+            if tracks_df is not None and len(tracks_df) > 0:
+                tracks_df.to_csv(tracking_filename, index=False)
+                logger.info(f"Saved {len(tracks_df)} tracking records to {tracking_filename}")
+            else:
+                logger.warning("No tracking results to save")
+        else:
+            logger.warning("No tracking data available (tracks is None)")
     
     def save_video(self, output_folder: str = "output") -> None:
         """Save annotated video with tracking visualization.
@@ -155,4 +223,3 @@ class AnalysisResults:
         if 'nest' in self.events.columns:
             nest_counts = self.events.groupby('nest')['action'].value_counts().unstack(fill_value=0)
             stats['nest_activity'] = nest_counts.to_dict()
-        
