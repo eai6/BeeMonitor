@@ -451,7 +451,7 @@ class TrackingConfig:
     area_similarity_weight: float = 0.7
 
     # All optimized values now here
-    max_age: int = 10
+    max_age: int = 30
     association_threshold_base: float = 100.0
     min_blob_aspect_ratio: float = 0.4
     max_blob_aspect_ratio: float = 2.5

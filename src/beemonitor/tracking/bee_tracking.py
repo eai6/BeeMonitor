@@ -232,18 +232,18 @@ class BeeTracking(BaseTracking):
             
             # Record tracks
             for track_id, track in frame_result['tracks'].items():
-                all_detections.append({
-                    'frame': frame_num,
-                    'track_id': track_id,
-                    'x1': track.bbox[0],
-                    'y1': track.bbox[1],
-                    'x2': track.bbox[2],
-                    'y2': track.bbox[3],
-                    'species': track.label,
-                    'confidence': 1.0,
-                    'source': track.source if hasattr(track, 'source') else 'unknown'
-                })
-            
+                if track.frames_without_detection == 0:
+                    all_detections.append({
+                        'frame': frame_num,
+                        'track_id': track_id,
+                        'x1': track.bbox[0],
+                        'y1': track.bbox[1],
+                        'x2': track.bbox[2],
+                        'y2': track.bbox[3],
+                        'species': track.label,
+                        'confidence': 1.0,
+                        'source': track.source if hasattr(track, 'source') else 'unknown'
+                    })
             frame_num += 1
             self.stats['total_frames'] = frame_num
         

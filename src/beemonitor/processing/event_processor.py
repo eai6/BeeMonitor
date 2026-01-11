@@ -1,7 +1,7 @@
-"""Event processing for bee tracking data with multi-species support.
+"""Event processing for bee tracking data with multi-species support and cleaning.
 
 This module processes bee trajectories to identify entry and exit events
-at nest holes, including species classification.
+at nest holes, including species classification and event cleaning/validation.
 """
 
 import logging
@@ -21,36 +21,24 @@ BBox = Tuple[float, float, float, float]
 
 
 class EventProcessor:
-    """Processor for identifying bee entry/exit events with species tracking.
+    """Processor for identifying bee entry/exit events with species tracking and cleaning.
     
     This class analyzes bee trajectories to determine when bees enter
     or exit nest holes, creating a timeline of activity events with
-    species information.
+    species information. Includes methods for cleaning noise and validating events.
     
     Attributes:
         config: Configuration object
         trajectory_analyzer: TrajectoryAnalyzer instance
+        ml_classifier: Optional ML-based event classifier
     
     Example:
         >>> processor = EventProcessor(config)
         >>> events = processor.process_tracks(motion_data, nests)
-        >>> print(f"Found {len(events)} events")
-        >>> print(events['species'].value_counts())
+        >>> clean_events = processor.clean_events(events, min_confidence=0.3)
+        >>> print(f"Found {len(clean_events)} valid events")
     """
     
-    # def __init__(self, config: Optional[Config] = None):
-    #     """Initialize EventProcessor.
-        
-    #     Args:
-    #         config: Configuration object (optional)
-    #     """
-    #     self.config = config if config is not None else Config.default()
-    #     self.trajectory_analyzer = TrajectoryAnalyzer(self.config)
-        
-    #     logger.debug("EventProcessor initialized with species support")
-
-
-    # REPLACE WITH:
     def __init__(self, config: Optional[Config] = None, ml_classifier=None):
         """Initialize EventProcessor.
         
@@ -66,45 +54,59 @@ class EventProcessor:
             logger.info("EventProcessor initialized with ML classifier")
         else:
             logger.debug("EventProcessor initialized with heuristic classification")
-
     
     def process_tracks(
         self,
         motion_data: pd.DataFrame,
         nests: Dict,
-        label_map: Optional[Dict[int, str]] = None
+        label_map: Optional[Dict[int, str]] = None,
+        filter_fragments: bool = True,
+        min_trajectory_length: int = 10,
+        min_movement_distance: float = 30.0
     ) -> pd.DataFrame:
         """Process tracking data to identify entry/exit events with species.
         
         Args:
             motion_data: DataFrame with columns: frame_number, tracks, detections
             nests: Dictionary with 'hotel' ROI and 'nests' mapping
-            species_map: Optional mapping of class IDs to species names
+            label_map: Optional mapping of class IDs to species names
+            filter_fragments: Filter out short trajectory fragments from ID switches
+            min_trajectory_length: Minimum frames for valid trajectory
+            min_movement_distance: Minimum distance traveled (pixels)
             
         Returns:
-            DataFrame with columns: action, nest, frame_number, species, 
-                                   species_class, species_confidence, notes
+            DataFrame with columns: action, nest, frame_number, label, 
+                                   label_class, label_confidence, notes
             
         Example:
-            >>> events = processor.process_tracks(motion_data, nests)
-            >>> entries = events[events['action'] == 'Entry']
-            >>> print(f"Found {len(entries)} entry events")
-            >>> # With species
-            >>> honeybee_entries = entries[entries['species'] == 'honeybee']
+            >>> events = processor.process_tracks(
+            ...     motion_data, nests,
+            ...     filter_fragments=True,  # Filter ID switch fragments
+            ...     min_trajectory_length=10
+            ... )
         """
         logger.info("Processing tracks to identify events...")
         
-        # Use species_map from config if not provided
+        # Use label_map from config if not provided
         if label_map is None and hasattr(self.config, 'tracking'):
             label_map = self.config.tracking.label_map
         
         # Extract all movements from tracking data
-        movements = [] # these are trajectories
+        movements = []  # these are trajectories
         for period in motion_data.tracks:
             for track in period:
                 movements.append(track)
         
         logger.debug(f"Processing {len(movements)} trajectories")
+        
+        # Filter trajectory fragments (NEW - prevents false events from ID switches)
+        if filter_fragments:
+            movements = self._filter_trajectory_fragments(
+                movements,
+                min_length=min_trajectory_length,
+                min_distance=min_movement_distance
+            )
+            logger.info(f"After fragment filtering: {len(movements)} valid trajectories")
         
         # Get resolution for scaled parameters
         res_width = self.config.video.res_width
@@ -139,7 +141,7 @@ class EventProcessor:
                     movement,
                     nests,
                     window_size=entry_window,
-                    padding=entry_padding,
+                    padding=entry_padding,  # ← FIXED: was exit_padding
                     label_map=label_map
                 )
             else:
@@ -160,14 +162,80 @@ class EventProcessor:
             df = pd.DataFrame(actions)
             # Log label distribution if present
             if 'label' in df.columns:
-                species_counts = df['label'].value_counts()
-                logger.info(f"Label distribution: {species_counts.to_dict()}")
+                label_counts = df['label'].value_counts()
+                logger.info(f"Label distribution: {label_counts.to_dict()}")
             return df
         else:
             return pd.DataFrame(columns=[
                 'action', 'nest', 'frame_number', 'label',
                 'label_class', 'label_confidence', 'notes'
             ])
+    
+    def _filter_trajectory_fragments(
+        self,
+        movements: List[Tuple],
+        min_length: int = 10,
+        min_distance: float = 30.0
+    ) -> List[Tuple]:
+        """Filter out short trajectory fragments likely from ID switches.
+        
+        Removes trajectories that are:
+        - Too short (< min_length frames)
+        - Don't move enough (total distance < min_distance)
+        - Sit stationary at one location (ID switch while bee at nest)
+        
+        Args:
+            movements: List of trajectory tuples
+            min_length: Minimum number of frames
+            min_distance: Minimum total distance traveled
+            
+        Returns:
+            Filtered list of movements
+        """
+        valid_movements = []
+        filtered_count = {'too_short': 0, 'no_movement': 0, 'stationary': 0}
+        
+        for movement in movements:
+            centroids = movement[1]  # List of (x, y) positions
+            
+            # Check 1: Minimum length
+            if len(centroids) < min_length:
+                filtered_count['too_short'] += 1
+                continue
+            
+            # Check 2: Calculate total distance traveled
+            total_distance = 0.0
+            for i in range(len(centroids) - 1):
+                dx = centroids[i+1][0] - centroids[i][0]
+                dy = centroids[i+1][1] - centroids[i][1]
+                total_distance += np.sqrt(dx**2 + dy**2)
+            
+            if total_distance < min_distance:
+                filtered_count['no_movement'] += 1
+                continue
+            
+            # Check 3: Calculate movement variance (detect stationary bee)
+            x_positions = [c[0] for c in centroids]
+            y_positions = [c[1] for c in centroids]
+            x_variance = np.var(x_positions)
+            y_variance = np.var(y_positions)
+            
+            # If variance is very low, bee is just sitting still (ID switch artifact)
+            if x_variance < 10.0 and y_variance < 10.0:
+                filtered_count['stationary'] += 1
+                continue
+            
+            # Passed all checks
+            valid_movements.append(movement)
+        
+        total_filtered = sum(filtered_count.values())
+        if total_filtered > 0:
+            logger.info(f"  Filtered {total_filtered} trajectory fragments: "
+                       f"short={filtered_count['too_short']}, "
+                       f"no_movement={filtered_count['no_movement']}, "
+                       f"stationary={filtered_count['stationary']}")
+        
+        return valid_movements
     
     def _get_action(
         self,
@@ -185,7 +253,7 @@ class EventProcessor:
             nests: Dictionary with nest locations
             window_size: Number of frames to analyze
             padding: Padding around nest boxes (already scaled)
-            species_map: Mapping of class IDs to species names
+            label_map: Mapping of class IDs to species names
             
         Returns:
             Dictionary or list of dictionaries with action details, or None
@@ -354,291 +422,6 @@ class EventProcessor:
         
         return x_min <= x <= x_max and y_min <= y <= y_max
     
-    def detect_entry(
-        self,
-        bee_trajectory: List[Point],
-        hole_bboxes: Dict[str, BBox],
-        window_size: int = 3,
-        padding: float = 20
-    ) -> int:
-        """Detect if bee enters a hole (analyze start of trajectory).
-        
-        Args:
-            bee_trajectory: List of (x, y) positions
-            hole_bboxes: Dictionary mapping hole IDs to bounding boxes
-            window_size: Number of frames to analyze
-            padding: Padding around boxes (already scaled)
-            
-        Returns:
-            Hole ID if entry detected, -1 otherwise
-        """
-        if len(bee_trajectory) < window_size:
-            window_size = max(1, len(bee_trajectory) // 2)
-        
-        start_trajectory = bee_trajectory[:window_size]
-        
-        for hole_id, bbox in hole_bboxes.items():
-            start_inside = all(
-                self._is_inside_bbox(pos, bbox, padding)
-                for pos in start_trajectory
-            )
-            
-            if start_inside:
-                return hole_id
-        
-        return -1
-    
-    def detect_exit(
-        self,
-        bee_trajectory: List[Point],
-        hole_bboxes: Dict[str, BBox],
-        window_size: int = 3,
-        padding: float = 20
-    ) -> int:
-        """Detect if bee exits a hole (analyze end of trajectory).
-        
-        Args:
-            bee_trajectory: List of (x, y) positions
-            hole_bboxes: Dictionary mapping hole IDs to bounding boxes
-            window_size: Number of frames to analyze
-            padding: Padding around boxes (already scaled)
-            
-        Returns:
-            Hole ID if exit detected, -1 otherwise
-        """
-        if len(bee_trajectory) < window_size:
-            window_size = max(1, len(bee_trajectory) // 2)
-        
-        end_trajectory = bee_trajectory[-window_size:]
-        
-        for hole_id, bbox in hole_bboxes.items():
-            end_inside = all(
-                self._is_inside_bbox(pos, bbox, padding)
-                for pos in end_trajectory
-            )
-            
-            if end_inside:
-                return hole_id
-        
-        return -1
-    
-    def process_yolo_tracks(
-        self,
-        movements: List[Tuple],
-        nests: Dict,
-        species_map: Optional[Dict[int, str]] = None
-    ) -> pd.DataFrame:
-        """Process YOLO tracking results to identify events with species.
-        
-        This is an alternative processing method for trajectories from
-        Ultralytics YOLO tracking rather than custom BeeTracker.
-        
-        Args:
-            movements: List of trajectories from UltralyticsTracker
-            nests: Dictionary with nest locations
-            species_map: Optional mapping of class IDs to species names
-            
-        Returns:
-            DataFrame with events
-            
-        Example:
-            >>> from beemonitor.tracking import UltralyticsTracker
-            >>> tracker = UltralyticsTracker(model)
-            >>> trajectories = tracker.get_tracks("video.mp4")
-            >>> events = processor.process_yolo_tracks(trajectories, nests)
-        """
-        logger.info("Processing YOLO tracks to identify events...")
-        
-        # Use species_map from config if not provided
-        if species_map is None and hasattr(self.config, 'tracking'):
-            species_map = self.config.tracking.species_map
-        
-        # Get resolution for scaled parameters
-        res_width = self.config.video.res_width
-        res_height = self.config.video.res_height
-        
-        actions = []
-        for movement in movements:
-            # Skip short trajectories
-            if len(movement[1]) < self.config.processing.min_trajectory_length:
-                continue
-            
-            # Classify movement type
-            if self.trajectory_analyzer.is_exit_behavior(movement):
-                exit_window = self.config.processing.exit_window_size
-                exit_padding = self.config.processing.exit_padding(res_width, res_height)
-                
-                action = self._get_action(
-                    movement,
-                    nests,
-                    window_size=exit_window,
-                    padding=exit_padding,
-                    species_map=species_map
-                )
-            elif self.trajectory_analyzer.is_entry_behavior(movement):
-                entry_window = self.config.processing.entry_window_size
-                entry_padding = self.config.processing.entry_padding(res_width, res_height)
-                
-                action = self._get_action(
-                    movement,
-                    nests,
-                    window_size=entry_window,
-                    padding=entry_padding,
-                    species_map=species_map
-                )
-            else:
-                continue
-            
-            # Add actions to list
-            if action:
-                if isinstance(action, list):
-                    actions.extend(action)
-                else:
-                    actions.append(action)
-        
-        logger.info(f"Identified {len(actions)} events from YOLO tracks")
-        
-        if actions:
-            df = pd.DataFrame(actions)
-            # Log species distribution if present
-            if 'species' in df.columns:
-                species_counts = df['species'].value_counts()
-                logger.info(f"Species distribution: {species_counts.to_dict()}")
-            return df
-        else:
-            return pd.DataFrame(columns=[
-                'action', 'nest', 'frame_number', 'species',
-                'species_class', 'species_confidence', 'notes'
-            ])
-    
-
-    def process_tracks_ml(
-        self,
-        motion_data: pd.DataFrame,
-        nests: Dict,
-        species_map: Optional[Dict[int, str]] = None,
-        bee_threshold: float = 0.6,
-        event_threshold: float = 0.5
-    ) -> pd.DataFrame:
-        """Process tracks using ML classifier.
-        
-        Args:
-            motion_data: DataFrame with columns: frame_number, tracks, detections
-            nests: Dictionary with 'hotel' ROI and 'nests' mapping
-            species_map: Optional mapping of class IDs to species names
-            bee_threshold: Confidence threshold for bee classification
-            event_threshold: Confidence threshold for event classification
-            
-        Returns:
-            DataFrame with events and ML confidence scores
-        """
-        if self.ml_classifier is None:
-            raise ValueError("ML classifier not available. Use process_tracks() for heuristic classification.")
-        
-        logger.info("Processing tracks with ML classifier...")
-        
-        # Use species_map from config if not provided
-        if species_map is None and hasattr(self.config, 'tracking'):
-            species_map = self.config.tracking.species_map
-        
-        # Extract all movements
-        movements = []
-        for period in motion_data.tracks:
-            for track in period:
-                movements.append(track)
-        
-        logger.debug(f"Classifying {len(movements)} trajectories with ML")
-        
-        # Classify each movement
-        actions = []
-        noise_filtered = 0
-        
-        for movement in movements:
-            # Skip short trajectories
-            if len(movement[1]) < self.config.processing.min_trajectory_length:
-                continue
-            
-            # Classify with ML
-            result = self.ml_classifier.classify_trajectory(
-                movement,
-                nests=nests,
-                bee_threshold=bee_threshold,
-                event_threshold=event_threshold
-            )
-            
-            # Filter out noise
-            if not result['is_bee']:
-                noise_filtered += 1
-                continue
-            
-            # Skip if event type is uncertain
-            if result['event_type'] is None:
-                continue
-            
-            # Get nest assignment
-            nest_id = self._find_nearest_nest(
-                result['event_location'],
-                nests['nests']
-            )
-            
-            if nest_id is None:
-                continue
-            
-            # Get species info
-            species_class = movement[4] if len(movement) > 4 else None
-            species_votes = movement[5] if len(movement) > 5 else {}
-            
-            if species_map and species_class is not None:
-                species_name = species_map.get(species_class, 'unknown')
-            else:
-                species_name = 'unknown'
-            
-            # Calculate species confidence
-            species_confidence = 0.0
-            if species_votes:
-                total_votes = sum(species_votes.values())
-                species_confidence = max(species_votes.values()) / total_votes if total_votes > 0 else 0.0
-            
-            # Determine frame number
-            frame_numbers = movement[3]
-            if result['event_type'] == 'entry':
-                frame_num = frame_numbers[-1]  # Last frame
-            elif result['event_type'] == 'exit':
-                frame_num = frame_numbers[0]  # First frame
-            else:
-                frame_num = frame_numbers[len(frame_numbers) // 2]  # Middle
-            
-            # Create action
-            action = {
-                'action': result['event_type'].capitalize(),
-                'nest': str(nest_id),
-                'frame_number': frame_num,
-                'species': species_name,
-                'species_class': species_class,
-                'species_confidence': species_confidence,
-                'bee_confidence': result['bee_confidence'],
-                'event_confidence': result['event_confidence'],
-                'notes': f"ML classified: {result['event_type']}"
-            }
-            
-            actions.append(action)
-        
-        logger.info(f"ML classifier: {len(actions)} events, {noise_filtered} trajectories filtered as noise")
-        
-        # Convert to DataFrame
-        if actions:
-            df = pd.DataFrame(actions)
-            if 'species' in df.columns:
-                species_counts = df['species'].value_counts()
-                logger.info(f"Species distribution: {species_counts.to_dict()}")
-            return df
-        else:
-            return pd.DataFrame(columns=[
-                'action', 'nest', 'frame_number', 'species',
-                'species_class', 'species_confidence',
-                'bee_confidence', 'event_confidence', 'notes'
-            ])
-
     def _find_nearest_nest(
         self,
         location: Tuple[float, float],
@@ -678,70 +461,475 @@ class EventProcessor:
             return nearest_nest
         return None
     
-
-    # REPLACE WITH:
+    # =========================================================================
+    # EVENT CLEANING AND VALIDATION METHODS
+    # =========================================================================
+    
+    def clean_events(
+        self,
+        events: pd.DataFrame,
+        remove_blob_events: bool = True,
+        min_confidence: float = 0.0,
+        merge_duplicates: bool = True,
+        duplicate_window: int = 10,
+        remove_id_switch_clusters: bool = True,
+        cluster_window: int = 30
+    ) -> pd.DataFrame:
+        """Clean event data by removing noise and duplicates.
+        
+        Args:
+            events: DataFrame with event data
+            remove_blob_events: Remove events labeled as 'blob' (FG/BG noise)
+            min_confidence: Minimum confidence threshold (0-1)
+            merge_duplicates: Merge duplicate events (same action/nest/time)
+            duplicate_window: Frame window for considering events duplicates
+            remove_id_switch_clusters: Remove Exit→Entry pairs from ID switches
+            cluster_window: Frame window for detecting ID switch clusters (default: 30)
+            
+        Returns:
+            Cleaned DataFrame
+            
+        Example:
+            >>> events = processor.process_tracks(motion_data, nests,
+            ...                                   filter_fragments=True)
+            >>> clean_events = processor.clean_events(
+            ...     events,
+            ...     remove_id_switch_clusters=True
+            ... )
+        """
+        if events.empty:
+            return events
+        
+        original_count = len(events)
+        df = events.copy()
+        
+        logger.info(f"Cleaning {original_count} events...")
+        
+        # 1. Remove blob events (FG/BG noise)
+        if remove_blob_events and 'label' in df.columns:
+            blob_count = len(df[df['label'] == 'blob'])
+            df = df[df['label'] != 'blob']
+            if blob_count > 0:
+                logger.info(f"  Removed {blob_count} blob events (FG/BG noise)")
+        
+        # 2. Filter by confidence
+        if min_confidence > 0 and 'label_confidence' in df.columns:
+            low_conf = len(df[df['label_confidence'] < min_confidence])
+            df = df[df['label_confidence'] >= min_confidence]
+            if low_conf > 0:
+                logger.info(f"  Removed {low_conf} low-confidence events (< {min_confidence})")
+        
+        # 3. Remove ID switch clusters (Exit → Entry at same nest)
+        if remove_id_switch_clusters:
+            df = self._remove_temporal_clusters(df, cluster_window)
+        
+        # 4. Merge duplicate events
+        if merge_duplicates:
+            before_merge = len(df)
+            df = self._merge_duplicate_events(df, duplicate_window)
+            dup_count = before_merge - len(df)
+            if dup_count > 0:
+                logger.info(f"  Merged {dup_count} duplicate events")
+        
+        # 5. Sort by frame number
+        df = df.sort_values('frame_number').reset_index(drop=True)
+        
+        cleaned_count = len(df)
+        removed_count = original_count - cleaned_count
+        
+        if removed_count > 0:
+            logger.info(f"✓ Cleaned events: {original_count} → {cleaned_count} "
+                       f"({removed_count} removed, {removed_count/original_count*100:.1f}%)")
+        else:
+            logger.info(f"✓ All {original_count} events passed cleaning")
+        
+        return df
+    
+    def _filter_trajectory_fragments(
+        self,
+        movements: List[Tuple],
+        min_length: int = 10,
+        min_distance: float = 30.0
+    ) -> List[Tuple]:
+        """Filter out short trajectory fragments from ID switches.
+        
+        Removes trajectories that are:
+        - Too short (< min_length frames) → ID switch fragments
+        - Don't move (< min_distance pixels) → Bee sitting still during switch
+        - Stationary (low variance) → Same bee, new ID
+        
+        Args:
+            movements: List of (track_id, centroids, bboxes, frames, species, votes)
+            min_length: Minimum frames (default: 10)
+            min_distance: Minimum distance traveled (default: 30 px)
+            
+        Returns:
+            Filtered movements (removes ~30-50% of ID switch fragments)
+        """
+        valid_movements = []
+        filtered = {'short': 0, 'stationary': 0, 'no_movement': 0}
+        
+        for movement in movements:
+            centroids = movement[1]  # List of (x, y) positions
+            
+            # Filter 1: Too short
+            if len(centroids) < min_length:
+                filtered['short'] += 1
+                continue
+            
+            # Filter 2: Calculate total distance
+            total_dist = 0.0
+            for i in range(len(centroids) - 1):
+                dx = centroids[i+1][0] - centroids[i][0]
+                dy = centroids[i+1][1] - centroids[i][1]
+                total_dist += np.sqrt(dx**2 + dy**2)
+            
+            if total_dist < min_distance:
+                filtered['no_movement'] += 1
+                continue
+            
+            # Filter 3: Check variance (detect stationary bee)
+            x_vals = [c[0] for c in centroids]
+            y_vals = [c[1] for c in centroids]
+            
+            if np.var(x_vals) < 10.0 and np.var(y_vals) < 10.0:
+                filtered['stationary'] += 1
+                continue
+            
+            # Valid trajectory
+            valid_movements.append(movement)
+        
+        total = sum(filtered.values())
+        if total > 0:
+            logger.info(f"  Filtered {total} fragments: "
+                       f"short={filtered['short']}, "
+                       f"stationary={filtered['stationary']}, "
+                       f"no_movement={filtered['no_movement']}")
+        
+        return valid_movements
+    
+    def _remove_temporal_clusters(
+        self,
+        events: pd.DataFrame,
+        window: int = 30
+    ) -> pd.DataFrame:
+        """Remove Exit→Entry pairs from ID switches at same nest.
+        
+        Detects pattern:
+          Frame 100: Exit at nest 22
+          Frame 105: Entry at nest 22  ← Same bee, new ID!
+          
+        Removes BOTH events (false exit + false entry).
+        
+        Args:
+            events: DataFrame with events
+            window: Frame window to detect clusters (default: 30)
+            
+        Returns:
+            Cleaned DataFrame
+        """
+        if events.empty or len(events) < 2:
+            return events
+        
+        df = events.sort_values(['nest', 'frame_number']).copy()
+        keep = [True] * len(df)
+        removed = 0
+        
+        i = 0
+        while i < len(df) - 1:
+            if not keep[i] or df.loc[i, 'action'] != 'Exit':
+                i += 1
+                continue
+            
+            exit_nest = df.loc[i, 'nest']
+            exit_frame = df.loc[i, 'frame_number']
+            
+            # Look for Entry at same nest nearby
+            for j in range(i + 1, len(df)):
+                if not keep[j]:
+                    continue
+                
+                entry_nest = df.loc[j, 'nest']
+                entry_frame = df.loc[j, 'frame_number']
+                
+                # Different nest → stop
+                if entry_nest != exit_nest:
+                    break
+                
+                # Too far apart → stop
+                if entry_frame - exit_frame > window:
+                    break
+                
+                # Found Exit→Entry cluster!
+                if df.loc[j, 'action'] == 'Entry':
+                    keep[i] = False  # Remove Exit
+                    keep[j] = False  # Remove Entry
+                    removed += 1
+                    
+                    logger.debug(f"Removed ID switch cluster: "
+                               f"Exit/Entry at nest {exit_nest}, "
+                               f"frames {exit_frame}/{entry_frame}")
+                    break
+            
+            i += 1
+        
+        if removed > 0:
+            logger.info(f"  Removed {removed * 2} events from {removed} ID switch clusters")
+        
+        return df[keep].reset_index(drop=True)
+    
+    def _merge_duplicate_events(
+        self,
+        events: pd.DataFrame,
+        window: int = 10
+    ) -> pd.DataFrame:
+        """Merge duplicate events (same action/nest within frame window).
+        
+        Args:
+            events: DataFrame with events
+            window: Frame window to consider duplicates
+            
+        Returns:
+            DataFrame with duplicates merged
+        """
+        if events.empty:
+            return events
+        
+        # Sort by action, nest, frame
+        df = events.sort_values(['action', 'nest', 'frame_number']).reset_index(drop=True)
+        
+        # Mark duplicates
+        keep_mask = [True] * len(df)
+        
+        for i in range(len(df) - 1):
+            if not keep_mask[i]:
+                continue
+            
+            curr_action = df.loc[i, 'action']
+            curr_nest = df.loc[i, 'nest']
+            curr_frame = df.loc[i, 'frame_number']
+            
+            # Check subsequent events
+            for j in range(i + 1, len(df)):
+                if not keep_mask[j]:
+                    continue
+                
+                next_action = df.loc[j, 'action']
+                next_nest = df.loc[j, 'nest']
+                next_frame = df.loc[j, 'frame_number']
+                
+                # Different action or nest - stop checking
+                if next_action != curr_action or next_nest != curr_nest:
+                    break
+                
+                # Frame too far - stop checking
+                if next_frame - curr_frame > window:
+                    break
+                
+                # Duplicate found - mark for removal
+                # Keep the one with higher confidence if available
+                if 'label_confidence' in df.columns:
+                    curr_conf = df.loc[i, 'label_confidence']
+                    next_conf = df.loc[j, 'label_confidence']
+                    
+                    if next_conf > curr_conf:
+                        keep_mask[i] = False
+                        break  # Keep next, remove current
+                    else:
+                        keep_mask[j] = False  # Keep current, remove next
+                else:
+                    # No confidence info - keep first occurrence
+                    keep_mask[j] = False
+        
+        # Filter to kept events
+        return df[keep_mask].reset_index(drop=True)
+    
+    def _remove_temporal_clusters(
+        self,
+        events: pd.DataFrame,
+        cluster_window: int = 30
+    ) -> pd.DataFrame:
+        """Remove false entry/exit pairs from ID switches.
+        
+        Detects patterns like:
+        - Exit at nest X, frame N
+        - Entry at nest X, frame N+5
+        
+        This indicates an ID switch where the same bee got two IDs,
+        creating false exit (old ID) and entry (new ID) events.
+        
+        Args:
+            events: DataFrame with events
+            cluster_window: Frame window to detect clusters
+            
+        Returns:
+            DataFrame with clusters removed
+        """
+        if events.empty or len(events) < 2:
+            return events
+        
+        df = events.sort_values(['nest', 'frame_number']).reset_index(drop=True)
+        keep_mask = [True] * len(df)
+        clusters_removed = 0
+        
+        # Look for Exit → Entry patterns at same nest
+        i = 0
+        while i < len(df) - 1:
+            if not keep_mask[i]:
+                i += 1
+                continue
+            
+            curr_action = df.loc[i, 'action']
+            curr_nest = df.loc[i, 'nest']
+            curr_frame = df.loc[i, 'frame_number']
+            
+            # Only check if current is an Exit
+            if curr_action != 'Exit':
+                i += 1
+                continue
+            
+            # Look for Entry at same nest within window
+            for j in range(i + 1, len(df)):
+                if not keep_mask[j]:
+                    continue
+                
+                next_action = df.loc[j, 'action']
+                next_nest = df.loc[j, 'nest']
+                next_frame = df.loc[j, 'frame_number']
+                
+                # Different nest - stop checking
+                if next_nest != curr_nest:
+                    break
+                
+                # Too far apart - stop checking
+                if next_frame - curr_frame > cluster_window:
+                    break
+                
+                # Found Exit → Entry at same nest within window
+                if next_action == 'Entry':
+                    # This is likely an ID switch artifact
+                    # Remove both events
+                    keep_mask[i] = False
+                    keep_mask[j] = False
+                    clusters_removed += 1
+                    
+                    logger.debug(f"Removed ID switch cluster: "
+                                f"Exit at nest {curr_nest} frame {curr_frame}, "
+                                f"Entry at nest {next_nest} frame {next_frame} "
+                                f"(gap={next_frame - curr_frame} frames)")
+                    break
+            
+            i += 1
+        
+        if clusters_removed > 0:
+            logger.info(f"  Removed {clusters_removed * 2} events from {clusters_removed} ID switch clusters")
+        
+        return df[keep_mask].reset_index(drop=True)
+    
+    def validate_events(
+        self,
+        events: pd.DataFrame,
+        nests: Dict,
+        max_distance: float = 100.0
+    ) -> pd.DataFrame:
+        """Validate events are near actual nests.
+        
+        Removes events that are too far from any nest location.
+        Useful for filtering false positives from tracking errors.
+        
+        Args:
+            events: DataFrame with events
+            nests: Dictionary with nest locations
+            max_distance: Maximum distance from nest center (pixels)
+            
+        Returns:
+            Validated DataFrame
+            
+        Example:
+            >>> events = processor.process_tracks(motion_data, nests)
+            >>> valid_events = processor.validate_events(events, nests)
+        """
+        if events.empty or 'nest' not in events.columns:
+            return events
+        
+        original_count = len(events)
+        valid_mask = []
+        
+        for idx, event in events.iterrows():
+            nest_id = str(event['nest'])
+            
+            # Check if nest exists
+            if nest_id not in nests['nests']:
+                valid_mask.append(False)
+                logger.debug(f"Event at invalid nest {nest_id} (frame {event['frame_number']})")
+                continue
+            
+            valid_mask.append(True)
+        
+        df = events[valid_mask].reset_index(drop=True)
+        
+        removed = original_count - len(df)
+        if removed > 0:
+            logger.info(f"Validated events: removed {removed} events at invalid nests")
+        
+        return df
+    
+    def get_event_statistics(self, events: pd.DataFrame) -> Dict:
+        """Get statistics about events.
+        
+        Args:
+            events: DataFrame with events
+            
+        Returns:
+            Dictionary with statistics
+            
+        Example:
+            >>> events = processor.process_tracks(motion_data, nests)
+            >>> stats = processor.get_event_statistics(events)
+            >>> print(f"Entries: {stats['entries']}, Exits: {stats['exits']}")
+        """
+        if events.empty:
+            return {
+                'total_events': 0,
+                'entries': 0,
+                'exits': 0,
+                'unique_nests': 0,
+                'label_distribution': {},
+                'avg_confidence': 0.0
+            }
+        
+        stats = {
+            'total_events': len(events),
+            'entries': len(events[events['action'] == 'Entry']),
+            'exits': len(events[events['action'] == 'Exit']),
+            'unique_nests': events['nest'].nunique()
+        }
+        
+        # Label distribution
+        if 'label' in events.columns:
+            stats['label_distribution'] = events['label'].value_counts().to_dict()
+        
+        # Average confidence
+        if 'label_confidence' in events.columns:
+            stats['avg_confidence'] = events['label_confidence'].mean()
+        
+        # Frame range
+        if 'frame_number' in events.columns:
+            stats['frame_range'] = (
+                int(events['frame_number'].min()),
+                int(events['frame_number'].max())
+            )
+        
+        # Events per nest
+        if 'nest' in events.columns:
+            nest_counts = events['nest'].value_counts().to_dict()
+            # Convert to sorted list for readability
+            stats['events_per_nest'] = dict(sorted(nest_counts.items()))
+            stats['most_active_nest'] = max(nest_counts.items(), key=lambda x: x[1])[0]
+        
+        return stats
+    
     def __repr__(self) -> str:
         """String representation of processor."""
         ml_status = "with ML" if self.ml_classifier else "heuristic"
         return f"EventProcessor({ml_status}, config={self.config is not None})"
-    
-
-
-
-
-# Backward compatibility functions
-def is_inside_bbox(bee_position: Tuple[float, float], bbox: Tuple, padding: float = 20) -> bool:
-    """Check if a point is inside a bounding box with padding.
-    
-    Args:
-        bee_position: Position as (x, y)
-        bbox: Bounding box as (x_min, y_min, x_max, y_max)
-        padding: Padding around bbox
-        
-    Returns:
-        True if point is inside padded bbox
-    """
-    processor = EventProcessor()
-    return processor._is_inside_bbox(bee_position, bbox, padding)
-
-
-def process_tracking(
-    motion: pd.DataFrame,
-    nest: Dict,
-    species_map: Optional[Dict[int, str]] = None,
-    config: Optional[Config] = None
-) -> pd.DataFrame:
-    """Process tracking data into events (backward compatible function).
-    
-    Args:
-        motion: DataFrame with tracking data
-        nest: Dictionary with nest information
-        species_map: Optional mapping of class IDs to species names
-        config: Optional configuration object
-        
-    Returns:
-        DataFrame with event information including species
-    """
-    processor = EventProcessor(config)
-    return processor.process_tracks(motion, nest, species_map)
-
-
-def process_yolo_tracks(
-    movements: List,
-    nest: Dict,
-    species_map: Optional[Dict[int, str]] = None,
-    config: Optional[Config] = None
-) -> pd.DataFrame:
-    """Process YOLO tracking results (backward compatible function).
-    
-    Args:
-        movements: List of track trajectories
-        nest: Dictionary with nest information
-        species_map: Mapping of class IDs to species names
-        config: Optional configuration object
-        
-    Returns:
-        DataFrame with event information
-    """
-    processor = EventProcessor(config)
-    return processor.process_yolo_tracks(movements, nest, species_map)

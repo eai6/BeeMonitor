@@ -803,7 +803,6 @@ class BeeMonitor:
             config=self.config,
             tracking_classes=tracking_class_names,
             require_yolo_confirmation=use_yolo_confirmation,  # Enable for YOLO modes
-            max_pending_age=30  # Max frames to wait for confirmation
         )
         
         if use_yolo_confirmation:

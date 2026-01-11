@@ -1,0 +1,570 @@
+"""Kalman filter-based MOT with adaptive cold-start, resurrection, and YOLO confirmation.
+
+Features:
+- Kalman filtering with velocity damping
+- Adaptive search regions (elliptical, oriented by velocity)
+- Dynamic cold-start handling
+- Track resurrection for temporarily lost tracks
+- Plausibility checks (max speed, acceleration limits)
+- YOLO-confirmed track creation (NEW!)
+"""
+
+import logging
+from typing import Dict, List, Tuple, Optional
+import cv2
+import numpy as np
+
+from beemonitor.tracking.mot.base_mot import BaseMOT, Detection, Track, BBox, Point
+
+logger = logging.getLogger(__name__)
+
+
+class BeeTracker(BaseMOT):
+    """Kalman filter-based bee tracker with adaptive parameters and YOLO confirmation."""
+    
+    def __init__(
+        self, 
+        config, 
+        tracking_classes: List[str],
+        require_yolo_confirmation: bool = False,
+        max_pending_age: int = 30
+    ):
+        """Initialize Kalman-based bee tracker.
+        
+        Args:
+            config: Configuration object
+            tracking_classes: List of class names to track
+            require_yolo_confirmation: Only create new tracks from YOLO-confirmed detections
+            max_pending_age: Maximum frames to keep pending detection
+        """
+        self.config = config
+        self.tracking_classes = tracking_classes
+        
+        # Track state
+        self._tracks: Dict[int, TrackState] = {}
+        self._next_track_id = 0
+        
+        # Adaptive parameters
+        self.d_initial = getattr(config.tracking, 'initial_distance_threshold', 30.0)
+        self.d_max = self.d_initial
+        self.recorded_speeds = []
+        self.max_speed_dynamic = 50.0  # Learned from 99th percentile
+        self.max_acceleration = 30.0   # px/frame
+        
+        # YOLO confirmation (NEW!)
+        self.require_yolo_confirmation = require_yolo_confirmation
+        self.max_pending_age = max_pending_age
+        self.pending_detections: List[Dict] = []
+        
+        # Statistics
+        self.stats = {
+            'total_tracks_created': 0,
+            'yolo_confirmed_tracks': 0,
+            'pending_confirmed': 0,
+            'pending_aged_out': 0,
+            'current_pending': 0
+        }
+        
+        logger.info(f"BeeTracker initialized for classes: {tracking_classes}")
+        logger.info(f"  YOLO confirmation: {require_yolo_confirmation}")
+    
+    def predict(self, frame_num: int) -> Dict[int, Track]:
+        """Predict track positions using Kalman filters."""
+        predictions = {}
+        
+        for track_id, track_state in self._tracks.items():
+            # Kalman prediction
+            track_state.kalman.predict()
+            
+            # Extract predicted state
+            pred = track_state.kalman.statePost
+            cx, cy = float(pred[0]), float(pred[1])
+            vx, vy = float(pred[2]), float(pred[3])
+            
+            # Update bbox around predicted centroid
+            w = track_state.bbox[2] - track_state.bbox[0]
+            h = track_state.bbox[3] - track_state.bbox[1]
+            x1 = cx - w / 2
+            y1 = cy - h / 2
+            x2 = cx + w / 2
+            y2 = cy + h / 2
+            
+            predictions[track_id] = Track(
+                track_id=track_id,
+                bbox=(x1, y1, x2, y2),
+                centroid=(cx, cy),
+                label=track_state.label,
+                age=track_state.age,
+                frames_without_detection=track_state.frames_without_detection,
+                last_confirmation_frame=track_state.last_yolo_confirmation,
+                trajectory=track_state.trajectory_history.copy(),
+                velocity=(vx, vy),
+                source=track_state.source
+            )
+        
+        return predictions
+    
+    def update(self, detections: List[Detection], frame_num: int) -> Dict[int, Track]:
+        """Update tracks with detections using Hungarian algorithm."""
+        # Predict all tracks
+        predictions = self.predict(frame_num)
+        
+        if not detections and not self._tracks:
+            return {}
+        
+        # Handle new detections
+        if not self._tracks:
+            # Initialize new tracks (with YOLO confirmation if enabled)
+            if self.require_yolo_confirmation:
+                self._handle_initial_detections_with_confirmation(detections, frame_num)
+            else:
+                for det in detections:
+                    self._create_track(det, frame_num)
+            return self.get_tracks()
+        
+        # Association: match detections to tracks
+        matched, unmatched_dets, unmatched_tracks = self._associate_detections(
+            detections, predictions, frame_num
+        )
+        
+        # Update matched tracks
+        for det_idx, track_id in matched:
+            det = detections[det_idx]
+            track_state = self._tracks[track_id]
+            
+            # Update Kalman filter
+            cx, cy = det.centroid
+            measurement = np.array([[cx], [cy]], dtype=np.float32)
+            track_state.kalman.correct(measurement)
+            
+            # Update state
+            track_state.bbox = det.bbox
+            track_state.centroid = det.centroid
+            track_state.frames_without_detection = 0
+            track_state.age += 1
+            
+            if det.source == 'yolo':
+                track_state.last_yolo_confirmation = frame_num
+                track_state.label = det.label
+            
+            # Record trajectory
+            track_state.trajectory_history.append((frame_num, det.centroid))
+            
+            # Learn speed
+            if len(track_state.trajectory_history) >= 2:
+                prev_frame, prev_pos = track_state.trajectory_history[-2]
+                curr_frame, curr_pos = track_state.trajectory_history[-1]
+                dx = curr_pos[0] - prev_pos[0]
+                dy = curr_pos[1] - prev_pos[1]
+                speed = np.sqrt(dx**2 + dy**2) / (curr_frame - prev_frame)
+                self.recorded_speeds.append(speed)
+        
+        # Handle unmatched tracks (increment age, check for deletion)
+        for track_id in unmatched_tracks:
+            track_state = self._tracks[track_id]
+            track_state.frames_without_detection += 1
+            track_state.age += 1
+            
+            # Delete old tracks
+            if track_state.frames_without_detection > self.config.tracking.max_age:
+                del self._tracks[track_id]
+        
+        # Create new tracks from unmatched detections (with YOLO confirmation if enabled)
+        if self.require_yolo_confirmation:
+            self._handle_unmatched_with_yolo_confirmation(
+                detections, unmatched_dets, frame_num
+            )
+        else:
+            for det_idx in unmatched_dets:
+                det = detections[det_idx]
+                
+                # Check if too close to existing tracks (anti-duplicate)
+                too_close = False
+                for track_state in self._tracks.values():
+                    dist = np.sqrt(
+                        (det.centroid[0] - track_state.centroid[0])**2 +
+                        (det.centroid[1] - track_state.centroid[1])**2
+                    )
+                    if dist < self.d_initial:
+                        too_close = True
+                        break
+                
+                if not too_close:
+                    self._create_track(det, frame_num)
+        
+        # Update dynamic max speed
+        if len(self.recorded_speeds) > 100:
+            self.max_speed_dynamic = float(np.percentile(self.recorded_speeds, 99))
+            self.max_speed_dynamic = max(20.0, self.max_speed_dynamic)
+        
+        # Update statistics
+        self.stats['current_pending'] = len(self.pending_detections)
+        
+        return self.get_tracks()
+    
+    def _handle_initial_detections_with_confirmation(
+        self, detections: List[Detection], frame_num: int
+    ):
+        """Handle initial detections when no tracks exist yet (with YOLO confirmation).
+        
+        Args:
+            detections: List of detections
+            frame_num: Current frame number
+        """
+        yolo_dets = [d for d in detections if d.source == 'yolo']
+        other_dets = [d for d in detections if d.source != 'yolo']
+        
+        # Create tracks from YOLO detections immediately
+        for det in yolo_dets:
+            self._create_track(det, frame_num, is_yolo_confirmed=True)
+        
+        # Add other detections to pending buffer
+        for det in other_dets:
+            self.pending_detections.append({
+                'detection': det,
+                'frame_num': frame_num,
+                'age': 0
+            })
+    
+    def _handle_unmatched_with_yolo_confirmation(
+        self, detections: List[Detection], unmatched_indices: List[int], frame_num: int
+    ):
+        """Handle unmatched detections with YOLO confirmation logic.
+        
+        Args:
+            detections: List of all detections
+            unmatched_indices: Indices of unmatched detections
+            frame_num: Current frame number
+        """
+        # Separate YOLO from other detections
+        yolo_indices = [i for i in unmatched_indices if detections[i].source == 'yolo']
+        other_indices = [i for i in unmatched_indices if detections[i].source != 'yolo']
+        
+        # YOLO detections create tracks immediately (pre-confirmed)
+        for idx in yolo_indices:
+            det = detections[idx]
+            
+            # Anti-duplicate check
+            too_close = False
+            for track_state in self._tracks.values():
+                dist = np.sqrt(
+                    (det.centroid[0] - track_state.centroid[0])**2 +
+                    (det.centroid[1] - track_state.centroid[1])**2
+                )
+                if dist < self.d_initial:
+                    too_close = True
+                    break
+            
+            if not too_close:
+                self._create_track(det, frame_num, is_yolo_confirmed=True)
+        
+        # If YOLO is running, check pending buffer for confirmations
+        if len(yolo_indices) > 0:
+            yolo_dets = [detections[i] for i in yolo_indices]
+            self._confirm_pending_detections(yolo_dets, frame_num)
+        
+        # Add other unmatched detections to pending buffer
+        for idx in other_indices:
+            det = detections[idx]
+            self.pending_detections.append({
+                'detection': det,
+                'frame_num': frame_num,
+                'age': 0
+            })
+        
+        # Age out old pending detections
+        self._age_out_pending(frame_num)
+    
+    def _confirm_pending_detections(self, yolo_dets: List[Detection], frame_num: int):
+        """Confirm pending detections by matching to YOLO.
+        
+        Args:
+            yolo_dets: List of YOLO detections
+            frame_num: Current frame number
+        """
+        if len(self.pending_detections) == 0:
+            return
+        
+        confirmed_indices = []
+        
+        for i, pending in enumerate(self.pending_detections):
+            # Check if pending detection matches any YOLO detection
+            for yolo_det in yolo_dets:
+                iou = self._compute_iou(pending['detection'].bbox, yolo_det.bbox)
+                
+                if iou >= 0.3:  # Match threshold
+                    # CONFIRMED! Create track
+                    self._create_track(pending['detection'], frame_num, is_yolo_confirmed=True)
+                    self.stats['pending_confirmed'] += 1
+                    confirmed_indices.append(i)
+                    break
+        
+        # Remove confirmed detections from pending buffer
+        for i in reversed(confirmed_indices):
+            del self.pending_detections[i]
+    
+    def _age_out_pending(self, frame_num: int):
+        """Remove pending detections that are too old.
+        
+        Args:
+            frame_num: Current frame number
+        """
+        aged_out_indices = []
+        
+        for i, pending in enumerate(self.pending_detections):
+            age = frame_num - pending['frame_num']
+            
+            if age > self.max_pending_age:
+                aged_out_indices.append(i)
+                self.stats['pending_aged_out'] += 1
+        
+        # Remove aged-out detections
+        for i in reversed(aged_out_indices):
+            del self.pending_detections[i]
+    
+    @staticmethod
+    def _compute_iou(bbox1, bbox2):
+        """Compute IoU between two bounding boxes."""
+        x1_1, y1_1, x2_1, y2_1 = bbox1
+        x1_2, y1_2, x2_2, y2_2 = bbox2
+        
+        x1_i = max(x1_1, x1_2)
+        y1_i = max(y1_1, y1_2)
+        x2_i = min(x2_1, x2_2)
+        y2_i = min(y2_1, y2_2)
+        
+        if x2_i < x1_i or y2_i < y1_i:
+            return 0.0
+        
+        intersection = (x2_i - x1_i) * (y2_i - y1_i)
+        area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
+        area2 = (x2_2 - x1_2) * (y2_2 - y1_2)
+        union = area1 + area2 - intersection
+        
+        return intersection / union if union > 0 else 0.0
+    
+    def get_tracks(self) -> Dict[int, Track]:
+        """Get all active tracks."""
+        tracks = {}
+        for track_id, track_state in self._tracks.items():
+            pred = track_state.kalman.statePost
+            vx, vy = float(pred[2]), float(pred[3])
+            
+            tracks[track_id] = Track(
+                track_id=track_id,
+                bbox=track_state.bbox,
+                centroid=track_state.centroid,
+                label=track_state.label,
+                age=track_state.age,
+                frames_without_detection=track_state.frames_without_detection,
+                last_confirmation_frame=track_state.last_yolo_confirmation,
+                trajectory=track_state.trajectory_history.copy(),
+                velocity=(vx, vy),
+                source=track_state.source
+            )
+        
+        return tracks
+    
+    def reset(self):
+        """Reset tracker state."""
+        self._tracks.clear()
+        self._next_track_id = 0
+        self.recorded_speeds.clear()
+        self.d_max = self.d_initial
+        self.max_speed_dynamic = 50.0
+        self.pending_detections.clear()
+        self.stats = {
+            'total_tracks_created': 0,
+            'yolo_confirmed_tracks': 0,
+            'pending_confirmed': 0,
+            'pending_aged_out': 0,
+            'current_pending': 0
+        }
+        logger.info("BeeTracker reset")
+    
+    def get_search_regions(self, frame_num: int) -> Dict[int, Dict]:
+        """Get search regions for visualization."""
+        regions = {}
+        
+        for track_id, track_state in self._tracks.items():
+            pred = track_state.kalman.statePost
+            cx, cy = float(pred[0]), float(pred[1])
+            vx, vy = float(pred[2]), float(pred[3])
+            speed = np.sqrt(vx**2 + vy**2)
+            
+            # Cold-start: use circular search
+            if track_state.age < 5:
+                base_radius = 150.0 if track_state.age < 2 else 100.0
+                regions[track_id] = {
+                    'type': 'circle',
+                    'center': (cx, cy),
+                    'radius': base_radius
+                }
+            # Velocity-based: use ellipse
+            elif speed > 1.0:
+                major_axis = min(2.5 * speed, self.max_speed_dynamic * 2)
+                minor_axis = major_axis * 0.5
+                angle = np.arctan2(vy, vx) * 180 / np.pi
+                
+                regions[track_id] = {
+                    'type': 'ellipse',
+                    'center': (cx, cy),
+                    'major_axis': major_axis,
+                    'minor_axis': minor_axis,
+                    'angle': angle
+                }
+            # Stationary: small circle
+            else:
+                regions[track_id] = {
+                    'type': 'circle',
+                    'center': (cx, cy),
+                    'radius': 50.0
+                }
+        
+        return regions
+    
+    def get_statistics(self):
+        """Get tracking statistics including YOLO confirmation stats."""
+        stats = self.stats.copy()
+        stats['active_tracks'] = len(self._tracks)
+        stats['confirmation_rate'] = (
+            self.stats['yolo_confirmed_tracks'] / max(1, self.stats['total_tracks_created'])
+        )
+        return stats
+    
+    def _create_track(self, det: Detection, frame_num: int, is_yolo_confirmed: bool = False):
+        """Create new track from detection."""
+        track_id = self._next_track_id
+        self._next_track_id += 1
+        
+        # Initialize Kalman filter
+        kalman = cv2.KalmanFilter(4, 2)
+        kalman.measurementMatrix = np.array([
+            [1, 0, 0, 0],
+            [0, 1, 0, 0]
+        ], dtype=np.float32)
+        kalman.transitionMatrix = np.array([
+            [1, 0, 1, 0],
+            [0, 1, 0, 1],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]
+        ], dtype=np.float32)
+        kalman.processNoiseCov = np.eye(4, dtype=np.float32) * 0.03
+        
+        cx, cy = det.centroid
+        kalman.statePre = np.array([[cx], [cy], [0], [0]], dtype=np.float32)
+        kalman.statePost = np.array([[cx], [cy], [0], [0]], dtype=np.float32)
+        
+        # Create track state
+        self._tracks[track_id] = TrackState(
+            track_id=track_id,
+            bbox=det.bbox,
+            centroid=det.centroid,
+            kalman=kalman,
+            frames_without_detection=0,
+            label=det.label,
+            age=0,
+            last_yolo_confirmation=frame_num if det.source == 'yolo' else -999,
+            trajectory_history=[(frame_num, det.centroid)],
+            source=det.source
+        )
+        
+        # Update statistics
+        self.stats['total_tracks_created'] += 1
+        if is_yolo_confirmed or det.source == 'yolo':
+            self.stats['yolo_confirmed_tracks'] += 1
+        
+        logger.debug(f"Created track {track_id} from {det.source} (YOLO confirmed: {is_yolo_confirmed})")
+    
+    def _associate_detections(
+        self,
+        detections: List[Detection],
+        predictions: Dict[int, Track],
+        frame_num: int
+    ) -> Tuple[List[Tuple[int, int]], List[int], List[int]]:
+        """Associate detections to tracks using Hungarian algorithm with YOLO priority.
+        
+        YOLO detections receive 10x preference (cost * 0.1) to ensure they always
+        update existing tracks before blob/SIFT detections. This prevents track
+        fragmentation when both YOLO and blob detect the same bee.
+        
+        Returns:
+            (matched_pairs, unmatched_det_indices, unmatched_track_ids)
+        """
+        if not detections or not predictions:
+            return [], list(range(len(detections))), list(predictions.keys())
+        
+        # Build cost matrix
+        track_ids = list(predictions.keys())
+        cost_matrix = np.zeros((len(detections), len(track_ids)), dtype=np.float32)
+        
+        search_regions = self.get_search_regions(frame_num)
+        
+        for i, det in enumerate(detections):
+            # PRIORITY ADJUSTMENT: YOLO detections get 0.1x cost (10x more likely to match)
+            # This ensures YOLO always updates existing tracks before blob detections
+            priority_multiplier = 0.1 if det.source == 'yolo' else 1.0
+            
+            for j, track_id in enumerate(track_ids):
+                pred = predictions[track_id]
+                
+                # Distance cost
+                dx = det.centroid[0] - pred.centroid[0]
+                dy = det.centroid[1] - pred.centroid[1]
+                dist = np.sqrt(dx**2 + dy**2)
+                
+                # Check if within search region
+                region = search_regions.get(track_id, {'type': 'circle', 'radius': 100})
+                if region['type'] == 'circle':
+                    max_dist = region['radius']
+                else:
+                    max_dist = region['major_axis']
+                
+                if dist > max_dist:
+                    cost_matrix[i, j] = 1e9  # Infinite cost
+                else:
+                    # Apply priority multiplier (YOLO gets 10x preference)
+                    cost_matrix[i, j] = dist * priority_multiplier
+        
+        # Hungarian algorithm (simplified greedy for now)
+        matched = []
+        unmatched_dets = set(range(len(detections)))
+        unmatched_tracks = set(track_ids)
+        
+        while unmatched_dets and unmatched_tracks:
+            # Find minimum cost
+            min_cost = 1e9
+            min_i, min_j = -1, -1
+            
+            for i in unmatched_dets:
+                for j_idx, track_id in enumerate(track_ids):
+                    if track_id in unmatched_tracks:
+                        if cost_matrix[i, j_idx] < min_cost:
+                            min_cost = cost_matrix[i, j_idx]
+                            min_i = i
+                            min_j = track_id
+            
+            if min_cost >= 1e9:  # No valid matches left
+                break
+            
+            matched.append((min_i, min_j))
+            unmatched_dets.remove(min_i)
+            unmatched_tracks.remove(min_j)
+        
+        return matched, list(unmatched_dets), list(unmatched_tracks)
+
+
+class TrackState:
+    """Internal track state for KalmanMOT."""
+    def __init__(self, track_id, bbox, centroid, kalman, frames_without_detection,
+                 label, age, last_yolo_confirmation, trajectory_history, source='unknown'):
+        self.track_id = track_id
+        self.bbox = bbox
+        self.centroid = centroid
+        self.kalman = kalman
+        self.frames_without_detection = frames_without_detection
+        self.label = label
+        self.age = age
+        self.last_yolo_confirmation = last_yolo_confirmation
+        self.trajectory_history = trajectory_history
+        self.source = source  # Detection source: 'blob', 'sift', 'yolo'
