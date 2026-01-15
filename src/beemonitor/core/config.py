@@ -6,12 +6,9 @@ based on both video resolution AND the hotel box position/distance from camera.
 
 import yaml
 from pathlib import Path
-from typing import List, Optional, Tuple, Callable, Dict, Any, TYPE_CHECKING
+from typing import List, Optional, Tuple, Callable, Dict, Any
 from dataclasses import dataclass, field
 import logging
-
-if TYPE_CHECKING:
-    import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -106,9 +103,10 @@ class VideoConfig:
 class ModelConfig:
     """Model paths configuration."""
     nest_detection: str = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/nest_detection.pt"
-    tracking : str = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/bee_tracking_back_up_Full_Mode.pt"
+    tracking : str = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/bee_tracking.pt"
     blob_noise_classifier: str = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/blob_noise_classifier.pth"
     bee_classifier: Optional[str] = None
+    event_classifier: Optional[str] = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/event_classifier_model.pkl"
 
 
 @dataclass  
@@ -440,6 +438,12 @@ class TrackingConfig:
     max_frames_without_yolo: int = 60
     force_yolo_on_no_blobs: bool = True
     force_yolo_for_tracking: bool = True
+    
+    # Two-mode tracking optimization
+    enable_two_mode_tracking: bool = True  # Enable adaptive mode switching
+    motion_detection_threshold: int = 1  # Min detections to stay in tracking mode
+    tracking_to_detection_delay: int = 30  # Frames without tracks before switching to motion mode
+    motion_mode_frame_merge: int = 10  # Merge frames in motion detection mode for efficiency
 
     # Adaptive association parameters
     adaptive_association: bool = True
@@ -451,7 +455,7 @@ class TrackingConfig:
     area_similarity_weight: float = 0.7
 
     # All optimized values now here
-    max_age: int = 30
+    max_age: int = 10
     association_threshold_base: float = 100.0
     min_blob_aspect_ratio: float = 0.4
     max_blob_aspect_ratio: float = 2.5

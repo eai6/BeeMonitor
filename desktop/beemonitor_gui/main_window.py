@@ -2,6 +2,7 @@
 
 import os
 import json
+import threading
 from pathlib import Path
 from datetime import datetime
 
@@ -32,9 +33,10 @@ from .utils import find_tracking_file, get_position_from_row
 
 
 class FolderAnalysisThread(QThread):
-    """Thread for analyzing multiple videos in a folder."""
+    """Thread for analyzing multiple videos in parallel with progress tracking."""
     
-    progress = pyqtSignal(str)
+    progress = pyqtSignal(str)  # Text progress messages
+    progress_update = pyqtSignal(int, int)  # (current, total) for progress bar
     video_completed = pyqtSignal(str, object)
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
@@ -45,20 +47,124 @@ class FolderAnalysisThread(QThread):
         self.folder_path = folder_path
         self.output_folder = output_folder
         self.params = params
+        self._stop_flag = False
+        self._lock = threading.Lock()
+        self._completed_count = 0
+        self._active_videos = []
+        self._video_times = {}  # Track time for each video
     
     def run(self):
-        """Run folder analysis."""
+        """Run folder analysis with parallel processing and progress tracking."""
         try:
+            import os
+            import time
+            from pathlib import Path
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            
+            # Start timing
+            start_time = time.time()
+            
             self.progress.emit(f"Starting batch analysis of folder: {Path(self.folder_path).name}")
             
-            results = self.monitor.analyze_videos_in_folder(
-                video_folder=self.folder_path,
-                output_folder=self.output_folder,
-                visualize=self.params.get('visualize', True),
-                detection_mode=self.params.get('detection_mode', 'fgbg_yolo'),
-                use_fallback=self.params.get('use_fallback', True),
-                max_workers=self.params.get('max_workers', 4)
-            )
+            # Get list of videos
+            video_files = [
+                f for f in os.listdir(self.folder_path)
+                if f.endswith(('.mp4', '.avi', '.mov', '.mkv'))
+            ]
+            
+            total_videos = len(video_files)
+            
+            if total_videos == 0:
+                self.error.emit("No video files found in folder")
+                return
+            
+            # Emit initial progress
+            self.progress_update.emit(0, total_videos)
+            
+            # Get max workers from params (default 4)
+            max_workers = self.params.get('max_workers', 4)
+            self.progress.emit(f"Processing {total_videos} videos with {max_workers} parallel workers")
+            self.progress.emit(f"Started at: {time.strftime('%H:%M:%S')}")
+            
+            # Use ThreadPoolExecutor for parallel processing
+            results = {}
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit all videos
+                future_to_video = {}
+                for video_file in video_files:
+                    if self._stop_flag:
+                        break
+                    
+                    video_path = str(Path(self.folder_path) / video_file)
+                    future = executor.submit(self._process_single_video, video_path, video_file)
+                    future_to_video[future] = video_file
+                
+                # Process completions as they happen
+                for future in as_completed(future_to_video):
+                    if self._stop_flag:
+                        # Cancel remaining futures
+                        for f in future_to_video:
+                            f.cancel()
+                        break
+                    
+                    video_file = future_to_video[future]
+                    
+                    try:
+                        result = future.result()
+                        results[video_file] = result
+                        
+                        # Update progress
+                        with self._lock:
+                            self._completed_count += 1
+                            completed = self._completed_count
+                        
+                        self.progress_update.emit(completed, total_videos)
+                        
+                        # Get time for this video
+                        video_time = self._video_times.get(video_file, 0)
+                        time_str = self._format_time(video_time)
+                        
+                        if result is not None:
+                            self.progress.emit(f"✓ Completed {video_file} in {time_str} ({completed}/{total_videos})")
+                        else:
+                            self.progress.emit(f"✗ Failed {video_file} after {time_str} ({completed}/{total_videos})")
+                            
+                    except Exception as e:
+                        with self._lock:
+                            self._completed_count += 1
+                            completed = self._completed_count
+                        
+                        self.progress.emit(f"✗ Error {video_file}: {e} ({completed}/{total_videos})")
+                        results[video_file] = None
+                        self.progress_update.emit(completed, total_videos)
+            
+            # Calculate total elapsed time
+            total_elapsed = time.time() - start_time
+            
+            if self._stop_flag:
+                self.progress.emit(f"")
+                self.progress.emit(f"Analysis stopped by user. Completed {self._completed_count}/{total_videos} videos.")
+                self.progress.emit(f"Total time: {self._format_time(total_elapsed)}")
+            else:
+                # Calculate timing statistics
+                avg_time = total_elapsed / len(results) if results else 0
+                
+                self.progress.emit(f"")
+                self.progress.emit(f"{'='*50}")
+                self.progress.emit(f"✓ BATCH ANALYSIS COMPLETE!")
+                self.progress.emit(f"{'='*50}")
+                self.progress.emit(f"Videos processed: {len(results)}/{total_videos}")
+                self.progress.emit(f"Total time: {self._format_time(total_elapsed)}")
+                self.progress.emit(f"Average per video: {self._format_time(avg_time)}")
+                self.progress.emit(f"Finished at: {time.strftime('%H:%M:%S')}")
+                
+                # Show per-video times if available
+                if self._video_times:
+                    self.progress.emit(f"")
+                    self.progress.emit(f"Per-video times:")
+                    for video_file, elapsed in sorted(self._video_times.items(), key=lambda x: x[1], reverse=True):
+                        self.progress.emit(f"  • {video_file}: {self._format_time(elapsed)}")
             
             self.finished.emit(results)
             
@@ -66,6 +172,71 @@ class FolderAnalysisThread(QThread):
             import traceback
             error_msg = f"Folder analysis failed: {e}\n\n{traceback.format_exc()}"
             self.error.emit(error_msg)
+    
+    def _process_single_video(self, video_path: str, video_file: str):
+        """Process a single video (runs in worker thread)."""
+        import time
+        
+        # Start timing this video
+        video_start_time = time.time()
+        
+        try:
+            # Track active video
+            with self._lock:
+                self._active_videos.append(video_file)
+            
+            # Emit status
+            active_list = ", ".join(self._active_videos[:3])  # Show first 3
+            if len(self._active_videos) > 3:
+                active_list += f" (+{len(self._active_videos)-3} more)"
+            self.progress.emit(f"⚙️  Processing: {active_list}")
+            
+            # Analyze video
+            result = self.monitor.analyze_video(
+                video_path=video_path,
+                output_folder=self.output_folder,
+                visualize=self.params.get('visualize', False),
+                detection_mode=self.params.get('detection_mode', 'yolo_only')
+            )
+            
+            # Calculate elapsed time for this video
+            video_elapsed = time.time() - video_start_time
+            
+            # Store time
+            with self._lock:
+                self._video_times[video_file] = video_elapsed
+                if video_file in self._active_videos:
+                    self._active_videos.remove(video_file)
+            
+            return result
+            
+        except Exception as e:
+            # Record time even on failure
+            video_elapsed = time.time() - video_start_time
+            with self._lock:
+                self._video_times[video_file] = video_elapsed
+                if video_file in self._active_videos:
+                    self._active_videos.remove(video_file)
+            raise e
+    
+    def _format_time(self, seconds):
+        """Format seconds into human-readable time string."""
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        elif seconds < 3600:
+            mins = int(seconds // 60)
+            secs = int(seconds % 60)
+            return f"{mins}m {secs}s"
+        else:
+            hours = int(seconds // 3600)
+            mins = int((seconds % 3600) // 60)
+            secs = int(seconds % 60)
+            return f"{hours}h {mins}m {secs}s"
+    
+    def stop(self):
+        """Request thread to stop processing."""
+        self._stop_flag = True
+        self.progress.emit("Stopping analysis... (waiting for active videos to finish)")
 
 
 class BeeMonitorGUI(QMainWindow):
@@ -175,13 +346,12 @@ class BeeMonitorGUI(QMainWindow):
     def _connect_signals(self):
         """Connect all signals from panels to methods."""
         self.control_panel.load_video_requested.connect(self.load_video)
-        self.control_panel.initialize_background_requested.connect(self.initialize_background)
         self.control_panel.run_analysis_requested.connect(self.run_analysis)
         self.control_panel.stop_analysis_requested.connect(self.stop_analysis)
         self.control_panel.parameters_changed.connect(self.on_parameters_changed)
         
         # Folder analysis signals
-        self.control_panel.folder_selected.connect(self.select_folder)
+        self.control_panel.folder_selected.connect(self.on_folder_selected)
         self.control_panel.analyze_folder_requested.connect(self.run_folder_analysis)
         
         self.video_panel.play_pause_toggled.connect(self.toggle_play_pause)
@@ -200,9 +370,7 @@ class BeeMonitorGUI(QMainWindow):
         load_action.triggered.connect(self.load_video)
         file_menu.addAction(load_action)
         
-        analyze_folder_action = QAction("Analyze &Folder...", self)
-        analyze_folder_action.triggered.connect(self.select_folder)
-        file_menu.addAction(analyze_folder_action)
+        # Note: Folder analysis now done via control panel (no menu item needed)
         
         file_menu.addSeparator()
         
@@ -332,66 +500,66 @@ class BeeMonitorGUI(QMainWindow):
         
         print(f"✓ Video loaded: {filepath}")
         
-        self._initialize_background()
+        # Background initialization removed - happens automatically during analysis
         
         self.control_panel.set_video_loaded(True)
         self.control_panel.append_log(f"✓ Loaded: {Path(filepath).name}")
     
-    def initialize_background(self):
-        """Initialize background model."""
-        if not self.video_path:
-            QMessageBox.warning(self, "Warning", "Load video first")
-            return
-        
-        self.control_panel.set_background_initialized(True)
-        self.control_panel.append_log("✓ Background initialized")
-        self.statusBar().showMessage("✓ Background ready")
+    # Background initialization removed - now automatic during analysis
+    # The video analyzer automatically initializes background when running analysis
     
     def stop_analysis(self):
-        """Stop running analysis."""
+        """Stop running analysis (single video or folder batch)."""
+        # Stop single video analysis
         if self.analysis_thread and self.analysis_thread.isRunning():
             self.analysis_thread.terminate()
             self.control_panel.set_analysis_running(False)
-            self.control_panel.append_log("Analysis stopped by user")
+            self.control_panel.append_log("Single video analysis stopped by user")
             self.statusBar().showMessage("Analysis stopped")
+        
+        # Stop folder batch analysis
+        if self.folder_analysis_thread and self.folder_analysis_thread.isRunning():
+            self.folder_analysis_thread.stop()  # Request graceful stop
+            self.folder_analysis_thread.wait(3000)  # Wait up to 3 seconds
+            if self.folder_analysis_thread.isRunning():
+                self.folder_analysis_thread.terminate()  # Force stop if needed
+            self.control_panel.set_folder_analyzing(False)
+            self.control_panel.append_log("Batch analysis stopped by user")
+            self.statusBar().showMessage("Batch analysis stopped")
     
     def select_folder(self):
-        """Select folder containing videos for batch analysis."""
-        folder = QFileDialog.getExistingDirectory(
-            self,
-            "Select Video Folder",
-            str(Path.home()),
-            QFileDialog.Option.ShowDirsOnly
-        )
-        
-        if folder:
-            self.folder_path = folder
-            
-            video_files = [f for f in os.listdir(folder) 
-                          if f.endswith(('.mp4', '.avi', '.mov', '.mkv'))]
-            
-            if not video_files:
-                QMessageBox.warning(
-                    self,
-                    "No Videos Found",
-                    f"No video files found in:\n{folder}\n\n"
-                    f"Supported formats: .mp4, .avi, .mov, .mkv"
-                )
-                return
-            
-            self.control_panel.set_folder_path(folder)
-            self.control_panel.append_log(f"✓ Selected folder: {Path(folder).name}")
-            self.control_panel.append_log(f"  Found {len(video_files)} video files")
-            
-            self.statusBar().showMessage(
-                f"Folder selected: {len(video_files)} videos found"
-            )
+        """DEPRECATED - Control panel now handles folder selection directly.
+        This method kept for compatibility but should not be called."""
+        pass
     
-    def run_folder_analysis(self, params):
+    def on_folder_selected(self, folder_path):
+        """Handle folder selection from control panel.
+        
+        Args:
+            folder_path: Folder path emitted by control panel
+        """
+        self.folder_path = folder_path
+        
+        # Count videos in folder
+        video_files = [f for f in os.listdir(folder_path) 
+                      if f.endswith(('.mp4', '.avi', '.mov', '.mkv'))]
+        
+        # Log selection
+        self.control_panel.append_log(f"✓ Selected folder: {Path(folder_path).name}")
+        self.control_panel.append_log(f"  Found {len(video_files)} video files")
+        
+        self.statusBar().showMessage(
+            f"Folder selected: {len(video_files)} videos found"
+        )
+    
+    def run_folder_analysis(self):
         """Run batch video analysis on folder."""
         if not self.folder_path:
             QMessageBox.warning(self, "Warning", "Select a video folder first")
             return
+        
+        # Get parameters from control panel
+        params = self.control_panel.get_parameters()
         
         video_files = [f for f in os.listdir(self.folder_path) 
                       if f.endswith(('.mp4', '.avi', '.mov', '.mkv'))]
@@ -450,8 +618,12 @@ class BeeMonitorGUI(QMainWindow):
             params
         )
         
+        # Connect progress signals
         self.folder_analysis_thread.progress.connect(
             lambda msg: self.control_panel.append_log(msg)
+        )
+        self.folder_analysis_thread.progress_update.connect(
+            self.control_panel.set_folder_progress  # Update progress bar!
         )
         self.folder_analysis_thread.finished.connect(self.on_folder_analysis_finished)
         self.folder_analysis_thread.error.connect(
@@ -676,6 +848,16 @@ class BeeMonitorGUI(QMainWindow):
                 self.control_panel.append_log(f"✓ Detected {len(nests)} nest tubes (quality verified)")
                 self.control_panel.append_log(f"  → Nest boxes now visible on video (green)")
                 self.statusBar().showMessage(f"✓ Detected {len(nests)} nest tubes")
+                
+                # Update video info to show nest count
+                self.control_panel.set_video_info(
+                    f"<b>{Path(self.video_path).name}</b><br>"
+                    f"{int(self.video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x"
+                    f"{int(self.video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))} "
+                    f"@ {self.fps:.1f} FPS<br>"
+                    f"{self.total_frames} frames ({self.total_frames/self.fps:.1f}s)<br>"
+                    f"<span style='color: #4CAF50;'><b>🎯 {len(nests)} nests detected</b></span>"
+                )
             else:
                 print("⚠️  No nest tubes detected after 15 attempts")
                 print("   ")
@@ -694,13 +876,34 @@ class BeeMonitorGUI(QMainWindow):
                 print("   ")
                 self.control_panel.append_log("⚠️  No nest tubes detected (tried 15 frames)")
                 self.control_panel.append_log("   You can load nest positions from CSV or continue without them")
-                self.statusBar().showMessage("No nest tubes detected (see console for details)")
+                self.statusBar().showMessage("⚠️  Nest detection failed")
+                
+                # Update video info to show detection failed
+                self.control_panel.set_video_info(
+                    f"<b>{Path(self.video_path).name}</b><br>"
+                    f"{int(self.video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x"
+                    f"{int(self.video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))} "
+                    f"@ {self.fps:.1f} FPS<br>"
+                    f"{self.total_frames} frames ({self.total_frames/self.fps:.1f}s)<br>"
+                    f"<span style='color: #FF9800;'>⚠️  No nests detected</span>"
+                )
         
         except Exception as e:
             print(f"⚠️  Nest detection failed with error: {e}")
             print("   You can continue without nest visualization")
             self.control_panel.append_log(f"⚠️  Nest detection error: {e}")
-            self.statusBar().showMessage("Video loaded (nest detection unavailable)")
+            self.statusBar().showMessage("Video loaded (nest detection error)")
+            
+            # Update video info to show error
+            self.control_panel.set_video_info(
+                f"<b>{Path(self.video_path).name}</b><br>"
+                f"{int(self.video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x"
+                f"{int(self.video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))} "
+                f"@ {self.fps:.1f} FPS<br>"
+                f"{self.total_frames} frames ({self.total_frames/self.fps:.1f}s)<br>"
+                f"<span style='color: #f44336;'>✗ Nest detection error</span>"
+            )
+            
             import traceback
             traceback.print_exc()
     
@@ -854,43 +1057,6 @@ class BeeMonitorGUI(QMainWindow):
         """Handle parameter changes from control panel."""
         pass
     
-    def _initialize_background(self):
-        """Initialize background with researched optimal thresholds."""
-        self.statusBar().showMessage("Initializing background...")
-        QApplication.processEvents()
-        
-        try:
-            RESEARCHED_MIN_AREA = 30.0
-            RESEARCHED_MIN_SOLIDITY = 0.56
-            
-            print("\n" + "="*70)
-            print("BACKGROUND INITIALIZATION (Researched Optimal Defaults)")
-            print("="*70)
-            print(f"\nUsing researched optimal thresholds:")
-            print(f"  min_area: {RESEARCHED_MIN_AREA}")
-            print(f"  min_solidity: {RESEARCHED_MIN_SOLIDITY}")
-            
-            self.blob_detector = BlobDetector(
-                min_area=RESEARCHED_MIN_AREA,
-                min_solidity=RESEARCHED_MIN_SOLIDITY
-            )
-            
-            self.blob_detector.initialize_from_video(
-                video_path=self.video_path,
-                num_frames=100,
-                start_frame=0
-            )
-            
-            self.statusBar().showMessage("✓ Background initialized")
-            print("✓ Background initialized (100 frames)")
-            print("="*70 + "\n")
-            
-        except Exception as e:
-            import traceback
-            print(f"✗ Background initialization failed: {e}")
-            print(traceback.format_exc())
-            self.statusBar().showMessage("✗ Background initialization failed")
-    
     def test_detection(self):
         """Test detection on current frame."""
         if self.current_frame is None:
@@ -984,10 +1150,15 @@ class BeeMonitorGUI(QMainWindow):
         }
         mode_name = mode_names.get(detection_mode, detection_mode)
         
+        # Record start time
+        import time
+        self.analysis_start_time = time.time()
+        
         self.statusBar().showMessage(f"Starting analysis ({mode_name})...")
         
         self.control_panel.set_analysis_running(True)
         self.control_panel.append_log(f"Starting analysis ({mode_name})...")
+        self.control_panel.append_log(f"Started at: {time.strftime('%H:%M:%S')}")
         
         monitor = BeeMonitor(config=self.config)
         
@@ -1184,9 +1355,19 @@ class BeeMonitorGUI(QMainWindow):
     
     def on_analysis_finished(self, result, csv_path):
         """Handle analysis completion and auto-load results."""
+        import time
+        
+        # Calculate elapsed time
+        if hasattr(self, 'analysis_start_time'):
+            elapsed_time = time.time() - self.analysis_start_time
+            elapsed_str = self._format_time(elapsed_time)
+        else:
+            elapsed_str = "Unknown"
+        
         self.control_panel.set_analysis_running(False)
-        self.control_panel.append_log("✓ Analysis complete")
-        self.statusBar().showMessage("✓ Analysis complete - Loading results...")
+        self.control_panel.append_log(f"✓ Analysis complete in {elapsed_str}")
+        self.control_panel.append_log(f"Finished at: {time.strftime('%H:%M:%S')}")
+        self.statusBar().showMessage(f"✓ Analysis complete ({elapsed_str}) - Loading results...")
         
         # Auto-load and display results
         success = self._auto_load_and_display_results(csv_path)
@@ -1194,6 +1375,7 @@ class BeeMonitorGUI(QMainWindow):
         if success:
             msg = (
                 f"✓ Analysis complete!\n\n"
+                f"Execution time: {elapsed_str}\n"
                 f"Output folder: {self.output_folder}\n\n"
                 f"Results automatically loaded and displayed on video!\n\n"
                 f"Files saved:\n"
@@ -1205,6 +1387,7 @@ class BeeMonitorGUI(QMainWindow):
         else:
             msg = (
                 f"✓ Analysis complete!\n\n"
+                f"Execution time: {elapsed_str}\n"
                 f"Output folder: {self.output_folder}\n\n"
                 f"Files saved:\n"
                 f"  • tracking_results.csv\n\n"
@@ -1493,6 +1676,27 @@ class BeeMonitorGUI(QMainWindow):
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load configuration:\n{e}")
+    
+    def _format_time(self, seconds):
+        """Format seconds into human-readable time string.
+        
+        Args:
+            seconds: Time in seconds
+            
+        Returns:
+            str: Formatted time string (e.g., "2m 30s", "1h 15m 45s")
+        """
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        elif seconds < 3600:
+            mins = int(seconds // 60)
+            secs = int(seconds % 60)
+            return f"{mins}m {secs}s"
+        else:
+            hours = int(seconds // 3600)
+            mins = int((seconds % 3600) // 60)
+            secs = int(seconds % 60)
+            return f"{hours}h {mins}m {secs}s"
     
     def keyPressEvent(self, event):
         """Handle keyboard shortcuts."""

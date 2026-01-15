@@ -4,7 +4,7 @@ Detects motion blobs using background subtraction and morphological operations.
 """
 
 import logging
-from typing import List, Optional, Tuple, Dict
+from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
@@ -93,6 +93,7 @@ class BlobDetector(BaseDetector):
             history: Background subtractor history frames
             var_threshold: Background subtractor variance threshold
         """
+        # Tracking mode thresholds (precise - can be learned from YOLO)
         self.min_area = min_area
         self.max_area = max_area
         self.min_solidity = min_solidity
@@ -100,21 +101,19 @@ class BlobDetector(BaseDetector):
         self.min_aspect_ratio = min_aspect_ratio
         self.max_aspect_ratio = max_aspect_ratio
         self.min_extent = min_extent
+        
+        # Motion mode thresholds (sensitive - for two-mode tracking)
+        # More relaxed to catch ANY movement and trigger switch to tracking mode
+        self.motion_min_area = 50.0
+        self.motion_max_area = 5000.0
+        self.motion_min_solidity = 0.3
+        self.motion_min_circularity = 0.0
+        self.motion_min_aspect_ratio = 0.2
+        self.motion_max_aspect_ratio = 5.0
+        self.motion_min_extent = 0.0
+        
         self.morph_kernel_size = morph_kernel_size
         self.morph_iterations = morph_iterations
-
-
-         # === ONLINE LEARNING (add these lines) ===
-        self.online_learning_enabled = True
-        self.confirmed_bee_blobs = []
-        self.learning_buffer_size = 100
-        self.update_interval = 30
-        self.min_samples_for_update = 20
-        self.smoothing_factor = 0.7
-        self.researched_min_area = min_area
-        self.researched_min_solidity = min_solidity
-        self.updates_count = 0
-
         
         # Initialize background subtractor
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
@@ -125,17 +124,40 @@ class BlobDetector(BaseDetector):
         
         logger.info(f"BlobDetector initialized: min_area={min_area}, max_area={max_area}, "
                    f"min_solidity={min_solidity}, min_circularity={min_circularity}")
+        logger.debug(f"Motion mode thresholds: min_area={self.motion_min_area}, "
+                    f"max_area={self.motion_max_area}, min_solidity={self.motion_min_solidity}")
     
-    def detect(self, frame: np.ndarray, **kwargs) -> List[Detection]:
+    def detect(self, frame: np.ndarray, mode: str = 'tracking', **kwargs) -> List[Detection]:
         """Detect motion blobs in frame.
         
         Args:
             frame: Input frame (BGR)
-            **kwargs: Optional overrides (min_area, min_solidity)
+            mode: 'tracking' (precise) or 'motion' (sensitive)
+            **kwargs: Optional overrides (min_area, min_solidity, etc.)
             
         Returns:
             List of blob detections
         """
+        # Select thresholds based on mode
+        if mode == 'motion':
+            # Motion mode: Use relaxed thresholds (catch any movement)
+            default_min_area = self.motion_min_area
+            default_max_area = self.motion_max_area
+            default_min_solidity = self.motion_min_solidity
+            default_min_circularity = self.motion_min_circularity
+            default_min_aspect_ratio = self.motion_min_aspect_ratio
+            default_max_aspect_ratio = self.motion_max_aspect_ratio
+            default_min_extent = self.motion_min_extent
+        else:
+            # Tracking mode: Use precise thresholds (learned or default)
+            default_min_area = self.min_area
+            default_max_area = self.max_area
+            default_min_solidity = self.min_solidity
+            default_min_circularity = self.min_circularity
+            default_min_aspect_ratio = self.min_aspect_ratio
+            default_max_aspect_ratio = self.max_aspect_ratio
+            default_min_extent = self.min_extent
+        
         # Apply background subtraction
         fg_mask = self.bg_subtractor.apply(frame)
         
@@ -160,13 +182,13 @@ class BlobDetector(BaseDetector):
         
         # Filter and convert to detections
         detections = []
-        min_area = kwargs.get('min_area', self.min_area)
-        max_area = kwargs.get('max_area', self.max_area)
-        min_solidity = kwargs.get('min_solidity', self.min_solidity)
-        min_circularity = kwargs.get('min_circularity', self.min_circularity)
-        min_aspect_ratio = kwargs.get('min_aspect_ratio', self.min_aspect_ratio)
-        max_aspect_ratio = kwargs.get('max_aspect_ratio', self.max_aspect_ratio)
-        min_extent = kwargs.get('min_extent', self.min_extent)
+        min_area = kwargs.get('min_area', default_min_area)
+        max_area = kwargs.get('max_area', default_max_area)
+        min_solidity = kwargs.get('min_solidity', default_min_solidity)
+        min_circularity = kwargs.get('min_circularity', default_min_circularity)
+        min_aspect_ratio = kwargs.get('min_aspect_ratio', default_min_aspect_ratio)
+        max_aspect_ratio = kwargs.get('max_aspect_ratio', default_max_aspect_ratio)
+        min_extent = kwargs.get('min_extent', default_min_extent)
         
         for contour in contours:
             area = cv2.contourArea(contour)
@@ -1253,343 +1275,3 @@ class BlobDetector(BaseDetector):
             'bg_subtractor': 'MOG2'
         })
         return info
-
-        """
-    New method to add to BlobDetector class in blob_detector.py
-
-    Add this method after the initialize_from_roi_video_with_verification method.
-    This learns from ACTUAL foreground blobs (what the detector sees), not arbitrary contours.
-    """
-
-    def learn_from_foreground_blobs(
-        self,
-        video_path: str,
-        yolo_detector,
-        num_frames: int = 100,
-        start_frame: int = 0,
-        min_detections: int = 20,
-        percentile_low: float = 5.0,
-        percentile_high: float = 95.0
-    ) -> Dict[str, float]:
-        """Learn blob parameters from actual foreground blobs within YOLO detections.
-        
-        **RECOMMENDED APPROACH** - This learns from the actual blob detector output!
-        
-        For each YOLO detection:
-        1. Extract the YOLO bounding box region
-        2. Apply background subtraction to get foreground mask
-        3. Find contours in the foreground mask
-        4. Measure geometric properties of actual blob
-        5. Collect statistics for adaptive thresholds
-        
-        This measures what the blob detector actually sees (foreground after
-        background subtraction), not arbitrary thresholded contours.
-        
-        Args:
-            video_path: Path to video file
-            yolo_detector: YOLODetector instance for finding bees
-            num_frames: Number of frames to analyze
-            start_frame: Starting frame number
-            min_detections: Minimum number of bee blobs needed
-            percentile_low: Percentile for minimum thresholds (e.g., 5th)
-            percentile_high: Percentile for maximum thresholds (e.g., 95th)
-            
-        Returns:
-            Dictionary of learned thresholds
-            
-        Example:
-            >>> # After initializing background
-            >>> blob.initialize_from_video_with_verification(...)
-            >>> 
-            >>> # Learn from actual foreground blobs
-            >>> params = blob.learn_from_foreground_blobs(
-            ...     video_path='hotel.mp4',
-            ...     yolo_detector=yolo,
-            ...     num_frames=100,
-            ...     start_frame=50
-            ... )
-            >>> 
-            >>> # Detector is now calibrated to actual blob characteristics!
-        """
-        logger.info(f"Learning from actual foreground blobs in video: {video_path}")
-        logger.info(f"  Analyzing {num_frames} frames starting at {start_frame}")
-        logger.info(f"  This learns from ACTUAL blob detector output (foreground mask)")
-        
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise ValueError(f"Could not open video: {video_path}")
-        
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-        
-        # Collect metrics from actual foreground blobs
-        areas = []
-        solidities = []
-        circularities = []
-        aspect_ratios = []
-        extents = []
-        
-        frames_processed = 0
-        blobs_analyzed = 0
-        
-        for i in range(num_frames):
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
-            # Get YOLO detections (ground truth bee locations)
-            yolo_detections = yolo_detector.detect(frame, conf=0.5)
-            
-            if not yolo_detections:
-                continue
-            
-            # Get foreground mask from background subtraction
-            fg_mask = self.get_foreground_mask(frame)
-            
-            # For each YOLO detection, extract blob from foreground mask
-            for det in yolo_detections:
-                x1, y1, x2, y2 = [int(c) for c in det.bbox]
-                
-                # Validate bounds
-                if x1 < 0 or y1 < 0 or x2 >= frame.shape[1] or y2 >= frame.shape[0]:
-                    continue
-                if x2 <= x1 or y2 <= y1:
-                    continue
-                
-                # Extract foreground mask region
-                fg_roi = fg_mask[y1:y2, x1:x2]
-                
-                if fg_roi.size == 0:
-                    continue
-                
-                # Find contours in foreground mask
-                contours, _ = cv2.findContours(
-                    fg_roi,
-                    cv2.RETR_EXTERNAL,
-                    cv2.CHAIN_APPROX_SIMPLE
-                )
-                
-                if not contours:
-                    continue
-                
-                # Use the largest contour (should be the bee)
-                largest_contour = max(contours, key=cv2.contourArea)
-                contour_area = cv2.contourArea(largest_contour)
-                
-                if contour_area < 10:  # Too small
-                    continue
-                
-                # Bounding box of contour (within ROI)
-                cx, cy, cw, ch = cv2.boundingRect(largest_contour)
-                
-                # Calculate metrics from actual blob
-                areas.append(contour_area)
-                
-                # Aspect ratio
-                if ch > 0:
-                    aspect_ratio = cw / ch
-                    aspect_ratios.append(aspect_ratio)
-                
-                # Solidity (blob area / convex hull area)
-                hull = cv2.convexHull(largest_contour)
-                hull_area = cv2.contourArea(hull)
-                if hull_area > 0:
-                    solidity = contour_area / hull_area
-                    solidities.append(solidity)
-                
-                # Circularity (4π * area / perimeter²)
-                perimeter = cv2.arcLength(largest_contour, True)
-                if perimeter > 0:
-                    circularity = (4 * np.pi * contour_area) / (perimeter * perimeter)
-                    circularities.append(circularity)
-                
-                # Extent (contour area / bounding box area)
-                bbox_area = cw * ch
-                if bbox_area > 0:
-                    extent = contour_area / bbox_area
-                    extents.append(extent)
-                
-                blobs_analyzed += 1
-            
-            frames_processed += 1
-            
-            # Progress logging
-            if frames_processed % 25 == 0 or frames_processed == num_frames:
-                logger.debug(f"  Processed {frames_processed}/{num_frames} frames, "
-                        f"analyzed {blobs_analyzed} blobs")
-        
-        cap.release()
-        
-        # Check if we have enough data
-        logger.info(f"Processed {frames_processed} frames, analyzed {blobs_analyzed} foreground blobs")
-        
-        if blobs_analyzed < min_detections:
-            logger.warning(f"Only found {blobs_analyzed} blobs (minimum {min_detections} needed)")
-            logger.warning("Using lenient default thresholds")
-            return {
-                'min_area': 30.0,
-                'max_area': 8000.0,
-                'min_solidity': 0.35,
-                'min_circularity': 0.2,
-                'min_aspect_ratio': 0.3,
-                'max_aspect_ratio': 3.0,
-                'min_extent': 0.2
-            }
-        
-        # Compute percentile-based thresholds from actual blob data
-        thresholds = {
-            'min_area': float(np.percentile(areas, percentile_low)) if areas else 30.0,
-            'max_area': float(np.percentile(areas, percentile_high)) if areas else 8000.0,
-            'min_solidity': float(np.percentile(solidities, percentile_low)) if solidities else 0.35,
-            'min_circularity': float(np.percentile(circularities, percentile_low)) if circularities else 0.2,
-            'min_aspect_ratio': float(np.percentile(aspect_ratios, percentile_low)) if aspect_ratios else 0.3,
-            'max_aspect_ratio': float(np.percentile(aspect_ratios, percentile_high)) if aspect_ratios else 3.0,
-            'min_extent': float(np.percentile(extents, percentile_low)) if extents else 0.2
-        }
-        
-        # Log learned parameters
-        logger.info("✓ Learned parameters from ACTUAL foreground blobs:")
-        logger.info(f"  Area: {thresholds['min_area']:.1f} - {thresholds['max_area']:.1f} px²")
-        logger.info(f"  Solidity: ≥{thresholds['min_solidity']:.3f}")
-        logger.info(f"  Circularity: ≥{thresholds['min_circularity']:.3f}")
-        logger.info(f"  Aspect ratio: {thresholds['min_aspect_ratio']:.2f} - {thresholds['max_aspect_ratio']:.2f}")
-        logger.info(f"  Extent: ≥{thresholds['min_extent']:.3f}")
-        
-        # Log statistics
-        if areas:
-            logger.info(f"  Statistics from {len(areas)} blobs:")
-            logger.info(f"    Area: mean={np.mean(areas):.1f} ± {np.std(areas):.1f} px²")
-            logger.info(f"    Solidity: mean={np.mean(solidities):.3f} ± {np.std(solidities):.3f}")
-            logger.info(f"    Circularity: mean={np.mean(circularities):.3f} ± {np.std(circularities):.3f}")
-            logger.info(f"    Aspect ratio: mean={np.mean(aspect_ratios):.2f} ± {np.std(aspect_ratios):.2f}")
-        
-        # Apply learned thresholds to this detector
-        self.min_area = thresholds['min_area']
-        self.max_area = thresholds['max_area']
-        self.min_solidity = thresholds['min_solidity']
-        self.min_circularity = thresholds['min_circularity']
-        self.min_aspect_ratio = thresholds['min_aspect_ratio']
-        self.max_aspect_ratio = thresholds['max_aspect_ratio']
-        self.min_extent = thresholds['min_extent']
-        
-        logger.info("✓ Learned thresholds applied to blob detector")
-        
-        return thresholds
-
-    def update_with_yolo_confirmation(self, blob_detection, frame_num=None):
-        """
-        Update online learning with YOLO-confirmed bee blob.
-        
-        Call during tracking when blob matches YOLO detection.
-        
-        Args:
-            blob_detection: Detection from blob detector
-            frame_num: Frame number (optional)
-        """
-        if not self.online_learning_enabled:
-            return
-        
-        self.confirmed_bee_blobs.append({
-            'area': blob_detection.metadata.get('area', 0),
-            'solidity': blob_detection.metadata.get('solidity', 0),
-            'frame': frame_num if frame_num else 0
-        })
-        
-        if len(self.confirmed_bee_blobs) > self.learning_buffer_size:
-            self.confirmed_bee_blobs = self.confirmed_bee_blobs[-self.learning_buffer_size:]
-        
-        if len(self.confirmed_bee_blobs) >= self.min_samples_for_update and \
-           len(self.confirmed_bee_blobs) % self.update_interval == 0:
-            self._update_thresholds_from_confirmed_bees()
-    
-    def _update_thresholds_from_confirmed_bees(self):
-        """Update thresholds from confirmed bees with exponential smoothing."""
-        import numpy as np
-        
-        if len(self.confirmed_bee_blobs) < self.min_samples_for_update:
-            return
-        
-        areas = [b['area'] for b in self.confirmed_bee_blobs if b['area'] > 0]
-        solidities = [b['solidity'] for b in self.confirmed_bee_blobs if b['solidity'] > 0]
-        
-        if len(areas) == 0 or len(solidities) == 0:
-            return
-        
-        new_min_area = float(np.percentile(areas, 5.0)) * 0.5
-        new_min_solidity = float(np.percentile(solidities, 5.0)) * 0.8
-        
-        old_area = self.min_area
-        old_solidity = self.min_solidity
-        
-        self.min_area = (self.smoothing_factor * new_min_area + 
-                        (1 - self.smoothing_factor) * self.min_area)
-        self.min_solidity = (self.smoothing_factor * new_min_solidity + 
-                            (1 - self.smoothing_factor) * self.min_solidity)
-        
-        self.updates_count += 1
-        
-        print(f"\n📊 ADAPTIVE UPDATE #{self.updates_count}")
-        print(f"   Samples: {len(self.confirmed_bee_blobs)} confirmed bees")
-        print(f"   min_area: {old_area:.1f} → {self.min_area:.1f} "
-              f"({((self.min_area - old_area) / old_area * 100):+.1f}%)")
-        print(f"   min_solidity: {old_solidity:.3f} → {self.min_solidity:.3f} "
-              f"({((self.min_solidity - old_solidity) / old_solidity * 100):+.1f}%)")
-    
-    def reset_online_learning(self):
-        """Reset to researched defaults."""
-        self.confirmed_bee_blobs = []
-        self.min_area = self.researched_min_area
-        self.min_solidity = self.researched_min_solidity
-        self.updates_count = 0
-        print(f"\n🔄 Reset to defaults: area={self.min_area:.1f}, solidity={self.min_solidity:.3f}")
-    
-    def get_learning_stats(self):
-        """Get learning statistics."""
-        if len(self.confirmed_bee_blobs) == 0:
-            return {
-                'samples_collected': 0,
-                'updates_count': self.updates_count,
-                'current_min_area': self.min_area,
-                'current_min_solidity': self.min_solidity,
-                'researched_min_area': self.researched_min_area,
-                'researched_min_solidity': self.researched_min_solidity,
-                'area_adaptation': 0.0,
-                'solidity_adaptation': 0.0
-            }
-        
-        return {
-            'samples_collected': len(self.confirmed_bee_blobs),
-            'updates_count': self.updates_count,
-            'current_min_area': self.min_area,
-            'current_min_solidity': self.min_solidity,
-            'researched_min_area': self.researched_min_area,
-            'researched_min_solidity': self.researched_min_solidity,
-            'area_adaptation': (self.min_area - self.researched_min_area) / self.researched_min_area * 100,
-            'solidity_adaptation': (self.min_solidity - self.researched_min_solidity) / self.researched_min_solidity * 100
-        }
-    
-    def enable_online_learning(self, enable=True):
-        """Enable/disable online learning."""
-        self.online_learning_enabled = enable
-        print(f"{'✓' if enable else '✗'} Online learning {'ENABLED' if enable else 'DISABLED'}")
-    
-    @staticmethod
-    def compute_iou(bbox1, bbox2):
-        """Compute IoU between two bboxes."""
-        x1_1, y1_1, x2_1, y2_1 = bbox1
-        x1_2, y1_2, x2_2, y2_2 = bbox2
-        
-        x1_i = max(x1_1, x1_2)
-        y1_i = max(y1_1, y1_2)
-        x2_i = min(x2_1, x2_2)
-        y2_i = min(y2_1, y2_2)
-        
-        if x2_i < x1_i or y2_i < y1_i:
-            return 0.0
-        
-        intersection = (x2_i - x1_i) * (y2_i - y1_i)
-        area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
-        area2 = (x2_2 - x1_2) * (y2_2 - y1_2)
-        union = area1 + area2 - intersection
-        
-        return intersection / union if union > 0 else 0.0
-

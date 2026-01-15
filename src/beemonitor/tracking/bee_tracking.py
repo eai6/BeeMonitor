@@ -1,7 +1,7 @@
-"""BeeTracking - High-level tracking system for bee hotels with online learning.
+"""BeeTracking - High-level tracking system for bee hotels.
 
 Combines detection methods (FG/BG, YOLO) with MOT algorithms
-to track bees in bee hotel videos. Includes adaptive threshold learning.
+to track bees in bee hotel videos.
 """
 
 import logging
@@ -43,13 +43,12 @@ class DetectionMode(Enum):
 
 
 class BeeTracking(BaseTracking):
-    """High-level tracking system for bee hotels with adaptive learning.
+    """High-level tracking system for bee hotels.
     
     Designed specifically for solitary bee hotels with:
     - Configurable detection pipeline (FG/BG, YOLO)
     - Noise filtering (CNN)
     - Pluggable MOT algorithm
-    - Adaptive threshold learning (online learning from YOLO confirmations)
     - Adaptive mode switching (motion detection ↔ tracking)
     - Frame merging for efficiency
     
@@ -59,7 +58,6 @@ class BeeTracking(BaseTracking):
         blob_detector: FG/BG blob detector
         yolo_detector: YOLO detector
         noise_filter: CNN noise filter
-        enable_online_learning: Whether to adapt thresholds during tracking
     """
     
     def __init__(
@@ -69,8 +67,7 @@ class BeeTracking(BaseTracking):
         detection_mode: DetectionMode = DetectionMode.FGBG_YOLO,
         use_noise_filter: bool = False,
         noise_filter_model = None,
-        config = None,
-        enable_online_learning: bool = True
+        config = None
     ):
         """Initialize BeeTracking system.
         
@@ -81,24 +78,30 @@ class BeeTracking(BaseTracking):
             use_noise_filter: Whether to use CNN noise filter
             noise_filter_model: Noise filter classifier
             config: Configuration object
-            enable_online_learning: Enable adaptive threshold learning (default: True)
         """
         self.mot = mot_algorithm
         self.detection_mode = detection_mode
         self.config = config
-        self.enable_online_learning = enable_online_learning
         
         # Initialize detectors based on mode
         self._init_detectors(yolo_model, noise_filter_model, use_noise_filter)
         
-        # Tracking state
-        self.current_mode = 'motion_detection'  # or 'tracking'
-        self.frames_without_tracks = 0
-        self.motion_detection_threshold = 1
-        self.tracking_to_detection_delay = 30
+        # Two-mode tracking optimization (configurable)
+        if config and hasattr(config, 'tracking'):
+            self.enable_two_mode = config.tracking.enable_two_mode_tracking
+            self.motion_detection_threshold = config.tracking.motion_detection_threshold
+            self.tracking_to_detection_delay = config.tracking.tracking_to_detection_delay
+            self.frame_merge_size = config.tracking.motion_mode_frame_merge
+        else:
+            # Default values if no config
+            self.enable_two_mode = True
+            self.motion_detection_threshold = 1
+            self.tracking_to_detection_delay = 30
+            self.frame_merge_size = 10
         
-        # Frame merging for motion detection
-        self.frame_merge_size = 10
+        # Tracking state - ALWAYS start in tracking mode to catch initial activity
+        self.current_mode = 'tracking'
+        self.frames_without_tracks = 0
         self.frame_buffer = []
         
         # Statistics
@@ -106,28 +109,31 @@ class BeeTracking(BaseTracking):
             'total_frames': 0,
             'total_detections': 0,
             'total_tracks': 0,
-            'mode_switches': 0
+            'mode_switches': 0,
+            'frames_in_motion_mode': 0,
+            'frames_in_tracking_mode': 0
         }
         
         logger.info(f"BeeTracking initialized")
         logger.info(f"  Detection mode: {detection_mode.value}")
         logger.info(f"  MOT: {type(mot_algorithm).__name__}")
         logger.info(f"  Noise filter: {use_noise_filter}")
-        logger.info(f"  Online learning: {'ENABLED' if enable_online_learning else 'DISABLED'}")
+        logger.info(f"  Two-mode tracking: {'ENABLED' if self.enable_two_mode else 'DISABLED'}")
+        if self.enable_two_mode:
+            logger.info(f"    Motion threshold: {self.motion_detection_threshold}")
+            logger.info(f"    Switch delay: {self.tracking_to_detection_delay} frames")
     
     def _init_detectors(self, yolo_model, noise_filter_model, use_noise_filter):
         """Initialize detectors based on detection mode."""
         mode = self.detection_mode
         
-        # FG/BG blob detector with RESEARCHED OPTIMAL defaults
+        # FG/BG blob detector
         if mode in [DetectionMode.FGBG_ONLY, DetectionMode.FGBG_YOLO, 
                     DetectionMode.FGBG_SIFT, DetectionMode.FGBG_SIFT_YOLO]:
-            # Use researched optimal defaults from ablation study
             self.blob_detector = BlobDetector(
-                min_area=30.0,      # Researched optimal (conservative)
-                min_solidity=0.56   # 80% of 0.7 (proven F1=53.0%)
+                min_area=50.0,
+                min_solidity=0.5
             )
-            logger.info(f"  Blob detector: RESEARCHED DEFAULTS (area=30.0, solidity=0.56)")
         else:
             self.blob_detector = None
         
@@ -189,7 +195,9 @@ class BeeTracking(BaseTracking):
         
         Args:
             video_path: Path to video
-            roi: Region of interest (x1, y1, x2, y2)
+            roi: Region of interest (x1, y1, x2, y2) - NOT used for masking.
+                 Detections and tracking happen in full frame to allow
+                 tracking bees that move outside the hotel region.
             **kwargs: visualize, progress_callback, etc.
             
         Returns:
@@ -200,58 +208,44 @@ class BeeTracking(BaseTracking):
             raise ValueError(f"Cannot open video: {video_path}")
         
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        print(f"Total frames to process: {total_frames}")
+        logger.info(f"Processing {total_frames} frames from {video_path}")
         
         # Reset state
         self.reset()
         
         all_detections = []
         frame_num = 0
-        last_print = 0
-        print_interval = max(1, total_frames // 20)  # Print 20 progress updates
         
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
             
-            # Apply ROI if specified
-            if roi:
-                frame = self._apply_roi_mask(frame, roi)
+            # Note: ROI is NOT applied to frame masking
+            # This allows tracking to follow bees outside the hotel region
+            # Detections happen in full frame, tracking persists everywhere
             
-            # Process frame
+            # Process frame (full frame, no ROI masking)
             frame_result = self.process_frame(frame, frame_num)
-            
-            # Progress logging
-            if frame_num - last_print >= print_interval or frame_num == total_frames - 1:
-                progress = (frame_num / total_frames) * 100
-                print(f"Progress: {progress:.1f}% ({frame_num}/{total_frames} frames) - "
-                      f"{len(frame_result['detections'])} detections, "
-                      f"{len(frame_result['tracks'])} active tracks")
-                last_print = frame_num
             
             # Record tracks
             for track_id, track in frame_result['tracks'].items():
-                if track.frames_without_detection == 0:
-                    all_detections.append({
-                        'frame': frame_num,
-                        'track_id': track_id,
-                        'x1': track.bbox[0],
-                        'y1': track.bbox[1],
-                        'x2': track.bbox[2],
-                        'y2': track.bbox[3],
-                        'species': track.label,
-                        'confidence': 1.0,
-                        'source': track.source if hasattr(track, 'source') else 'unknown'
-                    })
+                all_detections.append({
+                    'frame': frame_num,
+                    'track_id': track_id,
+                    'x1': track.bbox[0],
+                    'y1': track.bbox[1],
+                    'x2': track.bbox[2],
+                    'y2': track.bbox[3],
+                    'species': track.label,
+                    'confidence': 1.0,
+                    'source': track.source if hasattr(track, 'source') else 'unknown'
+                })
+            
             frame_num += 1
             self.stats['total_frames'] = frame_num
         
         cap.release()
-        
-        print(f"\n✓ Video processing complete!")
-        print(f"  Frames processed: {frame_num}")
-        print(f"  Total track records: {len(all_detections)}")
         
         # Convert to DataFrame
         return self._convert_to_dataframe(all_detections)
@@ -261,14 +255,41 @@ class BeeTracking(BaseTracking):
         frame: np.ndarray,
         frame_num: int
     ) -> Dict[str, Any]:
-        """Process single frame with online learning.
+        """Process single frame with optional two-mode optimization.
+        
+        Two-Mode Tracking:
+        - Motion Detection Mode: Lightweight motion check only (fast)
+        - Tracking Mode: Full detection + tracking (comprehensive)
+        - Switches based on bee activity
         
         Args:
             frame: Input frame
             frame_num: Frame number
             
         Returns:
-            Dict with detections and tracks
+            Dict with detections, tracks, and current mode
+        """
+        # Check if two-mode tracking is enabled
+        if not self.enable_two_mode:
+            # Original behavior: full tracking every frame
+            return self._process_full_tracking(frame, frame_num)
+        
+        # Two-mode optimization enabled
+        if self.current_mode == 'motion_detection':
+            # Lightweight mode: just check for motion
+            return self._process_motion_detection_mode(frame, frame_num)
+        else:
+            # Full mode: complete detection + tracking
+            return self._process_tracking_mode(frame, frame_num)
+    
+    def _process_full_tracking(
+        self,
+        frame: np.ndarray,
+        frame_num: int
+    ) -> Dict[str, Any]:
+        """Process frame with full tracking (original behavior).
+        
+        Used when two-mode tracking is disabled.
         """
         # Detect objects in frame
         detections = self._detect_in_frame(frame, frame_num)
@@ -296,18 +317,121 @@ class BeeTracking(BaseTracking):
         except ImportError:
             tracks = self.mot.update(mot_detections, frame_num)
         
-        # Online learning update (adapt thresholds from YOLO-confirmed bees)
-        if self.enable_online_learning:
-            self._update_online_learning(frame, frame_num, detections)
-        
         self.stats['total_detections'] += len(detections)
         self.stats['total_tracks'] = max(self.stats['total_tracks'], len(tracks))
         
         return {
             'detections': detections,
             'tracks': tracks,
-            'mode': self.current_mode
+            'mode': 'full_tracking'
         }
+    
+    def _process_motion_detection_mode(
+        self,
+        frame: np.ndarray,
+        frame_num: int
+    ) -> Dict[str, Any]:
+        """Process frame in lightweight motion detection mode.
+        
+        Only checks for motion using blob detector with RELAXED thresholds.
+        If motion detected, switches to tracking mode.
+        """
+        self.stats['frames_in_motion_mode'] += 1
+        
+        # Lightweight detection: blob only with MOTION MODE thresholds
+        # More sensitive to catch ANY movement and trigger switch
+        detections = []
+        if self.blob_detector:
+            blob_dets = self.blob_detector.detect(frame, mode='motion')
+            detections.extend(blob_dets)
+        
+        # Check if we should switch to tracking mode
+        if len(detections) >= self.motion_detection_threshold:
+            # Motion detected! Switch to tracking mode
+            self._switch_to_tracking_mode()
+            # Process this frame in tracking mode
+            return self._process_tracking_mode(frame, frame_num)
+        
+        # No motion - stay in motion detection mode
+        # Return empty tracks
+        return {
+            'detections': detections,
+            'tracks': {},
+            'mode': 'motion_detection'
+        }
+    
+    def _process_tracking_mode(
+        self,
+        frame: np.ndarray,
+        frame_num: int
+    ) -> Dict[str, Any]:
+        """Process frame in full tracking mode.
+        
+        Runs complete detection pipeline + MOT tracking.
+        If no tracks for N frames, switches back to motion detection mode.
+        """
+        self.stats['frames_in_tracking_mode'] += 1
+        
+        # Full detection pipeline
+        detections = self._detect_in_frame(frame, frame_num)
+        
+        # Update MOT
+        from beemonitor.tracking.mot.base_mot import Detection as MOTDetection
+        mot_detections = [
+            MOTDetection(
+                bbox=d.bbox,
+                centroid=d.centroid,
+                label=d.label,
+                confidence=d.confidence,
+                source=d.source
+            )
+            for d in detections
+        ]
+        
+        # Check if MOT needs frame (Ultralytics trackers)
+        try:
+            from beemonitor.tracking.mot.ultralytics_tracker import UltralyticsTracker
+            if isinstance(self.mot, UltralyticsTracker):
+                tracks = self.mot.update(mot_detections, frame_num, frame=frame)
+            else:
+                tracks = self.mot.update(mot_detections, frame_num)
+        except ImportError:
+            tracks = self.mot.update(mot_detections, frame_num)
+        
+        self.stats['total_detections'] += len(detections)
+        self.stats['total_tracks'] = max(self.stats['total_tracks'], len(tracks))
+        
+        # Check if we should switch to motion detection mode
+        if len(tracks) == 0:
+            self.frames_without_tracks += 1
+            if self.frames_without_tracks >= self.tracking_to_detection_delay:
+                # No tracks for N frames - switch to motion detection mode
+                self._switch_to_motion_detection_mode()
+        else:
+            # Reset counter when tracks are present
+            self.frames_without_tracks = 0
+        
+        return {
+            'detections': detections,
+            'tracks': tracks,
+            'mode': 'tracking'
+        }
+    
+    def _switch_to_tracking_mode(self):
+        """Switch from motion detection mode to tracking mode."""
+        if self.current_mode != 'tracking':
+            logger.info(f"Mode switch: motion_detection → tracking (motion detected)")
+            self.current_mode = 'tracking'
+            self.frames_without_tracks = 0
+            self.stats['mode_switches'] += 1
+    
+    def _switch_to_motion_detection_mode(self):
+        """Switch from tracking mode to motion detection mode."""
+        if self.current_mode != 'motion_detection':
+            logger.info(f"Mode switch: tracking → motion_detection ({self.frames_without_tracks} frames without tracks)")
+            self.current_mode = 'motion_detection'
+            self.frames_without_tracks = 0
+            self.stats['mode_switches'] += 1
     
     def _detect_in_frame(
         self,
@@ -325,22 +449,9 @@ class BeeTracking(BaseTracking):
         """
         detections = []
         
-        # FG/BG blob detection
+        # FG/BG blob detection with TRACKING MODE thresholds (precise)
         if self.blob_detector:
-            blob_dets = self.blob_detector.detect(frame)
-            
-            # Diagnostic logging (only first time and when interesting)
-            if frame_num == 0:
-                print(f"\n🔍 FIRST FRAME DIAGNOSTICS:")
-                print(f"  Blob detections: {len(blob_dets)}")
-                print(f"  Thresholds: area≥{self.blob_detector.min_area:.1f}, "
-                      f"solidity≥{self.blob_detector.min_solidity:.3f}")
-                if len(blob_dets) == 0:
-                    print(f"  ⚠ No blobs detected - may indicate:")
-                    print(f"    • Background model too aggressive")
-                    print(f"    • Thresholds too strict")
-                    print(f"    • No motion in this frame")
-            
+            blob_dets = self.blob_detector.detect(frame, mode='tracking')
             detections.extend(blob_dets)
         
         # SIFT stationary detection
@@ -349,16 +460,8 @@ class BeeTracking(BaseTracking):
             detections.extend(sift_dets)
         
         # Apply noise filter if enabled (to blob and SIFT detections)
-        pre_filter_count = len(detections)
         if self.noise_filter and detections:
             detections = self.noise_filter.filter_detections(frame, detections)
-            
-            # Log filter effectiveness (only when interesting)
-            if pre_filter_count > 0 and frame_num % 100 == 0:
-                filtered = pre_filter_count - len(detections)
-                print(f"  🧹 CNN Filter (frame {frame_num}): "
-                      f"{pre_filter_count} → {len(detections)} "
-                      f"(removed {filtered}, {filtered/pre_filter_count*100:.1f}%)")
         
         # YOLO confirmation/detection
         if self.yolo_detector:
@@ -367,94 +470,19 @@ class BeeTracking(BaseTracking):
                 detections = self.yolo_detector.detect(frame)
             else:
                 # Periodic YOLO confirmation
-                if frame_num % 5 == 0:
+                if frame_num % 10 == 0:
                     yolo_dets = self.yolo_detector.detect(frame)
                     detections.extend(yolo_dets)
         
         return detections
     
-    def _update_online_learning(
-        self,
-        frame: np.ndarray,
-        frame_num: int,
-        all_detections: List[Detection]
-    ) -> None:
-        """Update blob detector thresholds from YOLO-confirmed bees.
-        
-        This is called after each frame is processed. It matches blob
-        detections to YOLO detections and updates the blob detector's
-        thresholds based on confirmed bee characteristics.
-        
-        Args:
-            frame: Current video frame
-            frame_num: Frame number
-            all_detections: All detections from current frame
-        """
-        # Only update if blob detector exists and has online learning
-        if not hasattr(self, 'blob_detector') or self.blob_detector is None:
-            return
-        
-        if not hasattr(self.blob_detector, 'online_learning_enabled'):
-            return
-        
-        if not self.blob_detector.online_learning_enabled:
-            return
-        
-        # Only update when YOLO runs (periodic confirmation)
-        should_run_yolo = False
-        
-        if self.detection_mode in [DetectionMode.FGBG_YOLO, DetectionMode.YOLO_ONLY,
-                                   DetectionMode.SIFT_YOLO, DetectionMode.FGBG_SIFT_YOLO]:
-            should_run_yolo = (frame_num % 10 == 0)  # YOLO runs every 10 frames
-        
-        if not should_run_yolo:
-            return
-        
-        # Get YOLO detections (ground truth)
-        yolo_dets = [d for d in all_detections if d.source == 'yolo']
-        
-        if len(yolo_dets) == 0:
-            return
-        
-        # Get blob detections
-        blob_dets = [d for d in all_detections if d.source == 'fgbg']
-        
-        if len(blob_dets) == 0:
-            return
-        
-        # Match blobs to YOLO (IoU > 0.3 = confirmed bee)
-        for blob_det in blob_dets:
-            for yolo_det in yolo_dets:
-                iou = self.blob_detector.compute_iou(blob_det.bbox, yolo_det.bbox)
-                if iou >= 0.3:
-                    # This blob is YOLO-confirmed!
-                    self.blob_detector.update_with_yolo_confirmation(blob_det, frame_num)
-                    break  # Each blob only matched once
-    
     def configure_detection(self, **kwargs) -> None:
-        """Configure detection pipeline.
-        
-        Args:
-            **kwargs: Configuration parameters
-                blob_min_area: Minimum blob area
-                blob_min_solidity: Minimum blob solidity
-                yolo_conf: YOLO confidence threshold
-                enable_online_learning: Enable/disable adaptive learning
-        """
+        """Configure detection pipeline."""
         if 'blob_min_area' in kwargs and self.blob_detector:
             self.blob_detector.configure(min_area=kwargs['blob_min_area'])
         
-        if 'blob_min_solidity' in kwargs and self.blob_detector:
-            self.blob_detector.configure(min_solidity=kwargs['blob_min_solidity'])
-        
         if 'yolo_conf' in kwargs and self.yolo_detector:
             self.yolo_detector.configure(conf_threshold=kwargs['yolo_conf'])
-        
-        if 'enable_online_learning' in kwargs:
-            self.enable_online_learning = kwargs['enable_online_learning']
-            if hasattr(self, 'blob_detector') and self.blob_detector:
-                if hasattr(self.blob_detector, 'enable_online_learning'):
-                    self.blob_detector.enable_online_learning(self.enable_online_learning)
         
         logger.debug(f"Detection configured: {kwargs}")
     
@@ -476,33 +504,24 @@ class BeeTracking(BaseTracking):
         self.mot.reset()
         
         self.frame_buffer.clear()
-        self.current_mode = 'motion_detection'
+        # ALWAYS start in tracking mode to catch initial activity
+        self.current_mode = 'tracking'
         self.frames_without_tracks = 0
         
         self.stats = {
             'total_frames': 0,
             'total_detections': 0,
             'total_tracks': 0,
-            'mode_switches': 0
+            'mode_switches': 0,
+            'frames_in_motion_mode': 0,
+            'frames_in_tracking_mode': 0
         }
         
         logger.debug("BeeTracking reset")
     
     def get_statistics(self) -> Dict[str, Any]:
-        """Get tracking statistics including online learning stats.
-        
-        Returns:
-            Dictionary with tracking and learning statistics
-        """
-        stats = self.stats.copy()
-        
-        # Add online learning statistics if available
-        if hasattr(self, 'blob_detector') and self.blob_detector:
-            if hasattr(self.blob_detector, 'get_learning_stats'):
-                learning_stats = self.blob_detector.get_learning_stats()
-                stats['online_learning'] = learning_stats
-        
-        return stats
+        """Get tracking statistics."""
+        return self.stats.copy()
     
     def _apply_roi_mask(self, frame: np.ndarray, roi: tuple) -> np.ndarray:
         """Apply ROI mask to frame."""

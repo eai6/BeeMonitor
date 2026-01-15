@@ -17,6 +17,7 @@ executing==2.2.1
 fastapi==0.120.4
 ffmpy==0.6.4
 filelock==3.20.0
+filterpy==1.4.5
 fonttools==4.60.1
 fsspec==2025.10.0
 gradio==5.49.1
@@ -66,6 +67,9 @@ pydantic_core==2.33.2
 pydub==0.25.1
 Pygments==2.19.2
 pyparsing==3.2.5
+PyQt6==6.10.2
+PyQt6-Qt6==6.10.1
+PyQt6_sip==13.10.3
 python-dateutil==2.9.0.post0
 python-multipart==0.0.20
 pytz==2025.2
