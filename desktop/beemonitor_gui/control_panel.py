@@ -55,8 +55,7 @@ class ControlPanel(QScrollArea):
         # Add sections
         layout.addWidget(self._create_video_group())
         layout.addWidget(self._create_single_analysis_group())
-        layout.addWidget(self._create_reference_config_group())  # NEW
-        layout.addWidget(self._create_advanced_options_group())  # NEW
+        layout.addWidget(self._create_reference_config_group())
         layout.addWidget(self._create_folder_analysis_group())
         layout.addStretch()
         
@@ -171,67 +170,6 @@ class ControlPanel(QScrollArea):
         
         ref_group.setLayout(ref_layout)
         return ref_group
-    
-    def _create_advanced_options_group(self):
-        """Create advanced options section."""
-        advanced_group = QGroupBox("⚙️ Advanced Options")
-        advanced_layout = QVBoxLayout()
-        
-        # Interaction metrics checkbox
-        self.interaction_metrics_checkbox = QCheckBox("Enable Interaction Metrics")
-        self.interaction_metrics_checkbox.setToolTip(
-            "Compute track-to-track and track-to-nest proximity metrics.\n"
-            "Outputs additional CSV files with interaction data."
-        )
-        self.interaction_metrics_checkbox.setChecked(False)
-        advanced_layout.addWidget(self.interaction_metrics_checkbox)
-        
-        # Proximity threshold
-        proximity_layout = QHBoxLayout()
-        proximity_layout.addWidget(QLabel("  Proximity (px):"))
-        self.proximity_spinner = QSpinBox()
-        self.proximity_spinner.setRange(10, 200)
-        self.proximity_spinner.setValue(50)
-        self.proximity_spinner.setToolTip("Distance threshold to consider as 'interacting'")
-        self.proximity_spinner.setEnabled(False)
-        proximity_layout.addWidget(self.proximity_spinner)
-        advanced_layout.addLayout(proximity_layout)
-        
-        # Enable/disable proximity spinner based on checkbox
-        self.interaction_metrics_checkbox.toggled.connect(
-            self.proximity_spinner.setEnabled
-        )
-        
-        # Separator
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        line.setStyleSheet("color: #444;")
-        advanced_layout.addWidget(line)
-        
-        # Save crops checkbox
-        self.save_crops_checkbox = QCheckBox("Save Bee Crops")
-        self.save_crops_checkbox.setToolTip(
-            "Save cropped images of tracked bees."
-        )
-        self.save_crops_checkbox.setChecked(False)
-        advanced_layout.addWidget(self.save_crops_checkbox)
-        
-        # Crops per track
-        crops_layout = QHBoxLayout()
-        crops_layout.addWidget(QLabel("  Crops per track:"))
-        self.crops_per_track_spinner = QSpinBox()
-        self.crops_per_track_spinner.setRange(1, 20)
-        self.crops_per_track_spinner.setValue(5)
-        self.crops_per_track_spinner.setEnabled(False)
-        crops_layout.addWidget(self.crops_per_track_spinner)
-        advanced_layout.addLayout(crops_layout)
-        
-        self.save_crops_checkbox.toggled.connect(
-            self.crops_per_track_spinner.setEnabled
-        )
-        
-        advanced_group.setLayout(advanced_layout)
-        return advanced_group
     
     def _create_folder_analysis_group(self):
         """Create batch folder analysis section."""
@@ -423,14 +361,14 @@ class ControlPanel(QScrollArea):
         }
     
     def get_advanced_options(self):
-        """Get advanced options settings.
+        """Get advanced options settings (hardcoded defaults).
         
         Returns:
             Dictionary with advanced options
         """
         return {
-            'enable_interaction_metrics': self.interaction_metrics_checkbox.isChecked(),
-            'proximity_threshold': self.proximity_spinner.value(),
-            'save_crops': self.save_crops_checkbox.isChecked(),
-            'crops_per_track': self.crops_per_track_spinner.value()
+            'enable_interaction_metrics': True,  # Always enabled
+            'proximity_threshold': 50,  # Default from config
+            'save_crops': False,
+            'crops_per_track': 5
         }

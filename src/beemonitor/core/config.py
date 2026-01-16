@@ -105,6 +105,7 @@ class ModelConfig:
     """Model paths configuration."""
     nest_detection: str = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/nest_detection.pt"
     tracking : str = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/bee_tracking.pt"
+    #tracking : str = "/storage/home/eai6/BeeMonitor_eai6/models/bee_tracking.pt"
     blob_noise_classifier: str = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/blob_noise_classifier.pth"
     bee_classifier: Optional[str] = None
     event_classifier: Optional[str] = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/event_classifier_model.pkl"
@@ -187,7 +188,7 @@ class NestConfig:
     reference_distance_factor: float = 1.0
     
     # Detection parameters
-    confidence_threshold: float = 0.5
+    confidence_threshold: float = 0.15
     min_detections: int = 35
     frame_skip: int = 30
     max_detection_attempts: int = 10

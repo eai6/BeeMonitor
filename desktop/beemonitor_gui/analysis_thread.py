@@ -35,6 +35,18 @@ class AnalysisThread(QThread):
         self.output_folder = output_folder
         self.detection_mode = 'yolo'  # Always YOLO
         self.nests = nests  # Manually edited nests from GUI
+        
+        # Extract hotel ROI for motion detection filtering
+        if self.nests and self.nests.get('hotel'):
+            hotel_roi = self.nests['hotel']
+            # Set ROI in config for motion detector
+            if hasattr(self.monitor.config, 'detection'):
+                self.monitor.config.detection.roi = hotel_roi
+            elif hasattr(self.monitor.config, 'tracking'):
+                self.monitor.config.tracking.roi = hotel_roi
+            # Also store directly on monitor if it has roi attribute
+            if hasattr(self.monitor, 'roi'):
+                self.monitor.roi = hotel_roi
     
     def run(self):
         """Run analysis in background thread."""
@@ -45,6 +57,9 @@ class AnalysisThread(QThread):
             
             if self.nests and self.nests.get('nests'):
                 self.progress.emit(f"✓ Using {len(self.nests['nests'])} manually edited nests")
+            if self.nests and self.nests.get('hotel'):
+                roi = self.nests['hotel']
+                self.progress.emit(f"✓ Using edited hotel ROI: ({int(roi[0])},{int(roi[1])}) to ({int(roi[2])},{int(roi[3])})")
             else:
                 self.progress.emit("Nest detector will automatically detect hotel ROI...")
             
@@ -53,7 +68,7 @@ class AnalysisThread(QThread):
             kwargs = {'video_path': self.video_path}
             
             if 'visualize' in sig.parameters:
-                kwargs['visualize'] = True
+                kwargs['visualize'] = False  # Don't generate visualization video
             
             if 'detection_mode' in sig.parameters:
                 kwargs['detection_mode'] = 'yolo'
@@ -66,6 +81,11 @@ class AnalysisThread(QThread):
             if self.nests and 'nests' in sig.parameters:
                 kwargs['nests'] = self.nests
                 self.progress.emit("✓ Passing edited nests to event processor")
+            
+            # Pass hotel ROI if analyze_video accepts it
+            if self.nests and self.nests.get('hotel') and 'roi' in sig.parameters:
+                kwargs['roi'] = self.nests['hotel']
+                self.progress.emit("✓ Passing hotel ROI to motion detection")
             
             self.progress.emit("Running analysis (this may take several minutes)...")
             self.progress.emit("Blob detector will scan for motion...")

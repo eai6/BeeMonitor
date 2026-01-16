@@ -13,7 +13,7 @@ v2.3 Changes:
 
 # Version
 VERSION = "3.2.0"
-TITLE = "BeeMonitor - Video Analysis Tool (v2.3)"
+TITLE = "BeeMonitor - Video Analysis Tool"
 
 # Detection parameter presets
 DETECTION_PRESETS = {
