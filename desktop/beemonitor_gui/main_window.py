@@ -177,6 +177,7 @@ class FolderAnalysisThread(QThread):
                 active_list += f" (+{len(self._active_videos)-3} more)"
             self.progress.emit(f"⚙️  Processing: {active_list}")
             
+            # Pass output_folder so crops save to correct location
             result = self.monitor.analyze_video(
                 video_path=video_path,
                 output_folder=self.output_folder,
@@ -528,19 +529,25 @@ class BeeMonitorGUI(QMainWindow):
                 }
                 nests.append(nest_dict)
         
+        # Get current hotel ROI
+        hotel_roi = getattr(self.video_canvas, 'hotel_roi', None)
+        
         # Get reference config
         ref_config = self.control_panel.get_reference_config()
         
         # Show visual editor with current frame
-        updated_nests = show_visual_nest_editor(
+        result = show_visual_nest_editor(
             self,
             frame=self.current_frame,
             nests=nests,
+            hotel_roi=hotel_roi,
             grid_rows=ref_config['rows'],
             grid_cols=ref_config['cols']
         )
         
-        if updated_nests:
+        if result:
+            updated_nests, updated_hotel = result
+            
             # Convert back to Detection format
             from collections import namedtuple
             Detection = namedtuple('Detection', ['bbox', 'confidence', 'nest_id'])
@@ -565,6 +572,12 @@ class BeeMonitorGUI(QMainWindow):
             self.video_canvas.detected_nests = new_nests
             self.video_canvas.show_nests = True
             
+            # Update hotel ROI
+            if updated_hotel:
+                self.video_canvas.hotel_roi = tuple(int(v) for v in updated_hotel)
+            else:
+                self.video_canvas.hotel_roi = None
+            
             # Refresh display
             if self.current_frame_idx is not None:
                 self.load_frame(self.current_frame_idx)
@@ -573,7 +586,10 @@ class BeeMonitorGUI(QMainWindow):
             self.control_panel.set_detected_nests_count(len(new_nests))
             
             self.statusBar().showMessage(f"✓ Updated {len(new_nests)} nests")
-            self.control_panel.append_log(f"✓ Manually edited {len(new_nests)} nests")
+            log_msg = f"✓ Manually edited {len(new_nests)} nests"
+            if updated_hotel:
+                log_msg += " + hotel ROI"
+            self.control_panel.append_log(log_msg)
     
     # =========================================================================
     # Video Loading
@@ -647,6 +663,7 @@ class BeeMonitorGUI(QMainWindow):
             if self.nest_yolo_model is None or self.nest_config is None:
                 print("⚠️  Nest detection unavailable (models not loaded at startup)")
                 self.control_panel.append_log("⚠️  Nest detection unavailable")
+                self._offer_grid_generation(first_frame, "Nest detection models not loaded")
                 return
             
             print("🔍 Auto-detecting nest tubes (comprehensive method)...")
@@ -701,11 +718,113 @@ class BeeMonitorGUI(QMainWindow):
                 self.control_panel.append_log("⚠️  No nest tubes detected")
                 self.control_panel.set_detected_nests_count(0)
                 self.statusBar().showMessage("⚠️  Nest detection failed")
+                
+                # Offer to generate grid from reference config
+                self._offer_grid_generation(first_frame, "Auto-detection found no nests")
         
         except Exception as e:
             print(f"⚠️  Nest detection failed: {e}")
             self.control_panel.append_log(f"⚠️  Nest detection error: {e}")
             self.statusBar().showMessage("Video loaded (nest detection error)")
+            
+            # Offer to generate grid from reference config
+            self._offer_grid_generation(first_frame, f"Detection error: {e}")
+    
+    def _offer_grid_generation(self, frame, reason: str):
+        """Offer to generate nest grid from reference config when auto-detection fails.
+        
+        Args:
+            frame: Video frame for dimensions
+            reason: Why auto-detection failed
+        """
+        ref_config = self.control_panel.get_reference_config()
+        rows = ref_config['rows']
+        cols = ref_config['cols']
+        total = ref_config['total']
+        
+        reply = QMessageBox.question(
+            self,
+            "Generate Nest Grid?",
+            f"{reason}.\n\n"
+            f"Would you like to generate a {rows}×{cols} grid ({total} nests) "
+            f"based on your reference configuration?\n\n"
+            f"You can adjust positions in the Visual Nest Editor afterwards.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self._generate_grid_from_config(frame, rows, cols)
+    
+    def _generate_grid_from_config(self, frame, rows: int, cols: int):
+        """Generate evenly spaced nest grid from reference config.
+        
+        Args:
+            frame: Video frame for dimensions
+            rows: Number of rows
+            cols: Number of columns
+        """
+        from collections import namedtuple
+        Detection = namedtuple('Detection', ['bbox', 'confidence', 'nest_id'])
+        
+        h, w = frame.shape[:2]
+        
+        # Default nest size and padding
+        nest_w, nest_h = 24, 14
+        padding = 50
+        
+        # Calculate spacing
+        avail_w = w - 2 * padding
+        avail_h = h - 2 * padding
+        spacing_x = avail_w / cols
+        spacing_y = avail_h / rows
+        
+        nests = []
+        nest_id = 1
+        
+        for row in range(rows):
+            for col in range(cols):
+                cx = padding + (col + 0.5) * spacing_x
+                cy = padding + (row + 0.5) * spacing_y
+                
+                bbox = (cx - nest_w/2, cy - nest_h/2, cx + nest_w/2, cy + nest_h/2)
+                
+                det = Detection(
+                    bbox=bbox,
+                    confidence=1.0,
+                    nest_id=nest_id
+                )
+                nests.append(det)
+                nest_id += 1
+        
+        # Update video canvas
+        self.video_canvas.detected_nests = nests
+        self.video_canvas.show_nests = True
+        
+        # Generate hotel ROI around all nests
+        self.video_canvas.hotel_roi = (
+            int(padding - 10),
+            int(padding - 10),
+            int(w - padding + 10),
+            int(h - padding + 10)
+        )
+        
+        # Refresh display
+        if self.current_frame_idx is not None:
+            self.load_frame(self.current_frame_idx)
+        
+        # Update UI
+        self.control_panel.set_detected_nests_count(len(nests))
+        
+        self.control_panel.set_video_info(
+            f"<b>{Path(self.video_path).name}</b><br>"
+            f"{w}x{h} @ {self.fps:.1f} FPS<br>"
+            f"{self.total_frames} frames ({self.total_frames/self.fps:.1f}s)<br>"
+            f"<span style='color: #FF9800;'><b>🔲 {len(nests)} nests (generated grid)</b></span>"
+        )
+        
+        self.statusBar().showMessage(f"✓ Generated {rows}×{cols} nest grid - use Edit Nests to adjust")
+        self.control_panel.append_log(f"✓ Generated {rows}×{cols} = {len(nests)} nest grid")
+        self.control_panel.append_log(f"  → Click 'Edit Nests' to adjust positions")
     
     # =========================================================================
     # Analysis Methods
@@ -730,6 +849,21 @@ class BeeMonitorGUI(QMainWindow):
         if advanced.get('save_crops'):
             self.config.tracking.save_crops = True
             self.config.tracking.crops_per_track = advanced.get('crops_per_track', 5)
+            # Set crop output folder to match CSV output folder
+            self.config.tracking.crop_output_folder = self.output_folder
+        
+        # Get manually edited nests to pass to analysis
+        edited_nests = None
+        if hasattr(self.video_canvas, 'detected_nests') and self.video_canvas.detected_nests:
+            # Convert Detection namedtuples to dict format for EventProcessor
+            edited_nests = {
+                'nests': {},
+                'hotel': getattr(self.video_canvas, 'hotel_roi', None)
+            }
+            for nest in self.video_canvas.detected_nests:
+                nest_id = getattr(nest, 'nest_id', None)
+                if nest_id is not None:
+                    edited_nests['nests'][nest_id] = nest.bbox
         
         self.analysis_start_time = time.time()
         
@@ -739,10 +873,14 @@ class BeeMonitorGUI(QMainWindow):
         self.control_panel.append_log(f"Starting analysis...")
         self.control_panel.append_log(f"Started at: {time.strftime('%H:%M:%S')}")
         
+        if edited_nests and edited_nests['nests']:
+            self.control_panel.append_log(f"✓ Using {len(edited_nests['nests'])} manually edited nests")
+        
         if advanced.get('enable_interaction_metrics'):
             self.control_panel.append_log(f"✓ Interaction metrics enabled")
         if advanced.get('save_crops'):
             self.control_panel.append_log(f"✓ Crop saving enabled ({advanced.get('crops_per_track', 5)} per track)")
+            self.control_panel.append_log(f"  → Crops will be saved to: {self.output_folder}")
         
         monitor = BeeMonitor(config=self.config)
         
@@ -750,7 +888,8 @@ class BeeMonitorGUI(QMainWindow):
             monitor,
             self.video_path,
             self.output_folder,
-            detection_mode='yolo'
+            detection_mode='yolo',
+            nests=edited_nests  # Pass edited nests to analysis
         )
         
         # Store advanced options for post-processing
@@ -820,16 +959,42 @@ class BeeMonitorGUI(QMainWindow):
             # Track-to-track interactions
             track_interactions, _ = analyzer.analyze_track_interactions(tracking_df)
             
-            # Track-to-nest interactions
-            if result.nests and 'nests' in result.nests:
+            # Track-to-nest interactions - ALWAYS use GUI edited nests first
+            nest_interactions = []
+            nests_used = 0
+            nests_source = "none"
+            
+            # Priority 1: GUI edited nests (from visual editor)
+            if hasattr(self.video_canvas, 'detected_nests') and self.video_canvas.detected_nests:
+                gui_nests = []
+                for nest in self.video_canvas.detected_nests:
+                    nest_id = getattr(nest, 'nest_id', None)
+                    if nest_id is not None:
+                        gui_nests.append({'id': nest_id, 'bbox': nest.bbox})
+                
+                if gui_nests:
+                    ref_objects = nests_to_reference_objects(gui_nests)
+                    nest_interactions, _ = analyzer.analyze_reference_interactions(
+                        tracking_df, ref_objects
+                    )
+                    nests_used = len(gui_nests)
+                    nests_source = "GUI-edited"
+                    self.control_panel.append_log(f"  ✓ Using {nests_used} {nests_source} nests for interactions")
+            
+            # Priority 2: Fallback to result.nests from auto-detection (only if no GUI nests)
+            if nests_used == 0 and hasattr(result, 'nests') and result.nests and 'nests' in result.nests:
                 ref_objects = nests_to_reference_objects(
                     [{'id': k, 'bbox': v} for k, v in result.nests['nests'].items()]
                 )
                 nest_interactions, _ = analyzer.analyze_reference_interactions(
                     tracking_df, ref_objects
                 )
-            else:
-                nest_interactions = []
+                nests_used = len(result.nests['nests'])
+                nests_source = "auto-detected"
+                self.control_panel.append_log(f"  ⚠️ Using {nests_used} {nests_source} nests (no GUI edits found)")
+            
+            if nests_used == 0:
+                self.control_panel.append_log("  ⚠️ No nests available - skipping nest interactions")
             
             # Save CSVs
             video_name = Path(self.video_path).stem
@@ -842,12 +1007,16 @@ class BeeMonitorGUI(QMainWindow):
             if nest_interactions:
                 nest_csv = os.path.join(self.output_folder, f"{video_name}_nest_interactions.csv")
                 analyzer.to_csv(nest_interactions, nest_csv, 'reference')
-                self.control_panel.append_log(f"  ✓ Saved {len(nest_interactions)} nest interactions")
+                self.control_panel.append_log(f"  ✓ Saved {len(nest_interactions)} nest interactions ({nests_source} nests)")
+            else:
+                self.control_panel.append_log(f"  No nest interactions detected")
             
         except ImportError:
             self.control_panel.append_log("  ⚠️ InteractionAnalyzer module not found")
         except Exception as e:
+            import traceback
             self.control_panel.append_log(f"  ⚠️ Interaction analysis failed: {e}")
+            print(f"Interaction analysis error: {traceback.format_exc()}")
     
     def _auto_load_and_display_results(self, csv_path):
         """Auto-load and display results after analysis."""
@@ -932,6 +1101,10 @@ class BeeMonitorGUI(QMainWindow):
             return
         
         params = self.control_panel.get_parameters()
+        advanced = self.control_panel.get_advanced_options()
+        
+        # Merge advanced options into params for thread
+        params.update(advanced)
         
         video_files = [f for f in os.listdir(self.folder_path) 
                       if f.endswith(('.mp4', '.avi', '.mov', '.mkv'))]
@@ -943,6 +1116,12 @@ class BeeMonitorGUI(QMainWindow):
         folder_name = Path(self.folder_path).name
         output_folder = str(Path(self.folder_path).parent / f"{folder_name}_output")
         os.makedirs(output_folder, exist_ok=True)
+        
+        # Update config with crop settings
+        if advanced.get('save_crops'):
+            self.config.tracking.save_crops = True
+            self.config.tracking.crops_per_track = advanced.get('crops_per_track', 5)
+            self.config.tracking.crop_output_folder = output_folder
         
         # Build confirmation message
         confirm_msg = (
@@ -976,6 +1155,8 @@ class BeeMonitorGUI(QMainWindow):
         self.control_panel.append_log(f"{'='*50}")
         self.control_panel.append_log(f"Videos: {len(video_files)}")
         self.control_panel.append_log(f"Workers: {params['max_workers']}")
+        if params.get('save_crops'):
+            self.control_panel.append_log(f"Crops: Saving to {output_folder}")
         
         self.statusBar().showMessage(f"Analyzing {len(video_files)} videos...")
         

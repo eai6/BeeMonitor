@@ -165,15 +165,9 @@ class ControlPanel(QScrollArea):
         
         # Edit nests button
         edit_nests_btn = QPushButton("✏️ Edit Nests")
-        edit_nests_btn.setToolTip("Manually add, edit, or remove nest positions")
+        edit_nests_btn.setToolTip("Visually edit nest positions on video frame")
         edit_nests_btn.clicked.connect(self.edit_nests_requested.emit)
         ref_layout.addWidget(edit_nests_btn)
-        
-        # Apply config button
-        apply_btn = QPushButton("Apply Configuration")
-        apply_btn.setStyleSheet("background-color: #2196F3; color: white;")
-        apply_btn.clicked.connect(self._apply_reference_config)
-        ref_layout.addWidget(apply_btn)
         
         ref_group.setLayout(ref_layout)
         return ref_group
@@ -319,15 +313,6 @@ class ControlPanel(QScrollArea):
         cols = self.cols_spinner.value()
         total = rows * cols
         self.total_nests_label.setText(f"Total Nests: {total}")
-    
-    def _apply_reference_config(self):
-        """Apply reference configuration."""
-        config = {
-            'rows': self.rows_spinner.value(),
-            'cols': self.cols_spinner.value(),
-            'total': self.rows_spinner.value() * self.cols_spinner.value()
-        }
-        self.reference_config_changed.emit(config)
     
     # === Control Methods ===
     
