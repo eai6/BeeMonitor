@@ -1,12 +1,19 @@
 """
-BeeTracking - v2.3 YOLO-Only with ADAPTIVE Tracker
-===================================================
+BeeTracking - v2.4 YOLO-Only with ADAPTIVE Tracker + Bee Identification
+========================================================================
 
 Simplified bee tracking using YOLO-only detection with adaptive, resolution and FPS-independent tracking.
+
+v2.4 Changes:
+- Added bee identification support (color, number, QR code)
+- taxon field from YOLO class label (always present)
+- bee_id field for individual identification (optional)
+- Configurable identifier via ColorIdentifier or BeeIdentifierManager
 
 v2.3 Changes:
 - Pass frame_height to tracker for resolution-relative fallback
 - Robust bee size with IQR outlier rejection (in BeeTracker)
+- Track IDs start from 1 for confirmed tracks only
 
 v2.2 Changes:
 - YOLO-only detection (no FGBG_YOLO mode)
@@ -46,13 +53,19 @@ class BeeTracking:
         confidence_threshold: float = 0.25,
         roi: Optional[Tuple[int, int, int, int]] = None,
         # Adaptive tracker parameters
-        max_age_seconds: float = 1.0,
-        min_hits_seconds: float = 0.1,
-        max_resurrection_seconds: float = 0.5,
+        max_age_seconds: float = 0.5,
+        min_hits_seconds: float = 0.0,
+        max_resurrection_seconds: float = 0.25,
         match_distance_multiplier: float = 5.0,
         resurrection_search_multiplier: float = 3.0,
         duplicate_distance_multiplier: float = 1.2,
-        iou_threshold: float = 0.3
+        iou_threshold: float = 0.3,
+        # Bee identification
+        identifier=None,  # BeeIdentifierManager or ColorIdentifier instance
+        # Crop saving for identification training
+        save_crops: bool = False,
+        crop_output_dir: Optional[str] = None,
+        crops_per_track: int = 5
     ):
         """
         Initialize BeeTracking with YOLO-only detection and adaptive tracking.
@@ -70,8 +83,16 @@ class BeeTracking:
                 resurrection_search_multiplier: Search radius (multiplier of bee size)
                 duplicate_distance_multiplier: Duplicate threshold (multiplier of bee size)
                 iou_threshold: IoU threshold for matching
+            
+            Bee identification:
+                identifier: Identifier instance (ColorIdentifier or BeeIdentifierManager)
+            
+            Crop saving (for identification training data):
+                save_crops: Whether to save bbox crops of tracked bees
+                crop_output_dir: Directory to save crops (default: ./crops)
+                crops_per_track: Number of crops to save per track (default: 5)
         """
-        logger.info("Initializing BeeTracking (v2.3 YOLO-only with adaptive tracker)")
+        logger.info("Initializing BeeTracking (v2.4 YOLO-only with adaptive tracker + identification)")
         
         # YOLO detector
         logger.info(f"Loading YOLO model from {yolo_model_path}")
@@ -114,12 +135,23 @@ class BeeTracking:
         # Tracker (will be initialized when video properties are known)
         self.tracker = None
         
+        # Bee identifier (optional)
+        self.identifier = identifier
+        
+        # Crop saving for identification training
+        self.save_crops = save_crops
+        self.crop_output_dir = crop_output_dir or './crops'
+        self.crops_per_track = crops_per_track
+        self.track_crop_counts = {}  # track_id -> number of crops saved
+        
         # Two-mode system state
         self.mode = 'motion_detection'  # 'motion_detection' or 'tracking'
         self.frames_since_motion = 0
         self.motion_cooldown = 30  # Frames to stay in tracking mode after motion stops
         
-        logger.info("BeeTracking initialized (v2.2 YOLO-only with adaptive tracker)")
+        id_status = "enabled" if identifier else "disabled"
+        crop_status = f"enabled ({crops_per_track}/track)" if save_crops else "disabled"
+        logger.info(f"BeeTracking initialized (v2.4, identification={id_status}, crops={crop_status})")
     
     def _initialize_tracker(self, fps: float, frame_height: int = None):
         """
@@ -175,6 +207,8 @@ class BeeTracking:
             video_path: Path to video file
             output_path: Optional path to output folder
         """
+        import os
+        
         logger.info(f"Initializing video tracking for: {video_path}")
         if output_path:
             logger.info(f"Output path: {output_path}")
@@ -186,6 +220,23 @@ class BeeTracking:
         # Initialize adaptive tracker with video FPS and frame height
         self._initialize_tracker(self.fps, self.video_height)
         
+        # Reset crop counts for new video
+        self.track_crop_counts = {}
+        
+        # Setup crop output directory (same location as other outputs)
+        if self.save_crops:
+            if output_path:
+                # output_path might be a file (video) or directory
+                # Use parent directory if it's a file
+                if os.path.splitext(output_path)[1]:  # Has extension = file
+                    output_dir = os.path.dirname(output_path)
+                else:
+                    output_dir = output_path
+                self.crop_output_dir = os.path.join(output_dir, 'crops')
+            os.makedirs(self.crop_output_dir, exist_ok=True)
+            abs_crop_dir = os.path.abspath(self.crop_output_dir)
+            logger.info(f"Crop saving enabled: {abs_crop_dir} ({self.crops_per_track} per track)")
+        
         # Initialize blob detector background
         # Note: BlobDetector builds background model internally from detect() calls
         # We don't need to manually feed it frames
@@ -194,7 +245,6 @@ class BeeTracking:
         # Optionally save initial background if output_path is provided
         # This will be saved after the first few frames are processed
         if output_path:
-            import os
             os.makedirs(output_path, exist_ok=True)
             self.background_save_path = os.path.join(output_path, "background.png")
             logger.info(f"Background will be saved to: {self.background_save_path}")
@@ -216,6 +266,58 @@ class BeeTracking:
         
         # Motion detected if we have any blobs
         return len(blob_detections) > 0
+    
+    def _save_track_crops(self, frame: np.ndarray, tracks: List[Dict], frame_num: int):
+        """
+        Save bbox crops for tracked bees (for identification training data).
+        
+        Args:
+            frame: Full video frame
+            tracks: List of confirmed tracks
+            frame_num: Current frame number
+        """
+        import os
+        
+        if not self.save_crops or not tracks:
+            return
+        
+        h, w = frame.shape[:2]
+        
+        for track in tracks:
+            track_id = track['track_id']
+            
+            # Check if we've saved enough crops for this track
+            saved = self.track_crop_counts.get(track_id, 0)
+            if saved >= self.crops_per_track:
+                continue
+            
+            # Extract bbox
+            x1 = max(0, int(track['x1']))
+            y1 = max(0, int(track['y1']))
+            x2 = min(w, int(track['x2']))
+            y2 = min(h, int(track['y2']))
+            
+            if x1 >= x2 or y1 >= y2:
+                continue
+            
+            # Crop bee region
+            crop = frame[y1:y2, x1:x2]
+            
+            if crop.size == 0:
+                continue
+            
+            # Save crop: crops/track_{id}/frame_{num}.jpg
+            track_dir = os.path.join(self.crop_output_dir, f'track_{track_id:04d}')
+            os.makedirs(track_dir, exist_ok=True)
+            
+            crop_path = os.path.join(track_dir, f'frame_{frame_num:06d}.jpg')
+            success = cv2.imwrite(crop_path, crop)
+            
+            if success:
+                self.track_crop_counts[track_id] = saved + 1
+                logger.info(f"Saved crop {saved + 1}/{self.crops_per_track} for track {track_id}: {crop_path}")
+            else:
+                logger.warning(f"Failed to save crop: {crop_path}")
     
     def process_frame(
         self,
@@ -257,22 +359,24 @@ class BeeTracking:
                 # Run YOLO on FULL FRAME (allows tracking beyond ROI)
                 yolo_detections = self.yolo_detector.detect(frame)
                 
-                # Convert to tracking format and add source
+                # Convert to tracking format: [x1, y1, x2, y2, conf, source, taxon]
                 for det in yolo_detections:
                     bbox = det.bbox
                     conf = det.confidence
-                    det_with_source = list(bbox) + [conf, 'yolo']
+                    taxon = det.label  # YOLO class label = taxonomic ID
+                    det_with_source = list(bbox) + [conf, 'yolo', taxon]
                     detections.append(det_with_source)
         
         else:  # tracking mode
             # Run YOLO on FULL FRAME (allows tracking beyond ROI)
             yolo_detections = self.yolo_detector.detect(frame)
             
-            # Convert to tracking format and add source
+            # Convert to tracking format: [x1, y1, x2, y2, conf, source, taxon]
             for det in yolo_detections:
                 bbox = det.bbox
                 conf = det.confidence
-                det_with_source = list(bbox) + [conf, 'yolo']
+                taxon = det.label  # YOLO class label = taxonomic ID
+                det_with_source = list(bbox) + [conf, 'yolo', taxon]
                 detections.append(det_with_source)
             
             # Check if motion has stopped (ROI only)
@@ -292,6 +396,23 @@ class BeeTracking:
         tracks = []
         if self.tracker is not None:
             tracks = self.tracker.update(detections, frame_num)
+            
+            # Run identification on confirmed tracks
+            if self.identifier and tracks:
+                for track_obj in self.tracker.tracks:
+                    if track_obj.is_confirmed and track_obj.bee_id is None:
+                        # Try to identify this bee
+                        result = self.identifier.identify(frame, track_obj.last_bbox)
+                        if result:
+                            bee_id, method, confidence = result
+                            track_obj.set_bee_id(bee_id, method, confidence)
+                
+                # Refresh tracks list with updated bee_ids
+                tracks = self.tracker.get_active_tracks()
+        
+        # Save crops for identification training
+        if self.save_crops and tracks:
+            self._save_track_crops(frame, tracks, frame_num)
         
         result = {
             'frame_num': frame_num,
@@ -347,7 +468,7 @@ class BeeTracking:
         for i, track in enumerate(tracks):
             color = colors[i % len(colors)]
             track_id = track['track_id']
-            cx, cy = map(int, track['centroid'])
+            cx, cy = int(track['cx']), int(track['cy'])
             
             # Draw trajectory
             if len(track['history']) > 1:
@@ -356,7 +477,10 @@ class BeeTracking:
             
             # Draw current position
             cv2.circle(vis_frame, (cx, cy), 5, color, -1)
-            cv2.putText(vis_frame, f"ID:{track_id}", (cx + 10, cy),
+            
+            # Show bee_id if available, otherwise track_id
+            label = f"B:{track['bee_id']}" if track.get('bee_id') else f"T:{track_id}"
+            cv2.putText(vis_frame, label, (cx + 10, cy),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
         # Draw mode indicator
@@ -426,14 +550,24 @@ class BeeTracking:
         
         logger.info(f"Processed {frame_num} frames total")
         
+        # Log crop saving summary
+        if self.save_crops and self.track_crop_counts:
+            import os
+            total_crops = sum(self.track_crop_counts.values())
+            num_tracks = len(self.track_crop_counts)
+            abs_crop_dir = os.path.abspath(self.crop_output_dir)
+            logger.info(f"Saved {total_crops} crops for {num_tracks} tracks in: {abs_crop_dir}")
+        
         # Convert results to DataFrame
         import pandas as pd
         
+        # Define clean column list
+        columns = ['frame', 'track_id', 'x1', 'y1', 'x2', 'y2', 'cx', 'cy',
+                   'confidence', 'source', 'taxon', 'bee_id', 'bee_id_method', 'bee_id_confidence', 'mode']
+        
         if not results:
             # Return empty DataFrame with expected columns
-            return pd.DataFrame(columns=['frame', 'frame_num', 'track_id', 
-                                        'x1', 'y1', 'x2', 'y2', 'cx', 'cy',
-                                        'bbox', 'centroid', 'confidence', 'mode'])
+            return pd.DataFrame(columns=columns)
         
         # Flatten results - one row per track per frame
         flattened_rows = []
@@ -444,45 +578,35 @@ class BeeTracking:
             
             # Extract each track into a separate row
             for track in result['tracks']:
-                # Get track ID - should be 'track_id' based on debug output
                 track_id = track.get('track_id')
                 
                 if track_id is None:
                     logger.warning(f"Track missing track_id! Track keys: {track.keys()}")
                     continue  # Skip tracks without ID
                 
-                # Unpack bbox (x1, y1, x2, y2)
-                bbox = track['bbox']
-                x1, y1, x2, y2 = bbox
-                
-                # Unpack centroid (cx, cy)
-                centroid = track['centroid']
-                cx, cy = centroid
-                
                 row = {
                     'frame': frame_num,
-                    'frame_num': frame_num,
                     'track_id': track_id,
-                    'x1': x1,
-                    'y1': y1,
-                    'x2': x2,
-                    'y2': y2,
-                    'cx': cx,
-                    'cy': cy,
-                    'bbox': bbox,  # Keep original bbox too
-                    'centroid': centroid,  # Keep original centroid too
+                    'x1': track['x1'],
+                    'y1': track['y1'],
+                    'x2': track['x2'],
+                    'y2': track['y2'],
+                    'cx': track['cx'],
+                    'cy': track['cy'],
                     'confidence': track.get('confidence', 0.0),
+                    'source': track.get('source', 'unknown'),
+                    'taxon': track.get('taxon', 'bee'),
+                    'bee_id': track.get('bee_id'),
+                    'bee_id_method': track.get('bee_id_method'),
+                    'bee_id_confidence': track.get('bee_id_confidence', 0.0),
                     'mode': mode
                 }
                 flattened_rows.append(row)
         
         # Create DataFrame from flattened rows
         if not flattened_rows:
-            # No tracks detected
             logger.warning("No tracks detected in video")
-            return pd.DataFrame(columns=['frame', 'frame_num', 'track_id', 
-                                        'x1', 'y1', 'x2', 'y2', 'cx', 'cy',
-                                        'bbox', 'centroid', 'confidence', 'mode'])
+            return pd.DataFrame(columns=columns)
         
         df = pd.DataFrame(flattened_rows)
         

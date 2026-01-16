@@ -442,6 +442,9 @@ class TrackingConfig:
     max_frames_without_yolo: int = 60
     force_yolo_on_no_blobs: bool = True
     force_yolo_for_tracking: bool = True
+
+    save_crops = True
+    crops_per_track = 10
     
     # Two-mode tracking optimization
     enable_two_mode_tracking: bool = True  # Enable adaptive mode switching

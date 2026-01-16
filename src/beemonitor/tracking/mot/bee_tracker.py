@@ -89,20 +89,25 @@ class KalmanFilter:
 class Track:
     """Represents a single tracked object (bee)."""
     
-    _next_id = 1
+    _next_confirmed_id = 1
+    
+    @classmethod
+    def reset_id_counter(cls):
+        """Reset track ID counter (call at start of new video)."""
+        cls._next_confirmed_id = 1
     
     def __init__(self, detection, frame_num, min_hits=3, max_age=30):
         """
         Initialize track.
         
         Args:
-            detection: Initial detection (x1, y1, x2, y2)
+            detection: Initial detection (x1, y1, x2, y2, confidence, source, taxon)
             frame_num: Frame number where track started
             min_hits: Minimum hits before track is confirmed
             max_age: Maximum frames without detection before deletion
         """
-        self.id = Track._next_id
-        Track._next_id += 1
+        # ID assigned only when confirmed
+        self._id = None
         
         bbox = detection[:4]
         cx = (bbox[0] + bbox[2]) / 2
@@ -118,14 +123,36 @@ class Track:
         self.min_hits = min_hits
         self.max_age = max_age
         
-        self.last_bbox = bbox
+        self.last_bbox = tuple(bbox)
+        self.last_confidence = float(detection[4]) if len(detection) > 4 else 0.0
+        self.last_source = detection[5] if len(detection) > 5 else 'unknown'
         self.last_detection_frame = frame_num
         self.start_frame = frame_num
+        
+        # Taxonomic identification (from YOLO class label - always present)
+        self.taxon = detection[6] if len(detection) > 6 else 'bee'
         
         # Anti-duplicate tracking
         self.initial_position = (cx, cy)
         self.position_variance = 0.0
         self.is_stable = False
+        
+        # Unique individual identification (optional)
+        # Determined by: color marking, number reading, QR code
+        self.bee_id = None  # None = unidentified individual
+        self.bee_id_method = None  # 'color', 'number', 'qrcode'
+        self.bee_id_confidence = 0.0
+    
+    @property
+    def id(self):
+        """Get track ID (assigned when first confirmed)."""
+        return self._id
+    
+    def _assign_id(self):
+        """Assign ID when track becomes confirmed."""
+        if self._id is None:
+            self._id = Track._next_confirmed_id
+            Track._next_confirmed_id += 1
     
     def predict(self):
         """Predict next position."""
@@ -145,8 +172,14 @@ class Track:
         
         self.hits += 1
         self.time_since_update = 0
-        self.last_bbox = bbox
+        self.last_bbox = tuple(bbox)
+        self.last_confidence = float(detection[4]) if len(detection) > 4 else 0.0
+        self.last_source = detection[5] if len(detection) > 5 else 'unknown'
         self.last_detection_frame = frame_num
+        
+        # Update taxon if provided (use most recent)
+        if len(detection) > 6 and detection[6]:
+            self.taxon = detection[6]
         
         # Update stability metrics
         if len(self.history) >= 5:
@@ -154,10 +187,28 @@ class Track:
             self.position_variance = np.var(recent_positions)
             self.is_stable = self.position_variance < 100
     
+    def set_bee_id(self, bee_id: str, method: str, confidence: float = 1.0):
+        """
+        Set the unique individual identity of this bee.
+        
+        Args:
+            bee_id: Unique identifier for this individual bee
+            method: How the ID was determined ('color', 'number', 'qrcode')
+            confidence: Confidence in the identification (0.0 - 1.0)
+        """
+        # Only update if higher confidence or no existing ID
+        if self.bee_id is None or confidence > self.bee_id_confidence:
+            self.bee_id = bee_id
+            self.bee_id_method = method
+            self.bee_id_confidence = confidence
+    
     @property
     def is_confirmed(self):
         """Check if track is confirmed."""
-        return self.hits >= self.min_hits
+        confirmed = self.hits >= self.min_hits
+        if confirmed and self._id is None:
+            self._assign_id()
+        return confirmed
     
     @property
     def is_dead(self):
@@ -241,6 +292,9 @@ class BeeTracker:
         self.duplicate_distance_multiplier = duplicate_distance_multiplier
         
         self.iou_threshold = iou_threshold
+        
+        # Reset track ID counter for new video
+        Track.reset_id_counter()
         
         self.tracks: List[Track] = []
         self.dead_tracks: List[Tuple[Track, int]] = []
@@ -569,14 +623,26 @@ class BeeTracker:
         
         self.tracks = active_tracks
         
-        # Return confirmed tracks
+        # Return confirmed tracks with clean format
         results = []
         for track in self.tracks:
             if track.is_confirmed:
+                cx, cy = track.centroid
+                x1, y1, x2, y2 = track.last_bbox
                 results.append({
                     'track_id': track.id,
-                    'centroid': tuple(track.centroid),
-                    'bbox': track.last_bbox,
+                    'x1': x1,
+                    'y1': y1,
+                    'x2': x2,
+                    'y2': y2,
+                    'cx': float(cx),
+                    'cy': float(cy),
+                    'confidence': track.last_confidence,
+                    'source': track.last_source,
+                    'taxon': track.taxon,
+                    'bee_id': track.bee_id,
+                    'bee_id_method': track.bee_id_method,
+                    'bee_id_confidence': track.bee_id_confidence,
                     'history': list(track.history)
                 })
         
@@ -584,12 +650,25 @@ class BeeTracker:
     
     def get_active_tracks(self):
         """Get all confirmed active tracks."""
-        return [
-            {
-                'track_id': track.id,
-                'centroid': tuple(track.centroid),
-                'bbox': track.last_bbox,
-                'history': list(track.history)
-            }
-            for track in self.tracks if track.is_confirmed
-        ]
+        results = []
+        for track in self.tracks:
+            if track.is_confirmed:
+                cx, cy = track.centroid
+                x1, y1, x2, y2 = track.last_bbox
+                results.append({
+                    'track_id': track.id,
+                    'x1': x1,
+                    'y1': y1,
+                    'x2': x2,
+                    'y2': y2,
+                    'cx': float(cx),
+                    'cy': float(cy),
+                    'confidence': track.last_confidence,
+                    'source': track.last_source,
+                    'taxon': track.taxon,
+                    'bee_id': track.bee_id,
+                    'bee_id_method': track.bee_id_method,
+                    'bee_id_confidence': track.bee_id_confidence,
+                    'history': list(track.history)
+                })
+        return results

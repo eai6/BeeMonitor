@@ -222,7 +222,10 @@ class BeeMonitor:
             max_resurrection_seconds=tracker_params['max_resurrection_seconds'],
             resurrection_search_multiplier=tracker_params['resurrection_search_multiplier'],
             duplicate_distance_multiplier=tracker_params['duplicate_distance_multiplier'],
-            iou_threshold=tracker_params['iou_threshold']
+            iou_threshold=tracker_params['iou_threshold'],
+            # Crop saving for identification training
+            save_crops=getattr(self.config.tracking, 'save_crops', False),
+            crops_per_track=getattr(self.config.tracking, 'crops_per_track', 5)
         )
         
         logger.info("✓ Tracking system initialized (v2.2.1 CONFIG-BASED)")
