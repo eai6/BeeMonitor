@@ -103,7 +103,7 @@ typer-slim==0.20.0
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 tzdata==2025.2
-ultralytics==8.3.223
+ultralytics==8.4.3
 ultralytics-thop==2.0.18
 urllib3==2.5.0
 uvicorn==0.38.0
