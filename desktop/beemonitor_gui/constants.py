@@ -1,13 +1,18 @@
 """
-Constants and Configuration
-============================
+Constants and Configuration - v2.2 SIMPLIFIED
+==============================================
 
 Shared constants, presets, and configuration values.
+
+v2.2 Changes:
+- Updated version to 3.1.0
+- Updated title to include "v2.2 YOLO-Only"
+- Removed SIFT color (no longer used)
 """
 
 # Version
-VERSION = "3.0.0"
-TITLE = "BeeMonitor - Video Analysis Tool"
+VERSION = "3.1.0"
+TITLE = "BeeMonitor - Video Analysis Tool (v2.2 YOLO-Only)"
 
 # Detection parameter presets
 DETECTION_PRESETS = {
@@ -38,11 +43,11 @@ DETECTION_PRESETS = {
 }
 
 # Detection source colors (BGR format for OpenCV)
+# v2.2: Removed SIFT (no longer used)
 DETECTION_SOURCE_COLORS = {
-    'blob': (0, 0, 255),      # RED - Blob/FG-BG motion detection
+    'blob': (0, 0, 255),      # RED - Blob motion detection
     'fgbg': (0, 0, 255),      # RED - Alias
-    'sift': (0, 255, 0),      # GREEN - SIFT stationary detection
-    'yolo': (255, 0, 0),      # BLUE - YOLO deep learning
+    'yolo': (255, 0, 0),      # BLUE - YOLO tracking
     'unknown': (128, 128, 128) # GRAY - Unknown source
 }
 

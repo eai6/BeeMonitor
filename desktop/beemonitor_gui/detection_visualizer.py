@@ -1,11 +1,14 @@
 """
-Detection Source Visualizer
-============================
+Detection Source Visualizer - v2.2 SIMPLIFIED
+==============================================
 
 Color-coded visualization of detection sources:
-- RED: Blob/FG-BG (motion detection)
-- GREEN: SIFT (stationary detection)
-- BLUE: YOLO (deep learning)
+- RED: Blob motion detection (two-mode optimization)
+- BLUE: YOLO tracking (100% accuracy)
+
+v2.2 Changes:
+- Removed SIFT (no longer used)
+- Simplified legend to 2 sources
 """
 
 import cv2
@@ -46,18 +49,16 @@ class DetectionSourceVisualizer:
         vis_frame = frame.copy()
         
         for det in detections:
-            # Get detection info
             x1, y1, x2, y2 = map(int, det.bbox)
             source = getattr(det, 'source', 'unknown').lower()
             confidence = getattr(det, 'confidence', 0.0)
             
-            # Get color for this source
             color = self.colors.get(source, self.colors['unknown'])
             
             # Draw bounding box
             cv2.rectangle(vis_frame, (x1, y1), (x2, y2), color, thickness)
             
-            # Build label text
+            # Build label
             label_parts = []
             if show_labels:
                 label_parts.append(source.upper())
@@ -67,7 +68,6 @@ class DetectionSourceVisualizer:
             if label_parts:
                 label = " ".join(label_parts)
                 
-                # Get label size for background
                 (label_w, label_h), baseline = cv2.getTextSize(
                     label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
                 )
@@ -78,7 +78,7 @@ class DetectionSourceVisualizer:
                     (x1, y1 - label_h - baseline - 5),
                     (x1 + label_w + 5, y1),
                     color,
-                    -1  # Filled
+                    -1
                 )
                 
                 # Draw label text
@@ -88,7 +88,7 @@ class DetectionSourceVisualizer:
                     (x1 + 2, y1 - baseline - 2),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.5,
-                    (255, 255, 255),  # White text
+                    (255, 255, 255),
                     1
                 )
             
@@ -108,6 +108,8 @@ class DetectionSourceVisualizer:
         """
         Draw legend showing detection source colors.
         
+        v2.2: Simplified to 2 sources (Blob + YOLO)
+        
         Args:
             frame: Input frame
             position: 'top_right', 'top_left', 'bottom_right', 'bottom_left'
@@ -119,9 +121,9 @@ class DetectionSourceVisualizer:
         vis_frame = frame.copy()
         h, w = frame.shape[:2]
         
-        # Legend config
+        # Legend config (smaller for v2.2)
         legend_width = 180
-        legend_height = 120 if counts else 80
+        legend_height = 90 if counts else 70
         padding = 10
         line_height = 20
         
@@ -139,7 +141,7 @@ class DetectionSourceVisualizer:
             x = padding
             y = h - legend_height - padding
         
-        # Draw legend background
+        # Draw background
         cv2.rectangle(
             vis_frame,
             (x, y),
@@ -158,19 +160,18 @@ class DetectionSourceVisualizer:
         # Title
         cv2.putText(
             vis_frame,
-            "Detection Sources",
+            "Detection Sources (v2.2)",
             (x + 5, y + 15),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.4,
+            0.35,
             (255, 255, 255),
             1
         )
         
-        # Draw each source
+        # Draw sources (v2.2: Only Blob + YOLO)
         sources = [
-            ('BLOB/FG-BG', 'blob'),
-            ('SIFT', 'sift'),
-            ('YOLO', 'yolo')
+            ('Motion (Blob)', 'blob'),
+            ('Tracking (YOLO)', 'yolo')
         ]
         
         for i, (label, source_key) in enumerate(sources):
@@ -221,13 +222,15 @@ class DetectionSourceVisualizer:
         """
         Count detections by source.
         
+        v2.2: Only counts blob + yolo
+        
         Args:
             detections: List of Detection objects
         
         Returns:
-            Dict with counts: {'blob': N, 'sift': M, 'yolo': K}
+            Dict with counts: {'blob': N, 'yolo': K}
         """
-        counts = {'blob': 0, 'sift': 0, 'yolo': 0}
+        counts = {'blob': 0, 'yolo': 0}
         
         for det in detections:
             source = getattr(det, 'source', 'unknown').lower()

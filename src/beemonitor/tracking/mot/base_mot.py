@@ -20,6 +20,7 @@ class Detection:
     label: str
     confidence: float = 1.0
     source: str = 'unknown'  # 'motion', 'yolo', etc.
+    cost_weight: float = 1.0 # Weight for Hungarian cost matrix
 
 
 @dataclass
