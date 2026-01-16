@@ -1,8 +1,14 @@
 """
-BeeMonitor GUI Package v3.1
+BeeMonitor GUI Package v3.2
 ============================
 
 Modular PyQt6 GUI for bee video analysis and visualization.
+
+v2.3 Features:
+- Reference configuration (nest rows/cols)
+- Interaction metrics analysis
+- Manual nest editing
+- Bee crop saving for ID training
 
 v2.2 Features:
 - YOLO-only tracking (100% accuracy)
@@ -15,5 +21,5 @@ v2.2 Features:
 
 from .main_window import BeeMonitorGUI
 
-__version__ = "3.1.0"
+__version__ = "3.2.0"
 __all__ = ['BeeMonitorGUI']

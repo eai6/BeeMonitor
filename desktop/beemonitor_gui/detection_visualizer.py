@@ -1,14 +1,10 @@
 """
-Detection Source Visualizer - v2.2 SIMPLIFIED
-==============================================
+Detection Source Visualizer - v2.3
+===================================
 
 Color-coded visualization of detection sources:
 - RED: Blob motion detection (two-mode optimization)
 - BLUE: YOLO tracking (100% accuracy)
-
-v2.2 Changes:
-- Removed SIFT (no longer used)
-- Simplified legend to 2 sources
 """
 
 import cv2
@@ -33,19 +29,7 @@ class DetectionSourceVisualizer:
         show_confidence: bool = False,
         thickness: int = 2
     ) -> np.ndarray:
-        """
-        Draw detections with color-coded sources.
-        
-        Args:
-            frame: Input frame (BGR)
-            detections: List of Detection objects with .source attribute
-            show_labels: Show source label text
-            show_confidence: Show confidence scores
-            thickness: Line thickness
-        
-        Returns:
-            Frame with visualizations
-        """
+        """Draw detections with color-coded sources."""
         vis_frame = frame.copy()
         
         for det in detections:
@@ -55,10 +39,8 @@ class DetectionSourceVisualizer:
             
             color = self.colors.get(source, self.colors['unknown'])
             
-            # Draw bounding box
             cv2.rectangle(vis_frame, (x1, y1), (x2, y2), color, thickness)
             
-            # Build label
             label_parts = []
             if show_labels:
                 label_parts.append(source.upper())
@@ -72,7 +54,6 @@ class DetectionSourceVisualizer:
                     label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
                 )
                 
-                # Draw label background
                 cv2.rectangle(
                     vis_frame,
                     (x1, y1 - label_h - baseline - 5),
@@ -81,7 +62,6 @@ class DetectionSourceVisualizer:
                     -1
                 )
                 
-                # Draw label text
                 cv2.putText(
                     vis_frame,
                     label,
@@ -92,7 +72,6 @@ class DetectionSourceVisualizer:
                     1
                 )
             
-            # Draw centroid
             if hasattr(det, 'centroid'):
                 cx, cy = map(int, det.centroid)
                 cv2.circle(vis_frame, (cx, cy), 3, color, -1)
@@ -105,29 +84,15 @@ class DetectionSourceVisualizer:
         position: str = 'top_right',
         counts: Optional[Dict] = None
     ) -> np.ndarray:
-        """
-        Draw legend showing detection source colors.
-        
-        v2.2: Simplified to 2 sources (Blob + YOLO)
-        
-        Args:
-            frame: Input frame
-            position: 'top_right', 'top_left', 'bottom_right', 'bottom_left'
-            counts: Optional dict with detection counts per source
-        
-        Returns:
-            Frame with legend
-        """
+        """Draw legend showing detection source colors."""
         vis_frame = frame.copy()
         h, w = frame.shape[:2]
         
-        # Legend config (smaller for v2.2)
         legend_width = 180
         legend_height = 90 if counts else 70
         padding = 10
         line_height = 20
         
-        # Position
         if position == 'top_right':
             x = w - legend_width - padding
             y = padding
@@ -137,11 +102,10 @@ class DetectionSourceVisualizer:
         elif position == 'bottom_right':
             x = w - legend_width - padding
             y = h - legend_height - padding
-        else:  # bottom_left
+        else:
             x = padding
             y = h - legend_height - padding
         
-        # Draw background
         cv2.rectangle(
             vis_frame,
             (x, y),
@@ -157,10 +121,9 @@ class DetectionSourceVisualizer:
             1
         )
         
-        # Title
         cv2.putText(
             vis_frame,
-            "Detection Sources (v2.2)",
+            "Detection Sources (v2.3)",
             (x + 5, y + 15),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.35,
@@ -168,7 +131,6 @@ class DetectionSourceVisualizer:
             1
         )
         
-        # Draw sources (v2.2: Only Blob + YOLO)
         sources = [
             ('Motion (Blob)', 'blob'),
             ('Tracking (YOLO)', 'yolo')
@@ -178,7 +140,6 @@ class DetectionSourceVisualizer:
             color = self.colors[source_key]
             y_pos = y + 30 + (i * line_height)
             
-            # Color box
             cv2.rectangle(
                 vis_frame,
                 (x + 5, y_pos),
@@ -187,7 +148,6 @@ class DetectionSourceVisualizer:
                 -1
             )
             
-            # Label
             text = label
             if counts and source_key in counts:
                 text += f" ({counts[source_key]})"
@@ -202,7 +162,6 @@ class DetectionSourceVisualizer:
                 1
             )
         
-        # Total count
         if counts:
             total = sum(counts.values())
             cv2.putText(
@@ -219,17 +178,7 @@ class DetectionSourceVisualizer:
     
     @staticmethod
     def get_detection_counts(detections: List) -> Dict[str, int]:
-        """
-        Count detections by source.
-        
-        v2.2: Only counts blob + yolo
-        
-        Args:
-            detections: List of Detection objects
-        
-        Returns:
-            Dict with counts: {'blob': N, 'yolo': K}
-        """
+        """Count detections by source."""
         counts = {'blob': 0, 'yolo': 0}
         
         for det in detections:

@@ -1,12 +1,8 @@
 """
-Analysis Thread - v2.2 SIMPLIFIED
-==================================
+Analysis Thread - v2.3
+=======================
 
 Background thread for running video analysis without blocking GUI.
-
-v2.2 Changes:
-- Always uses 'yolo' detection mode
-- Updated progress messages
 """
 
 import os
@@ -24,40 +20,28 @@ class AnalysisThread(QThread):
     error = pyqtSignal(str)
     
     def __init__(self, monitor, video_path, output_folder, detection_mode='yolo'):
-        """
-        Initialize analysis thread.
-        
-        Args:
-            monitor: BeeMonitor instance
-            video_path: Path to input video
-            output_folder: Path to output directory
-            detection_mode: Detection mode (v2.2: always 'yolo', parameter kept for compatibility)
-        """
+        """Initialize analysis thread."""
         super().__init__()
         self.monitor = monitor
         self.video_path = video_path
         self.output_folder = output_folder
-        # v2.2: Ignore parameter, always use YOLO
-        self.detection_mode = 'yolo'
+        self.detection_mode = 'yolo'  # Always YOLO
     
     def run(self):
         """Run analysis in background thread."""
         try:
             self.progress.emit("Initializing analysis...")
-            self.progress.emit("✓ Detection mode: YOLO-only (v2.2 - 100% accuracy)")
+            self.progress.emit("✓ Detection mode: YOLO-only (v2.3 - 100% accuracy)")
             self.progress.emit("✓ Two-mode optimization enabled (5-7x faster)")
             self.progress.emit("Nest detector will automatically detect hotel ROI...")
             
-            # Check if analyze_video accepts these parameters
             sig = inspect.signature(self.monitor.analyze_video)
             
-            # Build kwargs
             kwargs = {'video_path': self.video_path}
             
             if 'visualize' in sig.parameters:
                 kwargs['visualize'] = True
             
-            # v2.2: Always pass 'yolo' mode
             if 'detection_mode' in sig.parameters:
                 kwargs['detection_mode'] = 'yolo'
                 self.progress.emit("Using detection mode: YOLO-only")
@@ -68,40 +52,32 @@ class AnalysisThread(QThread):
             
             result = self.monitor.analyze_video(**kwargs)
             
-            # Ensure output folder exists
             os.makedirs(self.output_folder, exist_ok=True)
             
             self.progress.emit("Saving results...")
             
             try:
-                # Save results (creates events + tracking CSVs)
                 result.to_csv(self.output_folder)
                 self.progress.emit("✓ Results saved!")
                 
-                # Get tracking results path
                 video_name = os.path.basename(self.video_path).replace('.mp4', '').replace('.avi', '').replace('.mov', '')
                 csv_path = os.path.join(self.output_folder, f'{video_name}_tracking_results.csv')
                 
-                # Verify file was created
                 if not os.path.exists(csv_path):
                     self.error.emit(
                         f"Tracking results file not created!\n\n"
-                        f"Expected: {csv_path}\n\n"
-                        f"The result.to_csv() method may not have created the file."
+                        f"Expected: {csv_path}"
                     )
                     return
                 
-                # Verify CSV has source column
                 try:
                     df = pd.read_csv(csv_path, nrows=1)
                     if 'source' in df.columns:
                         self.progress.emit("✓ Detection source tracking enabled")
                         self.progress.emit("  RED = Motion detection (Blob)")
                         self.progress.emit("  BLUE = YOLO tracking")
-                    else:
-                        self.progress.emit("⚠ Detection sources not tracked")
                 except Exception:
-                    pass  # Non-critical
+                    pass
                 
                 self.progress.emit("✓ Analysis complete!")
                 

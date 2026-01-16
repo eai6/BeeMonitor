@@ -1,8 +1,16 @@
-"""Main Window - BeeMonitor Desktop App with Batch Folder Analysis"""
+"""Main Window - BeeMonitor Desktop App v2.3
+
+v2.3 Features:
+- Reference Configuration (nest rows/cols)
+- Interaction Metrics Analysis
+- Manual Nest Editing
+- Crop Saving for ID Training
+"""
 
 import os
 import json
 import threading
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -35,8 +43,8 @@ from .utils import find_tracking_file, get_position_from_row
 class FolderAnalysisThread(QThread):
     """Thread for analyzing multiple videos in parallel with progress tracking."""
     
-    progress = pyqtSignal(str)  # Text progress messages
-    progress_update = pyqtSignal(int, int)  # (current, total) for progress bar
+    progress = pyqtSignal(str)
+    progress_update = pyqtSignal(int, int)
     video_completed = pyqtSignal(str, object)
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
@@ -51,22 +59,16 @@ class FolderAnalysisThread(QThread):
         self._lock = threading.Lock()
         self._completed_count = 0
         self._active_videos = []
-        self._video_times = {}  # Track time for each video
+        self._video_times = {}
     
     def run(self):
-        """Run folder analysis with parallel processing and progress tracking."""
+        """Run folder analysis with parallel processing."""
         try:
-            import os
-            import time
-            from pathlib import Path
             from concurrent.futures import ThreadPoolExecutor, as_completed
             
-            # Start timing
             start_time = time.time()
-            
             self.progress.emit(f"Starting batch analysis of folder: {Path(self.folder_path).name}")
             
-            # Get list of videos
             video_files = [
                 f for f in os.listdir(self.folder_path)
                 if f.endswith(('.mp4', '.avi', '.mov', '.mkv'))
@@ -78,19 +80,21 @@ class FolderAnalysisThread(QThread):
                 self.error.emit("No video files found in folder")
                 return
             
-            # Emit initial progress
             self.progress_update.emit(0, total_videos)
             
-            # Get max workers from params (default 4)
             max_workers = self.params.get('max_workers', 4)
             self.progress.emit(f"Processing {total_videos} videos with {max_workers} parallel workers")
             self.progress.emit(f"Started at: {time.strftime('%H:%M:%S')}")
             
-            # Use ThreadPoolExecutor for parallel processing
+            # Log advanced options if enabled
+            if self.params.get('enable_interaction_metrics'):
+                self.progress.emit(f"✓ Interaction metrics enabled (proximity={self.params.get('proximity_threshold', 50)}px)")
+            if self.params.get('save_crops'):
+                self.progress.emit(f"✓ Crop saving enabled ({self.params.get('crops_per_track', 5)} per track)")
+            
             results = {}
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Submit all videos
                 future_to_video = {}
                 for video_file in video_files:
                     if self._stop_flag:
@@ -100,10 +104,8 @@ class FolderAnalysisThread(QThread):
                     future = executor.submit(self._process_single_video, video_path, video_file)
                     future_to_video[future] = video_file
                 
-                # Process completions as they happen
                 for future in as_completed(future_to_video):
                     if self._stop_flag:
-                        # Cancel remaining futures
                         for f in future_to_video:
                             f.cancel()
                         break
@@ -114,14 +116,12 @@ class FolderAnalysisThread(QThread):
                         result = future.result()
                         results[video_file] = result
                         
-                        # Update progress
                         with self._lock:
                             self._completed_count += 1
                             completed = self._completed_count
                         
                         self.progress_update.emit(completed, total_videos)
                         
-                        # Get time for this video
                         video_time = self._video_times.get(video_file, 0)
                         time_str = self._format_time(video_time)
                         
@@ -139,7 +139,6 @@ class FolderAnalysisThread(QThread):
                         results[video_file] = None
                         self.progress_update.emit(completed, total_videos)
             
-            # Calculate total elapsed time
             total_elapsed = time.time() - start_time
             
             if self._stop_flag:
@@ -147,7 +146,6 @@ class FolderAnalysisThread(QThread):
                 self.progress.emit(f"Analysis stopped by user. Completed {self._completed_count}/{total_videos} videos.")
                 self.progress.emit(f"Total time: {self._format_time(total_elapsed)}")
             else:
-                # Calculate timing statistics
                 avg_time = total_elapsed / len(results) if results else 0
                 
                 self.progress.emit(f"")
@@ -158,13 +156,6 @@ class FolderAnalysisThread(QThread):
                 self.progress.emit(f"Total time: {self._format_time(total_elapsed)}")
                 self.progress.emit(f"Average per video: {self._format_time(avg_time)}")
                 self.progress.emit(f"Finished at: {time.strftime('%H:%M:%S')}")
-                
-                # Show per-video times if available
-                if self._video_times:
-                    self.progress.emit(f"")
-                    self.progress.emit(f"Per-video times:")
-                    for video_file, elapsed in sorted(self._video_times.items(), key=lambda x: x[1], reverse=True):
-                        self.progress.emit(f"  • {video_file}: {self._format_time(elapsed)}")
             
             self.finished.emit(results)
             
@@ -175,34 +166,30 @@ class FolderAnalysisThread(QThread):
     
     def _process_single_video(self, video_path: str, video_file: str):
         """Process a single video (runs in worker thread)."""
-        import time
-        
-        # Start timing this video
         video_start_time = time.time()
         
         try:
-            # Track active video
             with self._lock:
                 self._active_videos.append(video_file)
             
-            # Emit status
-            active_list = ", ".join(self._active_videos[:3])  # Show first 3
+            active_list = ", ".join(self._active_videos[:3])
             if len(self._active_videos) > 3:
                 active_list += f" (+{len(self._active_videos)-3} more)"
             self.progress.emit(f"⚙️  Processing: {active_list}")
             
-            # Analyze video
             result = self.monitor.analyze_video(
                 video_path=video_path,
                 output_folder=self.output_folder,
                 visualize=self.params.get('visualize', False),
-                detection_mode=self.params.get('detection_mode', 'yolo_only')
+                detection_mode=self.params.get('detection_mode', 'yolo')
             )
             
-            # Calculate elapsed time for this video
+            # Run interaction analysis if enabled
+            if result and self.params.get('enable_interaction_metrics'):
+                self._run_interaction_analysis(result, video_path)
+            
             video_elapsed = time.time() - video_start_time
             
-            # Store time
             with self._lock:
                 self._video_times[video_file] = video_elapsed
                 if video_file in self._active_videos:
@@ -211,13 +198,57 @@ class FolderAnalysisThread(QThread):
             return result
             
         except Exception as e:
-            # Record time even on failure
             video_elapsed = time.time() - video_start_time
             with self._lock:
                 self._video_times[video_file] = video_elapsed
                 if video_file in self._active_videos:
                     self._active_videos.remove(video_file)
             raise e
+    
+    def _run_interaction_analysis(self, result, video_path):
+        """Run interaction analysis on completed result."""
+        try:
+            from beemonitor.processing.interaction_analyzer import (
+                InteractionAnalyzer, nests_to_reference_objects
+            )
+            
+            tracking_df = result.tracks
+            if tracking_df is None or tracking_df.empty:
+                return
+            
+            analyzer = InteractionAnalyzer(
+                proximity_threshold=self.params.get('proximity_threshold', 50),
+                min_interaction_frames=3,
+                fps=30.0
+            )
+            
+            # Track-to-track interactions
+            track_interactions, track_summary = analyzer.analyze_track_interactions(tracking_df)
+            
+            # Track-to-nest interactions
+            if result.nests and 'nests' in result.nests:
+                ref_objects = nests_to_reference_objects(
+                    [{'id': k, 'bbox': v} for k, v in result.nests['nests'].items()]
+                )
+                nest_interactions, nest_summary = analyzer.analyze_reference_interactions(
+                    tracking_df, ref_objects
+                )
+            else:
+                nest_interactions, nest_summary = [], pd.DataFrame()
+            
+            # Save interaction CSVs
+            video_name = Path(video_path).stem
+            
+            if track_interactions:
+                track_csv = os.path.join(self.output_folder, f"{video_name}_track_interactions.csv")
+                analyzer.to_csv(track_interactions, track_csv, 'track')
+            
+            if nest_interactions:
+                nest_csv = os.path.join(self.output_folder, f"{video_name}_nest_interactions.csv")
+                analyzer.to_csv(nest_interactions, nest_csv, 'reference')
+            
+        except Exception as e:
+            self.progress.emit(f"  ⚠️ Interaction analysis failed: {e}")
     
     def _format_time(self, seconds):
         """Format seconds into human-readable time string."""
@@ -240,7 +271,7 @@ class FolderAnalysisThread(QThread):
 
 
 class BeeMonitorGUI(QMainWindow):
-    """Main GUI application with video player controls and batch folder analysis."""
+    """Main GUI application v2.3 with reference configuration and interaction metrics."""
     
     def __init__(self):
         super().__init__()
@@ -271,7 +302,7 @@ class BeeMonitorGUI(QMainWindow):
         self.folder_path = None
         self.folder_analysis_thread = None
         
-        # Pre-initialize nest detection models (for fast reuse)
+        # Pre-initialize nest detection models
         self.nest_yolo_model = None
         self.nest_config = None
         self._init_nest_detection_models()
@@ -293,53 +324,31 @@ class BeeMonitorGUI(QMainWindow):
         print(f"✓ BeeMonitor GUI v{VERSION} initialized")
     
     def _init_nest_detection_models(self):
-        """Initialize models for nest detection once at startup.
-        
-        Pre-loads:
-        - YOLO model for nest detection (from config.model.nest_detection)
-        - Config with GUI-specific settings (15 attempts vs 5 default)
-        
-        This makes subsequent nest detections much faster (reuses models).
-        """
+        """Initialize models for nest detection once at startup."""
         try:
             from ultralytics import YOLO
             from beemonitor.core.config import Config
             
             print("Initializing nest detection models...")
             
-            # Load config
             self.nest_config = Config.default()
-            
-            # Get nest detection model path from config
             nest_model_path = self.nest_config.models.nest_detection
             print(f"  Loading nest model: {nest_model_path}")
             
-            # Check if model file exists
-            import os
             if not os.path.exists(nest_model_path):
                 raise FileNotFoundError(f"Nest detection model not found at: {nest_model_path}")
             
-            # Load YOLO model
             self.nest_yolo_model = YOLO(nest_model_path)
-            
-            # Set GUI-specific config (more attempts than batch processing)
             self.nest_config.nest.max_detection_attempts = 15
             
             print("✓ Nest detection models ready")
-            print(f"  Model: {nest_model_path}")
-            print(f"  Max attempts: {self.nest_config.nest.max_detection_attempts}")
             
         except FileNotFoundError as e:
             print(f"⚠️  Nest detection model not found: {e}")
-            print(f"   Please ensure model exists at configured path")
-            print(f"   Nest detection will be unavailable")
             self.nest_yolo_model = None
             self.nest_config = None
         except Exception as e:
             print(f"⚠️  Could not initialize nest detection models: {e}")
-            print(f"   Nest detection will be unavailable")
-            import traceback
-            traceback.print_exc()
             self.nest_yolo_model = None
             self.nest_config = None
     
@@ -353,6 +362,10 @@ class BeeMonitorGUI(QMainWindow):
         # Folder analysis signals
         self.control_panel.folder_selected.connect(self.on_folder_selected)
         self.control_panel.analyze_folder_requested.connect(self.run_folder_analysis)
+        
+        # NEW v2.3: Reference configuration signals
+        self.control_panel.reference_config_changed.connect(self.on_reference_config_changed)
+        self.control_panel.edit_nests_requested.connect(self.show_nest_editor)
         
         self.video_panel.play_pause_toggled.connect(self.toggle_play_pause)
         self.video_panel.frame_changed.connect(self.on_frame_slider_change)
@@ -369,8 +382,6 @@ class BeeMonitorGUI(QMainWindow):
         load_action.setShortcut("Ctrl+O")
         load_action.triggered.connect(self.load_video)
         file_menu.addAction(load_action)
-        
-        # Note: Folder analysis now done via control panel (no menu item needed)
         
         file_menu.addSeparator()
         
@@ -413,6 +424,13 @@ class BeeMonitorGUI(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
         
+        # NEW v2.3: Edit menu
+        edit_menu = menubar.addMenu("&Edit")
+        
+        edit_nests_action = QAction("Edit &Nests...", self)
+        edit_nests_action.triggered.connect(self.show_nest_editor)
+        edit_menu.addAction(edit_nests_action)
+        
         help_menu = menubar.addMenu("&Help")
         
         guide_action = QAction("Parameter &Guide", self)
@@ -440,6 +458,126 @@ class BeeMonitorGUI(QMainWindow):
         splitter.addWidget(self.video_panel)
         
         splitter.setSizes([400, 1000])
+    
+    # =========================================================================
+    # NEW v2.3: Reference Configuration Methods
+    # =========================================================================
+    
+    def on_reference_config_changed(self, config):
+        """Handle reference configuration change.
+        
+        Args:
+            config: Dict with 'rows', 'cols', 'total'
+        """
+        # Update config
+        self.config.nest.expected_rows = config['rows']
+        self.config.nest.expected_nests_per_row = config['cols']
+        self.config.nest.expected_total_nests = config['total']
+        
+        # Also update nest_config if initialized
+        if self.nest_config:
+            self.nest_config.nest.expected_rows = config['rows']
+            self.nest_config.nest.expected_nests_per_row = config['cols']
+            self.nest_config.nest.expected_total_nests = config['total']
+        
+        self.statusBar().showMessage(
+            f"Reference config updated: {config['rows']}×{config['cols']} = {config['total']} nests"
+        )
+        self.control_panel.append_log(
+            f"✓ Reference config: {config['rows']} rows × {config['cols']} cols = {config['total']} nests"
+        )
+    
+    def show_nest_editor(self):
+        """Open visual nest editor dialog for manual nest editing."""
+        try:
+            from .nest_editor_dialog import show_visual_nest_editor
+        except ImportError:
+            QMessageBox.warning(
+                self,
+                "Module Not Found",
+                "Nest editor dialog module not found.\n"
+                "Please ensure nest_editor_dialog.py is in the GUI package."
+            )
+            return
+        
+        # Need a video frame to edit on
+        if self.current_frame is None:
+            QMessageBox.warning(
+                self,
+                "No Video",
+                "Please load a video first to edit nests."
+            )
+            return
+        
+        # Get current nests - convert Detection namedtuples to dicts
+        nests = []
+        if hasattr(self.video_canvas, 'detected_nests') and self.video_canvas.detected_nests:
+            for i, nest in enumerate(self.video_canvas.detected_nests):
+                bbox = nest.bbox
+                cx = (bbox[0] + bbox[2]) / 2
+                cy = (bbox[1] + bbox[3]) / 2
+                w = bbox[2] - bbox[0]
+                h = bbox[3] - bbox[1]
+                
+                nest_dict = {
+                    'id': getattr(nest, 'nest_id', i + 1),
+                    'x': cx,
+                    'y': cy,
+                    'w': int(w),
+                    'h': int(h)
+                }
+                nests.append(nest_dict)
+        
+        # Get reference config
+        ref_config = self.control_panel.get_reference_config()
+        
+        # Show visual editor with current frame
+        updated_nests = show_visual_nest_editor(
+            self,
+            frame=self.current_frame,
+            nests=nests,
+            grid_rows=ref_config['rows'],
+            grid_cols=ref_config['cols']
+        )
+        
+        if updated_nests:
+            # Convert back to Detection format
+            from collections import namedtuple
+            Detection = namedtuple('Detection', ['bbox', 'confidence', 'nest_id'])
+            
+            new_nests = []
+            for nest in updated_nests:
+                # Convert center + size to bbox
+                x, y = nest['x'], nest['y']
+                w = nest.get('w', 24)
+                h = nest.get('h', 14)
+                
+                bbox = (x - w/2, y - h/2, x + w/2, y + h/2)
+                
+                det = Detection(
+                    bbox=bbox,
+                    confidence=1.0,
+                    nest_id=nest['id']
+                )
+                new_nests.append(det)
+            
+            # Update video canvas
+            self.video_canvas.detected_nests = new_nests
+            self.video_canvas.show_nests = True
+            
+            # Refresh display
+            if self.current_frame_idx is not None:
+                self.load_frame(self.current_frame_idx)
+            
+            # Update control panel
+            self.control_panel.set_detected_nests_count(len(new_nests))
+            
+            self.statusBar().showMessage(f"✓ Updated {len(new_nests)} nests")
+            self.control_panel.append_log(f"✓ Manually edited {len(new_nests)} nests")
+    
+    # =========================================================================
+    # Video Loading
+    # =========================================================================
     
     def load_video(self):
         """Load video file."""
@@ -486,9 +624,7 @@ class BeeMonitorGUI(QMainWindow):
         # Read first frame for nest detection
         ret, first_frame = self.video_cap.read()
         if ret:
-            self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # Reset to start
-            
-            # Auto-detect nests on first frame
+            self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             self._auto_detect_nests(first_frame)
         
         self.load_frame(0)
@@ -500,57 +636,294 @@ class BeeMonitorGUI(QMainWindow):
         
         print(f"✓ Video loaded: {filepath}")
         
-        # Background initialization removed - happens automatically during analysis
-        
         self.control_panel.set_video_loaded(True)
         self.control_panel.append_log(f"✓ Loaded: {Path(filepath).name}")
     
-    # Background initialization removed - now automatic during analysis
-    # The video analyzer automatically initializes background when running analysis
+    def _auto_detect_nests(self, first_frame):
+        """Auto-detect nest tubes using comprehensive multi-frame detection."""
+        try:
+            from beemonitor.detection import NestDetector
+            
+            if self.nest_yolo_model is None or self.nest_config is None:
+                print("⚠️  Nest detection unavailable (models not loaded at startup)")
+                self.control_panel.append_log("⚠️  Nest detection unavailable")
+                return
+            
+            print("🔍 Auto-detecting nest tubes (comprehensive method)...")
+            self.statusBar().showMessage("Detecting nest tubes (trying multiple frames)...")
+            QApplication.processEvents()
+            
+            nest_detector = NestDetector(
+                model=self.nest_yolo_model,
+                config=self.nest_config
+            )
+            
+            nests_dict = nest_detector.get_nests_and_hotel_detections(
+                video_path=self.video_path
+            )
+            
+            if nests_dict and 'nests' in nests_dict and len(nests_dict['nests']) > 0:
+                from collections import namedtuple
+                Detection = namedtuple('Detection', ['bbox', 'confidence', 'nest_id'])
+                
+                nests = []
+                for nest_id, bbox in nests_dict['nests'].items():
+                    det = Detection(
+                        bbox=bbox,
+                        confidence=1.0,
+                        nest_id=int(nest_id)
+                    )
+                    nests.append(det)
+                
+                self.video_canvas.detected_nests = nests
+                self.video_canvas.show_nests = True
+                self.video_canvas.hotel_roi = nests_dict.get('hotel')
+                
+                if self.current_frame_idx is not None:
+                    self.load_frame(self.current_frame_idx)
+                
+                print(f"✓ Detected {len(nests)} nest tubes (quality verified)")
+                self.control_panel.append_log(f"✓ Detected {len(nests)} nest tubes (quality verified)")
+                self.control_panel.set_detected_nests_count(len(nests))
+                self.statusBar().showMessage(f"✓ Detected {len(nests)} nest tubes")
+                
+                # Update video info
+                self.control_panel.set_video_info(
+                    f"<b>{Path(self.video_path).name}</b><br>"
+                    f"{int(self.video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x"
+                    f"{int(self.video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))} "
+                    f"@ {self.fps:.1f} FPS<br>"
+                    f"{self.total_frames} frames ({self.total_frames/self.fps:.1f}s)<br>"
+                    f"<span style='color: #4CAF50;'><b>🎯 {len(nests)} nests detected</b></span>"
+                )
+            else:
+                print("⚠️  No nest tubes detected after multiple attempts")
+                self.control_panel.append_log("⚠️  No nest tubes detected")
+                self.control_panel.set_detected_nests_count(0)
+                self.statusBar().showMessage("⚠️  Nest detection failed")
+        
+        except Exception as e:
+            print(f"⚠️  Nest detection failed: {e}")
+            self.control_panel.append_log(f"⚠️  Nest detection error: {e}")
+            self.statusBar().showMessage("Video loaded (nest detection error)")
+    
+    # =========================================================================
+    # Analysis Methods
+    # =========================================================================
+    
+    def run_analysis(self):
+        """Run full video analysis with v2.3 options."""
+        if self.video_path is None:
+            QMessageBox.warning(self, "Warning", "Load a video first")
+            return
+        
+        params = self.control_panel.get_parameters()
+        advanced = self.control_panel.get_advanced_options()
+        
+        if not self.output_folder:
+            video_dir = Path(self.video_path).parent
+            video_name = Path(self.video_path).stem
+            self.output_folder = str(video_dir / f"{video_name}_output")
+            os.makedirs(self.output_folder, exist_ok=True)
+        
+        # Update config with advanced options
+        if advanced.get('save_crops'):
+            self.config.tracking.save_crops = True
+            self.config.tracking.crops_per_track = advanced.get('crops_per_track', 5)
+        
+        self.analysis_start_time = time.time()
+        
+        self.statusBar().showMessage("Starting analysis...")
+        
+        self.control_panel.set_analysis_running(True)
+        self.control_panel.append_log(f"Starting analysis...")
+        self.control_panel.append_log(f"Started at: {time.strftime('%H:%M:%S')}")
+        
+        if advanced.get('enable_interaction_metrics'):
+            self.control_panel.append_log(f"✓ Interaction metrics enabled")
+        if advanced.get('save_crops'):
+            self.control_panel.append_log(f"✓ Crop saving enabled ({advanced.get('crops_per_track', 5)} per track)")
+        
+        monitor = BeeMonitor(config=self.config)
+        
+        self.analysis_thread = AnalysisThread(
+            monitor,
+            self.video_path,
+            self.output_folder,
+            detection_mode='yolo'
+        )
+        
+        # Store advanced options for post-processing
+        self._analysis_advanced_options = advanced
+        
+        self.analysis_thread.progress.connect(
+            lambda msg: self.statusBar().showMessage(msg))
+        self.analysis_thread.finished.connect(self.on_analysis_finished)
+        self.analysis_thread.error.connect(
+            lambda err: QMessageBox.critical(self, "Analysis Error", err))
+        
+        self.analysis_thread.start()
+    
+    def on_analysis_finished(self, result, csv_path):
+        """Handle analysis completion with v2.3 post-processing."""
+        if hasattr(self, 'analysis_start_time'):
+            elapsed_time = time.time() - self.analysis_start_time
+            elapsed_str = self._format_time(elapsed_time)
+        else:
+            elapsed_str = "Unknown"
+        
+        self.control_panel.set_analysis_running(False)
+        self.control_panel.append_log(f"✓ Analysis complete in {elapsed_str}")
+        self.control_panel.append_log(f"Finished at: {time.strftime('%H:%M:%S')}")
+        
+        # Run interaction analysis if enabled
+        if hasattr(self, '_analysis_advanced_options'):
+            advanced = self._analysis_advanced_options
+            if advanced.get('enable_interaction_metrics') and result:
+                self._run_interaction_analysis(result, advanced)
+        
+        self.statusBar().showMessage(f"✓ Analysis complete ({elapsed_str}) - Loading results...")
+        
+        success = self._auto_load_and_display_results(csv_path)
+        
+        msg = (
+            f"✓ Analysis complete!\n\n"
+            f"Execution time: {elapsed_str}\n"
+            f"Output folder: {self.output_folder}\n\n"
+        )
+        
+        if success:
+            msg += "Results automatically loaded and displayed on video!"
+        
+        QMessageBox.information(self, "Analysis Complete", msg)
+    
+    def _run_interaction_analysis(self, result, advanced):
+        """Run interaction analysis post-processing."""
+        try:
+            from beemonitor.processing.interaction_analyzer import (
+                InteractionAnalyzer, nests_to_reference_objects
+            )
+            
+            self.control_panel.append_log("Running interaction analysis...")
+            
+            tracking_df = result.tracks
+            if tracking_df is None or tracking_df.empty:
+                self.control_panel.append_log("  ⚠️ No tracking data for interactions")
+                return
+            
+            analyzer = InteractionAnalyzer(
+                proximity_threshold=advanced.get('proximity_threshold', 50),
+                min_interaction_frames=3,
+                fps=self.fps
+            )
+            
+            # Track-to-track interactions
+            track_interactions, _ = analyzer.analyze_track_interactions(tracking_df)
+            
+            # Track-to-nest interactions
+            if result.nests and 'nests' in result.nests:
+                ref_objects = nests_to_reference_objects(
+                    [{'id': k, 'bbox': v} for k, v in result.nests['nests'].items()]
+                )
+                nest_interactions, _ = analyzer.analyze_reference_interactions(
+                    tracking_df, ref_objects
+                )
+            else:
+                nest_interactions = []
+            
+            # Save CSVs
+            video_name = Path(self.video_path).stem
+            
+            if track_interactions:
+                track_csv = os.path.join(self.output_folder, f"{video_name}_track_interactions.csv")
+                analyzer.to_csv(track_interactions, track_csv, 'track')
+                self.control_panel.append_log(f"  ✓ Saved {len(track_interactions)} track interactions")
+            
+            if nest_interactions:
+                nest_csv = os.path.join(self.output_folder, f"{video_name}_nest_interactions.csv")
+                analyzer.to_csv(nest_interactions, nest_csv, 'reference')
+                self.control_panel.append_log(f"  ✓ Saved {len(nest_interactions)} nest interactions")
+            
+        except ImportError:
+            self.control_panel.append_log("  ⚠️ InteractionAnalyzer module not found")
+        except Exception as e:
+            self.control_panel.append_log(f"  ⚠️ Interaction analysis failed: {e}")
+    
+    def _auto_load_and_display_results(self, csv_path):
+        """Auto-load and display results after analysis."""
+        try:
+            if not os.path.exists(csv_path):
+                return False
+            
+            df = pd.read_csv(csv_path)
+            
+            if 'track_id' not in df.columns:
+                return False
+            
+            # Find frame column
+            frame_col = None
+            for possible in ['frame', 'frame_number', 'frame_num']:
+                if possible in df.columns:
+                    frame_col = possible
+                    break
+            
+            if frame_col is None:
+                return False
+            
+            if frame_col != 'frame':
+                df = df.rename(columns={frame_col: 'frame'})
+            
+            self.tracking_results = df
+            self.results_loaded = True
+            
+            total_tracks = df['track_id'].nunique()
+            total_detections = len(df)
+            
+            self.control_panel.append_log(f"✓ Loading tracking results for display...")
+            self.control_panel.append_log(f"✓ Results loaded: {total_tracks} tracks, {total_detections} detections")
+            self.control_panel.append_log(f"  → Blue boxes on video show tracked bees")
+            
+            if self.current_frame is not None:
+                self.load_frame(self.current_frame_idx)
+            
+            return True
+            
+        except Exception as e:
+            print(f"Auto-load failed: {e}")
+            return False
+    
+    # =========================================================================
+    # Folder Analysis
+    # =========================================================================
     
     def stop_analysis(self):
-        """Stop running analysis (single video or folder batch)."""
-        # Stop single video analysis
+        """Stop running analysis."""
         if self.analysis_thread and self.analysis_thread.isRunning():
             self.analysis_thread.terminate()
             self.control_panel.set_analysis_running(False)
-            self.control_panel.append_log("Single video analysis stopped by user")
+            self.control_panel.append_log("Analysis stopped by user")
             self.statusBar().showMessage("Analysis stopped")
         
-        # Stop folder batch analysis
         if self.folder_analysis_thread and self.folder_analysis_thread.isRunning():
-            self.folder_analysis_thread.stop()  # Request graceful stop
-            self.folder_analysis_thread.wait(3000)  # Wait up to 3 seconds
+            self.folder_analysis_thread.stop()
+            self.folder_analysis_thread.wait(3000)
             if self.folder_analysis_thread.isRunning():
-                self.folder_analysis_thread.terminate()  # Force stop if needed
+                self.folder_analysis_thread.terminate()
             self.control_panel.set_folder_analyzing(False)
             self.control_panel.append_log("Batch analysis stopped by user")
             self.statusBar().showMessage("Batch analysis stopped")
     
-    def select_folder(self):
-        """DEPRECATED - Control panel now handles folder selection directly.
-        This method kept for compatibility but should not be called."""
-        pass
-    
     def on_folder_selected(self, folder_path):
-        """Handle folder selection from control panel.
-        
-        Args:
-            folder_path: Folder path emitted by control panel
-        """
+        """Handle folder selection."""
         self.folder_path = folder_path
         
-        # Count videos in folder
         video_files = [f for f in os.listdir(folder_path) 
                       if f.endswith(('.mp4', '.avi', '.mov', '.mkv'))]
         
-        # Log selection
         self.control_panel.append_log(f"✓ Selected folder: {Path(folder_path).name}")
         self.control_panel.append_log(f"  Found {len(video_files)} video files")
         
-        self.statusBar().showMessage(
-            f"Folder selected: {len(video_files)} videos found"
-        )
+        self.statusBar().showMessage(f"Folder selected: {len(video_files)} videos found")
     
     def run_folder_analysis(self):
         """Run batch video analysis on folder."""
@@ -558,7 +931,6 @@ class BeeMonitorGUI(QMainWindow):
             QMessageBox.warning(self, "Warning", "Select a video folder first")
             return
         
-        # Get parameters from control panel
         params = self.control_panel.get_parameters()
         
         video_files = [f for f in os.listdir(self.folder_path) 
@@ -569,28 +941,28 @@ class BeeMonitorGUI(QMainWindow):
             return
         
         folder_name = Path(self.folder_path).name
-        
-        # Include detection mode in output folder name to avoid overwrites
-        mode_suffix = params['detection_mode'].replace('_', '-')
-        output_folder = str(Path(self.folder_path).parent / f"{folder_name}_output_{mode_suffix}")
+        output_folder = str(Path(self.folder_path).parent / f"{folder_name}_output")
         os.makedirs(output_folder, exist_ok=True)
         
-        mode_names = {
-            'fgbg_yolo': 'Motion + YOLO',
-            'yolo_only': 'YOLO Only'
-        }
-        mode_name = mode_names.get(params['detection_mode'], params['detection_mode'])
+        # Build confirmation message
+        confirm_msg = (
+            f"Analyze {len(video_files)} videos?\n\n"
+            f"Folder: {folder_name}\n"
+            f"Output: {Path(output_folder).name}\n"
+            f"Parallel workers: {params['max_workers']}\n"
+        )
+        
+        if params.get('enable_interaction_metrics'):
+            confirm_msg += f"Interaction metrics: Enabled (proximity={params.get('proximity_threshold', 50)}px)\n"
+        if params.get('save_crops'):
+            confirm_msg += f"Crop saving: Enabled ({params.get('crops_per_track', 5)} per track)\n"
+        
+        confirm_msg += "\nThis may take a while..."
         
         reply = QMessageBox.question(
             self,
             "Batch Video Analysis",
-            f"Analyze {len(video_files)} videos?\n\n"
-            f"Folder: {Path(self.folder_path).name}\n"
-            f"Output: {Path(output_folder).name}\n"
-            f"Detection mode: {mode_name}\n"
-            f"Nest fallback: {'Enabled' if params['use_fallback'] else 'Disabled'}\n"
-            f"Parallel workers: {params['max_workers']}\n\n"
-            f"This may take a while...",
+            confirm_msg,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         
@@ -603,8 +975,6 @@ class BeeMonitorGUI(QMainWindow):
         self.control_panel.append_log(f"BATCH ANALYSIS STARTED")
         self.control_panel.append_log(f"{'='*50}")
         self.control_panel.append_log(f"Videos: {len(video_files)}")
-        self.control_panel.append_log(f"Mode: {mode_name}")
-        self.control_panel.append_log(f"Fallback: {'ON' if params['use_fallback'] else 'OFF'}")
         self.control_panel.append_log(f"Workers: {params['max_workers']}")
         
         self.statusBar().showMessage(f"Analyzing {len(video_files)} videos...")
@@ -618,12 +988,11 @@ class BeeMonitorGUI(QMainWindow):
             params
         )
         
-        # Connect progress signals
         self.folder_analysis_thread.progress.connect(
             lambda msg: self.control_panel.append_log(msg)
         )
         self.folder_analysis_thread.progress_update.connect(
-            self.control_panel.set_folder_progress  # Update progress bar!
+            self.control_panel.set_folder_progress
         )
         self.folder_analysis_thread.finished.connect(self.on_folder_analysis_finished)
         self.folder_analysis_thread.error.connect(
@@ -648,264 +1017,22 @@ class BeeMonitorGUI(QMainWindow):
         self.control_panel.append_log(f"Successful: {successful}")
         self.control_panel.append_log(f"Failed: {failed}")
         self.control_panel.append_log(f"Total events: {total_events}")
-        self.control_panel.append_log(f"{'='*50}")
-        
-        summary_text = (
-            f"Batch analysis complete!\n\n"
-            f"Total videos: {total_videos}\n"
-            f"Successful: {successful}\n"
-            f"Failed: {failed}\n"
-            f"Total events detected: {total_events}\n\n"
-        )
-        
-        if failed > 0:
-            failed_videos = [Path(p).name for p, r in results.items() if r is None]
-            summary_text += f"Failed videos:\n"
-            for v in failed_videos[:5]:
-                summary_text += f"  • {v}\n"
-            if len(failed_videos) > 5:
-                summary_text += f"  ... and {len(failed_videos) - 5} more\n"
-        
-        # Use actual output folder from thread (includes detection mode)
-        output_path = self.folder_analysis_thread.output_folder if self.folder_analysis_thread else "output"
-        summary_text += f"\nOutput folder:\n{output_path}"
         
         QMessageBox.information(
             self,
             "Batch Analysis Complete",
-            summary_text
+            f"Batch analysis complete!\n\n"
+            f"Videos: {successful}/{total_videos} successful\n"
+            f"Total events: {total_events}"
         )
         
         self.statusBar().showMessage(
-            f"✓ Batch analysis complete: {successful}/{total_videos} successful"
+            f"✓ Batch complete: {successful}/{total_videos} successful"
         )
     
-    def _auto_detect_nests(self, first_frame):
-        """Auto-detect nest tubes on first frame using simple YOLO detection.
-        
-        Args:
-            first_frame: First frame of video (BGR image)
-        """
-        try:
-            from ultralytics import YOLO
-            import cv2
-            
-            print("🔍 Auto-detecting nest tubes...")
-            self.statusBar().showMessage("Detecting nest tubes...")
-            QApplication.processEvents()
-            
-            # Use YOLO directly to detect objects that look like nest tubes
-            yolo_model = YOLO('yolo11n.pt')
-            
-            # Get video dimensions
-            height, width = first_frame.shape[:2]
-            
-            # Run YOLO detection on first frame
-            results = yolo_model(first_frame, verbose=False)
-            
-            # Extract detections and filter for potential nest tubes
-            # We'll look for small rectangular objects arranged in a grid pattern
-            detections = []
-            if len(results) > 0 and results[0].boxes is not None:
-                boxes = results[0].boxes
-                for box in boxes:
-                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                    conf = float(box.conf[0])
-                    
-                    # Filter: small objects with decent confidence
-                    w, h = x2 - x1, y2 - y1
-                    if 20 < w < 100 and 20 < h < 100 and conf > 0.3:
-                        # Create a simple Detection-like object
-                        from collections import namedtuple
-                        Detection = namedtuple('Detection', ['bbox', 'confidence'])
-                        det = Detection(
-                            bbox=(int(x1), int(y1), int(x2), int(y2)),
-                            confidence=conf
-                        )
-                        detections.append(det)
-            
-            # If YOLO didn't find good candidates, try grid-based approach
-            if len(detections) < 10:
-                print("   YOLO found few candidates, trying grid-based detection...")
-                detections = self._detect_nests_by_grid(first_frame)
-            
-            if detections and len(detections) > 0:
-                # Sort by position (top to bottom, left to right)
-                detections.sort(key=lambda d: (d.bbox[1], d.bbox[0]))
-                
-                # Store nests
-                self.video_canvas.detected_nests = detections
-                self.video_canvas.show_nests = True
-                
-                # Compute hotel ROI
-                if len(detections) > 1:
-                    xs = [d.bbox[0] for d in detections] + [d.bbox[2] for d in detections]
-                    ys = [d.bbox[1] for d in detections] + [d.bbox[3] for d in detections]
-                    padding = 20
-                    hotel_roi = (
-                        max(0, int(min(xs)) - padding),
-                        max(0, int(min(ys)) - padding),
-                        int(max(xs)) + padding,
-                        int(max(ys)) + padding
-                    )
-                    self.video_canvas.hotel_roi = hotel_roi
-                
-                print(f"✓ Detected {len(detections)} nest tubes")
-                self.control_panel.append_log(f"✓ Detected {len(detections)} nest tubes")
-                self.statusBar().showMessage(f"✓ Detected {len(detections)} nest tubes")
-            else:
-                print("⚠️  No nest tubes detected - you can load nests from CSV instead")
-                self.control_panel.append_log("⚠️  No nest tubes detected automatically")
-                self.statusBar().showMessage("No nest tubes detected")
-        
-        except Exception as e:
-            print(f"⚠️  Nest detection failed: {e}")
-            print("   You can load nest positions from CSV instead")
-            self.control_panel.append_log(f"⚠️  Automatic nest detection unavailable")
-            self.statusBar().showMessage("Video loaded (nest detection unavailable)")
-            import traceback
-            traceback.print_exc()
-    
-    def _auto_detect_nests(self, first_frame):
-        """Auto-detect nest tubes using comprehensive multi-frame detection.
-        
-        Uses pre-initialized models (loaded at startup) for fast detection:
-        - YOLO model from config.model.nest_detection
-        - Config with 15 max attempts (GUI-specific)
-        
-        Quality checks:
-        - Correct nest count, grid alignment, spacing
-        - Automatic retries with frame skipping
-        
-        Args:
-            first_frame: First frame of video (used only to get dimensions)
-        """
-        try:
-            from beemonitor.detection import NestDetector
-            import logging
-            
-            # Check if models are available
-            if self.nest_yolo_model is None or self.nest_config is None:
-                print("⚠️  Nest detection unavailable (models not loaded at startup)")
-                print("   Check that nest detection model exists at configured path")
-                self.control_panel.append_log("⚠️  Nest detection unavailable")
-                return
-            
-            # Enable detailed logging for nest detection
-            logging.basicConfig(level=logging.INFO)
-            nest_logger = logging.getLogger('beemonitor.detection.nest_detector')
-            nest_logger.setLevel(logging.INFO)
-            
-            print("🔍 Auto-detecting nest tubes (comprehensive method)...")
-            print("   This will try multiple frames with quality checks...")
-            self.statusBar().showMessage("Detecting nest tubes (trying multiple frames)...")
-            QApplication.processEvents()
-            
-            # Use pre-initialized models (much faster!)
-            nest_detector = NestDetector(
-                model=self.nest_yolo_model,  # ← Reused from startup
-                config=self.nest_config       # ← Reused from startup
-            )
-            
-            # Show config settings
-            print(f"   Config: max_attempts={self.nest_config.nest.max_detection_attempts}, "
-                  f"frame_skip={self.nest_config.nest.frame_skip}")
-            print(f"   Expected: {self.nest_config.nest.expected_total_nests} nests "
-                  f"({self.nest_config.nest.expected_rows} rows × "
-                  f"{self.nest_config.nest.expected_nests_per_row} per row)")
-            print(f"   Will try frames: 0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330, 360, 390, 420")
-            
-            # Use comprehensive detection method (same as video analyzer)
-            nests_dict = nest_detector.get_nests_and_hotel_detections(
-                video_path=self.video_path
-            )
-            
-            if nests_dict and 'nests' in nests_dict and len(nests_dict['nests']) > 0:
-                # Convert to our format for display
-                from collections import namedtuple
-                Detection = namedtuple('Detection', ['bbox', 'confidence', 'nest_id'])
-                
-                nests = []
-                for nest_id, bbox in nests_dict['nests'].items():
-                    det = Detection(
-                        bbox=bbox,
-                        confidence=1.0,
-                        nest_id=int(nest_id)
-                    )
-                    nests.append(det)
-                
-                # Store nests for display
-                self.video_canvas.detected_nests = nests
-                self.video_canvas.show_nests = True
-                self.video_canvas.hotel_roi = nests_dict.get('hotel')
-                
-                # REFRESH FRAME to show nests immediately
-                if self.current_frame_idx is not None:
-                    self.load_frame(self.current_frame_idx)
-                
-                print(f"✓ Detected {len(nests)} nest tubes (quality verified)")
-                print(f"  → Green boxes now displayed on video")
-                self.control_panel.append_log(f"✓ Detected {len(nests)} nest tubes (quality verified)")
-                self.control_panel.append_log(f"  → Nest boxes now visible on video (green)")
-                self.statusBar().showMessage(f"✓ Detected {len(nests)} nest tubes")
-                
-                # Update video info to show nest count
-                self.control_panel.set_video_info(
-                    f"<b>{Path(self.video_path).name}</b><br>"
-                    f"{int(self.video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x"
-                    f"{int(self.video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))} "
-                    f"@ {self.fps:.1f} FPS<br>"
-                    f"{self.total_frames} frames ({self.total_frames/self.fps:.1f}s)<br>"
-                    f"<span style='color: #4CAF50;'><b>🎯 {len(nests)} nests detected</b></span>"
-                )
-            else:
-                print("⚠️  No nest tubes detected after 15 attempts")
-                print("   ")
-                print("   Possible reasons:")
-                print("   • Video doesn't show bee hotel clearly in first 7+ minutes")
-                print("   • Hotel has different grid size (not 6×10)")
-                print("   • Quality checks too strict for this video setup")
-                print("   • Model not detecting nest tubes reliably")
-                print("   ")
-                print("   Workarounds:")
-                print("   1. Check video shows hotel clearly")
-                print("   2. Try different video or later timestamp")
-                print("   3. Load nest positions from CSV")
-                print("   4. Continue without nest visualization (analysis still works!)")
-                print("   5. Check logs above to see which quality check failed")
-                print("   ")
-                self.control_panel.append_log("⚠️  No nest tubes detected (tried 15 frames)")
-                self.control_panel.append_log("   You can load nest positions from CSV or continue without them")
-                self.statusBar().showMessage("⚠️  Nest detection failed")
-                
-                # Update video info to show detection failed
-                self.control_panel.set_video_info(
-                    f"<b>{Path(self.video_path).name}</b><br>"
-                    f"{int(self.video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x"
-                    f"{int(self.video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))} "
-                    f"@ {self.fps:.1f} FPS<br>"
-                    f"{self.total_frames} frames ({self.total_frames/self.fps:.1f}s)<br>"
-                    f"<span style='color: #FF9800;'>⚠️  No nests detected</span>"
-                )
-        
-        except Exception as e:
-            print(f"⚠️  Nest detection failed with error: {e}")
-            print("   You can continue without nest visualization")
-            self.control_panel.append_log(f"⚠️  Nest detection error: {e}")
-            self.statusBar().showMessage("Video loaded (nest detection error)")
-            
-            # Update video info to show error
-            self.control_panel.set_video_info(
-                f"<b>{Path(self.video_path).name}</b><br>"
-                f"{int(self.video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x"
-                f"{int(self.video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))} "
-                f"@ {self.fps:.1f} FPS<br>"
-                f"{self.total_frames} frames ({self.total_frames/self.fps:.1f}s)<br>"
-                f"<span style='color: #f44336;'>✗ Nest detection error</span>"
-            )
-            
-            import traceback
-            traceback.print_exc()
+    # =========================================================================
+    # Video Playback and Display
+    # =========================================================================
     
     def load_frame(self, frame_idx):
         """Load specific frame and display with nests."""
@@ -927,7 +1054,6 @@ class BeeMonitorGUI(QMainWindow):
             
             self._update_data_status(tracks_for_frame)
             
-            # Draw nests on frame if detected
             display_frame = frame.copy()
             if hasattr(self.video_canvas, 'show_nests') and self.video_canvas.show_nests:
                 display_frame = self._draw_nests_on_frame(display_frame)
@@ -939,53 +1065,35 @@ class BeeMonitorGUI(QMainWindow):
             )
     
     def _draw_nests_on_frame(self, frame):
-        """Draw detected nests on frame.
-        
-        Args:
-            frame: BGR image
-            
-        Returns:
-            Frame with nest boxes drawn
-        """
+        """Draw detected nests on frame."""
         if not hasattr(self.video_canvas, 'detected_nests'):
             return frame
         
         annotated = frame.copy()
         
-        # Draw hotel ROI
         if hasattr(self.video_canvas, 'hotel_roi') and self.video_canvas.hotel_roi:
             x1, y1, x2, y2 = self.video_canvas.hotel_roi
             cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(annotated, "Hotel", (x1, y1 - 5),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
         
-        # Draw nest boxes
         for idx, nest in enumerate(self.video_canvas.detected_nests):
             x1, y1, x2, y2 = nest.bbox
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
             
-            # Blue boxes for nests
             cv2.rectangle(annotated, (x1, y1), (x2, y2), (255, 0, 0), 1)
             
-            # Get nest ID
-            nest_id = idx
-            if hasattr(nest, 'nest_id'):
-                nest_id = nest.nest_id
-            elif hasattr(nest, 'metadata') and 'nest_id' in nest.metadata:
-                nest_id = nest.metadata['nest_id']
+            nest_id = getattr(nest, 'nest_id', idx + 1)
             
-            # Put nest ID ABOVE the tube for visibility
             cx = (x1 + x2) // 2
             label = str(nest_id)
             
-            # Get text size for centering
-            (text_width, text_height), baseline = cv2.getTextSize(
+            (text_width, text_height), _ = cv2.getTextSize(
                 label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1
             )
             
-            # Center the text horizontally above the box
             text_x = cx - text_width // 2
-            text_y = y1 - 5  # 5 pixels above the box
+            text_y = y1 - 5
             
             cv2.putText(annotated, label, (text_x, text_y),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
@@ -1045,7 +1153,6 @@ class BeeMonitorGUI(QMainWindow):
         else:
             self.current_frame_idx = 0
             self.load_frame(0)
-            self.video_panel.set_frame_slider_value(0)
     
     def on_speed_change(self, value):
         """Handle playback speed change."""
@@ -1057,231 +1164,9 @@ class BeeMonitorGUI(QMainWindow):
         """Handle parameter changes from control panel."""
         pass
     
-    def test_detection(self):
-        """Test detection on current frame."""
-        if self.current_frame is None:
-            QMessageBox.warning(self, "Warning", "Load a video first")
-            return
-        
-        try:
-            params = self.control_panel.get_parameters()
-            detection_mode = params.get("detection_mode", "fgbg_yolo")
-            
-            detections = []
-            
-            if detection_mode == 'fgbg_yolo':
-                if self.blob_detector is None:
-                    QMessageBox.warning(
-                        self,
-                        "Background Not Ready",
-                        "Background model is not initialized."
-                    )
-                    return
-                
-                detections = self.blob_detector.detect(self.current_frame)
-            
-            elif detection_mode == 'yolo_only':
-                if not hasattr(self, 'yolo_detector_test') or self.yolo_detector_test is None:
-                    self.statusBar().showMessage("⏳ Loading YOLO model...")
-                    QApplication.processEvents()
-                    
-                    try:
-                        from beemonitor.detection import YOLODetector
-                        from ultralytics import YOLO
-                        
-                        model = YOLO('yolo11n.pt')
-                        self.yolo_detector_test = YOLODetector(
-                            model, 
-                            tracking_classes=['bee'], 
-                            conf_threshold=0.25
-                        )
-                        self.statusBar().showMessage("✓ YOLO model loaded")
-                    except Exception as e:
-                        QMessageBox.critical(
-                            self, 
-                            "YOLO Error",
-                            f"Failed to load YOLO model:\n{e}"
-                        )
-                        return
-                
-                QApplication.processEvents()
-                detections = self.yolo_detector_test.detect(self.current_frame)
-            
-            tracks_for_frame = self.get_tracks_for_frame(self.current_frame_idx)
-            self._update_data_status(tracks_for_frame)
-            
-            self.video_canvas.set_frame(
-                self.current_frame,
-                detections=detections,
-                tracks=tracks_for_frame
-            )
-            
-            mode_names = {
-                'fgbg_yolo': 'Motion+YOLO', 
-                'yolo_only': 'YOLO Only'
-            }
-            mode_name = mode_names.get(detection_mode, detection_mode)
-            
-            self.statusBar().showMessage(f"✓ {mode_name}: {len(detections)} detections")
-            
-        except Exception as e:
-            import traceback
-            QMessageBox.critical(self, "Error", 
-                f"Detection failed:\n{e}\n\n{traceback.format_exc()}")
-    
-    def run_analysis(self):
-        """Run full video analysis."""
-        if self.video_path is None:
-            QMessageBox.warning(self, "Warning", "Load a video first")
-            return
-        
-        params = self.control_panel.get_parameters()
-        detection_mode = params.get("detection_mode", "fgbg_yolo")
-        
-        if not self.output_folder:
-            video_dir = Path(self.video_path).parent
-            video_name = Path(self.video_path).stem
-            self.output_folder = str(video_dir / f"{video_name}_output")
-            os.makedirs(self.output_folder, exist_ok=True)
-        
-        mode_names = {
-            'fgbg_yolo': 'Motion + YOLO',
-            'yolo_only': 'YOLO Only'
-        }
-        mode_name = mode_names.get(detection_mode, detection_mode)
-        
-        # Record start time
-        import time
-        self.analysis_start_time = time.time()
-        
-        self.statusBar().showMessage(f"Starting analysis ({mode_name})...")
-        
-        self.control_panel.set_analysis_running(True)
-        self.control_panel.append_log(f"Starting analysis ({mode_name})...")
-        self.control_panel.append_log(f"Started at: {time.strftime('%H:%M:%S')}")
-        
-        monitor = BeeMonitor(config=self.config)
-        
-        self.analysis_thread = AnalysisThread(
-            monitor,
-            self.video_path,
-            self.output_folder,
-            detection_mode=detection_mode
-        )
-        
-        self.analysis_thread.progress.connect(
-            lambda msg: self.statusBar().showMessage(msg))
-        self.analysis_thread.finished.connect(self.on_analysis_finished)
-        self.analysis_thread.error.connect(
-            lambda err: QMessageBox.critical(self, "Analysis Error", err))
-        
-        self.analysis_thread.start()
-    
-    def load_results(self):
-        """Load tracking results CSV."""
-        default_dir = self.output_folder if self.output_folder else str(Path.home())
-        
-        filepath, _ = QFileDialog.getOpenFileName(
-            self,
-            "Load Tracking Results",
-            default_dir,
-            "CSV Files (*.csv);;All Files (*)"
-        )
-        
-        if not filepath:
-            return
-        
-        try:
-            if os.path.getsize(filepath) == 0:
-                QMessageBox.critical(
-                    self,
-                    "Empty File",
-                    "The tracking results file is empty!"
-                )
-                return
-            
-            df = pd.read_csv(filepath)
-            
-            if 'action' in df.columns and 'nest' in df.columns:
-                QMessageBox.warning(
-                    self,
-                    "Wrong File",
-                    "This appears to be an events CSV file."
-                )
-                
-                tracking_file = find_tracking_file(filepath)
-                if tracking_file:
-                    reply = QMessageBox.question(
-                        self,
-                        "Found Tracking File",
-                        f"Load {Path(tracking_file).name} instead?",
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                    )
-                    
-                    if reply == QMessageBox.StandardButton.Yes:
-                        filepath = tracking_file
-                        df = pd.read_csv(filepath)
-                    else:
-                        return
-                else:
-                    return
-            
-            if 'track_id' not in df.columns:
-                QMessageBox.warning(self, "Invalid File", "Missing 'track_id' column")
-                return
-            
-            frame_col = None
-            for possible in ['frame', 'frame_number', 'frame_num', 'frame_id', 'frame_idx']:
-                if possible in df.columns:
-                    frame_col = possible
-                    break
-            
-            if frame_col is None:
-                QMessageBox.critical(
-                    self,
-                    "Invalid CSV Format",
-                    f"Missing frame column in CSV!"
-                )
-                return
-            
-            if frame_col != 'frame':
-                df = df.rename(columns={frame_col: 'frame'})
-            
-            has_bbox = all(col in df.columns for col in ['x1', 'y1', 'x2', 'y2'])
-            has_xy = all(col in df.columns for col in ['x', 'y'])
-            has_centroid = all(col in df.columns for col in ['centroid_x', 'centroid_y'])
-            
-            if not (has_bbox or has_xy or has_centroid):
-                QMessageBox.warning(self, "Invalid File", "Missing position data")
-                return
-            
-            self.tracking_results = df
-            self.results_loaded = True
-            
-            total_tracks = df['track_id'].nunique()
-            total_frames = df['frame'].nunique()
-            
-            msg = (
-                f"✓ Tracking results loaded!\n\n"
-                f"File: {Path(filepath).name}\n\n"
-                f"Total tracks: {total_tracks}\n"
-                f"Total frames: {total_frames}\n"
-                f"Total detections: {len(df)}"
-            )
-            
-            QMessageBox.information(self, "Results Loaded", msg)
-            
-            if self.current_frame is not None:
-                self.load_frame(self.current_frame_idx)
-            
-            self.statusBar().showMessage(
-                f"✓ Results loaded: {total_tracks} tracks across {total_frames} frames"
-            )
-            
-        except Exception as e:
-            import traceback
-            error_msg = f"Failed to load results:\n{e}\n\n{traceback.format_exc()}"
-            QMessageBox.critical(self, "Error", error_msg)
+    # =========================================================================
+    # Track Data Methods
+    # =========================================================================
     
     def get_tracks_for_frame(self, frame_idx):
         """Get all tracks visible in this frame."""
@@ -1346,173 +1231,105 @@ class BeeMonitorGUI(QMainWindow):
                     centroid=centroid,
                     confidence=row.get('confidence', 1.0),
                     label=row.get('species', 'bee'),
-                    source=row.get('source', 'blob')
+                    source=row.get('source', 'yolo')
                 )
                 
                 detections.append(det)
         
         return detections
     
-    def on_analysis_finished(self, result, csv_path):
-        """Handle analysis completion and auto-load results."""
-        import time
-        
-        # Calculate elapsed time
-        if hasattr(self, 'analysis_start_time'):
-            elapsed_time = time.time() - self.analysis_start_time
-            elapsed_str = self._format_time(elapsed_time)
-        else:
-            elapsed_str = "Unknown"
-        
-        self.control_panel.set_analysis_running(False)
-        self.control_panel.append_log(f"✓ Analysis complete in {elapsed_str}")
-        self.control_panel.append_log(f"Finished at: {time.strftime('%H:%M:%S')}")
-        self.statusBar().showMessage(f"✓ Analysis complete ({elapsed_str}) - Loading results...")
-        
-        # Auto-load and display results
-        success = self._auto_load_and_display_results(csv_path)
-        
-        if success:
-            msg = (
-                f"✓ Analysis complete!\n\n"
-                f"Execution time: {elapsed_str}\n"
-                f"Output folder: {self.output_folder}\n\n"
-                f"Results automatically loaded and displayed on video!\n\n"
-                f"Files saved:\n"
-                f"  • tracking_results.csv\n"
-                f"  • events.csv (if applicable)\n\n"
-                f"Tracks are now shown as blue boxes on the video.\n"
-                f"Use video controls to step through frames."
-            )
-        else:
-            msg = (
-                f"✓ Analysis complete!\n\n"
-                f"Execution time: {elapsed_str}\n"
-                f"Output folder: {self.output_folder}\n\n"
-                f"Files saved:\n"
-                f"  • tracking_results.csv\n\n"
-                f"Could not auto-load results for display.\n"
-                f"You can try: File → Load Results"
-            )
-        
-        QMessageBox.information(self, "Analysis Complete", msg)
+    # =========================================================================
+    # File Operations
+    # =========================================================================
     
-    def _auto_load_and_display_results(self, csv_path):
-        """Auto-load analysis results and display on video.
+    def load_results(self):
+        """Load tracking results CSV."""
+        default_dir = self.output_folder if self.output_folder else str(Path.home())
         
-        Args:
-            csv_path: Path to tracking_results.csv
-            
-        Returns:
-            bool: True if successfully loaded, False otherwise
-        """
+        filepath, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Tracking Results",
+            default_dir,
+            "CSV Files (*.csv);;All Files (*)"
+        )
+        
+        if not filepath:
+            return
+        
         try:
-            import pandas as pd
+            df = pd.read_csv(filepath)
             
-            if not os.path.exists(csv_path):
-                print(f"⚠️  Results file not found: {csv_path}")
-                self.control_panel.append_log("⚠️  Results file not found")
-                return False
+            if 'track_id' not in df.columns:
+                QMessageBox.warning(self, "Invalid File", "Missing 'track_id' column")
+                return
             
-            print(f"📊 Auto-loading tracking results from {csv_path}")
-            self.control_panel.append_log("📊 Loading tracking results for display...")
+            frame_col = None
+            for possible in ['frame', 'frame_number', 'frame_num']:
+                if possible in df.columns:
+                    frame_col = possible
+                    break
             
-            # Load CSV
-            df = pd.read_csv(csv_path)
+            if frame_col is None:
+                QMessageBox.critical(self, "Invalid CSV", "Missing frame column!")
+                return
             
-            if df.empty:
-                print("⚠️  Results file is empty")
-                self.control_panel.append_log("⚠️  No tracking data in results")
-                return False
+            if frame_col != 'frame':
+                df = df.rename(columns={frame_col: 'frame'})
             
-            # Store for general use
             self.tracking_results = df
             self.results_loaded = True
             
-            # Also create frame-indexed lookup for video display
-            results_by_frame = {}
-            for frame_num in df['frame'].unique():
-                frame_data = df[df['frame'] == frame_num]
-                
-                tracks = []
-                for _, row in frame_data.iterrows():
-                    track = {
-                        'track_id': int(row['track_id']),
-                        'bbox': (float(row['x1']), float(row['y1']), 
-                                float(row['x2']), float(row['y2'])),
-                        'species': row.get('species', 'bee'),
-                        'confidence': float(row.get('confidence', 1.0))
-                    }
-                    tracks.append(track)
-                
-                results_by_frame[int(frame_num)] = tracks
+            total_tracks = df['track_id'].nunique()
+            total_frames = df['frame'].nunique()
             
-            # Store frame-indexed results for video display
-            self.video_canvas.analysis_results = results_by_frame
-            self.video_canvas.show_analysis_results = True
+            QMessageBox.information(
+                self,
+                "Results Loaded",
+                f"✓ Tracking results loaded!\n\n"
+                f"Total tracks: {total_tracks}\n"
+                f"Total frames: {total_frames}\n"
+                f"Total detections: {len(df)}"
+            )
             
-            # Refresh current frame to show results
-            if self.current_frame_idx is not None:
+            if self.current_frame is not None:
                 self.load_frame(self.current_frame_idx)
             
-            num_frames = len(results_by_frame)
-            total_tracks = df['track_id'].nunique()
-            total_detections = len(df)
-            
-            print(f"✓ Auto-loaded tracking results:")
-            print(f"  Frames with data: {num_frames}")
-            print(f"  Total unique tracks: {total_tracks}")
-            print(f"  Total detections: {total_detections}")
-            
-            self.control_panel.append_log(
-                f"✓ Results loaded: {total_tracks} tracks, {total_detections} detections"
-            )
-            self.control_panel.append_log("  → Blue boxes on video show tracked bees")
             self.statusBar().showMessage(
-                f"✓ Results displayed ({total_tracks} tracks across {num_frames} frames)"
+                f"✓ Results loaded: {total_tracks} tracks"
             )
-            
-            return True
             
         except Exception as e:
-            print(f"⚠️  Error auto-loading results: {e}")
-            self.control_panel.append_log(f"⚠️  Could not auto-load results: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
+            QMessageBox.critical(self, "Error", f"Failed to load results:\n{e}")
     
     def load_output_video(self):
-        """Load output visualization video."""
+        """Load output video file."""
         default_dir = self.output_folder if self.output_folder else str(Path.home())
         
         filepath, _ = QFileDialog.getOpenFileName(
             self,
             "Load Output Video",
             default_dir,
-            "Video Files (*.mp4 *.avi *.mov *.mkv);;All Files (*)"
+            "Video Files (*.mp4 *.avi);;All Files (*)"
         )
         
         if filepath:
-            self.load_video()
+            self.video_path = filepath
+            self.video_cap = cv2.VideoCapture(filepath)
             
-            QMessageBox.information(
-                self,
-                "Output Video Loaded",
-                "This is a pre-rendered visualization video."
-            )
+            if self.video_cap.isOpened():
+                self.total_frames = int(self.video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                self.fps = self.video_cap.get(cv2.CAP_PROP_FPS)
+                
+                self.video_panel.set_frame_range(self.total_frames - 1)
+                self.load_frame(0)
+                self.video_panel.enable_play_button(True)
+                
+                self.statusBar().showMessage(f"Loaded output video: {Path(filepath).name}")
     
     def save_visualization_video(self):
-        """Save current video with tracks/detections."""
-        if self.video_path is None:
-            QMessageBox.warning(self, "Warning", "Load a video first")
-            return
-        
-        if not self.results_loaded and not self.blob_detector:
-            QMessageBox.warning(
-                self,
-                "Warning",
-                "No data to visualize!"
-            )
+        """Save video with visualization overlays."""
+        if self.video_cap is None:
+            QMessageBox.warning(self, "Warning", "No video loaded")
             return
         
         default_dir = self.output_folder if self.output_folder else str(Path.home())
@@ -1523,36 +1340,23 @@ class BeeMonitorGUI(QMainWindow):
             self,
             "Save Visualization Video",
             default_path,
-            "MP4 Video (*.mp4);;AVI Video (*.avi);;All Files (*)"
+            "MP4 Video (*.mp4);;AVI Video (*.avi)"
         )
         
         if not output_path:
-            return
-        
-        reply = QMessageBox.question(
-            self,
-            "Save Visualization Video",
-            f"This will save the video with overlays.\n"
-            f"Continue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        
-        if reply != QMessageBox.StandardButton.Yes:
             return
         
         progress = QProgressDialog(
             "Saving visualization video...", "Cancel", 0, self.total_frames, self
         )
         progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
         
         try:
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             width = int(self.video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(self.video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            fps = self.video_cap.get(cv2.CAP_PROP_FPS)
             
-            out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+            out = cv2.VideoWriter(output_path, fourcc, self.fps, (width, height))
             
             self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             
@@ -1564,40 +1368,27 @@ class BeeMonitorGUI(QMainWindow):
                 if not ret:
                     break
                 
-                vis_frame = frame.copy()
+                # Draw nests
+                if hasattr(self.video_canvas, 'detected_nests'):
+                    frame = self._draw_nests_on_frame(frame)
                 
-                if self.blob_detector:
-                    try:
-                        detections = self.blob_detector.detect(frame)
-                        for det in detections:
-                            x1, y1, x2, y2 = [int(c) for c in det.bbox]
-                            cv2.rectangle(vis_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    except:
-                        pass
-                
+                # Draw tracks
                 if self.results_loaded:
                     tracks = self.get_tracks_for_frame(frame_idx)
-                    colors = [(255, 0, 0), (0, 255, 255), (255, 0, 255), 
-                             (255, 255, 0), (128, 0, 255), (255, 128, 0)]
+                    colors = [(255, 0, 0), (0, 255, 255), (255, 0, 255)]
                     
                     for i, (track_id, trajectory) in enumerate(tracks.items()):
                         color = colors[i % len(colors)]
                         
                         if len(trajectory) > 1:
                             points = np.array(trajectory, dtype=np.int32)
-                            cv2.polylines(vis_frame, [points], False, color, 2)
+                            cv2.polylines(frame, [points], False, color, 2)
                         
                         if trajectory:
                             x, y = trajectory[-1]
-                            cv2.circle(vis_frame, (int(x), int(y)), 5, color, -1)
-                            cv2.putText(vis_frame, f"ID:{track_id}", 
-                                       (int(x)+10, int(y)),
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                            cv2.circle(frame, (int(x), int(y)), 5, color, -1)
                 
-                cv2.putText(vis_frame, f"Frame: {frame_idx}", (10, 30),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                
-                out.write(vis_frame)
+                out.write(frame)
                 progress.setValue(frame_idx)
                 QApplication.processEvents()
             
@@ -1605,18 +1396,11 @@ class BeeMonitorGUI(QMainWindow):
             self.load_frame(self.current_frame_idx)
             progress.close()
             
-            QMessageBox.information(
-                self, "Success",
-                f"Visualization video saved!\n\n{output_path}"
-            )
-            
-            self.statusBar().showMessage(f"✓ Visualization saved")
+            QMessageBox.information(self, "Success", f"Saved: {output_path}")
             
         except Exception as e:
-            import traceback
             progress.close()
-            QMessageBox.critical(self, "Error", 
-                f"Failed to save video:\n{e}\n\n{traceback.format_exc()}")
+            QMessageBox.critical(self, "Error", f"Failed to save video:\n{e}")
     
     def set_output_folder(self):
         """Set output folder."""
@@ -1632,16 +1416,20 @@ class BeeMonitorGUI(QMainWindow):
     def save_config(self):
         """Save configuration."""
         filepath, _ = QFileDialog.getSaveFileName(
-            self, "Save Configuration", "", "JSON Files (*.json);;All Files (*)"
+            self, "Save Configuration", "", "JSON Files (*.json)"
         )
         
         if not filepath:
             return
         
         params = self.control_panel.get_parameters()
+        ref_config = self.control_panel.get_reference_config()
+        advanced = self.control_panel.get_advanced_options()
         
         config_data = {
             "detection": params,
+            "reference": ref_config,
+            "advanced": advanced,
             "video_path": self.video_path,
             "output_folder": self.output_folder,
             "saved_at": datetime.now().isoformat()
@@ -1655,7 +1443,7 @@ class BeeMonitorGUI(QMainWindow):
     def load_config(self):
         """Load configuration."""
         filepath, _ = QFileDialog.getOpenFileName(
-            self, "Load Configuration", "", "JSON Files (*.json);;All Files (*)"
+            self, "Load Configuration", "", "JSON Files (*.json)"
         )
         
         if not filepath:
@@ -1665,9 +1453,13 @@ class BeeMonitorGUI(QMainWindow):
             with open(filepath, 'r') as f:
                 config_data = json.load(f)
             
-            if "detection" in config_data:
-                detection_mode = config_data["detection"].get("detection_mode", "fgbg_yolo")
-                self.control_panel.set_detection_mode(detection_mode)
+            # Load reference config
+            if "reference" in config_data:
+                ref = config_data["reference"]
+                self.control_panel.set_reference_config(
+                    ref.get('rows', 6),
+                    ref.get('cols', 10)
+                )
             
             if "output_folder" in config_data:
                 self.output_folder = config_data["output_folder"]
@@ -1678,14 +1470,7 @@ class BeeMonitorGUI(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to load configuration:\n{e}")
     
     def _format_time(self, seconds):
-        """Format seconds into human-readable time string.
-        
-        Args:
-            seconds: Time in seconds
-            
-        Returns:
-            str: Formatted time string (e.g., "2m 30s", "1h 15m 45s")
-        """
+        """Format seconds into human-readable time string."""
         if seconds < 60:
             return f"{seconds:.1f}s"
         elif seconds < 3600:
@@ -1701,10 +1486,7 @@ class BeeMonitorGUI(QMainWindow):
     def keyPressEvent(self, event):
         """Handle keyboard shortcuts."""
         if event.key() == Qt.Key.Key_Space:
-            if self.playing:
-                self.toggle_play_pause()
-            else:
-                self.test_detection()
+            self.toggle_play_pause()
         elif event.key() == Qt.Key.Key_Left:
             self.jump_frame(-1)
         elif event.key() == Qt.Key.Key_Right:

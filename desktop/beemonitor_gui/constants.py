@@ -1,18 +1,19 @@
 """
-Constants and Configuration - v2.2 SIMPLIFIED
-==============================================
+Constants and Configuration - v2.3
+===================================
 
 Shared constants, presets, and configuration values.
 
-v2.2 Changes:
-- Updated version to 3.1.0
-- Updated title to include "v2.2 YOLO-Only"
-- Removed SIFT color (no longer used)
+v2.3 Changes:
+- Updated version to 3.2.0
+- Updated title to include "v2.3"
+- Added reference configuration defaults
+- Added interaction metrics defaults
 """
 
 # Version
-VERSION = "3.1.0"
-TITLE = "BeeMonitor - Video Analysis Tool (v2.2 YOLO-Only)"
+VERSION = "3.2.0"
+TITLE = "BeeMonitor - Video Analysis Tool (v2.3)"
 
 # Detection parameter presets
 DETECTION_PRESETS = {
@@ -43,7 +44,6 @@ DETECTION_PRESETS = {
 }
 
 # Detection source colors (BGR format for OpenCV)
-# v2.2: Removed SIFT (no longer used)
 DETECTION_SOURCE_COLORS = {
     'blob': (0, 0, 255),      # RED - Blob motion detection
     'fgbg': (0, 0, 255),      # RED - Alias
@@ -97,3 +97,21 @@ POSITION_COLUMN_SETS = [
     ['x', 'y'],                         # Centroid
     ['centroid_x', 'centroid_y']       # Alternative centroid
 ]
+
+# === NEW v2.3: Reference Configuration Defaults ===
+DEFAULT_NEST_ROWS = 6
+DEFAULT_NESTS_PER_ROW = 10
+DEFAULT_TOTAL_NESTS = DEFAULT_NEST_ROWS * DEFAULT_NESTS_PER_ROW  # 60
+
+# Nest grid settings
+DEFAULT_NEST_WIDTH = 24
+DEFAULT_NEST_HEIGHT = 14
+DEFAULT_NEST_PADDING_X = 50
+DEFAULT_NEST_PADDING_Y = 50
+
+# === NEW v2.3: Interaction Metrics Defaults ===
+DEFAULT_PROXIMITY_THRESHOLD = 50  # pixels
+DEFAULT_MIN_INTERACTION_FRAMES = 3  # frames
+
+# === NEW v2.3: Crop Saving Defaults ===
+DEFAULT_CROPS_PER_TRACK = 5

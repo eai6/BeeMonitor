@@ -36,10 +36,15 @@ class VideoCanvas(QLabel):
         # Visualization overlays
         self.show_detections = False
         self.show_tracks = False
-        self.show_detection_sources = False  # NEW: Color-coded sources
+        self.show_detection_sources = False
         self.detections = []
-        self.tracks = {}  # {track_id: [(x, y), ...]}
+        self.tracks = {}
         self.roi = None
+        
+        # Nest overlays
+        self.detected_nests = []
+        self.hotel_roi = None
+        self.show_nests = True
         
         # Detection source visualizer
         self.source_visualizer = DetectionSourceVisualizer()
@@ -56,14 +61,11 @@ class VideoCanvas(QLabel):
         
         if detections is not None:
             self.detections = detections
-            print(f"VideoCanvas.set_frame: Received {len(detections)} detections")
         if tracks is not None:
             self.tracks = tracks
-            print(f"VideoCanvas.set_frame: Received {len(tracks)} tracks")
         if roi is not None:
             self.roi = roi
         
-        print(f"VideoCanvas.set_frame: State - show_detections={self.show_detections}, show_tracks={self.show_tracks}, show_sources={self.show_detection_sources}")
         self._draw_frame()
     
     def _draw_frame(self):
@@ -87,11 +89,8 @@ class VideoCanvas(QLabel):
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
         
         # Draw detections
-        detections_drawn = 0
         if self.show_detections and self.detections:
-            print(f"_draw_frame: Drawing {len(self.detections)} detections (show_detection_sources={self.show_detection_sources})")
             if self.show_detection_sources:
-                # Color-coded by source
                 frame = self.source_visualizer.draw_detections_with_sources(
                     frame,
                     self.detections,
@@ -100,56 +99,36 @@ class VideoCanvas(QLabel):
                     thickness=DETECTION_BOX_THICKNESS
                 )
                 
-                # Draw legend
                 counts = self.source_visualizer.get_detection_counts(self.detections)
                 frame = self.source_visualizer.draw_source_legend(
                     frame,
                     position='top_right',
                     counts=counts
                 )
-                detections_drawn = len(self.detections)
-                print(f"  -> Drew {detections_drawn} color-coded detections")
             else:
-                # Standard green boxes
                 for det in self.detections:
                     x1, y1, x2, y2 = [int(c) for c in det.bbox]
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     area = (x2-x1) * (y2-y1)
                     cv2.putText(frame, f"{area:.0f}", (x1, y1-5),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
-                    detections_drawn += 1
-                print(f"  -> Drew {detections_drawn} green box detections")
-        elif self.show_detections:
-            print(f"_draw_frame: show_detections=True but no detections to draw")
-        elif self.detections:
-            print(f"_draw_frame: Have {len(self.detections)} detections but show_detections=False")
         
         # Draw tracks
-        tracks_drawn = 0
         if self.show_tracks and self.tracks:
-            print(f"_draw_frame: Drawing {len(self.tracks)} tracks")
             for i, (track_id, trajectory) in enumerate(self.tracks.items()):
                 color = TRACK_COLORS[i % len(TRACK_COLORS)]
                 
-                # Draw trajectory
                 if len(trajectory) > 1:
                     points = np.array(trajectory, dtype=np.int32)
                     cv2.polylines(frame, [points], False, color, 2)
                 
-                # Draw current position
                 if trajectory:
                     x, y = trajectory[-1]
                     cv2.circle(frame, (int(x), int(y)), TRACK_CIRCLE_RADIUS, color, -1)
                     cv2.putText(frame, f"ID:{track_id}", (int(x)+10, int(y)),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                    tracks_drawn += 1
-            print(f"  -> Drew {tracks_drawn} tracks")
-        elif self.show_tracks:
-            print(f"_draw_frame: show_tracks=True but no tracks to draw")
-        elif self.tracks:
-            print(f"_draw_frame: Have {len(self.tracks)} tracks but show_tracks=False")
         
-        # Add status overlay (if not showing source legend)
+        # Add status overlay
         if not self.show_detection_sources:
             status_lines = []
             if self.show_detections:
@@ -179,27 +158,20 @@ class VideoCanvas(QLabel):
         
         self.original_pixmap = pixmap
         self.setPixmap(scaled_pixmap)
-
     
     def toggle_detections(self, enabled):
         """Toggle detection overlay."""
-        print(f"VideoCanvas.toggle_detections: {self.show_detections} -> {enabled}")
         self.show_detections = enabled
-        print(f"  Current detections: {len(self.detections)}")
         self._draw_frame()
     
     def toggle_tracks(self, enabled):
         """Toggle track overlay."""
-        print(f"VideoCanvas.toggle_tracks: {self.show_tracks} -> {enabled}")
         self.show_tracks = enabled
-        print(f"  Current tracks: {len(self.tracks)}")
         self._draw_frame()
     
     def toggle_detection_sources(self, enabled):
         """Toggle detection source color-coding."""
-        print(f"VideoCanvas.toggle_detection_sources: {self.show_detection_sources} -> {enabled}")
         self.show_detection_sources = enabled
-        print(f"  Show detections: {self.show_detections}, Detections: {len(self.detections)}")
         self._draw_frame()
     
     def start_roi_drawing(self):

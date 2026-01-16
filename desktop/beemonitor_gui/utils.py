@@ -13,18 +13,9 @@ from .constants import FRAME_COLUMN_NAMES, POSITION_COLUMN_SETS
 
 
 def find_tracking_file(events_filepath: str) -> Optional[str]:
-    """
-    Try to find the tracking results file in the same directory.
-    
-    Args:
-        events_filepath: Path to events CSV file
-    
-    Returns:
-        Path to tracking file, or None if not found
-    """
+    """Try to find the tracking results file in the same directory."""
     directory = Path(events_filepath).parent
     
-    # Common tracking file names
     possible_names = [
         'tracking_results.csv',
         'tracks.csv',
@@ -37,7 +28,6 @@ def find_tracking_file(events_filepath: str) -> Optional[str]:
         if path.exists():
             return str(path)
     
-    # Try with video name prefix
     for file in directory.glob('*_tracks.csv'):
         return str(file)
     for file in directory.glob('*_tracking.csv'):
@@ -47,20 +37,10 @@ def find_tracking_file(events_filepath: str) -> Optional[str]:
 
 
 def validate_tracking_csv(df: pd.DataFrame) -> Tuple[bool, str]:
-    """
-    Validate tracking CSV has required columns.
-    
-    Args:
-        df: DataFrame to validate
-    
-    Returns:
-        (is_valid, error_message)
-    """
-    # Check for track_id
+    """Validate tracking CSV has required columns."""
     if 'track_id' not in df.columns:
         return False, "Missing 'track_id' column"
     
-    # Check for frame column
     frame_col = None
     for col in FRAME_COLUMN_NAMES:
         if col in df.columns:
@@ -70,7 +50,6 @@ def validate_tracking_csv(df: pd.DataFrame) -> Tuple[bool, str]:
     if frame_col is None:
         return False, f"Missing frame column (tried: {', '.join(FRAME_COLUMN_NAMES)})"
     
-    # Check for position columns
     has_positions = False
     for col_set in POSITION_COLUMN_SETS:
         if all(col in df.columns for col in col_set):
@@ -84,31 +63,15 @@ def validate_tracking_csv(df: pd.DataFrame) -> Tuple[bool, str]:
 
 
 def get_position_from_row(row: pd.Series) -> Optional[Tuple[int, int]]:
-    """
-    Extract position from a DataFrame row.
-    
-    Handles different column formats:
-    - x1, y1, x2, y2 → centroid
-    - x, y → direct
-    - centroid_x, centroid_y → direct
-    
-    Args:
-        row: DataFrame row
-    
-    Returns:
-        (x, y) position, or None if no position columns
-    """
-    # Format 1: Bounding box
+    """Extract position from a DataFrame row."""
     if all(col in row.index for col in ['x1', 'y1', 'x2', 'y2']):
         cx = int((row['x1'] + row['x2']) / 2)
         cy = int((row['y1'] + row['y2']) / 2)
         return (cx, cy)
     
-    # Format 2: Direct x, y
     if all(col in row.index for col in ['x', 'y']):
         return (int(row['x']), int(row['y']))
     
-    # Format 3: Centroid
     if all(col in row.index for col in ['centroid_x', 'centroid_y']):
         return (int(row['centroid_x']), int(row['centroid_y']))
     

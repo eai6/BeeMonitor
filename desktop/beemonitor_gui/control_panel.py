@@ -1,26 +1,31 @@
 """
-Control Panel - v2.2 ULTRA SIMPLIFIED
-======================================
+Control Panel - v2.3 with Reference Configuration
+==================================================
 
-Left sidebar control panel with single video analysis and batch folder analysis.
+Left sidebar control panel with:
+- Single video analysis
+- Batch folder analysis
+- Reference configuration (nest grid)
+- Advanced options (interaction metrics)
 
-v2.2 CHANGES:
-- Removed detection section entirely (not needed)
-- Detection mode always 'yolo' internally
-- Cleaner, simpler UI
+v2.3 CHANGES:
+- Added Reference Configuration section (nest rows/cols)
+- Added Advanced Options section
+- Added interaction metrics toggle
+- Added manual nest editing button
 """
 
 from PyQt6.QtWidgets import (
     QScrollArea, QWidget, QVBoxLayout, QGroupBox, QHBoxLayout,
-    QPushButton, QLabel, QSpinBox, QCheckBox,
-    QProgressBar, QTextEdit, QFileDialog
+    QPushButton, QLabel, QSpinBox, QCheckBox, QComboBox,
+    QProgressBar, QTextEdit, QFileDialog, QFrame
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from pathlib import Path
 
 
 class ControlPanel(QScrollArea):
-    """Control panel with action buttons and folder analysis."""
+    """Control panel with action buttons, folder analysis, and reference configuration."""
     
     # Signals for single video
     test_detection_requested = pyqtSignal()
@@ -33,6 +38,10 @@ class ControlPanel(QScrollArea):
     folder_selected = pyqtSignal(str)
     analyze_folder_requested = pyqtSignal()
     
+    # NEW: Signals for reference configuration
+    reference_config_changed = pyqtSignal(dict)  # {'rows': int, 'cols': int, 'total': int}
+    edit_nests_requested = pyqtSignal()  # Request to open nest editor
+    
     def __init__(self):
         """Initialize control panel."""
         super().__init__()
@@ -43,9 +52,11 @@ class ControlPanel(QScrollArea):
         layout = QVBoxLayout()
         container.setLayout(layout)
         
-        # Add sections (removed detection section)
+        # Add sections
         layout.addWidget(self._create_video_group())
         layout.addWidget(self._create_single_analysis_group())
+        layout.addWidget(self._create_reference_config_group())  # NEW
+        layout.addWidget(self._create_advanced_options_group())  # NEW
         layout.addWidget(self._create_folder_analysis_group())
         layout.addStretch()
         
@@ -56,7 +67,7 @@ class ControlPanel(QScrollArea):
         video_group = QGroupBox("Video")
         video_layout = QVBoxLayout()
         
-        load_btn = QPushButton("📁 Load Video")
+        load_btn = QPushButton("📂 Load Video")
         load_btn.clicked.connect(self.load_video_requested.emit)
         video_layout.addWidget(load_btn)
         
@@ -99,12 +110,141 @@ class ControlPanel(QScrollArea):
         analysis_group.setLayout(analysis_layout)
         return analysis_group
     
+    def _create_reference_config_group(self):
+        """Create reference configuration section for nest grid."""
+        ref_group = QGroupBox("🏠 Reference Configuration")
+        ref_layout = QVBoxLayout()
+        
+        # Description
+        desc_label = QLabel("Configure bee hotel nest grid layout:")
+        desc_label.setStyleSheet("color: gray; font-size: 9pt;")
+        ref_layout.addWidget(desc_label)
+        
+        # Rows spinner
+        rows_layout = QHBoxLayout()
+        rows_layout.addWidget(QLabel("Nest Rows:"))
+        self.rows_spinner = QSpinBox()
+        self.rows_spinner.setRange(1, 20)
+        self.rows_spinner.setValue(6)
+        self.rows_spinner.setToolTip("Number of rows in the bee hotel grid")
+        self.rows_spinner.valueChanged.connect(self._on_grid_changed)
+        rows_layout.addWidget(self.rows_spinner)
+        ref_layout.addLayout(rows_layout)
+        
+        # Columns spinner
+        cols_layout = QHBoxLayout()
+        cols_layout.addWidget(QLabel("Nests per Row:"))
+        self.cols_spinner = QSpinBox()
+        self.cols_spinner.setRange(1, 30)
+        self.cols_spinner.setValue(10)
+        self.cols_spinner.setToolTip("Number of nest tubes per row")
+        self.cols_spinner.valueChanged.connect(self._on_grid_changed)
+        cols_layout.addWidget(self.cols_spinner)
+        ref_layout.addLayout(cols_layout)
+        
+        # Total nests display
+        self.total_nests_label = QLabel("Total Nests: 60")
+        self.total_nests_label.setStyleSheet("font-weight: bold; color: #4CAF50;")
+        ref_layout.addWidget(self.total_nests_label)
+        
+        # Separator
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet("color: #444;")
+        ref_layout.addWidget(line)
+        
+        # Nest editing section
+        nest_edit_label = QLabel("Nest Detection:")
+        nest_edit_label.setStyleSheet("font-weight: bold;")
+        ref_layout.addWidget(nest_edit_label)
+        
+        # Detected nests info
+        self.detected_nests_label = QLabel("Detected: - nests")
+        self.detected_nests_label.setStyleSheet("color: gray;")
+        ref_layout.addWidget(self.detected_nests_label)
+        
+        # Edit nests button
+        edit_nests_btn = QPushButton("✏️ Edit Nests")
+        edit_nests_btn.setToolTip("Manually add, edit, or remove nest positions")
+        edit_nests_btn.clicked.connect(self.edit_nests_requested.emit)
+        ref_layout.addWidget(edit_nests_btn)
+        
+        # Apply config button
+        apply_btn = QPushButton("Apply Configuration")
+        apply_btn.setStyleSheet("background-color: #2196F3; color: white;")
+        apply_btn.clicked.connect(self._apply_reference_config)
+        ref_layout.addWidget(apply_btn)
+        
+        ref_group.setLayout(ref_layout)
+        return ref_group
+    
+    def _create_advanced_options_group(self):
+        """Create advanced options section."""
+        advanced_group = QGroupBox("⚙️ Advanced Options")
+        advanced_layout = QVBoxLayout()
+        
+        # Interaction metrics checkbox
+        self.interaction_metrics_checkbox = QCheckBox("Enable Interaction Metrics")
+        self.interaction_metrics_checkbox.setToolTip(
+            "Compute track-to-track and track-to-nest proximity metrics.\n"
+            "Outputs additional CSV files with interaction data."
+        )
+        self.interaction_metrics_checkbox.setChecked(False)
+        advanced_layout.addWidget(self.interaction_metrics_checkbox)
+        
+        # Proximity threshold
+        proximity_layout = QHBoxLayout()
+        proximity_layout.addWidget(QLabel("  Proximity (px):"))
+        self.proximity_spinner = QSpinBox()
+        self.proximity_spinner.setRange(10, 200)
+        self.proximity_spinner.setValue(50)
+        self.proximity_spinner.setToolTip("Distance threshold to consider as 'interacting'")
+        self.proximity_spinner.setEnabled(False)
+        proximity_layout.addWidget(self.proximity_spinner)
+        advanced_layout.addLayout(proximity_layout)
+        
+        # Enable/disable proximity spinner based on checkbox
+        self.interaction_metrics_checkbox.toggled.connect(
+            self.proximity_spinner.setEnabled
+        )
+        
+        # Separator
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet("color: #444;")
+        advanced_layout.addWidget(line)
+        
+        # Save crops checkbox
+        self.save_crops_checkbox = QCheckBox("Save Bee Crops")
+        self.save_crops_checkbox.setToolTip(
+            "Save cropped images of tracked bees."
+        )
+        self.save_crops_checkbox.setChecked(False)
+        advanced_layout.addWidget(self.save_crops_checkbox)
+        
+        # Crops per track
+        crops_layout = QHBoxLayout()
+        crops_layout.addWidget(QLabel("  Crops per track:"))
+        self.crops_per_track_spinner = QSpinBox()
+        self.crops_per_track_spinner.setRange(1, 20)
+        self.crops_per_track_spinner.setValue(5)
+        self.crops_per_track_spinner.setEnabled(False)
+        crops_layout.addWidget(self.crops_per_track_spinner)
+        advanced_layout.addLayout(crops_layout)
+        
+        self.save_crops_checkbox.toggled.connect(
+            self.crops_per_track_spinner.setEnabled
+        )
+        
+        advanced_group.setLayout(advanced_layout)
+        return advanced_group
+    
     def _create_folder_analysis_group(self):
         """Create batch folder analysis section."""
         folder_group = QGroupBox("Batch Video Analysis")
         folder_layout = QVBoxLayout()
         
-        folder_btn = QPushButton("📂 Select Video Folder")
+        folder_btn = QPushButton("📁 Select Video Folder")
         folder_btn.clicked.connect(self._select_folder)
         folder_layout.addWidget(folder_btn)
         
@@ -173,14 +313,38 @@ class ControlPanel(QScrollArea):
             self.analyze_folder_btn.setEnabled(True)
             self.folder_selected.emit(folder)
     
+    def _on_grid_changed(self):
+        """Handle grid configuration change."""
+        rows = self.rows_spinner.value()
+        cols = self.cols_spinner.value()
+        total = rows * cols
+        self.total_nests_label.setText(f"Total Nests: {total}")
+    
+    def _apply_reference_config(self):
+        """Apply reference configuration."""
+        config = {
+            'rows': self.rows_spinner.value(),
+            'cols': self.cols_spinner.value(),
+            'total': self.rows_spinner.value() * self.cols_spinner.value()
+        }
+        self.reference_config_changed.emit(config)
+    
     # === Control Methods ===
     
     def get_parameters(self):
-        """Get current parameters (v2.2: detection_mode always 'yolo')."""
+        """Get current parameters."""
         return {
             'detection_mode': 'yolo',  # v2.2: Always YOLO
             'use_fallback': self.use_fallback_checkbox.isChecked(),
-            'max_workers': self.workers_spinner.value()
+            'max_workers': self.workers_spinner.value(),
+            # Reference config
+            'nest_rows': self.rows_spinner.value(),
+            'nests_per_row': self.cols_spinner.value(),
+            # Advanced options
+            'enable_interaction_metrics': self.interaction_metrics_checkbox.isChecked(),
+            'proximity_threshold': self.proximity_spinner.value(),
+            'save_crops': self.save_crops_checkbox.isChecked(),
+            'crops_per_track': self.crops_per_track_spinner.value()
         }
     
     def set_detection_mode(self, mode):
@@ -232,3 +396,56 @@ class ControlPanel(QScrollArea):
     def clear_log(self):
         """Clear analysis log."""
         self.log_output.clear()
+    
+    # === NEW: Reference Config Methods ===
+    
+    def set_reference_config(self, rows: int, cols: int):
+        """Set reference configuration values.
+        
+        Args:
+            rows: Number of nest rows
+            cols: Number of nests per row
+        """
+        self.rows_spinner.setValue(rows)
+        self.cols_spinner.setValue(cols)
+        self._on_grid_changed()
+    
+    def set_detected_nests_count(self, count: int):
+        """Update detected nests count display.
+        
+        Args:
+            count: Number of detected nests
+        """
+        if count > 0:
+            expected = self.rows_spinner.value() * self.cols_spinner.value()
+            color = "#4CAF50" if count == expected else "#FF9800"
+            self.detected_nests_label.setText(f"Detected: {count} nests")
+            self.detected_nests_label.setStyleSheet(f"color: {color};")
+        else:
+            self.detected_nests_label.setText("Detected: - nests")
+            self.detected_nests_label.setStyleSheet("color: gray;")
+    
+    def get_reference_config(self):
+        """Get current reference configuration.
+        
+        Returns:
+            Dictionary with rows, cols, total
+        """
+        return {
+            'rows': self.rows_spinner.value(),
+            'cols': self.cols_spinner.value(),
+            'total': self.rows_spinner.value() * self.cols_spinner.value()
+        }
+    
+    def get_advanced_options(self):
+        """Get advanced options settings.
+        
+        Returns:
+            Dictionary with advanced options
+        """
+        return {
+            'enable_interaction_metrics': self.interaction_metrics_checkbox.isChecked(),
+            'proximity_threshold': self.proximity_spinner.value(),
+            'save_crops': self.save_crops_checkbox.isChecked(),
+            'crops_per_track': self.crops_per_track_spinner.value()
+        }
