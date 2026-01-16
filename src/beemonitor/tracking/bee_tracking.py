@@ -1,219 +1,405 @@
-"""BeeTracking - High-level tracking system for bee hotels.
+"""
+BeeTracking - v2.3 YOLO-Only with ADAPTIVE Tracker
+===================================================
 
-Combines detection methods (FG/BG, YOLO) with MOT algorithms
-to track bees in bee hotel videos.
+Simplified bee tracking using YOLO-only detection with adaptive, resolution and FPS-independent tracking.
+
+v2.3 Changes:
+- Pass frame_height to tracker for resolution-relative fallback
+- Robust bee size with IQR outlier rejection (in BeeTracker)
+
+v2.2 Changes:
+- YOLO-only detection (no FGBG_YOLO mode)
+- Two-mode optimization (motion detection + YOLO tracking)
+- Adaptive tracker with FPS and bee-size relative thresholds
+- Auto-calculates bee size from detections
 """
 
-import logging
-from typing import List, Dict, Optional, Any
-from enum import Enum
 import cv2
 import numpy as np
-import pandas as pd
+from typing import List, Tuple, Optional, Dict, Any
+import logging
+from ultralytics import YOLO
 
-from beemonitor.tracking.base_tracking import BaseTracking
-from beemonitor.detection.base_detector import Detection
-from beemonitor.detection.blob_detector import BlobDetector
-from beemonitor.detection.sift_detector import SIFTDetector
 from beemonitor.detection.yolo_detector import YOLODetector
-from beemonitor.detection.noise_filter import NoiseFilter
+from beemonitor.detection.blob_detector import BlobDetector
+from beemonitor.tracking.mot.bee_tracker import BeeTracker
 
 logger = logging.getLogger(__name__)
 
 
-class DetectionMode(Enum):
-    """Detection modes for BeeTracking.
-    
-    Modes:
-        FGBG_ONLY: Motion detection only (fast, misses stationary bees)
-        SIFT_ONLY: SIFT keypoint detection only (slower, finds stationary)
-        YOLO_ONLY: Deep learning every frame (slowest, most accurate)
-        FGBG_SIFT: Motion + SIFT (balanced speed + stationary detection)
-        FGBG_YOLO: Motion + periodic YOLO (good balance)
-        SIFT_YOLO: SIFT + periodic YOLO (stationary + species ID)
-        FGBG_SIFT_YOLO: All three methods (comprehensive, RECOMMENDED)
+class BeeTracking:
     """
-    FGBG_ONLY = "fgbg"                      # FG/BG blob detection only
-    SIFT_ONLY = "sift"                      # SIFT keypoint detection only
-    YOLO_ONLY = "yolo"                      # YOLO every frame
-    FGBG_SIFT = "fgbg_sift"                 # FG/BG + SIFT
-    FGBG_YOLO = "fgbg_yolo"                 # FG/BG + YOLO confirmation
-    SIFT_YOLO = "sift_yolo"                 # SIFT + YOLO confirmation
-    FGBG_SIFT_YOLO = "fgbg_sift_yolo"       # All three (RECOMMENDED)
-
-
-class BeeTracking(BaseTracking):
-    """High-level tracking system for bee hotels.
+    YOLO-only bee tracking with two-mode optimization and adaptive parameters.
     
-    Designed specifically for solitary bee hotels with:
-    - Configurable detection pipeline (FG/BG, YOLO)
-    - Noise filtering (CNN)
-    - Pluggable MOT algorithm
-    - Adaptive mode switching (motion detection ↔ tracking)
-    - Frame merging for efficiency
-    
-    Attributes:
-        mot_algorithm: MOT algorithm (BeeTracker, ByteTrack, etc.)
-        detection_mode: Which detectors to use
-        blob_detector: FG/BG blob detector
-        yolo_detector: YOLO detector
-        noise_filter: CNN noise filter
+    Features:
+    - Motion detection mode (fast blob detection)
+    - Tracking mode (YOLO when motion detected)
+    - Adaptive tracker (resolution & FPS independent)
+    - Auto-calculates bee size
+    - Configurable distance multipliers for tuning
     """
     
     def __init__(
         self,
-        mot_algorithm,
-        yolo_model = None,
-        detection_mode: DetectionMode = DetectionMode.FGBG_YOLO,
-        use_noise_filter: bool = False,
-        noise_filter_model = None,
-        config = None
+        yolo_model_path: str,
+        confidence_threshold: float = 0.25,
+        roi: Optional[Tuple[int, int, int, int]] = None,
+        # Adaptive tracker parameters
+        max_age_seconds: float = 1.0,
+        min_hits_seconds: float = 0.1,
+        max_resurrection_seconds: float = 0.5,
+        match_distance_multiplier: float = 5.0,
+        resurrection_search_multiplier: float = 3.0,
+        duplicate_distance_multiplier: float = 1.2,
+        iou_threshold: float = 0.3
     ):
-        """Initialize BeeTracking system.
+        """
+        Initialize BeeTracking with YOLO-only detection and adaptive tracking.
         
         Args:
-            mot_algorithm: MOT algorithm (BeeTracker, ByteTrack, etc.)
-            yolo_model: YOLO model for detection
-            detection_mode: Which detection methods to use
-            use_noise_filter: Whether to use CNN noise filter
-            noise_filter_model: Noise filter classifier
-            config: Configuration object
+            yolo_model_path: Path to YOLO model weights
+            confidence_threshold: YOLO confidence threshold
+            roi: Region of interest (x1, y1, x2, y2)
+            
+            Adaptive tracker parameters (resolution & FPS independent):
+                max_age_seconds: Max time without detection before track dies
+                min_hits_seconds: Min time before track is confirmed
+                max_resurrection_seconds: Max time to resurrect dead tracks
+                match_distance_multiplier: Max distance for matching (multiplier of bee size)
+                resurrection_search_multiplier: Search radius (multiplier of bee size)
+                duplicate_distance_multiplier: Duplicate threshold (multiplier of bee size)
+                iou_threshold: IoU threshold for matching
         """
-        self.mot = mot_algorithm
-        self.detection_mode = detection_mode
-        self.config = config
-        
-        # Initialize detectors based on mode
-        self._init_detectors(yolo_model, noise_filter_model, use_noise_filter)
-        
-        # Two-mode tracking optimization (configurable)
-        if config and hasattr(config, 'tracking'):
-            self.enable_two_mode = config.tracking.enable_two_mode_tracking
-            self.motion_detection_threshold = config.tracking.motion_detection_threshold
-            self.tracking_to_detection_delay = config.tracking.tracking_to_detection_delay
-            self.frame_merge_size = config.tracking.motion_mode_frame_merge
-        else:
-            # Default values if no config
-            self.enable_two_mode = True
-            self.motion_detection_threshold = 1
-            self.tracking_to_detection_delay = 30
-            self.frame_merge_size = 10
-        
-        # Tracking state - ALWAYS start in tracking mode to catch initial activity
-        self.current_mode = 'tracking'
-        self.frames_without_tracks = 0
-        self.frame_buffer = []
-        
-        # Statistics
-        self.stats = {
-            'total_frames': 0,
-            'total_detections': 0,
-            'total_tracks': 0,
-            'mode_switches': 0,
-            'frames_in_motion_mode': 0,
-            'frames_in_tracking_mode': 0
-        }
-        
-        logger.info(f"BeeTracking initialized")
-        logger.info(f"  Detection mode: {detection_mode.value}")
-        logger.info(f"  MOT: {type(mot_algorithm).__name__}")
-        logger.info(f"  Noise filter: {use_noise_filter}")
-        logger.info(f"  Two-mode tracking: {'ENABLED' if self.enable_two_mode else 'DISABLED'}")
-        if self.enable_two_mode:
-            logger.info(f"    Motion threshold: {self.motion_detection_threshold}")
-            logger.info(f"    Switch delay: {self.tracking_to_detection_delay} frames")
-    
-    def _init_detectors(self, yolo_model, noise_filter_model, use_noise_filter):
-        """Initialize detectors based on detection mode."""
-        mode = self.detection_mode
-        
-        # FG/BG blob detector
-        if mode in [DetectionMode.FGBG_ONLY, DetectionMode.FGBG_YOLO, 
-                    DetectionMode.FGBG_SIFT, DetectionMode.FGBG_SIFT_YOLO]:
-            self.blob_detector = BlobDetector(
-                min_area=50.0,
-                min_solidity=0.5
-            )
-        else:
-            self.blob_detector = None
-        
-        # SIFT detector (for stationary bee detection)
-        # NOTE: Must be initialized with learn_from_video() before use!
-        if mode in [DetectionMode.SIFT_ONLY, DetectionMode.FGBG_SIFT,
-                    DetectionMode.SIFT_YOLO, DetectionMode.FGBG_SIFT_YOLO]:
-            self.sift_detector = SIFTDetector(
-                min_keypoints=3,
-                use_templates=True,
-                require_movement=True  # Filter out static nest holes
-            )
-            logger.info("  SIFT detector created (needs initialization before use)")
-        else:
-            self.sift_detector = None
+        logger.info("Initializing BeeTracking (v2.3 YOLO-only with adaptive tracker)")
         
         # YOLO detector
-        if mode in [DetectionMode.FGBG_YOLO, DetectionMode.YOLO_ONLY,
-                    DetectionMode.SIFT_YOLO, DetectionMode.FGBG_SIFT_YOLO]:
-            if yolo_model is None:
-                raise ValueError("YOLO model required for this detection mode")
-            
-            # Convert class IDs to class names
-            if self.config is None:
-                tracking_classes = ['bee', 'wasp']
-            else:
-                tracking_classes = []
-                if hasattr(self.config.tracking, 'label_map'):
-                    for class_id in self.config.tracking.tracking_classes:
-                        class_name = self.config.tracking.label_map.get(class_id, f'class_{class_id}')
-                        tracking_classes.append(class_name)
-                else:
-                    tracking_classes = [str(cid) for cid in self.config.tracking.tracking_classes]
-            
-            self.yolo_detector = YOLODetector(
-                model=yolo_model,
-                conf_threshold=0.25,
-                tracking_classes=tracking_classes
-            )
-        else:
-            self.yolo_detector = None
+        logger.info(f"Loading YOLO model from {yolo_model_path}")
+
+        # self.yolo_detector = YOLODetector(
+        #     model_path=yolo_model_path,
+        #     confidence_threshold=confidence_threshold
+        # )
+
+        yolo_model = YOLO(yolo_model_path)
+        self.yolo_detector = YOLODetector(
+            model=yolo_model,
+            conf_threshold=confidence_threshold,
+            iou_threshold=iou_threshold
+        )
         
-        # Noise filter
-        if use_noise_filter and noise_filter_model is not None:
-            self.noise_filter = NoiseFilter(
-                classifier=noise_filter_model,
-                threshold=0.7
-            )
+        # Blob detector (for motion detection mode)
+        logger.info("Initializing blob detector for motion detection")
+        self.blob_detector = BlobDetector()
+        
+        # ROI
+        self.roi = roi
+        
+        # Video properties (will be set when video is opened)
+        self.fps = None
+        self.video_width = None
+        self.video_height = None
+        
+        # Store tracker parameters for initialization
+        self.tracker_params = {
+            'max_age_seconds': max_age_seconds,
+            'min_hits_seconds': min_hits_seconds,
+            'max_resurrection_seconds': max_resurrection_seconds,
+            'match_distance_multiplier': match_distance_multiplier,
+            'resurrection_search_multiplier': resurrection_search_multiplier,
+            'duplicate_distance_multiplier': duplicate_distance_multiplier,
+            'iou_threshold': iou_threshold
+        }
+        
+        # Tracker (will be initialized when video properties are known)
+        self.tracker = None
+        
+        # Two-mode system state
+        self.mode = 'motion_detection'  # 'motion_detection' or 'tracking'
+        self.frames_since_motion = 0
+        self.motion_cooldown = 30  # Frames to stay in tracking mode after motion stops
+        
+        logger.info("BeeTracking initialized (v2.2 YOLO-only with adaptive tracker)")
+    
+    def _initialize_tracker(self, fps: float, frame_height: int = None):
+        """
+        Initialize adaptive tracker with video FPS and frame height.
+        
+        Args:
+            fps: Video frame rate
+            frame_height: Video frame height for resolution-relative fallback
+        """
+        logger.info(f"Initializing adaptive tracker with FPS={fps}, frame_height={frame_height}")
+        
+        self.tracker = BeeTracker(
+            fps=fps,
+            bee_size=None,  # Auto-calculate from detections
+            frame_height=frame_height,  # For resolution-relative fallback
+            **self.tracker_params
+        )
+        
+        logger.info("Adaptive tracker initialized")
+    
+    def _get_video_properties(self, video_path: str) -> Tuple[float, int, int]:
+        """
+        Get video properties (FPS, width, height).
+        
+        Args:
+            video_path: Path to video file
+            
+        Returns:
+            (fps, width, height)
+        """
+        cap = cv2.VideoCapture(video_path)
+        
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        cap.release()
+        
+        # Default to 30fps if unable to read
+        if fps <= 0:
+            logger.warning(f"Could not read FPS from video, defaulting to 30.0")
+            fps = 30.0
+        
+        logger.info(f"Video properties: {width}x{height} @ {fps} fps")
+        
+        return fps, width, height
+    
+    def initialize_video(self, video_path: str, output_path: Optional[str] = None):
+        """
+        Initialize tracking for a specific video.
+        
+        Args:
+            video_path: Path to video file
+            output_path: Optional path to output folder
+        """
+        logger.info(f"Initializing video tracking for: {video_path}")
+        if output_path:
+            logger.info(f"Output path: {output_path}")
+        
+        # Get video properties
+        self.fps, self.video_width, self.video_height = self._get_video_properties(video_path)
+        logger.info(f"Video properties: {self.video_width}x{self.video_height} @ {self.fps} fps")
+        
+        # Initialize adaptive tracker with video FPS and frame height
+        self._initialize_tracker(self.fps, self.video_height)
+        
+        # Initialize blob detector background
+        # Note: BlobDetector builds background model internally from detect() calls
+        # We don't need to manually feed it frames
+        logger.info("Blob detector initialized (will build background on first detect() call)")
+        
+        # Optionally save initial background if output_path is provided
+        # This will be saved after the first few frames are processed
+        if output_path:
+            import os
+            os.makedirs(output_path, exist_ok=True)
+            self.background_save_path = os.path.join(output_path, "background.png")
+            logger.info(f"Background will be saved to: {self.background_save_path}")
         else:
-            self.noise_filter = None
+            self.background_save_path = None
+    
+    def detect_motion(self, frame: np.ndarray) -> bool:
+        """
+        Detect if there is motion in the frame.
+        
+        Args:
+            frame: Input frame
+            
+        Returns:
+            True if motion detected, False otherwise
+        """
+        # Get blob detections (fast)
+        blob_detections = self.blob_detector.detect(frame)
+        
+        # Motion detected if we have any blobs
+        return len(blob_detections) > 0
+    
+    def process_frame(
+        self,
+        frame: np.ndarray,
+        frame_num: int,
+        visualize: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Process a single frame with two-mode optimization.
+        
+        Args:
+            frame: Input frame
+            frame_num: Frame number
+            visualize: Whether to create visualization
+            
+        Returns:
+            Dictionary with detections, tracks, and mode info
+        """
+        # Apply ROI for motion detection only
+        if self.roi:
+            x1, y1, x2, y2 = self.roi
+            roi_frame = frame[y1:y2, x1:x2]
+        else:
+            roi_frame = frame
+        
+        detections = []
+        
+        # TWO-MODE SYSTEM
+        if self.mode == 'motion_detection':
+            # Fast motion detection mode (ROI only)
+            has_motion = self.detect_motion(roi_frame)
+            
+            if has_motion:
+                # Motion detected - switch to tracking mode
+                logger.debug(f"Frame {frame_num}: Motion detected, switching to tracking mode")
+                self.mode = 'tracking'
+                self.frames_since_motion = 0
+                
+                # Run YOLO on FULL FRAME (allows tracking beyond ROI)
+                yolo_detections = self.yolo_detector.detect(frame)
+                
+                # Convert to tracking format and add source
+                for det in yolo_detections:
+                    bbox = det.bbox
+                    conf = det.confidence
+                    det_with_source = list(bbox) + [conf, 'yolo']
+                    detections.append(det_with_source)
+        
+        else:  # tracking mode
+            # Run YOLO on FULL FRAME (allows tracking beyond ROI)
+            yolo_detections = self.yolo_detector.detect(frame)
+            
+            # Convert to tracking format and add source
+            for det in yolo_detections:
+                bbox = det.bbox
+                conf = det.confidence
+                det_with_source = list(bbox) + [conf, 'yolo']
+                detections.append(det_with_source)
+            
+            # Check if motion has stopped (ROI only)
+            has_motion = self.detect_motion(roi_frame)
+            
+            if has_motion:
+                self.frames_since_motion = 0
+            else:
+                self.frames_since_motion += 1
+            
+            # Switch back to motion detection mode if no motion for cooldown period
+            if self.frames_since_motion > self.motion_cooldown:
+                logger.debug(f"Frame {frame_num}: No motion for {self.motion_cooldown} frames, switching to motion detection mode")
+                self.mode = 'motion_detection'
+        
+        # Update tracker (full frame coordinates, no adjustment needed)
+        tracks = []
+        if self.tracker is not None:
+            tracks = self.tracker.update(detections, frame_num)
+        
+        result = {
+            'frame_num': frame_num,
+            'detections': detections,
+            'tracks': tracks,
+            'mode': self.mode,
+            'num_detections': len(detections),
+            'num_tracks': len(tracks)
+        }
+        
+        if visualize:
+            result['visualization'] = self._create_visualization(frame, detections, tracks)
+        
+        return result
+    
+    def _create_visualization(
+        self,
+        frame: np.ndarray,
+        detections: List,
+        tracks: List[Dict]
+    ) -> np.ndarray:
+        """
+        Create visualization of detections and tracks.
+        
+        Args:
+            frame: Input frame
+            detections: List of detections
+            tracks: List of tracks
+            
+        Returns:
+            Annotated frame
+        """
+        vis_frame = frame.copy()
+        
+        # Draw ROI
+        if self.roi:
+            x1, y1, x2, y2 = self.roi
+            cv2.rectangle(vis_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        
+        # Draw detections (BLUE for YOLO)
+        for det in detections:
+            x1, y1, x2, y2 = map(int, det[:4])
+            source = det[5] if len(det) > 5 else 'unknown'
+            
+            color = (255, 0, 0) if source == 'yolo' else (128, 128, 128)
+            cv2.rectangle(vis_frame, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(vis_frame, source.upper(), (x1, y1 - 5),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        # Draw tracks
+        colors = [(255, 0, 0), (0, 255, 255), (255, 0, 255), (255, 255, 0)]
+        
+        for i, track in enumerate(tracks):
+            color = colors[i % len(colors)]
+            track_id = track['track_id']
+            cx, cy = map(int, track['centroid'])
+            
+            # Draw trajectory
+            if len(track['history']) > 1:
+                points = np.array(track['history'], dtype=np.int32)
+                cv2.polylines(vis_frame, [points], False, color, 2)
+            
+            # Draw current position
+            cv2.circle(vis_frame, (cx, cy), 5, color, -1)
+            cv2.putText(vis_frame, f"ID:{track_id}", (cx + 10, cy),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        # Draw mode indicator
+        mode_text = f"Mode: {self.mode.upper()}"
+        cv2.putText(vis_frame, mode_text, (10, 30),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        
+        return vis_frame
     
     def process_video(
         self,
         video_path: str,
-        roi: Optional[tuple] = None,
-        **kwargs
-    ) -> pd.DataFrame:
-        """Process entire video.
+        output_path: Optional[str] = None,
+        visualize: bool = False
+    ) -> List[Dict[str, Any]]:
+        """
+        Process entire video.
         
         Args:
-            video_path: Path to video
-            roi: Region of interest (x1, y1, x2, y2) - NOT used for masking.
-                 Detections and tracking happen in full frame to allow
-                 tracking bees that move outside the hotel region.
-            **kwargs: visualize, progress_callback, etc.
+            video_path: Path to input video
+            output_path: Path to output video (if visualize=True)
+            visualize: Whether to create output video
             
         Returns:
-            DataFrame with tracking results
+            List of results for each frame
         """
+        # Initialize for this video
+        self.initialize_video(video_path, output_path)
+        
+        # Open video
         cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise ValueError(f"Cannot open video: {video_path}")
         
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        logger.info(f"Processing {total_frames} frames from {video_path}")
+        # Setup video writer if visualizing
+        if visualize and output_path:
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(
+                output_path,
+                fourcc,
+                self.fps,
+                (self.video_width, self.video_height)
+            )
         
-        # Reset state
-        self.reset()
-        
-        all_detections = []
+        results = []
         frame_num = 0
         
         while True:
@@ -221,318 +407,86 @@ class BeeTracking(BaseTracking):
             if not ret:
                 break
             
-            # Note: ROI is NOT applied to frame masking
-            # This allows tracking to follow bees outside the hotel region
-            # Detections happen in full frame, tracking persists everywhere
+            # Process frame
+            result = self.process_frame(frame, frame_num, visualize=visualize)
+            results.append(result)
             
-            # Process frame (full frame, no ROI masking)
-            frame_result = self.process_frame(frame, frame_num)
-            
-            # Record tracks
-            for track_id, track in frame_result['tracks'].items():
-                all_detections.append({
-                    'frame': frame_num,
-                    'track_id': track_id,
-                    'x1': track.bbox[0],
-                    'y1': track.bbox[1],
-                    'x2': track.bbox[2],
-                    'y2': track.bbox[3],
-                    'species': track.label,
-                    'confidence': 1.0,
-                    'source': track.source if hasattr(track, 'source') else 'unknown'
-                })
+            # Write visualization if enabled
+            if visualize and output_path and 'visualization' in result:
+                out.write(result['visualization'])
             
             frame_num += 1
-            self.stats['total_frames'] = frame_num
+            
+            if frame_num % 100 == 0:
+                logger.info(f"Processed {frame_num} frames")
         
         cap.release()
+        if visualize and output_path:
+            out.release()
         
-        # Convert to DataFrame
-        return self._convert_to_dataframe(all_detections)
-    
-    def process_frame(
-        self,
-        frame: np.ndarray,
-        frame_num: int
-    ) -> Dict[str, Any]:
-        """Process single frame with optional two-mode optimization.
+        logger.info(f"Processed {frame_num} frames total")
         
-        Two-Mode Tracking:
-        - Motion Detection Mode: Lightweight motion check only (fast)
-        - Tracking Mode: Full detection + tracking (comprehensive)
-        - Switches based on bee activity
+        # Convert results to DataFrame
+        import pandas as pd
         
-        Args:
-            frame: Input frame
-            frame_num: Frame number
+        if not results:
+            # Return empty DataFrame with expected columns
+            return pd.DataFrame(columns=['frame', 'frame_num', 'track_id', 
+                                        'x1', 'y1', 'x2', 'y2', 'cx', 'cy',
+                                        'bbox', 'centroid', 'confidence', 'mode'])
+        
+        # Flatten results - one row per track per frame
+        flattened_rows = []
+        
+        for result in results:
+            frame_num = result['frame_num']
+            mode = result['mode']
             
-        Returns:
-            Dict with detections, tracks, and current mode
-        """
-        # Check if two-mode tracking is enabled
-        if not self.enable_two_mode:
-            # Original behavior: full tracking every frame
-            return self._process_full_tracking(frame, frame_num)
+            # Extract each track into a separate row
+            for track in result['tracks']:
+                # Get track ID - should be 'track_id' based on debug output
+                track_id = track.get('track_id')
+                
+                if track_id is None:
+                    logger.warning(f"Track missing track_id! Track keys: {track.keys()}")
+                    continue  # Skip tracks without ID
+                
+                # Unpack bbox (x1, y1, x2, y2)
+                bbox = track['bbox']
+                x1, y1, x2, y2 = bbox
+                
+                # Unpack centroid (cx, cy)
+                centroid = track['centroid']
+                cx, cy = centroid
+                
+                row = {
+                    'frame': frame_num,
+                    'frame_num': frame_num,
+                    'track_id': track_id,
+                    'x1': x1,
+                    'y1': y1,
+                    'x2': x2,
+                    'y2': y2,
+                    'cx': cx,
+                    'cy': cy,
+                    'bbox': bbox,  # Keep original bbox too
+                    'centroid': centroid,  # Keep original centroid too
+                    'confidence': track.get('confidence', 0.0),
+                    'mode': mode
+                }
+                flattened_rows.append(row)
         
-        # Two-mode optimization enabled
-        if self.current_mode == 'motion_detection':
-            # Lightweight mode: just check for motion
-            return self._process_motion_detection_mode(frame, frame_num)
-        else:
-            # Full mode: complete detection + tracking
-            return self._process_tracking_mode(frame, frame_num)
-    
-    def _process_full_tracking(
-        self,
-        frame: np.ndarray,
-        frame_num: int
-    ) -> Dict[str, Any]:
-        """Process frame with full tracking (original behavior).
+        # Create DataFrame from flattened rows
+        if not flattened_rows:
+            # No tracks detected
+            logger.warning("No tracks detected in video")
+            return pd.DataFrame(columns=['frame', 'frame_num', 'track_id', 
+                                        'x1', 'y1', 'x2', 'y2', 'cx', 'cy',
+                                        'bbox', 'centroid', 'confidence', 'mode'])
         
-        Used when two-mode tracking is disabled.
-        """
-        # Detect objects in frame
-        detections = self._detect_in_frame(frame, frame_num)
+        df = pd.DataFrame(flattened_rows)
         
-        # Update MOT
-        from beemonitor.tracking.mot.base_mot import Detection as MOTDetection
-        mot_detections = [
-            MOTDetection(
-                bbox=d.bbox,
-                centroid=d.centroid,
-                label=d.label,
-                confidence=d.confidence,
-                source=d.source
-            )
-            for d in detections
-        ]
+        logger.info(f"Created tracking DataFrame with {len(df)} rows ({len(results)} frames, "
+                   f"{len(df['track_id'].unique())} unique tracks)")
         
-        # Check if MOT needs frame (Ultralytics trackers)
-        try:
-            from beemonitor.tracking.mot.ultralytics_tracker import UltralyticsTracker
-            if isinstance(self.mot, UltralyticsTracker):
-                tracks = self.mot.update(mot_detections, frame_num, frame=frame)
-            else:
-                tracks = self.mot.update(mot_detections, frame_num)
-        except ImportError:
-            tracks = self.mot.update(mot_detections, frame_num)
-        
-        self.stats['total_detections'] += len(detections)
-        self.stats['total_tracks'] = max(self.stats['total_tracks'], len(tracks))
-        
-        return {
-            'detections': detections,
-            'tracks': tracks,
-            'mode': 'full_tracking'
-        }
-    
-    def _process_motion_detection_mode(
-        self,
-        frame: np.ndarray,
-        frame_num: int
-    ) -> Dict[str, Any]:
-        """Process frame in lightweight motion detection mode.
-        
-        Only checks for motion using blob detector with RELAXED thresholds.
-        If motion detected, switches to tracking mode.
-        """
-        self.stats['frames_in_motion_mode'] += 1
-        
-        # Lightweight detection: blob only with MOTION MODE thresholds
-        # More sensitive to catch ANY movement and trigger switch
-        detections = []
-        if self.blob_detector:
-            blob_dets = self.blob_detector.detect(frame, mode='motion')
-            detections.extend(blob_dets)
-        
-        # Check if we should switch to tracking mode
-        if len(detections) >= self.motion_detection_threshold:
-            # Motion detected! Switch to tracking mode
-            self._switch_to_tracking_mode()
-            # Process this frame in tracking mode
-            return self._process_tracking_mode(frame, frame_num)
-        
-        # No motion - stay in motion detection mode
-        # Return empty tracks
-        return {
-            'detections': detections,
-            'tracks': {},
-            'mode': 'motion_detection'
-        }
-    
-    def _process_tracking_mode(
-        self,
-        frame: np.ndarray,
-        frame_num: int
-    ) -> Dict[str, Any]:
-        """Process frame in full tracking mode.
-        
-        Runs complete detection pipeline + MOT tracking.
-        If no tracks for N frames, switches back to motion detection mode.
-        """
-        self.stats['frames_in_tracking_mode'] += 1
-        
-        # Full detection pipeline
-        detections = self._detect_in_frame(frame, frame_num)
-        
-        # Update MOT
-        from beemonitor.tracking.mot.base_mot import Detection as MOTDetection
-        mot_detections = [
-            MOTDetection(
-                bbox=d.bbox,
-                centroid=d.centroid,
-                label=d.label,
-                confidence=d.confidence,
-                source=d.source
-            )
-            for d in detections
-        ]
-        
-        # Check if MOT needs frame (Ultralytics trackers)
-        try:
-            from beemonitor.tracking.mot.ultralytics_tracker import UltralyticsTracker
-            if isinstance(self.mot, UltralyticsTracker):
-                tracks = self.mot.update(mot_detections, frame_num, frame=frame)
-            else:
-                tracks = self.mot.update(mot_detections, frame_num)
-        except ImportError:
-            tracks = self.mot.update(mot_detections, frame_num)
-        
-        self.stats['total_detections'] += len(detections)
-        self.stats['total_tracks'] = max(self.stats['total_tracks'], len(tracks))
-        
-        # Check if we should switch to motion detection mode
-        if len(tracks) == 0:
-            self.frames_without_tracks += 1
-            if self.frames_without_tracks >= self.tracking_to_detection_delay:
-                # No tracks for N frames - switch to motion detection mode
-                self._switch_to_motion_detection_mode()
-        else:
-            # Reset counter when tracks are present
-            self.frames_without_tracks = 0
-        
-        return {
-            'detections': detections,
-            'tracks': tracks,
-            'mode': 'tracking'
-        }
-    
-    def _switch_to_tracking_mode(self):
-        """Switch from motion detection mode to tracking mode."""
-        if self.current_mode != 'tracking':
-            logger.info(f"Mode switch: motion_detection → tracking (motion detected)")
-            self.current_mode = 'tracking'
-            self.frames_without_tracks = 0
-            self.stats['mode_switches'] += 1
-    
-    def _switch_to_motion_detection_mode(self):
-        """Switch from tracking mode to motion detection mode."""
-        if self.current_mode != 'motion_detection':
-            logger.info(f"Mode switch: tracking → motion_detection ({self.frames_without_tracks} frames without tracks)")
-            self.current_mode = 'motion_detection'
-            self.frames_without_tracks = 0
-            self.stats['mode_switches'] += 1
-    
-    def _detect_in_frame(
-        self,
-        frame: np.ndarray,
-        frame_num: int
-    ) -> List[Detection]:
-        """Run detection pipeline on frame.
-        
-        Args:
-            frame: Input frame
-            frame_num: Frame number
-            
-        Returns:
-            List of detections
-        """
-        detections = []
-        
-        # FG/BG blob detection with TRACKING MODE thresholds (precise)
-        if self.blob_detector:
-            blob_dets = self.blob_detector.detect(frame, mode='tracking')
-            detections.extend(blob_dets)
-        
-        # SIFT stationary detection
-        if self.sift_detector:
-            sift_dets = self.sift_detector.detect(frame, use_templates=True)
-            detections.extend(sift_dets)
-        
-        # Apply noise filter if enabled (to blob and SIFT detections)
-        if self.noise_filter and detections:
-            detections = self.noise_filter.filter_detections(frame, detections)
-        
-        # YOLO confirmation/detection
-        if self.yolo_detector:
-            if self.detection_mode == DetectionMode.YOLO_ONLY:
-                # Replace all with YOLO
-                detections = self.yolo_detector.detect(frame)
-            else:
-                # Periodic YOLO confirmation
-                if frame_num % 10 == 0:
-                    yolo_dets = self.yolo_detector.detect(frame)
-                    detections.extend(yolo_dets)
-        
-        return detections
-    
-    def configure_detection(self, **kwargs) -> None:
-        """Configure detection pipeline."""
-        if 'blob_min_area' in kwargs and self.blob_detector:
-            self.blob_detector.configure(min_area=kwargs['blob_min_area'])
-        
-        if 'yolo_conf' in kwargs and self.yolo_detector:
-            self.yolo_detector.configure(conf_threshold=kwargs['yolo_conf'])
-        
-        logger.debug(f"Detection configured: {kwargs}")
-    
-    def configure_tracking(self, **kwargs) -> None:
-        """Configure MOT algorithm."""
-        # Delegate to MOT algorithm if it has configure method
-        if hasattr(self.mot, 'configure'):
-            self.mot.configure(**kwargs)
-        
-        logger.debug(f"Tracking configured: {kwargs}")
-    
-    def reset(self) -> None:
-        """Reset tracking system."""
-        if self.blob_detector:
-            self.blob_detector.reset()
-        if self.yolo_detector:
-            self.yolo_detector.reset()
-        
-        self.mot.reset()
-        
-        self.frame_buffer.clear()
-        # ALWAYS start in tracking mode to catch initial activity
-        self.current_mode = 'tracking'
-        self.frames_without_tracks = 0
-        
-        self.stats = {
-            'total_frames': 0,
-            'total_detections': 0,
-            'total_tracks': 0,
-            'mode_switches': 0,
-            'frames_in_motion_mode': 0,
-            'frames_in_tracking_mode': 0
-        }
-        
-        logger.debug("BeeTracking reset")
-    
-    def get_statistics(self) -> Dict[str, Any]:
-        """Get tracking statistics."""
-        return self.stats.copy()
-    
-    def _apply_roi_mask(self, frame: np.ndarray, roi: tuple) -> np.ndarray:
-        """Apply ROI mask to frame."""
-        mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-        x1, y1, x2, y2 = [int(c) for c in roi]
-        mask[y1:y2, x1:x2] = 255
-        return cv2.bitwise_and(frame, frame, mask=mask)
-    
-    def _convert_to_dataframe(self, detections: List[dict]) -> pd.DataFrame:
-        """Convert detections to DataFrame."""
-        if not detections:
-            return pd.DataFrame(columns=['frame', 'track_id', 'x1', 'y1', 'x2', 'y2', 'species', 'confidence', 'source'])
-        
-        return pd.DataFrame(detections)
+        return df

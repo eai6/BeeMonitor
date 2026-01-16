@@ -1,7 +1,8 @@
-"""Enhanced configuration with hotel box-aware parameter scaling.
+"""Enhanced configuration with hotel box-aware parameter scaling and adaptive tracker.
 
 This module extends the configuration system to support parameter scaling
 based on both video resolution AND the hotel box position/distance from camera.
+Now includes adaptive tracker configuration for FPS and resolution-independent tracking.
 """
 
 import yaml
@@ -425,7 +426,10 @@ class DetectionConfig:
 
 @dataclass
 class TrackingConfig:
-    """Enhanced tracking configuration for HyDaT system with hotel-aware scaling."""
+    """Enhanced tracking configuration with hotel-aware scaling AND adaptive tracker parameters.
+    
+    Now includes v2.2 adaptive tracker configuration for FPS and resolution-independent tracking.
+    """
 
     fast_mode : bool = False
     use_gpu: bool = True
@@ -445,6 +449,40 @@ class TrackingConfig:
     tracking_to_detection_delay: int = 30  # Frames without tracks before switching to motion mode
     motion_mode_frame_merge: int = 10  # Merge frames in motion detection mode for efficiency
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # ADAPTIVE TRACKER CONFIGURATION (v2.2)
+    # Resolution and FPS-independent tracking parameters
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    # Time-based parameters (in SECONDS, not frames)
+    # These are automatically converted to frames based on video FPS
+    max_age_seconds: float = 2.0  # Max time without detection before track dies
+                                   # Example: 1.0s = 30 frames @ 30fps, 60 frames @ 60fps
+    
+    min_hits_seconds: float = 0.05  # Min time before track is confirmed
+                                    # Example: 0.1s = 3 frames @ 30fps, 6 frames @ 60fps
+    
+    max_resurrection_seconds: float = 1.5  # Max time to keep dead tracks for resurrection
+                                            # Example: 0.5s = 15 frames @ 30fps, 30 frames @ 60fps
+    
+    # Distance-based parameters (as MULTIPLIERS of bee size, not pixels)
+    # These are automatically scaled based on detected bee size
+    resurrection_search_multiplier: float = 2.5  # Search radius for resurrections
+                                                  # Example: 1.5x40px = 60px, 1.5x80px = 120px
+    
+    duplicate_distance_multiplier: float = 1.2  # Distance threshold for duplicate detection
+                                                 # Example: 1.2x40px = 48px, 1.2x80px = 96px
+    
+    # Other adaptive parameters
+    adaptive_iou_threshold: float = 0.25  # IoU threshold for matching (dimensionless)
+    adaptive_bee_size: Optional[float] = None  # Average bee size in pixels
+                                               # None = auto-calculate from detections (recommended)
+                                               # number = use fixed size (for fine-tuning)
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # END ADAPTIVE TRACKER CONFIGURATION
+    # ═══════════════════════════════════════════════════════════════════════════
+
     # Adaptive association parameters
     adaptive_association: bool = True
     stationary_speed_threshold: float = 5.0
@@ -462,23 +500,8 @@ class TrackingConfig:
 
     initial_distance_threshold: float = 30.0
     
-    # ⭐ CRITICAL FIX: Area filter base values (BEFORE auto-scaling)
-    # These get scaled by (scale_factor)² - area scales quadratically
-    # 
-    # Example scaling for CLOSE camera (scale_factor = 4.5):
-    #   min: 10 × (4.5)² = 202 px² ✓ Good for catching bees
-    #   max: 1500 × (4.5)² = 30,375 px² ✓ Filters large noise
-    #
-    # Example scaling for REFERENCE camera (scale_factor = 1.0):
-    #   min: 10 × (1.0)² = 10 px² ✓ Catches small bees
-    #   max: 1500 × (1.0)² = 1500 px² ✓ Normal upper bound
-    #
-    # Example scaling for FAR camera (scale_factor = 0.5):
-    #   min: 10 × (0.5)² = 2.5 px² ✓ Very sensitive
-    #   max: 1500 × (0.5)² = 375 px² ✓ Tighter upper bound
-    #
-    min_blob_area_pixels: float = 500  # ⭐ LOWERED from 20.0 to fix rejection issue
-    max_blob_area_pixels: float = 1500.0  # ⭐ LOWERED from 2000.0
+    min_blob_area_pixels: float = 500
+    max_blob_area_pixels: float = 1500.0
     
     new_track_distance_threshold: float = 100.0
     new_track_proximity_check: float = 100.0
@@ -542,7 +565,7 @@ class TrackingConfig:
     
     # Species tracking
     enable_species_tracking: bool = False
-    label_map: Dict[int, str] = field(default_factory=lambda: {0: 'osmia_cornifrons', 1: 'bee'})
+    label_map: Dict[int, str] = field(default_factory=lambda: {0: 'bee', 1: 'bee'})
     tracking_classes: List[int] = field(default_factory=lambda: [0])
     
     # Motion detection (legacy)
@@ -552,6 +575,34 @@ class TrackingConfig:
     max_association_distance: int = 100
     max_bee_velocity: int = 50
     max_bee_acceleration: int = 30
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # ADAPTIVE TRACKER HELPER METHODS
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    def get_adaptive_tracker_params(self, fps: float) -> Dict[str, Any]:
+        """Get adaptive tracker parameters for BeeTracker initialization.
+        
+        Args:
+            fps: Video frame rate
+            
+        Returns:
+            Dictionary of parameters for BeeTracker.__init__()
+        """
+        return {
+            'fps': fps,
+            'bee_size': self.adaptive_bee_size,
+            'max_age_seconds': self.max_age_seconds,
+            'min_hits_seconds': self.min_hits_seconds,
+            'max_resurrection_seconds': self.max_resurrection_seconds,
+            'resurrection_search_multiplier': self.resurrection_search_multiplier,
+            'duplicate_distance_multiplier': self.duplicate_distance_multiplier,
+            'iou_threshold': self.adaptive_iou_threshold
+        }
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # END ADAPTIVE TRACKER HELPER METHODS
+    # ═══════════════════════════════════════════════════════════════════════════
     
     # Scaling methods
     def distance_threshold(self, width: int, height: int, hotel_box=None) -> float:
@@ -686,6 +737,9 @@ class TrackingConfig:
         config.max_age = 20
         config.bg_init_target_frames = 30
         config.low_res_switch_threshold = 20
+        # Adaptive tracker params for high activity
+        config.max_age_seconds = 0.7
+        config.min_hits_seconds = 0.05
         return config
     
     @classmethod
@@ -697,6 +751,9 @@ class TrackingConfig:
         config.max_age = 50
         config.bg_init_target_frames = 75
         config.low_res_switch_threshold = 50
+        # Adaptive tracker params for low activity
+        config.max_age_seconds = 1.5
+        config.max_resurrection_seconds = 0.8
         return config
     
     @classmethod
@@ -708,6 +765,9 @@ class TrackingConfig:
         config.min_blob_solidity = 0.5
         config.confidence_threshold = 0.6
         config.min_track_length = 10
+        # Adaptive tracker params for high accuracy
+        config.min_hits_seconds = 0.2
+        config.duplicate_distance_multiplier = 1.0
         return config
     
     @classmethod
@@ -720,6 +780,9 @@ class TrackingConfig:
         config.low_res_scale_factor = 0.4
         config.low_res_check_interval = 10
         config.min_blob_solidity = 0.2
+        # Adaptive tracker params for speed
+        config.max_age_seconds = 0.5
+        config.resurrection_search_multiplier = 1.0
         return config
     
     def to_dict(self) -> Dict:
@@ -736,7 +799,13 @@ class TrackingConfig:
             f"  min_fg_area_base={self.min_fg_area_base},\n"
             f"  enable_low_res_mode={self.enable_low_res_mode},\n"
             f"  yolo_reconfirm_interval={self.yolo_reconfirm_interval},\n"
-            f"  tracking_classes={self.tracking_classes}\n"
+            f"  tracking_classes={self.tracking_classes},\n"
+            f"  # Adaptive tracker params:\n"
+            f"  max_age_seconds={self.max_age_seconds},\n"
+            f"  min_hits_seconds={self.min_hits_seconds},\n"
+            f"  max_resurrection_seconds={self.max_resurrection_seconds},\n"
+            f"  resurrection_search_multiplier={self.resurrection_search_multiplier},\n"
+            f"  duplicate_distance_multiplier={self.duplicate_distance_multiplier}\n"
             f")"
         )
 
@@ -799,7 +868,7 @@ class OutputConfig:
 
 @dataclass
 class Config:
-    """Main configuration with hotel box-aware parameter scaling."""
+    """Main configuration with hotel box-aware parameter scaling and adaptive tracker."""
     
     video: VideoConfig = field(default_factory=VideoConfig)
     hotel_box: HotelBoxConfig = field(default_factory=HotelBoxConfig)
@@ -845,6 +914,14 @@ class Config:
             'max_age': self.tracking.max_age,
             'no_motion_frames': self.tracking.no_motion_frames,
         }
+    
+    def get_adaptive_tracker_params(self) -> Dict[str, Any]:
+        """Get adaptive tracker parameters for BeeTracker initialization.
+        
+        Returns:
+            Dictionary of parameters for BeeTracker.__init__()
+        """
+        return self.tracking.get_adaptive_tracker_params(self.video.fps)
     
     def get_processing_params(self, hotel_box: Optional[HotelBoxConfig] = None) -> Dict[str, Any]:
         """Get all scaled processing parameters."""
@@ -892,6 +969,12 @@ class Config:
         print(f"  max_area: {self.detection.max_area}")
         print()
         
+        print("Adaptive Tracker Configuration:")
+        adaptive_params = self.get_adaptive_tracker_params()
+        for key, value in adaptive_params.items():
+            print(f"  {key}: {value}")
+        print()
+        
         print("Nest Detection Parameters:")
         nest_params = self.get_nest_params()
         for key, value in nest_params.items():
@@ -926,6 +1009,9 @@ class Config:
         config.nest.y_position_tolerance_base = 8.0
         config.tracking.max_age = 20
         config.tracking.association_threshold_base = 150.0
+        # Adaptive tracker for high quality
+        config.tracking.min_hits_seconds = 0.2
+        config.tracking.duplicate_distance_multiplier = 1.0
         return config
     
     @classmethod
@@ -938,6 +1024,9 @@ class Config:
         config.nest.nest_count_tolerance = 5
         config.nest.spacing_tolerance_base = 20.0
         config.tracking.no_motion_frames = 20
+        # Adaptive tracker for speed
+        config.tracking.max_age_seconds = 0.5
+        config.tracking.resurrection_search_multiplier = 1.0
         return config
     
     @classmethod
