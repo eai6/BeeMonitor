@@ -98,7 +98,7 @@ class BeeMonitor:
             raise FileNotFoundError(f"Video file not found: {video_path}")
         
         if visualize is None:
-            visualize = self.config.output.save_tracking_visualizations
+            visualize = self.config.output.save_visualizations
         if output_folder is None:
             output_folder = self.config.output.base_folder
         
@@ -225,7 +225,7 @@ class BeeMonitor:
             iou_threshold=tracker_params['iou_threshold'],
             # Crop saving for identification training
             save_crops=getattr(self.config.tracking, 'save_crops', False),
-            crops_per_track=getattr(self.config.tracking, 'crops_per_track', 5)
+            crops_per_track=getattr(self.config.tracking, 'crops_per_track', 10)
         )
         
         logger.info("✓ Tracking system initialized (v2.2.1 CONFIG-BASED)")
@@ -281,10 +281,11 @@ class BeeMonitor:
                     most_common_species = 'bee'
                     species_votes = {'bee': len(frame_numbers)}
                     
-                    if len(frame_numbers) >= self.config.tracking.min_track_length:
-                        track_groups[unique_id] = (
-                            unique_id, centroids, bboxes, frame_numbers, most_common_species, species_votes
-                        )
+                    # v2.3: No min_track_length filtering here - let ML handle it
+                    # All tracks are passed to EventProcessor for ML-based filtering
+                    track_groups[unique_id] = (
+                        unique_id, centroids, bboxes, frame_numbers, most_common_species, species_votes
+                    )
             
             if not track_groups:
                 continue

@@ -4,6 +4,7 @@ annotated-types==0.7.0
 anyio==4.11.0
 appnope==0.1.4
 asttokens==3.0.0
+-e git+https://github.com/eai6/BeeMonitor.git@14f6d9765f5d679b88269cd3e6943ece44ed4d2e#egg=beemonitor
 Brotli==1.1.0
 certifi==2025.10.5
 charset-normalizer==3.4.4

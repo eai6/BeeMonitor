@@ -53,10 +53,10 @@ class BeeTracking:
         confidence_threshold: float = 0.25,
         roi: Optional[Tuple[int, int, int, int]] = None,
         # Adaptive tracker parameters
-        max_age_seconds: float = 0.5,
-        min_hits_seconds: float = 0.0,
-        max_resurrection_seconds: float = 0.25,
-        match_distance_multiplier: float = 5.0,
+        max_age_seconds: float = 1.0,
+        min_hits_seconds: float = 0.1,
+        max_resurrection_seconds: float = 0.5,
+        match_distance_multiplier: float = 8.0,
         resurrection_search_multiplier: float = 3.0,
         duplicate_distance_multiplier: float = 1.2,
         iou_threshold: float = 0.3,
@@ -149,6 +149,12 @@ class BeeTracking:
         self.frames_since_motion = 0
         self.motion_cooldown = 30  # Frames to stay in tracking mode after motion stops
         
+        # Lookback buffer for catching motion before detection
+        self.lookback_seconds = 0.5  # How far back to look when motion detected
+        self.frame_buffer = []  # Ring buffer of (frame_num, frame) tuples
+        self.lookback_frames = 0  # Will be set based on FPS
+        self.processing_lookback = False  # Flag to prevent infinite loops
+        
         id_status = "enabled" if identifier else "disabled"
         crop_status = f"enabled ({crops_per_track}/track)" if save_crops else "disabled"
         logger.info(f"BeeTracking initialized (v2.4, identification={id_status}, crops={crop_status})")
@@ -169,6 +175,11 @@ class BeeTracking:
             frame_height=frame_height,  # For resolution-relative fallback
             **self.tracker_params
         )
+        
+        # Set lookback buffer size based on FPS
+        self.lookback_frames = int(fps * self.lookback_seconds)
+        self.frame_buffer = []  # Reset buffer
+        logger.info(f"Lookback buffer: {self.lookback_frames} frames ({self.lookback_seconds}s)")
         
         logger.info("Adaptive tracker initialized")
     
@@ -344,9 +355,17 @@ class BeeTracking:
             roi_frame = frame
         
         detections = []
+        lookback_results = []  # Results from lookback frames
         
         # TWO-MODE SYSTEM
         if self.mode == 'motion_detection':
+            # Add frame to lookback buffer (only in motion_detection mode)
+            if not self.processing_lookback:
+                self.frame_buffer.append((frame_num, frame.copy()))
+                # Keep buffer at max size
+                if len(self.frame_buffer) > self.lookback_frames:
+                    self.frame_buffer.pop(0)
+            
             # Fast motion detection mode (ROI only)
             has_motion = self.detect_motion(roi_frame)
             
@@ -356,14 +375,43 @@ class BeeTracking:
                 self.mode = 'tracking'
                 self.frames_since_motion = 0
                 
-                # Run YOLO on FULL FRAME (allows tracking beyond ROI)
+                # Process lookback buffer FIRST (if we have buffered frames)
+                if self.frame_buffer and not self.processing_lookback:
+                    self.processing_lookback = True  # Prevent infinite loops
+                    logger.debug(f"Processing {len(self.frame_buffer)} lookback frames")
+                    
+                    for buf_frame_num, buf_frame in self.frame_buffer:
+                        # Run YOLO on buffered frames
+                        yolo_detections = self.yolo_detector.detect(buf_frame)
+                        
+                        buf_detections = []
+                        for det in yolo_detections:
+                            bbox = det.bbox
+                            conf = det.confidence
+                            taxon = det.label
+                            det_with_source = list(bbox) + [conf, 'yolo', taxon]
+                            buf_detections.append(det_with_source)
+                        
+                        # Update tracker with lookback detections
+                        if self.tracker is not None:
+                            buf_tracks = self.tracker.update(buf_detections, buf_frame_num)
+                            lookback_results.append({
+                                'frame_num': buf_frame_num,
+                                'detections': buf_detections,
+                                'tracks': buf_tracks,
+                                'mode': 'lookback'
+                            })
+                    
+                    self.frame_buffer = []  # Clear buffer
+                    self.processing_lookback = False
+                
+                # Now run YOLO on current frame
                 yolo_detections = self.yolo_detector.detect(frame)
                 
-                # Convert to tracking format: [x1, y1, x2, y2, conf, source, taxon]
                 for det in yolo_detections:
                     bbox = det.bbox
                     conf = det.confidence
-                    taxon = det.label  # YOLO class label = taxonomic ID
+                    taxon = det.label
                     det_with_source = list(bbox) + [conf, 'yolo', taxon]
                     detections.append(det_with_source)
         
@@ -391,6 +439,7 @@ class BeeTracking:
             if self.frames_since_motion > self.motion_cooldown:
                 logger.debug(f"Frame {frame_num}: No motion for {self.motion_cooldown} frames, switching to motion detection mode")
                 self.mode = 'motion_detection'
+                self.frame_buffer = []  # Clear buffer when switching back
         
         # Update tracker (full frame coordinates, no adjustment needed)
         tracks = []
@@ -420,7 +469,8 @@ class BeeTracking:
             'tracks': tracks,
             'mode': self.mode,
             'num_detections': len(detections),
-            'num_tracks': len(tracks)
+            'num_tracks': len(tracks),
+            'lookback_results': lookback_results  # Include lookback frames
         }
         
         if visualize:
@@ -533,6 +583,13 @@ class BeeTracking:
             
             # Process frame
             result = self.process_frame(frame, frame_num, visualize=visualize)
+            
+            # Handle lookback results (frames processed before current frame)
+            lookback_results = result.pop('lookback_results', [])
+            if lookback_results:
+                logger.debug(f"Adding {len(lookback_results)} lookback results")
+                results.extend(lookback_results)
+            
             results.append(result)
             
             # Write visualization if enabled
@@ -609,6 +666,9 @@ class BeeTracking:
             return pd.DataFrame(columns=columns)
         
         df = pd.DataFrame(flattened_rows)
+        
+        # Sort by frame number to ensure correct temporal order (lookback frames may be added later)
+        df = df.sort_values(['frame', 'track_id']).reset_index(drop=True)
         
         logger.info(f"Created tracking DataFrame with {len(df)} rows ({len(results)} frames, "
                    f"{len(df['track_id'].unique())} unique tracks)")

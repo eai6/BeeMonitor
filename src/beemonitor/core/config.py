@@ -100,16 +100,23 @@ class VideoConfig:
             cap.release()
 
 
+
 @dataclass
 class ModelConfig:
     """Model paths configuration."""
     nest_detection: str = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/nest_detection.pt"
     tracking : str = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/bee_tracking.pt"
-    #tracking : str = "/storage/home/eai6/BeeMonitor_eai6/models/bee_tracking.pt"
     blob_noise_classifier: str = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/blob_noise_classifier.pth"
     bee_classifier: Optional[str] = None
     event_classifier: Optional[str] = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/event_classifier_model.pkl"
 
+
+
+    # nest_detection: str = "/storage/home/eai6/BeeMonitor_eai6/models/nest_detection.pt"
+    # tracking : str = "/storage/home/eai6/BeeMonitor_eai6/models/bee_tracking.pt"
+    # blob_noise_classifier: str = "/storage/home/eai6/BeeMonitor_eai6/models/blob_noise_classifier.pth"
+    # bee_classifier: Optional[str] = None
+    # event_classifier: Optional[str] = "/storage/home/eai6/BeeMonitor_eai6/models/event_classifier_model.pkl"
 
 @dataclass  
 class HotelBoxConfig:
@@ -188,7 +195,7 @@ class NestConfig:
     reference_distance_factor: float = 1.0
     
     # Detection parameters
-    confidence_threshold: float = 0.15
+    confidence_threshold: float = 0.25
     min_detections: int = 35
     frame_skip: int = 30
     max_detection_attempts: int = 10
@@ -460,13 +467,13 @@ class TrackingConfig:
     
     # Time-based parameters (in SECONDS, not frames)
     # These are automatically converted to frames based on video FPS
-    max_age_seconds: float = 2.0  # Max time without detection before track dies
+    max_age_seconds: float = 0.5  # Max time without detection before track dies
                                    # Example: 1.0s = 30 frames @ 30fps, 60 frames @ 60fps
     
-    min_hits_seconds: float = 0.05  # Min time before track is confirmed
+    min_hits_seconds: float = 0.00  # Min time before track is confirmed
                                     # Example: 0.1s = 3 frames @ 30fps, 6 frames @ 60fps
     
-    max_resurrection_seconds: float = 1.5  # Max time to keep dead tracks for resurrection
+    max_resurrection_seconds: float = 0.3  # Max time to keep dead tracks for resurrection
                                             # Example: 0.5s = 15 frames @ 30fps, 30 frames @ 60fps
     
     # Distance-based parameters (as MULTIPLIERS of bee size, not pixels)
@@ -511,7 +518,6 @@ class TrackingConfig:
     new_track_proximity_check: float = 100.0
     low_res_switch_threshold: int = 50
     kalman_process_noise: float = 0.15
-    min_track_length: int = 5
     
     # Reference resolution
     reference_width: int = 1280
@@ -558,7 +564,7 @@ class TrackingConfig:
     low_res_check_interval: int = 5
     
     # YOLO detection parameters
-    confidence_threshold: float = 0.3
+    confidence_threshold: float = 0.25
     iou_threshold: float = 0.4
     
     # YOLO confirmation strategy
@@ -768,7 +774,6 @@ class TrackingConfig:
         config.min_yolo_confirmations = 2
         config.min_blob_solidity = 0.5
         config.confidence_threshold = 0.6
-        config.min_track_length = 10
         # Adaptive tracker params for high accuracy
         config.min_hits_seconds = 0.2
         config.duplicate_distance_multiplier = 1.0

@@ -111,7 +111,7 @@ class NestDetector:
         logger.debug(f"Processing frame {frame_counter}")
         
         # Run YOLO inference
-        results = self.model.predict(frame, conf=confidence_threshold, verbose=False)
+        results = self.model.predict(frame, conf=confidence_threshold, verbose=False, fuse=False)
         
         # Extract detections
         boxes = results[0].boxes.xyxy.tolist()

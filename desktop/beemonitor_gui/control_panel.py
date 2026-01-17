@@ -257,17 +257,17 @@ class ControlPanel(QScrollArea):
     def get_parameters(self):
         """Get current parameters."""
         return {
-            'detection_mode': 'yolo',  # v2.2: Always YOLO
+            'detection_mode': 'yolo',  # Always YOLO
             'use_fallback': self.use_fallback_checkbox.isChecked(),
             'max_workers': self.workers_spinner.value(),
             # Reference config
             'nest_rows': self.rows_spinner.value(),
             'nests_per_row': self.cols_spinner.value(),
-            # Advanced options
-            'enable_interaction_metrics': self.interaction_metrics_checkbox.isChecked(),
-            'proximity_threshold': self.proximity_spinner.value(),
-            'save_crops': self.save_crops_checkbox.isChecked(),
-            'crops_per_track': self.crops_per_track_spinner.value()
+            # Hardcoded defaults (advanced options removed from UI)
+            'enable_interaction_metrics': True,
+            'proximity_threshold': 50,
+            'save_crops': False,
+            'crops_per_track': 5
         }
     
     def set_detection_mode(self, mode):
