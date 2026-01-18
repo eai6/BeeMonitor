@@ -357,6 +357,11 @@ class BeeTracking:
         detections = []
         lookback_results = []  # Results from lookback frames
         
+        # DISABLE TWO-MODE FOR NOW
+        self.mode = "tracking" # allow two mode for now.
+
+        #print(self.mode)
+
         # TWO-MODE SYSTEM
         if self.mode == 'motion_detection':
             # Add frame to lookback buffer (only in motion_detection mode)

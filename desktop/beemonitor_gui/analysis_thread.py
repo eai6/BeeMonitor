@@ -1,8 +1,12 @@
 """
-Analysis Thread - v2.3
+Analysis Thread - v2.4
 =======================
 
 Background thread for running video analysis without blocking GUI.
+
+v2.4 CHANGES:
+- Added enable_two_mode parameter support
+- Passes two-mode setting to monitor.analyze_video
 """
 
 import os
@@ -19,7 +23,8 @@ class AnalysisThread(QThread):
     finished = pyqtSignal(object, str)
     error = pyqtSignal(str)
     
-    def __init__(self, monitor, video_path, output_folder, detection_mode='yolo', nests=None):
+    def __init__(self, monitor, video_path, output_folder, detection_mode='yolo', 
+                 nests=None, enable_two_mode=True):
         """Initialize analysis thread.
         
         Args:
@@ -28,6 +33,7 @@ class AnalysisThread(QThread):
             output_folder: Output directory for results
             detection_mode: Detection mode (default: 'yolo')
             nests: Optional dict with 'nests' and 'hotel' for manually edited nests
+            enable_two_mode: Enable two-mode tracking optimization (default: True)
         """
         super().__init__()
         self.monitor = monitor
@@ -35,6 +41,7 @@ class AnalysisThread(QThread):
         self.output_folder = output_folder
         self.detection_mode = 'yolo'  # Always YOLO
         self.nests = nests  # Manually edited nests from GUI
+        self.enable_two_mode = enable_two_mode  # NEW v2.4
         
         # Extract hotel ROI for motion detection filtering
         if self.nests and self.nests.get('hotel'):
@@ -47,13 +54,24 @@ class AnalysisThread(QThread):
             # Also store directly on monitor if it has roi attribute
             if hasattr(self.monitor, 'roi'):
                 self.monitor.roi = hotel_roi
+        
+        # NEW v2.4: Set two-mode in config
+        if hasattr(self.monitor.config, 'tracking'):
+            self.monitor.config.tracking.enable_two_mode = enable_two_mode
     
     def run(self):
         """Run analysis in background thread."""
         try:
             self.progress.emit("Initializing analysis...")
-            self.progress.emit("✓ Detection mode: YOLO-only (v2.3 - 100% accuracy)")
-            self.progress.emit("✓ Two-mode optimization enabled (5-7x faster)")
+            self.progress.emit("✓ Detection mode: YOLO-only (v2.4)")
+            
+            # NEW v2.4: Log two-mode status
+            if self.enable_two_mode:
+                self.progress.emit("✓ Two-mode optimization ENABLED (5-7x faster)")
+                self.progress.emit("  → Motion detection triggers YOLO tracking")
+            else:
+                self.progress.emit("⚠ Two-mode optimization DISABLED")
+                self.progress.emit("  → YOLO runs on every frame (slower)")
             
             if self.nests and self.nests.get('nests'):
                 self.progress.emit(f"✓ Using {len(self.nests['nests'])} manually edited nests")
@@ -87,9 +105,18 @@ class AnalysisThread(QThread):
                 kwargs['roi'] = self.nests['hotel']
                 self.progress.emit("✓ Passing hotel ROI to motion detection")
             
+            # NEW v2.4: Pass two-mode setting if supported
+            if 'enable_two_mode' in sig.parameters:
+                kwargs['enable_two_mode'] = self.enable_two_mode
+                self.progress.emit(f"✓ Two-mode tracking: {'ENABLED' if self.enable_two_mode else 'DISABLED'}")
+            
             self.progress.emit("Running analysis (this may take several minutes)...")
-            self.progress.emit("Blob detector will scan for motion...")
-            self.progress.emit("YOLO will run when motion is detected...")
+            
+            if self.enable_two_mode:
+                self.progress.emit("Blob detector will scan for motion...")
+                self.progress.emit("YOLO will run when motion is detected...")
+            else:
+                self.progress.emit("YOLO will process every frame...")
             
             result = self.monitor.analyze_video(**kwargs)
             

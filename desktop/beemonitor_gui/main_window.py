@@ -303,12 +303,6 @@ class BeeMonitorGUI(QMainWindow):
         self.folder_path = None
         self.folder_analysis_thread = None
         
-        # Custom model paths (empty = use default from config)
-        self.custom_models = {
-            'nest_detection': '',
-            'bee_tracking': ''
-        }
-        
         # Pre-initialize nest detection models
         self.nest_yolo_model = None
         self.nest_config = None
@@ -339,14 +333,8 @@ class BeeMonitorGUI(QMainWindow):
             print("Initializing nest detection models...")
             
             self.nest_config = Config.default()
-            
-            # Use custom model if set, otherwise use default
-            if hasattr(self, 'custom_models') and self.custom_models.get('nest_detection'):
-                nest_model_path = self.custom_models['nest_detection']
-                print(f"  Using custom nest model: {nest_model_path}")
-            else:
-                nest_model_path = self.nest_config.models.nest_detection
-                print(f"  Using default nest model: {nest_model_path}")
+            nest_model_path = self.nest_config.models.nest_detection
+            print(f"  Loading nest model: {nest_model_path}")
             
             if not os.path.exists(nest_model_path):
                 raise FileNotFoundError(f"Nest detection model not found at: {nest_model_path}")
@@ -443,13 +431,6 @@ class BeeMonitorGUI(QMainWindow):
         edit_nests_action = QAction("Edit &Nests...", self)
         edit_nests_action.triggered.connect(self.show_nest_editor)
         edit_menu.addAction(edit_nests_action)
-        
-        # Settings menu
-        settings_menu = menubar.addMenu("&Settings")
-        
-        model_settings_action = QAction("&Model Settings...", self)
-        model_settings_action.triggered.connect(self.show_model_settings)
-        settings_menu.addAction(model_settings_action)
         
         help_menu = menubar.addMenu("&Help")
         
@@ -609,39 +590,6 @@ class BeeMonitorGUI(QMainWindow):
             if updated_hotel:
                 log_msg += " + hotel ROI"
             self.control_panel.append_log(log_msg)
-    
-    def show_model_settings(self):
-        """Open model settings dialog."""
-        try:
-            from .model_settings_dialog import show_model_settings
-        except ImportError:
-            QMessageBox.warning(
-                self,
-                "Module Not Found",
-                "Model settings dialog module not found.\n"
-                "Please ensure model_settings_dialog.py is in the GUI package."
-            )
-            return
-        
-        result = show_model_settings(self, self.custom_models)
-        
-        if result:
-            self.custom_models = result
-            
-            # Update config with custom models
-            if result['nest_detection']:
-                self.config.models.nest_detection = result['nest_detection']
-                self.control_panel.append_log(f"✓ Nest model: {os.path.basename(result['nest_detection'])}")
-            
-            if result['bee_tracking']:
-                self.config.models.bee_detection = result['bee_tracking']
-                self.control_panel.append_log(f"✓ Bee model: {os.path.basename(result['bee_tracking'])}")
-            
-            # Reload nest detection model if changed
-            if result['nest_detection']:
-                self._init_nest_detection_models()
-            
-            self.statusBar().showMessage("✓ Model settings updated")
     
     # =========================================================================
     # Video Loading
@@ -928,12 +876,6 @@ class BeeMonitorGUI(QMainWindow):
         if edited_nests and edited_nests['nests']:
             self.control_panel.append_log(f"✓ Using {len(edited_nests['nests'])} manually edited nests")
         
-        # Log custom models if used
-        if self.custom_models.get('nest_detection'):
-            self.control_panel.append_log(f"✓ Custom nest model: {os.path.basename(self.custom_models['nest_detection'])}")
-        if self.custom_models.get('bee_tracking'):
-            self.control_panel.append_log(f"✓ Custom bee model: {os.path.basename(self.custom_models['bee_tracking'])}")
-        
         if advanced.get('enable_interaction_metrics'):
             self.control_panel.append_log(f"✓ Interaction metrics enabled")
         if advanced.get('save_crops'):
@@ -1215,12 +1157,6 @@ class BeeMonitorGUI(QMainWindow):
         self.control_panel.append_log(f"Workers: {params['max_workers']}")
         if params.get('save_crops'):
             self.control_panel.append_log(f"Crops: Saving to {output_folder}")
-        
-        # Log custom models if used
-        if self.custom_models.get('nest_detection'):
-            self.control_panel.append_log(f"Custom nest model: {os.path.basename(self.custom_models['nest_detection'])}")
-        if self.custom_models.get('bee_tracking'):
-            self.control_panel.append_log(f"Custom bee model: {os.path.basename(self.custom_models['bee_tracking'])}")
         
         self.statusBar().showMessage(f"Analyzing {len(video_files)} videos...")
         
