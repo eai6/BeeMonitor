@@ -34,6 +34,7 @@ dependencies = [
     "pyyaml>=6.0",
     "tqdm>=4.65.0",
     "pillow>=9.0.0",
+    scikit-learn==1.7.2 # ml-based event filter
 ]
 
 [project.optional-dependencies]
