@@ -30,11 +30,10 @@ dependencies = [
     "ultralytics>=8.4.5",
     "torch>=2.0.0",
     "torchvision>=0.15.0",
-    "gradio>=3.0.0",
     "pyyaml>=6.0",
     "tqdm>=4.65.0",
     "pillow>=9.0.0",
-    scikit-learn==1.7.2 # ml-based event filter
+    "scikit-learn==1.7.2" 
 ]
 
 [project.optional-dependencies]

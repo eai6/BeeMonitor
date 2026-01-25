@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from beemonitor import BeeMonitor
-from beemonitor.core.config import BeeMonitorConfig
+from beemonitor.core.config import Config as BeeMonitorConfig
 
 
 def process_video(monitor, video_path, output_folder):
@@ -25,7 +25,7 @@ def process_video(monitor, video_path, output_folder):
         result = monitor.analyze_video(
             str(video_path),
             output_folder=str(output_folder),
-            visualize=True,
+            visualize=False,
             detection_mode='yolo_only'  # User's default
         )
         return video_path, result
@@ -38,8 +38,12 @@ def process_video(monitor, video_path, output_folder):
 
 def main():
     # Hardcoded paths for CVPR evaluation
-    input_folder = Path("/storage/home/eai6/CVPR_Evaluation_Video_Data")
-    output_folder = Path("/storage/home/eai6/CVPR_Output")
+    # input_folder = Path("/storage/home/eai6/CVPR_Evaluation_Video_Data")
+    # output_folder = Path("/storage/home/eai6/CVPR_Output")
+
+
+    input_folder = Path("/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/data/short_videos")
+    output_folder = Path("/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/CVPR_Cloud_Output/CVPR_local")
     
     # Check input folder
     if not input_folder.exists():
