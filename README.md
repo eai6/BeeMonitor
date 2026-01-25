@@ -1,309 +1,386 @@
-# Bee Monitor 🐝
+# BeeMonitor
 
-A professional computer vision system for monitoring solitary bee activity in bee hotels using YOLO-based detection and tracking.
+**An open-source machine learning system for automated monitoring of cavity-nesting solitary bees**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![YOLO26](https://img.shields.io/badge/YOLO-26-green.svg)](https://github.com/ultralytics/ultralytics)
+
+BeeMonitor is an integrated hardware and software system for automated video surveillance and AI-powered analysis of cavity-nesting solitary bee activity at bee hotels. The system extracts entry/exit events from nesting tubes without requiring individual bee marking.
+
+---
+
+## Performance
+
+Evaluated on 110 minutes of video containing 300 manually annotated foraging events:
+
+| Mode | Precision | Recall | F1 Score | Processing Speed |
+|------|-----------|--------|----------|------------------|
+| **Full Tracking** | 93.9% | 87.7% | **0.907** | 2.3× real-time |
+| **Two-Mode Adaptive** | 92.0% | 84.3% | 0.880 | **0.8× real-time** |
+
+*Benchmarked on Apple M3 Pro (18GB) with 4 parallel workers and MPS acceleration.*
+
+---
 
 ## Features
 
-- **Nest Detection**: Automatically identifies and labels individual nest holes in bee hotels
-- **Motion Detection**: Efficiently detects bee activity using frame differencing
-- **Object Tracking**: Tracks individual bees across video frames using custom and YOLO-based algorithms
-- **Event Processing**: Identifies entry/exit events for each nest
-- **Data Export**: Generates CSV reports with timestamps and nest activity
-- **Video Synthesis**: Creates annotated videos showing tracked bees and events
-- **Web Interface**: Gradio-based UI for easy video analysis
+### Software Pipeline
+- **YOLO26 Object Detection** — End-to-end NMS-free detection with up to 43% faster CPU inference
+- **BeeTrack MOT Algorithm** — Custom multiple-object tracking optimized for fast-moving insects
+- **ML Event Classifier** — Random Forest classifier distinguishes real events from noise
+- **Two-Mode Adaptive Processing** — Motion detection skips idle periods for 2.9× speedup
+- **Batch Processing** — Parallel video processing with configurable workers
+
+### Hardware System (~$350 USD)
+- Raspberry Pi 4 + Witty Pi 4 power management
+- Raspberry Pi HQ Camera (30 fps, 1080p)
+- Solar panel + LiFePO4 battery for off-grid deployment
+- Weatherproof 3D-printed enclosure
+
+---
 
 ## Installation
 
-### Prerequisites
+### Requirements
+- Python 3.10+
+- macOS, Linux, or Windows
+- GPU recommended (CUDA, MPS, or ROCm) but not required
 
-- Python 3.8+
-- CUDA-capable GPU (recommended for real-time processing)
-
-### Install from source
+### Install from Source
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/bee-monitor.git
-cd bee-monitor
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Install package in development mode
+git clone https://github.com/yourusername/beemonitor.git
+cd beemonitor
 pip install -e .
 ```
 
-## Quick Start
+This installs all dependencies including PyTorch, Ultralytics, OpenCV, and scikit-learn.
 
-### Command Line Interface
-
-```python
-from bee_monitor import BeeMonitor
-
-# Initialize the monitor
-monitor = BeeMonitor(
-    nest_model_path="models/nest_detection_model.pt",
-    tracking_model_path="models/bee_tracking_model.pt",
-    config_path="config/default_config.yaml"
-)
-
-# Analyze a video
-results = monitor.analyze_video("path/to/video.mp4")
-
-# Export results
-results.to_csv("output/results.csv")
-results.save_video("output/annotated_video.mp4")
-```
-
-### Web Interface
+### Verify Installation
 
 ```bash
-# Launch Gradio interface
-python scripts/gradio_app.py
+python -c "from beemonitor import BeeMonitor; print('✓ BeeMonitor installed')"
 ```
 
-Then open your browser to `http://localhost:7860`
+---
 
-## Project Structure
+## Quick Start
 
-```
-bee-monitor/
-├── src/bee_monitor/       # Main package
-│   ├── core/              # Core system components
-│   ├── detection/         # Detection modules
-│   ├── tracking/          # Tracking algorithms
-│   ├── processing/        # Event processing
-│   ├── output/            # Output generation
-│   └── utils/             # Utility functions
-├── tests/                 # Unit and integration tests
-├── examples/              # Example scripts
-├── docs/                  # Documentation
-├── scripts/               # Utility scripts
-├── config/                # Configuration files
-└── models/                # Model weights (not included)
-
-```
-
-## Configuration
-
-Create a `config.yaml` file to customize behavior:
-
-```yaml
-video:
-  resolution:
-    height: 720
-    width: 1280
-  fps: 30
-
-models:
-  nest_detection: "models/nest_detection_model.pt"
-  tracking: "models/bee_tracking_model.pt"
-
-tracking:
-  max_age: 30
-  distance_threshold: 100
-  association_threshold: 200
-
-detection:
-  confidence_threshold: 0.25
-  iou_threshold: 0.5
-  motion_threshold: 5
-
-output:
-  base_folder: "output"
-  save_visualizations: false
-```
-
-## Usage Examples
-
-### Basic Video Analysis
+### Analyze a Single Video
 
 ```python
-from bee_monitor import BeeMonitor
+from beemonitor import BeeMonitor
+from beemonitor.core.config import Config
 
-monitor = BeeMonitor.from_config("config/my_config.yaml")
-results = monitor.analyze_video("video.mp4")
-print(f"Found {len(results.events)} events")
+# Load configuration
+config = Config.from_yaml("config.yaml")
+
+# Initialize monitor
+monitor = BeeMonitor(config=config)
+
+# Analyze video
+results = monitor.analyze_video(
+    video_path="path/to/video.mp4",
+    output_folder="output/"
+)
+
+# Access detected events
+print(f"Detected {len(results.events)} events")
+for event in results.events:
+    print(f"  {event.action} at nest {event.nest} (frame {event.frame_number})")
 ```
 
 ### Batch Processing
 
 ```python
-from bee_monitor import BeeMonitor
+from beemonitor import BeeMonitor
+from beemonitor.core.config import Config
 from pathlib import Path
+import concurrent.futures
 
-monitor = BeeMonitor.from_config("config/my_config.yaml")
+config = Config.from_yaml("config.yaml")
+video_folder = Path("videos/")
+output_folder = Path("output/")
 
-video_dir = Path("videos/")
-for video_path in video_dir.glob("*.mp4"):
-    print(f"Processing {video_path.name}")
-    results = monitor.analyze_video(str(video_path))
-    results.to_csv(f"output/{video_path.stem}_results.csv")
+def process_video(video_path):
+    monitor = BeeMonitor(config=config)  # Fresh instance per video
+    return monitor.analyze_video(str(video_path), str(output_folder / video_path.stem))
+
+videos = list(video_folder.glob("*.mp4"))
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+    results = list(executor.map(process_video, videos))
 ```
 
-### Custom Tracking Parameters
+---
+
+## Configuration
+
+### Minimal Config (config.yaml)
+
+```yaml
+video:
+  fps: 30
+  auto_detect_from_video: true
+
+models:
+  nest_detection: "models/nest_detection.pt"
+  tracking: "models/bee_tracking.pt"
+  event_classifier: "models/event_classifier_model.pkl"
+
+tracking:
+  confidence_threshold: 0.25
+  max_age_seconds: 1.0
+  min_hits_seconds: 0.1
+  match_distance_multiplier: 8.0
+
+processing:
+  ml_threshold: 0.6  # Event classifier confidence threshold
+```
+
+### Key Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `confidence_threshold` | 0.25 | YOLO detection confidence |
+| `ml_threshold` | 0.6 | Event classifier threshold (0.3-0.6) |
+| `max_age_seconds` | 1.0 | Max time without detection before track dies |
+| `match_distance_multiplier` | 8.0 | Association distance (× bee size) |
+
+### ML Threshold Guide
+
+| Threshold | Precision | Recall | F1 | Use Case |
+|-----------|-----------|--------|-----|----------|
+| 0.3 | 84.2% | 90.7% | 0.873 | Maximum recall |
+| 0.4 | 88.0% | 90.3% | 0.891 | Balanced |
+| 0.5 | 91.1% | 89.0% | 0.901 | High precision |
+| **0.6** | **93.9%** | 87.7% | **0.907** | **Recommended** |
+
+---
+
+## Output Structure
+
+```
+output/
+├── video_name/
+│   ├── events.csv           # Detected entry/exit events
+│   ├── tracks.csv           # Full tracking data (frame-by-frame)
+│   ├── nests.json           # Detected nest tube locations
+│   ├── summary.json         # Processing metadata
+│   ├── background.png       # Background model visualization
+│   └── crops/               # (Optional) Bee image crops per track
+│       └── video_name/
+│           ├── track_0001/
+│           │   ├── frame_000123.jpg
+│           │   └── frame_000456.jpg
+│           └── track_0002/
+```
+
+### events.csv
+
+| Column | Description |
+|--------|-------------|
+| `frame_number` | Frame where event occurred |
+| `action` | "Entry" or "Exit" |
+| `nest` | Nest tube ID (e.g., "R2C5" = Row 2, Column 5) |
+| `track_id` | Associated track ID |
+| `ml_confidence` | Event classifier confidence score |
+
+---
+
+## Project Structure
+
+```
+beemonitor/
+├── __init__.py
+├── core/
+│   ├── config.py              # Configuration management
+│   ├── video_analyzer.py      # Main BeeMonitor class
+│   └── analysis_results.py    # Result containers
+├── detection/
+│   ├── yolo_detector.py       # YOLO26 wrapper (NMS-free end-to-end)
+│   ├── blob_detector.py       # Motion detection (two-mode)
+│   ├── nest_detector.py       # Nest grid detection
+│   └── noise_filter.py        # Detection filtering
+├── tracking/
+│   ├── bee_tracking.py        # BeeTracking orchestrator
+│   └── mot/
+│       ├── bee_tracker.py     # BeeTrack MOT algorithm
+│       └── base_mot.py        # Abstract tracker interface
+├── processing/
+│   ├── event_processor.py     # ML-first event detection
+│   ├── event_classifier.py    # Random Forest classifier
+│   ├── trajectory_analyzer.py # Trajectory feature extraction
+│   └── interaction_analyzer.py
+├── output/
+│   ├── csv_generator.py       # CSV export
+│   └── video_synthesizer.py   # Annotated video output
+├── utils/
+│   └── geometry.py            # Spatial utilities
+└── visualization/
+    └── detection_source_visualizer.py
+```
+
+---
+
+## Algorithm Details
+
+### YOLO26 Object Detection
+
+BeeMonitor uses fine-tuned YOLO26 models for bee and nest detection. Key advantages of YOLO26:
+
+- **End-to-end NMS-free inference** — No post-processing required, simplifying deployment
+- **Up to 43% faster CPU inference** — Critical for edge devices like Raspberry Pi
+- **Improved small object detection** — Better accuracy for fast-moving bees
+- **Simplified export** — DFL removal improves compatibility across platforms
+
+We fine-tuned separate models for:
+1. **Nest detection** — Identifies 60-tube grid layout (runs once per video)
+2. **Bee detection** — Locates bees in each frame (confidence threshold 0.25)
+
+### BeeTrack MOT
+
+BeeTrack is a tracking-by-detection algorithm optimized for fast-moving insects:
+
+1. **Adaptive Kalman Filter** — Position prediction with velocity smoothing
+2. **Hungarian Assignment** — Optimal detection-to-track association
+3. **Track Lifecycle Management** — Handles occlusions with resurrection capability
+
+Key innovations:
+- **Adaptive thresholds** scale with detected bee size and video FPS
+- **Distance clamping** prevents wild predictions during rapid direction changes
+- **Track resurrection** recovers temporarily lost tracks within 0.5s window
+
+### Two-Mode Adaptive Processing
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Motion Detection Mode                │
+│  • Lightweight blob detection on ROI                    │
+│  • Skip YOLO inference when no motion                   │
+│  • Maintain 0.5s lookback buffer                        │
+└─────────────────────────┬───────────────────────────────┘
+                          │ Motion detected
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│                    Full Tracking Mode                   │
+│  • YOLO26 detection on full frame (NMS-free)            │
+│  • BeeTrack MOT processing                              │
+│  • Process lookback buffer first                        │
+│  • 30-frame cooldown before returning to motion mode    │
+└─────────────────────────────────────────────────────────┘
+```
+
+### ML Event Classification
+
+The event classifier extracts 20 features from trajectory segments:
+
+| Category | Features |
+|----------|----------|
+| **Trajectory Shape** | length, path_length, displacement, tortuosity |
+| **Speed Profile** | avg, max, std, cv, start/middle/end speed, decel_ratio |
+| **Nest Proximity** | start_to_nest, end_to_nest, approach_ratio |
+| **Position Variance** | x_var, y_var |
+| **Direction** | vertical_movement, horizontal_movement, is_entry |
+
+---
+
+## Hardware Setup
+
+See [HARDWARE.md](docs/HARDWARE.md) for detailed assembly instructions.
+
+### Bill of Materials (~$350 USD)
+
+| Component | Price |
+|-----------|-------|
+| Raspberry Pi 4 (4GB) | $55–65 |
+| Witty Pi 4 | $70–75 |
+| Raspberry Pi HQ Camera | $50–55 |
+| 6mm CS-Mount Lens | $25–35 |
+| 256GB MicroSD | $25–30 |
+| 100W Solar Panel | $80 |
+| 12V 30Ah LiFePO4 Battery | $80–100 |
+| Enclosure & Misc | $40–50 |
+
+---
+
+## GPU Acceleration
+
+### Apple Silicon (MPS)
 
 ```python
-from bee_monitor import BeeMonitor
-from bee_monitor.tracking import BeeTracker
-
-# Use custom tracker
-tracker = BeeTracker(
-    max_age=50,
-    distance_threshold=150,
-    association_threshold=250
-)
-
-monitor = BeeMonitor(
-    nest_model_path="models/nest_model.pt",
-    tracking_model_path="models/tracking_model.pt",
-    tracker=tracker
-)
+# Automatic — PyTorch detects MPS
+import torch
+print(torch.backends.mps.is_available())  # True
 ```
 
-## API Documentation
-
-### BeeMonitor Class
-
-The main interface for video analysis.
-
-**Methods:**
-- `analyze_video(video_path: str) -> AnalysisResults`
-- `get_nest_detection(video_path: str) -> pd.DataFrame`
-- `process_nest_detection(video_path: str, nest_detection: pd.DataFrame) -> Dict`
-- `get_motion_tracking(video_path: str, hotel_roi: Tuple, output_folder: str) -> pd.DataFrame`
-
-### AnalysisResults Class
-
-Container for analysis results.
-
-**Attributes:**
-- `events`: DataFrame with entry/exit events
-- `tracks`: List of bee trajectories
-- `nests`: Dictionary of nest locations
-
-**Methods:**
-- `to_csv(filename: str)`
-- `save_video(filename: str)`
-- `get_statistics() -> Dict`
-
-## Development
-
-### Running Tests
+### NVIDIA (CUDA)
 
 ```bash
-# Run all tests
-pytest tests/
-
-# Run with coverage
-pytest --cov=bee_monitor tests/
-
-# Run specific test file
-pytest tests/test_detection.py
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 ```
 
-### Code Style
-
-This project uses:
-- **black** for code formatting
-- **pylint** for linting
-- **mypy** for type checking
-
-```bash
-# Format code
-black src/
-
-# Run linter
-pylint src/bee_monitor/
-
-# Type checking
-mypy src/bee_monitor/
-```
-
-## Architecture
-
-### Detection Pipeline
-
-1. **Nest Detection**: YOLOv8 model identifies nest holes in first frame
-2. **Nest Processing**: Clusters detections into rows and assigns IDs
-3. **Motion Detection**: Frame differencing identifies areas with activity
-4. **Object Detection**: YOLO confirms bee presence in motion areas
-5. **Tracking**: Hungarian algorithm associates detections across frames
-
-### Event Processing
-
-1. **Trajectory Analysis**: Analyzes bee paths to determine behavior
-2. **Entry/Exit Detection**: Identifies when bees enter or leave nests
-3. **Speed Calculation**: Computes velocity to classify behavior
-4. **Event Classification**: Labels events as entry, exit, or visit
-
-## Performance
-
-Typical processing times on NVIDIA RTX 3080:
-- 720p video: ~0.5x real-time
-- 1080p video: ~0.3x real-time
-
-Memory usage: ~2-4GB GPU RAM
+---
 
 ## Troubleshooting
 
-### Common Issues
+| Issue | Solution |
+|-------|----------|
+| CUDA out of memory | Reduce `--workers` or process sequentially |
+| Low recall | Lower `ml_threshold` to 0.4 or 0.3 |
+| Too many false positives | Raise `ml_threshold` to 0.6 |
+| Slow processing | Enable two-mode tracking, use GPU |
+| Track fragmentation | Increase `max_age_seconds` to 1.5 |
 
-**Issue**: CUDA out of memory
-**Solution**: Reduce batch size or video resolution in config
-
-**Issue**: No nests detected
-**Solution**: Check model path and confidence threshold
-
-**Issue**: Too many false positives
-**Solution**: Increase confidence threshold or adjust motion threshold
-
-## Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new features
-4. Ensure all tests pass
-5. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License - see LICENSE file for details.
+---
 
 ## Citation
 
-If you use this software in your research, please cite:
+If you use BeeMonitor in your research, please cite:
 
 ```bibtex
-@software{bee_monitor,
-  title = {Bee Monitor: Automated Solitary Bee Activity Tracking},
-  author = {Your Name},
-  year = {2024},
-  url = {https://github.com/yourusername/bee-monitor}
+@article{amoah2025beemonitor,
+  title={BeeMonitor: An open-source machine learning system for automated 
+         monitoring of cavity-nesting solitary bee activity},
+  author={Amoah, Edward and Grozinger, Christina M.},
+  journal={Methods in Ecology and Evolution},
+  year={2026},
+  doi={10.1111/2041-210X.XXXXX}
 }
 ```
 
-## Acknowledgments
+If you use YOLO26, please also cite:
 
-- Uses YOLOv8 from Ultralytics
-- ByteTrack tracking algorithm
-- Built with OpenCV, NumPy, and Pandas
+```bibtex
+@software{yolo26_ultralytics,
+  author = {Glenn Jocher and Jing Qiu},
+  title = {Ultralytics YOLO26},
+  version = {26.0.0},
+  year = {2026},
+  url = {https://github.com/ultralytics/ultralytics},
+  license = {AGPL-3.0}
+}
+```
+
+---
+
+## License
+
+MIT License. See [LICENSE](LICENSE) for details.
+
+---
+
+## Acknowledgements
+
+- NSF Research Traineeship Program (INSECT NET, Grant 2243979)
+- USDA NIFA Hatch and Smith-Lever Appropriations (Projects PEN04943, PEN08801)
+- Penn State Joan Luerssen Faculty Enhancement Fund
+
+---
 
 ## Contact
 
-For questions or support, please open an issue on GitHub or contact [your.email@example.com]
-
-## Roadmap
-
-- [ ] Multi-camera support
-- [ ] Real-time processing
-- [ ] Cloud deployment
-- [ ] Mobile app
-- [ ] Advanced behavior classification
-- [ ] Integration with weather data
+- **Author:** Edward Amoah
+- **Email:** eai6@psu.edu
+- **Lab:** [Grozinger Lab](https://ento.psu.edu/directory/cmg25), Penn State University
