@@ -8,6 +8,8 @@ Version 1.0.0
 
 The BeeMonitor Desktop Application provides a user-friendly interface for analyzing bee hotel videos to detect and track bee nesting behavior. The application processes recorded videos to automatically identify entry/exit events at nesting tubes without requiring programming expertise.
 
+![alt text](desktop_application.png)
+
 ### Key Features
 
 - **Video Player Interface**: Frame-by-frame navigation with playback controls
