@@ -77,12 +77,10 @@ from beemonitor.detection import BlobDetector, YOLODetector
 
 # Initialize detectors
 blob = BlobDetector(min_area=50, max_area=5000)
-sift = SIFTDetector()
 yolo = YOLODetector('yolov8n.pt', conf_threshold=0.6)
 
 # Detect in frame
 blob_dets = blob.detect(frame)
-sift_dets = sift.detect(frame, use_templates=True)
 yolo_dets = yolo.detect(frame)
 
 # All return List[Detection]
