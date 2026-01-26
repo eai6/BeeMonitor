@@ -10,8 +10,6 @@ BeeMonitor is an integrated hardware and software system for automated video sur
 
 ![alt text](beemonitor_hardware.png)
 
-![alt text](beemonitor_software.png)
-
 ## Performance
 
 Evaluated on 110 minutes of video containing 300 manually annotated foraging events:
