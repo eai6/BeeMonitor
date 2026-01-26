@@ -2,7 +2,6 @@
 
 **An open-source machine learning system for automated monitoring of cavity-nesting solitary bees**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![YOLO26](https://img.shields.io/badge/YOLO-26-green.svg)](https://github.com/ultralytics/ultralytics)
 
@@ -246,16 +245,6 @@ print(torch.backends.mps.is_available())  # True
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 ```
 
-## Troubleshooting
-
-| Issue | Solution |
-|-------|----------|
-| CUDA out of memory | Reduce `--workers` or process sequentially |
-| Low recall | Lower `ml_threshold` to 0.4 or 0.3 |
-| Too many false positives | Raise `ml_threshold` to 0.6 |
-| Slow processing | Enable two-mode tracking, use GPU |
-| Track fragmentation | Increase `max_age_seconds` to 1.5 |
-
 ## Citation
 
 If you use BeeMonitor in your research, please cite:
@@ -271,7 +260,7 @@ If you use BeeMonitor in your research, please cite:
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+Apache 2.0 License. See [LICENSE](LICENSE) for details.
 
 ## Acknowledgements
 
@@ -283,4 +272,4 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 - **Author:** Edward Amoah
 - **Email:** eai6@psu.edu
-- **Lab:** [Grozinger Lab](https://ento.psu.edu/directory/cmg25), INSECT-NET, Penn State University
+- **Lab:** [Grozinger Lab](https://www.grozingerlab.com/), INSECT-NET, Penn State University

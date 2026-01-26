@@ -43,7 +43,7 @@ beemonitor/
 from beemonitor import BeeMonitor, Config
 
 # Initialize
-config = Config.Default()
+config = Config.default()
 analyzer = BeeMonitor(config)
 
 # Process video
@@ -98,8 +98,6 @@ class Detection:
     source: str                       # 'blob', 'sift', 'yolo'
     metadata: Dict = field(default_factory=dict)
 ```
-
----
 
 ### tracking/ - Multi-Object Tracking
 
@@ -297,7 +295,7 @@ The system uses configuration py files inside core
 from beemonitor import BeeMonitor, Config
 
 # 1. Load configuration
-config = Config.Default()
+config = Config.default()
 
 # 2. Initialize analyzer
 analyzer = BeeMonitor(config)
