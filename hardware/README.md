@@ -37,45 +37,7 @@ The recording module can operate standalone with grid power, or combined with th
 
 ## System Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                           ENERGY MODULE                                  │
-│                                                                          │
-│   ┌──────────────┐      ┌───────────────────┐      ┌────────────────┐   │
-│   │    Solar     │ ──── │     Charge        │ ──── │  12V 30Ah      │   │
-│   │    Panel     │      │   Controller      │      │  LiFePO4       │   │
-│   │    100W      │      │  (Renogy 10A)     │      │  Battery       │   │
-│   └──────────────┘      └─────────┬─────────┘      └────────────────┘   │
-│                                   │ LOAD OUT (12V)                       │
-└───────────────────────────────────┼──────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        RECORDING MODULE                                  │
-│                                                                          │
-│                         ┌──────────────────┐                             │
-│              12V ────── │    DC-DC         │ ──── 5V                     │
-│                         │   Converter      │                             │
-│                         └────────┬─────────┘                             │
-│                                  │ 5V                                    │
-│                                  ▼                                       │
-│                         ┌──────────────────┐                             │
-│                         │   Witty Pi 4     │ ◄─── Power scheduling       │
-│                         │   (on top)       │      & RTC                  │
-│                         └────────┬─────────┘                             │
-│                                  │ GPIO                                  │
-│                                  ▼                                       │
-│   ┌──────────────┐      ┌──────────────────┐      ┌────────────────┐    │
-│   │  HQ Camera   │ ──── │  Raspberry Pi    │ ──── │   256GB        │    │
-│   │  (CSI)       │  FPC │  4 (4GB)         │      │   MicroSD      │    │
-│   └──────────────┘      └──────────────────┘      └────────────────┘    │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-**Important:** Power flows through the Witty Pi 4, NOT directly to the Raspberry Pi USB-C port.
-
-
+![alt text](hardware_architecture.png)
 
 
 ## Bill of Materials

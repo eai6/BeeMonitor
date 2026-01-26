@@ -8,6 +8,10 @@
 
 BeeMonitor is an integrated hardware and software system for automated video surveillance and AI-powered analysis of cavity-nesting solitary bee activity at bee hotels. The system extracts entry/exit events from nesting tubes without requiring individual bee marking.
 
+![alt text](beemonitor_hardware.png)
+
+![alt text](beemonitor_software.png)
+
 ## Performance
 
 Evaluated on 110 minutes of video containing 300 manually annotated foraging events:
