@@ -1,7 +1,7 @@
 venv
 Experiments/CVPR_Evaluation_Video_Data/*
 Experiments/output/*
-models/*
+#models/*
 
 # Python
 __pycache__/
@@ -17,7 +17,7 @@ __pycache__/
 
 data/
 output/
-models/
+#models/
 
 
 CVPR*
