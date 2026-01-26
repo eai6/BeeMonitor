@@ -2,8 +2,6 @@
 
 **Complete assembly and deployment instructions for the BeeMonitor video recording system**
 
-![alt text](beemonitor_hardware.png)
-
 ## Table of Contents
 
 1. [Overview](#overview)
