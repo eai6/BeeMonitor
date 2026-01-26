@@ -71,8 +71,6 @@ The recording module can operate standalone with grid power, or combined with th
 
 **Subtotal: $245 USD**
 
----
-
 ## 3D Printed Enclosure
 
 ### STL Files
@@ -102,8 +100,6 @@ Located in `/hardware/enclosure/`:
 1. Apply silicone sealant around all cable entry points
 2. Apply conformal coating to exposed PCB edges (optional)
 3. Ensure cable glands are properly tightened
-
----
 
 ## Assembly Instructions
 
@@ -296,8 +292,6 @@ sudo ./wittyPi.sh
 2. Pick the `beeHotelScheduler_2024.wpi` script
 3. Verify that the next power on/off times make sense
 
----
-
 ## Step 9: Set Up VNC (Remote Desktop)
 
 ### 9.1 Enable VNC
@@ -313,8 +307,6 @@ Navigate to: **Interfacing Options → VNC → Enable**
 3. Authenticate with Unix password
 4. Encryption with at least 128-bit
 5. Allow all users
-
----
 
 ## Step 10: Set Up WiFi Access Point
 
@@ -432,8 +424,6 @@ Reboot:
 ```bash
 sudo reboot
 ```
-
----
 
 ## Field Deployment
 
@@ -558,6 +548,6 @@ journalctl -u beeHotelRecord.service -f
 
 ## Support
 
-- **Issues:** [GitHub Issues](https://github.com/eai6/BeeHotelMonitoring/issues)
+- **Author:** Edward Amoah
 - **Email:** eai6@psu.edu
-- **Lab:** [Grozinger Lab](https://ento.psu.edu/directory/cmg25), INSECT-NET, Penn State University
+- **Lab:** [Grozinger Lab](https://www.grozingerlab.com/), INSECT-NET, Penn State University

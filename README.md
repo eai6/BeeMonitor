@@ -106,65 +106,6 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
     results = list(executor.map(process_video, videos))
 ```
 
-## Output Structure
-
-```
-output/
-├── video_name/
-│   ├── events.csv                       # Detected entry/exit events
-│   ├── tracks.csv                       # Full tracking data (frame-by-frame)
-│   ├── synthesived_video.json           # Event annotated video
-├── crops/                               # (Optional) Bee image crops per track
-│       └── video_name/
-│           ├── track_0001/
-│           │   ├── frame_000123.jpg
-│           │   └── frame_000456.jpg
-│           └── track_0002/
-```
-
-### events.csv
-
-| Column | Description |
-|--------|-------------|
-| `frame_number` | Frame where event occurred |
-| `action` | "Entry" or "Exit" |
-| `nest` | Nest tube ID (e.g., "R2C5" = Row 2, Column 5) |
-| `track_id` | Associated track ID |
-| `ml_confidence` | Event classifier confidence score |
-
-## Project Structure
-
-```
-beemonitor/src
-├── __init__.py
-├── core/
-│   ├── config.py              # Configuration management
-│   ├── video_analyzer.py      # Main BeeMonitor class
-│   └── analysis_results.py    # Result containers
-├── detection/
-│   ├── yolo_detector.py       # YOLO26 wrapper (NMS-free end-to-end)
-│   ├── blob_detector.py       # Motion detection (two-mode)
-│   ├── nest_detector.py       # Nest grid detection
-│   └── noise_filter.py        # Detection filtering
-├── tracking/
-│   ├── bee_tracking.py        # BeeTracking orchestrator
-│   └── mot/
-│       ├── bee_tracker.py     # BeeTrack MOT algorithm
-│       └── base_mot.py        # Abstract tracker interface
-├── processing/
-│   ├── event_processor.py     # ML-first event detection
-│   ├── event_classifier.py    # Random Forest classifier
-│   ├── trajectory_analyzer.py # Trajectory feature extraction
-│   └── interaction_analyzer.py
-├── output/
-│   ├── csv_generator.py       # CSV export
-│   └── video_synthesizer.py   # Annotated video output
-├── utils/
-│   └── geometry.py            # Spatial utilities
-└── visualization/
-    └── detection_source_visualizer.py
-```
-
 ## Algorithm Details
 
 ### YOLO26 Object Detection
@@ -228,22 +169,6 @@ The event classifier extracts 20 features from trajectory segments:
 ## Hardware Setup
 
 See [HARDWARE.md](hardware/README.md) for detailed assembly instructions.
-
-## GPU Acceleration
-
-### Apple Silicon (MPS)
-
-```python
-# Automatic — PyTorch detects MPS
-import torch
-print(torch.backends.mps.is_available())  # True
-```
-
-### NVIDIA (CUDA)
-
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
-```
 
 ## Citation
 

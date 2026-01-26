@@ -33,7 +33,8 @@ The BeeMonitor Desktop Application provides a user-friendly interface for analyz
 First, install the BeeMonitor analysis package:
 
 ```bash
-cd /path/to/beemonitor
+git clone https://github.com/eai6/BeeMonitor.git
+cd beemonitor
 pip install -e .
 ```
 
@@ -92,8 +93,6 @@ python desktop/run_gui.py
 - Real-time performance possible on recommended hardware
 - GPU acceleration provides 2-5x speedup over CPU-only
 
----
-
 ## Configuration Files
 
 The application uses these configuration files in the core package
@@ -149,8 +148,6 @@ Process multiple videos:
 1. Tools → Model Settings
 2. Set custom YOLO weights path
 
----
-
 ## File Structure
 
 ```
@@ -179,7 +176,10 @@ run_gui.py                   # Application entry point
 - **pandas**: Data export
 - **beemonitor**: Core analysis package
 
+## Support
 
-
+- **Author:** Edward Amoah
+- **Email:** eai6@psu.edu
+- **Lab:** [Grozinger Lab](https://www.grozingerlab.com/), INSECT-NET, Penn State University
 
 
