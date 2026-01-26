@@ -54,7 +54,7 @@ echo ""
 echo "Starting analysis..."
 echo ""
 
-python scripts/batch_process_cvpr.py
+python scripts/batch_process.py
 
 EXIT_CODE=$?
 
