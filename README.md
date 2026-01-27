@@ -185,7 +185,7 @@ If you use BeeMonitor in your research, please cite:
 
 ## License
 
-Apache 2.0 License. See [LICENSE](LICENSE) for details.
+AGPL License. See [LICENSE](LICENSE) for details.
 
 ## Acknowledgements
 
