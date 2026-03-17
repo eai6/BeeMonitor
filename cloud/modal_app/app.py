@@ -29,7 +29,7 @@ def health():
     timeout=7200,
     retries=1,
     volumes={MODEL_VOLUME_MOUNT: model_volume},
-    # secrets=[modal.Secret.from_name("azure-storage")],  # Enable when Azure Storage is configured
+    secrets=[modal.Secret.from_name("azure-storage")],
     memory=8192,
 )
 def process_video(
