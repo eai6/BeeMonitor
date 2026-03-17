@@ -160,13 +160,22 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
             ctx["result"] = None
             return ctx
 
+        # Build paths — use DB values or construct from modal_job_id as fallback
+        user_id = str(job.user.pk)
+        modal_id = job.modal_job_id or ""
+        prefix = f"{user_id}/{modal_id}"
+
+        events_path = result.events_csv_path or (f"{prefix}/events.csv" if modal_id else "")
+        tracking_path = result.tracking_csv_path or (f"{prefix}/tracking_results.csv" if modal_id else "")
+        annotated_path = result.annotated_video_path or (f"{prefix}/annotated_video.mp4" if modal_id else "")
+
         # Generate SAS URLs for viewing/downloading
-        if result.events_csv_path:
-            ctx["events_csv_url"] = _generate_sas_url(result.events_csv_path)
-        if result.tracking_csv_path:
-            ctx["tracking_csv_url"] = _generate_sas_url(result.tracking_csv_path)
-        if result.annotated_video_path:
-            ctx["annotated_video_url"] = _generate_sas_url(result.annotated_video_path)
+        if events_path:
+            ctx["events_csv_url"] = _generate_sas_url(events_path)
+        if tracking_path:
+            ctx["tracking_csv_url"] = _generate_sas_url(tracking_path)
+        if annotated_path:
+            ctx["annotated_video_url"] = _generate_sas_url(annotated_path)
 
         # Original video SAS URL
         if job.video.azure_blob_path:
