@@ -11,5 +11,6 @@ urlpatterns = [
     path("analysis/", include("apps.analysis.urls")),
     path("sources/", include("apps.sources.urls")),
     path("developer/", include("apps.developer.urls")),
+    path("", include("apps.pwa.urls")),
     path("", include("apps.dashboard.urls")),
 ]

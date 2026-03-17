@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     "apps.dashboard",
     "apps.developer",
     "apps.api",
+    "apps.pwa",
 ]
 
 MIDDLEWARE = [
