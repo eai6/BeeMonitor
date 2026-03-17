@@ -1,0 +1,7 @@
+django>=5.0
+djangorestframework>=3.14
+django-cors-headers>=4.3
+celery>=5.3
+redis>=5.0
+azure-storage-blob>=12.19.0
+psycopg2-binary>=2.9
