@@ -12,7 +12,7 @@ Provisions on Azure:
 
 import pulumi
 import pulumi_azure_native as azure
-from pulumi_azure_native import resources, storage, dbforpostgresql, cache, web, containerregistry
+from pulumi_azure_native import resources, storage, dbforpostgresql, redis, web, containerregistry
 import pulumi_docker as docker
 
 config = pulumi.Config()
@@ -78,7 +78,7 @@ pg_server = dbforpostgresql.Server(
     server_name=f"{prefix}-pg",
     resource_group_name=rg.name,
     location=rg.location,
-    version=dbforpostgresql.ServerVersion.SERVER_VERSION_16,
+    version=dbforpostgresql.PostgresMajorVersion.POSTGRES_MAJOR_VERSION_16,
     sku=dbforpostgresql.SkuArgs(
         name=pg_sku,
         tier=getattr(dbforpostgresql.SkuTier, pg_tier.upper(), dbforpostgresql.SkuTier.BURSTABLE),
@@ -109,14 +109,14 @@ dbforpostgresql.FirewallRule(
 
 # ── 4. Redis Cache ────────────────────────────────────────────────────
 
-redis_cache = cache.Redis(
+redis_cache = redis.Redis(
     f"{prefix}-redis",
     name=f"{prefix}-redis",
     resource_group_name=rg.name,
     location=rg.location,
-    sku=cache.SkuArgs(
-        name=cache.SkuName.BASIC,
-        family=cache.SkuFamily.C,
+    sku=redis.SkuArgs(
+        name=redis.SkuName.BASIC,
+        family=redis.SkuFamily.C,
         capacity=0,  # 250MB, cheapest tier
     ),
     enable_non_ssl_port=False,
@@ -124,7 +124,7 @@ redis_cache = cache.Redis(
 )
 
 redis_keys = pulumi.Output.all(rg.name, redis_cache.name).apply(
-    lambda args: cache.list_redis_keys(
+    lambda args: redis.list_redis_keys(
         resource_group_name=args[0],
         name=args[1],
     )

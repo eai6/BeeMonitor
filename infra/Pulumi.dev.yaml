@@ -4,3 +4,10 @@ config:
   beemonitor-infra:appServiceSku: B1
   beemonitor-infra:postgresSkuName: Standard_B1ms
   beemonitor-infra:postgresTier: Burstable
+  beemonitor-infra:postgresPassword:
+    secure: v1:RkE8ukdcUoRxZACg:ljGClvngGpobjLi8ovJ7aCon0JrFb7LFVER9JOYN8BN7iw==
+  beemonitor-infra:djangoSecretKey:
+    secure: v1:pR4aqAMCx1qK59dT:yjiAyrRoDcGlALKzldAkHlZd2W3S9rukdDba6w4lHlaS8bFX/aiTEkkrGbnsxqrM4Y1YqymHT1FfPsNBV2WNlQcd6QwqDsk71QLZGb5pweKfPIw=
+  beemonitor-infra:credentialKey:
+    secure: v1:aBgpTzdHBr23ireq:ADQMBiWKQcOdg1frzaQSNBz9pXsFBFae+2zuYdjXt/xUv5oolyySeKgvPYufX4Uq6trHCLjETqFt7Y0X
+encryptionsalt: v1:8/cWmkujK6k=:v1:jv/KMrBFqFDFVjOo:f+GQHV47h+2DkvVFKwjTh54bMF0HUw==

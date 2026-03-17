@@ -1,8 +1,12 @@
-name: Deploy
+name: Build, Test & Deploy
 
 on:
   push:
     branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/beemonitor-web
 
 jobs:
   test:
@@ -22,69 +26,46 @@ jobs:
         working-directory: beemonitor_web
         run: python manage.py check
 
-  infra:
+  build-and-push:
     needs: test
     runs-on: ubuntu-latest
-    if: contains(github.event.head_commit.message, '[deploy-infra]') || contains(github.event.head_commit.message, '[deploy-all]')
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install Pulumi deps
-        run: pip install -r infra/requirements.txt
-      - uses: pulumi/actions@v5
-        with:
-          command: up
-          stack-name: dev
-          work-dir: infra
-        env:
-          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
-          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
-          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
-          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
 
-  deploy-web:
-    needs: [test, infra]
-    if: |
-      always() &&
-      needs.test.result == 'success' &&
-      (needs.infra.result == 'success' || needs.infra.result == 'skipped') &&
-      (contains(github.event.head_commit.message, '[deploy-web]') || contains(github.event.head_commit.message, '[deploy-all]'))
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: beemonitor_web
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+  deploy-azure:
+    needs: build-and-push
     runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.message, '[deploy]') || contains(github.event.head_commit.message, '[deploy-web]') || contains(github.event.head_commit.message, '[deploy-all]')
     steps:
-      - uses: actions/checkout@v4
-
       - name: Login to Azure
         uses: azure/login@v2
         with:
-          creds: |
-            {
-              "clientId": "${{ secrets.ARM_CLIENT_ID }}",
-              "clientSecret": "${{ secrets.ARM_CLIENT_SECRET }}",
-              "subscriptionId": "${{ secrets.ARM_SUBSCRIPTION_ID }}",
-              "tenantId": "${{ secrets.ARM_TENANT_ID }}"
-            }
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Login to ACR
-        run: |
-          ACR_NAME=$(az acr list --query "[?contains(name,'beemonitor')].name" -o tsv | head -1)
-          az acr login --name $ACR_NAME
-
-      - name: Build and push Docker image
-        working-directory: beemonitor_web
-        run: |
-          ACR_SERVER=$(az acr list --query "[?contains(name,'beemonitor')].loginServer" -o tsv | head -1)
-          docker build -t $ACR_SERVER/beemonitor-web:latest -t $ACR_SERVER/beemonitor-web:${{ github.sha }} .
-          docker push $ACR_SERVER/beemonitor-web:latest
-          docker push $ACR_SERVER/beemonitor-web:${{ github.sha }}
-
-      - name: Deploy to App Service
-        run: |
-          APP_NAME=$(az webapp list --query "[?contains(name,'beemonitor')].name" -o tsv | head -1)
-          RG_NAME=$(az webapp list --query "[?contains(name,'beemonitor')].resourceGroup" -o tsv | head -1)
-          az webapp restart --name $APP_NAME --resource-group $RG_NAME
+      - name: Deploy to Azure App Service
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ vars.AZURE_WEBAPP_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
 
   deploy-modal:
     needs: test
@@ -95,10 +76,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install Modal
-        run: pip install modal
       - name: Deploy Modal functions
+        run: pip install modal && modal deploy cloud/modal_app/app.py
         env:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
-        run: modal deploy cloud/modal_app/app.py
