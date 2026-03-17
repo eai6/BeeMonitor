@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "BeeMonitor",
+    "slug": "beemonitor",
+    "scheme": "beemonitor",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F59E0B"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.beemonitor.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#F59E0B"
+      },
+      "package": "com.beemonitor.app"
+    },
+    "plugins": ["expo-router", "expo-camera", "expo-location"],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
