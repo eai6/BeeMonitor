@@ -1,0 +1,35 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "beemonitor_web/**"
+      - "cloud/**"
+
+jobs:
+  deploy-modal:
+    runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.message, '[deploy-modal]') || contains(github.event.head_commit.message, '[deploy-all]')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Modal
+        run: pip install modal
+      - name: Deploy Modal functions
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: modal deploy cloud/modal_app/app.py
+
+  deploy-web:
+    runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.message, '[deploy-web]') || contains(github.event.head_commit.message, '[deploy-all]')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        working-directory: beemonitor_web
+        run: docker build -t beemonitor-web .
+      # Add your deployment target here (Azure App Service, Railway, etc.)
