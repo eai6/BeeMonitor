@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install cloud deps
-        run: pip install -r cloud/requirements-cloud.txt pytest boto3 modal cryptography
+        run: pip install -r cloud/requirements-cloud.txt pytest boto3 modal cryptography pandas
       - name: Run cloud tests
         run: python -m pytest cloud/tests/ -v -o "addopts="
       - name: Install Django deps
