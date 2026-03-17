@@ -30,12 +30,9 @@ beemonitor_image = (
         "pyyaml>=6.0",
         "tqdm>=4.65.0",
         "Pillow>=10.0.0",
+        "fastapi[standard]>=0.100.0",
     )
+    .env({"PYTHONPATH": "/root/src:/root"})
     .add_local_dir("src/beemonitor", "/root/src/beemonitor")
     .add_local_dir("cloud", "/root/cloud")
-    .run_commands(
-        "echo 'import sys; sys.path.insert(0, \"/root/src\"); sys.path.insert(0, \"/root\")' "
-        "> /root/sitecustomize.py",
-        "cp /root/sitecustomize.py /usr/lib/python3.12/sitecustomize.py",
-    )
 )
