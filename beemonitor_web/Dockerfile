@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    DJANGO_ENV=production
+    DJANGO_ENV=development
 
 WORKDIR /app
 
@@ -11,12 +11,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 COPY requirements/ requirements/
-RUN pip install --no-cache-dir -r requirements/production.txt django-filter
+RUN pip install --no-cache-dir -r requirements/base.txt django-filter gunicorn
 
 COPY . .
 
-RUN chmod +x scripts/entrypoint.sh
+RUN mkdir -p static staticfiles && python manage.py collectstatic --noinput 2>/dev/null || true
+RUN python manage.py migrate --noinput
 
 EXPOSE 8000
 
-CMD ["scripts/entrypoint.sh"]
+CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "120"]
