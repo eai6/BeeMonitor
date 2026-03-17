@@ -16,8 +16,8 @@ RUN pip install --no-cache-dir -r requirements/base.txt django-filter gunicorn
 COPY . .
 
 RUN mkdir -p static staticfiles && python manage.py collectstatic --noinput 2>/dev/null || true
-RUN python manage.py migrate --noinput
+RUN chmod +x scripts/entrypoint.sh
 
 EXPOSE 8000
 
-CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "120"]
+CMD ["scripts/entrypoint.sh"]
