@@ -21,3 +21,11 @@ app = modal.App("beemonitor-cloud", image=beemonitor_image)
 def health():
     """Health check endpoint."""
     return {"status": "ok", "service": "beemonitor-cloud"}
+
+
+# ── Import all function modules so they register on the app ───────────
+
+import cloud.modal_app.functions.process_video  # noqa: F401, E402
+import cloud.modal_app.functions.ingest_video  # noqa: F401, E402
+import cloud.modal_app.functions.generate_results  # noqa: F401, E402
+import cloud.modal_app.functions.batch_process  # noqa: F401, E402
