@@ -1,3 +1,7 @@
+import logging
+import uuid
+
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.shortcuts import get_object_or_404
@@ -6,6 +10,42 @@ from django.views.generic import DetailView, FormView, ListView, TemplateView
 
 from .forms import JobCreateForm
 from .models import Job, JobResult
+
+logger = logging.getLogger(__name__)
+
+
+def _generate_sas_url(blob_path: str, container: str = "processed") -> str:
+    """Generate a time-limited SAS URL for a blob in Azure Storage."""
+    try:
+        from datetime import datetime, timedelta, timezone
+        from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
+
+        conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
+        if not conn_str:
+            return ""
+
+        service = BlobServiceClient.from_connection_string(conn_str)
+        account_name = service.account_name
+
+        # Extract account key from connection string
+        account_key = ""
+        for part in conn_str.split(";"):
+            if part.startswith("AccountKey="):
+                account_key = part.split("=", 1)[1]
+                break
+
+        token = generate_blob_sas(
+            account_name=account_name,
+            container_name=container,
+            blob_name=blob_path,
+            account_key=account_key,
+            permission=BlobSasPermissions(read=True),
+            expiry=datetime.now(timezone.utc) + timedelta(hours=24),
+        )
+        return f"https://{account_name}.blob.core.windows.net/{container}/{blob_path}?{token}"
+    except Exception as e:
+        logger.error("Failed to generate SAS URL for %s: %s", blob_path, e)
+        return ""
 
 
 class JobListView(LoginRequiredMixin, ListView):
@@ -42,7 +82,6 @@ class JobCreateView(LoginRequiredMixin, FormView):
         return initial
 
     def form_valid(self, form):
-        import uuid
         from django.utils import timezone
 
         job = Job.objects.create(
@@ -55,7 +94,6 @@ class JobCreateView(LoginRequiredMixin, FormView):
             status=Job.Status.QUEUED,
         )
 
-        # Try to run via Modal directly (no Celery/Redis needed)
         try:
             import modal
 
@@ -94,7 +132,7 @@ class JobCreateView(LoginRequiredMixin, FormView):
             job.save(update_fields=["status", "progress_pct", "completed_at"])
             messages.success(self.request, f"Job #{job.pk} completed — {result_payload.get('total_events', 0)} events detected.")
         except ImportError:
-            messages.info(self.request, f"Job #{job.pk} queued (Modal SDK not installed, will process when Celery is available).")
+            messages.info(self.request, f"Job #{job.pk} queued (Modal SDK not installed).")
         except Exception as e:
             job.status = Job.Status.FAILED
             job.error_message = str(e)
@@ -114,8 +152,26 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         ctx = super().get_context_data(**kwargs)
         job = get_object_or_404(Job, pk=self.kwargs["pk"], user=self.request.user)
         ctx["job"] = job
+
         try:
-            ctx["result"] = job.result
+            result = job.result
+            ctx["result"] = result
         except JobResult.DoesNotExist:
             ctx["result"] = None
+            return ctx
+
+        # Generate SAS URLs for viewing/downloading
+        if result.events_csv_path:
+            ctx["events_csv_url"] = _generate_sas_url(result.events_csv_path)
+        if result.tracking_csv_path:
+            ctx["tracking_csv_url"] = _generate_sas_url(result.tracking_csv_path)
+        if result.annotated_video_path:
+            ctx["annotated_video_url"] = _generate_sas_url(result.annotated_video_path)
+
+        # Original video SAS URL
+        if job.video.azure_blob_path:
+            ctx["original_video_url"] = _generate_sas_url(
+                job.video.azure_blob_path, container="raw-videos"
+            )
+
         return ctx
