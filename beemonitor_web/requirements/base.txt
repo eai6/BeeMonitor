@@ -5,3 +5,4 @@ celery>=5.3
 redis>=5.0
 azure-storage-blob>=12.19.0
 psycopg2-binary>=2.9
+modal>=0.60.0
