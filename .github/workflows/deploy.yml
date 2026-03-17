@@ -6,7 +6,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}/beemonitor-web
+  IMAGE_NAME: eai6/beemonitor/beemonitor-web
 
 jobs:
   test:
