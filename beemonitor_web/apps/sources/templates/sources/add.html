@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Add Data Source - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="max-w-lg mx-auto">
+  <h1 class="text-2xl font-bold text-gray-900 mb-6">Add Data Source</h1>
+  <div class="bg-white shadow rounded-lg p-6">
+    <form method="post">
+      {% csrf_token %}
+      {% if form.errors %}
+      <div class="bg-red-50 text-red-700 rounded p-3 mb-4 text-sm">
+        <ul class="list-disc list-inside">
+          {% for field in form %}
+            {% for error in field.errors %}
+            <li>{{ field.label }}: {{ error }}</li>
+            {% endfor %}
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+      <div class="mb-4">
+        <label for="id_name" class="block text-sm font-medium text-gray-700 mb-1">Name</label>
+        <input type="text" name="name" id="id_name" value="{{ form.name.value|default:'' }}" required
+               class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+      </div>
+      <div class="mb-6">
+        <label for="id_source_type" class="block text-sm font-medium text-gray-700 mb-1">Source Type</label>
+        <select name="source_type" id="id_source_type" required
+                class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+          <option value="">Select type...</option>
+          {% for value, label in form.source_type.field.choices %}
+            {% if value %}
+            <option value="{{ value }}" {% if form.source_type.value == value %}selected{% endif %}>{{ label }}</option>
+            {% endif %}
+          {% endfor %}
+        </select>
+      </div>
+      <div class="flex space-x-3">
+        <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Add Source</button>
+        <a href="{% url 'sources:list' %}" class="px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

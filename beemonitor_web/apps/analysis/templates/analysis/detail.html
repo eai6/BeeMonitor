@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Job #{{ job.pk }} - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+  <a href="{% url 'analysis:list' %}" class="text-sm text-amber-600 hover:underline">&larr; Back to Jobs</a>
+</div>
+
+<div id="job-status" {% if job.status not in 'completed,failed,cancelled' %}hx-get="{% url 'analysis:detail' job.pk %}" hx-trigger="every 5s" hx-select="#job-status" hx-swap="outerHTML"{% endif %}>
+  <div class="bg-white shadow rounded-lg p-6 mb-6">
+    <div class="flex justify-between items-start">
+      <h1 class="text-2xl font-bold text-gray-900">Job #{{ job.pk }}</h1>
+      <span class="inline-flex px-3 py-1 text-sm font-medium rounded-full
+        {% if job.status == 'completed' %}bg-green-100 text-green-800
+        {% elif job.status == 'failed' %}bg-red-100 text-red-800
+        {% elif job.status == 'cancelled' %}bg-gray-100 text-gray-800
+        {% else %}bg-amber-100 text-amber-800{% endif %}">
+        {{ job.get_status_display }}
+      </span>
+    </div>
+
+    <!-- Progress bar -->
+    <div class="mt-4">
+      <div class="flex justify-between text-sm text-gray-600 mb-1">
+        <span>Progress</span>
+        <span>{{ job.progress_pct }}%</span>
+      </div>
+      <div class="w-full bg-gray-200 rounded-full h-2.5">
+        <div class="bg-amber-500 h-2.5 rounded-full" style="width: {{ job.progress_pct }}%"></div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6 text-sm">
+      <div>
+        <p class="text-gray-500">Video</p>
+        <p class="font-medium"><a href="{% url 'videos:detail' job.video.pk %}" class="text-amber-600 hover:underline">{{ job.video.title }}</a></p>
+      </div>
+      <div>
+        <p class="text-gray-500">Created</p>
+        <p class="font-medium">{{ job.created_at }}</p>
+      </div>
+      <div>
+        <p class="text-gray-500">Started</p>
+        <p class="font-medium">{{ job.started_at|default:"--" }}</p>
+      </div>
+      <div>
+        <p class="text-gray-500">Completed</p>
+        <p class="font-medium">{{ job.completed_at|default:"--" }}</p>
+      </div>
+      {% if job.config %}
+      <div>
+        <p class="text-gray-500">Detection Mode</p>
+        <p class="font-medium">{{ job.config.detection_mode|default:"--" }}</p>
+      </div>
+      <div>
+        <p class="text-gray-500">Confidence Threshold</p>
+        <p class="font-medium">{{ job.config.confidence_threshold|default:"--" }}</p>
+      </div>
+      {% endif %}
+      {% if job.compute_cost_usd %}
+      <div>
+        <p class="text-gray-500">Compute Cost</p>
+        <p class="font-medium">${{ job.compute_cost_usd }}</p>
+      </div>
+      {% endif %}
+    </div>
+
+    {% if job.error_message %}
+    <div class="mt-4 bg-red-50 text-red-700 rounded p-3 text-sm">
+      <strong>Error:</strong> {{ job.error_message }}
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% if job.status == 'completed' %}
+<div class="text-center">
+  <a href="{% url 'analysis:results' job.pk %}" class="inline-flex items-center bg-amber-600 hover:bg-amber-700 text-white px-6 py-2 rounded font-medium text-sm">View Results</a>
+</div>
+{% endif %}
+{% endblock %}

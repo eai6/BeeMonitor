@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Analysis Jobs - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="flex justify-between items-center mb-6">
+  <h1 class="text-2xl font-bold text-gray-900">Analysis Jobs</h1>
+  <a href="{% url 'analysis:new' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">New Job</a>
+</div>
+
+{% if jobs %}
+<div class="bg-white shadow rounded-lg overflow-hidden">
+  <table class="min-w-full divide-y divide-gray-200">
+    <thead class="bg-gray-50">
+      <tr>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Video</th>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Progress</th>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-200">
+      {% for job in jobs %}
+      <tr>
+        <td class="px-6 py-4 text-sm"><a href="{% url 'analysis:detail' job.pk %}" class="text-amber-600 hover:underline font-medium">#{{ job.pk }}</a></td>
+        <td class="px-6 py-4 text-sm text-gray-900">{{ job.video.title|truncatechars:40 }}</td>
+        <td class="px-6 py-4 text-sm">
+          <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full
+            {% if job.status == 'completed' %}bg-green-100 text-green-800
+            {% elif job.status == 'failed' %}bg-red-100 text-red-800
+            {% elif job.status == 'cancelled' %}bg-gray-100 text-gray-800
+            {% else %}bg-amber-100 text-amber-800{% endif %}">
+            {{ job.get_status_display }}
+          </span>
+        </td>
+        <td class="px-6 py-4 text-sm text-gray-500">{{ job.progress_pct }}%</td>
+        <td class="px-6 py-4 text-sm text-gray-500">{{ job.created_at|timesince }} ago</td>
+        <td class="px-6 py-4 text-sm">
+          {% if job.status == 'completed' %}
+          <a href="{% url 'analysis:results' job.pk %}" class="text-amber-600 hover:underline">Results</a>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if is_paginated %}
+<div class="flex justify-center mt-6 space-x-2">
+  {% if page_obj.has_previous %}
+  <a href="?page={{ page_obj.previous_page_number }}" class="px-3 py-1 border rounded text-sm text-gray-700 hover:bg-gray-50">Previous</a>
+  {% endif %}
+  <span class="px-3 py-1 text-sm text-gray-500">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+  {% if page_obj.has_next %}
+  <a href="?page={{ page_obj.next_page_number }}" class="px-3 py-1 border rounded text-sm text-gray-700 hover:bg-gray-50">Next</a>
+  {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div class="bg-white shadow rounded-lg p-12 text-center">
+  <p class="text-gray-500 mb-4">No analysis jobs yet.</p>
+  <a href="{% url 'analysis:new' %}" class="text-amber-600 hover:underline font-medium">Create your first job</a>
+</div>
+{% endif %}
+{% endblock %}

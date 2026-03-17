@@ -116,3 +116,8 @@ CELERY_RESULT_SERIALIZER = "json"
 
 # Credential encryption key
 BEEMONITOR_CREDENTIAL_KEY = os.environ.get("BEEMONITOR_CREDENTIAL_KEY", "")
+
+# Auth
+LOGIN_URL = "/accounts/login/"
+LOGIN_REDIRECT_URL = "/"
+LOGOUT_REDIRECT_URL = "/accounts/login/"
