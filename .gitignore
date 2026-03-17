@@ -28,3 +28,23 @@ archives
 
 # Credentials
 credentials/
+
+# Environment files
+.env
+.env.local
+*.env
+
+# Django
+beemonitor_web/db.sqlite3
+beemonitor_web/staticfiles/
+beemonitor_web/.env
+
+# React Native
+beemonitor-mobile/node_modules/
+beemonitor-mobile/.expo/
+beemonitor-mobile/dist/
+beemonitor-mobile/ios/
+beemonitor-mobile/android/
+
+# Docker
+*.log
