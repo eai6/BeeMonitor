@@ -121,21 +121,37 @@ class CloudPipeline:
         azure_paths = self._upload_results(job_id, user_id, output_dir, video_local)
 
         # Step 5 — Build structured result
-        stats = result.get_statistics() if result else {}
         events = result.events if result is not None else None
         tracks = result.tracks if result is not None else None
+
+        # get_statistics() exists on analysis_results.AnalysisResults but not
+        # on the version defined in video_analyzer.py — handle both
+        if result and hasattr(result, "get_statistics"):
+            stats = result.get_statistics()
+        elif result and events is not None and hasattr(events, "empty") and not events.empty:
+            import pandas as pd
+            stats = {
+                "total_events": len(events),
+                "total_entries": int((events["action"] == "Entry").sum()) if "action" in events.columns else 0,
+                "total_exits": int((events["action"] == "Exit").sum()) if "action" in events.columns else 0,
+                "total_tracks": int(tracks["track_id"].nunique()) if tracks is not None and "track_id" in tracks.columns else 0,
+                "total_nests": int(events["nest"].nunique()) if "nest" in events.columns else 0,
+            }
+        else:
+            stats = {}
+
+        total_events = len(events) if events is not None and hasattr(events, "__len__") else 0
+        unique_tracks = 0
+        if tracks is not None and hasattr(tracks, "nunique") and "track_id" in tracks.columns:
+            unique_tracks = int(tracks["track_id"].nunique())
 
         pipeline_result = PipelineResult(
             job_id=job_id,
             user_id=user_id,
-            total_events=len(events) if events is not None else 0,
+            total_events=total_events,
             entry_count=int(stats.get("total_entries", 0)),
             exit_count=int(stats.get("total_exits", 0)),
-            unique_tracks=(
-                tracks["track_id"].nunique()
-                if tracks is not None and hasattr(tracks, "nunique")
-                else int(stats.get("total_tracks", 0))
-            ),
+            unique_tracks=unique_tracks,
             nest_count=int(stats.get("total_nests", 0)),
             events_csv_path=azure_paths.get("events_csv", ""),
             tracking_csv_path=azure_paths.get("tracking_csv", ""),
