@@ -1,0 +1,6 @@
+name: beemonitor-infra
+runtime:
+  name: python
+  options:
+    virtualenv: venv
+description: BeeMonitor Cloud Platform infrastructure on Azure

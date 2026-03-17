@@ -3,12 +3,91 @@ name: Deploy
 on:
   push:
     branches: [main]
-    paths:
-      - "beemonitor_web/**"
-      - "cloud/**"
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install cloud deps
+        run: pip install -r cloud/requirements-cloud.txt pytest boto3 modal cryptography
+      - name: Run cloud tests
+        run: python -m pytest cloud/tests/ -v -o "addopts="
+      - name: Install Django deps
+        run: pip install -r beemonitor_web/requirements/development.txt django-filter
+      - name: Django check
+        working-directory: beemonitor_web
+        run: python manage.py check
+
+  infra:
+    needs: test
+    runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.message, '[deploy-infra]') || contains(github.event.head_commit.message, '[deploy-all]')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Pulumi deps
+        run: pip install -r infra/requirements.txt
+      - uses: pulumi/actions@v5
+        with:
+          command: up
+          stack-name: dev
+          work-dir: infra
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+  deploy-web:
+    needs: [test, infra]
+    if: |
+      always() &&
+      needs.test.result == 'success' &&
+      (needs.infra.result == 'success' || needs.infra.result == 'skipped') &&
+      (contains(github.event.head_commit.message, '[deploy-web]') || contains(github.event.head_commit.message, '[deploy-all]'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.ARM_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.ARM_CLIENT_SECRET }}",
+              "subscriptionId": "${{ secrets.ARM_SUBSCRIPTION_ID }}",
+              "tenantId": "${{ secrets.ARM_TENANT_ID }}"
+            }
+
+      - name: Login to ACR
+        run: |
+          ACR_NAME=$(az acr list --query "[?contains(name,'beemonitor')].name" -o tsv | head -1)
+          az acr login --name $ACR_NAME
+
+      - name: Build and push Docker image
+        working-directory: beemonitor_web
+        run: |
+          ACR_SERVER=$(az acr list --query "[?contains(name,'beemonitor')].loginServer" -o tsv | head -1)
+          docker build -t $ACR_SERVER/beemonitor-web:latest -t $ACR_SERVER/beemonitor-web:${{ github.sha }} .
+          docker push $ACR_SERVER/beemonitor-web:latest
+          docker push $ACR_SERVER/beemonitor-web:${{ github.sha }}
+
+      - name: Deploy to App Service
+        run: |
+          APP_NAME=$(az webapp list --query "[?contains(name,'beemonitor')].name" -o tsv | head -1)
+          RG_NAME=$(az webapp list --query "[?contains(name,'beemonitor')].resourceGroup" -o tsv | head -1)
+          az webapp restart --name $APP_NAME --resource-group $RG_NAME
+
   deploy-modal:
+    needs: test
     runs-on: ubuntu-latest
     if: contains(github.event.head_commit.message, '[deploy-modal]') || contains(github.event.head_commit.message, '[deploy-all]')
     steps:
@@ -23,13 +102,3 @@ jobs:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
         run: modal deploy cloud/modal_app/app.py
-
-  deploy-web:
-    runs-on: ubuntu-latest
-    if: contains(github.event.head_commit.message, '[deploy-web]') || contains(github.event.head_commit.message, '[deploy-all]')
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build Docker image
-        working-directory: beemonitor_web
-        run: docker build -t beemonitor-web .
-      # Add your deployment target here (Azure App Service, Railway, etc.)

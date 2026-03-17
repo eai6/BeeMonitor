@@ -1,0 +1,6 @@
+config:
+  azure-native:location: eastus
+  beemonitor-infra:environment: prod
+  beemonitor-infra:appServiceSku: P1v3
+  beemonitor-infra:postgresSkuName: Standard_D2ds_v4
+  beemonitor-infra:postgresTier: GeneralPurpose
