@@ -120,33 +120,60 @@ def _transfer_s3_to_azure(video) -> str:
 
 
 def _run_modal_job(job_pk: int) -> None:
-    """Background thread: call Modal and update job status on completion."""
+    """Background thread: call Modal and update job status on completion.
+
+    DB connection pattern: read → close → long Modal call → reconnect → write.
+    """
     import django
     django.setup()
+    from django.db import connection
     from django.utils import timezone
 
+    # 1. Read what we need from DB
     try:
         job = Job.objects.select_related("video", "video__source").get(pk=job_pk)
+        modal_job_id = job.modal_job_id
+        user_id = str(job.user_id)
+        video_blob_path = job.video.azure_blob_path
+        detection_mode = job.config.get("detection_mode", "yolo")
+        confidence = job.config.get("confidence_threshold", 0.25)
+
+        # If S3 video, transfer first (uses Azure SDK, not DB)
+        if video_blob_path.startswith("s3://"):
+            video_blob_path = _transfer_s3_to_azure(job.video)
     except Job.DoesNotExist:
         return
+    except Exception as e:
+        Job.objects.filter(pk=job_pk).update(status="failed", error_message=str(e))
+        connection.close()
+        return
 
+    # 2. Close DB — Modal call can take 3-10+ minutes
+    connection.close()
+
+    # 3. Long-running Modal call (no DB needed)
     try:
-        # If video is on S3, transfer to Azure first
-        video_blob_path = _transfer_s3_to_azure(job.video)
-
         import modal
         process_video = modal.Function.from_name("beemonitor-cloud", "process_video")
         result_payload = process_video.remote(
-            job_id=job.modal_job_id,
-            user_id=str(job.user_id),
+            job_id=modal_job_id,
+            user_id=user_id,
             video_blob_path=video_blob_path,
-            detection_mode=job.config.get("detection_mode", "yolo"),
-            confidence_threshold=job.config.get("confidence_threshold", 0.25),
+            detection_mode=detection_mode,
+            confidence_threshold=confidence,
             visualize=True,
         )
+    except Exception as e:
+        # 4a. Reconnect to write failure
+        Job.objects.filter(pk=job_pk).update(status="failed", error_message=str(e))
+        connection.close()
+        logger.exception("Job %s Modal call failed", job_pk)
+        return
 
+    # 4b. Reconnect to write success (Django auto-reconnects)
+    try:
         JobResult.objects.update_or_create(
-            job=job,
+            job_id=job_pk,
             defaults={
                 "events_csv_path": result_payload.get("events_csv_path", ""),
                 "tracking_csv_path": result_payload.get("tracking_csv_path", ""),
@@ -159,17 +186,14 @@ def _run_modal_job(job_pk: int) -> None:
                 "summary_stats": result_payload.get("summary_stats", {}),
             },
         )
-        job.status = Job.Status.COMPLETED
-        job.progress_pct = 100
-        job.completed_at = timezone.now()
-        job.save(update_fields=["status", "progress_pct", "completed_at"])
+        Job.objects.filter(pk=job_pk).update(
+            status="completed", progress_pct=100, completed_at=timezone.now(),
+        )
         logger.info("Job %s completed — %s events", job_pk, result_payload.get("total_events", 0))
-
     except Exception as e:
-        job.status = Job.Status.FAILED
-        job.error_message = str(e)
-        job.save(update_fields=["status", "error_message"])
-        logger.exception("Job %s failed", job_pk)
+        logger.error("Job %s result write failed: %s", job_pk, e)
+    finally:
+        connection.close()
 
 
 def _run_modal_batch(jobs_data: list, detection_mode: str, confidence: float) -> None:
@@ -235,57 +259,79 @@ def _run_modal_batch(jobs_data: list, detection_mode: str, confidence: float) ->
         if not modal_jobs:
             return
 
-        # Call Modal batch_process — this uses starmap() for parallel GPU containers
+        # Close DB — Modal batch call can take 10+ minutes
+        from django.db import connection
+        connection.close()
+
+        # Long-running Modal call (no DB needed — Modal handles all GPU work)
         logger.info("Submitting %d videos to Modal batch_process", len(modal_jobs))
         results = batch_process.remote(modal_jobs)
 
-        # Update Django Job records with results
-        result_by_job_id = {r.get("job_id"): r for r in results if isinstance(r, dict)}
+        # Django auto-reconnects on next query
 
-        for jd in jobs_data:
-            result = result_by_job_id.get(jd["job_id"])
-            if result:
-                try:
-                    job = Job.objects.get(pk=jd["job_pk"])
+        # Map job_id to job_pk for result matching
+        job_id_to_pk = {jd["job_id"]: jd["job_pk"] for jd in jobs_data}
+        job_id_to_video_pk = {jd["job_id"]: jd["video"].pk for jd in jobs_data}
+        completed = 0
 
-                    # Update video blob path if transferred from S3
-                    if result.get("azure_blob_path"):
-                        video = jd["video"]
-                        video.azure_blob_path = result["azure_blob_path"]
-                        video.file_size_bytes = result.get("file_size", 0) or video.file_size_bytes
-                        video.save(update_fields=["azure_blob_path", "file_size_bytes"])
+        for result in (results or []):
+            if not isinstance(result, dict):
+                continue
+            job_id = result.get("job_id")
+            job_pk = job_id_to_pk.get(job_id)
+            if not job_pk:
+                continue
 
-                    JobResult.objects.update_or_create(
-                        job=job,
-                        defaults={
-                            "events_csv_path": result.get("events_csv_path", ""),
-                            "tracking_csv_path": result.get("tracking_csv_path", ""),
-                            "annotated_video_path": result.get("annotated_video_path", ""),
-                            "total_events": result.get("total_events", 0),
-                            "entry_count": result.get("entry_count", 0),
-                            "exit_count": result.get("exit_count", 0),
-                            "unique_tracks": result.get("unique_tracks", 0),
-                            "nest_count": result.get("nest_count", 0),
-                            "summary_stats": result.get("summary_stats", {}),
-                        },
-                    )
-                    job.status = Job.Status.COMPLETED
-                    job.progress_pct = 100
-                    job.completed_at = timezone.now()
-                    job.save(update_fields=["status", "progress_pct", "completed_at"])
-                except Exception as e:
-                    logger.error("Failed to save result for job %s: %s", jd["job_pk"], e)
-            else:
-                Job.objects.filter(pk=jd["job_pk"]).update(
-                    status=Job.Status.FAILED,
-                    error_message="No result returned from Modal",
+            try:
+                # Update video blob path if transferred from S3
+                if result.get("azure_blob_path"):
+                    video_pk = job_id_to_video_pk.get(job_id)
+                    if video_pk:
+                        from apps.videos.models import Video as VideoModel
+                        VideoModel.objects.filter(pk=video_pk).update(
+                            azure_blob_path=result["azure_blob_path"],
+                            file_size_bytes=result.get("file_size", 0),
+                        )
+
+                JobResult.objects.update_or_create(
+                    job_id=job_pk,
+                    defaults={
+                        "events_csv_path": result.get("events_csv_path", ""),
+                        "tracking_csv_path": result.get("tracking_csv_path", ""),
+                        "annotated_video_path": result.get("annotated_video_path", ""),
+                        "total_events": result.get("total_events", 0),
+                        "entry_count": result.get("entry_count", 0),
+                        "exit_count": result.get("exit_count", 0),
+                        "unique_tracks": result.get("unique_tracks", 0),
+                        "nest_count": result.get("nest_count", 0),
+                        "summary_stats": result.get("summary_stats", {}),
+                    },
                 )
+                Job.objects.filter(pk=job_pk).update(
+                    status=Job.Status.COMPLETED,
+                    progress_pct=100,
+                    completed_at=timezone.now(),
+                )
+                completed += 1
+            except Exception as e:
+                logger.error("Failed to save result for job %s: %s", job_pk, e)
+                Job.objects.filter(pk=job_pk).update(
+                    status=Job.Status.FAILED,
+                    error_message=f"Result save error: {e}",
+                )
+
+        # Mark any remaining jobs as failed
+        all_pks = [jd["job_pk"] for jd in jobs_data]
+        Job.objects.filter(pk__in=all_pks, status=Job.Status.PROCESSING).update(
+            status=Job.Status.FAILED,
+            error_message="No result returned from Modal batch",
+        )
 
         # Clear cached credentials
         for creds in s3_creds_cache.values():
             creds.clear()
 
-        logger.info("Batch complete: %d/%d results", len(result_by_job_id), len(jobs_data))
+        logger.info("Batch complete: %d/%d completed", completed, len(jobs_data))
 
     except Exception as e:
         logger.exception("Batch processing failed: %s", e)
@@ -294,6 +340,9 @@ def _run_modal_batch(jobs_data: list, detection_mode: str, confidence: float) ->
             status=Job.Status.FAILED,
             error_message=f"Batch error: {e}",
         )
+    finally:
+        from django.db import connection
+        connection.close()
 
 
 class JobListView(LoginRequiredMixin, ListView):
