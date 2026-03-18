@@ -1,9 +1,8 @@
 import re
-from datetime import datetime
+from datetime import datetime, timezone as dt_timezone
 
 from django.conf import settings
 from django.db import models
-from django.utils import timezone as django_timezone
 
 
 class Video(models.Model):
@@ -81,7 +80,7 @@ class Video(models.Model):
                     hour=int(match.group(5)),
                     minute=int(match.group(6)),
                     second=int(match.group(7)),
-                    tzinfo=django_timezone.utc,
+                    tzinfo=dt_timezone.utc,
                 )
                 return site, dt
             except (ValueError, OverflowError):
@@ -99,7 +98,7 @@ class Video(models.Model):
                     day=int(match2.group(4)),
                     hour=int(match2.group(5)),
                     minute=int(match2.group(6)),
-                    tzinfo=django_timezone.utc,
+                    tzinfo=dt_timezone.utc,
                 )
                 return site, dt
             except (ValueError, OverflowError):
