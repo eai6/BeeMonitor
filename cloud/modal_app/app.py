@@ -15,7 +15,7 @@ app = modal.App("beemonitor-cloud", image=beemonitor_image)
 
 # ── Health check ──────────────────────────────────────────────────────
 
-@app.function()
+@app.function(min_containers=1)  # Always warm — instant response
 @modal.fastapi_endpoint(method="GET")
 def health():
     """Health check endpoint."""
@@ -31,6 +31,8 @@ def health():
     volumes={MODEL_VOLUME_MOUNT: model_volume},
     secrets=[modal.Secret.from_name("azure-storage")],
     memory=8192,
+    min_containers=0,  # Scale to zero — GPU spins up only on demand
+    scaledown_window=60,  # Keep alive 60s after last request, then shut down
 )
 def process_video(
     job_id: str,
@@ -80,6 +82,7 @@ def process_video(
 @app.function(
     timeout=3600,
     memory=4096,
+    min_containers=1,  # Always warm — fast ingestion response
 )
 def ingest_video(
     user_id: str,
@@ -117,7 +120,7 @@ def ingest_video(
 
 # ── Batch Processing ─────────────────────────────────────────────────
 
-@app.function(timeout=14400)
+@app.function(timeout=14400, min_containers=0)  # On-demand only
 def batch_process(jobs: list[dict]) -> list[dict]:
     """Process multiple videos in parallel via process_video.starmap()."""
     results = list(process_video.starmap(
