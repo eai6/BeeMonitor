@@ -180,3 +180,37 @@ class VideoDetailView(LoginRequiredMixin, DetailView):
 
     def get_queryset(self):
         return Video.objects.filter(user=self.request.user)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        video = self.object
+        blob_path = video.azure_blob_path
+
+        # Generate SAS URL for video playback
+        if blob_path and not blob_path.startswith("s3://"):
+            try:
+                from datetime import datetime, timedelta, timezone
+                from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
+
+                conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
+                if conn_str:
+                    service = BlobServiceClient.from_connection_string(conn_str)
+                    account_name = service.account_name
+                    account_key = ""
+                    for part in conn_str.split(";"):
+                        if part.startswith("AccountKey="):
+                            account_key = part.split("=", 1)[1]
+                            break
+                    token = generate_blob_sas(
+                        account_name=account_name,
+                        container_name="raw-videos",
+                        blob_name=blob_path,
+                        account_key=account_key,
+                        permission=BlobSasPermissions(read=True),
+                        expiry=datetime.now(timezone.utc) + timedelta(hours=24),
+                    )
+                    ctx["video_url"] = f"https://{account_name}.blob.core.windows.net/raw-videos/{blob_path}?{token}"
+            except Exception as e:
+                logger.error("Failed to generate video SAS URL: %s", e)
+
+        return ctx

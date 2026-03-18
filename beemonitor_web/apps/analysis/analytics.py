@@ -59,16 +59,9 @@ def get_activity_over_time(user, site_name=None, year=None, month=None):
     return sorted_data
 
 
-def get_period_averages(user, site_name=None):
+def get_period_averages(user, site_name=None, year=None, month=None):
     """
     Return average events per hour-of-day, per day-of-week, and per month.
-
-    Returns a dict:
-    {
-        "hourly": {0: avg, 1: avg, ... 23: avg},
-        "daily": {0: avg, 1: avg, ... 6: avg},  # 0=Mon, 6=Sun
-        "monthly": {1: avg, 2: avg, ... 12: avg},
-    }
     """
     qs = JobResult.objects.filter(
         job__user=user,
@@ -77,6 +70,10 @@ def get_period_averages(user, site_name=None):
 
     if site_name:
         qs = qs.filter(job__video__site_name=site_name)
+    if year:
+        qs = qs.filter(job__video__year=year)
+    if month:
+        qs = qs.filter(job__video__month=month)
 
     hourly_totals = defaultdict(list)
     daily_totals = defaultdict(list)
@@ -101,13 +98,11 @@ def get_period_averages(user, site_name=None):
     }
 
 
-def get_cumulative_activity(user, site_name=None):
+def get_cumulative_activity(user, site_name=None, year=None, month=None):
     """
     Return cumulative sum of events over time (sorted by date).
-
-    Returns a list of dicts: [{"date": "2024-06-01", "cumulative": 20}, ...]
     """
-    daily_data = get_activity_over_time(user, site_name=site_name)
+    daily_data = get_activity_over_time(user, site_name=site_name, year=year, month=month)
 
     cumulative = 0
     result = []

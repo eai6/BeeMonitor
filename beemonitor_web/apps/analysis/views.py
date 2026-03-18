@@ -829,13 +829,13 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
             ctx["activity_json"] = "[]"
 
         try:
-            cumulative = get_cumulative_activity(user, site_name=site or None)
+            cumulative = get_cumulative_activity(user, site_name=site or None, year=year_int, month=month_int)
             ctx["cumulative_json"] = json.dumps(cumulative, default=str)
         except Exception:
             ctx["cumulative_json"] = "[]"
 
         try:
-            averages = get_period_averages(user, site_name=site or None)
+            averages = get_period_averages(user, site_name=site or None, year=year_int, month=month_int)
             # Convert int keys to string keys for JSON
             ctx["hourly_avg_json"] = json.dumps({str(k): v for k, v in averages["hourly"].items()})
             ctx["daily_avg_json"] = json.dumps({str(k): v for k, v in averages["daily"].items()})

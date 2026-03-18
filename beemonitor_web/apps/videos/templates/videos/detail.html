@@ -6,9 +6,25 @@
   <a href="{% url 'videos:list' %}" class="text-sm text-amber-600 hover:underline">&larr; Back to Videos</a>
 </div>
 
-<div class="bg-white shadow rounded-lg p-6">
-  <h1 class="text-2xl font-bold text-gray-900 mb-4">{{ video.title }}</h1>
-  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+<h1 class="text-2xl font-bold text-gray-900 mb-4">{{ video.title }}</h1>
+
+<!-- Video Player -->
+{% if video_url %}
+<div class="bg-white shadow rounded-lg overflow-hidden mb-6">
+  <video controls class="w-full" preload="metadata" style="max-height: 500px;">
+    <source src="{{ video_url }}" type="video/mp4">
+    Your browser does not support the video tag.
+  </video>
+</div>
+{% elif video.azure_blob_path and "s3://" in video.azure_blob_path %}
+<div class="bg-gray-50 rounded-lg p-8 text-center mb-6">
+  <p class="text-gray-500">Video is stored on S3. It will be transferred to Azure when analysis is submitted.</p>
+</div>
+{% endif %}
+
+<!-- Metadata -->
+<div class="bg-white shadow rounded-lg p-6 mb-6">
+  <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 text-sm">
     <div>
       <p class="text-gray-500">Status</p>
       <p class="font-medium">
@@ -21,33 +37,46 @@
       </p>
     </div>
     <div>
+      <p class="text-gray-500">Site</p>
+      <p class="font-medium">{{ video.site_name|default:"--" }}</p>
+    </div>
+    <div>
+      <p class="text-gray-500">Recorded</p>
+      <p class="font-medium">{% if video.recorded_at %}{{ video.recorded_at|date:"Y-m-d H:i" }}{% else %}--{% endif %}</p>
+    </div>
+    <div>
       <p class="text-gray-500">File Size</p>
       <p class="font-medium">{{ video.file_size_bytes|filesizeformat }}</p>
     </div>
     <div>
-      <p class="text-gray-500">Duration</p>
-      <p class="font-medium">{% if video.duration_seconds %}{{ video.duration_seconds|floatformat:1 }}s{% else %}--{% endif %}</p>
+      <p class="text-gray-500">Uploaded</p>
+      <p class="font-medium">{{ video.uploaded_at|date:"Y-m-d H:i" }}</p>
     </div>
+    {% if video.duration_seconds %}
+    <div>
+      <p class="text-gray-500">Duration</p>
+      <p class="font-medium">{{ video.duration_seconds|floatformat:1 }}s</p>
+    </div>
+    {% endif %}
+    {% if video.resolution %}
     <div>
       <p class="text-gray-500">Resolution</p>
-      <p class="font-medium">{{ video.resolution|default:"--" }}</p>
+      <p class="font-medium">{{ video.resolution }}</p>
     </div>
+    {% endif %}
+    {% if video.fps %}
     <div>
       <p class="text-gray-500">FPS</p>
-      <p class="font-medium">{% if video.fps %}{{ video.fps|floatformat:1 }}{% else %}--{% endif %}</p>
+      <p class="font-medium">{{ video.fps|floatformat:1 }}</p>
     </div>
-    <div>
-      <p class="text-gray-500">Uploaded</p>
-      <p class="font-medium">{{ video.uploaded_at }}</p>
-    </div>
+    {% endif %}
   </div>
 </div>
 
 <!-- Jobs for this video -->
-<div class="mt-8 bg-white shadow rounded-lg">
-  <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+<div class="bg-white shadow rounded-lg">
+  <div class="px-6 py-4 border-b border-gray-200">
     <h2 class="text-lg font-medium text-gray-900">Analysis Jobs</h2>
-    <a href="{% url 'analysis:new' %}?video={{ video.pk }}" class="text-sm text-amber-600 hover:underline">New Job</a>
   </div>
   {% if video.jobs.all %}
   <table class="min-w-full divide-y divide-gray-200">
@@ -55,17 +84,35 @@
       <tr>
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Progress</th>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Events</th>
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-200">
       {% for job in video.jobs.all %}
       <tr>
         <td class="px-6 py-4 text-sm"><a href="{% url 'analysis:detail' job.pk %}" class="text-amber-600 hover:underline">#{{ job.pk }}</a></td>
-        <td class="px-6 py-4 text-sm">{{ job.get_status_display }}</td>
-        <td class="px-6 py-4 text-sm">{{ job.progress_pct }}%</td>
+        <td class="px-6 py-4 text-sm">
+          <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full
+            {% if job.status == 'completed' %}bg-green-100 text-green-800
+            {% elif job.status == 'failed' %}bg-red-100 text-red-800
+            {% elif job.status == 'processing' %}bg-blue-100 text-blue-800
+            {% else %}bg-amber-100 text-amber-800{% endif %}">
+            {{ job.get_status_display }}
+          </span>
+        </td>
+        <td class="px-6 py-4 text-sm text-gray-500">
+          {% if job.status == 'completed' %}
+            {% with r=job.result %}{% if r %}{{ r.total_events }}{% else %}--{% endif %}{% endwith %}
+          {% else %}--{% endif %}
+        </td>
         <td class="px-6 py-4 text-sm text-gray-500">{{ job.created_at|timesince }} ago</td>
+        <td class="px-6 py-4 text-sm">
+          {% if job.status == 'completed' %}
+          <a href="{% url 'analysis:results' job.pk %}" class="text-amber-600 hover:underline">Results</a>
+          {% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>
