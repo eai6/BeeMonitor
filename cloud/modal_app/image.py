@@ -32,6 +32,7 @@ beemonitor_image = (
         "tqdm>=4.65.0",
         "Pillow>=10.0.0",
         "fastapi[standard]>=0.100.0",
+        "boto3>=1.28.0",
     )
     .env({"PYTHONPATH": "/root/src:/root"})
     .add_local_dir("src/beemonitor", "/root/src/beemonitor")
