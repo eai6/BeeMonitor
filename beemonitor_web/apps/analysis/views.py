@@ -58,6 +58,66 @@ def _generate_sas_url(blob_path: str, container: str = "processed") -> str:
         return ""
 
 
+def _transfer_s3_to_azure(video) -> str:
+    """If video is on S3, transfer it to Azure Blob Storage. Returns the Azure blob path."""
+    blob_path = video.azure_blob_path
+    if not blob_path.startswith("s3://"):
+        return blob_path  # Already in Azure
+
+    import boto3
+    from azure.storage.blob import BlobServiceClient
+    from django.conf import settings as django_settings
+    import tempfile
+    from pathlib import Path
+
+    meta = video.metadata or {}
+    remote_key = meta.get("remote_key", blob_path.replace("s3://", ""))
+    bucket = meta.get("remote_bucket", "")
+
+    if not bucket:
+        raise ValueError("No S3 bucket in video metadata")
+
+    # Get S3 credentials from the source
+    source = video.source
+    if not source:
+        raise ValueError("Video has no linked data source for S3 credentials")
+
+    from apps.sources.views import _decrypt_credentials
+    creds = _decrypt_credentials(source)
+
+    s3 = boto3.client(
+        "s3",
+        aws_access_key_id=creds["access_key_id"],
+        aws_secret_access_key=creds["secret_access_key"],
+        region_name=creds.get("region", "us-east-1"),
+    )
+
+    conn_str = django_settings.AZURE_STORAGE_CONNECTION_STRING
+    azure_service = BlobServiceClient.from_connection_string(conn_str)
+
+    # Download from S3 to temp file, then upload to Azure
+    filename = remote_key.split("/")[-1]
+    azure_blob_path = f"{video.user_id}/{video.pk}/{filename}"
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=True) as tmp:
+        logger.info("Transferring s3://%s/%s -> Azure raw-videos/%s", bucket, remote_key, azure_blob_path)
+        s3.download_file(bucket, remote_key, tmp.name)
+        file_size = Path(tmp.name).stat().st_size
+
+        blob = azure_service.get_blob_client("raw-videos", azure_blob_path)
+        with open(tmp.name, "rb") as fh:
+            blob.upload_blob(fh, overwrite=True)
+
+    # Update video record with Azure path and file size
+    video.azure_blob_path = azure_blob_path
+    video.file_size_bytes = file_size
+    video.save(update_fields=["azure_blob_path", "file_size_bytes"])
+    creds.clear()
+
+    logger.info("Transfer complete: %s (%d MB)", azure_blob_path, file_size // (1024 * 1024))
+    return azure_blob_path
+
+
 def _run_modal_job(job_pk: int) -> None:
     """Background thread: call Modal and update job status on completion."""
     import django
@@ -65,18 +125,20 @@ def _run_modal_job(job_pk: int) -> None:
     from django.utils import timezone
 
     try:
-        job = Job.objects.select_related("video").get(pk=job_pk)
+        job = Job.objects.select_related("video", "video__source").get(pk=job_pk)
     except Job.DoesNotExist:
         return
 
     try:
-        import modal
+        # If video is on S3, transfer to Azure first
+        video_blob_path = _transfer_s3_to_azure(job.video)
 
+        import modal
         process_video = modal.Function.from_name("beemonitor-cloud", "process_video")
         result_payload = process_video.remote(
             job_id=job.modal_job_id,
             user_id=str(job.user_id),
-            video_blob_path=job.video.azure_blob_path,
+            video_blob_path=video_blob_path,
             detection_mode=job.config.get("detection_mode", "yolo"),
             confidence_threshold=job.config.get("confidence_threshold", 0.25),
             visualize=True,
