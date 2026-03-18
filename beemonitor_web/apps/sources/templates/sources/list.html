@@ -22,6 +22,22 @@
     {% if source.last_synced_at %}
     <p class="text-xs text-gray-400">Last synced {{ source.last_synced_at|timesince }} ago</p>
     {% endif %}
+
+    <div class="flex gap-2 mt-4">
+      {% if source.is_connected %}
+      <a href="{% url 'sources:browse' source.pk %}"
+         class="flex-1 text-center px-3 py-1.5 bg-amber-50 border border-amber-200 rounded text-sm text-amber-700 hover:bg-amber-100">
+        Browse Files
+      </a>
+      {% endif %}
+      <form method="post" action="{% url 'sources:delete' source.pk %}"
+            onsubmit="return confirm('Delete source \'{{ source.name }}\'? This will remove stored credentials. This cannot be undone.')">
+        {% csrf_token %}
+        <button type="submit" class="px-3 py-1.5 bg-red-50 border border-red-200 rounded text-sm text-red-700 hover:bg-red-100">
+          Delete
+        </button>
+      </form>
+    </div>
   </div>
   {% endfor %}
 </div>

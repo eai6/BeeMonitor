@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Browse {{ source.name }} - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+  <a href="{% url 'sources:list' %}" class="text-sm text-amber-600 hover:underline">&larr; Back to Sources</a>
+</div>
+
+<div class="flex justify-between items-center mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">{{ source.name }}</h1>
+    <p class="text-sm text-gray-500">{{ source.get_source_type_display }} &mdash; {{ files|length }} file(s) found</p>
+  </div>
+</div>
+
+{% if error %}
+<div class="bg-red-50 text-red-700 rounded-lg p-4 mb-6">{{ error }}</div>
+{% endif %}
+
+{% if files %}
+<form method="post" action="{% url 'sources:sync' source.pk %}">
+  {% csrf_token %}
+
+  <div class="bg-white shadow rounded-lg mb-4">
+    <div class="px-6 py-3 border-b border-gray-200 flex justify-between items-center bg-gray-50">
+      <label class="flex items-center gap-2 text-sm">
+        <input type="checkbox" id="select-all" class="rounded border-gray-300">
+        <span class="font-medium text-gray-700">Select All</span>
+      </label>
+      <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-1.5 rounded text-sm font-medium">
+        Import Selected to BeeMonitor
+      </button>
+    </div>
+
+    <div class="overflow-x-auto">
+      <table class="min-w-full divide-y divide-gray-200 text-sm">
+        <thead class="bg-gray-50">
+          <tr>
+            <th class="px-4 py-3 w-8"></th>
+            <th class="px-4 py-3 text-left font-medium text-gray-500 text-xs uppercase">Filename</th>
+            <th class="px-4 py-3 text-left font-medium text-gray-500 text-xs uppercase">Size</th>
+            <th class="px-4 py-3 text-left font-medium text-gray-500 text-xs uppercase">Last Modified</th>
+          </tr>
+        </thead>
+        <tbody class="bg-white divide-y divide-gray-200">
+          {% for file in files %}
+          <tr class="hover:bg-gray-50">
+            <td class="px-4 py-2">
+              <input type="checkbox" name="selected_files" value="{{ file.key }}" class="file-checkbox rounded border-gray-300">
+            </td>
+            <td class="px-4 py-2">
+              <span class="font-mono text-gray-700">{{ file.name }}</span>
+            </td>
+            <td class="px-4 py-2 text-gray-500">{{ file.size_mb }} MB</td>
+            <td class="px-4 py-2 text-gray-400 text-xs">{{ file.last_modified }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</form>
+
+<script>
+  document.getElementById('select-all').addEventListener('change', function() {
+    document.querySelectorAll('.file-checkbox').forEach(cb => cb.checked = this.checked);
+  });
+</script>
+
+{% else %}
+<div class="bg-white shadow rounded-lg p-12 text-center">
+  <p class="text-gray-500">No files found in this source.</p>
+</div>
+{% endif %}
+{% endblock %}
