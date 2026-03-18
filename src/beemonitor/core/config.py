@@ -870,7 +870,7 @@ class OutputConfig:
     base_folder: str = "output"
     save_visualizations: bool = False
     save_intermediate_frames: bool = False
-    video_codec: str = "mp4v"
+    video_codec: str = "avc1"
     csv_include_species: bool = True
     csv_columns: Optional[List[str]] = None
 
