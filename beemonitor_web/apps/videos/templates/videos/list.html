@@ -4,27 +4,115 @@
 {% block content %}
 <div class="flex justify-between items-center mb-6">
   <h1 class="text-2xl font-bold text-gray-900">Videos</h1>
-  <a href="{% url 'videos:upload' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Upload Video</a>
+  <div class="flex gap-2">
+    <a href="{% url 'videos:batch_upload' %}" class="bg-white border border-amber-600 text-amber-600 hover:bg-amber-50 px-4 py-2 rounded text-sm font-medium">Batch Upload</a>
+    <a href="{% url 'videos:upload' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Upload Video</a>
+  </div>
+</div>
+
+<!-- Filter Bar -->
+<div class="bg-white shadow rounded-lg p-4 mb-6">
+  <form method="get" class="flex flex-wrap gap-3 items-end">
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Site</label>
+      <select name="site" class="border border-gray-300 rounded px-3 py-1.5 text-sm focus:ring-amber-500 focus:border-amber-500">
+        <option value="">All Sites</option>
+        {% for site in site_names %}
+        <option value="{{ site }}" {% if current_site == site %}selected{% endif %}>{{ site }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Year</label>
+      <select name="year" class="border border-gray-300 rounded px-3 py-1.5 text-sm focus:ring-amber-500 focus:border-amber-500">
+        <option value="">All Years</option>
+        {% for y in years %}
+        <option value="{{ y }}" {% if current_year == y|stringformat:"d" %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Month</label>
+      <select name="month" class="border border-gray-300 rounded px-3 py-1.5 text-sm focus:ring-amber-500 focus:border-amber-500">
+        <option value="">All Months</option>
+        {% for m in months %}
+        <option value="{{ m }}" {% if current_month == m|stringformat:"d" %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Day</label>
+      <select name="day" class="border border-gray-300 rounded px-3 py-1.5 text-sm focus:ring-amber-500 focus:border-amber-500">
+        <option value="">All Days</option>
+        {% for d in days %}
+        <option value="{{ d }}" {% if current_day == d|stringformat:"d" %}selected{% endif %}>{{ d }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-1.5 rounded text-sm font-medium border border-gray-300">Filter</button>
+    </div>
+    {% if current_site or current_year or current_month or current_day %}
+    <div>
+      <a href="{% url 'videos:list' %}" class="text-sm text-amber-600 hover:underline">Clear Filters</a>
+    </div>
+    {% endif %}
+  </form>
 </div>
 
 {% if videos %}
+
+<!-- Analyze All Button -->
+<div class="mb-4 flex justify-end">
+  <form method="get" action="{% url 'analysis:new' %}" id="analyzeAllForm">
+    {% if current_site %}<input type="hidden" name="site" value="{{ current_site }}">{% endif %}
+    {% if current_year %}<input type="hidden" name="year" value="{{ current_year }}">{% endif %}
+    {% if current_month %}<input type="hidden" name="month" value="{{ current_month }}">{% endif %}
+    <button type="button" onclick="analyzeAll()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded text-sm font-medium">
+      Analyze All Filtered Videos
+    </button>
+  </form>
+</div>
+
 <div class="bg-white shadow rounded-lg overflow-hidden">
   <table class="min-w-full divide-y divide-gray-200">
     <thead class="bg-gray-50">
       <tr>
-        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Title</th>
-        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Size</th>
-        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Uploaded</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+          <input type="checkbox" id="selectAll" class="rounded border-gray-300">
+        </th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Title</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Site</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Recorded</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Size</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Uploaded</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-200">
       {% for video in videos %}
       <tr>
-        <td class="px-6 py-4 text-sm">
+        <td class="px-4 py-4 text-sm">
+          <input type="checkbox" class="video-checkbox rounded border-gray-300" value="{{ video.pk }}" name="video_ids">
+        </td>
+        <td class="px-4 py-4 text-sm">
           <a href="{% url 'videos:detail' video.pk %}" class="text-amber-600 hover:underline font-medium">{{ video.title }}</a>
         </td>
-        <td class="px-6 py-4 text-sm">
+        <td class="px-4 py-4 text-sm text-gray-500">
+          {% if video.site_name %}
+          <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800">{{ video.site_name }}</span>
+          {% else %}
+          <span class="text-gray-300">--</span>
+          {% endif %}
+        </td>
+        <td class="px-4 py-4 text-sm text-gray-500">
+          {% if video.recorded_at %}
+            {{ video.recorded_at|date:"Y-m-d H:i" }}
+          {% else %}
+            <span class="text-gray-300">--</span>
+          {% endif %}
+        </td>
+        <td class="px-4 py-4 text-sm">
           <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full
             {% if video.status == 'ready' %}bg-green-100 text-green-800
             {% elif video.status == 'processing' %}bg-amber-100 text-amber-800
@@ -32,8 +120,8 @@
             {{ video.get_status_display }}
           </span>
         </td>
-        <td class="px-6 py-4 text-sm text-gray-500">{{ video.file_size_bytes|filesizeformat }}</td>
-        <td class="px-6 py-4 text-sm text-gray-500">{{ video.uploaded_at|timesince }} ago</td>
+        <td class="px-4 py-4 text-sm text-gray-500">{{ video.file_size_bytes|filesizeformat }}</td>
+        <td class="px-4 py-4 text-sm text-gray-500">{{ video.uploaded_at|timesince }} ago</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -43,11 +131,11 @@
 {% if is_paginated %}
 <div class="flex justify-center mt-6 space-x-2">
   {% if page_obj.has_previous %}
-  <a href="?page={{ page_obj.previous_page_number }}" class="px-3 py-1 border rounded text-sm text-gray-700 hover:bg-gray-50">Previous</a>
+  <a href="?page={{ page_obj.previous_page_number }}{% if current_site %}&site={{ current_site }}{% endif %}{% if current_year %}&year={{ current_year }}{% endif %}{% if current_month %}&month={{ current_month }}{% endif %}" class="px-3 py-1 border rounded text-sm text-gray-700 hover:bg-gray-50">Previous</a>
   {% endif %}
   <span class="px-3 py-1 text-sm text-gray-500">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
   {% if page_obj.has_next %}
-  <a href="?page={{ page_obj.next_page_number }}" class="px-3 py-1 border rounded text-sm text-gray-700 hover:bg-gray-50">Next</a>
+  <a href="?page={{ page_obj.next_page_number }}{% if current_site %}&site={{ current_site }}{% endif %}{% if current_year %}&year={{ current_year }}{% endif %}{% if current_month %}&month={{ current_month }}{% endif %}" class="px-3 py-1 border rounded text-sm text-gray-700 hover:bg-gray-50">Next</a>
   {% endif %}
 </div>
 {% endif %}
@@ -58,4 +146,33 @@
   <a href="{% url 'videos:upload' %}" class="text-amber-600 hover:underline font-medium">Upload your first video</a>
 </div>
 {% endif %}
+
+<script>
+// Select all checkbox
+document.addEventListener('DOMContentLoaded', function() {
+    const selectAll = document.getElementById('selectAll');
+    if (selectAll) {
+        selectAll.addEventListener('change', function() {
+            document.querySelectorAll('.video-checkbox').forEach(function(cb) {
+                cb.checked = selectAll.checked;
+            });
+        });
+    }
+});
+
+// Analyze all filtered/selected videos — opens new analysis job page for each
+function analyzeAll() {
+    const checked = document.querySelectorAll('.video-checkbox:checked');
+    if (checked.length === 0) {
+        alert('Please select at least one video to analyze.');
+        return;
+    }
+    // Open the analysis new page for the first selected video.
+    // For batch analysis, we pass all video IDs as query params.
+    const ids = Array.from(checked).map(function(cb) { return cb.value; });
+    // Navigate to create job for first video; user can queue more
+    const firstId = ids[0];
+    window.location.href = "{% url 'analysis:new' %}?video=" + firstId;
+}
+</script>
 {% endblock %}

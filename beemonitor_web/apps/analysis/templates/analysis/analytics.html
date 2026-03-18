@@ -1,0 +1,279 @@
+{% extends "base.html" %}
+{% block title %}Analytics - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-gray-900">Activity Analytics</h1>
+  <p class="mt-1 text-sm text-gray-500">Visualize bee activity across your monitored sites.</p>
+</div>
+
+<!-- Filter Bar -->
+<div class="bg-white shadow rounded-lg p-4 mb-6">
+  <form method="get" class="flex flex-wrap gap-3 items-end">
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Site</label>
+      <select name="site" class="border border-gray-300 rounded px-3 py-1.5 text-sm focus:ring-amber-500 focus:border-amber-500">
+        <option value="">All Sites</option>
+        {% for site in site_names %}
+        <option value="{{ site }}" {% if current_site == site %}selected{% endif %}>{{ site }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Year</label>
+      <select name="year" class="border border-gray-300 rounded px-3 py-1.5 text-sm focus:ring-amber-500 focus:border-amber-500">
+        <option value="">All Years</option>
+        {% for y in years %}
+        <option value="{{ y }}" {% if current_year == y|stringformat:"d" %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Month</label>
+      <select name="month" class="border border-gray-300 rounded px-3 py-1.5 text-sm focus:ring-amber-500 focus:border-amber-500">
+        <option value="">All Months</option>
+        {% for m in months_list %}
+        <option value="{{ m }}" {% if current_month == m|stringformat:"d" %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-1.5 rounded text-sm font-medium border border-gray-300">Filter</button>
+    </div>
+    {% if current_site or current_year or current_month %}
+    <div>
+      <a href="{% url 'analysis:analytics' %}" class="text-sm text-amber-600 hover:underline">Clear Filters</a>
+    </div>
+    {% endif %}
+  </form>
+</div>
+
+<!-- Summary Cards -->
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+  <div class="bg-white shadow rounded-lg p-5 text-center">
+    <p class="text-sm text-gray-500">Total Videos</p>
+    <p class="text-3xl font-bold text-gray-900 mt-1">{{ summary.total_videos }}</p>
+  </div>
+  <div class="bg-white shadow rounded-lg p-5 text-center">
+    <p class="text-sm text-gray-500">Total Events</p>
+    <p class="text-3xl font-bold text-gray-900 mt-1">{{ summary.total_events }}</p>
+  </div>
+  <div class="bg-white shadow rounded-lg p-5 text-center">
+    <p class="text-sm text-gray-500">Avg Events/Video</p>
+    <p class="text-3xl font-bold text-amber-600 mt-1">{{ summary.avg_events_per_video }}</p>
+  </div>
+  <div class="bg-white shadow rounded-lg p-5 text-center">
+    <p class="text-sm text-gray-500">Unique Tracks</p>
+    <p class="text-3xl font-bold text-blue-600 mt-1">{{ summary.total_unique_tracks }}</p>
+  </div>
+</div>
+
+<!-- Entry / Exit Summary -->
+<div class="grid grid-cols-2 gap-4 mb-8">
+  <div class="bg-white shadow rounded-lg p-5 text-center">
+    <p class="text-sm text-gray-500">Total Entries</p>
+    <p class="text-3xl font-bold text-green-600 mt-1">{{ summary.total_entries }}</p>
+  </div>
+  <div class="bg-white shadow rounded-lg p-5 text-center">
+    <p class="text-sm text-gray-500">Total Exits</p>
+    <p class="text-3xl font-bold text-red-600 mt-1">{{ summary.total_exits }}</p>
+  </div>
+</div>
+
+<!-- Charts -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+
+  <!-- Cumulative Activity Chart -->
+  <div class="bg-white shadow rounded-lg p-6">
+    <h2 class="text-lg font-medium text-gray-900 mb-4">Cumulative Activity Over Time</h2>
+    <canvas id="cumulativeChart" height="250"></canvas>
+  </div>
+
+  <!-- Hourly Activity Chart -->
+  <div class="bg-white shadow rounded-lg p-6">
+    <h2 class="text-lg font-medium text-gray-900 mb-4">Average Events by Hour of Day</h2>
+    <canvas id="hourlyChart" height="250"></canvas>
+  </div>
+
+  <!-- Daily Activity Chart -->
+  <div class="bg-white shadow rounded-lg p-6">
+    <h2 class="text-lg font-medium text-gray-900 mb-4">Average Events by Day of Week</h2>
+    <canvas id="dailyChart" height="250"></canvas>
+  </div>
+
+  <!-- Monthly Trend Chart -->
+  <div class="bg-white shadow rounded-lg p-6">
+    <h2 class="text-lg font-medium text-gray-900 mb-4">Monthly Activity Trend</h2>
+    <canvas id="monthlyChart" height="250"></canvas>
+  </div>
+</div>
+
+<!-- Nest Activity Heatmap -->
+{% if nest_data %}
+<div class="bg-white shadow rounded-lg p-6 mb-8">
+  <h2 class="text-lg font-medium text-gray-900 mb-4">Nest Activity Heatmap</h2>
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead>
+        <tr>
+          <th class="px-4 py-2 text-left font-medium text-gray-500">Nest</th>
+          <th class="px-4 py-2 text-center font-medium text-gray-500">Entries</th>
+          <th class="px-4 py-2 text-center font-medium text-gray-500">Exits</th>
+          <th class="px-4 py-2 text-center font-medium text-gray-500">Total</th>
+          <th class="px-4 py-2 text-left font-medium text-gray-500">Activity</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for nest in nest_data %}
+        <tr>
+          <td class="px-4 py-2 font-medium text-gray-900">{{ nest.nest_id }}</td>
+          <td class="px-4 py-2 text-center text-green-700">{{ nest.entries }}</td>
+          <td class="px-4 py-2 text-center text-red-700">{{ nest.exits }}</td>
+          <td class="px-4 py-2 text-center font-bold text-gray-900">{{ nest.total }}</td>
+          <td class="px-4 py-2">
+            <div class="flex gap-1">
+              <div class="h-6 rounded bg-green-500" style="width: {{ nest.entries }}px; min-width: 2px; max-width: 200px;" title="Entries: {{ nest.entries }}"></div>
+              <div class="h-6 rounded bg-red-500" style="width: {{ nest.exits }}px; min-width: 2px; max-width: 200px;" title="Exits: {{ nest.exits }}"></div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if summary.completed_jobs == 0 %}
+<div class="bg-white shadow rounded-lg p-12 text-center mb-8">
+  <p class="text-gray-500">No completed analysis jobs yet. Run some analyses to see activity data here.</p>
+  <a href="{% url 'analysis:new' %}" class="text-amber-600 hover:underline font-medium mt-2 inline-block">Create Analysis Job</a>
+</div>
+{% endif %}
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const cumulativeData = JSON.parse('{{ cumulative_json|escapejs }}');
+    const hourlyAvg = JSON.parse('{{ hourly_avg_json|escapejs }}');
+    const dailyAvg = JSON.parse('{{ daily_avg_json|escapejs }}');
+    const monthlyAvg = JSON.parse('{{ monthly_avg_json|escapejs }}');
+
+    // --- Cumulative Activity Chart ---
+    if (cumulativeData.length > 0) {
+        new Chart(document.getElementById('cumulativeChart'), {
+            type: 'line',
+            data: {
+                labels: cumulativeData.map(d => d.date),
+                datasets: [{
+                    label: 'Cumulative Events',
+                    data: cumulativeData.map(d => d.cumulative),
+                    borderColor: '#d97706',
+                    backgroundColor: 'rgba(217, 119, 6, 0.1)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 3,
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    x: { title: { display: true, text: 'Date' } },
+                    y: { title: { display: true, text: 'Cumulative Events' }, beginAtZero: true }
+                },
+                plugins: { legend: { display: false } }
+            }
+        });
+    }
+
+    // --- Hourly Activity Chart (Stacked: Entries green, Exits red) ---
+    const activityData = JSON.parse('{{ activity_json|escapejs }}');
+    // Build hourly aggregation from hourlyAvg
+    const hours = Array.from({length: 24}, (_, i) => i);
+
+    // For stacked bars, we need entry vs exit per hour.
+    // hourlyAvg only has total; use activity data to compute entry/exit ratios
+    // We'll use hourlyAvg for the total and estimate splits from overall ratios
+    const totalEntries = {{ summary.total_entries }};
+    const totalExits = {{ summary.total_exits }};
+    const totalAll = totalEntries + totalExits || 1;
+    const entryRatio = totalEntries / totalAll;
+    const exitRatio = totalExits / totalAll;
+
+    new Chart(document.getElementById('hourlyChart'), {
+        type: 'bar',
+        data: {
+            labels: hours.map(h => h + ':00'),
+            datasets: [
+                {
+                    label: 'Entries',
+                    data: hours.map(h => Math.round((hourlyAvg[h] || 0) * entryRatio * 10) / 10),
+                    backgroundColor: 'rgba(34, 197, 94, 0.7)',
+                },
+                {
+                    label: 'Exits',
+                    data: hours.map(h => Math.round((hourlyAvg[h] || 0) * exitRatio * 10) / 10),
+                    backgroundColor: 'rgba(239, 68, 68, 0.7)',
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            scales: {
+                x: { stacked: true, title: { display: true, text: 'Hour of Day' } },
+                y: { stacked: true, title: { display: true, text: 'Avg Events' }, beginAtZero: true }
+            }
+        }
+    });
+
+    // --- Daily Activity Chart ---
+    const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    new Chart(document.getElementById('dailyChart'), {
+        type: 'bar',
+        data: {
+            labels: dayLabels,
+            datasets: [{
+                label: 'Avg Events',
+                data: Array.from({length: 7}, (_, i) => dailyAvg[i] || 0),
+                backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                borderRadius: 4,
+            }]
+        },
+        options: {
+            responsive: true,
+            scales: {
+                x: { title: { display: true, text: 'Day of Week' } },
+                y: { title: { display: true, text: 'Avg Events' }, beginAtZero: true }
+            },
+            plugins: { legend: { display: false } }
+        }
+    });
+
+    // --- Monthly Trend Chart ---
+    const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    new Chart(document.getElementById('monthlyChart'), {
+        type: 'line',
+        data: {
+            labels: monthLabels,
+            datasets: [{
+                label: 'Avg Events',
+                data: Array.from({length: 12}, (_, i) => monthlyAvg[i + 1] || 0),
+                borderColor: '#8b5cf6',
+                backgroundColor: 'rgba(139, 92, 246, 0.1)',
+                fill: true,
+                tension: 0.3,
+                pointRadius: 4,
+            }]
+        },
+        options: {
+            responsive: true,
+            scales: {
+                x: { title: { display: true, text: 'Month' } },
+                y: { title: { display: true, text: 'Avg Events' }, beginAtZero: true }
+            },
+            plugins: { legend: { display: false } }
+        }
+    });
+});
+</script>
+{% endblock %}

@@ -1,3 +1,4 @@
+import json
 import logging
 import uuid
 
@@ -8,6 +9,15 @@ from django.shortcuts import get_object_or_404
 from django.urls import reverse, reverse_lazy
 from django.views.generic import DetailView, FormView, ListView, TemplateView
 
+from apps.videos.models import Video
+
+from .analytics import (
+    get_activity_over_time,
+    get_cumulative_activity,
+    get_nest_activity_heatmap,
+    get_period_averages,
+    get_summary_stats,
+)
 from .forms import JobCreateForm
 from .models import Job, JobResult
 
@@ -205,6 +215,70 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         # Load CSV data for display in tables
         ctx["events_data"] = _load_csv_from_azure(events_path)
         ctx["tracking_data"] = _load_csv_from_azure(tracking_path)
+
+        return ctx
+
+
+class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
+    template_name = "analysis/analytics.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        user = self.request.user
+
+        # Get filter params
+        site = self.request.GET.get("site", "")
+        year = self.request.GET.get("year", "")
+        month = self.request.GET.get("month", "")
+
+        year_int = None
+        month_int = None
+        if year:
+            try:
+                year_int = int(year)
+            except (ValueError, TypeError):
+                pass
+        if month:
+            try:
+                month_int = int(month)
+            except (ValueError, TypeError):
+                pass
+
+        # Filter options
+        user_videos = Video.objects.filter(user=user)
+        ctx["site_names"] = sorted(
+            user_videos.exclude(site_name="")
+            .values_list("site_name", flat=True)
+            .distinct()
+        )
+        ctx["years"] = sorted(
+            user_videos.exclude(year=None)
+            .values_list("year", flat=True)
+            .distinct()
+        )
+        ctx["months_list"] = list(range(1, 13))
+
+        ctx["current_site"] = site
+        ctx["current_year"] = year
+        ctx["current_month"] = month
+
+        # Analytics data
+        ctx["summary"] = get_summary_stats(user, site_name=site or None, year=year_int, month=month_int)
+
+        activity = get_activity_over_time(user, site_name=site or None, year=year_int, month=month_int)
+        ctx["activity_json"] = json.dumps(activity)
+
+        cumulative = get_cumulative_activity(user, site_name=site or None)
+        ctx["cumulative_json"] = json.dumps(cumulative)
+
+        averages = get_period_averages(user, site_name=site or None)
+        ctx["hourly_avg_json"] = json.dumps(averages["hourly"])
+        ctx["daily_avg_json"] = json.dumps(averages["daily"])
+        ctx["monthly_avg_json"] = json.dumps(averages["monthly"])
+
+        nest_data = get_nest_activity_heatmap(user)
+        ctx["nest_data"] = nest_data
+        ctx["nest_data_json"] = json.dumps(nest_data)
 
         return ctx
 

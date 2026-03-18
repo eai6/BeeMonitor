@@ -52,7 +52,7 @@
   </div>
   {% endif %}
 
-  <!-- Annotated Video -->
+  <!-- Annotated Video (served via re-encoder proxy for browser compatibility) -->
   {% if annotated_video_url %}
   <div class="bg-white shadow rounded-lg overflow-hidden">
     <div class="px-6 py-3 border-b border-gray-200 bg-amber-50">
@@ -60,9 +60,10 @@
     </div>
     <div class="p-4">
       <video controls class="w-full rounded" preload="metadata">
-        <source src="{{ annotated_video_url }}" type="video/mp4">
+        <source src="{% url 'analysis:video_proxy' job.pk %}" type="video/mp4">
         Your browser does not support the video tag.
       </video>
+      <p class="text-xs text-gray-400 mt-2">Video is served through a smart proxy that ensures browser-compatible H.264 encoding.</p>
     </div>
   </div>
   {% endif %}
