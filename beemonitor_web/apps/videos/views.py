@@ -51,27 +51,19 @@ class VideoListView(LoginRequiredMixin, ListView):
         ctx = super().get_context_data(**kwargs)
         user_videos = Video.objects.filter(user=self.request.user)
 
-        # Build filter options from existing data
-        ctx["site_names"] = sorted(
-            user_videos.exclude(site_name="")
-            .values_list("site_name", flat=True)
-            .distinct()
-        )
-        ctx["years"] = sorted(
-            user_videos.exclude(year=None)
-            .values_list("year", flat=True)
-            .distinct()
-        )
-        ctx["months"] = sorted(
-            user_videos.exclude(month=None)
-            .values_list("month", flat=True)
-            .distinct()
-        )
-        ctx["days"] = sorted(
-            user_videos.exclude(day=None)
-            .values_list("day", flat=True)
-            .distinct()
-        )
+        # Build filter options from existing data (use set() to guarantee uniqueness)
+        ctx["site_names"] = sorted(set(
+            user_videos.exclude(site_name="").values_list("site_name", flat=True)
+        ))
+        ctx["years"] = sorted(set(
+            user_videos.exclude(year=None).values_list("year", flat=True)
+        ))
+        ctx["months"] = sorted(set(
+            user_videos.exclude(month=None).values_list("month", flat=True)
+        ))
+        ctx["days"] = sorted(set(
+            user_videos.exclude(day=None).values_list("day", flat=True)
+        ))
 
         # Preserve current filter selections
         ctx["current_site"] = self.request.GET.get("site", "")
