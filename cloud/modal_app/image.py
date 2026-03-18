@@ -8,13 +8,14 @@ import modal
 
 beemonitor_image = (
     modal.Image.debian_slim(python_version="3.12")
-    .apt_install("libgl1", "libglib2.0-0", "libsm6", "libxext6", "libxrender1")
+    .apt_install("libgl1", "libglib2.0-0", "libsm6", "libxext6", "libxrender1",
+                 "libopenh264-dev", "ffmpeg")
     .pip_install(
         # Core ML / CV
         "ultralytics>=8.4.0",
         "torch>=2.0.0",
         "torchvision>=0.15.0",
-        "opencv-python-headless>=4.8.0",
+        "opencv-python>=4.8.0",
         # ML
         "scikit-learn>=1.3.0",
         "filterpy>=1.4.5",
