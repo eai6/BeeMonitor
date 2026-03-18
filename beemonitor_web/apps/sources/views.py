@@ -175,21 +175,17 @@ class SourceSyncView(LoginRequiredMixin, View):
                 credentials.clear()
                 return redirect("sources:browse", pk=pk)
 
-            # Build a set of already-imported keys for fast lookup
-            existing_keys = set(
-                Video.objects.filter(user=request.user)
-                .exclude(metadata={})
-                .values_list("metadata", flat=True)
-            )
-            # Extract remote_key from each metadata dict
+            # Build a set of already-imported keys for fast duplicate check
             existing_remote_keys = set()
-            for meta in existing_keys:
+            for v in Video.objects.filter(user=request.user).exclude(metadata={}).only("metadata"):
+                meta = v.metadata
                 if isinstance(meta, dict) and "remote_key" in meta:
                     existing_remote_keys.add(meta["remote_key"])
 
             imported = 0
             skipped = 0
             errors = 0
+            last_error = ""
 
             for file_key in selected_files:
                 try:
@@ -226,7 +222,8 @@ class SourceSyncView(LoginRequiredMixin, View):
                     )
                     imported += 1
                 except Exception as e:
-                    logger.error("Failed to import %s: %s", file_key, e)
+                    logger.error("Failed to import %s: %s", file_key, e, exc_info=True)
+                    last_error = f"{file_key}: {e}"
                     errors += 1
 
             credentials.clear()
@@ -243,8 +240,8 @@ class SourceSyncView(LoginRequiredMixin, View):
             if skipped:
                 msg += f" Skipped {skipped} already imported."
             if errors:
-                msg += f" {errors} error(s)."
-            messages.success(request, msg)
+                msg += f" {errors} error(s). Last: {last_error}"
+            messages.success(request, msg) if imported > 0 else messages.warning(request, msg)
 
         except Exception as e:
             credentials.clear()
