@@ -48,6 +48,57 @@ def _generate_sas_url(blob_path: str, container: str = "processed") -> str:
         return ""
 
 
+def _run_modal_job(job_pk: int) -> None:
+    """Background thread: call Modal and update job status on completion."""
+    import django
+    django.setup()
+    from django.utils import timezone
+
+    try:
+        job = Job.objects.select_related("video").get(pk=job_pk)
+    except Job.DoesNotExist:
+        return
+
+    try:
+        import modal
+
+        process_video = modal.Function.from_name("beemonitor-cloud", "process_video")
+        result_payload = process_video.remote(
+            job_id=job.modal_job_id,
+            user_id=str(job.user_id),
+            video_blob_path=job.video.azure_blob_path,
+            detection_mode=job.config.get("detection_mode", "yolo"),
+            confidence_threshold=job.config.get("confidence_threshold", 0.25),
+            visualize=True,
+        )
+
+        JobResult.objects.update_or_create(
+            job=job,
+            defaults={
+                "events_csv_path": result_payload.get("events_csv_path", ""),
+                "tracking_csv_path": result_payload.get("tracking_csv_path", ""),
+                "annotated_video_path": result_payload.get("annotated_video_path", ""),
+                "total_events": result_payload.get("total_events", 0),
+                "entry_count": result_payload.get("entry_count", 0),
+                "exit_count": result_payload.get("exit_count", 0),
+                "unique_tracks": result_payload.get("unique_tracks", 0),
+                "nest_count": result_payload.get("nest_count", 0),
+                "summary_stats": result_payload.get("summary_stats", {}),
+            },
+        )
+        job.status = Job.Status.COMPLETED
+        job.progress_pct = 100
+        job.completed_at = timezone.now()
+        job.save(update_fields=["status", "progress_pct", "completed_at"])
+        logger.info("Job %s completed — %s events", job_pk, result_payload.get("total_events", 0))
+
+    except Exception as e:
+        job.status = Job.Status.FAILED
+        job.error_message = str(e)
+        job.save(update_fields=["status", "error_message"])
+        logger.exception("Job %s failed", job_pk)
+
+
 class JobListView(LoginRequiredMixin, ListView):
     template_name = "analysis/list.html"
     context_object_name = "jobs"
@@ -82,6 +133,7 @@ class JobCreateView(LoginRequiredMixin, FormView):
         return initial
 
     def form_valid(self, form):
+        import threading
         from django.utils import timezone
 
         job = Job.objects.create(
@@ -91,58 +143,25 @@ class JobCreateView(LoginRequiredMixin, FormView):
                 "detection_mode": form.cleaned_data["detection_mode"],
                 "confidence_threshold": form.cleaned_data["confidence_threshold"],
             },
-            status=Job.Status.QUEUED,
+            status=Job.Status.PROCESSING,
+            started_at=timezone.now(),
+            modal_job_id=f"modal_{uuid.uuid4().hex[:12]}",
         )
 
-        try:
-            import modal
+        # Run Modal processing in background thread — don't block the request
+        thread = threading.Thread(
+            target=_run_modal_job,
+            args=(job.pk,),
+            daemon=True,
+        )
+        thread.start()
 
-            process_video = modal.Function.from_name("beemonitor-cloud", "process_video")
-            job.status = Job.Status.PROCESSING
-            job.started_at = timezone.now()
-            job.modal_job_id = f"modal_{uuid.uuid4().hex[:12]}"
-            job.save(update_fields=["status", "started_at", "modal_job_id"])
-
-            result_payload = process_video.remote(
-                job_id=job.modal_job_id,
-                user_id=str(self.request.user.pk),
-                video_blob_path=job.video.azure_blob_path,
-                detection_mode=job.config.get("detection_mode", "yolo"),
-                confidence_threshold=job.config.get("confidence_threshold", 0.25),
-                visualize=True,
-            )
-
-            JobResult.objects.update_or_create(
-                job=job,
-                defaults={
-                    "events_csv_path": result_payload.get("events_csv_path", ""),
-                    "tracking_csv_path": result_payload.get("tracking_csv_path", ""),
-                    "annotated_video_path": result_payload.get("annotated_video_path", ""),
-                    "total_events": result_payload.get("total_events", 0),
-                    "entry_count": result_payload.get("entry_count", 0),
-                    "exit_count": result_payload.get("exit_count", 0),
-                    "unique_tracks": result_payload.get("unique_tracks", 0),
-                    "nest_count": result_payload.get("nest_count", 0),
-                    "summary_stats": result_payload.get("summary_stats", {}),
-                },
-            )
-            job.status = Job.Status.COMPLETED
-            job.progress_pct = 100
-            job.completed_at = timezone.now()
-            job.save(update_fields=["status", "progress_pct", "completed_at"])
-            messages.success(self.request, f"Job #{job.pk} completed — {result_payload.get('total_events', 0)} events detected.")
-        except ImportError:
-            messages.info(self.request, f"Job #{job.pk} queued (Modal SDK not installed).")
-        except Exception as e:
-            job.status = Job.Status.FAILED
-            job.error_message = str(e)
-            job.save(update_fields=["status", "error_message"])
-            messages.error(self.request, f"Job #{job.pk} failed: {e}")
-
+        messages.info(self.request, f"Job #{job.pk} submitted — processing on GPU. This page auto-refreshes.")
+        self._job_pk = job.pk
         return super().form_valid(form)
 
     def get_success_url(self):
-        return reverse("analysis:list")
+        return reverse("analysis:detail", kwargs={"pk": self._job_pk})
 
 
 class JobResultsView(LoginRequiredMixin, TemplateView):
