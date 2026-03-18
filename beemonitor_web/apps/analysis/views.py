@@ -172,6 +172,130 @@ def _run_modal_job(job_pk: int) -> None:
         logger.exception("Job %s failed", job_pk)
 
 
+def _run_modal_batch(jobs_data: list, detection_mode: str, confidence: float) -> None:
+    """Background thread: submit batch to Modal for parallel GPU processing."""
+    import django
+    django.setup()
+    from django.utils import timezone
+
+    try:
+        import modal
+        batch_process = modal.Function.from_name("beemonitor-cloud", "batch_process")
+
+        # Build Modal job configs
+        modal_jobs = []
+        s3_creds_cache = {}  # source_id -> decrypted creds
+
+        for jd in jobs_data:
+            video = jd["video"]
+            blob_path = video.azure_blob_path
+
+            if blob_path.startswith("s3://"):
+                # S3 video — need credentials for transfer
+                meta = video.metadata or {}
+                source = video.source
+                source_id = source.pk if source else None
+
+                if source_id and source_id not in s3_creds_cache:
+                    try:
+                        from apps.sources.views import _decrypt_credentials
+                        s3_creds_cache[source_id] = _decrypt_credentials(source)
+                    except Exception as e:
+                        logger.error("Failed to decrypt creds for source %s: %s", source_id, e)
+                        Job.objects.filter(pk=jd["job_pk"]).update(
+                            status=Job.Status.FAILED,
+                            error_message=f"Credential error: {e}",
+                        )
+                        continue
+
+                creds = s3_creds_cache.get(source_id, {})
+                modal_jobs.append({
+                    "job_id": jd["job_id"],
+                    "user_id": jd["user_id"],
+                    "s3_bucket": meta.get("remote_bucket", creds.get("bucket", "")),
+                    "s3_key": meta.get("remote_key", ""),
+                    "s3_access_key_id": creds.get("access_key_id", ""),
+                    "s3_secret_access_key": creds.get("secret_access_key", ""),
+                    "s3_region": creds.get("region", "us-east-1"),
+                    "detection_mode": detection_mode,
+                    "confidence_threshold": confidence,
+                    "visualize": True,
+                })
+            else:
+                # Azure video — already in blob storage
+                modal_jobs.append({
+                    "job_id": jd["job_id"],
+                    "user_id": jd["user_id"],
+                    "video_blob_path": blob_path,
+                    "detection_mode": detection_mode,
+                    "confidence_threshold": confidence,
+                    "visualize": True,
+                })
+
+        if not modal_jobs:
+            return
+
+        # Call Modal batch_process — this uses starmap() for parallel GPU containers
+        logger.info("Submitting %d videos to Modal batch_process", len(modal_jobs))
+        results = batch_process.remote(modal_jobs)
+
+        # Update Django Job records with results
+        result_by_job_id = {r.get("job_id"): r for r in results if isinstance(r, dict)}
+
+        for jd in jobs_data:
+            result = result_by_job_id.get(jd["job_id"])
+            if result:
+                try:
+                    job = Job.objects.get(pk=jd["job_pk"])
+
+                    # Update video blob path if transferred from S3
+                    if result.get("azure_blob_path"):
+                        video = jd["video"]
+                        video.azure_blob_path = result["azure_blob_path"]
+                        video.file_size_bytes = result.get("file_size", 0) or video.file_size_bytes
+                        video.save(update_fields=["azure_blob_path", "file_size_bytes"])
+
+                    JobResult.objects.update_or_create(
+                        job=job,
+                        defaults={
+                            "events_csv_path": result.get("events_csv_path", ""),
+                            "tracking_csv_path": result.get("tracking_csv_path", ""),
+                            "annotated_video_path": result.get("annotated_video_path", ""),
+                            "total_events": result.get("total_events", 0),
+                            "entry_count": result.get("entry_count", 0),
+                            "exit_count": result.get("exit_count", 0),
+                            "unique_tracks": result.get("unique_tracks", 0),
+                            "nest_count": result.get("nest_count", 0),
+                            "summary_stats": result.get("summary_stats", {}),
+                        },
+                    )
+                    job.status = Job.Status.COMPLETED
+                    job.progress_pct = 100
+                    job.completed_at = timezone.now()
+                    job.save(update_fields=["status", "progress_pct", "completed_at"])
+                except Exception as e:
+                    logger.error("Failed to save result for job %s: %s", jd["job_pk"], e)
+            else:
+                Job.objects.filter(pk=jd["job_pk"]).update(
+                    status=Job.Status.FAILED,
+                    error_message="No result returned from Modal",
+                )
+
+        # Clear cached credentials
+        for creds in s3_creds_cache.values():
+            creds.clear()
+
+        logger.info("Batch complete: %d/%d results", len(result_by_job_id), len(jobs_data))
+
+    except Exception as e:
+        logger.exception("Batch processing failed: %s", e)
+        job_pks = [jd["job_pk"] for jd in jobs_data]
+        Job.objects.filter(pk__in=job_pks, status=Job.Status.PROCESSING).update(
+            status=Job.Status.FAILED,
+            error_message=f"Batch error: {e}",
+        )
+
+
 class JobListView(LoginRequiredMixin, ListView):
     template_name = "analysis/list.html"
     context_object_name = "jobs"
@@ -238,10 +362,10 @@ class JobCreateView(LoginRequiredMixin, FormView):
 
 
 class BatchJobView(LoginRequiredMixin, View):
-    """Submit analysis jobs for multiple videos at once.
+    """Submit analysis jobs for multiple videos via Modal parallel processing.
 
-    Accepts filter params (site, year, month, day) or explicit video IDs.
-    Each video gets its own Job, all processed in parallel on separate GPU containers.
+    Uses Modal's starmap() for true GPU parallelism — each video gets its own
+    A10G container. No Django threads needed. Modal handles queueing and scaling.
     """
 
     def post(self, request):
@@ -287,15 +411,16 @@ class BatchJobView(LoginRequiredMixin, View):
             ).values_list("video_id", flat=True)
         )
 
-        videos_to_process = [v for v in videos if v.pk not in existing_video_ids]
+        videos_to_process = [v for v in videos.select_related("source") if v.pk not in existing_video_ids]
 
         if not videos_to_process:
             messages.warning(request, "No new videos to analyze (all already have jobs).")
             return redirect("analysis:list")
 
-        # Create jobs and launch background threads
-        job_pks = []
+        # Create Job records for all videos
+        jobs_data = []
         for video in videos_to_process:
+            modal_job_id = f"modal_{uuid.uuid4().hex[:12]}"
             job = Job.objects.create(
                 user=request.user,
                 video=video,
@@ -305,21 +430,28 @@ class BatchJobView(LoginRequiredMixin, View):
                 },
                 status=Job.Status.PROCESSING,
                 started_at=tz.now(),
-                modal_job_id=f"modal_{uuid.uuid4().hex[:12]}",
+                modal_job_id=modal_job_id,
             )
-            job_pks.append(job.pk)
+            jobs_data.append({
+                "job_pk": job.pk,
+                "job_id": modal_job_id,
+                "user_id": str(request.user.pk),
+                "video": video,
+            })
 
-            thread = threading.Thread(
-                target=_run_modal_job,
-                args=(job.pk,),
-                daemon=True,
-            )
-            thread.start()
+        # Launch batch processing in one background thread
+        # This thread calls Modal batch_process which uses starmap() for parallelism
+        thread = threading.Thread(
+            target=_run_modal_batch,
+            args=(jobs_data, detection_mode, confidence),
+            daemon=True,
+        )
+        thread.start()
 
         messages.success(
             request,
-            f"Submitted {len(job_pks)} analysis job(s) — each running on a separate GPU. "
-            f"View progress on the Analysis page.",
+            f"Submitted {len(jobs_data)} video(s) for parallel GPU processing. "
+            f"Modal will spin up a separate A10G container for each video.",
         )
         return redirect("analysis:list")
 
