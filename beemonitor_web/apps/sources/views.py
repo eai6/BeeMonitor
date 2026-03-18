@@ -164,74 +164,93 @@ class SourceSyncView(LoginRequiredMixin, View):
             messages.error(request, f"Could not decrypt credentials: {e}")
             return redirect("sources:browse", pk=pk)
 
-        # If "import all", list all files from source
-        if import_all:
-            all_files = _list_files(source.source_type, credentials, prefix=prefix, limit=10000)
-            selected_files = [f["key"] for f in all_files]
-
-        if not selected_files:
-            messages.warning(request, "No files selected.")
-            credentials.clear()
-            return redirect("sources:browse", pk=pk)
-
-        imported = 0
-        skipped = 0
-        for file_key in selected_files:
-            filename = file_key.split("/")[-1] if "/" in file_key else file_key
-
-            # Skip non-video files
-            if not any(filename.lower().endswith(ext) for ext in (".mp4", ".avi", ".mov", ".mkv")):
-                continue
-
-            # Check if already imported
-            if Video.objects.filter(user=request.user, metadata__remote_key=file_key).exists():
-                skipped += 1
-                continue
-
-            # Parse timestamp from filename
-            site_name, recorded_at = Video.parse_timestamp_from_filename(filename)
-            title = filename.rsplit(".", 1)[0] if "." in filename else filename
-
-            # Get file size from the listing if available
-            file_size = 0
+        try:
+            # If "import all", list all files from source
             if import_all:
-                for f in all_files:
-                    if f["key"] == file_key:
-                        file_size = f.get("size", 0)
-                        break
+                all_files = _list_files(source.source_type, credentials, prefix=prefix, limit=10000)
+                selected_files = [f["key"] for f in all_files]
 
-            Video.objects.create(
-                user=request.user,
-                source=source,
-                title=title,
-                azure_blob_path=f"s3://{file_key}",
-                file_size_bytes=file_size,
-                status=Video.Status.READY,
-                recorded_at=recorded_at,
-                site_name=site_name,
-                metadata={
-                    "source_id": source.pk,
-                    "source_type": source.source_type,
-                    "remote_key": file_key,
-                    "remote_bucket": credentials.get("bucket", ""),
-                },
+            if not selected_files:
+                messages.warning(request, "No files selected.")
+                credentials.clear()
+                return redirect("sources:browse", pk=pk)
+
+            # Build a set of already-imported keys for fast lookup
+            existing_keys = set(
+                Video.objects.filter(user=request.user)
+                .exclude(metadata={})
+                .values_list("metadata", flat=True)
             )
-            imported += 1
+            # Extract remote_key from each metadata dict
+            existing_remote_keys = set()
+            for meta in existing_keys:
+                if isinstance(meta, dict) and "remote_key" in meta:
+                    existing_remote_keys.add(meta["remote_key"])
 
-        credentials.clear()
+            imported = 0
+            skipped = 0
+            errors = 0
 
-        source.last_synced_at = timezone.now()
-        source.save(update_fields=["last_synced_at"])
+            for file_key in selected_files:
+                try:
+                    filename = file_key.split("/")[-1] if "/" in file_key else file_key
 
-        logger.info(
-            "AUDIT: User %s synced %d files from source '%s' (id=%s), skipped %d",
-            request.user.username, imported, source.name, pk, skipped,
-        )
+                    # Skip non-video files
+                    if not any(filename.lower().endswith(ext) for ext in (".mp4", ".avi", ".mov", ".mkv")):
+                        continue
 
-        msg = f"Imported {imported} video(s) from '{source.name}'."
-        if skipped:
-            msg += f" Skipped {skipped} already imported."
-        messages.success(request, msg)
+                    # Check if already imported
+                    if file_key in existing_remote_keys:
+                        skipped += 1
+                        continue
+
+                    # Parse timestamp from filename
+                    site_name, recorded_at = Video.parse_timestamp_from_filename(filename)
+                    title = filename.rsplit(".", 1)[0] if "." in filename else filename
+
+                    Video.objects.create(
+                        user=request.user,
+                        source=source,
+                        title=title,
+                        azure_blob_path=f"s3://{file_key}",
+                        file_size_bytes=0,
+                        status=Video.Status.READY,
+                        recorded_at=recorded_at,
+                        site_name=site_name,
+                        metadata={
+                            "source_id": source.pk,
+                            "source_type": source.source_type,
+                            "remote_key": file_key,
+                            "remote_bucket": credentials.get("bucket", ""),
+                        },
+                    )
+                    imported += 1
+                except Exception as e:
+                    logger.error("Failed to import %s: %s", file_key, e)
+                    errors += 1
+
+            credentials.clear()
+
+            source.last_synced_at = timezone.now()
+            source.save(update_fields=["last_synced_at"])
+
+            logger.info(
+                "AUDIT: User %s synced %d files from source '%s' (id=%s), skipped %d, errors %d",
+                request.user.username, imported, source.name, pk, skipped, errors,
+            )
+
+            msg = f"Imported {imported} video(s) from '{source.name}'."
+            if skipped:
+                msg += f" Skipped {skipped} already imported."
+            if errors:
+                msg += f" {errors} error(s)."
+            messages.success(request, msg)
+
+        except Exception as e:
+            credentials.clear()
+            logger.exception("Sync failed for source %s: %s", pk, e)
+            messages.error(request, f"Import failed: {e}")
+
         return redirect("videos:list")
 
 
