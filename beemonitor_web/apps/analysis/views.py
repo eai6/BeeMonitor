@@ -280,10 +280,55 @@ def _spawn_modal_batch(jobs_data: list, detection_mode: str, confidence: float) 
 class JobListView(LoginRequiredMixin, ListView):
     template_name = "analysis/list.html"
     context_object_name = "jobs"
-    paginate_by = 20
+    paginate_by = 50
 
     def get_queryset(self):
-        return Job.objects.filter(user=self.request.user).select_related("video")
+        qs = Job.objects.filter(user=self.request.user).select_related("video")
+
+        # Filters
+        status = self.request.GET.get("status", "")
+        site = self.request.GET.get("site", "")
+        year = self.request.GET.get("year", "")
+        month = self.request.GET.get("month", "")
+
+        if status:
+            qs = qs.filter(status=status)
+        if site:
+            qs = qs.filter(video__site_name=site)
+        if year:
+            try:
+                qs = qs.filter(video__year=int(year))
+            except (ValueError, TypeError):
+                pass
+        if month:
+            try:
+                qs = qs.filter(video__month=int(month))
+            except (ValueError, TypeError):
+                pass
+
+        return qs
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        user_videos = Video.objects.filter(user=self.request.user)
+
+        ctx["site_names"] = sorted(set(
+            user_videos.exclude(site_name="").values_list("site_name", flat=True)
+        ))
+        ctx["years"] = sorted(set(
+            user_videos.exclude(year=None).values_list("year", flat=True)
+        ))
+        ctx["months"] = sorted(set(
+            user_videos.exclude(month=None).values_list("month", flat=True)
+        ))
+        ctx["statuses"] = Job.Status.choices
+
+        ctx["current_status"] = self.request.GET.get("status", "")
+        ctx["current_site"] = self.request.GET.get("site", "")
+        ctx["current_year"] = self.request.GET.get("year", "")
+        ctx["current_month"] = self.request.GET.get("month", "")
+
+        return ctx
 
 
 class JobDetailView(LoginRequiredMixin, DetailView):
@@ -561,6 +606,174 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         return ctx
 
 
+class _FilteredJobsMixin:
+    """Shared logic for filtering completed jobs by site/year/month."""
+
+    def _get_filtered_results(self, request):
+        site = request.GET.get("site", "")
+        year = request.GET.get("year", "")
+        month = request.GET.get("month", "")
+
+        qs = JobResult.objects.filter(
+            job__user=request.user,
+            job__status=Job.Status.COMPLETED,
+        ).select_related("job__video")
+
+        if site:
+            qs = qs.filter(job__video__site_name=site)
+        if year:
+            try:
+                qs = qs.filter(job__video__year=int(year))
+            except (ValueError, TypeError):
+                pass
+        if month:
+            try:
+                qs = qs.filter(job__video__month=int(month))
+            except (ValueError, TypeError):
+                pass
+
+        label_parts = []
+        if site:
+            label_parts.append(site)
+        if year:
+            label_parts.append(str(year))
+        if month:
+            label_parts.append(f"month{month}")
+        label = "_".join(label_parts) if label_parts else "all"
+
+        return qs, label
+
+
+class DownloadEventsCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
+    """Download combined events CSV for all filtered completed jobs."""
+
+    def get(self, request):
+        import csv
+        import io
+        from django.http import HttpResponse
+
+        results, label = self._get_filtered_results(request)
+
+        if not results.exists():
+            from django.contrib import messages as msg
+            msg.warning(request, "No completed jobs matching this filter.")
+            return redirect("analysis:analytics")
+
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = f'attachment; filename="beemonitor_events_{label}.csv"'
+
+        writer = None
+        conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
+
+        if conn_str:
+            from azure.storage.blob import BlobServiceClient
+            service = BlobServiceClient.from_connection_string(conn_str)
+
+            for result in results:
+                path = result.events_csv_path
+                if not path:
+                    # Try constructing from modal_job_id
+                    mid = result.job.modal_job_id
+                    uid = str(result.job.user_id)
+                    if mid:
+                        path = f"{uid}/{mid}/events.csv"
+                    else:
+                        continue
+
+                try:
+                    blob = service.get_blob_client("processed", path)
+                    content = blob.download_blob().readall().decode("utf-8")
+                    reader = csv.reader(io.StringIO(content))
+                    headers = next(reader, [])
+
+                    if writer is None:
+                        # Add source columns
+                        all_headers = ["video_title", "site_name", "recorded_at"] + headers
+                        writer = csv.writer(response)
+                        writer.writerow(all_headers)
+
+                    video = result.job.video
+                    prefix = [
+                        video.title,
+                        video.site_name,
+                        video.recorded_at.isoformat() if video.recorded_at else "",
+                    ]
+                    for row in reader:
+                        writer.writerow(prefix + row)
+                except Exception as e:
+                    logger.error("Failed to read events CSV %s: %s", path, e)
+
+        if writer is None:
+            writer = csv.writer(response)
+            writer.writerow(["No event data found for this filter"])
+
+        return response
+
+
+class DownloadTrackingCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
+    """Download combined tracking CSV for all filtered completed jobs."""
+
+    def get(self, request):
+        import csv
+        import io
+        from django.http import HttpResponse
+
+        results, label = self._get_filtered_results(request)
+
+        if not results.exists():
+            from django.contrib import messages as msg
+            msg.warning(request, "No completed jobs matching this filter.")
+            return redirect("analysis:analytics")
+
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = f'attachment; filename="beemonitor_tracking_{label}.csv"'
+
+        writer = None
+        conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
+
+        if conn_str:
+            from azure.storage.blob import BlobServiceClient
+            service = BlobServiceClient.from_connection_string(conn_str)
+
+            for result in results:
+                path = result.tracking_csv_path
+                if not path:
+                    mid = result.job.modal_job_id
+                    uid = str(result.job.user_id)
+                    if mid:
+                        path = f"{uid}/{mid}/tracking_results.csv"
+                    else:
+                        continue
+
+                try:
+                    blob = service.get_blob_client("processed", path)
+                    content = blob.download_blob().readall().decode("utf-8")
+                    reader = csv.reader(io.StringIO(content))
+                    headers = next(reader, [])
+
+                    if writer is None:
+                        all_headers = ["video_title", "site_name", "recorded_at"] + headers
+                        writer = csv.writer(response)
+                        writer.writerow(all_headers)
+
+                    video = result.job.video
+                    prefix = [
+                        video.title,
+                        video.site_name,
+                        video.recorded_at.isoformat() if video.recorded_at else "",
+                    ]
+                    for row in reader:
+                        writer.writerow(prefix + row)
+                except Exception as e:
+                    logger.error("Failed to read tracking CSV %s: %s", path, e)
+
+        if writer is None:
+            writer = csv.writer(response)
+            writer.writerow(["No tracking data found for this filter"])
+
+        return response
+
+
 class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
     template_name = "analysis/analytics.html"
 
@@ -586,18 +799,16 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
             except (ValueError, TypeError):
                 pass
 
-        # Filter options
+        # Filter options (use set() to guarantee uniqueness)
         user_videos = Video.objects.filter(user=user)
-        ctx["site_names"] = sorted(
+        ctx["site_names"] = sorted(set(
             user_videos.exclude(site_name="")
             .values_list("site_name", flat=True)
-            .distinct()
-        )
-        ctx["years"] = sorted(
+        ))
+        ctx["years"] = sorted(set(
             user_videos.exclude(year=None)
             .values_list("year", flat=True)
-            .distinct()
-        )
+        ))
         ctx["months_list"] = list(range(1, 13))
 
         ctx["current_site"] = site

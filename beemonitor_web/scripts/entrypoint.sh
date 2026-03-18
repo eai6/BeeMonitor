@@ -7,6 +7,9 @@ python manage.py migrate --noinput
 echo "Backfilling video timestamps..."
 python manage.py backfill_video_timestamps 2>/dev/null || true
 
+echo "Cleaning up stale jobs..."
+python manage.py cleanup_stale_jobs 2>/dev/null || true
+
 echo "Collecting static files..."
 python manage.py collectstatic --noinput 2>/dev/null || true
 

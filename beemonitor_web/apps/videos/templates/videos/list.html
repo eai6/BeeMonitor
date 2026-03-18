@@ -4,10 +4,7 @@
 {% block content %}
 <div class="flex justify-between items-center mb-6">
   <h1 class="text-2xl font-bold text-gray-900">Videos</h1>
-  <div class="flex gap-2">
-    <a href="{% url 'videos:batch_upload' %}" class="bg-white border border-amber-600 text-amber-600 hover:bg-amber-50 px-4 py-2 rounded text-sm font-medium">Batch Upload</a>
-    <a href="{% url 'videos:upload' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Upload Video</a>
-  </div>
+  <a href="{% url 'videos:batch_upload' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Upload Videos</a>
 </div>
 
 <!-- Filter Bar -->
@@ -65,19 +62,11 @@
 <!-- Batch Analyze -->
 <form method="post" action="{% url 'analysis:batch' %}" id="batchForm">
   {% csrf_token %}
-  {% if current_site %}<input type="hidden" name="site" value="{{ current_site }}">{% endif %}
-  {% if current_year %}<input type="hidden" name="year" value="{{ current_year }}">{% endif %}
-  {% if current_month %}<input type="hidden" name="month" value="{{ current_month }}">{% endif %}
-  {% if current_day %}<input type="hidden" name="day" value="{{ current_day }}">{% endif %}
   <input type="hidden" name="detection_mode" value="yolo">
   <input type="hidden" name="confidence_threshold" value="0.25">
-  <div class="mb-4 flex justify-end gap-2">
+  <div class="mb-4 flex justify-end">
     <button type="button" onclick="analyzeSelected()" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">
       Analyze Selected
-    </button>
-    <button type="submit" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded text-sm font-medium"
-            onclick="return confirm('Submit analysis jobs for ALL filtered videos? Each gets a separate GPU.')">
-      Analyze All Filtered
     </button>
   </div>
 </form>
