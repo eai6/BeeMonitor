@@ -228,7 +228,10 @@ class BeeMonitor:
             crops_per_track=getattr(self.config.tracking, 'crops_per_track', 10)
         )
         
-        logger.info("✓ Tracking system initialized (v2.2.1 CONFIG-BASED)")
+        # Pass two-mode config flag
+        tracker.enable_two_mode = getattr(self.config.tracking, 'enable_two_mode_tracking', True)
+
+        logger.info("✓ Tracking system initialized (v2.2.1 CONFIG-BASED, two_mode=%s)", tracker.enable_two_mode)
         logger.info("="*70 + "\n")
         
         # Process video with output path and visualize flag

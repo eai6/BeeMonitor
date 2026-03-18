@@ -831,6 +831,7 @@ class BeeTracking:
         self.track_crop_counts = {}  # track_id -> number of crops saved
         
         # Two-mode system state
+        self.enable_two_mode = True  # Can be set to False via config to force YOLO every frame
         self.mode = 'motion_detection'  # 'motion_detection' or 'tracking'
         self.frames_since_motion = 0
         self.motion_cooldown = 30  # Frames to stay in tracking mode after motion stops
@@ -1050,7 +1051,9 @@ class BeeTracking:
         detections = []
         lookback_results = []  # Results from lookback frames
         
-        # Two-mode: start in motion_detection, switch to tracking when motion found
+        # If two-mode disabled, force YOLO on every frame
+        if not self.enable_two_mode:
+            self.mode = "tracking"
 
         # TWO-MODE SYSTEM
         if self.mode == 'motion_detection':

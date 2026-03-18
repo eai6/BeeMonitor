@@ -41,12 +41,16 @@ def process_video(
     confidence_threshold: float = 0.25,
     ml_threshold: float = 0.6,
     visualize: bool = True,
+    two_mode_tracking: bool = True,
 ) -> dict:
     """Run BeeMonitor analysis on a video stored in Azure Blob."""
+    import time
     from cloud.storage.azure_client import AzureBlobClient
     from cloud.storage.config import StorageConfig
     from cloud.wrapper.model_manager import ModelManager
     from cloud.wrapper.pipeline import CloudPipeline
+
+    start_time = time.time()
 
     config = StorageConfig()
     storage = AzureBlobClient(config)
@@ -69,11 +73,15 @@ def process_video(
         confidence_threshold=confidence_threshold,
         ml_threshold=ml_threshold,
         visualize=visualize,
+        two_mode_tracking=two_mode_tracking,
     )
 
     pipeline.cleanup(job_id)
     model_volume.commit()
-    return result.to_dict()
+
+    result_dict = result.to_dict()
+    result_dict["execution_seconds"] = round(time.time() - start_time, 1)
+    return result_dict
 
 
 # ── Full Pipeline: S3 Transfer + GPU Processing ──────────────────────
@@ -99,16 +107,16 @@ def process_video_from_s3(
     detection_mode: str = "yolo",
     confidence_threshold: float = 0.25,
     visualize: bool = True,
+    two_mode_tracking: bool = True,
 ) -> dict:
-    """Transfer video from S3 to Azure, then run BeeMonitor analysis.
-
-    This runs entirely on Modal — no Django threads needed.
-    """
+    """Transfer video from S3 to Azure, then run BeeMonitor analysis."""
     import boto3
     import tempfile
+    import time
     import logging
     from pathlib import Path
 
+    start_time = time.time()
     logger = logging.getLogger(__name__)
 
     from cloud.storage.azure_client import AzureBlobClient
@@ -161,6 +169,7 @@ def process_video_from_s3(
         detection_mode=detection_mode,
         confidence_threshold=confidence_threshold,
         visualize=visualize,
+        two_mode_tracking=two_mode_tracking,
     )
 
     pipeline.cleanup(job_id)
@@ -169,6 +178,7 @@ def process_video_from_s3(
     result_dict = result.to_dict()
     result_dict["azure_blob_path"] = azure_blob_path
     result_dict["file_size"] = file_size
+    result_dict["execution_seconds"] = round(time.time() - start_time, 1)
     return result_dict
 
 

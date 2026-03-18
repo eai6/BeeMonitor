@@ -73,6 +73,7 @@ class CloudPipeline:
         confidence_threshold: float = 0.25,
         ml_threshold: float = 0.6,
         visualize: bool = True,
+        two_mode_tracking: bool = True,
     ) -> PipelineResult:
         """Run the full BeeMonitor pipeline on a video stored in Azure.
 
@@ -84,6 +85,7 @@ class CloudPipeline:
             confidence_threshold: YOLO detection threshold.
             ml_threshold: Event classifier threshold.
             visualize: Whether to generate annotated video.
+            two_mode_tracking: Use blob motion detection + YOLO (faster) vs YOLO every frame.
 
         Returns:
             PipelineResult with Azure paths to all outputs.
@@ -114,6 +116,7 @@ class CloudPipeline:
             confidence_threshold=confidence_threshold,
             ml_threshold=ml_threshold,
             visualize=visualize,
+            two_mode_tracking=two_mode_tracking,
         )
 
         # Step 4 — Upload results to Azure
@@ -175,6 +178,7 @@ class CloudPipeline:
         confidence_threshold: float,
         ml_threshold: float,
         visualize: bool,
+        two_mode_tracking: bool = True,
     ):
         """Build a BeeMonitor Config, instantiate, and run."""
         from beemonitor.core.config import Config, ModelConfig
@@ -188,6 +192,7 @@ class CloudPipeline:
 
         # Apply user overrides
         config.tracking.confidence_threshold = confidence_threshold
+        config.tracking.enable_two_mode_tracking = two_mode_tracking
         config.output.save_visualizations = visualize
 
         from beemonitor import BeeMonitor
