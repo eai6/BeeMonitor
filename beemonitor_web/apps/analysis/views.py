@@ -119,28 +119,25 @@ def _transfer_s3_to_azure(video) -> str:
     return azure_blob_path
 
 
-def _run_modal_job(job_pk: int) -> None:
-    """Background thread: call Modal and update job status on completion.
+def _spawn_modal_job(job_pk: int) -> None:
+    """Spawn a Modal function call (non-blocking) and store the call ID.
 
-    DB connection pattern: read → close → long Modal call → reconnect → write.
+    Does NOT wait for completion — just fires and stores the call ID.
+    The PollJobsView will check for results later.
     """
     import django
     django.setup()
     from django.db import connection
-    from django.utils import timezone
 
-    # 1. Read what we need from DB
     try:
         job = Job.objects.select_related("video", "video__source").get(pk=job_pk)
         modal_job_id = job.modal_job_id
         user_id = str(job.user_id)
-        video_blob_path = job.video.azure_blob_path
+        video = job.video
+        blob_path = video.azure_blob_path
         detection_mode = job.config.get("detection_mode", "yolo")
         confidence = job.config.get("confidence_threshold", 0.25)
-
-        # If S3 video, transfer first (uses Azure SDK, not DB)
-        if video_blob_path.startswith("s3://"):
-            video_blob_path = _transfer_s3_to_azure(job.video)
+        meta = video.metadata or {}
     except Job.DoesNotExist:
         return
     except Exception as e:
@@ -148,200 +145,135 @@ def _run_modal_job(job_pk: int) -> None:
         connection.close()
         return
 
-    # 2. Close DB — Modal call can take 3-10+ minutes
-    connection.close()
-
-    # 3. Long-running Modal call (no DB needed)
     try:
         import modal
-        process_video = modal.Function.from_name("beemonitor-cloud", "process_video")
-        result_payload = process_video.remote(
-            job_id=modal_job_id,
-            user_id=user_id,
-            video_blob_path=video_blob_path,
-            detection_mode=detection_mode,
-            confidence_threshold=confidence,
-            visualize=True,
-        )
-    except Exception as e:
-        # 4a. Reconnect to write failure
-        Job.objects.filter(pk=job_pk).update(status="failed", error_message=str(e))
-        connection.close()
-        logger.exception("Job %s Modal call failed", job_pk)
-        return
 
-    # 4b. Reconnect to write success (Django auto-reconnects)
-    try:
-        JobResult.objects.update_or_create(
-            job_id=job_pk,
-            defaults={
-                "events_csv_path": result_payload.get("events_csv_path", ""),
-                "tracking_csv_path": result_payload.get("tracking_csv_path", ""),
-                "annotated_video_path": result_payload.get("annotated_video_path", ""),
-                "total_events": result_payload.get("total_events", 0),
-                "entry_count": result_payload.get("entry_count", 0),
-                "exit_count": result_payload.get("exit_count", 0),
-                "unique_tracks": result_payload.get("unique_tracks", 0),
-                "nest_count": result_payload.get("nest_count", 0),
-                "summary_stats": result_payload.get("summary_stats", {}),
-            },
-        )
-        Job.objects.filter(pk=job_pk).update(
-            status="completed", progress_pct=100, completed_at=timezone.now(),
-        )
-        logger.info("Job %s completed — %s events", job_pk, result_payload.get("total_events", 0))
+        if blob_path.startswith("s3://"):
+            # S3 video — use process_video_from_s3 (handles transfer + analysis)
+            source = video.source
+            if source:
+                from apps.sources.views import _decrypt_credentials
+                creds = _decrypt_credentials(source)
+            else:
+                raise ValueError("No linked source for S3 video")
+
+            fn = modal.Function.from_name("beemonitor-cloud", "process_video_from_s3")
+            call = fn.spawn(
+                job_id=modal_job_id,
+                user_id=user_id,
+                s3_bucket=meta.get("remote_bucket", creds.get("bucket", "")),
+                s3_key=meta.get("remote_key", ""),
+                s3_access_key_id=creds.get("access_key_id", ""),
+                s3_secret_access_key=creds.get("secret_access_key", ""),
+                s3_region=creds.get("region", "us-east-1"),
+                detection_mode=detection_mode,
+                confidence_threshold=confidence,
+                visualize=True,
+            )
+            creds.clear()
+        else:
+            # Azure video — direct processing
+            fn = modal.Function.from_name("beemonitor-cloud", "process_video")
+            call = fn.spawn(
+                job_id=modal_job_id,
+                user_id=user_id,
+                video_blob_path=blob_path,
+                detection_mode=detection_mode,
+                confidence_threshold=confidence,
+                visualize=True,
+            )
+
+        # Store the call ID for polling
+        Job.objects.filter(pk=job_pk).update(modal_call_id=call.object_id)
+        logger.info("Job %s spawned on Modal (call_id=%s)", job_pk, call.object_id)
+
     except Exception as e:
-        logger.error("Job %s result write failed: %s", job_pk, e)
+        Job.objects.filter(pk=job_pk).update(status="failed", error_message=str(e))
+        logger.exception("Job %s spawn failed", job_pk)
     finally:
         connection.close()
 
 
-def _run_modal_batch(jobs_data: list, detection_mode: str, confidence: float) -> None:
-    """Background thread: submit batch to Modal for parallel GPU processing."""
+def _spawn_modal_batch(jobs_data: list, detection_mode: str, confidence: float) -> None:
+    """Spawn all Modal jobs (non-blocking). Each gets its own GPU container.
+
+    Uses spawn() — fires each job and stores the call ID.
+    PollJobsView checks for results via HTMX polling.
+    """
     import django
     django.setup()
-    from django.utils import timezone
+    from django.db import connection
+
+    s3_creds_cache = {}
 
     try:
         import modal
-        batch_process = modal.Function.from_name("beemonitor-cloud", "batch_process")
-
-        # Build Modal job configs
-        modal_jobs = []
-        s3_creds_cache = {}  # source_id -> decrypted creds
 
         for jd in jobs_data:
-            video = jd["video"]
-            blob_path = video.azure_blob_path
-
-            if blob_path.startswith("s3://"):
-                # S3 video — need credentials for transfer
+            try:
+                video = jd["video"]
+                blob_path = video.azure_blob_path
                 meta = video.metadata or {}
-                source = video.source
-                source_id = source.pk if source else None
 
-                if source_id and source_id not in s3_creds_cache:
-                    try:
+                if blob_path.startswith("s3://"):
+                    source = video.source
+                    source_id = source.pk if source else None
+
+                    if source_id and source_id not in s3_creds_cache:
                         from apps.sources.views import _decrypt_credentials
                         s3_creds_cache[source_id] = _decrypt_credentials(source)
-                    except Exception as e:
-                        logger.error("Failed to decrypt creds for source %s: %s", source_id, e)
+
+                    creds = s3_creds_cache.get(source_id, {})
+                    if not creds:
                         Job.objects.filter(pk=jd["job_pk"]).update(
-                            status=Job.Status.FAILED,
-                            error_message=f"Credential error: {e}",
+                            status="failed", error_message="No credentials for S3 source",
                         )
                         continue
 
-                creds = s3_creds_cache.get(source_id, {})
-                modal_jobs.append({
-                    "job_id": jd["job_id"],
-                    "user_id": jd["user_id"],
-                    "s3_bucket": meta.get("remote_bucket", creds.get("bucket", "")),
-                    "s3_key": meta.get("remote_key", ""),
-                    "s3_access_key_id": creds.get("access_key_id", ""),
-                    "s3_secret_access_key": creds.get("secret_access_key", ""),
-                    "s3_region": creds.get("region", "us-east-1"),
-                    "detection_mode": detection_mode,
-                    "confidence_threshold": confidence,
-                    "visualize": True,
-                })
-            else:
-                # Azure video — already in blob storage
-                modal_jobs.append({
-                    "job_id": jd["job_id"],
-                    "user_id": jd["user_id"],
-                    "video_blob_path": blob_path,
-                    "detection_mode": detection_mode,
-                    "confidence_threshold": confidence,
-                    "visualize": True,
-                })
+                    fn = modal.Function.from_name("beemonitor-cloud", "process_video_from_s3")
+                    call = fn.spawn(
+                        job_id=jd["job_id"],
+                        user_id=jd["user_id"],
+                        s3_bucket=meta.get("remote_bucket", creds.get("bucket", "")),
+                        s3_key=meta.get("remote_key", ""),
+                        s3_access_key_id=creds.get("access_key_id", ""),
+                        s3_secret_access_key=creds.get("secret_access_key", ""),
+                        s3_region=creds.get("region", "us-east-1"),
+                        detection_mode=detection_mode,
+                        confidence_threshold=confidence,
+                        visualize=True,
+                    )
+                else:
+                    fn = modal.Function.from_name("beemonitor-cloud", "process_video")
+                    call = fn.spawn(
+                        job_id=jd["job_id"],
+                        user_id=jd["user_id"],
+                        video_blob_path=blob_path,
+                        detection_mode=detection_mode,
+                        confidence_threshold=confidence,
+                        visualize=True,
+                    )
 
-        if not modal_jobs:
-            return
+                Job.objects.filter(pk=jd["job_pk"]).update(modal_call_id=call.object_id)
+                logger.info("Spawned job %s (call_id=%s)", jd["job_pk"], call.object_id)
 
-        # Close DB — Modal batch call can take 10+ minutes
-        from django.db import connection
-        connection.close()
-
-        # Long-running Modal call (no DB needed — Modal handles all GPU work)
-        logger.info("Submitting %d videos to Modal batch_process", len(modal_jobs))
-        results = batch_process.remote(modal_jobs)
-
-        # Django auto-reconnects on next query
-
-        # Map job_id to job_pk for result matching
-        job_id_to_pk = {jd["job_id"]: jd["job_pk"] for jd in jobs_data}
-        job_id_to_video_pk = {jd["job_id"]: jd["video"].pk for jd in jobs_data}
-        completed = 0
-
-        for result in (results or []):
-            if not isinstance(result, dict):
-                continue
-            job_id = result.get("job_id")
-            job_pk = job_id_to_pk.get(job_id)
-            if not job_pk:
-                continue
-
-            try:
-                # Update video blob path if transferred from S3
-                if result.get("azure_blob_path"):
-                    video_pk = job_id_to_video_pk.get(job_id)
-                    if video_pk:
-                        from apps.videos.models import Video as VideoModel
-                        VideoModel.objects.filter(pk=video_pk).update(
-                            azure_blob_path=result["azure_blob_path"],
-                            file_size_bytes=result.get("file_size", 0),
-                        )
-
-                JobResult.objects.update_or_create(
-                    job_id=job_pk,
-                    defaults={
-                        "events_csv_path": result.get("events_csv_path", ""),
-                        "tracking_csv_path": result.get("tracking_csv_path", ""),
-                        "annotated_video_path": result.get("annotated_video_path", ""),
-                        "total_events": result.get("total_events", 0),
-                        "entry_count": result.get("entry_count", 0),
-                        "exit_count": result.get("exit_count", 0),
-                        "unique_tracks": result.get("unique_tracks", 0),
-                        "nest_count": result.get("nest_count", 0),
-                        "summary_stats": result.get("summary_stats", {}),
-                    },
-                )
-                Job.objects.filter(pk=job_pk).update(
-                    status=Job.Status.COMPLETED,
-                    progress_pct=100,
-                    completed_at=timezone.now(),
-                )
-                completed += 1
             except Exception as e:
-                logger.error("Failed to save result for job %s: %s", job_pk, e)
-                Job.objects.filter(pk=job_pk).update(
-                    status=Job.Status.FAILED,
-                    error_message=f"Result save error: {e}",
+                logger.error("Failed to spawn job %s: %s", jd["job_pk"], e)
+                Job.objects.filter(pk=jd["job_pk"]).update(
+                    status="failed", error_message=str(e),
                 )
 
-        # Mark any remaining jobs as failed
-        all_pks = [jd["job_pk"] for jd in jobs_data]
-        Job.objects.filter(pk__in=all_pks, status=Job.Status.PROCESSING).update(
-            status=Job.Status.FAILED,
-            error_message="No result returned from Modal batch",
-        )
-
-        # Clear cached credentials
-        for creds in s3_creds_cache.values():
-            creds.clear()
-
-        logger.info("Batch complete: %d/%d completed", completed, len(jobs_data))
+        logger.info("Batch spawn complete: %d jobs submitted to Modal", len(jobs_data))
 
     except Exception as e:
-        logger.exception("Batch processing failed: %s", e)
+        logger.exception("Batch spawn failed: %s", e)
         job_pks = [jd["job_pk"] for jd in jobs_data]
-        Job.objects.filter(pk__in=job_pks, status=Job.Status.PROCESSING).update(
-            status=Job.Status.FAILED,
-            error_message=f"Batch error: {e}",
+        Job.objects.filter(pk__in=job_pks, status="processing").update(
+            status="failed", error_message=f"Spawn error: {e}",
         )
     finally:
-        from django.db import connection
+        for creds in s3_creds_cache.values():
+            creds.clear()
         connection.close()
 
 
@@ -394,9 +326,9 @@ class JobCreateView(LoginRequiredMixin, FormView):
             modal_job_id=f"modal_{uuid.uuid4().hex[:12]}",
         )
 
-        # Run Modal processing in background thread — don't block the request
+        # Spawn on Modal (non-blocking) — PollJobsView checks for results
         thread = threading.Thread(
-            target=_run_modal_job,
+            target=_spawn_modal_job,
             args=(job.pk,),
             daemon=True,
         )
@@ -408,6 +340,86 @@ class JobCreateView(LoginRequiredMixin, FormView):
 
     def get_success_url(self):
         return reverse("analysis:detail", kwargs={"pk": self._job_pk})
+
+
+class PollJobsView(LoginRequiredMixin, View):
+    """HTMX endpoint: check Modal for completed jobs and update DB.
+
+    Called every 10s from the Analysis list page. Checks all 'processing'
+    jobs with a modal_call_id, gets results from Modal if done.
+    Returns updated job list HTML fragment.
+    """
+
+    def get(self, request):
+        from django.http import JsonResponse
+        from django.utils import timezone
+
+        processing_jobs = Job.objects.filter(
+            user=request.user,
+            status=Job.Status.PROCESSING,
+        ).exclude(modal_call_id="")
+
+        if not processing_jobs.exists():
+            return JsonResponse({"checked": 0, "completed": 0})
+
+        completed = 0
+        try:
+            import modal
+
+            for job in processing_jobs[:50]:  # Check max 50 per poll
+                try:
+                    fc = modal.functions.FunctionCall.from_id(job.modal_call_id)
+                    try:
+                        result = fc.get(timeout=0)  # Non-blocking — returns immediately or raises
+                    except TimeoutError:
+                        continue  # Still running
+                    except modal.exception.ExecutionError as e:
+                        Job.objects.filter(pk=job.pk).update(
+                            status="failed", error_message=str(e),
+                        )
+                        continue
+
+                    if not isinstance(result, dict):
+                        continue
+
+                    # Update video path if transferred from S3
+                    if result.get("azure_blob_path"):
+                        from apps.videos.models import Video as VideoModel
+                        VideoModel.objects.filter(pk=job.video_id).update(
+                            azure_blob_path=result["azure_blob_path"],
+                            file_size_bytes=result.get("file_size", 0),
+                        )
+
+                    JobResult.objects.update_or_create(
+                        job_id=job.pk,
+                        defaults={
+                            "events_csv_path": result.get("events_csv_path", ""),
+                            "tracking_csv_path": result.get("tracking_csv_path", ""),
+                            "annotated_video_path": result.get("annotated_video_path", ""),
+                            "total_events": result.get("total_events", 0),
+                            "entry_count": result.get("entry_count", 0),
+                            "exit_count": result.get("exit_count", 0),
+                            "unique_tracks": result.get("unique_tracks", 0),
+                            "nest_count": result.get("nest_count", 0),
+                            "summary_stats": result.get("summary_stats", {}),
+                        },
+                    )
+                    Job.objects.filter(pk=job.pk).update(
+                        status="completed", progress_pct=100, completed_at=timezone.now(),
+                    )
+                    completed += 1
+                    logger.info("Poll: Job %s completed — %s events", job.pk, result.get("total_events", 0))
+
+                except Exception as e:
+                    logger.error("Poll error for job %s: %s", job.pk, e)
+
+        except ImportError:
+            pass
+
+        return JsonResponse({
+            "checked": processing_jobs.count(),
+            "completed": completed,
+        })
 
 
 class BatchJobView(LoginRequiredMixin, View):
@@ -488,10 +500,9 @@ class BatchJobView(LoginRequiredMixin, View):
                 "video": video,
             })
 
-        # Launch batch processing in one background thread
-        # This thread calls Modal batch_process which uses starmap() for parallelism
+        # Spawn all jobs on Modal (non-blocking — each gets its own GPU)
         thread = threading.Thread(
-            target=_run_modal_batch,
+            target=_spawn_modal_batch,
             args=(jobs_data, detection_mode, confidence),
             daemon=True,
         )

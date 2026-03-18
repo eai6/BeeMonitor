@@ -10,6 +10,7 @@ urlpatterns = [
     path("analytics/", views.AnalyticsDashboardView.as_view(), name="analytics"),
     path("new/", views.JobCreateView.as_view(), name="new"),
     path("batch/", views.BatchJobView.as_view(), name="batch"),
+    path("poll/", views.PollJobsView.as_view(), name="poll"),
     path("<int:pk>/", views.JobDetailView.as_view(), name="detail"),
     path("<int:pk>/results/", views.JobResultsView.as_view(), name="results"),
     path("<int:pk>/video/", VideoProxyView.as_view(), name="video_proxy"),

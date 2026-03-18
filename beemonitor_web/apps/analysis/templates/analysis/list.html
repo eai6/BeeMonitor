@@ -7,15 +7,27 @@
   <a href="{% url 'analysis:new' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">New Job</a>
 </div>
 
+<!-- Auto-poll for processing jobs — refreshes page when jobs complete -->
+<div id="poll-status" class="mb-4"
+     hx-get="{% url 'analysis:poll' %}"
+     hx-trigger="every 10s"
+     hx-swap="innerHTML">
+</div>
+
 {% if jobs %}
-<div class="bg-white shadow rounded-lg overflow-hidden">
+<div class="bg-white shadow rounded-lg overflow-hidden"
+     hx-get="{% url 'analysis:list' %}"
+     hx-trigger="every 10s"
+     hx-select="table"
+     hx-swap="innerHTML"
+     hx-target="table">
   <table class="min-w-full divide-y divide-gray-200">
     <thead class="bg-gray-50">
       <tr>
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Video</th>
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Progress</th>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Events</th>
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
       </tr>
@@ -29,16 +41,29 @@
           <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full
             {% if job.status == 'completed' %}bg-green-100 text-green-800
             {% elif job.status == 'failed' %}bg-red-100 text-red-800
+            {% elif job.status == 'processing' %}bg-blue-100 text-blue-800 animate-pulse
             {% elif job.status == 'cancelled' %}bg-gray-100 text-gray-800
             {% else %}bg-amber-100 text-amber-800{% endif %}">
             {{ job.get_status_display }}
           </span>
         </td>
-        <td class="px-6 py-4 text-sm text-gray-500">{{ job.progress_pct }}%</td>
+        <td class="px-6 py-4 text-sm text-gray-500">
+          {% if job.status == 'completed' %}
+            {% with result=job.result %}
+              {% if result %}{{ result.total_events }}{% else %}--{% endif %}
+            {% endwith %}
+          {% elif job.status == 'processing' %}
+            <span class="text-blue-500">...</span>
+          {% else %}
+            --
+          {% endif %}
+        </td>
         <td class="px-6 py-4 text-sm text-gray-500">{{ job.created_at|timesince }} ago</td>
         <td class="px-6 py-4 text-sm">
           {% if job.status == 'completed' %}
           <a href="{% url 'analysis:results' job.pk %}" class="text-amber-600 hover:underline">Results</a>
+          {% elif job.status == 'failed' %}
+          <span class="text-red-500 text-xs" title="{{ job.error_message }}">Error</span>
           {% endif %}
         </td>
       </tr>
