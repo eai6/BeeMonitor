@@ -225,12 +225,28 @@ class CloudPipeline:
             self._storage.upload_file(container, blob_path, str(tracking_files[0]))
             uploaded["tracking_csv"] = blob_path
 
-        # Annotated video
+        # Annotated video — re-encode to H.264 with ffmpeg for browser playback
         video_files = list(output_dir.glob("*.mp4"))
         if video_files:
+            src = str(video_files[0])
+            h264 = str(output_dir / "annotated_h264.mp4")
+            try:
+                import subprocess
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", src, "-c:v", "libx264",
+                     "-preset", "fast", "-crf", "23", "-pix_fmt", "yuv420p",
+                     "-movflags", "+faststart", "-an", h264],
+                    check=True, capture_output=True, timeout=600,
+                )
+                upload_file = h264
+                logger.info("[%s] Re-encoded to H.264", job_id)
+            except Exception as e:
+                logger.warning("[%s] ffmpeg failed, uploading mp4v: %s", job_id, e)
+                upload_file = src
+
             blob_path = f"{prefix}/annotated_video.mp4"
             self._storage.upload_file(
-                container, blob_path, str(video_files[0]), content_type="video/mp4"
+                container, blob_path, upload_file, content_type="video/mp4"
             )
             uploaded["annotated_video"] = blob_path
 

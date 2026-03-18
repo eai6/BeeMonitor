@@ -629,7 +629,7 @@
     
 #     @dataclass
 #     class LegacyOutputConfig:
-#         video_codec: str = "avc1"
+#         video_codec: str = "mp4v"
 #         video_fps: int = 30
     
 #     @dataclass
@@ -1368,7 +1368,7 @@ def synthesize(
     
     @dataclass
     class LegacyOutputConfig:
-        video_codec: str = "avc1"
+        video_codec: str = "mp4v"
         video_fps: int = 30
     
     @dataclass
