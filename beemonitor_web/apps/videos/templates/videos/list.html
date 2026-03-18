@@ -59,11 +59,10 @@
 
 {% if videos %}
 
-<!-- Batch Analyze -->
+<!-- Batch Analyze with Config -->
 <form method="post" action="{% url 'analysis:batch' %}" id="batchForm">
   {% csrf_token %}
-  <input type="hidden" name="detection_mode" value="yolo">
-  <input type="hidden" name="confidence_threshold" value="0.25">
+  {% include "analysis/components/config_panel.html" %}
   <div class="mb-4 flex justify-end">
     <button type="button" onclick="analyzeSelected()" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">
       Analyze Selected

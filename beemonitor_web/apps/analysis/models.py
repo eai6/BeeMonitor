@@ -1,5 +1,24 @@
+import hashlib
+import json
+
 from django.conf import settings
 from django.db import models
+
+
+# GPU tiers with cost per second
+GPU_TIERS = {
+    "T4": {"label": "T4 (Budget)", "cost_per_sec": 0.000164, "speed": "~10 min/video"},
+    "L4": {"label": "L4 (Standard)", "cost_per_sec": 0.000222, "speed": "~8 min/video"},
+    "A10G": {"label": "A10G (Fast)", "cost_per_sec": 0.000306, "speed": "~5.5 min/video"},
+    "L40S": {"label": "L40S (Faster)", "cost_per_sec": 0.000542, "speed": "~3.5 min/video"},
+    "A100": {"label": "A100 (Fastest)", "cost_per_sec": 0.000583, "speed": "~3 min/video"},
+}
+
+
+def compute_config_hash(video_id: int, config: dict) -> str:
+    """SHA256 hash of video_id + sorted config. Used to detect duplicate analysis."""
+    payload = json.dumps({"video_id": video_id, **config}, sort_keys=True)
+    return hashlib.sha256(payload.encode()).hexdigest()[:32]
 
 
 class Job(models.Model):
@@ -11,6 +30,13 @@ class Job(models.Model):
         COMPLETED = "completed", "Completed"
         FAILED = "failed", "Failed"
         CANCELLED = "cancelled", "Cancelled"
+
+    class GpuTier(models.TextChoices):
+        T4 = "T4", "T4 (Budget)"
+        L4 = "L4", "L4 (Standard)"
+        A10G = "A10G", "A10G (Fast)"
+        L40S = "L40S", "L40S (Faster)"
+        A100 = "A100", "A100 (Fastest)"
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -30,10 +56,14 @@ class Job(models.Model):
         default=Status.QUEUED,
     )
     config = models.JSONField(default=dict, blank=True)
+    config_hash = models.CharField(max_length=32, blank=True, db_index=True,
+                                   help_text="SHA256 hash for deduplication")
+    gpu_tier = models.CharField(max_length=10, choices=GpuTier.choices, default=GpuTier.A10G)
     progress_pct = models.IntegerField(default=0)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     error_message = models.TextField(blank=True)
+    execution_seconds = models.FloatField(null=True, blank=True, help_text="Actual GPU seconds consumed")
     compute_cost_usd = models.DecimalField(
         max_digits=8,
         decimal_places=4,
@@ -41,6 +71,11 @@ class Job(models.Model):
         blank=True,
     )
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if not self.config_hash and self.video_id and self.config:
+            self.config_hash = compute_config_hash(self.video_id, self.config)
+        super().save(*args, **kwargs)
 
     class Meta:
         ordering = ["-created_at"]

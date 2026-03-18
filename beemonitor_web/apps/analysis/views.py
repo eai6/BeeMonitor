@@ -20,7 +20,7 @@ from .analytics import (
     get_summary_stats,
 )
 from .forms import JobCreateForm
-from .models import Job, JobResult
+from .models import Job, JobResult, GPU_TIERS
 
 logger = logging.getLogger(__name__)
 
@@ -477,63 +477,65 @@ class BatchJobView(LoginRequiredMixin, View):
     def post(self, request):
         import threading
         from django.utils import timezone as tz
+        from .models import compute_config_hash
 
         video_ids = request.POST.getlist("video_ids")
-        site = request.POST.get("site", "")
-        year = request.POST.get("year", "")
-        month = request.POST.get("month", "")
-        day = request.POST.get("day", "")
+
+        # Read config from form
         detection_mode = request.POST.get("detection_mode", "yolo")
         confidence = float(request.POST.get("confidence_threshold", 0.25))
+        two_mode = request.POST.get("two_mode_tracking", "true") == "true"
+        visualize = request.POST.get("visualize", "true") == "true"
+        gpu_tier = request.POST.get("gpu_tier", "A10G")
 
-        # Build queryset from filters or explicit IDs
+        config = {
+            "detection_mode": detection_mode,
+            "confidence_threshold": confidence,
+            "two_mode_tracking": two_mode,
+            "visualize": visualize,
+        }
+
+        # Build queryset
         if video_ids:
             videos = Video.objects.filter(user=request.user, pk__in=video_ids, status=Video.Status.READY)
         else:
-            videos = Video.objects.filter(user=request.user, status=Video.Status.READY)
-            if site:
-                videos = videos.filter(site_name=site)
-            if year:
-                try:
-                    videos = videos.filter(year=int(year))
-                except (ValueError, TypeError):
-                    pass
-            if month:
-                try:
-                    videos = videos.filter(month=int(month))
-                except (ValueError, TypeError):
-                    pass
-            if day:
-                try:
-                    videos = videos.filter(day=int(day))
-                except (ValueError, TypeError):
-                    pass
+            messages.warning(request, "No videos selected.")
+            return redirect("videos:list")
 
-        # Skip videos that already have a running or completed job
-        existing_video_ids = set(
-            Job.objects.filter(
+        # Deduplication: check which videos already have completed jobs with same config
+        skipped = 0
+        videos_to_process = []
+        for video in videos.select_related("source"):
+            config_hash = compute_config_hash(video.pk, config)
+
+            # Check for existing completed or processing job with same hash
+            existing = Job.objects.filter(
                 user=request.user,
-                status__in=[Job.Status.QUEUED, Job.Status.PROCESSING, Job.Status.COMPLETED],
-            ).values_list("video_id", flat=True)
-        )
+                video=video,
+                config_hash=config_hash,
+                status__in=[Job.Status.COMPLETED, Job.Status.PROCESSING, Job.Status.QUEUED],
+            ).exists()
 
-        videos_to_process = [v for v in videos.select_related("source") if v.pk not in existing_video_ids]
+            if existing:
+                skipped += 1
+            else:
+                videos_to_process.append(video)
 
         if not videos_to_process:
-            messages.warning(request, "No new videos to analyze (all already have jobs).")
+            msg = f"All {skipped} video(s) already analyzed with this configuration."
+            messages.info(request, msg)
             return redirect("analysis:list")
 
-        # Create Job records for all videos
+        # Create Job records
         jobs_data = []
         for video in videos_to_process:
             modal_job_id = f"modal_{uuid.uuid4().hex[:12]}"
             job = Job.objects.create(
                 user=request.user,
                 video=video,
-                config={
-                    "detection_mode": detection_mode,
-                    "confidence_threshold": confidence,
-                },
+                config=config,
+                config_hash=compute_config_hash(video.pk, config),
+                gpu_tier=gpu_tier,
                 status=Job.Status.PROCESSING,
                 started_at=tz.now(),
                 modal_job_id=modal_job_id,
@@ -545,7 +547,7 @@ class BatchJobView(LoginRequiredMixin, View):
                 "video": video,
             })
 
-        # Spawn all jobs on Modal (non-blocking — each gets its own GPU)
+        # Spawn all jobs on Modal
         thread = threading.Thread(
             target=_spawn_modal_batch,
             args=(jobs_data, detection_mode, confidence),
@@ -553,11 +555,13 @@ class BatchJobView(LoginRequiredMixin, View):
         )
         thread.start()
 
-        messages.success(
-            request,
-            f"Submitted {len(jobs_data)} video(s) for parallel GPU processing. "
-            f"Modal will spin up a separate A10G container for each video.",
-        )
+        msg = f"Submitted {len(jobs_data)} video(s) on {gpu_tier} GPU."
+        if skipped:
+            msg += f" Skipped {skipped} already analyzed."
+        cost_rate = GPU_TIERS.get(gpu_tier, {}).get("cost_per_sec", 0.000306)
+        est_cost = len(jobs_data) * 349 * cost_rate  # 349s avg execution
+        msg += f" Estimated cost: ~${est_cost:.2f}"
+        messages.success(request, msg)
         return redirect("analysis:list")
 
 

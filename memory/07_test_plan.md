@@ -369,3 +369,217 @@ MODAL_TOKEN_SECRET=<from modal dashboard>
 6. **Modal integration tests** — Requires account setup (Stage 2)
 7. **Multi-cloud connector tests** — Requires credentials (Stage 3)
 8. **PWA manual tests** — Browser-based (Stage 7)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Getting Started
+
+  1. Django Web App (local, no cloud needed)
+
+  # From project root
+  cd beemonitor_web
+
+  # Install deps (you already have most from earlier)
+  pip install django djangorestframework django-cors-headers django-filter celery redis
+
+  # Run migrations (already done, but in case of fresh clone)
+  python manage.py migrate
+
+  # Create a superuser
+  python manage.py createsuperuser
+
+  # Start the server
+  python manage.py runserver
+
+  Then visit:
+  - http://localhost:8000 — Dashboard (login required)
+  - http://localhost:8000/admin/ — Django admin
+  - http://localhost:8000/api/v1/health/ — API health check (no auth needed)
+
+  2. Run existing tests
+
+  # From project root
+  python -m pytest cloud/tests/ -v -o "addopts="
+
+  3. Add Celery (for background jobs)
+
+  Open a second terminal:
+  # Install and start Redis (pick one)
+  brew install redis && redis-server          # macOS
+  # OR
+  docker run -p 6379:6379 redis:7-alpine      # Docker
+
+  # In another terminal, start Celery worker
+  cd beemonitor_web
+  celery -A config.celery worker -l info
+
+  4. Azure Blob Storage (when ready for cloud)
+
+  Option A: Local emulator (free, no Azure account)
+  docker run -p 10000:10000 mcr.microsoft.com/azure-storage/azurite
+  Then set in your .env:
+  AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz
+  4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;
+
+  Option B: Real Azure account
+  1. Go to https://portal.azure.com
+  2. Create a Storage Account
+  3. Go to Access Keys → copy Connection String
+  4. Set it in .env
+
+  Then set up containers:
+  cd /Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6
+  python -m cloud.scripts.setup_containers
+  python -m cloud.scripts.seed_models --verify
+
+  5. Modal.com (for GPU processing)
+
+  1. Sign up at https://modal.com (free $30/month credits)
+  2. Run modal setup to authenticate
+  3. Deploy:
+  modal deploy cloud/modal_app/app.py
+
+  6. React Native Mobile App
+
+  cd beemonitor-mobile
+  npm install
+  npx expo start
+  Scan the QR code with Expo Go app on your phone, or press i for iOS simulator / a for Android emulator.
+
+  ---
+  What works right now without any cloud setup
+
+  ┌───────────────────────┬─────────────────────┬────────────────────────────┐
+  │        Feature        │         URL         │           Status           │
+  ├───────────────────────┼─────────────────────┼────────────────────────────┤
+  │ Register/Login        │ /accounts/register/ │ Works                      │
+  ├───────────────────────┼─────────────────────┼────────────────────────────┤
+  │ Dashboard             │ /                   │ Works (shows 0 counts)     │
+  ├───────────────────────┼─────────────────────┼────────────────────────────┤
+  │ Upload video metadata │ /videos/upload/     │ Works (stores in DB)       │
+  ├───────────────────────┼─────────────────────┼────────────────────────────┤
+  │ Create analysis job   │ /analysis/new/      │ Works (queues job)         │
+  ├───────────────────────┼─────────────────────┼────────────────────────────┤
+  │ View job list         │ /analysis/          │ Works                      │
+  ├───────────────────────┼─────────────────────┼────────────────────────────┤
+  │ Developer portal      │ /developer/         │ Works (API key generation) │
+  ├───────────────────────┼─────────────────────┼────────────────────────────┤
+  │ REST API              │ /api/v1/            │ Works (all endpoints)      │
+  ├───────────────────────┼─────────────────────┼────────────────────────────┤
+  │ Admin panel           │ /admin/             │ Works                      │
+  ├───────────────────────┼─────────────────────┼────────────────────────────┤
+  │ PWA manifest          │ /manifest.json      │ Works                      │
+  └───────────────────────┴─────────────────────┴────────────────────────────┘
+
+  What needs cloud setup: Actual video processing (Modal + Azure), cloud source ingestion (S3/GCS/etc), annotated video generation.
+
+  Would you like me to start the server so you can try it?

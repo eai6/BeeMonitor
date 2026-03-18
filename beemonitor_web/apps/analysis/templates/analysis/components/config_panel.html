@@ -1,0 +1,112 @@
+<!-- Analysis Configuration Panel — include in any page that submits jobs -->
+<div x-data="{ showConfig: false }" class="bg-white shadow rounded-lg p-4 mb-4">
+  <div class="flex justify-between items-center">
+    <div>
+      <h3 class="text-sm font-medium text-gray-700">Analysis Configuration</h3>
+      <p class="text-xs text-gray-400 mt-0.5">Preset: Standard (A10G, two-mode tracking, 0.25 confidence)</p>
+    </div>
+    <button type="button" @click="showConfig = !showConfig" class="text-sm text-amber-600 hover:underline">
+      <span x-show="!showConfig">Customize</span>
+      <span x-show="showConfig">Hide</span>
+    </button>
+  </div>
+
+  <div x-show="showConfig" x-cloak class="mt-4 space-y-4 border-t border-gray-200 pt-4">
+    <!-- Presets -->
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-2">Preset</label>
+      <div class="flex gap-2">
+        <button type="button" onclick="applyPreset('fast')" class="px-3 py-1.5 border border-gray-300 rounded text-xs hover:bg-gray-50">Fast ($0.07/vid)</button>
+        <button type="button" onclick="applyPreset('standard')" class="px-3 py-1.5 border border-amber-400 bg-amber-50 rounded text-xs font-medium">Standard ($0.11/vid)</button>
+        <button type="button" onclick="applyPreset('quality')" class="px-3 py-1.5 border border-gray-300 rounded text-xs hover:bg-gray-50">Quality ($0.13/vid)</button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <!-- GPU Tier -->
+      <div>
+        <label class="block text-xs font-medium text-gray-500 mb-1">GPU</label>
+        <select name="gpu_tier" id="cfg-gpu" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="T4">T4 — $0.16/min</option>
+          <option value="L4">L4 — $0.22/min</option>
+          <option value="A10G" selected>A10G — $0.31/min</option>
+          <option value="L40S">L40S — $0.54/min</option>
+          <option value="A100">A100 — $0.58/min</option>
+        </select>
+      </div>
+
+      <!-- Confidence Threshold -->
+      <div>
+        <label class="block text-xs font-medium text-gray-500 mb-1">Confidence</label>
+        <input type="number" name="confidence_threshold" id="cfg-conf" value="0.25" min="0.1" max="0.9" step="0.05"
+               class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+      </div>
+
+      <!-- Two-Mode Tracking -->
+      <div>
+        <label class="block text-xs font-medium text-gray-500 mb-1">Two-Mode Tracking</label>
+        <select name="two_mode_tracking" id="cfg-twomode" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="true" selected>Enabled (faster)</option>
+          <option value="false">Disabled (YOLO every frame)</option>
+        </select>
+      </div>
+
+      <!-- Visualization -->
+      <div>
+        <label class="block text-xs font-medium text-gray-500 mb-1">Annotated Video</label>
+        <select name="visualize" id="cfg-viz" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="true" selected>Generate</option>
+          <option value="false">Skip (faster)</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Cost Estimate -->
+    <div id="cost-estimate" class="bg-amber-50 border border-amber-200 rounded p-3 text-sm">
+      <span class="text-amber-700" id="cost-text">Select videos and click Analyze to see cost estimate.</span>
+    </div>
+  </div>
+</div>
+
+<input type="hidden" name="detection_mode" value="yolo">
+
+<script>
+function applyPreset(preset) {
+    const gpu = document.getElementById('cfg-gpu');
+    const conf = document.getElementById('cfg-conf');
+    const twomode = document.getElementById('cfg-twomode');
+    const viz = document.getElementById('cfg-viz');
+
+    if (preset === 'fast') {
+        gpu.value = 'T4'; conf.value = '0.3'; twomode.value = 'true'; viz.value = 'false';
+    } else if (preset === 'standard') {
+        gpu.value = 'A10G'; conf.value = '0.25'; twomode.value = 'true'; viz.value = 'true';
+    } else if (preset === 'quality') {
+        gpu.value = 'A10G'; conf.value = '0.2'; twomode.value = 'true'; viz.value = 'true';
+    }
+    updateCostEstimate();
+}
+
+function updateCostEstimate() {
+    const rates = { T4: 0.07, L4: 0.09, A10G: 0.11, L40S: 0.14, A100: 0.13 };
+    const gpu = document.getElementById('cfg-gpu').value;
+    const costPerVid = rates[gpu] || 0.11;
+    const checked = document.querySelectorAll('.video-checkbox:checked').length;
+
+    const el = document.getElementById('cost-text');
+    if (checked > 0) {
+        const total = (costPerVid * checked).toFixed(2);
+        el.innerHTML = `Estimated cost: <strong>$${costPerVid.toFixed(2)}/video × ${checked} videos = $${total}</strong>`;
+    } else {
+        el.innerHTML = `~$${costPerVid.toFixed(2)} per video on ${gpu}. Select videos to see total.`;
+    }
+}
+
+// Update cost when checkboxes change
+document.addEventListener('change', function(e) {
+    if (e.target.classList.contains('video-checkbox') || e.target.id === 'selectAll' || e.target.id === 'cfg-gpu') {
+        updateCostEstimate();
+    }
+});
+document.addEventListener('DOMContentLoaded', updateCostEstimate);
+</script>
