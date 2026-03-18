@@ -9,8 +9,18 @@
 <div class="flex justify-between items-center mb-6">
   <div>
     <h1 class="text-2xl font-bold text-gray-900">{{ source.name }}</h1>
-    <p class="text-sm text-gray-500">{{ source.get_source_type_display }} &mdash; {{ files|length }} file(s) found</p>
+    <p class="text-sm text-gray-500">{{ source.get_source_type_display }} — {{ total_files }} video file(s) found</p>
   </div>
+  <!-- Import All button -->
+  <form method="post" action="{% url 'sources:sync' source.pk %}"
+        onsubmit="return confirm('Import all {{ total_files }} video files into BeeMonitor?')">
+    {% csrf_token %}
+    <input type="hidden" name="import_all" value="true">
+    <input type="hidden" name="prefix" value="{{ prefix }}">
+    <button type="submit" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded text-sm font-medium">
+      Import All {{ total_files }} Videos
+    </button>
+  </form>
 </div>
 
 {% if error %}
@@ -25,11 +35,14 @@
     <div class="px-6 py-3 border-b border-gray-200 flex justify-between items-center bg-gray-50">
       <label class="flex items-center gap-2 text-sm">
         <input type="checkbox" id="select-all" class="rounded border-gray-300">
-        <span class="font-medium text-gray-700">Select All</span>
+        <span class="font-medium text-gray-700">Select All on Page</span>
       </label>
-      <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-1.5 rounded text-sm font-medium">
-        Import Selected to BeeMonitor
-      </button>
+      <div class="flex gap-3 items-center">
+        <span class="text-xs text-gray-500">Page {{ page }} of {{ total_pages }}</span>
+        <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-1.5 rounded text-sm font-medium">
+          Import Selected
+        </button>
+      </div>
     </div>
 
     <div class="overflow-x-auto">
@@ -49,14 +62,31 @@
               <input type="checkbox" name="selected_files" value="{{ file.key }}" class="file-checkbox rounded border-gray-300">
             </td>
             <td class="px-4 py-2">
-              <span class="font-mono text-gray-700">{{ file.name }}</span>
+              <span class="font-mono text-gray-700 text-xs">{{ file.name }}</span>
             </td>
             <td class="px-4 py-2 text-gray-500">{{ file.size_mb }} MB</td>
-            <td class="px-4 py-2 text-gray-400 text-xs">{{ file.last_modified }}</td>
+            <td class="px-4 py-2 text-gray-400 text-xs">{{ file.last_modified|truncatechars:19 }}</td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
+    </div>
+
+    <!-- Pagination -->
+    <div class="px-6 py-3 border-t border-gray-200 flex justify-between items-center bg-gray-50">
+      <div class="text-sm text-gray-500">
+        Showing {{ files|length }} of {{ total_files }} files
+      </div>
+      <div class="flex gap-2">
+        {% if has_prev %}
+        <a href="?prefix={{ prefix }}&page={{ page|add:"-1" }}"
+           class="px-3 py-1 border border-gray-300 rounded text-sm hover:bg-gray-100">Previous</a>
+        {% endif %}
+        {% if has_next %}
+        <a href="?prefix={{ prefix }}&page={{ page|add:"1" }}"
+           class="px-3 py-1 border border-gray-300 rounded text-sm hover:bg-gray-100">Next</a>
+        {% endif %}
+      </div>
     </div>
   </div>
 </form>
@@ -69,7 +99,7 @@
 
 {% else %}
 <div class="bg-white shadow rounded-lg p-12 text-center">
-  <p class="text-gray-500">No files found in this source.</p>
+  <p class="text-gray-500">No video files found in this source.</p>
 </div>
 {% endif %}
 {% endblock %}

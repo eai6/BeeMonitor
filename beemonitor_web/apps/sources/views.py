@@ -33,7 +33,10 @@ def _get_fernet() -> Fernet:
 def _decrypt_credentials(source: DataSource) -> dict:
     """Decrypt stored credentials for a source."""
     fernet = _get_fernet()
-    return _json.loads(fernet.decrypt(bytes(source.config_encrypted)).decode())
+    raw = bytes(source.config_encrypted)
+    if not raw:
+        raise ValueError("No credentials stored for this source.")
+    return _json.loads(fernet.decrypt(raw).decode())
 
 
 class SourceListView(LoginRequiredMixin, ListView):
@@ -91,8 +94,6 @@ class SourceCreateView(LoginRequiredMixin, FormView):
 
 
 class SourceDeleteView(LoginRequiredMixin, View):
-    """Delete a data source and its encrypted credentials."""
-
     def post(self, request, pk):
         source = get_object_or_404(DataSource, pk=pk, user=request.user)
         name = source.name
@@ -106,7 +107,7 @@ class SourceDeleteView(LoginRequiredMixin, View):
 
 
 class SourceBrowseView(LoginRequiredMixin, DetailView):
-    """Browse files in a connected source and optionally import them."""
+    """Browse files in a connected source with pagination."""
     template_name = "sources/browse.html"
     context_object_name = "source"
 
@@ -117,16 +118,32 @@ class SourceBrowseView(LoginRequiredMixin, DetailView):
         ctx = super().get_context_data(**kwargs)
         source = self.object
         prefix = self.request.GET.get("prefix", "")
+        page = int(self.request.GET.get("page", 1))
+        per_page = 100
+
         ctx["prefix"] = prefix
+        ctx["page"] = page
+        ctx["per_page"] = per_page
         ctx["files"] = []
+        ctx["total_files"] = 0
+        ctx["has_next"] = False
+        ctx["has_prev"] = page > 1
         ctx["error"] = ""
 
         try:
             credentials = _decrypt_credentials(source)
-            files = _list_files(source.source_type, credentials, prefix=prefix, limit=200)
+            all_files = _list_files(source.source_type, credentials, prefix=prefix, limit=10000)
             credentials.clear()
-            ctx["files"] = files
+
+            ctx["total_files"] = len(all_files)
+            start = (page - 1) * per_page
+            end = start + per_page
+            ctx["files"] = all_files[start:end]
+            ctx["has_next"] = end < len(all_files)
+            ctx["total_pages"] = (len(all_files) + per_page - 1) // per_page
+
         except Exception as e:
+            logger.error("Browse error for source %s: %s", source.pk, e)
             ctx["error"] = str(e)
 
         return ctx
@@ -138,10 +155,8 @@ class SourceSyncView(LoginRequiredMixin, View):
     def post(self, request, pk):
         source = get_object_or_404(DataSource, pk=pk, user=request.user)
         selected_files = request.POST.getlist("selected_files")
-
-        if not selected_files:
-            messages.warning(request, "No files selected.")
-            return redirect("sources:browse", pk=pk)
+        import_all = request.POST.get("import_all") == "true"
+        prefix = request.POST.get("prefix", "")
 
         try:
             credentials = _decrypt_credentials(source)
@@ -149,7 +164,18 @@ class SourceSyncView(LoginRequiredMixin, View):
             messages.error(request, f"Could not decrypt credentials: {e}")
             return redirect("sources:browse", pk=pk)
 
+        # If "import all", list all files from source
+        if import_all:
+            all_files = _list_files(source.source_type, credentials, prefix=prefix, limit=10000)
+            selected_files = [f["key"] for f in all_files]
+
+        if not selected_files:
+            messages.warning(request, "No files selected.")
+            credentials.clear()
+            return redirect("sources:browse", pk=pk)
+
         imported = 0
+        skipped = 0
         for file_key in selected_files:
             filename = file_key.split("/")[-1] if "/" in file_key else file_key
 
@@ -158,27 +184,36 @@ class SourceSyncView(LoginRequiredMixin, View):
                 continue
 
             # Check if already imported
-            if Video.objects.filter(user=request.user, azure_blob_path__endswith=filename).exists():
+            if Video.objects.filter(user=request.user, metadata__remote_key=file_key).exists():
+                skipped += 1
                 continue
 
             # Parse timestamp from filename
             site_name, recorded_at = Video.parse_timestamp_from_filename(filename)
             title = filename.rsplit(".", 1)[0] if "." in filename else filename
 
-            # Create video record (not yet downloaded to Azure — just registered)
+            # Get file size from the listing if available
+            file_size = 0
+            if import_all:
+                for f in all_files:
+                    if f["key"] == file_key:
+                        file_size = f.get("size", 0)
+                        break
+
             Video.objects.create(
                 user=request.user,
                 source=source,
                 title=title,
-                azure_blob_path=f"s3://{file_key}",  # Mark as S3 reference
-                file_size_bytes=0,
-                status=Video.Status.UPLOADING,
+                azure_blob_path=f"s3://{file_key}",
+                file_size_bytes=file_size,
+                status=Video.Status.READY,
                 recorded_at=recorded_at,
                 site_name=site_name,
                 metadata={
                     "source_id": source.pk,
                     "source_type": source.source_type,
                     "remote_key": file_key,
+                    "remote_bucket": credentials.get("bucket", ""),
                 },
             )
             imported += 1
@@ -189,17 +224,20 @@ class SourceSyncView(LoginRequiredMixin, View):
         source.save(update_fields=["last_synced_at"])
 
         logger.info(
-            "AUDIT: User %s synced %d files from source '%s' (id=%s)",
-            request.user.username, imported, source.name, pk,
+            "AUDIT: User %s synced %d files from source '%s' (id=%s), skipped %d",
+            request.user.username, imported, source.name, pk, skipped,
         )
-        messages.success(request, f"Imported {imported} video(s) from '{source.name}'.")
+
+        msg = f"Imported {imported} video(s) from '{source.name}'."
+        if skipped:
+            msg += f" Skipped {skipped} already imported."
+        messages.success(request, msg)
         return redirect("videos:list")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
 def _test_connection(source_type: str, credentials: dict) -> tuple[bool, str]:
-    """Test if credentials work. SOC2: credentials never logged."""
     try:
         if source_type == "aws_s3":
             import boto3
@@ -230,8 +268,8 @@ def _test_connection(source_type: str, credentials: dict) -> tuple[bool, str]:
         return False, error_msg
 
 
-def _list_files(source_type: str, credentials: dict, prefix: str = "", limit: int = 200) -> list[dict]:
-    """List files from a remote source."""
+def _list_files(source_type: str, credentials: dict, prefix: str = "", limit: int = 10000) -> list[dict]:
+    """List files from a remote source. Handles pagination for large buckets."""
     files = []
     if source_type == "aws_s3":
         import boto3
@@ -246,10 +284,13 @@ def _list_files(source_type: str, credentials: dict, prefix: str = "", limit: in
 
         paginator = client.get_paginator("list_objects_v2")
         count = 0
-        for page in paginator.paginate(Bucket=bucket, Prefix=search_prefix, MaxKeys=limit):
+        for page in paginator.paginate(Bucket=bucket, Prefix=search_prefix):
             for obj in page.get("Contents", []):
                 name = obj["Key"]
                 if name.endswith("/"):
+                    continue
+                # Only include video files
+                if not any(name.lower().endswith(ext) for ext in (".mp4", ".avi", ".mov", ".mkv")):
                     continue
                 files.append({
                     "key": name,
