@@ -108,6 +108,76 @@
   </div>
 </div>
 
+<!-- Events Table -->
+{% if events_data.rows %}
+<div class="bg-white shadow rounded-lg mb-8">
+  <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+    <h2 class="text-lg font-medium text-gray-900">Events ({{ events_data.total }} rows)</h2>
+    {% if events_csv_url %}
+    <a href="{{ events_csv_url }}" download class="text-sm text-amber-600 hover:underline">Download CSV</a>
+    {% endif %}
+  </div>
+  <div class="overflow-x-auto">
+    <table class="min-w-full divide-y divide-gray-200 text-sm">
+      <thead class="bg-gray-50">
+        <tr>
+          {% for header in events_data.headers %}
+          <th class="px-4 py-3 text-left font-medium text-gray-500 uppercase tracking-wider text-xs">{{ header }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody class="bg-white divide-y divide-gray-200">
+        {% for row in events_data.rows %}
+        <tr class="hover:bg-gray-50">
+          {% for cell in row %}
+          <td class="px-4 py-2 whitespace-nowrap text-gray-700">{{ cell }}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- Tracking Table -->
+{% if tracking_data.rows %}
+<div class="bg-white shadow rounded-lg mb-8" x-data="{ show: false }">
+  <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+    <h2 class="text-lg font-medium text-gray-900">Tracking Data ({{ tracking_data.total }} rows)</h2>
+    <div class="flex gap-4 items-center">
+      {% if tracking_csv_url %}
+      <a href="{{ tracking_csv_url }}" download class="text-sm text-amber-600 hover:underline">Download CSV</a>
+      {% endif %}
+      <button @click="show = !show" class="text-sm text-gray-500 hover:text-gray-700">
+        <span x-show="!show">Show Table</span>
+        <span x-show="show">Hide Table</span>
+      </button>
+    </div>
+  </div>
+  <div x-show="show" class="overflow-x-auto">
+    <table class="min-w-full divide-y divide-gray-200 text-sm">
+      <thead class="bg-gray-50">
+        <tr>
+          {% for header in tracking_data.headers %}
+          <th class="px-4 py-3 text-left font-medium text-gray-500 uppercase tracking-wider text-xs">{{ header }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody class="bg-white divide-y divide-gray-200">
+        {% for row in tracking_data.rows %}
+        <tr class="hover:bg-gray-50">
+          {% for cell in row %}
+          <td class="px-4 py-2 whitespace-nowrap text-gray-700 font-mono text-xs">{{ cell }}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
 <!-- Detailed Summary Stats -->
 {% if result.summary_stats %}
 <div class="bg-white shadow rounded-lg mb-8">
@@ -126,14 +196,6 @@
   </div>
 </div>
 {% endif %}
-
-<!-- File Paths (for reference) -->
-<div class="bg-gray-50 rounded-lg p-4 text-xs text-gray-400">
-  <p class="font-medium text-gray-500 mb-2">Azure Blob Paths</p>
-  {% if result.events_csv_path %}<p>Events: {{ result.events_csv_path }}</p>{% endif %}
-  {% if result.tracking_csv_path %}<p>Tracking: {{ result.tracking_csv_path }}</p>{% endif %}
-  {% if result.annotated_video_path %}<p>Video: {{ result.annotated_video_path }}</p>{% endif %}
-</div>
 
 {% else %}
 <div class="bg-white shadow rounded-lg p-12 text-center">

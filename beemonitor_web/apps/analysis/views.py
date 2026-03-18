@@ -183,4 +183,39 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
                 job.video.azure_blob_path, container="raw-videos"
             )
 
+        # Load CSV data for display in tables
+        ctx["events_data"] = _load_csv_from_azure(events_path)
+        ctx["tracking_data"] = _load_csv_from_azure(tracking_path)
+
         return ctx
+
+
+def _load_csv_from_azure(blob_path: str, container: str = "processed", max_rows: int = 500) -> dict:
+    """Download a CSV from Azure and return headers + rows for template rendering."""
+    if not blob_path:
+        return {"headers": [], "rows": []}
+    try:
+        import csv
+        import io
+        from azure.storage.blob import BlobServiceClient
+
+        conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
+        if not conn_str:
+            return {"headers": [], "rows": []}
+
+        service = BlobServiceClient.from_connection_string(conn_str)
+        blob = service.get_blob_client(container, blob_path)
+        content = blob.download_blob().readall().decode("utf-8")
+
+        reader = csv.reader(io.StringIO(content))
+        headers = next(reader, [])
+        rows = []
+        for i, row in enumerate(reader):
+            if i >= max_rows:
+                break
+            rows.append(row)
+
+        return {"headers": headers, "rows": rows, "total": len(rows)}
+    except Exception as e:
+        logger.error("Failed to load CSV %s: %s", blob_path, e)
+        return {"headers": [], "rows": []}
