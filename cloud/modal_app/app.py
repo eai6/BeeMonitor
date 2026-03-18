@@ -25,7 +25,7 @@ def health():
 # ── GPU Processing ────────────────────────────────────────────────────
 
 @app.function(
-    gpu="L4",
+    gpu="A10G",
     timeout=7200,
     retries=1,
     volumes={MODEL_VOLUME_MOUNT: model_volume},

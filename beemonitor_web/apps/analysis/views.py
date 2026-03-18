@@ -236,6 +236,93 @@ class JobCreateView(LoginRequiredMixin, FormView):
         return reverse("analysis:detail", kwargs={"pk": self._job_pk})
 
 
+class BatchJobView(LoginRequiredMixin, View):
+    """Submit analysis jobs for multiple videos at once.
+
+    Accepts filter params (site, year, month, day) or explicit video IDs.
+    Each video gets its own Job, all processed in parallel on separate GPU containers.
+    """
+
+    def post(self, request):
+        import threading
+        from django.utils import timezone as tz
+
+        video_ids = request.POST.getlist("video_ids")
+        site = request.POST.get("site", "")
+        year = request.POST.get("year", "")
+        month = request.POST.get("month", "")
+        day = request.POST.get("day", "")
+        detection_mode = request.POST.get("detection_mode", "yolo")
+        confidence = float(request.POST.get("confidence_threshold", 0.25))
+
+        # Build queryset from filters or explicit IDs
+        if video_ids:
+            videos = Video.objects.filter(user=request.user, pk__in=video_ids, status=Video.Status.READY)
+        else:
+            videos = Video.objects.filter(user=request.user, status=Video.Status.READY)
+            if site:
+                videos = videos.filter(site_name=site)
+            if year:
+                try:
+                    videos = videos.filter(year=int(year))
+                except (ValueError, TypeError):
+                    pass
+            if month:
+                try:
+                    videos = videos.filter(month=int(month))
+                except (ValueError, TypeError):
+                    pass
+            if day:
+                try:
+                    videos = videos.filter(day=int(day))
+                except (ValueError, TypeError):
+                    pass
+
+        # Skip videos that already have a running or completed job
+        existing_video_ids = set(
+            Job.objects.filter(
+                user=request.user,
+                status__in=[Job.Status.QUEUED, Job.Status.PROCESSING, Job.Status.COMPLETED],
+            ).values_list("video_id", flat=True)
+        )
+
+        videos_to_process = [v for v in videos if v.pk not in existing_video_ids]
+
+        if not videos_to_process:
+            messages.warning(request, "No new videos to analyze (all already have jobs).")
+            return redirect("analysis:list")
+
+        # Create jobs and launch background threads
+        job_pks = []
+        for video in videos_to_process:
+            job = Job.objects.create(
+                user=request.user,
+                video=video,
+                config={
+                    "detection_mode": detection_mode,
+                    "confidence_threshold": confidence,
+                },
+                status=Job.Status.PROCESSING,
+                started_at=tz.now(),
+                modal_job_id=f"modal_{uuid.uuid4().hex[:12]}",
+            )
+            job_pks.append(job.pk)
+
+            thread = threading.Thread(
+                target=_run_modal_job,
+                args=(job.pk,),
+                daemon=True,
+            )
+            thread.start()
+
+        messages.success(
+            request,
+            f"Submitted {len(job_pks)} analysis job(s) — each running on a separate GPU. "
+            f"View progress on the Analysis page.",
+        )
+        return redirect("analysis:list")
+
+
 class JobResultsView(LoginRequiredMixin, TemplateView):
     template_name = "analysis/results.html"
 

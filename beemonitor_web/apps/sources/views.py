@@ -165,9 +165,11 @@ class SourceSyncView(LoginRequiredMixin, View):
             return redirect("sources:browse", pk=pk)
 
         try:
-            # If "import all", list all files from source
+            # Always list files to get sizes
+            all_files = _list_files(source.source_type, credentials, prefix=prefix, limit=10000)
+            size_lookup = {f["key"]: f["size"] for f in all_files}
+
             if import_all:
-                all_files = _list_files(source.source_type, credentials, prefix=prefix, limit=10000)
                 selected_files = [f["key"] for f in all_files]
 
             if not selected_files:
@@ -209,7 +211,7 @@ class SourceSyncView(LoginRequiredMixin, View):
                         source=source,
                         title=title,
                         azure_blob_path=f"s3://{file_key}",
-                        file_size_bytes=0,
+                        file_size_bytes=size_lookup.get(file_key, 0),
                         status=Video.Status.READY,
                         recorded_at=recorded_at,
                         site_name=site_name,
