@@ -262,23 +262,43 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
         ctx["current_year"] = year
         ctx["current_month"] = month
 
-        # Analytics data
-        ctx["summary"] = get_summary_stats(user, site_name=site or None, year=year_int, month=month_int)
+        # Analytics data — wrap in try/except so page never crashes
+        try:
+            ctx["summary"] = get_summary_stats(user, site_name=site or None, year=year_int, month=month_int)
+        except Exception:
+            ctx["summary"] = {"total_videos": 0, "total_events": 0, "total_entries": 0,
+                              "total_exits": 0, "avg_events_per_video": 0, "total_unique_tracks": 0, "completed_jobs": 0}
 
-        activity = get_activity_over_time(user, site_name=site or None, year=year_int, month=month_int)
-        ctx["activity_json"] = json.dumps(activity)
+        try:
+            activity = get_activity_over_time(user, site_name=site or None, year=year_int, month=month_int)
+            ctx["activity_json"] = json.dumps(activity, default=str)
+        except Exception:
+            ctx["activity_json"] = "[]"
 
-        cumulative = get_cumulative_activity(user, site_name=site or None)
-        ctx["cumulative_json"] = json.dumps(cumulative)
+        try:
+            cumulative = get_cumulative_activity(user, site_name=site or None)
+            ctx["cumulative_json"] = json.dumps(cumulative, default=str)
+        except Exception:
+            ctx["cumulative_json"] = "[]"
 
-        averages = get_period_averages(user, site_name=site or None)
-        ctx["hourly_avg_json"] = json.dumps(averages["hourly"])
-        ctx["daily_avg_json"] = json.dumps(averages["daily"])
-        ctx["monthly_avg_json"] = json.dumps(averages["monthly"])
+        try:
+            averages = get_period_averages(user, site_name=site or None)
+            # Convert int keys to string keys for JSON
+            ctx["hourly_avg_json"] = json.dumps({str(k): v for k, v in averages["hourly"].items()})
+            ctx["daily_avg_json"] = json.dumps({str(k): v for k, v in averages["daily"].items()})
+            ctx["monthly_avg_json"] = json.dumps({str(k): v for k, v in averages["monthly"].items()})
+        except Exception:
+            ctx["hourly_avg_json"] = "{}"
+            ctx["daily_avg_json"] = "{}"
+            ctx["monthly_avg_json"] = "{}"
 
-        nest_data = get_nest_activity_heatmap(user)
-        ctx["nest_data"] = nest_data
-        ctx["nest_data_json"] = json.dumps(nest_data)
+        try:
+            nest_data = get_nest_activity_heatmap(user)
+            ctx["nest_data"] = nest_data
+            ctx["nest_data_json"] = json.dumps(nest_data, default=str)
+        except Exception:
+            ctx["nest_data"] = []
+            ctx["nest_data_json"] = "[]"
 
         return ctx
 
