@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% block title %}Usage & Credits - BeeMonitor{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold text-gray-900 mb-6">Usage & Credits</h1>
+
+<!-- Credit Balance -->
+<div class="bg-white shadow rounded-lg p-6 mb-6">
+  <div class="flex justify-between items-center mb-3">
+    <h2 class="text-lg font-medium text-gray-900">Monthly Credits</h2>
+    <span class="inline-flex px-3 py-1 text-sm font-medium rounded-full
+      {% if profile.tier == 'free' %}bg-gray-100 text-gray-800
+      {% elif profile.tier == 'standard' %}bg-blue-100 text-blue-800
+      {% elif profile.tier == 'pro' %}bg-purple-100 text-purple-800
+      {% else %}bg-amber-100 text-amber-800{% endif %}">
+      {{ profile.get_tier_display }} Tier
+    </span>
+  </div>
+
+  <!-- Progress bar -->
+  <div class="mb-2">
+    <div class="flex justify-between text-sm mb-1">
+      <span class="text-gray-600">${{ profile.used_credit_usd|floatformat:2 }} used</span>
+      <span class="text-gray-600">${{ profile.monthly_credit_usd|floatformat:2 }} limit</span>
+    </div>
+    <div class="w-full bg-gray-200 rounded-full h-4">
+      <div class="h-4 rounded-full transition-all
+        {% if profile.credit_usage_pct > 90 %}bg-red-500
+        {% elif profile.credit_usage_pct > 70 %}bg-amber-500
+        {% else %}bg-green-500{% endif %}"
+        style="width: {{ profile.credit_usage_pct }}%"></div>
+    </div>
+  </div>
+
+  <div class="flex justify-between text-sm text-gray-500">
+    <span>Remaining: <strong class="text-gray-900">${{ profile.remaining_credit_usd|floatformat:2 }}</strong></span>
+    {% if profile.credit_reset_date %}
+    <span>Resets: {{ profile.credit_reset_date }}</span>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Stats Cards -->
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+  <div class="bg-white shadow rounded-lg p-4 text-center">
+    <p class="text-sm text-gray-500">Total Jobs</p>
+    <p class="text-2xl font-bold text-gray-900">{{ total_jobs }}</p>
+  </div>
+  <div class="bg-white shadow rounded-lg p-4 text-center">
+    <p class="text-sm text-gray-500">Completed</p>
+    <p class="text-2xl font-bold text-green-600">{{ completed_jobs }}</p>
+  </div>
+  <div class="bg-white shadow rounded-lg p-4 text-center">
+    <p class="text-sm text-gray-500">Processing</p>
+    <p class="text-2xl font-bold text-blue-600">{{ processing_jobs }}</p>
+  </div>
+  <div class="bg-white shadow rounded-lg p-4 text-center">
+    <p class="text-sm text-gray-500">Failed</p>
+    <p class="text-2xl font-bold text-red-600">{{ failed_jobs }}</p>
+  </div>
+</div>
+
+<!-- GPU Usage Breakdown -->
+{% if gpu_stats %}
+<div class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-lg font-medium text-gray-900 mb-4">GPU Usage by Tier</h2>
+  <table class="min-w-full text-sm">
+    <thead>
+      <tr class="border-b border-gray-200">
+        <th class="py-2 text-left text-gray-500">GPU</th>
+        <th class="py-2 text-right text-gray-500">Jobs</th>
+        <th class="py-2 text-right text-gray-500">GPU Time</th>
+        <th class="py-2 text-right text-gray-500">Cost</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for stat in gpu_stats %}
+      <tr class="border-b border-gray-100">
+        <td class="py-2 font-medium">{{ stat.gpu_tier|default:"A10G" }}</td>
+        <td class="py-2 text-right">{{ stat.count }}</td>
+        <td class="py-2 text-right">{% if stat.total_seconds %}{{ stat.total_seconds|floatformat:0 }}s{% else %}--{% endif %}</td>
+        <td class="py-2 text-right">${{ stat.total_cost|default:"0"|floatformat:2 }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<!-- Lifetime Stats -->
+<div class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-lg font-medium text-gray-900 mb-4">Lifetime Stats</h2>
+  <div class="grid grid-cols-2 gap-4 text-sm">
+    <div>
+      <p class="text-gray-500">Total Jobs Submitted</p>
+      <p class="text-xl font-bold">{{ profile.total_jobs_submitted }}</p>
+    </div>
+    <div>
+      <p class="text-gray-500">Total GPU Time</p>
+      <p class="text-xl font-bold">{{ profile.total_gpu_seconds|floatformat:0 }}s</p>
+    </div>
+    <div>
+      <p class="text-gray-500">Organization</p>
+      <p class="text-xl font-bold">{{ profile.organization|default:"Not set" }}</p>
+    </div>
+    <div>
+      <p class="text-gray-500">Max Concurrent Jobs</p>
+      <p class="text-xl font-bold">{{ profile.max_concurrent_jobs }}</p>
+    </div>
+  </div>
+</div>
+
+<!-- Monthly Cost Chart -->
+<div class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-lg font-medium text-gray-900 mb-4">Monthly Spend</h2>
+  <canvas id="monthlyCostChart" height="200"></canvas>
+</div>
+
+<!-- Tier Comparison -->
+<div class="bg-white shadow rounded-lg p-6">
+  <h2 class="text-lg font-medium text-gray-900 mb-4">Plan Comparison</h2>
+  <table class="min-w-full text-sm">
+    <thead>
+      <tr class="border-b border-gray-200">
+        <th class="py-2 text-left text-gray-500">Feature</th>
+        <th class="py-2 text-center text-gray-500">Free</th>
+        <th class="py-2 text-center text-gray-500">Standard</th>
+        <th class="py-2 text-center text-gray-500">Pro</th>
+        <th class="py-2 text-center text-gray-500">Enterprise</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr class="border-b border-gray-100">
+        <td class="py-2">Monthly Credits</td>
+        <td class="py-2 text-center">$30</td>
+        <td class="py-2 text-center">$250</td>
+        <td class="py-2 text-center">$1,000</td>
+        <td class="py-2 text-center">Unlimited</td>
+      </tr>
+      <tr class="border-b border-gray-100">
+        <td class="py-2">Concurrent GPUs</td>
+        <td class="py-2 text-center">10</td>
+        <td class="py-2 text-center">50</td>
+        <td class="py-2 text-center">200</td>
+        <td class="py-2 text-center">500</td>
+      </tr>
+      <tr class="border-b border-gray-100">
+        <td class="py-2">Video Hours/Month</td>
+        <td class="py-2 text-center">50 hrs</td>
+        <td class="py-2 text-center">500 hrs</td>
+        <td class="py-2 text-center">5,000 hrs</td>
+        <td class="py-2 text-center">Unlimited</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const data = JSON.parse('{{ monthly_costs_json|escapejs }}');
+    if (data.length > 0) {
+        new Chart(document.getElementById('monthlyCostChart'), {
+            type: 'bar',
+            data: {
+                labels: data.map(d => d.month),
+                datasets: [{
+                    label: 'Cost ($)',
+                    data: data.map(d => d.cost),
+                    backgroundColor: 'rgba(217, 119, 6, 0.7)',
+                    borderRadius: 4,
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: { beginAtZero: true, title: { display: true, text: 'Cost ($)' } }
+                },
+                plugins: { legend: { display: false } }
+            }
+        });
+    }
+});
+</script>
+{% endblock %}

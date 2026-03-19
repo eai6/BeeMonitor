@@ -449,11 +449,30 @@ class PollJobsView(LoginRequiredMixin, View):
                             "summary_stats": result.get("summary_stats", {}),
                         },
                     )
+                    # Calculate and store cost
+                    exec_secs = result.get("execution_seconds", 0) or 0
+                    cost_rate = GPU_TIERS.get(job.gpu_tier, {}).get("cost_per_sec", 0.000306)
+                    cost_usd = round(exec_secs * cost_rate, 4)
+                    cost_cents = int(cost_usd * 100)
+
                     Job.objects.filter(pk=job.pk).update(
-                        status="completed", progress_pct=100, completed_at=timezone.now(),
+                        status="completed", progress_pct=100,
+                        completed_at=timezone.now(),
+                        execution_seconds=exec_secs,
+                        compute_cost_usd=cost_usd,
                     )
+
+                    # Charge user credits
+                    try:
+                        from apps.accounts.models import UserProfile
+                        profile, _ = UserProfile.objects.get_or_create(user=job.user)
+                        profile.charge(cost_cents, gpu_seconds=exec_secs)
+                    except Exception as e:
+                        logger.error("Failed to charge credits for job %s: %s", job.pk, e)
+
                     completed += 1
-                    logger.info("Poll: Job %s completed — %s events", job.pk, result.get("total_events", 0))
+                    logger.info("Poll: Job %s completed — %s events, %.1fs, $%.4f",
+                                job.pk, result.get("total_events", 0), exec_secs, cost_usd)
 
                 except Exception as e:
                     logger.error("Poll error for job %s: %s", job.pk, e)
@@ -495,6 +514,14 @@ class BatchJobView(LoginRequiredMixin, View):
             "visualize": visualize,
         }
 
+        # Quota check
+        from apps.accounts.models import UserProfile
+        profile, _ = UserProfile.objects.get_or_create(user=request.user)
+
+        # Estimate cost
+        cost_rate = GPU_TIERS.get(gpu_tier, {}).get("cost_per_sec", 0.000306)
+        est_cost_per_video_cents = int(349 * cost_rate * 100)  # 349s avg, convert to cents
+
         # Build queryset
         if video_ids:
             videos = Video.objects.filter(user=request.user, pk__in=video_ids, status=Video.Status.READY)
@@ -525,6 +552,29 @@ class BatchJobView(LoginRequiredMixin, View):
             msg = f"All {skipped} video(s) already analyzed with this configuration."
             messages.info(request, msg)
             return redirect("analysis:list")
+
+        # Budget check
+        total_est_cents = est_cost_per_video_cents * len(videos_to_process)
+        if not profile.has_budget(total_est_cents):
+            est_usd = total_est_cents / 100
+            messages.error(
+                request,
+                f"Insufficient credits. Need ~${est_usd:.2f} for {len(videos_to_process)} videos "
+                f"but only ${profile.remaining_credit_usd:.2f} remaining this month."
+            )
+            return redirect("videos:list")
+
+        # Concurrent job check
+        active_count = Job.objects.filter(
+            user=request.user, status=Job.Status.PROCESSING,
+        ).count()
+        if active_count + len(videos_to_process) > profile.max_concurrent_jobs:
+            messages.error(
+                request,
+                f"Concurrent job limit ({profile.max_concurrent_jobs}) would be exceeded. "
+                f"Currently {active_count} processing. Wait for some to complete."
+            )
+            return redirect("videos:list")
 
         # Create Job records
         jobs_data = []
