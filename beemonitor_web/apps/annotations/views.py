@@ -99,8 +99,26 @@ class AddVideosView(LoginRequiredMixin, View):
 class AnnotationEditorView(LoginRequiredMixin, TemplateView):
     template_name = "annotations/editor.html"
 
+    def get(self, request, *args, **kwargs):
+        """Return JSON for AJAX frame navigation, HTML for normal page load."""
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.GET.get("format") == "json":
+            project = get_object_or_404(
+                AnnotationProject, pk=self.kwargs["pk"], user=request.user
+            )
+            video_id = request.GET.get("video")
+            frame_number = int(request.GET.get("frame", 0))
+            boxes = []
+            if video_id:
+                try:
+                    video = project.videos.get(pk=video_id)
+                    ann = Annotation.objects.get(project=project, video=video, frame_number=frame_number)
+                    boxes = ann.boxes
+                except (Annotation.DoesNotExist, Exception):
+                    boxes = []
+            return JsonResponse({"boxes": boxes, "frame": frame_number})
+        return super().get(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
-        import logging
         logger = logging.getLogger(__name__)
 
         ctx = super().get_context_data(**kwargs)

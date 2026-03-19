@@ -320,17 +320,32 @@
   // Prevent context menu on canvas
   canvas.addEventListener("contextmenu", function(e) { e.preventDefault(); });
 
-  // Frame navigation
+  // Frame navigation — seek video and load existing annotations from server
   function navigateToFrame(frame) {
     if (frame < 0) frame = 0;
     if (sourceVideo && videoReady) {
       currentFrame = frame;
       frameInput.value = frame;
-      boxes = [];
       seekToFrame(frame);
-      render();
-      updateBoxList();
-      statusText.textContent = "Frame " + frame + " — draw boxes and save";
+      statusText.textContent = "Loading frame " + frame + "...";
+
+      // Fetch existing annotations for this frame from server
+      fetch(EDITOR_URL + "?video=" + VIDEO_ID + "&frame=" + frame + "&format=json", {
+        headers: {"X-Requested-With": "XMLHttpRequest"}
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        boxes = data.boxes || [];
+        render();
+        updateBoxList();
+        statusText.textContent = "Frame " + frame + (boxes.length > 0 ? " — " + boxes.length + " box(es) loaded" : " — draw boxes and save");
+      })
+      .catch(function() {
+        boxes = [];
+        render();
+        updateBoxList();
+        statusText.textContent = "Frame " + frame + " — draw boxes and save";
+      });
     } else {
       window.location.href = EDITOR_URL + "?video=" + VIDEO_ID + "&frame=" + frame;
     }
