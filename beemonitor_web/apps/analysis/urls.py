@@ -1,4 +1,5 @@
 from django.urls import path
+from django.views.generic import RedirectView
 
 from . import views
 from .video_proxy import VideoProxyView
@@ -6,7 +7,7 @@ from .video_proxy import VideoProxyView
 app_name = "analysis"
 
 urlpatterns = [
-    path("", views.JobListView.as_view(), name="list"),
+    path("", RedirectView.as_view(pattern_name="analysis:analytics", permanent=False), name="list"),
     path("analytics/", views.AnalyticsDashboardView.as_view(), name="analytics"),
     path("analytics/download-events/", views.DownloadEventsCSVView.as_view(), name="download_events"),
     path("analytics/download-tracking/", views.DownloadTrackingCSVView.as_view(), name="download_tracking"),

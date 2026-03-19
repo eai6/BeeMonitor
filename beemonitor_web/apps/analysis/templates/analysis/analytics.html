@@ -48,6 +48,93 @@
   </form>
 </div>
 
+<!-- Job Progress Tracker -->
+{% if job_stats.processing > 0 or job_stats.failed > 0 or job_stats.queued > 0 %}
+<div class="bg-white shadow rounded-lg p-5 mb-6" id="job-tracker"
+     hx-get="{% url 'analysis:poll' %}" hx-trigger="every 10s" hx-swap="none">
+  <div class="flex items-center justify-between mb-4">
+    <h2 class="text-lg font-medium text-gray-900">Analysis Progress</h2>
+    <div class="flex gap-3 text-sm">
+      <span class="inline-flex items-center gap-1">
+        <span class="w-2 h-2 rounded-full bg-green-500"></span>
+        {{ job_stats.completed }} completed
+      </span>
+      {% if job_stats.processing > 0 %}
+      <span class="inline-flex items-center gap-1 animate-pulse">
+        <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+        {{ job_stats.processing }} processing
+      </span>
+      {% endif %}
+      {% if job_stats.queued > 0 %}
+      <span class="inline-flex items-center gap-1">
+        <span class="w-2 h-2 rounded-full bg-amber-500"></span>
+        {{ job_stats.queued }} queued
+      </span>
+      {% endif %}
+      {% if job_stats.failed > 0 %}
+      <span class="inline-flex items-center gap-1">
+        <span class="w-2 h-2 rounded-full bg-red-500"></span>
+        {{ job_stats.failed }} failed
+      </span>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Progress bar -->
+  {% if job_stats.total > 0 %}
+  <div class="w-full bg-gray-200 rounded-full h-3 mb-4">
+    <div class="flex h-3 rounded-full overflow-hidden">
+      {% widthratio job_stats.completed job_stats.total 100 as pct_completed %}
+      {% widthratio job_stats.processing job_stats.total 100 as pct_processing %}
+      {% widthratio job_stats.failed job_stats.total 100 as pct_failed %}
+      <div class="bg-green-500" style="width: {{ pct_completed }}%"></div>
+      <div class="bg-blue-500 animate-pulse" style="width: {{ pct_processing }}%"></div>
+      <div class="bg-red-400" style="width: {{ pct_failed }}%"></div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Active Jobs -->
+  {% if processing_jobs %}
+  <div class="mb-3">
+    <h3 class="text-sm font-medium text-gray-600 mb-2">Processing Now</h3>
+    <div class="space-y-1">
+      {% for job in processing_jobs %}
+      <div class="flex items-center justify-between text-sm bg-blue-50 rounded px-3 py-2">
+        <div class="flex items-center gap-2">
+          <svg class="w-4 h-4 text-blue-500 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <span class="text-gray-700">{{ job.video.title|truncatechars:50 }}</span>
+        </div>
+        <span class="text-xs text-gray-500">started {{ job.started_at|timesince }} ago</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Recent Failures -->
+  {% if failed_jobs %}
+  <div>
+    <h3 class="text-sm font-medium text-gray-600 mb-2">Recent Failures</h3>
+    <div class="space-y-1">
+      {% for job in failed_jobs %}
+      <div class="flex items-center justify-between text-sm bg-red-50 rounded px-3 py-2">
+        <span class="text-gray-700">{{ job.video.title|truncatechars:40 }}</span>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-red-500 truncate max-w-xs">{{ job.error_message|truncatechars:60 }}</span>
+          <a href="{% url 'analysis:detail' job.pk %}" class="text-xs text-red-600 hover:underline">Details</a>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
 <!-- Summary Cards -->
 <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
   <div class="bg-white shadow rounded-lg p-5 text-center">
@@ -205,6 +292,13 @@
     </div>
   </div>
 </div>
+
+{% if job_stats.processing > 0 or job_stats.queued > 0 %}
+<!-- Auto-refresh when jobs are running -->
+<script>
+setTimeout(function() { window.location.reload(); }, 30000);
+</script>
+{% endif %}
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>

@@ -899,6 +899,23 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
         ctx["current_year"] = year
         ctx["current_month"] = month
 
+        # Job progress metrics
+        user_jobs = Job.objects.filter(user=user)
+        processing_jobs = user_jobs.filter(status=Job.Status.PROCESSING).select_related("video")
+        failed_jobs = user_jobs.filter(status=Job.Status.FAILED).select_related("video").order_by("-created_at")[:5]
+        completed_recent = user_jobs.filter(status=Job.Status.COMPLETED).order_by("-completed_at")[:5]
+
+        ctx["job_stats"] = {
+            "total": user_jobs.count(),
+            "completed": user_jobs.filter(status=Job.Status.COMPLETED).count(),
+            "processing": processing_jobs.count(),
+            "failed": user_jobs.filter(status=Job.Status.FAILED).count(),
+            "queued": user_jobs.filter(status=Job.Status.QUEUED).count(),
+        }
+        ctx["processing_jobs"] = processing_jobs[:20]
+        ctx["failed_jobs"] = failed_jobs
+        ctx["completed_recent"] = completed_recent
+
         # Analytics data — wrap in try/except so page never crashes
         try:
             ctx["summary"] = get_summary_stats(user, site_name=site or None, year=year_int, month=month_int)
