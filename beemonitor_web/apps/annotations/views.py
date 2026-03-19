@@ -224,6 +224,29 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
         ctx["videos"] = project.videos.all()
         ctx["video_url"] = ""
 
+        # Build ordered frame list for prev/next navigation across all project frames
+        all_frames = list(
+            Annotation.objects.filter(project=project)
+            .order_by("video__title", "frame_number")
+            .values_list("video_id", "frame_number")
+        )
+        current_key = (video.pk if video else None, frame_number)
+        ctx["total_project_frames"] = len(all_frames)
+        ctx["current_frame_index"] = 0
+        ctx["prev_frame_url"] = ""
+        ctx["next_frame_url"] = ""
+
+        if all_frames and current_key in all_frames:
+            idx = all_frames.index(current_key)
+            ctx["current_frame_index"] = idx + 1
+            base_url = f"/annotations/{project.pk}/edit/"
+            if idx > 0:
+                pv, pf = all_frames[idx - 1]
+                ctx["prev_frame_url"] = f"{base_url}?video={pv}&frame={pf}"
+            if idx < len(all_frames) - 1:
+                nv, nf = all_frames[idx + 1]
+                ctx["next_frame_url"] = f"{base_url}?video={nv}&frame={nf}"
+
         # Generate video SAS URL for frame display
         if video and video.azure_blob_path and not video.azure_blob_path.startswith("s3://"):
             try:

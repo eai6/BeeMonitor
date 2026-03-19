@@ -74,7 +74,8 @@ class CloudPipeline:
         ml_threshold: float = 0.6,
         visualize: bool = True,
         two_mode_tracking: bool = True,
-        custom_model_path: str = "",
+        custom_nest_model_path: str = "",
+        custom_bee_model_path: str = "",
     ) -> PipelineResult:
         """Run the full BeeMonitor pipeline on a video stored in Azure.
 
@@ -107,12 +108,15 @@ class CloudPipeline:
         logger.info("[%s] Ensuring models are available", job_id)
         model_paths = self._models.ensure_models()
 
-        # Step 2b — Download custom model if specified
-        custom_model_local = ""
-        if custom_model_path:
-            logger.info("[%s] Downloading custom model: %s", job_id, custom_model_path)
-            custom_model_local = self._models.ensure_custom_model(custom_model_path)
-            logger.info("[%s] Custom model ready at: %s", job_id, custom_model_local)
+        # Step 2b — Download custom models if specified
+        custom_nest_local = ""
+        custom_bee_local = ""
+        if custom_nest_model_path:
+            logger.info("[%s] Downloading custom nest model: %s", job_id, custom_nest_model_path)
+            custom_nest_local = self._models.ensure_custom_model(custom_nest_model_path)
+        if custom_bee_model_path:
+            logger.info("[%s] Downloading custom bee model: %s", job_id, custom_bee_model_path)
+            custom_bee_local = self._models.ensure_custom_model(custom_bee_model_path)
 
         # Step 3 — Build config and run analysis
         logger.info("[%s] Running BeeMonitor analysis", job_id)
@@ -125,7 +129,8 @@ class CloudPipeline:
             ml_threshold=ml_threshold,
             visualize=visualize,
             two_mode_tracking=two_mode_tracking,
-            custom_model_local=custom_model_local,
+            custom_nest_local=custom_nest_local,
+            custom_bee_local=custom_bee_local,
         )
 
         # Step 4 — Upload results to Azure
@@ -188,7 +193,8 @@ class CloudPipeline:
         ml_threshold: float,
         visualize: bool,
         two_mode_tracking: bool = True,
-        custom_model_local: str = "",
+        custom_nest_local: str = "",
+        custom_bee_local: str = "",
     ):
         """Build a BeeMonitor Config, instantiate, and run."""
         from beemonitor.core.config import Config, ModelConfig
@@ -200,11 +206,13 @@ class CloudPipeline:
         config.models.tracking = model_paths.bee_tracking
         config.models.event_classifier = model_paths.event_classifier
 
-        # Override with custom model if provided (replaces both detection models)
-        if custom_model_local:
-            logger.info("Using custom model: %s", custom_model_local)
-            config.models.nest_detection = custom_model_local
-            config.models.tracking = custom_model_local
+        # Override with custom models if provided (separate for nest and bee)
+        if custom_nest_local:
+            logger.info("Using custom nest model: %s", custom_nest_local)
+            config.models.nest_detection = custom_nest_local
+        if custom_bee_local:
+            logger.info("Using custom bee model: %s", custom_bee_local)
+            config.models.tracking = custom_bee_local
 
         # Apply user overrides
         config.tracking.confidence_threshold = confidence_threshold

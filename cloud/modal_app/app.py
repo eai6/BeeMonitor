@@ -42,7 +42,8 @@ def process_video(
     ml_threshold: float = 0.6,
     visualize: bool = True,
     two_mode_tracking: bool = True,
-    custom_model_path: str = "",
+    custom_nest_model_path: str = "",
+    custom_bee_model_path: str = "",
 ) -> dict:
     """Run BeeMonitor analysis on a video stored in Azure Blob."""
     import time
@@ -75,7 +76,8 @@ def process_video(
         ml_threshold=ml_threshold,
         visualize=visualize,
         two_mode_tracking=two_mode_tracking,
-        custom_model_path=custom_model_path,
+        custom_nest_model_path=custom_nest_model_path,
+        custom_bee_model_path=custom_bee_model_path,
     )
 
     pipeline.cleanup(job_id)
@@ -110,7 +112,8 @@ def process_video_from_s3(
     confidence_threshold: float = 0.25,
     visualize: bool = True,
     two_mode_tracking: bool = True,
-    custom_model_path: str = "",
+    custom_nest_model_path: str = "",
+    custom_bee_model_path: str = "",
 ) -> dict:
     """Transfer video from S3 to Azure, then run BeeMonitor analysis."""
     import boto3
@@ -173,7 +176,8 @@ def process_video_from_s3(
         confidence_threshold=confidence_threshold,
         visualize=visualize,
         two_mode_tracking=two_mode_tracking,
-        custom_model_path=custom_model_path,
+        custom_nest_model_path=custom_nest_model_path,
+        custom_bee_model_path=custom_bee_model_path,
     )
 
     pipeline.cleanup(job_id)

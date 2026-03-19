@@ -138,7 +138,8 @@ def _spawn_modal_job(job_pk: int) -> None:
         blob_path = video.azure_blob_path
         detection_mode = job.config.get("detection_mode", "yolo")
         confidence = job.config.get("confidence_threshold", 0.25)
-        custom_model_path = job.config.get("custom_model_path", "")
+        custom_nest_model_path = job.config.get("custom_nest_model_path", "")
+        custom_bee_model_path = job.config.get("custom_bee_model_path", "")
         meta = video.metadata or {}
     except Job.DoesNotExist:
         return
@@ -172,8 +173,10 @@ def _spawn_modal_job(job_pk: int) -> None:
                 confidence_threshold=confidence,
                 visualize=True,
             )
-            if custom_model_path:
-                spawn_kwargs["custom_model_path"] = custom_model_path
+            if custom_nest_model_path:
+                spawn_kwargs["custom_nest_model_path"] = custom_nest_model_path
+            if custom_bee_model_path:
+                spawn_kwargs["custom_bee_model_path"] = custom_bee_model_path
             call = fn.spawn(**spawn_kwargs)
             creds.clear()
         else:
@@ -187,8 +190,10 @@ def _spawn_modal_job(job_pk: int) -> None:
                 confidence_threshold=confidence,
                 visualize=True,
             )
-            if custom_model_path:
-                spawn_kwargs["custom_model_path"] = custom_model_path
+            if custom_nest_model_path:
+                spawn_kwargs["custom_nest_model_path"] = custom_nest_model_path
+            if custom_bee_model_path:
+                spawn_kwargs["custom_bee_model_path"] = custom_bee_model_path
             call = fn.spawn(**spawn_kwargs)
 
         # Store the call ID for polling
@@ -202,12 +207,9 @@ def _spawn_modal_job(job_pk: int) -> None:
         connection.close()
 
 
-def _spawn_modal_batch(jobs_data: list, detection_mode: str, confidence: float, custom_model_path: str = "") -> None:
-    """Spawn all Modal jobs (non-blocking). Each gets its own GPU container.
-
-    Uses spawn() — fires each job and stores the call ID.
-    PollJobsView checks for results via HTMX polling.
-    """
+def _spawn_modal_batch(jobs_data: list, detection_mode: str, confidence: float,
+                       custom_nest_model_path: str = "", custom_bee_model_path: str = "") -> None:
+    """Spawn all Modal jobs (non-blocking). Each gets its own GPU container."""
     import django
     django.setup()
     from django.db import connection
@@ -251,8 +253,10 @@ def _spawn_modal_batch(jobs_data: list, detection_mode: str, confidence: float, 
                         confidence_threshold=confidence,
                         visualize=True,
                     )
-                    if custom_model_path:
-                        spawn_kwargs["custom_model_path"] = custom_model_path
+                    if custom_nest_model_path:
+                        spawn_kwargs["custom_nest_model_path"] = custom_nest_model_path
+                    if custom_bee_model_path:
+                        spawn_kwargs["custom_bee_model_path"] = custom_bee_model_path
                     call = fn.spawn(**spawn_kwargs)
                 else:
                     fn = modal.Function.from_name("beemonitor-cloud", "process_video")
@@ -264,8 +268,10 @@ def _spawn_modal_batch(jobs_data: list, detection_mode: str, confidence: float, 
                         confidence_threshold=confidence,
                         visualize=True,
                     )
-                    if custom_model_path:
-                        spawn_kwargs["custom_model_path"] = custom_model_path
+                    if custom_nest_model_path:
+                        spawn_kwargs["custom_nest_model_path"] = custom_nest_model_path
+                    if custom_bee_model_path:
+                        spawn_kwargs["custom_bee_model_path"] = custom_bee_model_path
                     call = fn.spawn(**spawn_kwargs)
 
                 Job.objects.filter(pk=jd["job_pk"]).update(modal_call_id=call.object_id)
@@ -373,14 +379,20 @@ class JobCreateView(LoginRequiredMixin, FormView):
         import threading
         from django.utils import timezone
 
-        custom_model = form.cleaned_data.get("custom_model")
         config = {
             "detection_mode": form.cleaned_data["detection_mode"],
             "confidence_threshold": form.cleaned_data["confidence_threshold"],
         }
-        if custom_model and custom_model.azure_model_path:
-            config["custom_model_path"] = custom_model.azure_model_path
-            config["custom_model_name"] = custom_model.name
+        # Resolve custom model paths from POST (not form fields — these come from template selects)
+        from apps.training.models import CustomModel
+        for key, config_key in [("custom_nest_model", "custom_nest_model_path"), ("custom_bee_model", "custom_bee_model_path")]:
+            model_id = self.request.POST.get(key, "")
+            if model_id:
+                try:
+                    cm = CustomModel.objects.get(pk=model_id, user=self.request.user, is_active=True)
+                    config[config_key] = cm.azure_model_path
+                except CustomModel.DoesNotExist:
+                    pass
 
         job = Job.objects.create(
             user=self.request.user,
@@ -526,7 +538,6 @@ class BatchJobView(LoginRequiredMixin, View):
         two_mode = request.POST.get("two_mode_tracking", "true") == "true"
         visualize = request.POST.get("visualize", "true") == "true"
         gpu_tier = request.POST.get("gpu_tier", "A10G")
-        custom_model_id = request.POST.get("custom_model", "")
 
         config = {
             "detection_mode": detection_mode,
@@ -535,17 +546,22 @@ class BatchJobView(LoginRequiredMixin, View):
             "visualize": visualize,
         }
 
-        # Resolve custom model path
-        custom_model_path = ""
-        if custom_model_id:
-            from apps.training.models import CustomModel
-            try:
-                cm = CustomModel.objects.get(pk=custom_model_id, user=request.user, is_active=True)
-                custom_model_path = cm.azure_model_path
-                config["custom_model_path"] = custom_model_path
-                config["custom_model_name"] = cm.name
-            except CustomModel.DoesNotExist:
-                pass
+        # Resolve custom model paths (separate for nest and bee)
+        from apps.training.models import CustomModel
+        custom_nest_model_path = ""
+        custom_bee_model_path = ""
+        for key, config_key in [("custom_nest_model", "custom_nest_model_path"), ("custom_bee_model", "custom_bee_model_path")]:
+            model_id = request.POST.get(key, "")
+            if model_id:
+                try:
+                    cm = CustomModel.objects.get(pk=model_id, user=request.user, is_active=True)
+                    config[config_key] = cm.azure_model_path
+                    if key == "custom_nest_model":
+                        custom_nest_model_path = cm.azure_model_path
+                    else:
+                        custom_bee_model_path = cm.azure_model_path
+                except CustomModel.DoesNotExist:
+                    pass
 
         # Quota check
         from apps.accounts.models import UserProfile
@@ -631,7 +647,7 @@ class BatchJobView(LoginRequiredMixin, View):
         # Spawn all jobs on Modal
         thread = threading.Thread(
             target=_spawn_modal_batch,
-            args=(jobs_data, detection_mode, confidence, custom_model_path),
+            args=(jobs_data, detection_mode, confidence, custom_nest_model_path, custom_bee_model_path),
             daemon=True,
         )
         thread.start()

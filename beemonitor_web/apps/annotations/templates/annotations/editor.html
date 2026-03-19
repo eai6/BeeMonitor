@@ -26,12 +26,35 @@
   </div>
 </div>
 {% else %}
+
+<!-- Project Frame Navigation (across all videos) -->
+{% if total_project_frames > 0 %}
+<div class="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 mb-3 flex items-center justify-between">
+  <div class="flex items-center gap-3">
+    <a href="{{ prev_frame_url|default:'#' }}"
+       class="px-3 py-1.5 bg-white border border-gray-300 rounded text-sm font-medium {% if not prev_frame_url %}opacity-40 pointer-events-none{% else %}hover:bg-gray-50{% endif %}"
+       {% if not prev_frame_url %}tabindex="-1"{% endif %}>
+      &larr; Prev Frame
+    </a>
+    <span class="text-sm text-gray-700 font-medium">
+      Frame {{ current_frame_index }} of {{ total_project_frames }}
+    </span>
+    <a href="{{ next_frame_url|default:'#' }}"
+       class="px-3 py-1.5 bg-white border border-gray-300 rounded text-sm font-medium {% if not next_frame_url %}opacity-40 pointer-events-none{% else %}hover:bg-gray-50{% endif %}"
+       {% if not next_frame_url %}tabindex="-1"{% endif %}>
+      Next Frame &rarr;
+    </a>
+  </div>
+  <span class="text-xs text-gray-500">{{ video.title }} &middot; f{{ frame_number }}</span>
+</div>
+{% endif %}
+
 <!-- Annotation Editor -->
 <div class="flex gap-4" id="editor-app" style="max-width: 100%; overflow: hidden;">
   <!-- Main Canvas Area -->
   <div class="flex-1 min-w-0">
     <div class="bg-white shadow rounded-lg p-4">
-      <!-- Frame Navigation -->
+      <!-- Video Frame Navigation (within current video) -->
       <div class="flex items-center gap-2 mb-3 flex-wrap">
         <button id="btn-play" class="px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded text-xs font-medium" title="Play/Pause">&#9654; Play</button>
         <span class="text-gray-300">|</span>
@@ -474,6 +497,22 @@
   updateBoxList();
   updateScale();
   window.addEventListener("resize", updateScale);
+
+  // Keyboard shortcuts for project-level frame navigation
+  document.addEventListener("keydown", function(e) {
+    // Left/Right arrow keys for prev/next annotated frame (project-level)
+    // Only when not focused on an input
+    if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA") return;
+    const prevUrl = "{{ prev_frame_url|escapejs }}";
+    const nextUrl = "{{ next_frame_url|escapejs }}";
+    if (e.key === "ArrowLeft" && prevUrl) {
+      e.preventDefault();
+      window.location.href = prevUrl;
+    } else if (e.key === "ArrowRight" && nextUrl) {
+      e.preventDefault();
+      window.location.href = nextUrl;
+    }
+  });
 })();
 </script>
 {% endif %}

@@ -61,16 +61,26 @@
       </div>
     </div>
 
-    <!-- Custom Model -->
-    <div>
-      <label class="block text-xs font-medium text-gray-500 mb-1">Custom Detection Model</label>
-      <select name="custom_model" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
-        <option value="" selected>Default (built-in models)</option>
-        {% for model in custom_models %}
-        <option value="{{ model.pk }}">{{ model.name }} (mAP50: {{ model.metrics.mAP50|default:"--" }})</option>
-        {% endfor %}
-      </select>
-      <p class="mt-1 text-xs text-gray-400">Use a fine-tuned model from Training</p>
+    <!-- Custom Models (separate for nest and bee) -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div>
+        <label class="block text-xs font-medium text-gray-500 mb-1">Nest Detection Model</label>
+        <select name="custom_nest_model" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="" selected>Default (nest_detection.pt)</option>
+          {% for model in custom_models %}
+          <option value="{{ model.pk }}">{{ model.name }} (mAP50: {{ model.metrics.mAP50|default:"--" }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-500 mb-1">Bee Tracking Model</label>
+        <select name="custom_bee_model" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="" selected>Default (bee_tracking.pt)</option>
+          {% for model in custom_models %}
+          <option value="{{ model.pk }}">{{ model.name }} (mAP50: {{ model.metrics.mAP50|default:"--" }})</option>
+          {% endfor %}
+        </select>
+      </div>
     </div>
 
     <!-- Cost Estimate -->
