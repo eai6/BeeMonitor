@@ -54,7 +54,42 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
             video_data.append({"video": video, "annotation_count": ann_count})
         ctx["video_data"] = video_data
         ctx["total_annotations"] = project.annotations.count()
+
+        # Available videos to add (not already in project)
+        from apps.videos.models import Video
+        existing_ids = set(videos.values_list("pk", flat=True))
+        available = Video.objects.filter(user=self.request.user).exclude(pk__in=existing_ids)
+        ctx["available_videos"] = available[:500]  # Cap for performance
+        ctx["available_sites"] = sorted(set(
+            available.exclude(site_name="").values_list("site_name", flat=True)
+        ))
         return ctx
+
+
+class AddVideosView(LoginRequiredMixin, View):
+    """Add selected videos to an annotation project."""
+
+    def post(self, request, pk):
+        from django.shortcuts import redirect
+        from django.contrib import messages
+
+        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        video_ids = request.POST.getlist("video_ids")
+
+        if not video_ids:
+            messages.warning(request, "No videos selected.")
+            return redirect("annotations:detail", pk=pk)
+
+        from apps.videos.models import Video
+        videos = Video.objects.filter(user=request.user, pk__in=video_ids)
+        added = 0
+        for video in videos:
+            if not project.videos.filter(pk=video.pk).exists():
+                project.videos.add(video)
+                added += 1
+
+        messages.success(request, f"Added {added} video(s) to project.")
+        return redirect("annotations:detail", pk=pk)
 
 
 class AnnotationEditorView(LoginRequiredMixin, TemplateView):
