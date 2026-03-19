@@ -121,6 +121,34 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
         ctx["boxes"] = json.dumps(boxes)
         ctx["classes"] = json.dumps(project.classes)
         ctx["videos"] = project.videos.all()
+        ctx["video_url"] = ""
+
+        # Generate video SAS URL for frame display
+        if video and video.azure_blob_path and not video.azure_blob_path.startswith("s3://"):
+            try:
+                from datetime import datetime, timedelta, timezone as dt_tz
+                from django.conf import settings
+                from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
+
+                conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
+                if conn_str:
+                    service = BlobServiceClient.from_connection_string(conn_str)
+                    account_name = service.account_name
+                    account_key = ""
+                    for part in conn_str.split(";"):
+                        if part.startswith("AccountKey="):
+                            account_key = part.split("=", 1)[1]
+                            break
+                    token = generate_blob_sas(
+                        account_name=account_name, container_name="raw-videos",
+                        blob_name=video.azure_blob_path, account_key=account_key,
+                        permission=BlobSasPermissions(read=True),
+                        expiry=datetime.now(dt_tz.utc) + timedelta(hours=24),
+                    )
+                    ctx["video_url"] = f"https://{account_name}.blob.core.windows.net/raw-videos/{video.azure_blob_path}?{token}"
+            except Exception:
+                pass
+
         return ctx
 
 
