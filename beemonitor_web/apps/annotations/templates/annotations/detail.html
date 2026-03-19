@@ -79,20 +79,25 @@
               class="text-gray-400 hover:text-gray-600 text-sm">Close</button>
     </div>
     <div class="flex gap-2 mb-3">
-      <select id="add-site-filter" class="border border-gray-300 rounded px-2 py-1 text-sm">
+      <input type="text" id="add-search" placeholder="Search videos..."
+             class="flex-1 border border-gray-300 rounded px-2 py-1 text-sm focus:ring-amber-500 focus:border-amber-500"
+             oninput="filterAddVideos()">
+      <select id="add-site-filter" class="border border-gray-300 rounded px-2 py-1 text-sm" onchange="filterAddVideos()">
         <option value="">All Sites</option>
         {% for site in available_sites %}
         <option value="{{ site }}">{{ site }}</option>
         {% endfor %}
       </select>
-      <button type="button" onclick="filterAddVideos()" class="text-sm text-gray-500 hover:text-gray-700 border border-gray-300 rounded px-2 py-1">Filter</button>
     </div>
-    <div class="max-h-48 overflow-y-auto border border-gray-200 rounded p-2 mb-3">
-      <label class="flex items-center gap-2 mb-1 text-sm text-gray-500">
-        <input type="checkbox" id="add-select-all" class="rounded border-gray-300"> Select all
+    <div class="flex items-center justify-between mb-2">
+      <label class="flex items-center gap-2 text-sm text-gray-500">
+        <input type="checkbox" id="add-select-all" class="rounded border-gray-300"> Select all visible
       </label>
+      <span id="add-video-count" class="text-xs text-gray-400"></span>
+    </div>
+    <div class="max-h-60 overflow-y-auto border border-gray-200 rounded p-2 mb-3">
       {% for video in available_videos %}
-      <label class="flex items-center gap-2 py-0.5 text-sm video-add-item" data-site="{{ video.site_name }}">
+      <label class="flex items-center gap-2 py-0.5 text-sm video-add-item" data-site="{{ video.site_name }}" data-title="{{ video.title|lower }}">
         <input type="checkbox" name="video_ids" value="{{ video.pk }}" class="rounded border-gray-300 add-video-cb">
         {{ video.title }}
         {% if video.site_name %}<span class="text-xs text-gray-400">({{ video.site_name }})</span>{% endif %}
@@ -195,9 +200,21 @@ document.getElementById('add-select-all')?.addEventListener('change', function()
 
 function filterAddVideos() {
     const site = document.getElementById('add-site-filter').value;
+    const search = (document.getElementById('add-search').value || '').toLowerCase();
+    let visible = 0;
     document.querySelectorAll('.video-add-item').forEach(el => {
-        el.style.display = (!site || el.dataset.site === site) ? '' : 'none';
+        const matchSite = !site || el.dataset.site === site;
+        const matchSearch = !search || el.dataset.title.includes(search);
+        if (matchSite && matchSearch) {
+            el.style.display = '';
+            visible++;
+        } else {
+            el.style.display = 'none';
+        }
     });
+    const countEl = document.getElementById('add-video-count');
+    if (countEl) countEl.textContent = visible + ' video(s)';
 }
+filterAddVideos();
 </script>
 {% endblock %}
