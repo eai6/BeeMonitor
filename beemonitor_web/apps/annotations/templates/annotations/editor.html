@@ -27,9 +27,9 @@
 </div>
 {% else %}
 <!-- Annotation Editor -->
-<div class="flex gap-4" id="editor-app">
+<div class="flex gap-4" id="editor-app" style="max-width: 100%; overflow: hidden;">
   <!-- Main Canvas Area -->
-  <div class="flex-1">
+  <div class="flex-1 min-w-0">
     <div class="bg-white shadow rounded-lg p-4">
       <!-- Frame Navigation -->
       <div class="flex items-center gap-3 mb-3">
@@ -47,13 +47,15 @@
       {% endif %}
 
       <!-- Canvas -->
-      <div class="relative border border-gray-300 rounded overflow-hidden" style="width:1280px; max-width:100%;">
+      <div class="relative border border-gray-300 rounded overflow-hidden">
         <canvas id="annotation-canvas" width="1280" height="720"
-                style="width:100%; cursor:crosshair; background:#1f2937;">
+                style="width:100%; height:auto; cursor:crosshair; background:#1f2937;">
         </canvas>
         {% if not video_url %}
-        <div id="no-video-msg" class="absolute inset-0 flex items-center justify-center text-gray-400 text-sm pointer-events-none">
-          Video not available for preview (stored on S3). Annotations still work — boxes are saved by frame number.
+        <div id="no-video-msg" class="absolute inset-0 flex flex-col items-center justify-center text-gray-400 text-sm pointer-events-none">
+          <p>Video stored on S3 — frames not available for preview.</p>
+          <p class="mt-1">Submit an analysis job first to transfer to Azure, then frames will load here.</p>
+          <p class="mt-2 text-xs">You can still draw boxes by frame number — they'll be saved.</p>
         </div>
         {% endif %}
       </div>
@@ -66,7 +68,7 @@
   </div>
 
   <!-- Right Sidebar -->
-  <div class="w-72 flex-shrink-0">
+  <div class="w-60 flex-shrink-0">
     <!-- Class Selector -->
     <div class="bg-white shadow rounded-lg p-4 mb-4">
       <h3 class="text-sm font-medium text-gray-700 mb-2">Active Class</h3>
