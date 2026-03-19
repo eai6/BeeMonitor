@@ -107,7 +107,13 @@
         <td class="px-6 py-4 text-sm text-gray-500">{{ item.annotation_count }} frames</td>
         <td class="px-6 py-4 text-sm">
           <a href="{% url 'annotations:editor' project.pk %}?video={{ item.video.pk }}&frame=0"
-             class="text-amber-600 hover:underline font-medium">Annotate</a>
+             class="text-amber-600 hover:underline font-medium mr-3">Annotate</a>
+          <form method="post" action="{% url 'annotations:pre_annotate' project.pk %}" class="inline"
+                onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Running...';">
+            {% csrf_token %}
+            <input type="hidden" name="video_id" value="{{ item.video.pk }}">
+            <button type="submit" class="text-blue-600 hover:underline text-sm">AI Pre-annotate</button>
+          </form>
         </td>
       </tr>
       {% endfor %}

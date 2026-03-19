@@ -49,3 +49,29 @@ class TrainingCreateForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         if user:
             self.fields["project"].queryset = AnnotationProject.objects.filter(user=user)
+
+
+class ModelUploadForm(forms.Form):
+    name = forms.CharField(max_length=200, widget=forms.TextInput(attrs={
+        "class": "w-full border border-gray-300 rounded px-3 py-2 text-sm",
+        "placeholder": "My Custom Nest Model",
+    }))
+    model_type = forms.ChoiceField(choices=[
+        ("nest_detection", "Nest Detection"),
+        ("bee_tracking", "Bee/Species Tracking"),
+        ("custom", "Other / Custom"),
+    ], widget=forms.Select(attrs={
+        "class": "w-full border border-gray-300 rounded px-3 py-2 text-sm",
+    }))
+    model_file = forms.FileField(
+        help_text="Upload a .pt YOLO model file",
+        widget=forms.ClearableFileInput(attrs={"accept": ".pt,.pth,.onnx"}),
+    )
+    classes = forms.CharField(
+        required=False,
+        help_text="Comma-separated class names (e.g., bee, wasp, hover_fly)",
+        widget=forms.TextInput(attrs={
+            "class": "w-full border border-gray-300 rounded px-3 py-2 text-sm",
+            "placeholder": "bee, wasp, hover_fly",
+        }),
+    )

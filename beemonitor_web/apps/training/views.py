@@ -1,9 +1,18 @@
-from django.contrib.auth.mixins import LoginRequiredMixin
-from django.urls import reverse_lazy
-from django.views.generic import CreateView, DetailView, ListView
+import logging
+import uuid
 
-from .forms import TrainingCreateForm
+from django.conf import settings
+from django.contrib import messages
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.shortcuts import redirect
+from django.urls import reverse_lazy
+from django.views import View
+from django.views.generic import CreateView, DetailView, FormView, ListView
+
+from .forms import TrainingCreateForm, ModelUploadForm
 from .models import CustomModel, TrainingJob
+
+logger = logging.getLogger(__name__)
 
 
 class TrainingListView(LoginRequiredMixin, ListView):
@@ -68,3 +77,45 @@ class CustomModelDetailView(LoginRequiredMixin, DetailView):
 
     def get_queryset(self):
         return CustomModel.objects.filter(user=self.request.user).select_related("training_job")
+
+
+class UploadModelView(LoginRequiredMixin, FormView):
+    """Upload a custom .pt model file."""
+    template_name = "training/upload_model.html"
+    form_class = ModelUploadForm
+
+    def form_valid(self, form):
+        model_file = self.request.FILES["model_file"]
+        name = form.cleaned_data["name"]
+        model_type = form.cleaned_data["model_type"]
+        classes_text = form.cleaned_data.get("classes", "")
+        classes = [c.strip() for c in classes_text.split(",") if c.strip()] if classes_text else []
+
+        # Upload to Azure Blob Storage
+        upload_id = uuid.uuid4().hex[:12]
+        blob_path = f"custom/{self.request.user.pk}/{upload_id}/{model_file.name}"
+
+        try:
+            from azure.storage.blob import BlobServiceClient
+            conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
+            if conn_str:
+                service = BlobServiceClient.from_connection_string(conn_str)
+                blob = service.get_blob_client("models", blob_path)
+                blob.upload_blob(model_file, overwrite=True)
+        except Exception as e:
+            messages.error(self.request, f"Upload failed: {e}")
+            return self.form_invalid(form)
+
+        CustomModel.objects.create(
+            user=self.request.user,
+            name=name,
+            model_type=model_type,
+            base_model="uploaded",
+            azure_model_path=blob_path,
+            classes=classes,
+            metrics={"source": "uploaded", "file_size": model_file.size},
+            is_active=True,
+        )
+
+        messages.success(self.request, f"Model '{name}' uploaded successfully.")
+        return redirect("training:models")

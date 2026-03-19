@@ -18,6 +18,7 @@ from .analytics import (
     get_nest_activity_heatmap,
     get_period_averages,
     get_summary_stats,
+    get_video_breakdown,
 )
 from .forms import JobCreateForm
 from .models import Job, JobResult, GPU_TIERS
@@ -904,6 +905,11 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
         except Exception:
             ctx["nest_data"] = []
             ctx["nest_data_json"] = "[]"
+
+        try:
+            ctx["video_breakdown"] = get_video_breakdown(user, site_name=site or None, year=year_int, month=month_int)
+        except Exception:
+            ctx["video_breakdown"] = []
 
         return ctx
 

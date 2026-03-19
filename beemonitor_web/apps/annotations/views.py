@@ -285,12 +285,94 @@ class SaveAnnotationView(LoginRequiredMixin, View):
         })
 
 
+class PreAnnotateView(LoginRequiredMixin, View):
+    """Run YOLO detection on a video's frames and save as initial annotations."""
+
+    def post(self, request, pk):
+        from django.shortcuts import redirect
+        from django.contrib import messages
+        import threading
+
+        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        video_id = request.POST.get("video_id")
+
+        from apps.videos.models import Video
+        video = get_object_or_404(Video, pk=video_id, user=request.user)
+
+        blob_path = video.azure_blob_path
+        if blob_path.startswith("s3://"):
+            messages.error(request, "Video must be transferred to Azure first.")
+            return redirect("annotations:detail", pk=pk)
+
+        # Spawn Modal pre-annotation in background
+        thread = threading.Thread(
+            target=self._run_pre_annotate,
+            args=(project.pk, video.pk, blob_path),
+            daemon=True,
+        )
+        thread.start()
+
+        messages.info(request, f"Pre-annotating '{video.title}' with AI. This takes 1-2 minutes. Refresh to see results.")
+        return redirect("annotations:detail", pk=pk)
+
+    @staticmethod
+    def _run_pre_annotate(project_pk, video_pk, blob_path):
+        import django
+        django.setup()
+        from django.db import connection
+
+        try:
+            import modal
+            fn = modal.Function.from_name("beemonitor-cloud", "pre_annotate_video")
+            result = fn.remote(video_blob_path=blob_path, sample_interval=30, max_frames=200)
+
+            if not result or not result.get("frames"):
+                return
+
+            from apps.annotations.models import Annotation, AnnotationProject
+            from apps.videos.models import Video
+
+            project = AnnotationProject.objects.get(pk=project_pk)
+            video = Video.objects.get(pk=video_pk)
+            width = result.get("video_width", 1280)
+            height = result.get("video_height", 720)
+
+            created = 0
+            for frame_data in result["frames"]:
+                _, was_created = Annotation.objects.update_or_create(
+                    project=project,
+                    video=video,
+                    frame_number=frame_data["frame_number"],
+                    defaults={
+                        "boxes": frame_data["boxes"],
+                        "image_width": width,
+                        "image_height": height,
+                    },
+                )
+                if was_created:
+                    created += 1
+
+            logger.info("Pre-annotated video %s: %d frames, %d new annotations",
+                        video_pk, len(result["frames"]), created)
+        except Exception as e:
+            logger.error("Pre-annotate failed for video %s: %s", video_pk, e, exc_info=True)
+        finally:
+            connection.close()
+
+
 class ExportProjectView(LoginRequiredMixin, View):
+    """Export YOLO dataset with images extracted from videos."""
+
     def get(self, request, pk):
         project = get_object_or_404(
             AnnotationProject, pk=pk, user=request.user
         )
-        annotations = project.annotations.select_related("video").all()
+        annotations = project.annotations.select_related("video").order_by("video", "frame_number")
+
+        if not annotations.exists():
+            from django.contrib import messages
+            messages.warning(request, "No annotations to export.")
+            return HttpResponse(status=302, headers={"Location": f"/annotations/{pk}/"})
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -299,18 +381,68 @@ class ExportProjectView(LoginRequiredMixin, View):
                 f"  {i}: {cls}" for i, cls in enumerate(project.classes)
             )
             data_yaml = (
-                f"train: ./images/train\n"
-                f"val: ./images/val\n"
+                f"path: .\n"
+                f"train: images/train\n"
+                f"val: images/val\n"
                 f"nc: {len(project.classes)}\n"
                 f"names:\n{class_lines}\n"
             )
             zf.writestr("data.yaml", data_yaml)
 
-            # Write label files
-            for ann in annotations:
+            # Group annotations and extract frames from videos
+            from django.conf import settings
+            conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
+            video_cache = {}  # video_pk -> cv2.VideoCapture
+
+            ann_list = list(annotations)
+            split_idx = int(len(ann_list) * 0.8)
+
+            for i, ann in enumerate(ann_list):
+                split = "train" if i < split_idx else "val"
+                base_name = f"{ann.video.title}_f{ann.frame_number:06d}"
+                label_name = f"labels/{split}/{base_name}.txt"
+
+                # Write label
                 yolo_txt = ann.to_yolo_format()
-                filename = f"labels/{ann.video.title}_frame{ann.frame_number:06d}.txt"
-                zf.writestr(filename, yolo_txt)
+                zf.writestr(label_name, yolo_txt)
+
+                # Extract frame image from video
+                try:
+                    if ann.video.pk not in video_cache:
+                        blob_path = ann.video.azure_blob_path
+                        if blob_path and not blob_path.startswith("s3://") and conn_str:
+                            import tempfile, cv2
+                            from azure.storage.blob import BlobServiceClient
+
+                            service = BlobServiceClient.from_connection_string(conn_str)
+                            tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+                            blob = service.get_blob_client("raw-videos", blob_path)
+                            with open(tmp.name, "wb") as fh:
+                                stream = blob.download_blob()
+                                stream.readinto(fh)
+                            cap = cv2.VideoCapture(tmp.name)
+                            video_cache[ann.video.pk] = (cap, tmp.name)
+
+                    if ann.video.pk in video_cache:
+                        import cv2
+                        cap, _ = video_cache[ann.video.pk]
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, ann.frame_number)
+                        ret, frame = cap.read()
+                        if ret:
+                            _, img_buf = cv2.imencode(".jpg", frame)
+                            zf.writestr(f"images/{split}/{base_name}.jpg", img_buf.tobytes())
+                except Exception as e:
+                    logger.error("Failed to extract frame %d from video %s: %s",
+                                ann.frame_number, ann.video.pk, e)
+
+            # Cleanup video captures
+            for cap, tmp_path in video_cache.values():
+                cap.release()
+                import os
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
 
         buf.seek(0)
         response = HttpResponse(buf.read(), content_type="application/zip")

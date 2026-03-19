@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Upload Model - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="max-w-lg mx-auto">
+  <h1 class="text-2xl font-bold text-gray-900 mb-6">Upload Custom Model</h1>
+  <p class="text-sm text-gray-500 mb-6">Upload a pre-trained YOLO model (.pt file) to use for analysis or as a base for fine-tuning.</p>
+
+  <div class="bg-white shadow rounded-lg p-6">
+    <form method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      {% if form.errors %}
+      <div class="bg-red-50 text-red-700 rounded p-3 mb-4 text-sm">
+        {% for field in form %}{% for error in field.errors %}<p>{{ field.label }}: {{ error }}</p>{% endfor %}{% endfor %}
+      </div>
+      {% endif %}
+
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Model Name</label>
+          {{ form.name }}
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Model Type</label>
+          {{ form.model_type }}
+          <p class="text-xs text-gray-500 mt-1">Select what this model detects — determines where it appears in the analysis config.</p>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Model File (.pt)</label>
+          {{ form.model_file }}
+          <p class="text-xs text-gray-500 mt-1">YOLO format weights file. Supports .pt (PyTorch) and .onnx formats.</p>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Class Names (optional)</label>
+          {{ form.classes }}
+        </div>
+      </div>
+
+      <div class="flex gap-3 mt-6">
+        <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Upload Model</button>
+        <a href="{% url 'training:models' %}" class="px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

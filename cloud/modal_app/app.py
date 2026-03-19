@@ -281,6 +281,157 @@ def batch_process(jobs: list[dict]) -> list[dict]:
     return results
 
 
+# ── Smart Pre-Annotation ─────────────────────────────────────────────
+
+@app.function(
+    gpu="A10G",
+    timeout=3600,
+    volumes={MODEL_VOLUME_MOUNT: model_volume},
+    secrets=[modal.Secret.from_name("azure-storage")],
+    memory=8192,
+    min_containers=0,
+)
+def pre_annotate_video(
+    video_blob_path: str,
+    sample_interval: int = 30,  # Sample every N frames (default: 1 per second at 30fps)
+    confidence_threshold: float = 0.25,
+    max_frames: int = 200,
+) -> dict:
+    """Run YOLO detection on sampled frames with motion, return detected boxes.
+
+    1. Opens video from Azure
+    2. Runs motion detection (background subtraction) to find active frames
+    3. Runs YOLO on active frames to detect bees/wasps
+    4. Returns frame numbers + bounding boxes for pre-annotation
+
+    Returns:
+        {
+            "frames": [
+                {"frame_number": 150, "boxes": [{"x": 100, "y": 200, "w": 50, "h": 50, "class": "bee", "class_id": 0, "confidence": 0.85}]},
+                ...
+            ],
+            "total_frames_checked": 1000,
+            "frames_with_activity": 45,
+            "total_detections": 120,
+        }
+    """
+    import cv2
+    import tempfile
+    import logging
+    from pathlib import Path
+
+    logger = logging.getLogger(__name__)
+
+    from cloud.storage.azure_client import AzureBlobClient
+    from cloud.storage.config import StorageConfig
+    from cloud.wrapper.model_manager import ModelManager
+
+    config = StorageConfig()
+    storage = AzureBlobClient(config)
+    models = ModelManager(
+        storage_client=storage,
+        storage_config=config,
+        local_cache_dir=MODEL_VOLUME_MOUNT,
+    )
+    model_paths = models.ensure_models()
+    model_volume.commit()
+
+    # Download video
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=True) as tmp:
+        storage.download_file(config.raw_videos_container, video_blob_path, tmp.name)
+
+        from ultralytics import YOLO
+        yolo = YOLO(model_paths.bee_tracking)
+
+        cap = cv2.VideoCapture(tmp.name)
+        if not cap.isOpened():
+            return {"error": "Could not open video", "frames": []}
+
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        # Background subtractor for motion detection
+        bg_sub = cv2.createBackgroundSubtractorMOG2(history=100, varThreshold=25, detectShadows=False)
+
+        # Warm up background model on first 30 frames
+        for i in range(min(30, total_frames)):
+            ret, frame = cap.read()
+            if ret:
+                bg_sub.apply(frame)
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+        annotated_frames = []
+        frames_checked = 0
+        frames_with_activity = 0
+        total_detections = 0
+
+        frame_num = 0
+        while frame_num < total_frames and len(annotated_frames) < max_frames:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
+            ret, frame = cap.read()
+            if not ret:
+                frame_num += sample_interval
+                continue
+
+            frames_checked += 1
+
+            # Check for motion
+            fg_mask = bg_sub.apply(frame)
+            motion_pixels = cv2.countNonZero(fg_mask)
+            motion_ratio = motion_pixels / (width * height)
+
+            if motion_ratio > 0.001:  # Some motion detected
+                frames_with_activity += 1
+
+                # Run YOLO detection
+                results = yolo(frame, conf=confidence_threshold, verbose=False)
+
+                boxes = []
+                for r in results:
+                    for box in r.boxes:
+                        x1, y1, x2, y2 = box.xyxy[0].tolist()
+                        conf = float(box.conf[0])
+                        cls_id = int(box.cls[0])
+                        cls_name = r.names.get(cls_id, f"class_{cls_id}")
+
+                        boxes.append({
+                            "x": round(x1),
+                            "y": round(y1),
+                            "w": round(x2 - x1),
+                            "h": round(y2 - y1),
+                            "class": cls_name,
+                            "class_id": cls_id,
+                            "confidence": round(conf, 3),
+                        })
+
+                if boxes:
+                    annotated_frames.append({
+                        "frame_number": frame_num,
+                        "boxes": boxes,
+                    })
+                    total_detections += len(boxes)
+
+            frame_num += sample_interval
+
+        cap.release()
+
+    logger.info("Pre-annotation: %d frames checked, %d with activity, %d detections, %d frames annotated",
+                frames_checked, frames_with_activity, total_detections, len(annotated_frames))
+
+    return {
+        "frames": annotated_frames,
+        "total_frames_checked": frames_checked,
+        "frames_with_activity": frames_with_activity,
+        "total_detections": total_detections,
+        "video_fps": fps,
+        "video_width": width,
+        "video_height": height,
+    }
+
+
 # ── YOLO Model Training ──────────────────────────────────────────────
 
 @app.function(
