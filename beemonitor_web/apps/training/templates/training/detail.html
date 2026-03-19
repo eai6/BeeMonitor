@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}{{ job.name }} - Training - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="flex justify-between items-center mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">{{ job.name }}</h1>
+    <p class="text-sm text-gray-500">Project: {{ job.project.name }}</p>
+  </div>
+  <a href="{% url 'training:list' %}" class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Back to List</a>
+</div>
+
+<!-- Status & Config -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+  <div class="bg-white shadow rounded-lg p-6">
+    <h2 class="text-sm font-medium text-gray-500 uppercase mb-3">Configuration</h2>
+    <dl class="space-y-2">
+      <div class="flex justify-between">
+        <dt class="text-sm text-gray-600">Base Model</dt>
+        <dd class="text-sm font-medium text-gray-900">{{ job.get_base_model_display }}</dd>
+      </div>
+      <div class="flex justify-between">
+        <dt class="text-sm text-gray-600">Epochs</dt>
+        <dd class="text-sm font-medium text-gray-900">{{ job.epochs }}</dd>
+      </div>
+      <div class="flex justify-between">
+        <dt class="text-sm text-gray-600">Image Size</dt>
+        <dd class="text-sm font-medium text-gray-900">{{ job.image_size }}px</dd>
+      </div>
+      <div class="flex justify-between">
+        <dt class="text-sm text-gray-600">Batch Size</dt>
+        <dd class="text-sm font-medium text-gray-900">{{ job.batch_size }}</dd>
+      </div>
+      <div class="flex justify-between">
+        <dt class="text-sm text-gray-600">GPU Tier</dt>
+        <dd class="text-sm font-medium text-gray-900">{{ job.get_gpu_tier_display }}</dd>
+      </div>
+    </dl>
+  </div>
+
+  <div class="bg-white shadow rounded-lg p-6">
+    <h2 class="text-sm font-medium text-gray-500 uppercase mb-3">Status</h2>
+    <div class="mb-4">
+      <span class="inline-flex px-3 py-1 text-sm font-medium rounded-full
+        {% if job.status == 'completed' %}bg-green-100 text-green-800
+        {% elif job.status == 'failed' %}bg-red-100 text-red-800
+        {% elif job.status == 'training' %}bg-blue-100 text-blue-800 animate-pulse
+        {% elif job.status == 'preparing' %}bg-purple-100 text-purple-800
+        {% else %}bg-amber-100 text-amber-800{% endif %}">
+        {{ job.get_status_display }}
+      </span>
+    </div>
+    <dl class="space-y-2">
+      <div class="flex justify-between">
+        <dt class="text-sm text-gray-600">Created</dt>
+        <dd class="text-sm text-gray-900">{{ job.created_at|date:"M d, Y H:i" }}</dd>
+      </div>
+      {% if job.started_at %}
+      <div class="flex justify-between">
+        <dt class="text-sm text-gray-600">Started</dt>
+        <dd class="text-sm text-gray-900">{{ job.started_at|date:"M d, Y H:i" }}</dd>
+      </div>
+      {% endif %}
+      {% if job.completed_at %}
+      <div class="flex justify-between">
+        <dt class="text-sm text-gray-600">Completed</dt>
+        <dd class="text-sm text-gray-900">{{ job.completed_at|date:"M d, Y H:i" }}</dd>
+      </div>
+      {% endif %}
+      {% if job.execution_seconds %}
+      <div class="flex justify-between">
+        <dt class="text-sm text-gray-600">GPU Time</dt>
+        <dd class="text-sm text-gray-900">{{ job.execution_seconds|floatformat:1 }}s</dd>
+      </div>
+      {% endif %}
+    </dl>
+    {% if job.error_message %}
+    <div class="mt-3 p-3 bg-red-50 rounded text-sm text-red-700">{{ job.error_message }}</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Metrics -->
+{% if job.status == 'completed' and job.metrics %}
+<div class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-sm font-medium text-gray-500 uppercase mb-4">Training Metrics</h2>
+  <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+    <div class="text-center p-3 bg-gray-50 rounded">
+      <p class="text-2xl font-bold text-gray-900">{% if job.metrics.mAP50 %}{{ job.metrics.mAP50|floatformat:3 }}{% else %}--{% endif %}</p>
+      <p class="text-xs text-gray-500 mt-1">mAP50</p>
+    </div>
+    <div class="text-center p-3 bg-gray-50 rounded">
+      <p class="text-2xl font-bold text-gray-900">{% if job.metrics.mAP50-95 %}{{ job.metrics.mAP50-95|floatformat:3 }}{% else %}--{% endif %}</p>
+      <p class="text-xs text-gray-500 mt-1">mAP50-95</p>
+    </div>
+    <div class="text-center p-3 bg-gray-50 rounded">
+      <p class="text-2xl font-bold text-gray-900">{% if job.metrics.precision %}{{ job.metrics.precision|floatformat:3 }}{% else %}--{% endif %}</p>
+      <p class="text-xs text-gray-500 mt-1">Precision</p>
+    </div>
+    <div class="text-center p-3 bg-gray-50 rounded">
+      <p class="text-2xl font-bold text-gray-900">{% if job.metrics.recall %}{{ job.metrics.recall|floatformat:3 }}{% else %}--{% endif %}</p>
+      <p class="text-xs text-gray-500 mt-1">Recall</p>
+    </div>
+    <div class="text-center p-3 bg-gray-50 rounded">
+      <p class="text-2xl font-bold text-gray-900">{% if job.metrics.best_epoch %}{{ job.metrics.best_epoch }}{% else %}--{% endif %}</p>
+      <p class="text-xs text-gray-500 mt-1">Best Epoch</p>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Link to Custom Model -->
+{% if custom_model %}
+<div class="bg-white shadow rounded-lg p-6">
+  <h2 class="text-sm font-medium text-gray-500 uppercase mb-3">Resulting Model</h2>
+  <a href="{% url 'training:model_detail' custom_model.pk %}" class="text-amber-600 hover:underline font-medium">{{ custom_model.name }}</a>
+  <span class="ml-2 inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800">{{ custom_model.get_model_type_display }}</span>
+</div>
+{% endif %}
+{% endblock %}

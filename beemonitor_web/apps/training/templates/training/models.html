@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Custom Models - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="flex justify-between items-center mb-6">
+  <h1 class="text-2xl font-bold text-gray-900">Custom Models</h1>
+  <a href="{% url 'training:list' %}" class="px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 font-medium">Training Jobs</a>
+</div>
+
+{% if models_list %}
+<div class="bg-white shadow rounded-lg overflow-hidden">
+  <table class="min-w-full divide-y divide-gray-200">
+    <thead class="bg-gray-50">
+      <tr>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Base Model</th>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">mAP50</th>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Active</th>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-200">
+      {% for m in models_list %}
+      <tr>
+        <td class="px-6 py-4 text-sm">
+          <a href="{% url 'training:model_detail' m.pk %}" class="text-amber-600 hover:underline font-medium">{{ m.name }}</a>
+        </td>
+        <td class="px-6 py-4 text-sm">
+          <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800">{{ m.get_model_type_display }}</span>
+        </td>
+        <td class="px-6 py-4 text-sm text-gray-500">{{ m.base_model }}</td>
+        <td class="px-6 py-4 text-sm text-gray-500">
+          {% if m.metrics.mAP50 %}{{ m.metrics.mAP50|floatformat:3 }}{% else %}--{% endif %}
+        </td>
+        <td class="px-6 py-4 text-sm">
+          {% if m.is_active %}
+          <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800">Active</span>
+          {% else %}
+          <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-800">Inactive</span>
+          {% endif %}
+        </td>
+        <td class="px-6 py-4 text-sm text-gray-500">{{ m.created_at|timesince }} ago</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if is_paginated %}
+<div class="flex justify-center mt-6 space-x-2">
+  {% if page_obj.has_previous %}
+  <a href="?page={{ page_obj.previous_page_number }}" class="px-3 py-1 border rounded text-sm text-gray-700 hover:bg-gray-50">Previous</a>
+  {% endif %}
+  <span class="px-3 py-1 text-sm text-gray-500">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+  {% if page_obj.has_next %}
+  <a href="?page={{ page_obj.next_page_number }}" class="px-3 py-1 border rounded text-sm text-gray-700 hover:bg-gray-50">Next</a>
+  {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div class="bg-white shadow rounded-lg p-12 text-center">
+  <p class="text-gray-500 mb-4">No custom models yet.</p>
+  <a href="{% url 'training:create' %}" class="text-amber-600 hover:underline font-medium">Train your first model</a>
+</div>
+{% endif %}
+{% endblock %}

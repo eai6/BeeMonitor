@@ -279,3 +279,135 @@ def batch_process(jobs: list[dict]) -> list[dict]:
 
     logger.info("Batch complete: %d/%d succeeded", len(results), len(jobs))
     return results
+
+
+# ── YOLO Model Training ──────────────────────────────────────────────
+
+@app.function(
+    gpu="A10G",
+    timeout=14400,  # 4 hours
+    volumes={MODEL_VOLUME_MOUNT: model_volume},
+    secrets=[modal.Secret.from_name("azure-storage")],
+    memory=16384,
+    min_containers=0,
+)
+def train_yolo_model(
+    job_id: str,
+    user_id: str,
+    base_model: str,
+    dataset_yaml_content: str,
+    train_images: list[dict],  # [{"filename": "img.jpg", "label": "0 0.5 0.5 0.1 0.1\n..."}]
+    epochs: int = 50,
+    imgsz: int = 640,
+    batch_size: int = 16,
+) -> dict:
+    """Fine-tune a YOLO model on user annotations.
+
+    Runs ultralytics training on a Modal GPU. Returns metrics and model path.
+    """
+    import time
+    import logging
+    import tempfile
+    import yaml
+    from pathlib import Path
+
+    start_time = time.time()
+    logger = logging.getLogger(__name__)
+
+    from cloud.storage.azure_client import AzureBlobClient
+    from cloud.storage.config import StorageConfig
+
+    config = StorageConfig()
+    storage = AzureBlobClient(config)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        dataset_dir = tmpdir / "dataset"
+
+        # Create YOLO dataset structure
+        for split in ["train", "val"]:
+            (dataset_dir / split / "images").mkdir(parents=True)
+            (dataset_dir / split / "labels").mkdir(parents=True)
+
+        # Write images and labels (80/20 split)
+        split_idx = int(len(train_images) * 0.8)
+        for i, item in enumerate(train_images):
+            split = "train" if i < split_idx else "val"
+            img_name = item["filename"]
+            label_name = img_name.rsplit(".", 1)[0] + ".txt"
+
+            # Download image from Azure if path provided
+            if item.get("azure_path"):
+                storage.download_file(
+                    "raw-videos", item["azure_path"],
+                    str(dataset_dir / split / "images" / img_name),
+                )
+            elif item.get("image_data"):
+                import base64
+                img_bytes = base64.b64decode(item["image_data"])
+                (dataset_dir / split / "images" / img_name).write_bytes(img_bytes)
+
+            # Write label file
+            (dataset_dir / split / "labels" / label_name).write_text(item["label"])
+
+        # Write dataset.yaml
+        data_yaml = dataset_dir / "data.yaml"
+        data_yaml.write_text(dataset_yaml_content)
+
+        logger.info("[%s] Dataset prepared: %d train, %d val",
+                    job_id, split_idx, len(train_images) - split_idx)
+
+        # Train
+        from ultralytics import YOLO
+
+        model = YOLO(base_model)
+        results = model.train(
+            data=str(data_yaml),
+            epochs=epochs,
+            imgsz=imgsz,
+            batch=batch_size,
+            project=str(tmpdir / "runs"),
+            name="train",
+            verbose=True,
+        )
+
+        # Extract metrics
+        metrics = {}
+        if hasattr(results, "results_dict"):
+            rd = results.results_dict
+            metrics = {
+                "mAP50": round(rd.get("metrics/mAP50(B)", 0), 4),
+                "mAP50_95": round(rd.get("metrics/mAP50-95(B)", 0), 4),
+                "precision": round(rd.get("metrics/precision(B)", 0), 4),
+                "recall": round(rd.get("metrics/recall(B)", 0), 4),
+            }
+
+        # Find best weights
+        best_weights = tmpdir / "runs" / "train" / "weights" / "best.pt"
+        if not best_weights.exists():
+            # Try alternative path
+            for p in (tmpdir / "runs").rglob("best.pt"):
+                best_weights = p
+                break
+
+        # Upload weights to Azure
+        azure_model_path = f"custom/{user_id}/{job_id}/best.pt"
+        if best_weights.exists():
+            storage.upload_file(
+                config.models_container, azure_model_path, str(best_weights),
+            )
+            logger.info("[%s] Model uploaded to %s", job_id, azure_model_path)
+        else:
+            logger.warning("[%s] No best.pt found", job_id)
+            azure_model_path = ""
+
+    execution_seconds = round(time.time() - start_time, 1)
+    model_volume.commit()
+
+    return {
+        "job_id": job_id,
+        "azure_model_path": azure_model_path,
+        "metrics": metrics,
+        "execution_seconds": execution_seconds,
+        "epochs_completed": epochs,
+    }

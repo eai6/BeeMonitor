@@ -10,6 +10,8 @@
           <a href="{% url 'videos:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Videos</a>
           <a href="{% url 'analysis:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Analysis</a>
           <a href="{% url 'analysis:analytics' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Analytics</a>
+          <a href="{% url 'annotations:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Annotate</a>
+          <a href="{% url 'training:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Training</a>
           <a href="{% url 'sources:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Sources</a>
           <a href="{% url 'developer:index' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Developer</a>
         </div>
@@ -41,6 +43,8 @@
       <a href="{% url 'videos:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Videos</a>
       <a href="{% url 'analysis:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Analysis</a>
       <a href="{% url 'analysis:analytics' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Analytics</a>
+      <a href="{% url 'annotations:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Annotate</a>
+      <a href="{% url 'training:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Training</a>
       <a href="{% url 'sources:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Sources</a>
       <a href="{% url 'developer:index' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Developer</a>
       {% if user.is_authenticated %}

@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}{{ model.name }} - Custom Model - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="flex justify-between items-center mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">{{ model.name }}</h1>
+    <div class="flex items-center gap-2 mt-1">
+      <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800">{{ model.get_model_type_display }}</span>
+      {% if model.is_active %}
+      <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800">Active</span>
+      {% else %}
+      <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-800">Inactive</span>
+      {% endif %}
+    </div>
+  </div>
+  <div class="flex gap-2">
+    {% if model.azure_model_path %}
+    <a href="#" class="inline-flex items-center gap-1 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+      Download Model
+    </a>
+    {% endif %}
+    <a href="{% url 'training:models' %}" class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Back</a>
+  </div>
+</div>
+
+<!-- Model Details -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+  <div class="bg-white shadow rounded-lg p-6">
+    <h2 class="text-sm font-medium text-gray-500 uppercase mb-3">Model Details</h2>
+    <dl class="space-y-2">
+      <div class="flex justify-between">
+        <dt class="text-sm text-gray-600">Base Model</dt>
+        <dd class="text-sm font-medium text-gray-900">{{ model.base_model }}</dd>
+      </div>
+      <div class="flex justify-between">
+        <dt class="text-sm text-gray-600">Type</dt>
+        <dd class="text-sm font-medium text-gray-900">{{ model.get_model_type_display }}</dd>
+      </div>
+      <div class="flex justify-between">
+        <dt class="text-sm text-gray-600">Created</dt>
+        <dd class="text-sm text-gray-900">{{ model.created_at|date:"M d, Y H:i" }}</dd>
+      </div>
+      {% if model.training_job %}
+      <div class="flex justify-between">
+        <dt class="text-sm text-gray-600">Training Job</dt>
+        <dd class="text-sm"><a href="{% url 'training:detail' model.training_job.pk %}" class="text-amber-600 hover:underline">{{ model.training_job.name }}</a></dd>
+      </div>
+      {% endif %}
+    </dl>
+  </div>
+
+  <div class="bg-white shadow rounded-lg p-6">
+    <h2 class="text-sm font-medium text-gray-500 uppercase mb-3">Classes</h2>
+    {% if model.classes %}
+    <div class="flex flex-wrap gap-1">
+      {% for cls in model.classes %}
+      <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 text-amber-800">{{ cls }}</span>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-sm text-gray-400">No classes defined.</p>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Metrics -->
+{% if model.metrics %}
+<div class="bg-white shadow rounded-lg p-6">
+  <h2 class="text-sm font-medium text-gray-500 uppercase mb-4">Performance Metrics</h2>
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <div class="text-center p-3 bg-gray-50 rounded">
+      <p class="text-2xl font-bold text-gray-900">{% if model.metrics.mAP50 %}{{ model.metrics.mAP50|floatformat:3 }}{% else %}--{% endif %}</p>
+      <p class="text-xs text-gray-500 mt-1">mAP50</p>
+    </div>
+    <div class="text-center p-3 bg-gray-50 rounded">
+      <p class="text-2xl font-bold text-gray-900">{% if model.metrics.mAP50-95 %}{{ model.metrics.mAP50-95|floatformat:3 }}{% else %}--{% endif %}</p>
+      <p class="text-xs text-gray-500 mt-1">mAP50-95</p>
+    </div>
+    <div class="text-center p-3 bg-gray-50 rounded">
+      <p class="text-2xl font-bold text-gray-900">{% if model.metrics.precision %}{{ model.metrics.precision|floatformat:3 }}{% else %}--{% endif %}</p>
+      <p class="text-xs text-gray-500 mt-1">Precision</p>
+    </div>
+    <div class="text-center p-3 bg-gray-50 rounded">
+      <p class="text-2xl font-bold text-gray-900">{% if model.metrics.recall %}{{ model.metrics.recall|floatformat:3 }}{% else %}--{% endif %}</p>
+      <p class="text-xs text-gray-500 mt-1">Recall</p>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

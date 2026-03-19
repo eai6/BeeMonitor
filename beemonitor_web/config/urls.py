@@ -10,6 +10,8 @@ urlpatterns = [
     path("videos/", include("apps.videos.urls")),
     path("analysis/", include("apps.analysis.urls")),
     path("sources/", include("apps.sources.urls")),
+    path("annotations/", include("apps.annotations.urls")),
+    path("training/", include("apps.training.urls")),
     path("developer/", include("apps.developer.urls")),
     path("", include("apps.pwa.urls")),
     path("", include("apps.dashboard.urls")),

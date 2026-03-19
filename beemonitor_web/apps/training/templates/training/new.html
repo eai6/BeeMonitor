@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}New Training Job - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="max-w-lg mx-auto">
+  <h1 class="text-2xl font-bold text-gray-900 mb-6">New Training Job</h1>
+  <div class="bg-white shadow rounded-lg p-6">
+    <form method="post">
+      {% csrf_token %}
+      {% if form.errors %}
+      <div class="bg-red-50 text-red-700 rounded p-3 mb-4 text-sm">
+        <ul class="list-disc list-inside">
+          {% for field in form %}
+            {% for error in field.errors %}
+            <li>{{ field.label }}: {{ error }}</li>
+            {% endfor %}
+          {% endfor %}
+          {% for error in form.non_field_errors %}
+          <li>{{ error }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+      <div class="mb-4">
+        <label for="id_project" class="block text-sm font-medium text-gray-700 mb-1">Annotation Project</label>
+        {{ form.project }}
+      </div>
+      <div class="mb-4">
+        <label for="id_name" class="block text-sm font-medium text-gray-700 mb-1">Job Name</label>
+        {{ form.name }}
+      </div>
+      <div class="mb-4">
+        <label for="id_base_model" class="block text-sm font-medium text-gray-700 mb-1">Base Model</label>
+        {{ form.base_model }}
+        <p class="mt-1 text-xs text-gray-500">Smaller models train faster but may be less accurate.</p>
+      </div>
+      <div class="grid grid-cols-3 gap-4 mb-4">
+        <div>
+          <label for="id_epochs" class="block text-sm font-medium text-gray-700 mb-1">Epochs</label>
+          {{ form.epochs }}
+        </div>
+        <div>
+          <label for="id_image_size" class="block text-sm font-medium text-gray-700 mb-1">Image Size</label>
+          {{ form.image_size }}
+        </div>
+        <div>
+          <label for="id_batch_size" class="block text-sm font-medium text-gray-700 mb-1">Batch Size</label>
+          {{ form.batch_size }}
+        </div>
+      </div>
+      <div class="mb-6">
+        <label for="id_gpu_tier" class="block text-sm font-medium text-gray-700 mb-1">GPU Tier</label>
+        {{ form.gpu_tier }}
+        <p class="mt-1 text-xs text-gray-500">Higher tiers train faster but cost more credits.</p>
+      </div>
+
+      <!-- Estimated cost hint -->
+      <div class="bg-amber-50 border border-amber-200 rounded p-3 mb-6 text-sm text-amber-800">
+        Training cost depends on dataset size, epochs, and GPU tier. Typical training runs use 500-5000 GPU seconds.
+      </div>
+
+      <div class="flex space-x-3">
+        <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Start Training</button>
+        <a href="{% url 'training:list' %}" class="px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

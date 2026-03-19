@@ -29,6 +29,8 @@ INSTALLED_APPS = [
     "apps.developer",
     "apps.api",
     "apps.pwa",
+    "apps.annotations",
+    "apps.training",
 ]
 
 MIDDLEWARE = [
