@@ -52,35 +52,67 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         ctx = super().get_context_data(**kwargs)
         project = self.object
         videos = project.videos.all()
+        ctx["project_videos"] = videos
+        ctx["video_count"] = videos.count()
+
+        # Video data for "no annotations" fallback links
         video_data = []
         for video in videos:
             ann_count = Annotation.objects.filter(project=project, video=video).count()
             video_data.append({"video": video, "annotation_count": ann_count})
         ctx["video_data"] = video_data
-        ctx["total_annotations"] = project.annotations.count()
 
-        # Available videos to add (not already in project)
+        # Available videos to add
         from apps.videos.models import Video
         existing_ids = set(videos.values_list("pk", flat=True))
         available = Video.objects.filter(user=self.request.user).exclude(pk__in=existing_ids)
-        ctx["available_videos"] = available[:500]  # Cap for performance
+        ctx["available_videos"] = available[:500]
         ctx["available_sites"] = sorted(set(
             available.exclude(site_name="").values_list("site_name", flat=True)
         ))
 
-        # All annotations for review table
-        all_anns = project.annotations.select_related("video").order_by("video__title", "frame_number")
-        ann_data = []
-        for ann in all_anns[:500]:  # Cap for performance
+        # Build combined frame grid with filters
+        filter_video = self.request.GET.get("video", "")
+        filter_class = self.request.GET.get("class", "")
+        ctx["filter_video"] = filter_video
+        ctx["filter_class"] = filter_class
+
+        anns_qs = project.annotations.select_related("video").order_by("video__title", "frame_number")
+        if filter_video:
+            try:
+                anns_qs = anns_qs.filter(video_id=int(filter_video))
+            except (ValueError, TypeError):
+                pass
+
+        total_boxes = 0
+        class_counts = {}
+        frame_cards = []
+
+        for ann in anns_qs[:500]:
             boxes = ann.boxes or []
-            class_names = sorted(set(b.get("class", "unknown") for b in boxes)) if boxes else []
-            ann_data.append({
-                "video": ann.video,
+            box_classes = sorted(set(b.get("class", "unknown") for b in boxes)) if boxes else []
+
+            # Class filter
+            if filter_class and filter_class not in box_classes:
+                continue
+
+            total_boxes += len(boxes)
+            for b in boxes:
+                cls = b.get("class", "unknown")
+                class_counts[cls] = class_counts.get(cls, 0) + 1
+
+            frame_cards.append({
+                "video_pk": ann.video_id,
+                "video_title": ann.video.title,
                 "frame_number": ann.frame_number,
                 "box_count": len(boxes),
-                "class_names": class_names,
+                "classes": box_classes,
             })
-        ctx["all_annotations"] = ann_data
+
+        ctx["total_annotations"] = len(frame_cards)
+        ctx["total_boxes"] = total_boxes
+        ctx["class_counts"] = class_counts
+        ctx["frame_cards"] = frame_cards
 
         return ctx
 
@@ -400,6 +432,41 @@ class PreAnnotateView(LoginRequiredMixin, View):
             logger.error("Pre-annotate failed for video %s: %s", video_pk, e, exc_info=True)
         finally:
             connection.close()
+
+
+class PreAnnotateAllView(LoginRequiredMixin, View):
+    """Run AI pre-annotation on ALL videos in a project."""
+
+    def post(self, request, pk):
+        from django.shortcuts import redirect
+        from django.contrib import messages
+        import threading
+
+        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        videos = project.videos.all()
+
+        if not videos.exists():
+            messages.warning(request, "No videos in this project.")
+            return redirect("annotations:detail", pk=pk)
+
+        count = 0
+        for video in videos:
+            blob_path = video.azure_blob_path
+            if not blob_path:
+                continue
+            thread = threading.Thread(
+                target=PreAnnotateView._run_pre_annotate,
+                args=(project.pk, video.pk, blob_path),
+                daemon=True,
+            )
+            thread.start()
+            count += 1
+
+        messages.info(
+            request,
+            f"AI pre-annotation started for {count} video(s). This takes 1-4 minutes per video. Refresh to see results.",
+        )
+        return redirect("annotations:detail", pk=pk)
 
 
 class FrameImageView(LoginRequiredMixin, View):

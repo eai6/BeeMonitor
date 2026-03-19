@@ -2,172 +2,187 @@
 {% block title %}{{ project.name }} - Annotations - BeeMonitor{% endblock %}
 
 {% block content %}
-<div class="flex justify-between items-center mb-6">
+<!-- Header -->
+<div class="flex justify-between items-start mb-6">
   <div>
     <h1 class="text-2xl font-bold text-gray-900">{{ project.name }}</h1>
     {% if project.description %}
     <p class="text-gray-500 text-sm mt-1">{{ project.description }}</p>
     {% endif %}
-  </div>
-  <div class="flex gap-2">
-    <a href="{% url 'annotations:review' project.pk %}"
-       class="inline-flex items-center gap-1 px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm font-medium">
-      Review Annotations
-    </a>
-    <a href="{% url 'annotations:export' project.pk %}"
-       class="inline-flex items-center gap-1 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium">
-      Export YOLO Dataset
-    </a>
-    <a href="{% url 'annotations:list' %}" class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Back</a>
-  </div>
-</div>
-
-<!-- Project Info -->
-<div class="bg-white shadow rounded-lg p-6 mb-6">
-  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-    <div>
-      <p class="text-xs font-medium text-gray-500 uppercase mb-1">Classes</p>
-      <div class="flex flex-wrap gap-1">
-        {% for cls in project.classes %}
-        <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 text-amber-800">{{ cls }}</span>
-        {% endfor %}
-      </div>
-    </div>
-    <div>
-      <p class="text-xs font-medium text-gray-500 uppercase mb-1">Videos in Project</p>
-      <p class="text-lg font-semibold text-gray-900">{{ video_data|length }}</p>
-    </div>
-    <div>
-      <p class="text-xs font-medium text-gray-500 uppercase mb-1">Annotated Frames</p>
-      <p class="text-lg font-semibold text-gray-900">{{ total_annotations }}</p>
-    </div>
-  </div>
-</div>
-
-<!-- Add Videos -->
-<div class="bg-white shadow rounded-lg p-6 mb-6" x-data="{ showAdd: false }">
-  <div class="flex justify-between items-center">
-    <h2 class="text-lg font-medium text-gray-900">Videos</h2>
-    <button @click="showAdd = !showAdd" class="text-sm text-amber-600 hover:underline">
-      <span x-show="!showAdd">+ Add Videos</span>
-      <span x-show="showAdd">Cancel</span>
-    </button>
-  </div>
-
-  <div x-show="showAdd" x-cloak class="mt-4 border-t border-gray-200 pt-4">
-    <form method="post" action="{% url 'annotations:add_videos' project.pk %}">
-      {% csrf_token %}
-      <p class="text-sm text-gray-500 mb-3">Select videos to add to this annotation project:</p>
-
-      <!-- Filter -->
-      <div class="flex gap-2 mb-3">
-        <select id="add-site-filter" class="border border-gray-300 rounded px-2 py-1 text-sm">
-          <option value="">All Sites</option>
-          {% for site in available_sites %}
-          <option value="{{ site }}">{{ site }}</option>
-          {% endfor %}
-        </select>
-        <button type="button" onclick="filterAddVideos()" class="text-sm text-gray-500 hover:text-gray-700 border border-gray-300 rounded px-2 py-1">Filter</button>
-      </div>
-
-      <div class="max-h-60 overflow-y-auto border border-gray-200 rounded p-2 mb-3">
-        <label class="flex items-center gap-2 mb-1 text-sm text-gray-500">
-          <input type="checkbox" id="add-select-all" class="rounded border-gray-300"> Select all
-        </label>
-        {% for video in available_videos %}
-        <label class="flex items-center gap-2 py-0.5 text-sm video-add-item" data-site="{{ video.site_name }}">
-          <input type="checkbox" name="video_ids" value="{{ video.pk }}" class="rounded border-gray-300 add-video-cb">
-          {{ video.title }}
-          {% if video.site_name %}<span class="text-xs text-gray-400">({{ video.site_name }})</span>{% endif %}
-        </label>
-        {% endfor %}
-      </div>
-      <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-1.5 rounded text-sm font-medium">Add Selected Videos</button>
-    </form>
-  </div>
-</div>
-
-<!-- Videos Table -->
-{% if video_data %}
-<div class="bg-white shadow rounded-lg overflow-hidden">
-  <table class="min-w-full divide-y divide-gray-200">
-    <thead class="bg-gray-50">
-      <tr>
-        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Video</th>
-        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Site</th>
-        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Annotated Frames</th>
-        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-      </tr>
-    </thead>
-    <tbody class="divide-y divide-gray-200">
-      {% for item in video_data %}
-      <tr>
-        <td class="px-6 py-4 text-sm text-gray-900">{{ item.video.title|truncatechars:50 }}</td>
-        <td class="px-6 py-4 text-sm">
-          {% if item.video.site_name %}
-          <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800">{{ item.video.site_name }}</span>
-          {% else %}--{% endif %}
-        </td>
-        <td class="px-6 py-4 text-sm text-gray-500">{{ item.annotation_count }} frames</td>
-        <td class="px-6 py-4 text-sm">
-          <a href="{% url 'annotations:editor' project.pk %}?video={{ item.video.pk }}&frame=0"
-             class="text-amber-600 hover:underline font-medium mr-3">Annotate</a>
-          <form method="post" action="{% url 'annotations:pre_annotate' project.pk %}" class="inline"
-                onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Running...';">
-            {% csrf_token %}
-            <input type="hidden" name="video_id" value="{{ item.video.pk }}">
-            <button type="submit" class="text-blue-600 hover:underline text-sm">AI Pre-annotate</button>
-          </form>
-        </td>
-      </tr>
+    <div class="flex flex-wrap gap-1 mt-2">
+      {% for cls in project.classes %}
+      <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 text-amber-800">{{ cls }}</span>
       {% endfor %}
-    </tbody>
-  </table>
-</div>
-<!-- Annotated Frames Review -->
-{% if all_annotations %}
-<div class="bg-white shadow rounded-lg mt-6 mb-6">
-  <div class="px-6 py-4 border-b border-gray-200">
-    <h2 class="text-lg font-medium text-gray-900">All Annotated Frames ({{ all_annotations|length }})</h2>
+    </div>
   </div>
-  <div class="overflow-x-auto" style="max-height: 400px; overflow-y: auto;">
-    <table class="min-w-full divide-y divide-gray-200 text-sm">
-      <thead class="bg-gray-50 sticky top-0">
-        <tr>
-          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Video</th>
-          <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Frame</th>
-          <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Boxes</th>
-          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Classes</th>
-          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-        </tr>
-      </thead>
-      <tbody class="divide-y divide-gray-100">
-        {% for ann in all_annotations %}
-        <tr class="hover:bg-gray-50">
-          <td class="px-4 py-2 text-gray-900">{{ ann.video.title|truncatechars:35 }}</td>
-          <td class="px-4 py-2 text-right font-mono text-gray-600">{{ ann.frame_number }}</td>
-          <td class="px-4 py-2 text-right font-bold">{{ ann.box_count }}</td>
-          <td class="px-4 py-2">
-            {% for cls in ann.class_names %}
-            <span class="inline-flex px-1.5 py-0.5 text-xs rounded bg-amber-100 text-amber-800 mr-0.5">{{ cls }}</span>
-            {% endfor %}
-          </td>
-          <td class="px-4 py-2">
-            <a href="{% url 'annotations:editor' project.pk %}?video={{ ann.video.pk }}&frame={{ ann.frame_number }}"
-               class="text-amber-600 hover:underline text-xs">Edit</a>
-          </td>
-        </tr>
+  <a href="{% url 'annotations:list' %}" class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Back</a>
+</div>
+
+<!-- Stats + Actions -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+  <div class="bg-white shadow rounded-lg p-4 text-center">
+    <p class="text-xs text-gray-500 uppercase">Videos</p>
+    <p class="text-2xl font-bold text-gray-900 mt-1">{{ video_count }}</p>
+  </div>
+  <div class="bg-white shadow rounded-lg p-4 text-center">
+    <p class="text-xs text-gray-500 uppercase">Annotated Frames</p>
+    <p class="text-2xl font-bold text-gray-900 mt-1">{{ total_annotations }}</p>
+  </div>
+  <div class="bg-white shadow rounded-lg p-4 text-center">
+    <p class="text-xs text-gray-500 uppercase">Total Boxes</p>
+    <p class="text-2xl font-bold text-amber-600 mt-1">{{ total_boxes }}</p>
+  </div>
+  <div class="bg-white shadow rounded-lg p-4 text-center">
+    <p class="text-xs text-gray-500 uppercase">Class Breakdown</p>
+    <div class="flex flex-wrap justify-center gap-1 mt-1">
+      {% for name, count in class_counts.items %}
+      <span class="text-xs text-gray-600">{{ name }}: <strong>{{ count }}</strong></span>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<!-- Action Bar -->
+<div class="bg-white shadow rounded-lg p-4 mb-6">
+  <div class="flex flex-wrap gap-3 items-center justify-between">
+    <div class="flex gap-2">
+      <!-- Add Videos -->
+      <button type="button" onclick="document.getElementById('addVideosModal').classList.toggle('hidden')"
+              class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 font-medium">
+        + Add Videos
+      </button>
+      <!-- Pre-annotate All -->
+      <form method="post" action="{% url 'annotations:pre_annotate_all' project.pk %}" class="inline"
+            onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Running AI on all videos...';">
+        {% csrf_token %}
+        <button type="submit" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium">
+          AI Pre-annotate All
+        </button>
+      </form>
+    </div>
+    <div class="flex gap-2">
+      <a href="{% url 'annotations:export' project.pk %}"
+         class="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium">
+        Export Dataset
+      </a>
+    </div>
+  </div>
+</div>
+
+<!-- Add Videos Modal (hidden by default) -->
+<div id="addVideosModal" class="hidden bg-white shadow rounded-lg p-6 mb-6">
+  <form method="post" action="{% url 'annotations:add_videos' project.pk %}">
+    {% csrf_token %}
+    <div class="flex justify-between items-center mb-3">
+      <h3 class="text-sm font-medium text-gray-700">Add Videos to Project</h3>
+      <button type="button" onclick="document.getElementById('addVideosModal').classList.add('hidden')"
+              class="text-gray-400 hover:text-gray-600 text-sm">Close</button>
+    </div>
+    <div class="flex gap-2 mb-3">
+      <select id="add-site-filter" class="border border-gray-300 rounded px-2 py-1 text-sm">
+        <option value="">All Sites</option>
+        {% for site in available_sites %}
+        <option value="{{ site }}">{{ site }}</option>
         {% endfor %}
-      </tbody>
-    </table>
-  </div>
+      </select>
+      <button type="button" onclick="filterAddVideos()" class="text-sm text-gray-500 hover:text-gray-700 border border-gray-300 rounded px-2 py-1">Filter</button>
+    </div>
+    <div class="max-h-48 overflow-y-auto border border-gray-200 rounded p-2 mb-3">
+      <label class="flex items-center gap-2 mb-1 text-sm text-gray-500">
+        <input type="checkbox" id="add-select-all" class="rounded border-gray-300"> Select all
+      </label>
+      {% for video in available_videos %}
+      <label class="flex items-center gap-2 py-0.5 text-sm video-add-item" data-site="{{ video.site_name }}">
+        <input type="checkbox" name="video_ids" value="{{ video.pk }}" class="rounded border-gray-300 add-video-cb">
+        {{ video.title }}
+        {% if video.site_name %}<span class="text-xs text-gray-400">({{ video.site_name }})</span>{% endif %}
+      </label>
+      {% endfor %}
+    </div>
+    <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-1.5 rounded text-sm font-medium">Add Selected</button>
+  </form>
 </div>
-{% endif %}
+
+{% if total_annotations > 0 %}
+<!-- Filter Bar for Frames -->
+<div class="bg-white shadow rounded-lg p-4 mb-4">
+  <form method="get" class="flex flex-wrap gap-3 items-end">
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Video</label>
+      <select name="video" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+        <option value="">All Videos</option>
+        {% for vid in project_videos %}
+        <option value="{{ vid.pk }}" {% if filter_video == vid.pk|stringformat:"s" %}selected{% endif %}>{{ vid.title|truncatechars:40 }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Class</label>
+      <select name="class" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+        <option value="">All Classes</option>
+        {% for cls in project.classes %}
+        <option value="{{ cls }}" {% if filter_class == cls %}selected{% endif %}>{{ cls }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded text-sm border border-gray-300">Filter</button>
+    {% if filter_video or filter_class %}
+    <a href="{% url 'annotations:detail' project.pk %}" class="text-sm text-amber-600 hover:underline">Clear</a>
+    {% endif %}
+    <span class="text-sm text-gray-500 ml-auto">{{ frame_cards|length }} frame(s)</span>
+  </form>
+</div>
+
+<!-- Combined Frame Grid -->
+<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 mb-6">
+  {% for card in frame_cards %}
+  <a href="{% url 'annotations:editor' project.pk %}?video={{ card.video_pk }}&frame={{ card.frame_number }}"
+     class="group bg-white shadow rounded-lg overflow-hidden hover:shadow-md transition-shadow">
+    <div class="relative aspect-video bg-gray-100">
+      <img src="{% url 'annotations:frame_image' project.pk %}?video={{ card.video_pk }}&frame={{ card.frame_number }}&boxes=true"
+           alt="Frame {{ card.frame_number }}"
+           class="w-full h-full object-cover"
+           loading="lazy"
+           onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 320 180%22><rect fill=%22%23f3f4f6%22 width=%22320%22 height=%22180%22/><text x=%2250%%25%22 y=%2250%%25%22 text-anchor=%22middle%22 fill=%22%239ca3af%22 font-size=%2214%22>No preview</text></svg>'">
+      <span class="absolute top-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
+        {{ card.box_count }} box{{ card.box_count|pluralize:"es" }}
+      </span>
+    </div>
+    <div class="p-2">
+      <p class="text-xs text-gray-500 truncate">{{ card.video_title }}</p>
+      <div class="flex justify-between items-center mt-0.5">
+        <span class="text-xs font-mono text-gray-400">f{{ card.frame_number }}</span>
+        <div class="flex gap-0.5">
+          {% for cls in card.classes %}
+          <span class="inline-flex px-1 py-0 text-[10px] rounded bg-amber-100 text-amber-700">{{ cls }}</span>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+
+{% elif video_count > 0 %}
+<!-- No annotations yet -->
+<div class="bg-white shadow rounded-lg p-12 text-center">
+  <p class="text-gray-500 mb-2">No annotations yet.</p>
+  <p class="text-sm text-gray-400">Click "AI Pre-annotate All" to auto-detect objects, or click a video below to annotate manually.</p>
+  {% if video_data %}
+  <div class="mt-4 space-y-1">
+    {% for item in video_data %}
+    <a href="{% url 'annotations:editor' project.pk %}?video={{ item.video.pk }}&frame=0"
+       class="block text-sm text-amber-600 hover:underline">{{ item.video.title }}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
 
 {% else %}
+<!-- No videos -->
 <div class="bg-white shadow rounded-lg p-12 text-center">
   <p class="text-gray-500 mb-2">No videos in this project yet.</p>
-  <p class="text-sm text-gray-400">Click "+ Add Videos" above to add videos from your library.</p>
+  <p class="text-sm text-gray-400">Click "+ Add Videos" to get started.</p>
 </div>
 {% endif %}
 
@@ -181,11 +196,7 @@ document.getElementById('add-select-all')?.addEventListener('change', function()
 function filterAddVideos() {
     const site = document.getElementById('add-site-filter').value;
     document.querySelectorAll('.video-add-item').forEach(el => {
-        if (!site || el.dataset.site === site) {
-            el.style.display = '';
-        } else {
-            el.style.display = 'none';
-        }
+        el.style.display = (!site || el.dataset.site === site) ? '' : 'none';
     });
 }
 </script>
