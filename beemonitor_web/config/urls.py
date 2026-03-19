@@ -13,6 +13,7 @@ urlpatterns = [
     path("annotations/", include("apps.annotations.urls")),
     path("training/", include("apps.training.urls")),
     path("developer/", include("apps.developer.urls")),
+    path("docs/", include("apps.docs.urls")),
     path("", include("apps.pwa.urls")),
     path("", include("apps.dashboard.urls")),
 ]

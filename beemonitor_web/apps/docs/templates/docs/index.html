@@ -1,0 +1,391 @@
+{% extends "base.html" %}
+{% block title %}Documentation - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+
+<div class="mb-8">
+  <h1 class="text-3xl font-bold text-gray-900">BeeMonitor Documentation</h1>
+  <p class="mt-2 text-gray-500">Complete guide to monitoring solitary bee activity using the BeeMonitor platform.</p>
+</div>
+
+<!-- Table of Contents -->
+<div class="bg-white shadow rounded-lg p-6 mb-8">
+  <h2 class="text-lg font-medium text-gray-900 mb-3">Contents</h2>
+  <ol class="space-y-1 text-sm">
+    <li><a href="#overview" class="text-amber-600 hover:underline">1. Platform Overview</a></li>
+    <li><a href="#getting-started" class="text-amber-600 hover:underline">2. Getting Started</a></li>
+    <li><a href="#uploading-videos" class="text-amber-600 hover:underline">3. Uploading Videos</a></li>
+    <li><a href="#connecting-sources" class="text-amber-600 hover:underline">4. Connecting Video Sources (S3)</a></li>
+    <li><a href="#analyzing-videos" class="text-amber-600 hover:underline">5. Analyzing Videos</a></li>
+    <li><a href="#viewing-results" class="text-amber-600 hover:underline">6. Viewing Results & Analytics</a></li>
+    <li><a href="#annotations" class="text-amber-600 hover:underline">7. Annotation Projects</a></li>
+    <li><a href="#training" class="text-amber-600 hover:underline">8. Training Custom Models</a></li>
+    <li><a href="#custom-models" class="text-amber-600 hover:underline">9. Using Custom Models for Analysis</a></li>
+    <li><a href="#credits" class="text-amber-600 hover:underline">10. Credits & Usage</a></li>
+    <li><a href="#faq" class="text-amber-600 hover:underline">11. FAQ</a></li>
+  </ol>
+</div>
+
+<!-- 1. Platform Overview -->
+<div id="overview" class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-xl font-bold text-gray-900 mb-3">1. Platform Overview</h2>
+  <p class="text-sm text-gray-700 mb-3">
+    BeeMonitor is a cloud-based platform for automated monitoring of solitary bee nesting activity.
+    It uses computer vision (YOLO object detection) to detect bees, wasps, and nests in video footage,
+    track their movements, and classify entry/exit events at nest tubes.
+  </p>
+  <div class="bg-amber-50 border border-amber-200 rounded p-4 text-sm">
+    <p class="font-medium text-amber-800 mb-2">Key Capabilities:</p>
+    <ul class="list-disc list-inside text-amber-700 space-y-1">
+      <li>Upload and manage field video recordings</li>
+      <li>Automated bee/wasp detection and tracking using GPU-accelerated AI</li>
+      <li>Entry/exit event classification at nest tubes</li>
+      <li>Visual analytics: hourly, daily, monthly activity patterns</li>
+      <li>Nest activity heatmaps (6x10 grid)</li>
+      <li>Annotation tools for labeling and reviewing detections</li>
+      <li>Custom model training to improve detection for your specific sites</li>
+      <li>Batch processing of multiple videos in parallel</li>
+      <li>Export data as CSV for further analysis</li>
+    </ul>
+  </div>
+</div>
+
+<!-- 2. Getting Started -->
+<div id="getting-started" class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-xl font-bold text-gray-900 mb-3">2. Getting Started</h2>
+  <div class="space-y-3 text-sm text-gray-700">
+    <p>The typical workflow follows these steps:</p>
+    <div class="grid grid-cols-1 md:grid-cols-5 gap-3">
+      <div class="text-center p-3 bg-gray-50 rounded">
+        <p class="text-2xl mb-1">1</p>
+        <p class="font-medium">Upload Videos</p>
+        <p class="text-xs text-gray-500">From your device or S3</p>
+      </div>
+      <div class="text-center p-3 bg-gray-50 rounded">
+        <p class="text-2xl mb-1">2</p>
+        <p class="font-medium">Run Analysis</p>
+        <p class="text-xs text-gray-500">Select videos, click Analyze</p>
+      </div>
+      <div class="text-center p-3 bg-gray-50 rounded">
+        <p class="text-2xl mb-1">3</p>
+        <p class="font-medium">View Results</p>
+        <p class="text-xs text-gray-500">Charts, stats, CSV exports</p>
+      </div>
+      <div class="text-center p-3 bg-gray-50 rounded">
+        <p class="text-2xl mb-1">4</p>
+        <p class="font-medium">Annotate</p>
+        <p class="text-xs text-gray-500">Review & correct detections</p>
+      </div>
+      <div class="text-center p-3 bg-gray-50 rounded">
+        <p class="text-2xl mb-1">5</p>
+        <p class="font-medium">Train Models</p>
+        <p class="text-xs text-gray-500">Fine-tune for your site</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 3. Uploading Videos -->
+<div id="uploading-videos" class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-xl font-bold text-gray-900 mb-3">3. Uploading Videos</h2>
+  <div class="space-y-3 text-sm text-gray-700">
+    <p>Navigate to <strong>Videos</strong> in the top menu, then click <strong>Upload Videos</strong>.</p>
+    <h3 class="font-medium text-gray-900 mt-4">Direct Upload</h3>
+    <ol class="list-decimal list-inside space-y-1 ml-2">
+      <li>Click "Upload Videos" on the Videos page</li>
+      <li>Select one or more .mp4 video files from your device</li>
+      <li>Videos are uploaded to Azure cloud storage</li>
+      <li>Once status shows "Ready", they can be analyzed</li>
+    </ol>
+    <h3 class="font-medium text-gray-900 mt-4">Video Naming Convention</h3>
+    <p>For best results, name your videos with the pattern:</p>
+    <code class="block bg-gray-100 rounded p-2 text-xs mt-1">sitename_YYYY-MM-DD_HH_MM_SS.mp4</code>
+    <p class="text-xs text-gray-500 mt-1">Example: <code>natalies_2024-06-07_12_30_00.mp4</code></p>
+    <p>BeeMonitor automatically extracts the site name, date, and time from the filename for filtering and analytics.</p>
+
+    <h3 class="font-medium text-gray-900 mt-4">Filtering Videos</h3>
+    <p>Use the filter bar at the top of the Videos page to filter by site, year, month, or day.</p>
+  </div>
+</div>
+
+<!-- 4. Connecting Sources -->
+<div id="connecting-sources" class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-xl font-bold text-gray-900 mb-3">4. Connecting Video Sources (S3)</h2>
+  <div class="space-y-3 text-sm text-gray-700">
+    <p>If your field cameras upload directly to Amazon S3, you can connect BeeMonitor to your S3 bucket.</p>
+    <ol class="list-decimal list-inside space-y-1 ml-2">
+      <li>Go to <strong>Sources</strong> in the menu</li>
+      <li>Click "Add Source" and enter your S3 credentials (Access Key, Secret Key, Bucket, Region)</li>
+      <li>BeeMonitor will list available videos from your bucket</li>
+      <li>Select videos to import &mdash; they are automatically transferred to Azure for processing</li>
+    </ol>
+    <div class="bg-blue-50 border border-blue-200 rounded p-3 mt-2">
+      <p class="text-blue-800 text-xs"><strong>Note:</strong> Credentials are encrypted at rest using Fernet symmetric encryption. BeeMonitor never stores plaintext credentials.</p>
+    </div>
+  </div>
+</div>
+
+<!-- 5. Analyzing Videos -->
+<div id="analyzing-videos" class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-xl font-bold text-gray-900 mb-3">5. Analyzing Videos</h2>
+  <div class="space-y-3 text-sm text-gray-700">
+    <h3 class="font-medium text-gray-900">Batch Analysis (Recommended)</h3>
+    <ol class="list-decimal list-inside space-y-1 ml-2">
+      <li>Go to <strong>Videos</strong> page</li>
+      <li>Filter videos by site/date if needed</li>
+      <li>Use "Select All Filtered" or check individual videos</li>
+      <li>Click "Customize" to adjust analysis settings (optional)</li>
+      <li>Click <strong>Analyze Selected</strong></li>
+    </ol>
+
+    <h3 class="font-medium text-gray-900 mt-4">Analysis Configuration</h3>
+    <table class="min-w-full text-xs mt-2">
+      <thead><tr class="bg-gray-50">
+        <th class="px-3 py-2 text-left font-medium text-gray-500">Setting</th>
+        <th class="px-3 py-2 text-left font-medium text-gray-500">Default</th>
+        <th class="px-3 py-2 text-left font-medium text-gray-500">Description</th>
+      </tr></thead>
+      <tbody class="divide-y divide-gray-100">
+        <tr><td class="px-3 py-2">GPU Tier</td><td class="px-3 py-2">A10G</td><td class="px-3 py-2">GPU type. A10G is the best balance of speed and cost.</td></tr>
+        <tr><td class="px-3 py-2">Confidence</td><td class="px-3 py-2">0.25</td><td class="px-3 py-2">Detection threshold (lower = more detections, more false positives).</td></tr>
+        <tr><td class="px-3 py-2">Two-Mode Tracking</td><td class="px-3 py-2">Enabled</td><td class="px-3 py-2">Uses motion detection + YOLO (faster). Disable for YOLO every frame.</td></tr>
+        <tr><td class="px-3 py-2">Annotated Video</td><td class="px-3 py-2">Generate</td><td class="px-3 py-2">Creates a video with detection boxes drawn. Skip to save time.</td></tr>
+        <tr><td class="px-3 py-2">Nest Detection Model</td><td class="px-3 py-2">Built-in</td><td class="px-3 py-2">Select a custom-trained nest detection model.</td></tr>
+        <tr><td class="px-3 py-2">Bee Tracking Model</td><td class="px-3 py-2">Built-in</td><td class="px-3 py-2">Select a custom-trained bee/wasp tracking model.</td></tr>
+      </tbody>
+    </table>
+
+    <h3 class="font-medium text-gray-900 mt-4">Presets</h3>
+    <ul class="list-disc list-inside space-y-1 ml-2">
+      <li><strong>Fast</strong> (~200 credits/video): T4 GPU, higher confidence, no annotated video</li>
+      <li><strong>Standard</strong> (~350 credits/video): A10G GPU, default settings</li>
+      <li><strong>Quality</strong> (~400 credits/video): A10G GPU, lower confidence threshold</li>
+    </ul>
+
+    <h3 class="font-medium text-gray-900 mt-4">Deduplication</h3>
+    <p>BeeMonitor automatically skips videos that have already been analyzed with the same configuration. This prevents duplicate processing and wasted credits.</p>
+  </div>
+</div>
+
+<!-- 6. Viewing Results -->
+<div id="viewing-results" class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-xl font-bold text-gray-900 mb-3">6. Viewing Results & Analytics</h2>
+  <div class="space-y-3 text-sm text-gray-700">
+    <p>Go to <strong>Analytics</strong> to see all your results.</p>
+
+    <h3 class="font-medium text-gray-900 mt-4">Job Progress Tracker</h3>
+    <p>At the top of the Analytics page, you'll see a progress bar showing processing, completed, and failed jobs. The page auto-refreshes every 30 seconds while jobs are running.</p>
+
+    <h3 class="font-medium text-gray-900 mt-4">Summary Cards</h3>
+    <p>Overview statistics: total videos analyzed, total events detected, average events per video, unique tracks, entries, and exits.</p>
+
+    <h3 class="font-medium text-gray-900 mt-4">Charts</h3>
+    <ul class="list-disc list-inside space-y-1 ml-2">
+      <li><strong>Cumulative Activity</strong>: Running total of events over time</li>
+      <li><strong>Hourly Activity</strong>: Average events by hour of day (entries vs exits)</li>
+      <li><strong>Daily Activity</strong>: Average events by day of week</li>
+      <li><strong>Monthly Trend</strong>: Activity pattern across months</li>
+      <li><strong>Nest Heatmap</strong>: 6x10 grid showing which nests are most active</li>
+    </ul>
+
+    <h3 class="font-medium text-gray-900 mt-4">Data Export</h3>
+    <p>Download combined data across all completed jobs:</p>
+    <ul class="list-disc list-inside space-y-1 ml-2">
+      <li><strong>Events CSV</strong>: All entry/exit events with timestamps, nest IDs, and track IDs</li>
+      <li><strong>Tracking CSV</strong>: Raw tracking data with frame-by-frame positions</li>
+    </ul>
+
+    <h3 class="font-medium text-gray-900 mt-4">Individual Job Results</h3>
+    <p>Click "Results" on any completed job to see per-video details: annotated video playback, events table, tracking data, and statistics.</p>
+  </div>
+</div>
+
+<!-- 7. Annotations -->
+<div id="annotations" class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-xl font-bold text-gray-900 mb-3">7. Annotation Projects</h2>
+  <div class="space-y-3 text-sm text-gray-700">
+    <p>Annotations let you label objects in video frames to create training data for custom models.</p>
+
+    <h3 class="font-medium text-gray-900 mt-4">Creating a Project</h3>
+    <ol class="list-decimal list-inside space-y-1 ml-2">
+      <li>Go to <strong>Annotate</strong> &rarr; <strong>New Project</strong></li>
+      <li>Enter a name, description, and class labels (e.g., "bee, wasp, nest")</li>
+      <li>Click Create</li>
+    </ol>
+
+    <h3 class="font-medium text-gray-900 mt-4">Adding Videos</h3>
+    <ol class="list-decimal list-inside space-y-1 ml-2">
+      <li>On the project page, click <strong>+ Add Videos</strong></li>
+      <li>Filter by site if needed, select videos, click Add</li>
+    </ol>
+
+    <h3 class="font-medium text-gray-900 mt-4">AI Pre-annotation</h3>
+    <p>Click <strong>AI Pre-annotate All</strong> to automatically detect objects in all project videos using YOLO. This creates initial annotations that you can then review and correct.</p>
+    <ul class="list-disc list-inside space-y-1 ml-2">
+      <li>Samples frames every 10 frames (~3 per second)</li>
+      <li>Runs YOLO detection on each sampled frame</li>
+      <li>Saves detected bounding boxes as annotations</li>
+      <li>Extracts and saves frame images for fast viewing</li>
+      <li>Takes 1-4 minutes per video</li>
+    </ul>
+
+    <h3 class="font-medium text-gray-900 mt-4">Reviewing & Editing Annotations</h3>
+    <p>The project page shows all annotated frames in a visual grid. Click any frame to open the annotation editor.</p>
+    <ul class="list-disc list-inside space-y-1 ml-2">
+      <li><strong>Prev/Next Frame</strong>: Navigate through all annotated frames across all videos</li>
+      <li><strong>Arrow keys</strong>: Left/Right for quick navigation</li>
+      <li><strong>Draw boxes</strong>: Click and drag on the frame to create a bounding box</li>
+      <li><strong>Select class</strong>: Choose the active class (bee, wasp, nest) before drawing</li>
+      <li><strong>Delete boxes</strong>: Click "Del" next to any box in the sidebar</li>
+      <li><strong>Save</strong>: Click "Save Annotations" to persist your changes</li>
+    </ul>
+
+    <h3 class="font-medium text-gray-900 mt-4">Exporting Dataset</h3>
+    <p>Click <strong>Export Dataset</strong> to download a YOLO-format ZIP file containing:</p>
+    <ul class="list-disc list-inside space-y-1 ml-2">
+      <li><code>data.yaml</code>: Dataset configuration with class names</li>
+      <li><code>images/train/</code> and <code>images/val/</code>: Frame images (80/20 split)</li>
+      <li><code>labels/train/</code> and <code>labels/val/</code>: YOLO-format label files</li>
+    </ul>
+  </div>
+</div>
+
+<!-- 8. Training -->
+<div id="training" class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-xl font-bold text-gray-900 mb-3">8. Training Custom Models</h2>
+  <div class="space-y-3 text-sm text-gray-700">
+    <p>Fine-tune YOLO models on your annotated data to improve detection accuracy for your specific sites and species.</p>
+
+    <h3 class="font-medium text-gray-900 mt-4">Starting a Training Job</h3>
+    <ol class="list-decimal list-inside space-y-1 ml-2">
+      <li>Go to <strong>Training</strong> &rarr; <strong>New Training Job</strong></li>
+      <li>Select an annotation project (must have annotated frames)</li>
+      <li>Choose a base model:
+        <ul class="list-disc list-inside ml-4 mt-1 text-gray-500">
+          <li>YOLOv8n (Nano) &mdash; fastest, smallest</li>
+          <li>YOLOv8s (Small) &mdash; better accuracy</li>
+          <li>YOLOv8m (Medium) &mdash; best accuracy, slower</li>
+        </ul>
+      </li>
+      <li>Set epochs (default 50), image size (640), batch size (16)</li>
+      <li>Click Create &mdash; training runs on an A10G GPU</li>
+    </ol>
+
+    <h3 class="font-medium text-gray-900 mt-4">Training Metrics</h3>
+    <p>After training completes, you'll see:</p>
+    <table class="min-w-full text-xs mt-2">
+      <thead><tr class="bg-gray-50">
+        <th class="px-3 py-2 text-left font-medium text-gray-500">Metric</th>
+        <th class="px-3 py-2 text-left font-medium text-gray-500">Description</th>
+        <th class="px-3 py-2 text-left font-medium text-gray-500">Good Value</th>
+      </tr></thead>
+      <tbody class="divide-y divide-gray-100">
+        <tr><td class="px-3 py-2 font-medium">mAP50</td><td class="px-3 py-2">Mean Average Precision at 50% IoU</td><td class="px-3 py-2">&gt; 0.7</td></tr>
+        <tr><td class="px-3 py-2 font-medium">mAP50-95</td><td class="px-3 py-2">mAP averaged across IoU thresholds</td><td class="px-3 py-2">&gt; 0.5</td></tr>
+        <tr><td class="px-3 py-2 font-medium">Precision</td><td class="px-3 py-2">Of all detections, how many are correct</td><td class="px-3 py-2">&gt; 0.8</td></tr>
+        <tr><td class="px-3 py-2 font-medium">Recall</td><td class="px-3 py-2">Of all actual objects, how many are detected</td><td class="px-3 py-2">&gt; 0.6</td></tr>
+      </tbody>
+    </table>
+
+    <h3 class="font-medium text-gray-900 mt-4">Uploading Pre-trained Models</h3>
+    <p>You can also upload a YOLO .pt model file directly:</p>
+    <ol class="list-decimal list-inside space-y-1 ml-2">
+      <li>Go to <strong>Training</strong> &rarr; <strong>Custom Models</strong> &rarr; <strong>Upload Model</strong></li>
+      <li>Enter a name and select the model type:
+        <ul class="list-disc list-inside ml-4 mt-1 text-gray-500">
+          <li><strong>Nest Detection</strong> &mdash; appears in the Nest Detection Model dropdown</li>
+          <li><strong>Bee Tracking</strong> &mdash; appears in the Bee Tracking Model dropdown</li>
+          <li><strong>Custom</strong> &mdash; appears in both dropdowns</li>
+        </ul>
+      </li>
+      <li>Upload the .pt file and optionally specify class names</li>
+    </ol>
+  </div>
+</div>
+
+<!-- 9. Using Custom Models -->
+<div id="custom-models" class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-xl font-bold text-gray-900 mb-3">9. Using Custom Models for Analysis</h2>
+  <div class="space-y-3 text-sm text-gray-700">
+    <p>Once you have a trained or uploaded custom model, you can use it for analysis:</p>
+    <ol class="list-decimal list-inside space-y-1 ml-2">
+      <li>Go to the <strong>Videos</strong> page</li>
+      <li>Click <strong>Customize</strong> to expand the analysis configuration</li>
+      <li>Under <strong>Nest Detection Model</strong>, select your custom nest model</li>
+      <li>Under <strong>Bee Tracking Model</strong>, select your custom bee model</li>
+      <li>Select videos and click <strong>Analyze Selected</strong></li>
+    </ol>
+    <div class="bg-amber-50 border border-amber-200 rounded p-3 mt-2">
+      <p class="text-amber-800 text-xs"><strong>Tip:</strong> You can use a custom model for one task (e.g., nest detection) and the default for the other (e.g., bee tracking). The two models are independent &mdash; nest detection and bee tracking may have different taxonomies.</p>
+    </div>
+  </div>
+</div>
+
+<!-- 10. Credits -->
+<div id="credits" class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-xl font-bold text-gray-900 mb-3">10. Credits & Usage</h2>
+  <div class="space-y-3 text-sm text-gray-700">
+    <p>BeeMonitor uses a credit system to track GPU usage. <strong>1 credit = 1 second of GPU time.</strong></p>
+
+    <h3 class="font-medium text-gray-900 mt-4">Credit Costs</h3>
+    <table class="min-w-full text-xs mt-2">
+      <thead><tr class="bg-gray-50">
+        <th class="px-3 py-2 text-left font-medium text-gray-500">Activity</th>
+        <th class="px-3 py-2 text-left font-medium text-gray-500">Typical Cost</th>
+      </tr></thead>
+      <tbody class="divide-y divide-gray-100">
+        <tr><td class="px-3 py-2">Video analysis (10-min video)</td><td class="px-3 py-2">~350 credits on A10G</td></tr>
+        <tr><td class="px-3 py-2">AI Pre-annotation (per video)</td><td class="px-3 py-2">~30-60 credits</td></tr>
+        <tr><td class="px-3 py-2">Model training (50 epochs)</td><td class="px-3 py-2">~300-500 credits</td></tr>
+      </tbody>
+    </table>
+
+    <h3 class="font-medium text-gray-900 mt-4">Free Tier</h3>
+    <p>Every account starts with <strong>3,000 credits per month</strong> (enough for ~8-10 video analyses). Credits reset monthly.</p>
+
+    <h3 class="font-medium text-gray-900 mt-4">Checking Usage</h3>
+    <p>Click your username in the top-right corner to view your Usage & Credits page with detailed breakdowns by GPU tier and monthly trends.</p>
+  </div>
+</div>
+
+<!-- 11. FAQ -->
+<div id="faq" class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-xl font-bold text-gray-900 mb-3">11. Frequently Asked Questions</h2>
+  <div class="space-y-4 text-sm text-gray-700">
+
+    <div>
+      <p class="font-medium text-gray-900">Q: What video formats are supported?</p>
+      <p class="mt-1">MP4 is the primary supported format. Videos should be recorded at a fixed camera angle pointing at the nest box.</p>
+    </div>
+
+    <div>
+      <p class="font-medium text-gray-900">Q: How long does analysis take?</p>
+      <p class="mt-1">A 10-minute video typically takes 3-6 minutes to process on an A10G GPU, depending on the amount of activity.</p>
+    </div>
+
+    <div>
+      <p class="font-medium text-gray-900">Q: My analysis job failed. What should I do?</p>
+      <p class="mt-1">Check the error message on the Analytics page. Common issues: video file is corrupted, S3 credentials expired, or insufficient credits. You can re-submit the job.</p>
+    </div>
+
+    <div>
+      <p class="font-medium text-gray-900">Q: How many annotations do I need for training?</p>
+      <p class="mt-1">For decent results, aim for at least 200-500 annotated frames with diverse examples. More annotations generally lead to better model performance.</p>
+    </div>
+
+    <div>
+      <p class="font-medium text-gray-900">Q: Can I use my own YOLO model?</p>
+      <p class="mt-1">Yes. Go to Training &rarr; Custom Models &rarr; Upload Model. Upload any .pt YOLO weights file and specify whether it's for nest detection or bee tracking.</p>
+    </div>
+
+    <div>
+      <p class="font-medium text-gray-900">Q: What species does BeeMonitor detect?</p>
+      <p class="mt-1">The default models are trained on solitary bees (primarily mason bees and leafcutter bees), wasps, and nest tube entrances. You can train custom models for other species or taxonomy.</p>
+    </div>
+
+  </div>
+</div>
+
+</div>
+{% endblock %}
