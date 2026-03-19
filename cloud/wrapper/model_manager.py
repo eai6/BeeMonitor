@@ -70,6 +70,18 @@ class ModelManager:
             paths[key] = self._ensure_single(filename)
         return ModelPaths(**paths)
 
+    def ensure_custom_model(self, azure_blob_path: str) -> str:
+        """Download a custom model from Azure if not cached. Returns local path."""
+        local = self.cache_dir / "custom" / azure_blob_path.replace("/", "_")
+        if local.exists():
+            logger.debug("Custom model cached: %s", local)
+            return str(local)
+
+        local.parent.mkdir(parents=True, exist_ok=True)
+        logger.info("Downloading custom model %s/%s -> %s", self._container, azure_blob_path, local)
+        self._client.download_file(self._container, azure_blob_path, str(local))
+        return str(local)
+
     def _ensure_single(self, filename: str) -> str:
         """Download a single model file if not cached locally."""
         local = self._local_path(filename)

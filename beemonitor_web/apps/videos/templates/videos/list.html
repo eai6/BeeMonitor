@@ -63,11 +63,21 @@
 <form method="post" action="{% url 'analysis:batch' %}" id="batchForm">
   {% csrf_token %}
   {% include "analysis/components/config_panel.html" %}
-  <div class="mb-4 flex justify-end">
+  <div class="mb-4 flex justify-between items-center">
+    <div class="flex items-center gap-3">
+      <button type="button" onclick="selectAllFiltered()" class="text-sm text-amber-600 hover:underline font-medium">
+        Select All {{ video_count }} Filtered
+      </button>
+      <span id="selectedCount" class="text-sm text-gray-500"></span>
+    </div>
     <button type="button" onclick="analyzeSelected()" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">
       Analyze Selected
     </button>
   </div>
+  <!-- Hidden inputs for all filtered video IDs (across pages) -->
+  {% for vid in all_video_ids %}
+  <input type="hidden" class="all-filtered-id" value="{{ vid }}">
+  {% endfor %}
 </form>
 
 <div class="bg-white shadow rounded-lg overflow-hidden">
@@ -144,37 +154,91 @@
 {% endif %}
 
 <script>
-// Select all checkbox
+let allFilteredSelected = false;
+
+// Select all checkbox (current page)
 document.addEventListener('DOMContentLoaded', function() {
     const selectAll = document.getElementById('selectAll');
     if (selectAll) {
         selectAll.addEventListener('change', function() {
+            allFilteredSelected = false;
             document.querySelectorAll('.video-checkbox').forEach(function(cb) {
                 cb.checked = selectAll.checked;
             });
+            updateSelectedCount();
         });
     }
+
+    // Update count when individual checkboxes change
+    document.querySelectorAll('.video-checkbox').forEach(function(cb) {
+        cb.addEventListener('change', function() {
+            allFilteredSelected = false;
+            updateSelectedCount();
+        });
+    });
+
+    updateSelectedCount();
 });
+
+function updateSelectedCount() {
+    const el = document.getElementById('selectedCount');
+    if (!el) return;
+    if (allFilteredSelected) {
+        const total = document.querySelectorAll('.all-filtered-id').length;
+        el.textContent = total + ' video(s) selected (all filtered)';
+    } else {
+        const checked = document.querySelectorAll('.video-checkbox:checked').length;
+        el.textContent = checked > 0 ? checked + ' video(s) selected' : '';
+    }
+    if (typeof updateCostEstimate === 'function') updateCostEstimate();
+}
+
+// Select ALL filtered videos across all pages
+function selectAllFiltered() {
+    allFilteredSelected = true;
+    document.querySelectorAll('.video-checkbox').forEach(cb => cb.checked = true);
+    const selectAll = document.getElementById('selectAll');
+    if (selectAll) selectAll.checked = true;
+    updateSelectedCount();
+}
 
 // Analyze selected videos via batch endpoint
 function analyzeSelected() {
-    const checked = document.querySelectorAll('.video-checkbox:checked');
-    if (checked.length === 0) {
-        alert('Please select at least one video.');
-        return;
-    }
     const form = document.getElementById('batchForm');
     // Remove old hidden video_ids inputs
     form.querySelectorAll('input[name="video_ids"]').forEach(e => e.remove());
-    // Add selected video IDs
-    checked.forEach(function(cb) {
-        const input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = 'video_ids';
-        input.value = cb.value;
-        form.appendChild(input);
-    });
-    if (confirm('Submit ' + checked.length + ' analysis job(s)? Each gets a separate GPU.')) {
+
+    if (allFilteredSelected) {
+        // Submit ALL filtered video IDs (across pages)
+        document.querySelectorAll('.all-filtered-id').forEach(function(el) {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'video_ids';
+            input.value = el.value;
+            form.appendChild(input);
+        });
+    } else {
+        // Submit only checked checkboxes on current page
+        const checked = document.querySelectorAll('.video-checkbox:checked');
+        if (checked.length === 0) {
+            alert('Please select at least one video.');
+            return;
+        }
+        checked.forEach(function(cb) {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'video_ids';
+            input.value = cb.value;
+            form.appendChild(input);
+        });
+    }
+
+    const count = form.querySelectorAll('input[name="video_ids"]').length;
+    if (count === 0) {
+        alert('No videos selected.');
+        return;
+    }
+    if (confirm('Submit ' + count + ' analysis job(s)? Each gets a separate GPU.')) {
         form.submit();
     }
 }

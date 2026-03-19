@@ -1,5 +1,6 @@
 from django import forms
 
+from apps.training.models import CustomModel
 from apps.videos.models import Video
 
 DETECTION_MODE_CHOICES = [
@@ -18,10 +19,18 @@ class JobCreateForm(forms.Form):
         initial=0.5,
         widget=forms.NumberInput(attrs={"step": "0.05"}),
     )
+    custom_model = forms.ModelChoiceField(
+        queryset=CustomModel.objects.none(),
+        required=False,
+        empty_label="Default (built-in models)",
+    )
 
     def __init__(self, *args, user=None, **kwargs):
         super().__init__(*args, **kwargs)
         if user:
             self.fields["video"].queryset = Video.objects.filter(
                 user=user, status=Video.Status.READY
+            )
+            self.fields["custom_model"].queryset = CustomModel.objects.filter(
+                user=user, is_active=True
             )

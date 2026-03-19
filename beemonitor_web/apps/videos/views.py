@@ -71,18 +71,19 @@ class VideoListView(LoginRequiredMixin, ListView):
         ctx["current_month"] = self.request.GET.get("month", "")
         ctx["current_day"] = self.request.GET.get("day", "")
 
+        # All filtered video IDs (for "Select All Filtered" across pages)
+        filtered_qs = self.get_queryset()
+        ctx["all_video_ids"] = list(filtered_qs.values_list("pk", flat=True))
+        ctx["video_count"] = len(ctx["all_video_ids"])
+
         # Custom models for config panel
         try:
             from apps.training.models import CustomModel
-            ctx["custom_nest_models"] = CustomModel.objects.filter(
-                user=self.request.user, model_type="nest_detection", is_active=True
-            )
-            ctx["custom_bee_models"] = CustomModel.objects.filter(
-                user=self.request.user, model_type="bee_tracking", is_active=True
+            ctx["custom_models"] = CustomModel.objects.filter(
+                user=self.request.user, is_active=True
             )
         except Exception:
-            ctx["custom_nest_models"] = []
-            ctx["custom_bee_models"] = []
+            ctx["custom_models"] = []
 
         return ctx
 

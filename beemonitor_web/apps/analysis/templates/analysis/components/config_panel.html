@@ -61,34 +61,16 @@
       </div>
     </div>
 
-    <!-- Model Selection -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
-      <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1">Nest Detection Model</label>
-        <select name="nest_model" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
-          <option value="default" selected>Default (nest_detection.pt)</option>
-          {% if custom_nest_models %}
-          <optgroup label="Custom Models">
-            {% for model in custom_nest_models %}
-            <option value="{{ model.pk }}">{{ model.name }} (mAP: {{ model.metrics.mAP50|default:"--" }})</option>
-            {% endfor %}
-          </optgroup>
-          {% endif %}
-        </select>
-      </div>
-      <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1">Bee Tracking Model</label>
-        <select name="bee_model" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
-          <option value="default" selected>Default (bee_tracking.pt)</option>
-          {% if custom_bee_models %}
-          <optgroup label="Custom Models">
-            {% for model in custom_bee_models %}
-            <option value="{{ model.pk }}">{{ model.name }} (mAP: {{ model.metrics.mAP50|default:"--" }})</option>
-            {% endfor %}
-          </optgroup>
-          {% endif %}
-        </select>
-      </div>
+    <!-- Custom Model -->
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Custom Detection Model</label>
+      <select name="custom_model" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+        <option value="" selected>Default (built-in models)</option>
+        {% for model in custom_models %}
+        <option value="{{ model.pk }}">{{ model.name }} (mAP50: {{ model.metrics.mAP50|default:"--" }})</option>
+        {% endfor %}
+      </select>
+      <p class="mt-1 text-xs text-gray-400">Use a fine-tuned model from Training</p>
     </div>
 
     <!-- Cost Estimate -->
