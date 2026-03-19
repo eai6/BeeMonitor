@@ -402,6 +402,160 @@ class PreAnnotateView(LoginRequiredMixin, View):
             connection.close()
 
 
+class FrameImageView(LoginRequiredMixin, View):
+    """Return a JPG image of a specific video frame with optional bounding boxes drawn.
+
+    NOTE: This downloads the entire video from Azure to extract a single frame,
+    which is slow for large videos. Consider adding a frame cache (e.g. Redis or
+    disk-based LRU cache keyed on video_pk + frame_number) to avoid repeated
+    downloads of the same video.
+    """
+
+    def get(self, request, pk):
+        video_id = request.GET.get("video")
+        frame_number = int(request.GET.get("frame", 0))
+        draw_boxes = request.GET.get("boxes", "true") == "true"
+        project_pk = request.GET.get("project")
+
+        # Get video and generate SAS URL or download frame
+        from apps.videos.models import Video
+        video = get_object_or_404(Video, pk=video_id, user=request.user)
+
+        blob_path = video.azure_blob_path
+        if blob_path.startswith("s3://") or not blob_path:
+            # Return placeholder image
+            return HttpResponse(status=404)
+
+        try:
+            import cv2
+            import tempfile
+            import numpy as np
+            from django.conf import settings
+            from azure.storage.blob import BlobServiceClient
+
+            conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
+            service = BlobServiceClient.from_connection_string(conn_str)
+
+            # Download video to temp file
+            tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+            blob = service.get_blob_client("raw-videos", blob_path)
+            with open(tmp.name, "wb") as fh:
+                stream = blob.download_blob()
+                stream.readinto(fh)
+
+            cap = cv2.VideoCapture(tmp.name)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+            ret, frame = cap.read()
+            cap.release()
+
+            import os
+            os.unlink(tmp.name)
+
+            if not ret:
+                return HttpResponse(status=404)
+
+            # Draw boxes if requested
+            if draw_boxes and project_pk:
+                try:
+                    project = AnnotationProject.objects.get(pk=project_pk)
+                    ann = Annotation.objects.get(project=project, video=video, frame_number=frame_number)
+
+                    colors = [(0, 0, 255), (255, 0, 0), (0, 255, 0), (0, 255, 255), (255, 0, 255)]
+                    for box in ann.boxes:
+                        x, y, w, h = int(box["x"]), int(box["y"]), int(box["w"]), int(box["h"])
+                        cls_id = box.get("class_id", 0)
+                        color = colors[cls_id % len(colors)]
+                        cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+                        label = box.get("class", "")
+                        conf = box.get("confidence", "")
+                        text = f"{label}" + (f" {conf:.0%}" if isinstance(conf, float) else "")
+                        cv2.putText(frame, text, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                except (Annotation.DoesNotExist, AnnotationProject.DoesNotExist):
+                    pass
+
+            # Encode as JPEG
+            _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            return HttpResponse(buf.tobytes(), content_type="image/jpeg")
+
+        except Exception as e:
+            logger.error("FrameImageView error: %s", e, exc_info=True)
+            return HttpResponse(status=500)
+
+
+class ReviewView(LoginRequiredMixin, TemplateView):
+    """Visual annotation review page (Roboflow-style grid of annotated frames)."""
+    template_name = "annotations/review.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        project = get_object_or_404(
+            AnnotationProject, pk=self.kwargs["pk"], user=self.request.user
+        )
+
+        # Filters from query params
+        video_filter = self.request.GET.get("video", "")
+        class_filter = self.request.GET.get("cls", "")
+        page_num = int(self.request.GET.get("page", 1))
+
+        annotations_qs = project.annotations.select_related("video").order_by(
+            "video__title", "frame_number"
+        )
+
+        if video_filter:
+            annotations_qs = annotations_qs.filter(video__pk=video_filter)
+
+        # Materialise and apply class filter (boxes is JSON, so filter in Python)
+        all_anns = list(annotations_qs[:2000])  # Cap for safety
+
+        if class_filter:
+            filtered = []
+            for ann in all_anns:
+                classes_in_ann = {b.get("class", "") for b in (ann.boxes or [])}
+                if class_filter in classes_in_ann:
+                    filtered.append(ann)
+            all_anns = filtered
+
+        # Build annotation card data
+        ann_data = []
+        for ann in all_anns:
+            boxes = ann.boxes or []
+            class_names = sorted(set(b.get("class", "unknown") for b in boxes)) if boxes else []
+            ann_data.append({
+                "video": ann.video,
+                "video_pk": ann.video.pk,
+                "frame_number": ann.frame_number,
+                "box_count": len(boxes),
+                "class_names": class_names,
+            })
+
+        # Pagination (50 per page)
+        per_page = 50
+        total = len(ann_data)
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        page_num = max(1, min(page_num, total_pages))
+        start = (page_num - 1) * per_page
+        end = start + per_page
+        page_anns = ann_data[start:end]
+
+        ctx["project"] = project
+        ctx["annotations"] = page_anns
+        ctx["total_count"] = total
+        ctx["page"] = page_num
+        ctx["total_pages"] = total_pages
+        ctx["has_prev"] = page_num > 1
+        ctx["has_next"] = page_num < total_pages
+        ctx["prev_page"] = page_num - 1
+        ctx["next_page"] = page_num + 1
+
+        # Filter options
+        ctx["videos"] = project.videos.all().order_by("title")
+        ctx["classes"] = project.classes
+        ctx["current_video"] = video_filter
+        ctx["current_class"] = class_filter
+
+        return ctx
+
+
 class ExportProjectView(LoginRequiredMixin, View):
     """Export YOLO dataset with images extracted from videos."""
 

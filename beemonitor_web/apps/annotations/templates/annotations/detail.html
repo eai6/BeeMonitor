@@ -10,6 +10,10 @@
     {% endif %}
   </div>
   <div class="flex gap-2">
+    <a href="{% url 'annotations:review' project.pk %}"
+       class="inline-flex items-center gap-1 px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm font-medium">
+      Review Annotations
+    </a>
     <a href="{% url 'annotations:export' project.pk %}"
        class="inline-flex items-center gap-1 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium">
       Export YOLO Dataset

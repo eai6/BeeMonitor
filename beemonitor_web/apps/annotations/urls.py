@@ -14,4 +14,6 @@ urlpatterns = [
     path("<int:pk>/save/", views.SaveAnnotationView.as_view(), name="save"),
     path("<int:pk>/pre-annotate/", views.PreAnnotateView.as_view(), name="pre_annotate"),
     path("<int:pk>/export/", views.ExportProjectView.as_view(), name="export"),
+    path("<int:pk>/frame/", views.FrameImageView.as_view(), name="frame_image"),
+    path("<int:pk>/review/", views.ReviewView.as_view(), name="review"),
 ]
