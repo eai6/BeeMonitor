@@ -444,6 +444,7 @@ class PreAnnotateView(LoginRequiredMixin, View):
                         "boxes": frame_data["boxes"],
                         "image_width": width,
                         "image_height": height,
+                        "frame_image_path": frame_data.get("frame_image_path", ""),
                     },
                 )
                 if was_created:
@@ -506,40 +507,86 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
 
 
 class FrameImageView(LoginRequiredMixin, View):
-    """Return a JPG image of a specific video frame with optional bounding boxes drawn.
+    """Return a JPG image of a specific video frame.
 
-    NOTE: This downloads the entire video from Azure to extract a single frame,
-    which is slow for large videos. Consider adding a frame cache (e.g. Redis or
-    disk-based LRU cache keyed on video_pk + frame_number) to avoid repeated
-    downloads of the same video.
+    First tries to serve a pre-saved frame from Azure (uploaded during
+    pre-annotation). Falls back to extracting from video if needed.
     """
 
     def get(self, request, pk):
         video_id = request.GET.get("video")
         frame_number = int(request.GET.get("frame", 0))
-        draw_boxes = request.GET.get("boxes", "true") == "true"
-        project_pk = request.GET.get("project")
+        draw_boxes = request.GET.get("boxes", "false") == "true"
 
-        # Get video and generate SAS URL or download frame
         from apps.videos.models import Video
         video = get_object_or_404(Video, pk=video_id, user=request.user)
 
+        # Check if we have a pre-saved frame image
+        try:
+            project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+            ann = Annotation.objects.get(project=project, video=video, frame_number=frame_number)
+
+            if ann.frame_image_path:
+                # Serve pre-saved frame from Azure
+                return self._serve_from_azure(ann.frame_image_path, ann if draw_boxes else None)
+        except Annotation.DoesNotExist:
+            pass
+
+        # Fallback: extract frame from video (slow but works)
+        return self._extract_from_video(video, frame_number)
+
+    def _serve_from_azure(self, blob_path, ann_for_boxes=None):
+        """Serve a pre-saved JPEG frame from Azure processed container."""
+        try:
+            from django.conf import settings
+            from azure.storage.blob import BlobServiceClient
+
+            conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
+            if not conn_str:
+                return HttpResponse(status=404)
+
+            service = BlobServiceClient.from_connection_string(conn_str)
+            blob = service.get_blob_client("processed", blob_path)
+            data = blob.download_blob().readall()
+
+            if ann_for_boxes and ann_for_boxes.boxes:
+                # Draw boxes on the image
+                import cv2
+                import numpy as np
+                img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+                colors = [(0, 0, 255), (255, 0, 0), (0, 255, 0), (0, 255, 255), (255, 0, 255)]
+                for box in ann_for_boxes.boxes:
+                    x, y, w, h = int(box["x"]), int(box["y"]), int(box["w"]), int(box["h"])
+                    color = colors[box.get("class_id", 0) % len(colors)]
+                    cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
+                    label = box.get("class", "")
+                    cv2.putText(img, label, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                data = buf.tobytes()
+
+            response = HttpResponse(data, content_type="image/jpeg")
+            response["Cache-Control"] = "public, max-age=3600"
+            return response
+        except Exception as e:
+            logger.error("FrameImageView Azure error: %s", e)
+            return HttpResponse(status=404)
+
+    def _extract_from_video(self, video, frame_number):
+        """Fallback: download video and extract frame (slow)."""
         blob_path = video.azure_blob_path
-        if blob_path.startswith("s3://") or not blob_path:
-            # Return placeholder image
+        if not blob_path or blob_path.startswith("s3://"):
             return HttpResponse(status=404)
 
         try:
             import cv2
             import tempfile
-            import numpy as np
+            import os
             from django.conf import settings
             from azure.storage.blob import BlobServiceClient
 
             conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
             service = BlobServiceClient.from_connection_string(conn_str)
 
-            # Download video to temp file
             tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
             blob = service.get_blob_client("raw-videos", blob_path)
             with open(tmp.name, "wb") as fh:
@@ -550,38 +597,15 @@ class FrameImageView(LoginRequiredMixin, View):
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
             ret, frame = cap.read()
             cap.release()
-
-            import os
             os.unlink(tmp.name)
 
             if not ret:
                 return HttpResponse(status=404)
 
-            # Draw boxes if requested
-            if draw_boxes and project_pk:
-                try:
-                    project = AnnotationProject.objects.get(pk=project_pk)
-                    ann = Annotation.objects.get(project=project, video=video, frame_number=frame_number)
-
-                    colors = [(0, 0, 255), (255, 0, 0), (0, 255, 0), (0, 255, 255), (255, 0, 255)]
-                    for box in ann.boxes:
-                        x, y, w, h = int(box["x"]), int(box["y"]), int(box["w"]), int(box["h"])
-                        cls_id = box.get("class_id", 0)
-                        color = colors[cls_id % len(colors)]
-                        cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-                        label = box.get("class", "")
-                        conf = box.get("confidence", "")
-                        text = f"{label}" + (f" {conf:.0%}" if isinstance(conf, float) else "")
-                        cv2.putText(frame, text, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-                except (Annotation.DoesNotExist, AnnotationProject.DoesNotExist):
-                    pass
-
-            # Encode as JPEG
             _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
             return HttpResponse(buf.tobytes(), content_type="image/jpeg")
-
         except Exception as e:
-            logger.error("FrameImageView error: %s", e, exc_info=True)
+            logger.error("FrameImageView extract error: %s", e, exc_info=True)
             return HttpResponse(status=500)
 
 

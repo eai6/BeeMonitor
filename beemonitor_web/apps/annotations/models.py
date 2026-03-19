@@ -51,6 +51,10 @@ class Annotation(models.Model):
         default=list,
         help_text='List of {"x": float, "y": float, "w": float, "h": float, "class": str, "class_id": int}',
     )
+    frame_image_path = models.CharField(
+        max_length=500, blank=True, default="",
+        help_text="Azure blob path to extracted frame JPEG",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

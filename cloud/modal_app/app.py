@@ -398,9 +398,24 @@ def pre_annotate_video(
 
             if boxes:
                 frames_with_detections += 1
+
+                # Save frame JPEG to Azure for fast serving later
+                frame_blob_path = f"frames/{video_blob_path.replace('/', '_')}/f{frame_num:06d}.jpg"
+                try:
+                    _, jpg_buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    import tempfile as _tf
+                    with _tf.NamedTemporaryFile(suffix=".jpg", delete=True) as jpg_tmp:
+                        jpg_tmp.write(jpg_buf.tobytes())
+                        jpg_tmp.flush()
+                        storage.upload_file("processed", frame_blob_path, jpg_tmp.name)
+                except Exception as upload_err:
+                    logger.warning("Failed to upload frame %d: %s", frame_num, upload_err)
+                    frame_blob_path = ""
+
                 annotated_frames.append({
                     "frame_number": frame_num,
                     "boxes": boxes,
+                    "frame_image_path": frame_blob_path,
                 })
                 total_detections += len(boxes)
 
