@@ -67,6 +67,21 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         ctx["available_sites"] = sorted(set(
             available.exclude(site_name="").values_list("site_name", flat=True)
         ))
+
+        # All annotations for review table
+        all_anns = project.annotations.select_related("video").order_by("video__title", "frame_number")
+        ann_data = []
+        for ann in all_anns[:500]:  # Cap for performance
+            boxes = ann.boxes or []
+            class_names = sorted(set(b.get("class", "unknown") for b in boxes)) if boxes else []
+            ann_data.append({
+                "video": ann.video,
+                "frame_number": ann.frame_number,
+                "box_count": len(boxes),
+                "class_names": class_names,
+            })
+        ctx["all_annotations"] = ann_data
+
         return ctx
 
 
@@ -327,20 +342,33 @@ class PreAnnotateView(LoginRequiredMixin, View):
             from apps.videos.models import Video
             video = Video.objects.select_related("source").get(pk=video_pk)
 
+            # Re-read blob_path from DB (might have been updated by analysis job)
+            blob_path = video.azure_blob_path
+
             # Transfer from S3 if needed
             if blob_path.startswith("s3://"):
-                logger.info("Pre-annotate: transferring video %s from S3 first", video_pk)
-                from apps.analysis.views import _transfer_s3_to_azure
-                blob_path = _transfer_s3_to_azure(video)
-                logger.info("Pre-annotate: transfer done, blob_path=%s", blob_path)
+                logger.info("Pre-annotate: transferring video %s from S3", video_pk)
+                try:
+                    from apps.analysis.views import _transfer_s3_to_azure
+                    blob_path = _transfer_s3_to_azure(video)
+                    logger.info("Pre-annotate: transfer done -> %s", blob_path)
+                except Exception as e:
+                    logger.error("Pre-annotate: S3 transfer failed for %s: %s", video_pk, e, exc_info=True)
+                    return
 
-            connection.close()  # Release before long Modal call
+            connection.close()
 
+            logger.info("Pre-annotate: calling Modal for video %s, path=%s", video_pk, blob_path)
             import modal
             fn = modal.Function.from_name("beemonitor-cloud", "pre_annotate_video")
             result = fn.remote(video_blob_path=blob_path, sample_interval=10, max_frames=300)
 
+            logger.info("Pre-annotate: Modal returned %s frames, %s detections",
+                        len(result.get("frames", [])) if result else 0,
+                        result.get("total_detections", 0) if result else 0)
+
             if not result or not result.get("frames"):
+                logger.info("Pre-annotate: no frames returned for video %s", video_pk)
                 return
 
             from apps.annotations.models import Annotation, AnnotationProject
