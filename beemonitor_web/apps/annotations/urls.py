@@ -16,5 +16,6 @@ urlpatterns = [
     path("<int:pk>/pre-annotate-all/", views.PreAnnotateAllView.as_view(), name="pre_annotate_all"),
     path("<int:pk>/export/", views.ExportProjectView.as_view(), name="export"),
     path("<int:pk>/frame/", views.FrameImageView.as_view(), name="frame_image"),
-    path("<int:pk>/review/", views.ReviewView.as_view(), name="review"),
+    # Review redirects to detail (review is now integrated into project page + editor)
+    path("<int:pk>/review/", views.ProjectDetailView.as_view(), name="review"),
 ]
