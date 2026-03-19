@@ -67,7 +67,7 @@
         <label class="block text-xs font-medium text-gray-500 mb-1">Nest Detection Model</label>
         <select name="custom_nest_model" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
           <option value="" selected>Default (nest_detection.pt)</option>
-          {% for model in custom_models %}
+          {% for model in custom_nest_models %}
           <option value="{{ model.pk }}">{{ model.name }} (mAP50: {{ model.metrics.mAP50|default:"--" }})</option>
           {% endfor %}
         </select>
@@ -76,7 +76,7 @@
         <label class="block text-xs font-medium text-gray-500 mb-1">Bee Tracking Model</label>
         <select name="custom_bee_model" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
           <option value="" selected>Default (bee_tracking.pt)</option>
-          {% for model in custom_models %}
+          {% for model in custom_bee_models %}
           <option value="{{ model.pk }}">{{ model.name }} (mAP50: {{ model.metrics.mAP50|default:"--" }})</option>
           {% endfor %}
         </select>

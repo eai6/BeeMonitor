@@ -139,7 +139,7 @@
   <a href="{% url 'annotations:editor' project.pk %}?video={{ card.video_pk }}&frame={{ card.frame_number }}"
      class="group bg-white shadow rounded-lg overflow-hidden hover:shadow-md transition-shadow">
     <div class="relative aspect-video bg-gray-100">
-      <img src="{% url 'annotations:frame_image' project.pk %}?video={{ card.video_pk }}&frame={{ card.frame_number }}&boxes=true"
+      <img src="{% if card.thumbnail_url %}{{ card.thumbnail_url }}{% else %}{% url 'annotations:frame_image' project.pk %}?video={{ card.video_pk }}&frame={{ card.frame_number }}&boxes=true{% endif %}"
            alt="Frame {{ card.frame_number }}"
            class="w-full h-full object-cover"
            loading="lazy"

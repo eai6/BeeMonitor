@@ -107,7 +107,38 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
                 "frame_number": ann.frame_number,
                 "box_count": len(boxes),
                 "classes": box_classes,
+                "frame_image_path": ann.frame_image_path or "",
             })
+
+        # Generate SAS URLs for frame thumbnails (batch for performance)
+        try:
+            from django.conf import settings
+            from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
+            from datetime import datetime, timedelta, timezone as dt_tz
+
+            conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
+            if conn_str:
+                service = BlobServiceClient.from_connection_string(conn_str)
+                account_name = service.account_name
+                account_key = ""
+                for part in conn_str.split(";"):
+                    if part.startswith("AccountKey="):
+                        account_key = part.split("=", 1)[1]
+                        break
+
+                for card in frame_cards:
+                    if card["frame_image_path"]:
+                        token = generate_blob_sas(
+                            account_name=account_name,
+                            container_name="processed",
+                            blob_name=card["frame_image_path"],
+                            account_key=account_key,
+                            permission=BlobSasPermissions(read=True),
+                            expiry=datetime.now(dt_tz.utc) + timedelta(hours=2),
+                        )
+                        card["thumbnail_url"] = f"https://{account_name}.blob.core.windows.net/processed/{card['frame_image_path']}?{token}"
+        except Exception as e:
+            logger.warning("Failed to generate SAS URLs for thumbnails: %s", e)
 
         ctx["total_annotations"] = len(frame_cards)
         ctx["total_boxes"] = total_boxes

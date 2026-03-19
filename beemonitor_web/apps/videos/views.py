@@ -76,14 +76,17 @@ class VideoListView(LoginRequiredMixin, ListView):
         ctx["all_video_ids"] = list(filtered_qs.values_list("pk", flat=True))
         ctx["video_count"] = len(ctx["all_video_ids"])
 
-        # Custom models for config panel
+        # Custom models for config panel (split by type for nest/bee dropdowns)
         try:
             from apps.training.models import CustomModel
-            ctx["custom_models"] = CustomModel.objects.filter(
-                user=self.request.user, is_active=True
-            )
+            all_models = CustomModel.objects.filter(user=self.request.user, is_active=True)
+            ctx["custom_models"] = all_models  # all models for generic dropdown
+            ctx["custom_nest_models"] = all_models.filter(model_type__in=["nest_detection", "custom"])
+            ctx["custom_bee_models"] = all_models.filter(model_type__in=["bee_tracking", "custom"])
         except Exception:
             ctx["custom_models"] = []
+            ctx["custom_nest_models"] = []
+            ctx["custom_bee_models"] = []
 
         return ctx
 
