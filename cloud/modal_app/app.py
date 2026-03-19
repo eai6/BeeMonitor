@@ -625,10 +625,11 @@ def train_yolo_model(
         write_time = time.time() - write_start
         logger.info("[%s] Dataset files written in %.1fs", job_id, write_time)
 
-        # Write dataset.yaml
+        # Write dataset.yaml — override path with absolute dataset_dir
         data_yaml = dataset_dir / "data.yaml"
-        data_yaml.write_text(dataset_yaml_content)
-        logger.info("[%s] dataset.yaml written:\n%s", job_id, dataset_yaml_content)
+        fixed_yaml = dataset_yaml_content.replace("path: .", f"path: {dataset_dir}")
+        data_yaml.write_text(fixed_yaml)
+        logger.info("[%s] dataset.yaml written:\n%s", job_id, fixed_yaml)
 
         # Verify dataset structure
         train_imgs = list((dataset_dir / "train" / "images").glob("*"))
