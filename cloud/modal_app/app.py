@@ -293,9 +293,9 @@ def batch_process(jobs: list[dict]) -> list[dict]:
 )
 def pre_annotate_video(
     video_blob_path: str,
-    sample_interval: int = 30,  # Sample every N frames (default: 1 per second at 30fps)
-    confidence_threshold: float = 0.25,
-    max_frames: int = 200,
+    sample_interval: int = 10,  # Sample every N frames (~3 per second at 30fps)
+    confidence_threshold: float = 0.15,  # Low threshold to catch more bees
+    max_frames: int = 300,
 ) -> dict:
     """Run YOLO detection on sampled frames with motion, return detected boxes.
 
@@ -352,20 +352,9 @@ def pre_annotate_video(
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        # Background subtractor for motion detection
-        bg_sub = cv2.createBackgroundSubtractorMOG2(history=100, varThreshold=25, detectShadows=False)
-
-        # Warm up background model on first 30 frames
-        for i in range(min(30, total_frames)):
-            ret, frame = cap.read()
-            if ret:
-                bg_sub.apply(frame)
-
-        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-
         annotated_frames = []
         frames_checked = 0
-        frames_with_activity = 0
+        frames_with_detections = 0
         total_detections = 0
 
         frame_num = 0
@@ -378,27 +367,19 @@ def pre_annotate_video(
 
             frames_checked += 1
 
-            # Check for motion
-            fg_mask = bg_sub.apply(frame)
-            motion_pixels = cv2.countNonZero(fg_mask)
-            motion_ratio = motion_pixels / (width * height)
+            # Run YOLO on every sampled frame (no motion filter)
+            results = yolo(frame, conf=confidence_threshold, verbose=False)
 
-            if motion_ratio > 0.001:  # Some motion detected
-                frames_with_activity += 1
+            boxes = []
+            for r in results:
+                for box in r.boxes:
+                    x1, y1, x2, y2 = box.xyxy[0].tolist()
+                    conf = float(box.conf[0])
+                    cls_id = int(box.cls[0])
+                    cls_name = r.names.get(cls_id, f"class_{cls_id}")
 
-                # Run YOLO detection
-                results = yolo(frame, conf=confidence_threshold, verbose=False)
-
-                boxes = []
-                for r in results:
-                    for box in r.boxes:
-                        x1, y1, x2, y2 = box.xyxy[0].tolist()
-                        conf = float(box.conf[0])
-                        cls_id = int(box.cls[0])
-                        cls_name = r.names.get(cls_id, f"class_{cls_id}")
-
-                        boxes.append({
-                            "x": round(x1),
+                    boxes.append({
+                        "x": round(x1),
                             "y": round(y1),
                             "w": round(x2 - x1),
                             "h": round(y2 - y1),
@@ -407,24 +388,25 @@ def pre_annotate_video(
                             "confidence": round(conf, 3),
                         })
 
-                if boxes:
-                    annotated_frames.append({
-                        "frame_number": frame_num,
-                        "boxes": boxes,
-                    })
-                    total_detections += len(boxes)
+            if boxes:
+                frames_with_detections += 1
+                annotated_frames.append({
+                    "frame_number": frame_num,
+                    "boxes": boxes,
+                })
+                total_detections += len(boxes)
 
             frame_num += sample_interval
 
         cap.release()
 
-    logger.info("Pre-annotation: %d frames checked, %d with activity, %d detections, %d frames annotated",
-                frames_checked, frames_with_activity, total_detections, len(annotated_frames))
+    logger.info("Pre-annotation: %d frames checked, %d with detections, %d total detections, %d frames saved",
+                frames_checked, frames_with_detections, total_detections, len(annotated_frames))
 
     return {
         "frames": annotated_frames,
         "total_frames_checked": frames_checked,
-        "frames_with_activity": frames_with_activity,
+        "frames_with_activity": frames_with_detections,
         "total_detections": total_detections,
         "video_fps": fps,
         "video_width": width,
