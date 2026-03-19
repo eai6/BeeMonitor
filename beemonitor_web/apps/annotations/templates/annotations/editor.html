@@ -33,6 +33,8 @@
     <div class="bg-white shadow rounded-lg p-4">
       <!-- Frame Navigation -->
       <div class="flex items-center gap-2 mb-3 flex-wrap">
+        <button id="btn-play" class="px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded text-xs font-medium" title="Play/Pause">&#9654; Play</button>
+        <span class="text-gray-300">|</span>
         <button id="btn-prev-10s" class="px-2 py-1 border border-gray-300 rounded text-xs hover:bg-gray-50" title="-10 seconds">-10s</button>
         <button id="btn-prev-1s" class="px-2 py-1 border border-gray-300 rounded text-xs hover:bg-gray-50" title="-1 second">-1s</button>
         <button id="btn-prev" class="px-2 py-1 border border-gray-300 rounded text-xs hover:bg-gray-50" title="-1 frame">-1f</button>
@@ -43,6 +45,7 @@
         <button id="btn-next-1s" class="px-2 py-1 border border-gray-300 rounded text-xs hover:bg-gray-50" title="+1 second">+1s</button>
         <button id="btn-next-10s" class="px-2 py-1 border border-gray-300 rounded text-xs hover:bg-gray-50" title="+10 seconds">+10s</button>
         <button id="btn-go" class="px-2 py-1 bg-gray-100 border border-gray-300 rounded text-xs hover:bg-gray-200">Go</button>
+        <span id="time-display" class="text-xs text-gray-500 ml-2"></span>
       </div>
       <!-- Video + Canvas overlay -->
       <div class="relative border border-gray-300 rounded overflow-hidden" style="aspect-ratio: 16/9;">
@@ -415,6 +418,54 @@
       boxes = [];
       render();
       updateBoxList();
+    }
+  });
+
+  // Play/Pause
+  const playBtn = document.getElementById("btn-play");
+  const timeDisplay = document.getElementById("time-display");
+  let isPlaying = false;
+
+  playBtn.addEventListener("click", function() {
+    if (!sourceVideo) return;
+    if (isPlaying) {
+      sourceVideo.pause();
+      isPlaying = false;
+      playBtn.innerHTML = "&#9654; Play";
+      playBtn.className = "px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded text-xs font-medium";
+      // Update frame number from current video time
+      currentFrame = Math.round(sourceVideo.currentTime * FPS);
+      frameInput.value = currentFrame;
+      statusText.textContent = "Paused at frame " + currentFrame + " — draw boxes and save";
+    } else {
+      sourceVideo.play();
+      isPlaying = true;
+      playBtn.innerHTML = "&#9646;&#9646; Pause";
+      playBtn.className = "px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-xs font-medium";
+      statusText.textContent = "Playing — click Pause to annotate a frame";
+    }
+  });
+
+  // Update time display and frame counter while playing
+  if (sourceVideo) {
+    sourceVideo.addEventListener("timeupdate", function() {
+      const t = sourceVideo.currentTime;
+      const mins = Math.floor(t / 60);
+      const secs = Math.floor(t % 60);
+      const frame = Math.round(t * FPS);
+      timeDisplay.textContent = mins + ":" + String(secs).padStart(2, "0") + " (frame " + frame + ")";
+      if (isPlaying) {
+        frameInput.value = frame;
+        currentFrame = frame;
+      }
+    });
+  }
+
+  // Spacebar to play/pause
+  document.addEventListener("keydown", function(e) {
+    if (e.code === "Space" && e.target.tagName !== "INPUT") {
+      e.preventDefault();
+      playBtn.click();
     }
   });
 
