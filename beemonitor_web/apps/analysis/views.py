@@ -449,11 +449,11 @@ class PollJobsView(LoginRequiredMixin, View):
                             "summary_stats": result.get("summary_stats", {}),
                         },
                     )
-                    # Calculate and store cost
+                    # Calculate cost and credits (1 credit ≈ 1 GPU-second)
                     exec_secs = result.get("execution_seconds", 0) or 0
+                    credits_used = int(exec_secs)
                     cost_rate = GPU_TIERS.get(job.gpu_tier, {}).get("cost_per_sec", 0.000306)
                     cost_usd = round(exec_secs * cost_rate, 4)
-                    cost_cents = int(cost_usd * 100)
 
                     Job.objects.filter(pk=job.pk).update(
                         status="completed", progress_pct=100,
@@ -466,7 +466,7 @@ class PollJobsView(LoginRequiredMixin, View):
                     try:
                         from apps.accounts.models import UserProfile
                         profile, _ = UserProfile.objects.get_or_create(user=job.user)
-                        profile.charge(cost_cents, gpu_seconds=exec_secs)
+                        profile.charge(credits_used, gpu_seconds=exec_secs)
                     except Exception as e:
                         logger.error("Failed to charge credits for job %s: %s", job.pk, e)
 
@@ -518,9 +518,8 @@ class BatchJobView(LoginRequiredMixin, View):
         from apps.accounts.models import UserProfile
         profile, _ = UserProfile.objects.get_or_create(user=request.user)
 
-        # Estimate cost
-        cost_rate = GPU_TIERS.get(gpu_tier, {}).get("cost_per_sec", 0.000306)
-        est_cost_per_video_cents = int(349 * cost_rate * 100)  # 349s avg, convert to cents
+        # Estimate credits (1 credit ≈ 1 GPU-second)
+        est_credits_per_video = 349  # avg GPU-seconds per video
 
         # Build queryset
         if video_ids:
@@ -554,13 +553,12 @@ class BatchJobView(LoginRequiredMixin, View):
             return redirect("analysis:list")
 
         # Budget check
-        total_est_cents = est_cost_per_video_cents * len(videos_to_process)
-        if not profile.has_budget(total_est_cents):
-            est_usd = total_est_cents / 100
+        total_est_credits = est_credits_per_video * len(videos_to_process)
+        if not profile.has_budget(total_est_credits):
             messages.error(
                 request,
-                f"Insufficient credits. Need ~${est_usd:.2f} for {len(videos_to_process)} videos "
-                f"but only ${profile.remaining_credit_usd:.2f} remaining this month."
+                f"Insufficient credits. Need ~{total_est_credits:,} credits for {len(videos_to_process)} videos "
+                f"but only {profile.remaining_credits:,} remaining this month."
             )
             return redirect("videos:list")
 
@@ -608,9 +606,8 @@ class BatchJobView(LoginRequiredMixin, View):
         msg = f"Submitted {len(jobs_data)} video(s) on {gpu_tier} GPU."
         if skipped:
             msg += f" Skipped {skipped} already analyzed."
-        cost_rate = GPU_TIERS.get(gpu_tier, {}).get("cost_per_sec", 0.000306)
-        est_cost = len(jobs_data) * 349 * cost_rate  # 349s avg execution
-        msg += f" Estimated cost: ~${est_cost:.2f}"
+        est_total_credits = len(jobs_data) * est_credits_per_video
+        msg += f" Estimated: ~{est_total_credits:,} credits"
         messages.success(request, msg)
         return redirect("analysis:list")
 

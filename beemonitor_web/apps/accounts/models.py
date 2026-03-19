@@ -7,28 +7,29 @@ from django.utils import timezone
 
 
 # Tier limits
+# Credits are abstract units (1 credit ≈ 1 second of GPU time)
 TIER_LIMITS = {
     "free": {
         "label": "Free",
-        "monthly_credit_cents": 3000,  # $30
+        "monthly_credits": 3000,
         "max_concurrent_jobs": 10,
         "max_video_hours_per_month": 50,
     },
     "standard": {
         "label": "Standard",
-        "monthly_credit_cents": 25000,  # $250
+        "monthly_credits": 25000,
         "max_concurrent_jobs": 50,
         "max_video_hours_per_month": 500,
     },
     "pro": {
         "label": "Pro",
-        "monthly_credit_cents": 100000,  # $1,000
+        "monthly_credits": 100000,
         "max_concurrent_jobs": 200,
         "max_video_hours_per_month": 5000,
     },
     "enterprise": {
         "label": "Enterprise",
-        "monthly_credit_cents": 0,  # Unlimited
+        "monthly_credits": 0,  # Unlimited
         "max_concurrent_jobs": 500,
         "max_video_hours_per_month": 0,  # Unlimited
     },
@@ -54,9 +55,9 @@ class UserProfile(models.Model):
         default=Tier.FREE,
     )
 
-    # Credits (in cents to avoid float issues)
-    monthly_credit_cents = models.IntegerField(default=3000, help_text="Monthly credit limit in cents")
-    used_credit_cents = models.IntegerField(default=0, help_text="Credits used this month in cents")
+    # Credits (abstract units, ~1 credit ≈ 1 second GPU time)
+    monthly_credits = models.IntegerField(default=3000, help_text="Monthly credit limit")
+    used_credits = models.IntegerField(default=0, help_text="Credits used this month")
     credit_reset_date = models.DateField(null=True, blank=True, help_text="Next monthly reset date")
 
     # Quotas
@@ -72,50 +73,38 @@ class UserProfile(models.Model):
         return f"{self.user.username} ({self.get_tier_display()})"
 
     @property
-    def remaining_credit_cents(self) -> int:
-        return max(0, self.monthly_credit_cents - self.used_credit_cents)
-
-    @property
-    def remaining_credit_usd(self) -> float:
-        return self.remaining_credit_cents / 100
-
-    @property
-    def used_credit_usd(self) -> float:
-        return self.used_credit_cents / 100
-
-    @property
-    def monthly_credit_usd(self) -> float:
-        return self.monthly_credit_cents / 100
+    def remaining_credits(self) -> int:
+        return max(0, self.monthly_credits - self.used_credits)
 
     @property
     def credit_usage_pct(self) -> int:
-        if self.monthly_credit_cents == 0:
+        if self.monthly_credits == 0:
             return 0
-        return min(100, int(self.used_credit_cents / self.monthly_credit_cents * 100))
+        return min(100, int(self.used_credits / self.monthly_credits * 100))
 
-    def has_budget(self, estimated_cost_cents: int) -> bool:
-        """Check if user has enough credits for estimated cost."""
+    def has_budget(self, estimated_credits: int) -> bool:
+        """Check if user has enough credits."""
         if self.tier == self.Tier.ENTERPRISE:
-            return True  # Unlimited
-        return self.remaining_credit_cents >= estimated_cost_cents
+            return True
+        return self.remaining_credits >= estimated_credits
 
-    def charge(self, cost_cents: int, gpu_seconds: float = 0):
+    def charge(self, credits: int, gpu_seconds: float = 0):
         """Deduct credits after a job completes."""
-        self.used_credit_cents += cost_cents
+        self.used_credits += credits
         self.total_gpu_seconds += gpu_seconds
         self.total_jobs_submitted += 1
-        self.save(update_fields=["used_credit_cents", "total_gpu_seconds", "total_jobs_submitted"])
+        self.save(update_fields=["used_credits", "total_gpu_seconds", "total_jobs_submitted"])
 
     def reset_monthly_credits(self):
-        """Reset monthly usage (called by management command)."""
+        """Reset monthly usage."""
         limits = TIER_LIMITS.get(self.tier, TIER_LIMITS["free"])
-        self.monthly_credit_cents = limits["monthly_credit_cents"]
+        self.monthly_credits = limits["monthly_credits"]
         self.max_concurrent_jobs = limits["max_concurrent_jobs"]
-        self.used_credit_cents = 0
+        self.used_credits = 0
         self.credit_reset_date = timezone.now().date() + timezone.timedelta(days=30)
         self.save(update_fields=[
-            "monthly_credit_cents", "max_concurrent_jobs",
-            "used_credit_cents", "credit_reset_date",
+            "monthly_credits", "max_concurrent_jobs",
+            "used_credits", "credit_reset_date",
         ])
 
     @property

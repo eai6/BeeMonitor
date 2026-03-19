@@ -26,8 +26,8 @@ class Command(BaseCommand):
             count += 1
             self.stdout.write(
                 f"  Reset {profile.user.username}: "
-                f"${old_used / 100:.2f} used → $0.00 "
-                f"(limit: ${profile.monthly_credit_cents / 100:.2f})"
+                f"{old_used} credits used → 0 "
+                f"(limit: {profile.monthly_credits})"
             )
 
         self.stdout.write(self.style.SUCCESS(f"Reset {count} profile(s)."))

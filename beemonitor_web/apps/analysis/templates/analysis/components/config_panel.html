@@ -16,9 +16,9 @@
     <div>
       <label class="block text-xs font-medium text-gray-500 mb-2">Preset</label>
       <div class="flex gap-2">
-        <button type="button" onclick="applyPreset('fast')" class="px-3 py-1.5 border border-gray-300 rounded text-xs hover:bg-gray-50">Fast ($0.07/vid)</button>
-        <button type="button" onclick="applyPreset('standard')" class="px-3 py-1.5 border border-amber-400 bg-amber-50 rounded text-xs font-medium">Standard ($0.11/vid)</button>
-        <button type="button" onclick="applyPreset('quality')" class="px-3 py-1.5 border border-gray-300 rounded text-xs hover:bg-gray-50">Quality ($0.13/vid)</button>
+        <button type="button" onclick="applyPreset('fast')" class="px-3 py-1.5 border border-gray-300 rounded text-xs hover:bg-gray-50">Fast (~200 credits/vid)</button>
+        <button type="button" onclick="applyPreset('standard')" class="px-3 py-1.5 border border-amber-400 bg-amber-50 rounded text-xs font-medium">Standard (~350 credits/vid)</button>
+        <button type="button" onclick="applyPreset('quality')" class="px-3 py-1.5 border border-gray-300 rounded text-xs hover:bg-gray-50">Quality (~400 credits/vid)</button>
       </div>
     </div>
 
@@ -88,17 +88,18 @@ function applyPreset(preset) {
 }
 
 function updateCostEstimate() {
-    const rates = { T4: 0.07, L4: 0.09, A10G: 0.11, L40S: 0.14, A100: 0.13 };
+    // Credits per video by GPU tier (1 credit ≈ 1 GPU-second)
+    const credits = { T4: 600, L4: 480, A10G: 349, L40S: 210, A100: 180 };
     const gpu = document.getElementById('cfg-gpu').value;
-    const costPerVid = rates[gpu] || 0.11;
+    const creditsPerVid = credits[gpu] || 349;
     const checked = document.querySelectorAll('.video-checkbox:checked').length;
 
     const el = document.getElementById('cost-text');
     if (checked > 0) {
-        const total = (costPerVid * checked).toFixed(2);
-        el.innerHTML = `Estimated cost: <strong>$${costPerVid.toFixed(2)}/video × ${checked} videos = $${total}</strong>`;
+        const total = creditsPerVid * checked;
+        el.innerHTML = `Estimated: <strong>~${creditsPerVid} credits/video × ${checked} videos = ${total.toLocaleString()} credits</strong>`;
     } else {
-        el.innerHTML = `~$${costPerVid.toFixed(2)} per video on ${gpu}. Select videos to see total.`;
+        el.innerHTML = `~${creditsPerVid} credits per video on ${gpu}. Select videos to see total.`;
     }
 }
 

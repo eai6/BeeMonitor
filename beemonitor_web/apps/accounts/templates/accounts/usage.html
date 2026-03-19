@@ -20,8 +20,8 @@
   <!-- Progress bar -->
   <div class="mb-2">
     <div class="flex justify-between text-sm mb-1">
-      <span class="text-gray-600">${{ profile.used_credit_usd|floatformat:2 }} used</span>
-      <span class="text-gray-600">${{ profile.monthly_credit_usd|floatformat:2 }} limit</span>
+      <span class="text-gray-600">{{ profile.used_credits }} credits used</span>
+      <span class="text-gray-600">{{ profile.monthly_credits }} credits limit</span>
     </div>
     <div class="w-full bg-gray-200 rounded-full h-4">
       <div class="h-4 rounded-full transition-all
@@ -33,7 +33,7 @@
   </div>
 
   <div class="flex justify-between text-sm text-gray-500">
-    <span>Remaining: <strong class="text-gray-900">${{ profile.remaining_credit_usd|floatformat:2 }}</strong></span>
+    <span>Remaining: <strong class="text-gray-900">{{ profile.remaining_credits }} credits</strong></span>
     {% if profile.credit_reset_date %}
     <span>Resets: {{ profile.credit_reset_date }}</span>
     {% endif %}
@@ -132,9 +132,9 @@
     <tbody>
       <tr class="border-b border-gray-100">
         <td class="py-2">Monthly Credits</td>
-        <td class="py-2 text-center">$30</td>
-        <td class="py-2 text-center">$250</td>
-        <td class="py-2 text-center">$1,000</td>
+        <td class="py-2 text-center">3,000</td>
+        <td class="py-2 text-center">25,000</td>
+        <td class="py-2 text-center">100,000</td>
         <td class="py-2 text-center">Unlimited</td>
       </tr>
       <tr class="border-b border-gray-100">
