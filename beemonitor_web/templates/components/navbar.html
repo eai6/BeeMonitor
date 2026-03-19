@@ -12,7 +12,6 @@
           <a href="{% url 'annotations:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Annotate</a>
           <a href="{% url 'training:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Training</a>
           <a href="{% url 'sources:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Sources</a>
-          <a href="{% url 'developer:index' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Developer</a>
         </div>
       </div>
       <div class="hidden md:flex md:items-center md:space-x-3">
@@ -44,7 +43,6 @@
       <a href="{% url 'annotations:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Annotate</a>
       <a href="{% url 'training:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Training</a>
       <a href="{% url 'sources:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Sources</a>
-      <a href="{% url 'developer:index' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Developer</a>
       {% if user.is_authenticated %}
       <a href="{% url 'accounts:logout' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Logout</a>
       {% else %}

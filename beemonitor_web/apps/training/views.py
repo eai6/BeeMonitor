@@ -369,6 +369,17 @@ class PollTrainingJobsView(LoginRequiredMixin, View):
                     else:
                         logger.warning("[poll] job=%s — no model path returned, skipping CustomModel creation", job.pk)
 
+                    # Charge credits (1 credit ≈ 1 GPU-second)
+                    credits_used = int(exec_secs)
+                    if credits_used > 0:
+                        try:
+                            from apps.accounts.models import UserProfile
+                            profile, _ = UserProfile.objects.get_or_create(user=job.user)
+                            profile.charge(credits_used, gpu_seconds=exec_secs)
+                            logger.info("[poll] job=%s — charged %d credits (%.1fs GPU)", job.pk, credits_used, exec_secs)
+                        except Exception as e:
+                            logger.error("[poll] job=%s — failed to charge credits: %s", job.pk, e)
+
                     completed += 1
 
                 except Exception as e:

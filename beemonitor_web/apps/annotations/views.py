@@ -451,6 +451,19 @@ class PreAnnotateView(LoginRequiredMixin, View):
 
             logger.info("Pre-annotated video %s: %d frames, %d new annotations",
                         video_pk, len(result["frames"]), created)
+
+            # Charge credits for pre-annotation GPU time
+            exec_secs = result.get("execution_seconds", 0) or 0
+            credits_used = int(exec_secs) if exec_secs else 30  # minimum 30 credits if no time reported
+            try:
+                from apps.accounts.models import UserProfile
+                user = project.user
+                profile, _ = UserProfile.objects.get_or_create(user=user)
+                profile.charge(credits_used, gpu_seconds=exec_secs or credits_used)
+                logger.info("Pre-annotate: charged %d credits for video %s", credits_used, video_pk)
+            except Exception as charge_err:
+                logger.error("Pre-annotate: failed to charge credits for video %s: %s", video_pk, charge_err)
+
         except Exception as e:
             logger.error("Pre-annotate failed for video %s: %s", video_pk, e, exc_info=True)
         finally:
