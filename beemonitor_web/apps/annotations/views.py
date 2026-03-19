@@ -300,11 +300,9 @@ class PreAnnotateView(LoginRequiredMixin, View):
         video = get_object_or_404(Video, pk=video_id, user=request.user)
 
         blob_path = video.azure_blob_path
-        if blob_path.startswith("s3://"):
-            messages.error(request, "Video must be transferred to Azure first.")
-            return redirect("annotations:detail", pk=pk)
 
-        # Spawn Modal pre-annotation in background
+        # Auto-transfer from S3 if needed, then pre-annotate
+        # The background thread handles both transfer and annotation
         thread = threading.Thread(
             target=self._run_pre_annotate,
             args=(project.pk, video.pk, blob_path),
@@ -312,7 +310,11 @@ class PreAnnotateView(LoginRequiredMixin, View):
         )
         thread.start()
 
-        messages.info(request, f"Pre-annotating '{video.title}' with AI. This takes 1-2 minutes. Refresh to see results.")
+        is_s3 = blob_path.startswith("s3://")
+        if is_s3:
+            messages.info(request, f"Transferring '{video.title}' from S3 then running AI detection. This takes 2-4 minutes. Refresh to see results.")
+        else:
+            messages.info(request, f"Pre-annotating '{video.title}' with AI. This takes 1-2 minutes. Refresh to see results.")
         return redirect("annotations:detail", pk=pk)
 
     @staticmethod
@@ -322,9 +324,21 @@ class PreAnnotateView(LoginRequiredMixin, View):
         from django.db import connection
 
         try:
+            from apps.videos.models import Video
+            video = Video.objects.select_related("source").get(pk=video_pk)
+
+            # Transfer from S3 if needed
+            if blob_path.startswith("s3://"):
+                logger.info("Pre-annotate: transferring video %s from S3 first", video_pk)
+                from apps.analysis.views import _transfer_s3_to_azure
+                blob_path = _transfer_s3_to_azure(video)
+                logger.info("Pre-annotate: transfer done, blob_path=%s", blob_path)
+
+            connection.close()  # Release before long Modal call
+
             import modal
             fn = modal.Function.from_name("beemonitor-cloud", "pre_annotate_video")
-            result = fn.remote(video_blob_path=blob_path, sample_interval=30, max_frames=200)
+            result = fn.remote(video_blob_path=blob_path, sample_interval=10, max_frames=300)
 
             if not result or not result.get("frames"):
                 return
