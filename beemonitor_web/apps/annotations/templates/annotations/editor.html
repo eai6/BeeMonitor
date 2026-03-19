@@ -32,13 +32,17 @@
   <div class="flex-1 min-w-0">
     <div class="bg-white shadow rounded-lg p-4">
       <!-- Frame Navigation -->
-      <div class="flex items-center gap-3 mb-3">
-        <button id="btn-prev" class="px-3 py-1 border border-gray-300 rounded text-sm hover:bg-gray-50">Prev</button>
+      <div class="flex items-center gap-2 mb-3 flex-wrap">
+        <button id="btn-prev-10s" class="px-2 py-1 border border-gray-300 rounded text-xs hover:bg-gray-50" title="-10 seconds">-10s</button>
+        <button id="btn-prev-1s" class="px-2 py-1 border border-gray-300 rounded text-xs hover:bg-gray-50" title="-1 second">-1s</button>
+        <button id="btn-prev" class="px-2 py-1 border border-gray-300 rounded text-xs hover:bg-gray-50" title="-1 frame">-1f</button>
         <label class="text-sm text-gray-600">Frame:</label>
         <input type="number" id="frame-input" value="{{ frame_number }}" min="0"
-               class="w-24 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
-        <button id="btn-next" class="px-3 py-1 border border-gray-300 rounded text-sm hover:bg-gray-50">Next</button>
-        <button id="btn-go" class="px-3 py-1 bg-gray-100 border border-gray-300 rounded text-sm hover:bg-gray-200">Go</button>
+               class="w-20 border border-gray-300 rounded px-2 py-1 text-sm">
+        <button id="btn-next" class="px-2 py-1 border border-gray-300 rounded text-xs hover:bg-gray-50" title="+1 frame">+1f</button>
+        <button id="btn-next-1s" class="px-2 py-1 border border-gray-300 rounded text-xs hover:bg-gray-50" title="+1 second">+1s</button>
+        <button id="btn-next-10s" class="px-2 py-1 border border-gray-300 rounded text-xs hover:bg-gray-50" title="+10 seconds">+10s</button>
+        <button id="btn-go" class="px-2 py-1 bg-gray-100 border border-gray-300 rounded text-xs hover:bg-gray-200">Go</button>
       </div>
       <!-- Video + Canvas overlay -->
       <div class="relative border border-gray-300 rounded overflow-hidden" style="aspect-ratio: 16/9;">
@@ -326,12 +330,24 @@
     }
   }
 
+  const FPS = 30;
   document.getElementById("btn-prev").addEventListener("click", function() {
     navigateToFrame(currentFrame - 1);
   });
-
   document.getElementById("btn-next").addEventListener("click", function() {
     navigateToFrame(currentFrame + 1);
+  });
+  document.getElementById("btn-prev-1s").addEventListener("click", function() {
+    navigateToFrame(currentFrame - FPS);
+  });
+  document.getElementById("btn-next-1s").addEventListener("click", function() {
+    navigateToFrame(currentFrame + FPS);
+  });
+  document.getElementById("btn-prev-10s").addEventListener("click", function() {
+    navigateToFrame(currentFrame - FPS * 10);
+  });
+  document.getElementById("btn-next-10s").addEventListener("click", function() {
+    navigateToFrame(currentFrame + FPS * 10);
   });
 
   document.getElementById("btn-go").addEventListener("click", function() {
