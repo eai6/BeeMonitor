@@ -9,8 +9,12 @@ from django.urls import reverse_lazy
 from django.views import View
 from django.views.generic import CreateView, DetailView, ListView, TemplateView
 
+import logging
+
 from .forms import ProjectCreateForm
 from .models import Annotation, AnnotationProject
+
+logger = logging.getLogger(__name__)
 
 
 class ProjectListView(LoginRequiredMixin, ListView):
@@ -162,6 +166,35 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
                 pass
 
         return ctx
+
+
+class TransferVideoView(LoginRequiredMixin, View):
+    """Transfer a video from S3 to Azure so frames are available for annotation."""
+
+    def post(self, request, pk):
+        from django.shortcuts import redirect
+        from django.contrib import messages
+
+        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        video_id = request.POST.get("video_id")
+        frame = request.POST.get("frame", 0)
+
+        from apps.videos.models import Video
+        video = get_object_or_404(Video, pk=video_id, user=request.user)
+
+        if not video.azure_blob_path.startswith("s3://"):
+            messages.info(request, "Video is already in Azure.")
+            return redirect(f"/annotations/{pk}/edit/?video={video_id}&frame={frame}")
+
+        try:
+            from apps.analysis.views import _transfer_s3_to_azure
+            new_path = _transfer_s3_to_azure(video)
+            messages.success(request, f"Video transferred to Azure. Frames now available.")
+        except Exception as e:
+            logger.error("Transfer failed for video %s: %s", video_id, e)
+            messages.error(request, f"Transfer failed: {e}")
+
+        return redirect(f"/annotations/{pk}/edit/?video={video_id}&frame={frame}")
 
 
 class SaveAnnotationView(LoginRequiredMixin, View):
