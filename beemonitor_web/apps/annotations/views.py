@@ -131,6 +131,26 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
             except Annotation.DoesNotExist:
                 boxes = []
 
+        # Auto-transfer S3 video to Azure if needed
+        ctx["transferring"] = False
+        if video and video.azure_blob_path.startswith("s3://"):
+            try:
+                import threading
+                from apps.analysis.views import _transfer_s3_to_azure
+
+                # Check if already transferring (avoid duplicate)
+                if not getattr(video, '_transfer_started', False):
+                    ctx["transferring"] = True
+                    # Transfer in background — page will show spinner and auto-reload
+                    thread = threading.Thread(
+                        target=self._do_transfer,
+                        args=(video.pk,),
+                        daemon=True,
+                    )
+                    thread.start()
+            except Exception as e:
+                logger.error("Auto-transfer failed for video %s: %s", video.pk, e)
+
         ctx["project"] = project
         ctx["video"] = video
         ctx["frame_number"] = frame_number
@@ -166,6 +186,23 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
                 pass
 
         return ctx
+
+    @staticmethod
+    def _do_transfer(video_pk):
+        """Background thread: transfer S3 video to Azure."""
+        import django
+        django.setup()
+        from django.db import connection
+        try:
+            from apps.videos.models import Video
+            from apps.analysis.views import _transfer_s3_to_azure
+            video = Video.objects.select_related("source").get(pk=video_pk)
+            _transfer_s3_to_azure(video)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error("Background transfer failed for %s: %s", video_pk, e)
+        finally:
+            connection.close()
 
 
 class TransferVideoView(LoginRequiredMixin, View):
