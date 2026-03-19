@@ -429,7 +429,8 @@ def train_yolo_model(
     user_id: str,
     base_model: str,
     dataset_yaml_content: str,
-    train_images: list[dict],  # [{"filename": "img.jpg", "label": "0 0.5 0.5 0.1 0.1\n..."}]
+    train_images: list[dict] | None = None,
+    video_annotations: list[dict] | None = None,
     epochs: int = 50,
     imgsz: int = 640,
     batch_size: int = 16,
@@ -437,63 +438,228 @@ def train_yolo_model(
     """Fine-tune a YOLO model on user annotations.
 
     Runs ultralytics training on a Modal GPU. Returns metrics and model path.
+    Supports two modes:
+      - train_images: pre-extracted images (azure_path or base64 image_data)
+      - video_annotations: extract frames from videos on the GPU side
     """
     import time
     import logging
     import tempfile
-    import yaml
+    import os
     from pathlib import Path
 
     start_time = time.time()
-    logger = logging.getLogger(__name__)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    logger = logging.getLogger("train_yolo")
+    logger.setLevel(logging.DEBUG)
 
+    logger.info("=" * 70)
+    logger.info("[%s] TRAINING JOB STARTED", job_id)
+    logger.info("[%s] Parameters: user=%s base_model=%s epochs=%d imgsz=%d batch=%d",
+                job_id, user_id, base_model, epochs, imgsz, batch_size)
+    logger.info("[%s] video_annotations: %d video(s)", job_id, len(video_annotations) if video_annotations else 0)
+    logger.info("[%s] train_images: %d image(s)", job_id, len(train_images) if train_images else 0)
+    logger.info("=" * 70)
+
+    # Log GPU info
+    try:
+        import torch
+        logger.info("[%s] PyTorch version: %s", job_id, torch.__version__)
+        logger.info("[%s] CUDA available: %s", job_id, torch.cuda.is_available())
+        if torch.cuda.is_available():
+            logger.info("[%s] CUDA device: %s", job_id, torch.cuda.get_device_name(0))
+            logger.info("[%s] CUDA memory: %.1f GB total, %.1f GB free",
+                        job_id,
+                        torch.cuda.get_device_properties(0).total_mem / 1e9,
+                        torch.cuda.mem_get_info()[0] / 1e9)
+    except Exception as e:
+        logger.warning("[%s] Could not get GPU info: %s", job_id, e)
+
+    logger.info("[%s] Initializing Azure storage client...", job_id)
     from cloud.storage.azure_client import AzureBlobClient
     from cloud.storage.config import StorageConfig
 
     config = StorageConfig()
     storage = AzureBlobClient(config)
+    logger.info("[%s] Azure storage client ready — models_container=%s", job_id, config.models_container)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir = Path(tmpdir)
         dataset_dir = tmpdir / "dataset"
+        logger.info("[%s] Working directory: %s", job_id, tmpdir)
 
         # Create YOLO dataset structure
         for split in ["train", "val"]:
             (dataset_dir / split / "images").mkdir(parents=True)
             (dataset_dir / split / "labels").mkdir(parents=True)
+        logger.info("[%s] Dataset directory structure created at %s", job_id, dataset_dir)
+
+        # Collect all (filename, label) pairs from both modes
+        all_items = []
+
+        # Mode 1: video_annotations — download videos and extract frames
+        if video_annotations:
+            import cv2
+            logger.info("[%s] MODE: video_annotations — processing %d video(s)", job_id, len(video_annotations))
+
+            for vi, va in enumerate(video_annotations):
+                video_path = va["video_blob_path"]
+                frames = va["frames"]
+                logger.info("[%s] Video %d/%d: blob_path='%s', %d frame(s) to extract",
+                            job_id, vi + 1, len(video_annotations), video_path, len(frames))
+
+                if not frames:
+                    logger.warning("[%s] Video %d — no frames, skipping", job_id, vi + 1)
+                    continue
+
+                # Download video to temp file
+                tmp_video = tmpdir / f"video_{hash(video_path) & 0xFFFFFFFF}.mp4"
+                logger.info("[%s] Downloading video to %s ...", job_id, tmp_video)
+                dl_start = time.time()
+                try:
+                    storage.download_file("raw-videos", video_path, str(tmp_video))
+                    dl_time = time.time() - dl_start
+                    file_size = tmp_video.stat().st_size
+                    logger.info("[%s] Video downloaded: %.1f MB in %.1fs (%.1f MB/s)",
+                                job_id, file_size / 1e6, dl_time,
+                                (file_size / 1e6) / max(dl_time, 0.01))
+                except Exception as e:
+                    logger.error("[%s] FAILED to download video '%s': %s: %s",
+                                 job_id, video_path, type(e).__name__, e)
+                    continue
+
+                cap = cv2.VideoCapture(str(tmp_video))
+                if not cap.isOpened():
+                    logger.error("[%s] FAILED to open video with cv2: %s", job_id, tmp_video)
+                    tmp_video.unlink(missing_ok=True)
+                    continue
+
+                total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                video_fps = cap.get(cv2.CAP_PROP_FPS)
+                video_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                video_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                logger.info("[%s] Video opened: %d total frames, %.1f fps, %dx%d",
+                            job_id, total_video_frames, video_fps, video_w, video_h)
+
+                extracted = 0
+                failed = 0
+                try:
+                    for fi, fr in enumerate(frames):
+                        frame_num = fr["frame_number"]
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
+                        ret, frame_img = cap.read()
+                        if ret:
+                            all_items.append({
+                                "filename": fr["filename"],
+                                "label": fr["label"],
+                                "frame_img": frame_img,
+                            })
+                            extracted += 1
+                            if (fi + 1) % 50 == 0 or fi == len(frames) - 1:
+                                logger.info("[%s] Extracted %d/%d frames from video %d",
+                                            job_id, extracted, len(frames), vi + 1)
+                        else:
+                            failed += 1
+                            logger.warning("[%s] Failed to read frame %d (total_frames=%d) from video %d",
+                                           job_id, frame_num, total_video_frames, vi + 1)
+                finally:
+                    cap.release()
+                    tmp_video.unlink(missing_ok=True)
+                    logger.info("[%s] Video %d done: %d extracted, %d failed, temp file cleaned up",
+                                job_id, vi + 1, extracted, failed)
+
+        # Mode 2: pre-extracted images
+        if train_images:
+            logger.info("[%s] MODE: train_images — %d pre-extracted image(s)", job_id, len(train_images))
+            for item in train_images:
+                all_items.append(item)
+                source = "azure_path" if item.get("azure_path") else ("image_data" if item.get("image_data") else "unknown")
+                logger.debug("[%s] Image: %s source=%s", job_id, item.get("filename", "?"), source)
+
+        logger.info("[%s] Total training images collected: %d", job_id, len(all_items))
+
+        if not all_items:
+            logger.error("[%s] NO TRAINING IMAGES — aborting", job_id)
+            return {
+                "job_id": job_id,
+                "azure_model_path": "",
+                "metrics": {},
+                "execution_seconds": round(time.time() - start_time, 1),
+                "epochs_completed": 0,
+                "error": "No training images found",
+            }
 
         # Write images and labels (80/20 split)
-        split_idx = int(len(train_images) * 0.8)
-        for i, item in enumerate(train_images):
+        split_idx = int(len(all_items) * 0.8)
+        logger.info("[%s] Splitting dataset: %d train, %d val (80/20)",
+                    job_id, split_idx, len(all_items) - split_idx)
+
+        write_start = time.time()
+        for i, item in enumerate(all_items):
             split = "train" if i < split_idx else "val"
             img_name = item["filename"]
             label_name = img_name.rsplit(".", 1)[0] + ".txt"
 
-            # Download image from Azure if path provided
-            if item.get("azure_path"):
-                storage.download_file(
-                    "raw-videos", item["azure_path"],
-                    str(dataset_dir / split / "images" / img_name),
-                )
+            # Write image from one of the supported sources
+            img_path = dataset_dir / split / "images" / img_name
+            if item.get("frame_img") is not None:
+                import cv2
+                cv2.imwrite(str(img_path), item["frame_img"])
+            elif item.get("azure_path"):
+                storage.download_file("raw-videos", item["azure_path"], str(img_path))
             elif item.get("image_data"):
                 import base64
                 img_bytes = base64.b64decode(item["image_data"])
-                (dataset_dir / split / "images" / img_name).write_bytes(img_bytes)
+                img_path.write_bytes(img_bytes)
 
             # Write label file
-            (dataset_dir / split / "labels" / label_name).write_text(item["label"])
+            label_path = dataset_dir / split / "labels" / label_name
+            label_content = item["label"]
+            label_path.write_text(label_content)
+            label_lines = len(label_content.strip().split("\n")) if label_content.strip() else 0
+
+            if (i + 1) % 50 == 0 or i == len(all_items) - 1:
+                logger.info("[%s] Written %d/%d images+labels to disk", job_id, i + 1, len(all_items))
+            logger.debug("[%s] %s/%s — %s (%d bbox lines)", job_id, split, img_name, label_name, label_lines)
+
+        write_time = time.time() - write_start
+        logger.info("[%s] Dataset files written in %.1fs", job_id, write_time)
 
         # Write dataset.yaml
         data_yaml = dataset_dir / "data.yaml"
         data_yaml.write_text(dataset_yaml_content)
+        logger.info("[%s] dataset.yaml written:\n%s", job_id, dataset_yaml_content)
 
-        logger.info("[%s] Dataset prepared: %d train, %d val",
-                    job_id, split_idx, len(train_images) - split_idx)
+        # Verify dataset structure
+        train_imgs = list((dataset_dir / "train" / "images").glob("*"))
+        val_imgs = list((dataset_dir / "val" / "images").glob("*"))
+        train_labels = list((dataset_dir / "train" / "labels").glob("*"))
+        val_labels = list((dataset_dir / "val" / "labels").glob("*"))
+        logger.info("[%s] Dataset verification: train=%d imgs/%d labels, val=%d imgs/%d labels",
+                    job_id, len(train_imgs), len(train_labels), len(val_imgs), len(val_labels))
+
+        if not train_imgs:
+            logger.error("[%s] NO TRAINING IMAGES ON DISK — something went wrong during write", job_id)
+
+        # Log disk usage
+        total_size = sum(f.stat().st_size for f in dataset_dir.rglob("*") if f.is_file())
+        logger.info("[%s] Total dataset size on disk: %.1f MB", job_id, total_size / 1e6)
 
         # Train
+        logger.info("[%s] " + "=" * 50, job_id)
+        logger.info("[%s] STARTING YOLO TRAINING", job_id)
+        logger.info("[%s] base_model=%s epochs=%d imgsz=%d batch=%d",
+                    job_id, base_model, epochs, imgsz, batch_size)
+        logger.info("[%s] data=%s", job_id, data_yaml)
+        logger.info("[%s] " + "=" * 50, job_id)
+
+        train_start = time.time()
         from ultralytics import YOLO
 
+        logger.info("[%s] Loading YOLO model '%s'...", job_id, base_model)
         model = YOLO(base_model)
+        logger.info("[%s] YOLO model loaded — starting training...", job_id)
+
         results = model.train(
             data=str(data_yaml),
             epochs=epochs,
@@ -504,38 +670,67 @@ def train_yolo_model(
             verbose=True,
         )
 
+        train_time = time.time() - train_start
+        logger.info("[%s] YOLO training finished in %.1fs (%.1f min)", job_id, train_time, train_time / 60)
+
         # Extract metrics
         metrics = {}
         if hasattr(results, "results_dict"):
             rd = results.results_dict
+            logger.info("[%s] Raw results_dict keys: %s", job_id, list(rd.keys()))
+            logger.info("[%s] Raw results_dict values: %s",
+                        job_id, {k: round(v, 4) if isinstance(v, float) else v for k, v in rd.items()})
             metrics = {
                 "mAP50": round(rd.get("metrics/mAP50(B)", 0), 4),
                 "mAP50_95": round(rd.get("metrics/mAP50-95(B)", 0), 4),
                 "precision": round(rd.get("metrics/precision(B)", 0), 4),
                 "recall": round(rd.get("metrics/recall(B)", 0), 4),
             }
+            logger.info("[%s] Extracted metrics: %s", job_id, metrics)
+        else:
+            logger.warning("[%s] No results_dict on training results — type=%s, dir=%s",
+                           job_id, type(results).__name__,
+                           [a for a in dir(results) if not a.startswith("_")][:20])
 
         # Find best weights
         best_weights = tmpdir / "runs" / "train" / "weights" / "best.pt"
+        logger.info("[%s] Looking for best.pt at %s — exists=%s", job_id, best_weights, best_weights.exists())
         if not best_weights.exists():
-            # Try alternative path
+            logger.warning("[%s] best.pt not at expected path, searching recursively...", job_id)
+            found_pts = list((tmpdir / "runs").rglob("*.pt"))
+            logger.info("[%s] Found .pt files: %s", job_id, [str(p) for p in found_pts])
             for p in (tmpdir / "runs").rglob("best.pt"):
                 best_weights = p
+                logger.info("[%s] Found best.pt at: %s", job_id, best_weights)
                 break
 
         # Upload weights to Azure
         azure_model_path = f"custom/{user_id}/{job_id}/best.pt"
         if best_weights.exists():
+            weight_size = best_weights.stat().st_size
+            logger.info("[%s] Uploading best.pt (%.1f MB) to Azure: %s/%s",
+                        job_id, weight_size / 1e6, config.models_container, azure_model_path)
+            upload_start = time.time()
             storage.upload_file(
                 config.models_container, azure_model_path, str(best_weights),
             )
-            logger.info("[%s] Model uploaded to %s", job_id, azure_model_path)
+            upload_time = time.time() - upload_start
+            logger.info("[%s] Model uploaded in %.1fs (%.1f MB/s)",
+                        job_id, upload_time, (weight_size / 1e6) / max(upload_time, 0.01))
         else:
-            logger.warning("[%s] No best.pt found", job_id)
+            logger.error("[%s] NO best.pt FOUND — training may have failed silently", job_id)
             azure_model_path = ""
 
     execution_seconds = round(time.time() - start_time, 1)
+    logger.info("[%s] Committing model volume...", job_id)
     model_volume.commit()
+
+    logger.info("=" * 70)
+    logger.info("[%s] TRAINING JOB COMPLETE", job_id)
+    logger.info("[%s] Total time: %.1fs (%.1f min)", job_id, execution_seconds, execution_seconds / 60)
+    logger.info("[%s] Metrics: %s", job_id, metrics)
+    logger.info("[%s] Model path: %s", job_id, azure_model_path or "NONE")
+    logger.info("=" * 70)
 
     return {
         "job_id": job_id,

@@ -117,4 +117,28 @@
   <span class="ml-2 inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800">{{ custom_model.get_model_type_display }}</span>
 </div>
 {% endif %}
+
+{% if job.status == 'queued' or job.status == 'preparing' or job.status == 'training' %}
+<!-- Auto-refresh: poll Modal for status updates every 10s -->
+<script>
+(function() {
+  const pollUrl = "{% url 'training:poll' %}";
+  const detailUrl = window.location.href;
+  const interval = setInterval(function() {
+    fetch(pollUrl, {credentials: 'same-origin'})
+      .then(r => r.json())
+      .then(data => {
+        if (data.completed > 0) {
+          clearInterval(interval);
+          window.location.reload();
+        }
+      })
+      .catch(() => {});
+  }, 10000);
+
+  // Also reload the page every 30s to pick up status changes
+  setTimeout(function() { window.location.reload(); }, 30000);
+})();
+</script>
+{% endif %}
 {% endblock %}
