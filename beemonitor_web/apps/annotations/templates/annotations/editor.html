@@ -54,46 +54,26 @@
   <!-- Main Canvas Area -->
   <div class="flex-1 min-w-0">
     <div class="bg-white shadow rounded-lg p-4">
-      <!-- Video Frame Navigation (within current video) -->
-      <div class="flex items-center gap-2 mb-3 flex-wrap">
-        <button id="btn-play" class="px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded text-xs font-medium" title="Play/Pause">&#9654; Play</button>
-        <span class="text-gray-300">|</span>
-        <button id="btn-prev-10s" class="px-2 py-1 border border-gray-300 rounded text-xs hover:bg-gray-50" title="-10 seconds">-10s</button>
-        <button id="btn-prev-1s" class="px-2 py-1 border border-gray-300 rounded text-xs hover:bg-gray-50" title="-1 second">-1s</button>
-        <button id="btn-prev" class="px-2 py-1 border border-gray-300 rounded text-xs hover:bg-gray-50" title="-1 frame">-1f</button>
-        <label class="text-sm text-gray-600">Frame:</label>
-        <input type="number" id="frame-input" value="{{ frame_number }}" min="0"
-               class="w-20 border border-gray-300 rounded px-2 py-1 text-sm">
-        <button id="btn-next" class="px-2 py-1 border border-gray-300 rounded text-xs hover:bg-gray-50" title="+1 frame">+1f</button>
-        <button id="btn-next-1s" class="px-2 py-1 border border-gray-300 rounded text-xs hover:bg-gray-50" title="+1 second">+1s</button>
-        <button id="btn-next-10s" class="px-2 py-1 border border-gray-300 rounded text-xs hover:bg-gray-50" title="+10 seconds">+10s</button>
-        <button id="btn-go" class="px-2 py-1 bg-gray-100 border border-gray-300 rounded text-xs hover:bg-gray-200">Go</button>
-        <span id="time-display" class="text-xs text-gray-500 ml-2"></span>
-      </div>
-      <!-- Video + Canvas overlay -->
+      <!-- Frame image + Canvas overlay -->
       <div class="relative border border-gray-300 rounded overflow-hidden" style="aspect-ratio: 16/9;">
-        {% if video_url %}
-        <!-- Video as background -->
-        <video id="source-video" src="{{ video_url }}" preload="auto" muted
-               style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:contain; background:#000;">
-        </video>
+        <!-- Frame image as background -->
+        <img id="frame-image"
+             src="{% url 'annotations:frame_image' project.pk %}?video={{ video.pk }}&frame={{ frame_number }}&project={{ project.pk }}"
+             alt="Frame {{ frame_number }}"
+             style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:contain; background:#000;"
+             onerror="this.style.display='none'">
         <!-- Transparent canvas on top for drawing -->
         <canvas id="annotation-canvas" width="1280" height="720"
                 style="position:absolute; top:0; left:0; width:100%; height:100%; cursor:crosshair;">
         </canvas>
-        {% else %}
-        <!-- No video available -->
-        <canvas id="annotation-canvas" width="1280" height="720"
-                style="width:100%; height:100%; cursor:crosshair; background:#1f2937;">
-        </canvas>
-        <div class="absolute inset-0 flex flex-col items-center justify-center text-gray-400 text-sm">
+        {% if not video.azure_blob_path or video.azure_blob_path|slice:":5" == "s3://" %}
+        <div class="absolute inset-0 flex flex-col items-center justify-center text-gray-400 text-sm pointer-events-none">
           {% if transferring %}
           <div class="animate-spin rounded-full h-12 w-12 border-4 border-amber-500 border-t-transparent mb-4"></div>
-          <p class="text-amber-400 font-medium">Transferring video from S3 to Azure...</p>
-          <p class="mt-1 text-gray-500 text-xs">This may take 1-2 minutes. Page will reload automatically.</p>
+          <p class="text-amber-400 font-medium">Transferring video from S3...</p>
           <script>setTimeout(function() { location.reload(); }, 15000);</script>
           {% else %}
-          <p>Video not available for preview.</p>
+          <p>Frame not available.</p>
           <form method="post" action="{% url 'annotations:transfer_video' project.pk %}" class="mt-3 pointer-events-auto">
             {% csrf_token %}
             <input type="hidden" name="video_id" value="{{ video.pk }}">
@@ -141,40 +121,31 @@
 
 <script>
 (function() {
-  // Configuration
-  const PROJECT_PK = {{ project.pk }};
   const VIDEO_ID = {{ video.pk }};
   const SAVE_URL = "{% url 'annotations:save' project.pk %}";
-  const EDITOR_URL = "{% url 'annotations:editor' project.pk %}";
   const CSRF_TOKEN = "{{ csrf_token }}";
   const CLASSES = {{ classes|safe }};
-  let currentFrame = {{ frame_number }};
+  const currentFrame = {{ frame_number }};
   let boxes = {{ boxes|safe }};
 
-  // Canvas setup
   const canvas = document.getElementById("annotation-canvas");
   const ctx = canvas.getContext("2d");
   const classSelect = document.getElementById("class-select");
   const boxList = document.getElementById("box-list");
   const boxCount = document.getElementById("box-count");
-  const frameInput = document.getElementById("frame-input");
   const statusText = document.getElementById("status-text");
   const cursorPos = document.getElementById("cursor-pos");
 
-  // Drawing state
   let isDrawing = false;
   let startX = 0, startY = 0;
   let scaleX = 1, scaleY = 1;
 
-  // Class colors
   const CLASS_COLORS = [
     "#ef4444", "#3b82f6", "#22c55e", "#eab308", "#a855f7",
     "#ec4899", "#14b8a6", "#f97316", "#6366f1", "#84cc16"
   ];
 
-  function getColor(idx) {
-    return CLASS_COLORS[idx % CLASS_COLORS.length];
-  }
+  function getColor(idx) { return CLASS_COLORS[idx % CLASS_COLORS.length]; }
 
   // Populate class selector
   CLASSES.forEach(function(cls, i) {
@@ -184,14 +155,12 @@
     classSelect.appendChild(opt);
   });
 
-  // Calculate scale factors
   function updateScale() {
     const rect = canvas.getBoundingClientRect();
     scaleX = canvas.width / rect.width;
     scaleY = canvas.height / rect.height;
   }
 
-  // Get canvas coordinates from mouse event
   function getCanvasCoords(e) {
     const rect = canvas.getBoundingClientRect();
     return {
@@ -200,53 +169,14 @@
     };
   }
 
-  // Video element
-  const sourceVideo = document.getElementById("source-video");
-  let videoReady = false;
-
-  if (sourceVideo) {
-    sourceVideo.addEventListener("loadeddata", function() {
-      videoReady = true;
-      seekToFrame(currentFrame);
-      statusText.textContent = "Video loaded. Pause at a frame, then draw boxes.";
-    });
-    sourceVideo.addEventListener("seeked", function() {
-      render();
-    });
-    // Auto-pause so user can draw
-    sourceVideo.pause();
-  }
-
-  function seekToFrame(frameNum) {
-    if (sourceVideo && videoReady) {
-      const fps = 30;
-      sourceVideo.currentTime = frameNum / fps;
-      sourceVideo.pause();
-    }
-  }
-
-  // Draw boxes only — canvas is transparent so video shows through
+  // Draw boxes on transparent canvas (frame image shows through)
   function render() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    if (!videoReady && !sourceVideo) {
-      // No video — draw placeholder on canvas
-      ctx.fillStyle = "#1f2937";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = "#9ca3af";
-      ctx.font = "20px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText("Frame " + currentFrame + " — {{ video.title }}", canvas.width / 2, canvas.height / 2);
-    }
-
-    // Draw boxes
     boxes.forEach(function(box, i) {
       const color = getColor(box.class_id);
       ctx.strokeStyle = color;
       ctx.lineWidth = 2;
       ctx.strokeRect(box.x, box.y, box.w, box.h);
-
-      // Label
       const label = box["class"] + " #" + (i + 1);
       ctx.font = "12px sans-serif";
       const tw = ctx.measureText(label).width;
@@ -257,7 +187,6 @@
     });
   }
 
-  // Update box list sidebar
   function updateBoxList() {
     boxCount.textContent = boxes.length;
     if (boxes.length === 0) {
@@ -285,7 +214,7 @@
     updateBoxList();
   };
 
-  // Mouse events for drawing
+  // Mouse events for drawing boxes
   canvas.addEventListener("mousedown", function(e) {
     updateScale();
     var coords = getCanvasCoords(e);
@@ -297,11 +226,9 @@
   canvas.addEventListener("mousemove", function(e) {
     updateScale();
     var coords = getCanvasCoords(e);
-    cursorPos.textContent = Math.round(coords.x) + ", " + Math.round(coords.y);
-
+    if (cursorPos) cursorPos.textContent = Math.round(coords.x) + ", " + Math.round(coords.y);
     if (isDrawing) {
       render();
-      // Draw in-progress box
       ctx.strokeStyle = "#f59e0b";
       ctx.lineWidth = 2;
       ctx.setLineDash([5, 3]);
@@ -315,123 +242,37 @@
     isDrawing = false;
     updateScale();
     var coords = getCanvasCoords(e);
-
     var x = Math.min(startX, coords.x);
     var y = Math.min(startY, coords.y);
     var w = Math.abs(coords.x - startX);
     var h = Math.abs(coords.y - startY);
-
-    // Minimum box size
-    if (w < 5 || h < 5) {
-      render();
-      return;
-    }
-
+    if (w < 5 || h < 5) { render(); return; }
     var classId = parseInt(classSelect.value);
-    var className = CLASSES[classId];
-
     boxes.push({
-      x: Math.round(x),
-      y: Math.round(y),
-      w: Math.round(w),
-      h: Math.round(h),
-      "class": className,
-      class_id: classId
+      x: Math.round(x), y: Math.round(y),
+      w: Math.round(w), h: Math.round(h),
+      "class": CLASSES[classId], class_id: classId
     });
-
     render();
     updateBoxList();
   });
 
-  // Prevent context menu on canvas
   canvas.addEventListener("contextmenu", function(e) { e.preventDefault(); });
-
-  // Frame navigation — seek video and load existing annotations from server
-  function navigateToFrame(frame) {
-    if (frame < 0) frame = 0;
-    if (sourceVideo && videoReady) {
-      currentFrame = frame;
-      frameInput.value = frame;
-      seekToFrame(frame);
-      statusText.textContent = "Loading frame " + frame + "...";
-
-      // Fetch existing annotations for this frame from server
-      fetch(EDITOR_URL + "?video=" + VIDEO_ID + "&frame=" + frame + "&format=json", {
-        headers: {"X-Requested-With": "XMLHttpRequest"}
-      })
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        boxes = data.boxes || [];
-        render();
-        updateBoxList();
-        statusText.textContent = "Frame " + frame + (boxes.length > 0 ? " — " + boxes.length + " box(es) loaded" : " — draw boxes and save");
-      })
-      .catch(function() {
-        boxes = [];
-        render();
-        updateBoxList();
-        statusText.textContent = "Frame " + frame + " — draw boxes and save";
-      });
-    } else {
-      window.location.href = EDITOR_URL + "?video=" + VIDEO_ID + "&frame=" + frame;
-    }
-  }
-
-  const FPS = 30;
-  document.getElementById("btn-prev").addEventListener("click", function() {
-    navigateToFrame(currentFrame - 1);
-  });
-  document.getElementById("btn-next").addEventListener("click", function() {
-    navigateToFrame(currentFrame + 1);
-  });
-  document.getElementById("btn-prev-1s").addEventListener("click", function() {
-    navigateToFrame(currentFrame - FPS);
-  });
-  document.getElementById("btn-next-1s").addEventListener("click", function() {
-    navigateToFrame(currentFrame + FPS);
-  });
-  document.getElementById("btn-prev-10s").addEventListener("click", function() {
-    navigateToFrame(currentFrame - FPS * 10);
-  });
-  document.getElementById("btn-next-10s").addEventListener("click", function() {
-    navigateToFrame(currentFrame + FPS * 10);
-  });
-
-  document.getElementById("btn-go").addEventListener("click", function() {
-    navigateToFrame(parseInt(frameInput.value) || 0);
-  });
-
-  frameInput.addEventListener("keydown", function(e) {
-    if (e.key === "Enter") {
-      navigateToFrame(parseInt(frameInput.value) || 0);
-    }
-  });
 
   // Save annotations
   document.getElementById("btn-save").addEventListener("click", function() {
-    statusText.textContent = "Saving...";
+    if (statusText) statusText.textContent = "Saving...";
     fetch(SAVE_URL, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-CSRFToken": CSRF_TOKEN
-      },
-      body: JSON.stringify({
-        video_id: VIDEO_ID,
-        frame_number: currentFrame,
-        boxes: boxes
-      })
+      headers: { "Content-Type": "application/json", "X-CSRFToken": CSRF_TOKEN },
+      body: JSON.stringify({ video_id: VIDEO_ID, frame_number: currentFrame, boxes: boxes })
     })
-    .then(function(resp) { return resp.json(); })
+    .then(function(r) { return r.json(); })
     .then(function(data) {
-      if (data.success) {
-        statusText.textContent = "Saved successfully.";
-      } else {
-        statusText.textContent = "Error: " + (data.error || "Unknown error");
-      }
+      if (statusText) statusText.textContent = data.success ? "Saved." : "Error: " + (data.error || "Unknown");
     })
     .catch(function(err) {
-      statusText.textContent = "Network error: " + err.message;
+      if (statusText) statusText.textContent = "Network error: " + err.message;
     });
   });
 
@@ -444,74 +285,19 @@
     }
   });
 
-  // Play/Pause
-  const playBtn = document.getElementById("btn-play");
-  const timeDisplay = document.getElementById("time-display");
-  let isPlaying = false;
-
-  playBtn.addEventListener("click", function() {
-    if (!sourceVideo) return;
-    if (isPlaying) {
-      sourceVideo.pause();
-      isPlaying = false;
-      playBtn.innerHTML = "&#9654; Play";
-      playBtn.className = "px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded text-xs font-medium";
-      // Update frame number from current video time
-      currentFrame = Math.round(sourceVideo.currentTime * FPS);
-      frameInput.value = currentFrame;
-      statusText.textContent = "Paused at frame " + currentFrame + " — draw boxes and save";
-    } else {
-      sourceVideo.play();
-      isPlaying = true;
-      playBtn.innerHTML = "&#9646;&#9646; Pause";
-      playBtn.className = "px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-xs font-medium";
-      statusText.textContent = "Playing — click Pause to annotate a frame";
-    }
-  });
-
-  // Update time display and frame counter while playing
-  if (sourceVideo) {
-    sourceVideo.addEventListener("timeupdate", function() {
-      const t = sourceVideo.currentTime;
-      const mins = Math.floor(t / 60);
-      const secs = Math.floor(t % 60);
-      const frame = Math.round(t * FPS);
-      timeDisplay.textContent = mins + ":" + String(secs).padStart(2, "0") + " (frame " + frame + ")";
-      if (isPlaying) {
-        frameInput.value = frame;
-        currentFrame = frame;
-      }
-    });
-  }
-
-  // Spacebar to play/pause
-  document.addEventListener("keydown", function(e) {
-    if (e.code === "Space" && e.target.tagName !== "INPUT") {
-      e.preventDefault();
-      playBtn.click();
-    }
-  });
-
   // Initial render
   render();
   updateBoxList();
   updateScale();
   window.addEventListener("resize", updateScale);
 
-  // Keyboard shortcuts for project-level frame navigation
+  // Keyboard shortcuts: Left/Right for prev/next frame
   document.addEventListener("keydown", function(e) {
-    // Left/Right arrow keys for prev/next annotated frame (project-level)
-    // Only when not focused on an input
     if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA") return;
     const prevUrl = "{{ prev_frame_url|escapejs }}";
     const nextUrl = "{{ next_frame_url|escapejs }}";
-    if (e.key === "ArrowLeft" && prevUrl) {
-      e.preventDefault();
-      window.location.href = prevUrl;
-    } else if (e.key === "ArrowRight" && nextUrl) {
-      e.preventDefault();
-      window.location.href = nextUrl;
-    }
+    if (e.key === "ArrowLeft" && prevUrl) { e.preventDefault(); window.location.href = prevUrl; }
+    else if (e.key === "ArrowRight" && nextUrl) { e.preventDefault(); window.location.href = nextUrl; }
   });
 })();
 </script>
