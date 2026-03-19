@@ -40,19 +40,23 @@
         <button id="btn-next" class="px-3 py-1 border border-gray-300 rounded text-sm hover:bg-gray-50">Next</button>
         <button id="btn-go" class="px-3 py-1 bg-gray-100 border border-gray-300 rounded text-sm hover:bg-gray-200">Go</button>
       </div>
-      <!-- Video (hidden, used for frame extraction) -->
-      {% if video_url %}
-      <video id="source-video" src="{{ video_url }}" preload="auto" muted crossorigin="anonymous"
-             style="display:none;" width="1280" height="720"></video>
-      {% endif %}
-
-      <!-- Canvas -->
-      <div class="relative border border-gray-300 rounded overflow-hidden">
+      <!-- Video + Canvas overlay -->
+      <div class="relative border border-gray-300 rounded overflow-hidden" style="aspect-ratio: 16/9;">
+        {% if video_url %}
+        <!-- Video as background -->
+        <video id="source-video" src="{{ video_url }}" preload="auto" muted
+               style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:contain; background:#000;">
+        </video>
+        <!-- Transparent canvas on top for drawing -->
         <canvas id="annotation-canvas" width="1280" height="720"
-                style="width:100%; height:auto; cursor:crosshair; background:#1f2937;">
+                style="position:absolute; top:0; left:0; width:100%; height:100%; cursor:crosshair;">
         </canvas>
-        {% if not video_url %}
-        <div id="no-video-msg" class="absolute inset-0 flex flex-col items-center justify-center text-gray-400 text-sm">
+        {% else %}
+        <!-- No video available -->
+        <canvas id="annotation-canvas" width="1280" height="720"
+                style="width:100%; height:100%; cursor:crosshair; background:#1f2937;">
+        </canvas>
+        <div class="absolute inset-0 flex flex-col items-center justify-center text-gray-400 text-sm">
           <p>Video not yet in Azure — frames unavailable.</p>
           <form method="post" action="{% url 'annotations:transfer_video' project.pk %}" class="mt-3 pointer-events-auto">
             {% csrf_token %}
@@ -160,7 +164,7 @@
     };
   }
 
-  // Video frame extraction
+  // Video element
   const sourceVideo = document.getElementById("source-video");
   let videoReady = false;
 
@@ -168,41 +172,35 @@
     sourceVideo.addEventListener("loadeddata", function() {
       videoReady = true;
       seekToFrame(currentFrame);
+      statusText.textContent = "Video loaded. Pause at a frame, then draw boxes.";
     });
     sourceVideo.addEventListener("seeked", function() {
       render();
     });
+    // Auto-pause so user can draw
+    sourceVideo.pause();
   }
 
   function seekToFrame(frameNum) {
     if (sourceVideo && videoReady) {
-      // Estimate: 30fps default
       const fps = 30;
       sourceVideo.currentTime = frameNum / fps;
+      sourceVideo.pause();
     }
   }
 
-  // Draw everything
+  // Draw boxes only — canvas is transparent so video shows through
   function render() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw video frame if available, otherwise placeholder
-    if (sourceVideo && videoReady) {
-      ctx.drawImage(sourceVideo, 0, 0, canvas.width, canvas.height);
-    } else {
+    if (!videoReady && !sourceVideo) {
+      // No video — draw placeholder on canvas
       ctx.fillStyle = "#1f2937";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = "#9ca3af";
       ctx.font = "20px sans-serif";
       ctx.textAlign = "center";
       ctx.fillText("Frame " + currentFrame + " — {{ video.title }}", canvas.width / 2, canvas.height / 2);
-      {% if not video_url %}
-      ctx.font = "14px sans-serif";
-      ctx.fillText("Video on S3 — frames not available for preview", canvas.width / 2, canvas.height / 2 + 30);
-      {% else %}
-      ctx.font = "14px sans-serif";
-      ctx.fillText("Loading video...", canvas.width / 2, canvas.height / 2 + 30);
-      {% endif %}
     }
 
     // Draw boxes
@@ -312,17 +310,17 @@
   // Prevent context menu on canvas
   canvas.addEventListener("contextmenu", function(e) { e.preventDefault(); });
 
-  // Frame navigation — seek video locally if available, otherwise reload page
+  // Frame navigation
   function navigateToFrame(frame) {
     if (frame < 0) frame = 0;
     if (sourceVideo && videoReady) {
-      // Save current boxes first, then seek locally
       currentFrame = frame;
       frameInput.value = frame;
-      boxes = [];  // Clear boxes for new frame (load from server on save)
+      boxes = [];
       seekToFrame(frame);
-      renderBoxList();
-      statusText.textContent = "Frame " + frame;
+      render();
+      updateBoxList();
+      statusText.textContent = "Frame " + frame + " — draw boxes and save";
     } else {
       window.location.href = EDITOR_URL + "?video=" + VIDEO_ID + "&frame=" + frame;
     }

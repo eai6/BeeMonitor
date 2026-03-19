@@ -196,24 +196,33 @@ def get_summary_stats(user, site_name=None, year=None, month=None):
     if month:
         qs = qs.filter(job__video__month=month)
 
-    agg = qs.aggregate(
-        total_events=Sum("total_events"),
-        total_entries=Sum("entry_count"),
-        total_exits=Sum("exit_count"),
-        total_tracks=Sum("unique_tracks"),
-        completed_jobs=Count("id"),
-        avg_events=Avg("total_events"),
-    )
+    count = qs.count()
+    if count == 0:
+        return {
+            "total_videos": 0, "total_events": 0, "total_entries": 0,
+            "total_exits": 0, "avg_events_per_video": 0,
+            "total_unique_tracks": 0, "completed_jobs": 0,
+        }
 
-    # Count distinct videos with completed jobs
-    video_ids = qs.values_list("job__video_id", flat=True).distinct()
+    total_events = 0
+    total_entries = 0
+    total_exits = 0
+    total_tracks = 0
+    video_ids = set()
+
+    for r in qs:
+        total_events += r.total_events or 0
+        total_entries += r.entry_count or 0
+        total_exits += r.exit_count or 0
+        total_tracks += r.unique_tracks or 0
+        video_ids.add(r.job.video_id)
 
     return {
         "total_videos": len(video_ids),
-        "total_events": agg["total_events"] or 0,
-        "total_entries": agg["total_entries"] or 0,
-        "total_exits": agg["total_exits"] or 0,
-        "avg_events_per_video": round(agg["avg_events"] or 0, 1),
-        "total_unique_tracks": agg["total_tracks"] or 0,
-        "completed_jobs": agg["completed_jobs"] or 0,
+        "total_events": total_events,
+        "total_entries": total_entries,
+        "total_exits": total_exits,
+        "avg_events_per_video": round(total_events / count, 1) if count else 0,
+        "total_unique_tracks": total_tracks,
+        "completed_jobs": count,
     }

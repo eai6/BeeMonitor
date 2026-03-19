@@ -869,7 +869,8 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
         # Analytics data — wrap in try/except so page never crashes
         try:
             ctx["summary"] = get_summary_stats(user, site_name=site or None, year=year_int, month=month_int)
-        except Exception:
+        except Exception as e:
+            logger.error("Analytics summary failed: %s", e, exc_info=True)
             ctx["summary"] = {"total_videos": 0, "total_events": 0, "total_entries": 0,
                               "total_exits": 0, "avg_events_per_video": 0, "total_unique_tracks": 0, "completed_jobs": 0}
 
