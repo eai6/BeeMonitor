@@ -96,17 +96,29 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
     template_name = "annotations/editor.html"
 
     def get_context_data(self, **kwargs):
+        import logging
+        logger = logging.getLogger(__name__)
+
         ctx = super().get_context_data(**kwargs)
-        project = get_object_or_404(
-            AnnotationProject, pk=self.kwargs["pk"], user=self.request.user
-        )
+        try:
+            project = get_object_or_404(
+                AnnotationProject, pk=self.kwargs["pk"], user=self.request.user
+            )
+        except Exception as e:
+            logger.error("Editor: project lookup failed: %s", e)
+            raise
+
         video_id = self.request.GET.get("video")
         frame_number = int(self.request.GET.get("frame", 0))
 
         video = None
         boxes = []
         if video_id:
-            video = get_object_or_404(project.videos, pk=video_id)
+            try:
+                video = project.videos.get(pk=video_id)
+            except Exception as e:
+                logger.error("Editor: video %s not in project %s: %s", video_id, project.pk, e)
+                video = None
             try:
                 annotation = Annotation.objects.get(
                     project=project, video=video, frame_number=frame_number
