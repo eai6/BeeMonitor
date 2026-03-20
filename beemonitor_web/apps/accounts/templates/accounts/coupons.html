@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Coupon Management - BeeMonitor{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold text-gray-900 mb-6">Coupon Management</h1>
+
+<!-- Create Coupon -->
+<div class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-lg font-medium text-gray-900 mb-4">Create New Coupon</h2>
+  <form method="post" action="{% url 'accounts:coupon_create' %}">
+    {% csrf_token %}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Code</label>
+        <input type="text" name="code" required
+          class="w-full rounded-md border-gray-300 shadow-sm focus:border-amber-500 focus:ring-amber-500 text-sm"
+          placeholder="e.g. BEEMONITOR2026">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Type</label>
+        <select name="coupon_type" required
+          class="w-full rounded-md border-gray-300 shadow-sm focus:border-amber-500 focus:ring-amber-500 text-sm">
+          <option value="credits">Credits</option>
+          <option value="tier_upgrade">Tier Upgrade</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Credits Amount</label>
+        <input type="number" name="credits_amount" value="0" min="0"
+          class="w-full rounded-md border-gray-300 shadow-sm focus:border-amber-500 focus:ring-amber-500 text-sm">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Upgrade Tier</label>
+        <select name="upgrade_tier"
+          class="w-full rounded-md border-gray-300 shadow-sm focus:border-amber-500 focus:ring-amber-500 text-sm">
+          <option value="">-- None --</option>
+          <option value="free">Free</option>
+          <option value="standard">Standard</option>
+          <option value="pro">Pro</option>
+          <option value="enterprise">Enterprise</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Upgrade Duration (days)</label>
+        <input type="number" name="upgrade_duration_days" value="30" min="1"
+          class="w-full rounded-md border-gray-300 shadow-sm focus:border-amber-500 focus:ring-amber-500 text-sm">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Max Redemptions (0=unlimited)</label>
+        <input type="number" name="max_redemptions" value="0" min="0"
+          class="w-full rounded-md border-gray-300 shadow-sm focus:border-amber-500 focus:ring-amber-500 text-sm">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Expires At</label>
+        <input type="datetime-local" name="expires_at"
+          class="w-full rounded-md border-gray-300 shadow-sm focus:border-amber-500 focus:ring-amber-500 text-sm">
+      </div>
+      <div class="flex items-end">
+        <label class="flex items-center gap-2 text-sm">
+          <input type="checkbox" name="is_active" checked
+            class="rounded border-gray-300 text-amber-600 focus:ring-amber-500">
+          Active
+        </label>
+      </div>
+    </div>
+    <div class="mt-4">
+      <button type="submit"
+        class="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-md hover:bg-amber-700 transition">
+        Create Coupon
+      </button>
+    </div>
+  </form>
+</div>
+
+<!-- Coupon List -->
+<div class="bg-white shadow rounded-lg p-6">
+  <h2 class="text-lg font-medium text-gray-900 mb-4">All Coupons</h2>
+  {% if coupons %}
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead>
+        <tr class="border-b border-gray-200">
+          <th class="py-2 text-left text-gray-500">Code</th>
+          <th class="py-2 text-left text-gray-500">Type</th>
+          <th class="py-2 text-right text-gray-500">Value</th>
+          <th class="py-2 text-right text-gray-500">Redeemed</th>
+          <th class="py-2 text-right text-gray-500">Max</th>
+          <th class="py-2 text-center text-gray-500">Status</th>
+          <th class="py-2 text-right text-gray-500">Expires</th>
+          <th class="py-2 text-right text-gray-500">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for coupon in coupons %}
+        <tr class="border-b border-gray-100">
+          <td class="py-2 font-mono font-medium">{{ coupon.code }}</td>
+          <td class="py-2">{{ coupon.get_coupon_type_display }}</td>
+          <td class="py-2 text-right">
+            {% if coupon.coupon_type == 'credits' %}{{ coupon.credits_amount }} credits
+            {% else %}{{ coupon.upgrade_tier }} ({{ coupon.upgrade_duration_days }}d){% endif %}
+          </td>
+          <td class="py-2 text-right">{{ coupon.times_redeemed }}</td>
+          <td class="py-2 text-right">{% if coupon.max_redemptions %}{{ coupon.max_redemptions }}{% else %}&infin;{% endif %}</td>
+          <td class="py-2 text-center">
+            {% if coupon.is_valid %}
+              <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800">Active</span>
+            {% else %}
+              <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-red-100 text-red-800">Inactive</span>
+            {% endif %}
+          </td>
+          <td class="py-2 text-right text-gray-500">{{ coupon.expires_at|date:"M d, Y"|default:"Never" }}</td>
+          <td class="py-2 text-right">
+            {% if coupon.is_active %}
+            <form method="post" action="{% url 'accounts:coupon_deactivate' coupon.pk %}" class="inline">
+              {% csrf_token %}
+              <button type="submit" class="text-red-600 hover:text-red-800 text-xs font-medium">Deactivate</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-gray-500 text-sm">No coupons created yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

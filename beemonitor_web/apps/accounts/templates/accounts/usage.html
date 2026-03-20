@@ -40,6 +40,21 @@
   </div>
 </div>
 
+<!-- Redeem Promo Code -->
+<div class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-lg font-medium text-gray-900 mb-3">Have a promo code?</h2>
+  <form method="post" action="{% url 'accounts:redeem_coupon' %}" class="flex gap-3">
+    {% csrf_token %}
+    <input type="text" name="coupon_code" placeholder="Enter promo code"
+      class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-amber-500 focus:ring-amber-500 text-sm"
+      required>
+    <button type="submit"
+      class="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-md hover:bg-amber-700 transition">
+      Apply
+    </button>
+  </form>
+</div>
+
 <!-- Stats Cards -->
 <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
   <div class="bg-white shadow rounded-lg p-4 text-center">
@@ -109,6 +124,36 @@
     </div>
   </div>
 </div>
+
+<!-- Redemption History -->
+{% if redemptions %}
+<div class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-lg font-medium text-gray-900 mb-4">Promo Code History</h2>
+  <table class="min-w-full text-sm">
+    <thead>
+      <tr class="border-b border-gray-200">
+        <th class="py-2 text-left text-gray-500">Code</th>
+        <th class="py-2 text-left text-gray-500">Type</th>
+        <th class="py-2 text-right text-gray-500">Details</th>
+        <th class="py-2 text-right text-gray-500">Date</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in redemptions %}
+      <tr class="border-b border-gray-100">
+        <td class="py-2 font-medium">{{ r.coupon.code }}</td>
+        <td class="py-2">{{ r.coupon.get_coupon_type_display }}</td>
+        <td class="py-2 text-right">
+          {% if r.credits_added %}+{{ r.credits_added }} credits
+          {% else %}{{ r.previous_tier }} &rarr; {{ r.new_tier }}{% endif %}
+        </td>
+        <td class="py-2 text-right text-gray-500">{{ r.redeemed_at|date:"M d, Y" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 
 <!-- Monthly Cost Chart -->
 <div class="bg-white shadow rounded-lg p-6 mb-6">
