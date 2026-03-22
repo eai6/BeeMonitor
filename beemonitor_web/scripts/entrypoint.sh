@@ -26,6 +26,9 @@ for u in User.objects.filter(is_superuser=True):
         print(f'Upgraded {u.username} to enterprise')
 " 2>/dev/null || true
 
+echo "Backfilling foraging trips..."
+python manage.py backfill_foraging_trips 2>/dev/null || true
+
 echo "Cleaning up stale jobs..."
 python manage.py cleanup_stale_jobs 2>/dev/null || true
 

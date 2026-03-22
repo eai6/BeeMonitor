@@ -13,7 +13,7 @@
 {% if result %}
 
 <!-- Summary Stats -->
-<div class="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-8">
+<div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
   <div class="bg-white shadow rounded-lg p-4 text-center">
     <p class="text-sm text-gray-500">Total Events</p>
     <p class="text-2xl font-bold text-gray-900">{{ result.total_events }}</p>
@@ -33,6 +33,14 @@
   <div class="bg-white shadow rounded-lg p-4 text-center">
     <p class="text-sm text-gray-500">Nests</p>
     <p class="text-2xl font-bold text-amber-600">{{ result.nest_count }}</p>
+  </div>
+  <div class="bg-white shadow rounded-lg p-4 text-center">
+    <p class="text-sm text-gray-500">Foraging Trips</p>
+    <p class="text-2xl font-bold text-purple-600">{{ result.foraging_trip_count }}</p>
+  </div>
+  <div class="bg-white shadow rounded-lg p-4 text-center">
+    <p class="text-sm text-gray-500">Avg Trip (s)</p>
+    <p class="text-2xl font-bold text-purple-500">{{ result.avg_trip_duration_sec|default_if_none:"--" }}</p>
   </div>
 </div>
 
@@ -76,7 +84,7 @@
     <h2 class="text-lg font-medium text-gray-900">Downloads</h2>
   </div>
   <div class="px-6 py-4">
-    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
       {% if events_csv_url %}
       <a href="{{ events_csv_url }}" download
          class="flex items-center justify-center gap-2 px-4 py-3 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 transition">
@@ -94,6 +102,16 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
         </svg>
         <span class="text-blue-700 font-medium">Tracking CSV</span>
+      </a>
+      {% endif %}
+
+      {% if foraging_trips_csv_url %}
+      <a href="{{ foraging_trips_csv_url }}" download
+         class="flex items-center justify-center gap-2 px-4 py-3 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 transition">
+        <svg class="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+        </svg>
+        <span class="text-purple-700 font-medium">Foraging Trips CSV</span>
       </a>
       {% endif %}
 
@@ -133,6 +151,38 @@
         <tr class="hover:bg-gray-50">
           {% for cell in row %}
           <td class="px-4 py-2 whitespace-nowrap text-gray-700">{{ cell }}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- Foraging Trips Table -->
+{% if foraging_trips_data.rows %}
+<div class="bg-white shadow rounded-lg mb-8">
+  <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+    <h2 class="text-lg font-medium text-gray-900">Foraging Trips ({{ foraging_trips_data.total }} trips)</h2>
+    {% if foraging_trips_csv_url %}
+    <a href="{{ foraging_trips_csv_url }}" download class="text-sm text-purple-600 hover:underline">Download CSV</a>
+    {% endif %}
+  </div>
+  <div class="overflow-x-auto" style="max-height: 400px; overflow-y: auto;">
+    <table class="min-w-full divide-y divide-gray-200 text-sm">
+      <thead class="bg-gray-50 sticky top-0">
+        <tr>
+          {% for header in foraging_trips_data.headers %}
+          <th class="px-4 py-3 text-left font-medium text-gray-500 uppercase tracking-wider text-xs">{{ header }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody class="bg-white divide-y divide-gray-200">
+        {% for row in foraging_trips_data.rows %}
+        <tr class="hover:bg-gray-50">
+          {% for cell in row %}
+          <td class="px-4 py-2 whitespace-nowrap text-gray-700 font-mono text-xs">{{ cell }}</td>
           {% endfor %}
         </tr>
         {% endfor %}

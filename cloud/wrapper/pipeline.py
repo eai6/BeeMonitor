@@ -32,7 +32,10 @@ class PipelineResult:
     nest_count: int
     events_csv_path: str  # Azure blob path
     tracking_csv_path: str  # Azure blob path
+    foraging_trips_csv_path: str  # Azure blob path
     annotated_video_path: str  # Azure blob path (empty if visualize=False)
+    foraging_trip_count: int
+    avg_trip_duration_sec: float
     summary_stats: dict
 
     def to_dict(self) -> dict:
@@ -133,13 +136,34 @@ class CloudPipeline:
             custom_bee_local=custom_bee_local,
         )
 
-        # Step 4 — Upload results to Azure
+        # Step 4 — Compute foraging trips from events
+        events = result.events if result is not None else None
+        tracks = result.tracks if result is not None else None
+
+        from cloud.wrapper.foraging import compute_foraging_trips, compute_trip_summary
+
+        # Detect fps from config or default to 30
+        fps = 30.0
+        if result and hasattr(result, "config") and result.config:
+            try:
+                fps = float(result.config.video.fps)
+            except Exception:
+                pass
+
+        trips_df = compute_foraging_trips(events, fps=fps)
+        trip_summary = compute_trip_summary(trips_df)
+
+        # Save foraging trips CSV to output dir
+        if not trips_df.empty:
+            trips_csv_path = str(output_dir / "foraging_trips.csv")
+            trips_df.to_csv(trips_csv_path, index=False)
+            logger.info("[%s] Saved %d foraging trips", job_id, len(trips_df))
+
+        # Step 5 — Upload results to Azure
         logger.info("[%s] Uploading results to Azure", job_id)
         azure_paths = self._upload_results(job_id, user_id, output_dir, video_local)
 
-        # Step 5 — Build structured result
-        events = result.events if result is not None else None
-        tracks = result.tracks if result is not None else None
+        # Step 6 — Build structured result
 
         # get_statistics() exists on analysis_results.AnalysisResults but not
         # on the version defined in video_analyzer.py — handle both
@@ -157,6 +181,10 @@ class CloudPipeline:
         else:
             stats = {}
 
+        # Merge foraging trip summary into stats
+        stats["foraging_trips"] = trip_summary
+        stats["video_fps"] = fps
+
         total_events = len(events) if events is not None and hasattr(events, "__len__") else 0
         unique_tracks = 0
         if tracks is not None and hasattr(tracks, "nunique") and "track_id" in tracks.columns:
@@ -172,11 +200,15 @@ class CloudPipeline:
             nest_count=int(stats.get("total_nests", 0)),
             events_csv_path=azure_paths.get("events_csv", ""),
             tracking_csv_path=azure_paths.get("tracking_csv", ""),
+            foraging_trips_csv_path=azure_paths.get("foraging_trips_csv", ""),
             annotated_video_path=azure_paths.get("annotated_video", ""),
+            foraging_trip_count=trip_summary["total_trips"],
+            avg_trip_duration_sec=trip_summary["avg_duration_sec"],
             summary_stats=stats,
         )
 
-        logger.info("[%s] Pipeline complete — %d events", job_id, pipeline_result.total_events)
+        logger.info("[%s] Pipeline complete — %d events, %d foraging trips",
+                     job_id, pipeline_result.total_events, pipeline_result.foraging_trip_count)
         return pipeline_result
 
     # ------------------------------------------------------------------
@@ -253,6 +285,13 @@ class CloudPipeline:
             blob_path = f"{prefix}/tracking_results.csv"
             self._storage.upload_file(container, blob_path, str(tracking_files[0]))
             uploaded["tracking_csv"] = blob_path
+
+        # Foraging trips CSV
+        trips_files = list(output_dir.glob("foraging_trips.csv"))
+        if trips_files:
+            blob_path = f"{prefix}/foraging_trips.csv"
+            self._storage.upload_file(container, blob_path, str(trips_files[0]))
+            uploaded["foraging_trips_csv"] = blob_path
 
         # Annotated video — re-encode to H.264 with ffmpeg for browser playback
         video_files = list(output_dir.glob("*.mp4"))

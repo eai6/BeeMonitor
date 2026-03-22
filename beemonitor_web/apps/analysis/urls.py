@@ -11,6 +11,7 @@ urlpatterns = [
     path("analytics/", views.AnalyticsDashboardView.as_view(), name="analytics"),
     path("analytics/download-events/", views.DownloadEventsCSVView.as_view(), name="download_events"),
     path("analytics/download-tracking/", views.DownloadTrackingCSVView.as_view(), name="download_tracking"),
+    path("analytics/download-trips/", views.DownloadTripsCSVView.as_view(), name="download_trips"),
     path("new/", views.JobCreateView.as_view(), name="new"),
     path("batch/", views.BatchJobView.as_view(), name="batch"),
     path("poll/", views.PollJobsView.as_view(), name="poll"),

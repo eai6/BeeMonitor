@@ -155,7 +155,7 @@
 {% endif %}
 
 <!-- Summary Cards -->
-<div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
   <div class="bg-white shadow rounded-lg p-5 text-center">
     <p class="text-sm text-gray-500">Total Videos</p>
     <p class="text-3xl font-bold text-gray-900 mt-1">{{ summary.total_videos }}</p>
@@ -165,12 +165,20 @@
     <p class="text-3xl font-bold text-gray-900 mt-1">{{ summary.total_events }}</p>
   </div>
   <div class="bg-white shadow rounded-lg p-5 text-center">
-    <p class="text-sm text-gray-500">Avg Events/Video</p>
-    <p class="text-3xl font-bold text-amber-600 mt-1">{{ summary.avg_events_per_video }}</p>
+    <p class="text-sm text-gray-500">Foraging Trips</p>
+    <p class="text-3xl font-bold text-amber-600 mt-1">{{ summary.total_foraging_trips }}</p>
+  </div>
+  <div class="bg-white shadow rounded-lg p-5 text-center">
+    <p class="text-sm text-gray-500">Avg Trip Duration</p>
+    <p class="text-3xl font-bold text-purple-600 mt-1">{{ summary.avg_trip_duration }}s</p>
   </div>
   <div class="bg-white shadow rounded-lg p-5 text-center">
     <p class="text-sm text-gray-500">Unique Tracks</p>
     <p class="text-3xl font-bold text-blue-600 mt-1">{{ summary.total_unique_tracks }}</p>
+  </div>
+  <div class="bg-white shadow rounded-lg p-5 text-center">
+    <p class="text-sm text-gray-500">Avg Trips/Video</p>
+    <p class="text-3xl font-bold text-teal-600 mt-1">{{ summary.avg_trips_per_video }}</p>
   </div>
 </div>
 
@@ -213,6 +221,13 @@
         </svg>
         All Tracking CSV
       </a>
+      <a href="{% url 'analysis:download_trips' %}?site={{ current_site }}&year={{ current_year }}&month={{ current_month }}&day={{ current_day }}&hour={{ current_hour }}"
+         class="inline-flex items-center gap-1 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded text-sm font-medium">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+        </svg>
+        Foraging Trips CSV
+      </a>
     </div>
   </div>
 </div>
@@ -236,6 +251,8 @@
           <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Exits</th>
           <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Tracks</th>
           <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Nests</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Trips</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Avg Trip (s)</th>
           <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
         </tr>
       </thead>
@@ -252,6 +269,8 @@
           <td class="px-4 py-2 text-right text-red-600">{{ row.exits }}</td>
           <td class="px-4 py-2 text-right text-blue-600">{{ row.tracks }}</td>
           <td class="px-4 py-2 text-right text-amber-600">{{ row.nests }}</td>
+          <td class="px-4 py-2 text-right text-purple-600 font-bold">{{ row.trips }}</td>
+          <td class="px-4 py-2 text-right text-purple-500">{{ row.avg_trip_sec }}</td>
           <td class="px-4 py-2">
             <a href="{% url 'analysis:results' row.job_pk %}" class="text-amber-600 hover:underline text-xs">Results</a>
           </td>
@@ -288,6 +307,18 @@
   <div class="bg-white shadow rounded-lg p-6">
     <h2 class="text-lg font-medium text-gray-900 mb-4">Monthly Activity Trend</h2>
     <canvas id="monthlyChart" height="250"></canvas>
+  </div>
+
+  <!-- Foraging Trips Over Time -->
+  <div class="bg-white shadow rounded-lg p-6">
+    <h2 class="text-lg font-medium text-gray-900 mb-4">Foraging Trips Over Time</h2>
+    <canvas id="foragingTripsChart" height="250"></canvas>
+  </div>
+
+  <!-- Trips Per Nest -->
+  <div class="bg-white shadow rounded-lg p-6">
+    <h2 class="text-lg font-medium text-gray-900 mb-4">Foraging Trips by Nest</h2>
+    <canvas id="tripsPerNestChart" height="250"></canvas>
   </div>
 </div>
 
@@ -444,6 +475,70 @@ document.addEventListener('DOMContentLoaded', function() {
             plugins: { legend: { display: false } }
         }
     });
+
+    // --- Foraging Trips Over Time Chart ---
+    const foragingData = JSON.parse('{{ foraging_trips_json|escapejs }}');
+    if (foragingData.length > 0) {
+        new Chart(document.getElementById('foragingTripsChart'), {
+            type: 'bar',
+            data: {
+                labels: foragingData.map(d => d.date),
+                datasets: [
+                    {
+                        label: 'Trips',
+                        data: foragingData.map(d => d.trips),
+                        backgroundColor: 'rgba(139, 92, 246, 0.7)',
+                        borderRadius: 4,
+                        yAxisID: 'y',
+                    },
+                    {
+                        label: 'Avg Duration (s)',
+                        data: foragingData.map(d => d.avg_duration),
+                        type: 'line',
+                        borderColor: '#f97316',
+                        backgroundColor: 'rgba(249, 115, 22, 0.1)',
+                        tension: 0.3,
+                        pointRadius: 3,
+                        yAxisID: 'y1',
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    x: { title: { display: true, text: 'Date' } },
+                    y: { title: { display: true, text: 'Trips' }, beginAtZero: true, position: 'left' },
+                    y1: { title: { display: true, text: 'Avg Duration (s)' }, beginAtZero: true, position: 'right', grid: { drawOnChartArea: false } }
+                }
+            }
+        });
+    }
+
+    // --- Trips Per Nest Chart ---
+    const tripsPerNest = JSON.parse('{{ trips_per_nest_json|escapejs }}');
+    if (tripsPerNest.length > 0) {
+        new Chart(document.getElementById('tripsPerNestChart'), {
+            type: 'bar',
+            data: {
+                labels: tripsPerNest.map(d => 'Nest ' + d.nest_id),
+                datasets: [{
+                    label: 'Foraging Trips',
+                    data: tripsPerNest.map(d => d.trips),
+                    backgroundColor: 'rgba(139, 92, 246, 0.7)',
+                    borderRadius: 4,
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                scales: {
+                    x: { title: { display: true, text: 'Number of Trips' }, beginAtZero: true },
+                    y: { title: { display: true, text: 'Nest' } }
+                },
+                plugins: { legend: { display: false } }
+            }
+        });
+    }
 
     // --- Nest Heatmap Grid (6 rows × 10 columns) ---
     const nestData = JSON.parse('{{ nest_data_json|escapejs }}');

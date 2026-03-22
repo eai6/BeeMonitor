@@ -214,6 +214,9 @@ def get_summary_stats(user, site_name=None, year=None, month=None, day=None, hou
     total_entries = 0
     total_exits = 0
     total_tracks = 0
+    total_trips = 0
+    trip_duration_sum = 0.0
+    trip_duration_count = 0
     video_ids = set()
 
     for r in qs:
@@ -221,7 +224,13 @@ def get_summary_stats(user, site_name=None, year=None, month=None, day=None, hou
         total_entries += r.entry_count or 0
         total_exits += r.exit_count or 0
         total_tracks += r.unique_tracks or 0
+        total_trips += r.foraging_trip_count or 0
+        if r.avg_trip_duration_sec and r.foraging_trip_count:
+            trip_duration_sum += r.avg_trip_duration_sec * r.foraging_trip_count
+            trip_duration_count += r.foraging_trip_count
         video_ids.add(r.job.video_id)
+
+    avg_trip_duration = round(trip_duration_sum / trip_duration_count, 1) if trip_duration_count else 0
 
     return {
         "total_videos": len(video_ids),
@@ -230,6 +239,9 @@ def get_summary_stats(user, site_name=None, year=None, month=None, day=None, hou
         "total_exits": total_exits,
         "avg_events_per_video": round(total_events / count, 1) if count else 0,
         "total_unique_tracks": total_tracks,
+        "total_foraging_trips": total_trips,
+        "avg_trip_duration": avg_trip_duration,
+        "avg_trips_per_video": round(total_trips / count, 1) if count else 0,
         "completed_jobs": count,
     }
 
@@ -255,6 +267,77 @@ def get_video_breakdown(user, site_name=None, year=None, month=None, day=None, h
             "exits": r.exit_count or 0,
             "tracks": r.unique_tracks or 0,
             "nests": r.nest_count or 0,
+            "trips": r.foraging_trip_count or 0,
+            "avg_trip_sec": round(r.avg_trip_duration_sec, 1) if r.avg_trip_duration_sec else 0,
             "job_pk": r.job.pk,
         })
     return rows
+
+
+def get_foraging_trips_over_time(user, site_name=None, year=None, month=None, day=None, hour=None):
+    """Return daily foraging trip counts and avg duration.
+
+    Returns: [{"date": "2024-06-01", "trips": 5, "avg_duration": 120.5}, ...]
+    """
+    qs = JobResult.objects.filter(
+        job__user=user,
+        job__status=Job.Status.COMPLETED,
+    ).select_related("job__video")
+
+    qs = _apply_video_filters(qs, site_name, year, month, day, hour)
+
+    daily = defaultdict(lambda: {"trips": 0, "duration_sum": 0.0, "duration_count": 0})
+
+    for result in qs:
+        video = result.job.video
+        date_val = video.recorded_at or video.uploaded_at
+        if date_val:
+            date_key = date_val.strftime("%Y-%m-%d")
+        else:
+            date_key = "unknown"
+        trip_count = result.foraging_trip_count or 0
+        daily[date_key]["trips"] += trip_count
+        if result.avg_trip_duration_sec and trip_count:
+            daily[date_key]["duration_sum"] += result.avg_trip_duration_sec * trip_count
+            daily[date_key]["duration_count"] += trip_count
+
+    sorted_data = []
+    for date_key in sorted(daily.keys()):
+        d = daily[date_key]
+        avg_dur = round(d["duration_sum"] / d["duration_count"], 1) if d["duration_count"] else 0
+        sorted_data.append({
+            "date": date_key,
+            "trips": d["trips"],
+            "avg_duration": avg_dur,
+        })
+    return sorted_data
+
+
+def get_trips_per_nest(user, site_name=None, year=None, month=None, day=None, hour=None):
+    """Aggregate foraging trips per nest from summary_stats.
+
+    Returns: [{"nest_id": "11", "trips": 15}, ...]
+    """
+    qs = JobResult.objects.filter(
+        job__user=user,
+        job__status=Job.Status.COMPLETED,
+    ).select_related("job__video")
+
+    qs = _apply_video_filters(qs, site_name, year, month, day, hour)
+
+    nest_trips = defaultdict(int)
+
+    for result in qs:
+        stats = result.summary_stats or {}
+        ft = stats.get("foraging_trips", {})
+        per_nest = ft.get("trips_per_nest", {})
+        for nest_id, count in per_nest.items():
+            nest_trips[str(nest_id)] += int(count)
+
+    result_list = []
+    for nest_id in sorted(nest_trips.keys()):
+        result_list.append({
+            "nest_id": nest_id,
+            "trips": nest_trips[nest_id],
+        })
+    return result_list
