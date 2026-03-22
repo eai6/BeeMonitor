@@ -2,11 +2,10 @@
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
     <div class="flex justify-between h-16">
       <div class="flex items-center">
-        <a href="{% url 'dashboard:dashboard' %}" class="flex items-center">
+        <a href="{% url 'analysis:analytics' %}" class="flex items-center">
           <span class="text-white text-xl font-bold tracking-tight">BeeMonitor</span>
         </a>
         <div class="hidden md:flex md:ml-10 md:space-x-4">
-          <a href="{% url 'dashboard:dashboard' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Dashboard</a>
           <a href="{% url 'videos:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Videos</a>
           <a href="{% url 'analysis:analytics' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Analytics</a>
           <a href="{% url 'annotations:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Annotate</a>
@@ -38,7 +37,6 @@
   <!-- Mobile menu -->
   <div x-show="open" class="md:hidden bg-amber-700">
     <div class="px-2 pt-2 pb-3 space-y-1">
-      <a href="{% url 'dashboard:dashboard' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Dashboard</a>
       <a href="{% url 'videos:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Videos</a>
       <a href="{% url 'analysis:analytics' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Analytics</a>
       <a href="{% url 'annotations:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Annotate</a>

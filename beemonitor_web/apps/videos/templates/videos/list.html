@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load video_filters %}
 {% block title %}Videos - BeeMonitor{% endblock %}
 
 {% block content %}
@@ -47,9 +48,18 @@
       </select>
     </div>
     <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Hour</label>
+      <select name="hour" class="border border-gray-300 rounded px-3 py-1.5 text-sm focus:ring-amber-500 focus:border-amber-500">
+        <option value="">All Hours</option>
+        {% for h in hours %}
+        <option value="{{ h }}" {% if current_hour == h|stringformat:"d" %}selected{% endif %}>{{ h }}:00</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
       <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-1.5 rounded text-sm font-medium border border-gray-300">Filter</button>
     </div>
-    {% if current_site or current_year or current_month or current_day %}
+    {% if current_site or current_year or current_month or current_day or current_hour %}
     <div>
       <a href="{% url 'videos:list' %}" class="text-sm text-amber-600 hover:underline">Clear Filters</a>
     </div>
@@ -102,11 +112,11 @@
           <input type="checkbox" class="video-checkbox rounded border-gray-300" value="{{ video.pk }}" name="video_ids">
         </td>
         <td class="px-4 py-4 text-sm">
-          <a href="{% url 'videos:detail' video.pk %}" class="text-amber-600 hover:underline font-medium">{{ video.title }}</a>
+          <a href="{% url 'videos:detail' video.pk %}" class="text-amber-600 hover:underline font-medium">{{ video.title|sanitize_name }}</a>
         </td>
         <td class="px-4 py-4 text-sm text-gray-500">
           {% if video.site_name %}
-          <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800">{{ video.site_name }}</span>
+          <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800">{{ video.site_name|sanitize_name }}</span>
           {% else %}
           <span class="text-gray-300">--</span>
           {% endif %}
@@ -137,11 +147,11 @@
 {% if is_paginated %}
 <div class="flex justify-center mt-6 space-x-2">
   {% if page_obj.has_previous %}
-  <a href="?page={{ page_obj.previous_page_number }}{% if current_site %}&site={{ current_site }}{% endif %}{% if current_year %}&year={{ current_year }}{% endif %}{% if current_month %}&month={{ current_month }}{% endif %}" class="px-3 py-1 border rounded text-sm text-gray-700 hover:bg-gray-50">Previous</a>
+  <a href="?page={{ page_obj.previous_page_number }}{% if current_site %}&site={{ current_site }}{% endif %}{% if current_year %}&year={{ current_year }}{% endif %}{% if current_month %}&month={{ current_month }}{% endif %}{% if current_day %}&day={{ current_day }}{% endif %}{% if current_hour %}&hour={{ current_hour }}{% endif %}" class="px-3 py-1 border rounded text-sm text-gray-700 hover:bg-gray-50">Previous</a>
   {% endif %}
   <span class="px-3 py-1 text-sm text-gray-500">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
   {% if page_obj.has_next %}
-  <a href="?page={{ page_obj.next_page_number }}{% if current_site %}&site={{ current_site }}{% endif %}{% if current_year %}&year={{ current_year }}{% endif %}{% if current_month %}&month={{ current_month }}{% endif %}" class="px-3 py-1 border rounded text-sm text-gray-700 hover:bg-gray-50">Next</a>
+  <a href="?page={{ page_obj.next_page_number }}{% if current_site %}&site={{ current_site }}{% endif %}{% if current_year %}&year={{ current_year }}{% endif %}{% if current_month %}&month={{ current_month }}{% endif %}{% if current_day %}&day={{ current_day }}{% endif %}{% if current_hour %}&hour={{ current_hour }}{% endif %}" class="px-3 py-1 border rounded text-sm text-gray-700 hover:bg-gray-50">Next</a>
   {% endif %}
 </div>
 {% endif %}

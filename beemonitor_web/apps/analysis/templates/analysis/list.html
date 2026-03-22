@@ -1,16 +1,17 @@
 {% extends "base.html" %}
+{% load video_filters %}
 {% block title %}Analysis Jobs - BeeMonitor{% endblock %}
 
 {% block content %}
 <div class="flex justify-between items-center mb-6">
   <h1 class="text-2xl font-bold text-gray-900">Analysis Jobs</h1>
   <div class="flex gap-2">
-    <a href="{% url 'analysis:download_events' %}?site={{ current_site }}&year={{ current_year }}&month={{ current_month }}"
+    <a href="{% url 'analysis:download_events' %}?site={{ current_site }}&year={{ current_year }}&month={{ current_month }}&day={{ current_day }}&hour={{ current_hour }}"
        class="inline-flex items-center gap-1 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
       Events CSV
     </a>
-    <a href="{% url 'analysis:download_tracking' %}?site={{ current_site }}&year={{ current_year }}&month={{ current_month }}"
+    <a href="{% url 'analysis:download_tracking' %}?site={{ current_site }}&year={{ current_year }}&month={{ current_month }}&day={{ current_day }}&hour={{ current_hour }}"
        class="inline-flex items-center gap-1 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
       Tracking CSV
@@ -62,9 +63,27 @@
       </select>
     </div>
     <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Day</label>
+      <select name="day" class="border border-gray-300 rounded px-3 py-1.5 text-sm">
+        <option value="">All Days</option>
+        {% for d in days %}
+        <option value="{{ d }}" {% if current_day == d|stringformat:"d" %}selected{% endif %}>{{ d }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Hour</label>
+      <select name="hour" class="border border-gray-300 rounded px-3 py-1.5 text-sm">
+        <option value="">All Hours</option>
+        {% for h in hours %}
+        <option value="{{ h }}" {% if current_hour == h|stringformat:"d" %}selected{% endif %}>{{ h }}:00</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
       <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-1.5 rounded text-sm font-medium border border-gray-300">Filter</button>
     </div>
-    {% if current_status or current_site or current_year or current_month %}
+    {% if current_status or current_site or current_year or current_month or current_day or current_hour %}
     <div>
       <a href="{% url 'analysis:list' %}" class="text-sm text-amber-600 hover:underline">Clear</a>
     </div>
@@ -96,10 +115,10 @@
       {% for job in jobs %}
       <tr>
         <td class="px-6 py-4 text-sm"><a href="{% url 'analysis:detail' job.pk %}" class="text-amber-600 hover:underline font-medium">#{{ job.pk }}</a></td>
-        <td class="px-6 py-4 text-sm text-gray-900">{{ job.video.title|truncatechars:40 }}</td>
+        <td class="px-6 py-4 text-sm text-gray-900">{{ job.video.title|sanitize_name|truncatechars:40 }}</td>
         <td class="px-6 py-4 text-sm">
           {% if job.video.site_name %}
-          <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800">{{ job.video.site_name }}</span>
+          <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800">{{ job.video.site_name|sanitize_name }}</span>
           {% else %}--{% endif %}
         </td>
         <td class="px-6 py-4 text-sm">

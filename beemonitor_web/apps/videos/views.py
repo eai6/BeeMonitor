@@ -1,4 +1,5 @@
 import logging
+import re
 import uuid
 
 from django.conf import settings
@@ -11,6 +12,15 @@ from .forms import VideoBatchUploadForm, VideoUploadForm
 from .models import Video
 
 logger = logging.getLogger(__name__)
+
+_NATALIES_RE = re.compile(r"natalies?", re.IGNORECASE)
+
+
+def _sanitize_site(value: str) -> str:
+    """Replace occurrences of 'natalies' with 'SiteA' in display strings."""
+    if not value:
+        return value
+    return _NATALIES_RE.sub("SiteA", value)
 
 
 class VideoListView(LoginRequiredMixin, ListView):
@@ -26,6 +36,7 @@ class VideoListView(LoginRequiredMixin, ListView):
         year = self.request.GET.get("year")
         month = self.request.GET.get("month")
         day = self.request.GET.get("day")
+        hour = self.request.GET.get("hour")
 
         if site:
             qs = qs.filter(site_name=site)
@@ -44,6 +55,11 @@ class VideoListView(LoginRequiredMixin, ListView):
                 qs = qs.filter(day=int(day))
             except (ValueError, TypeError):
                 pass
+        if hour:
+            try:
+                qs = qs.filter(hour=int(hour))
+            except (ValueError, TypeError):
+                pass
 
         return qs
 
@@ -53,6 +69,7 @@ class VideoListView(LoginRequiredMixin, ListView):
 
         # Build filter options from existing data (use set() to guarantee uniqueness)
         ctx["site_names"] = sorted(set(
+            _sanitize_site(s) for s in
             user_videos.exclude(site_name="").values_list("site_name", flat=True)
         ))
         ctx["years"] = sorted(set(
@@ -64,12 +81,16 @@ class VideoListView(LoginRequiredMixin, ListView):
         ctx["days"] = sorted(set(
             user_videos.exclude(day=None).values_list("day", flat=True)
         ))
+        ctx["hours"] = sorted(set(
+            user_videos.exclude(hour=None).values_list("hour", flat=True)
+        ))
 
         # Preserve current filter selections
         ctx["current_site"] = self.request.GET.get("site", "")
         ctx["current_year"] = self.request.GET.get("year", "")
         ctx["current_month"] = self.request.GET.get("month", "")
         ctx["current_day"] = self.request.GET.get("day", "")
+        ctx["current_hour"] = self.request.GET.get("hour", "")
 
         # All filtered video IDs (for "Select All Filtered" across pages)
         filtered_qs = self.get_queryset()

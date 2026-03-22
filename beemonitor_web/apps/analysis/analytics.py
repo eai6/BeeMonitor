@@ -15,7 +15,22 @@ from .models import Job, JobResult
 logger = logging.getLogger(__name__)
 
 
-def get_activity_over_time(user, site_name=None, year=None, month=None):
+def _apply_video_filters(qs, site_name=None, year=None, month=None, day=None, hour=None):
+    """Apply common site/year/month/day/hour filters to a JobResult queryset."""
+    if site_name:
+        qs = qs.filter(job__video__site_name=site_name)
+    if year:
+        qs = qs.filter(job__video__year=year)
+    if month:
+        qs = qs.filter(job__video__month=month)
+    if day:
+        qs = qs.filter(job__video__day=day)
+    if hour is not None:
+        qs = qs.filter(job__video__hour=hour)
+    return qs
+
+
+def get_activity_over_time(user, site_name=None, year=None, month=None, day=None, hour=None):
     """
     Return daily event counts across all completed jobs with entry/exit breakdown.
 
@@ -26,12 +41,7 @@ def get_activity_over_time(user, site_name=None, year=None, month=None):
         job__status=Job.Status.COMPLETED,
     ).select_related("job__video")
 
-    if site_name:
-        qs = qs.filter(job__video__site_name=site_name)
-    if year:
-        qs = qs.filter(job__video__year=year)
-    if month:
-        qs = qs.filter(job__video__month=month)
+    qs = _apply_video_filters(qs, site_name, year, month, day, hour)
 
     # Group by date using the video's recorded_at or uploaded_at
     daily = defaultdict(lambda: {"entries": 0, "exits": 0, "total": 0})
@@ -59,7 +69,7 @@ def get_activity_over_time(user, site_name=None, year=None, month=None):
     return sorted_data
 
 
-def get_period_averages(user, site_name=None, year=None, month=None):
+def get_period_averages(user, site_name=None, year=None, month=None, day=None, hour=None):
     """
     Return average events per hour-of-day, per day-of-week, and per month.
     """
@@ -68,12 +78,7 @@ def get_period_averages(user, site_name=None, year=None, month=None):
         job__status=Job.Status.COMPLETED,
     ).select_related("job__video")
 
-    if site_name:
-        qs = qs.filter(job__video__site_name=site_name)
-    if year:
-        qs = qs.filter(job__video__year=year)
-    if month:
-        qs = qs.filter(job__video__month=month)
+    qs = _apply_video_filters(qs, site_name, year, month, day, hour)
 
     hourly_totals = defaultdict(list)
     daily_totals = defaultdict(list)
@@ -98,11 +103,11 @@ def get_period_averages(user, site_name=None, year=None, month=None):
     }
 
 
-def get_cumulative_activity(user, site_name=None, year=None, month=None):
+def get_cumulative_activity(user, site_name=None, year=None, month=None, day=None, hour=None):
     """
     Return cumulative sum of events over time (sorted by date).
     """
-    daily_data = get_activity_over_time(user, site_name=site_name, year=year, month=month)
+    daily_data = get_activity_over_time(user, site_name=site_name, year=year, month=month, day=day, hour=hour)
 
     cumulative = 0
     result = []
@@ -175,7 +180,7 @@ def get_nest_activity_heatmap(user, job_id=None):
     return result_list
 
 
-def get_summary_stats(user, site_name=None, year=None, month=None):
+def get_summary_stats(user, site_name=None, year=None, month=None, day=None, hour=None):
     """
     Return high-level summary statistics.
 
@@ -195,12 +200,7 @@ def get_summary_stats(user, site_name=None, year=None, month=None):
         job__status=Job.Status.COMPLETED,
     ).select_related("job__video")
 
-    if site_name:
-        qs = qs.filter(job__video__site_name=site_name)
-    if year:
-        qs = qs.filter(job__video__year=year)
-    if month:
-        qs = qs.filter(job__video__month=month)
+    qs = _apply_video_filters(qs, site_name, year, month, day, hour)
 
     count = qs.count()
     if count == 0:
@@ -234,19 +234,14 @@ def get_summary_stats(user, site_name=None, year=None, month=None):
     }
 
 
-def get_video_breakdown(user, site_name=None, year=None, month=None):
+def get_video_breakdown(user, site_name=None, year=None, month=None, day=None, hour=None):
     """Return per-video event breakdown for the analytics table."""
     qs = JobResult.objects.filter(
         job__user=user,
         job__status=Job.Status.COMPLETED,
     ).select_related("job__video")
 
-    if site_name:
-        qs = qs.filter(job__video__site_name=site_name)
-    if year:
-        qs = qs.filter(job__video__year=year)
-    if month:
-        qs = qs.filter(job__video__month=month)
+    qs = _apply_video_filters(qs, site_name, year, month, day, hour)
 
     rows = []
     for r in qs.order_by("-job__video__recorded_at", "-job__created_at"):

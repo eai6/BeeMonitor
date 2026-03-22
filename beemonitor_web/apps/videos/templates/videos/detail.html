@@ -1,12 +1,13 @@
 {% extends "base.html" %}
-{% block title %}{{ video.title }} - BeeMonitor{% endblock %}
+{% load video_filters %}
+{% block title %}{{ video.title|sanitize_name }} - BeeMonitor{% endblock %}
 
 {% block content %}
 <div class="mb-6">
   <a href="{% url 'videos:list' %}" class="text-sm text-amber-600 hover:underline">&larr; Back to Videos</a>
 </div>
 
-<h1 class="text-2xl font-bold text-gray-900 mb-4">{{ video.title }}</h1>
+<h1 class="text-2xl font-bold text-gray-900 mb-4">{{ video.title|sanitize_name }}</h1>
 
 <!-- Video Player -->
 {% if video_url %}
@@ -38,7 +39,7 @@
     </div>
     <div>
       <p class="text-gray-500">Site</p>
-      <p class="font-medium">{{ video.site_name|default:"--" }}</p>
+      <p class="font-medium">{{ video.site_name|sanitize_name|default:"--" }}</p>
     </div>
     <div>
       <p class="text-gray-500">Recorded</p>

@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
     volumes={MODEL_VOLUME_MOUNT: model_volume},
     secrets=[azure_secret],
     memory=8192,  # 8 GiB RAM
+    max_containers=50,
 )
 def process_video(
     job_id: str,
@@ -93,6 +94,7 @@ def process_video(
     volumes={MODEL_VOLUME_MOUNT: model_volume},
     secrets=[azure_secret],
     memory=8192,
+    max_containers=50,
 )
 def process_video_cpu_fallback(
     job_id: str,

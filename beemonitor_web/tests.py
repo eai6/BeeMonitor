@@ -354,9 +354,10 @@ class DashboardTests(TestCase):
     def setUp(self):
         self.client, self.user = logged_in_client()
 
-    def test_dashboard_loads(self):
+    def test_dashboard_redirects_to_analytics(self):
         r = self.client.get(reverse("dashboard:dashboard"))
-        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.status_code, 302)
+        self.assertIn(reverse("analysis:analytics"), r.url)
 
 
 # ── Navigation Tests ─────────────────────────────────────────────────
@@ -386,7 +387,7 @@ class NavTests(TestCase):
         self.assertRedirects(r, reverse("analysis:analytics"))
 
     def test_no_developer_in_nav(self):
-        r = self.client.get(reverse("dashboard:dashboard"))
+        r = self.client.get(reverse("videos:list"))
         self.assertNotContains(r, "Developer")
 
 

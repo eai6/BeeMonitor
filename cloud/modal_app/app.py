@@ -31,6 +31,7 @@ def health():
     secrets=[modal.Secret.from_name("azure-storage")],
     memory=8192,
     min_containers=0,
+    max_containers=50,
     scaledown_window=60,
 )
 def process_video(
@@ -98,6 +99,7 @@ def process_video(
     secrets=[modal.Secret.from_name("azure-storage")],
     memory=8192,
     min_containers=0,
+    max_containers=50,
     scaledown_window=60,
 )
 def process_video_from_s3(
@@ -446,6 +448,7 @@ def pre_annotate_video(
     secrets=[modal.Secret.from_name("azure-storage")],
     memory=16384,
     min_containers=0,
+    max_containers=50,
 )
 def train_yolo_model(
     job_id: str,

@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import uuid
 
 from django.conf import settings
@@ -24,6 +25,15 @@ from .forms import JobCreateForm
 from .models import Job, JobResult, GPU_TIERS
 
 logger = logging.getLogger(__name__)
+
+_NATALIES_RE = re.compile(r"natalies?", re.IGNORECASE)
+
+
+def _sanitize_site(value: str) -> str:
+    """Replace occurrences of 'natalies' with 'SiteA' in display strings."""
+    if not value:
+        return value
+    return _NATALIES_RE.sub("SiteA", value)
 
 
 def _generate_sas_url(blob_path: str, container: str = "processed") -> str:
@@ -310,6 +320,8 @@ class JobListView(LoginRequiredMixin, ListView):
         site = self.request.GET.get("site", "")
         year = self.request.GET.get("year", "")
         month = self.request.GET.get("month", "")
+        day = self.request.GET.get("day", "")
+        hour = self.request.GET.get("hour", "")
 
         if status:
             qs = qs.filter(status=status)
@@ -325,6 +337,16 @@ class JobListView(LoginRequiredMixin, ListView):
                 qs = qs.filter(video__month=int(month))
             except (ValueError, TypeError):
                 pass
+        if day:
+            try:
+                qs = qs.filter(video__day=int(day))
+            except (ValueError, TypeError):
+                pass
+        if hour:
+            try:
+                qs = qs.filter(video__hour=int(hour))
+            except (ValueError, TypeError):
+                pass
 
         return qs
 
@@ -333,6 +355,7 @@ class JobListView(LoginRequiredMixin, ListView):
         user_videos = Video.objects.filter(user=self.request.user)
 
         ctx["site_names"] = sorted(set(
+            _sanitize_site(s) for s in
             user_videos.exclude(site_name="").values_list("site_name", flat=True)
         ))
         ctx["years"] = sorted(set(
@@ -341,12 +364,20 @@ class JobListView(LoginRequiredMixin, ListView):
         ctx["months"] = sorted(set(
             user_videos.exclude(month=None).values_list("month", flat=True)
         ))
+        ctx["days"] = sorted(set(
+            user_videos.exclude(day=None).values_list("day", flat=True)
+        ))
+        ctx["hours"] = sorted(set(
+            user_videos.exclude(hour=None).values_list("hour", flat=True)
+        ))
         ctx["statuses"] = Job.Status.choices
 
         ctx["current_status"] = self.request.GET.get("status", "")
         ctx["current_site"] = self.request.GET.get("site", "")
         ctx["current_year"] = self.request.GET.get("year", "")
         ctx["current_month"] = self.request.GET.get("month", "")
+        ctx["current_day"] = self.request.GET.get("day", "")
+        ctx["current_hour"] = self.request.GET.get("hour", "")
 
         return ctx
 
@@ -707,12 +738,14 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
 
 
 class _FilteredJobsMixin:
-    """Shared logic for filtering completed jobs by site/year/month."""
+    """Shared logic for filtering completed jobs by site/year/month/day/hour."""
 
     def _get_filtered_results(self, request):
         site = request.GET.get("site", "")
         year = request.GET.get("year", "")
         month = request.GET.get("month", "")
+        day = request.GET.get("day", "")
+        hour = request.GET.get("hour", "")
 
         qs = JobResult.objects.filter(
             job__user=request.user,
@@ -731,6 +764,16 @@ class _FilteredJobsMixin:
                 qs = qs.filter(job__video__month=int(month))
             except (ValueError, TypeError):
                 pass
+        if day:
+            try:
+                qs = qs.filter(job__video__day=int(day))
+            except (ValueError, TypeError):
+                pass
+        if hour:
+            try:
+                qs = qs.filter(job__video__hour=int(hour))
+            except (ValueError, TypeError):
+                pass
 
         label_parts = []
         if site:
@@ -739,6 +782,10 @@ class _FilteredJobsMixin:
             label_parts.append(str(year))
         if month:
             label_parts.append(f"month{month}")
+        if day:
+            label_parts.append(f"day{day}")
+        if hour:
+            label_parts.append(f"hour{hour}")
         label = "_".join(label_parts) if label_parts else "all"
 
         return qs, label
@@ -885,9 +932,13 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
         site = self.request.GET.get("site", "")
         year = self.request.GET.get("year", "")
         month = self.request.GET.get("month", "")
+        day = self.request.GET.get("day", "")
+        hour = self.request.GET.get("hour", "")
 
         year_int = None
         month_int = None
+        day_int = None
+        hour_int = None
         if year:
             try:
                 year_int = int(year)
@@ -898,10 +949,21 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
                 month_int = int(month)
             except (ValueError, TypeError):
                 pass
+        if day:
+            try:
+                day_int = int(day)
+            except (ValueError, TypeError):
+                pass
+        if hour:
+            try:
+                hour_int = int(hour)
+            except (ValueError, TypeError):
+                pass
 
         # Filter options (use set() to guarantee uniqueness)
         user_videos = Video.objects.filter(user=user)
         ctx["site_names"] = sorted(set(
+            _sanitize_site(s) for s in
             user_videos.exclude(site_name="")
             .values_list("site_name", flat=True)
         ))
@@ -910,10 +972,16 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
             .values_list("year", flat=True)
         ))
         ctx["months_list"] = list(range(1, 13))
+        ctx["days_list"] = sorted(set(
+            user_videos.exclude(day=None).values_list("day", flat=True)
+        ))
+        ctx["hours_list"] = list(range(24))
 
         ctx["current_site"] = site
         ctx["current_year"] = year
         ctx["current_month"] = month
+        ctx["current_day"] = day
+        ctx["current_hour"] = hour
 
         # Job progress metrics
         user_jobs = Job.objects.filter(user=user)
@@ -934,26 +1002,26 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
 
         # Analytics data — wrap in try/except so page never crashes
         try:
-            ctx["summary"] = get_summary_stats(user, site_name=site or None, year=year_int, month=month_int)
+            ctx["summary"] = get_summary_stats(user, site_name=site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
         except Exception as e:
             logger.error("Analytics summary failed: %s", e, exc_info=True)
             ctx["summary"] = {"total_videos": 0, "total_events": 0, "total_entries": 0,
                               "total_exits": 0, "avg_events_per_video": 0, "total_unique_tracks": 0, "completed_jobs": 0}
 
         try:
-            activity = get_activity_over_time(user, site_name=site or None, year=year_int, month=month_int)
+            activity = get_activity_over_time(user, site_name=site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
             ctx["activity_json"] = json.dumps(activity, default=str)
         except Exception:
             ctx["activity_json"] = "[]"
 
         try:
-            cumulative = get_cumulative_activity(user, site_name=site or None, year=year_int, month=month_int)
+            cumulative = get_cumulative_activity(user, site_name=site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
             ctx["cumulative_json"] = json.dumps(cumulative, default=str)
         except Exception:
             ctx["cumulative_json"] = "[]"
 
         try:
-            averages = get_period_averages(user, site_name=site or None, year=year_int, month=month_int)
+            averages = get_period_averages(user, site_name=site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
             # Convert int keys to string keys for JSON
             ctx["hourly_avg_json"] = json.dumps({str(k): v for k, v in averages["hourly"].items()})
             ctx["daily_avg_json"] = json.dumps({str(k): v for k, v in averages["daily"].items()})
@@ -972,7 +1040,11 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
             ctx["nest_data_json"] = "[]"
 
         try:
-            ctx["video_breakdown"] = get_video_breakdown(user, site_name=site or None, year=year_int, month=month_int)
+            vb = get_video_breakdown(user, site_name=site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
+            for row in vb:
+                row["title"] = _sanitize_site(row["title"])
+                row["site"] = _sanitize_site(row["site"])
+            ctx["video_breakdown"] = vb
         except Exception:
             ctx["video_breakdown"] = []
 

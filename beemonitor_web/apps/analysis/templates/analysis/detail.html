@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load video_filters %}
 {% block title %}Job #{{ job.pk }} - BeeMonitor{% endblock %}
 
 {% block content %}
@@ -33,7 +34,7 @@
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6 text-sm">
       <div>
         <p class="text-gray-500">Video</p>
-        <p class="font-medium"><a href="{% url 'videos:detail' job.video.pk %}" class="text-amber-600 hover:underline">{{ job.video.title }}</a></p>
+        <p class="font-medium"><a href="{% url 'videos:detail' job.video.pk %}" class="text-amber-600 hover:underline">{{ job.video.title|sanitize_name }}</a></p>
       </div>
       <div>
         <p class="text-gray-500">Created</p>
