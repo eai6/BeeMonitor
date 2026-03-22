@@ -27,6 +27,7 @@ from .models import Job, JobResult, GPU_TIERS
 logger = logging.getLogger(__name__)
 
 _NATALIES_RE = re.compile(r"natalies?", re.IGNORECASE)
+_SITEA_RE = re.compile(r"SiteA", re.IGNORECASE)
 
 
 def _sanitize_site(value: str) -> str:
@@ -34,6 +35,13 @@ def _sanitize_site(value: str) -> str:
     if not value:
         return value
     return _NATALIES_RE.sub("SiteA", value)
+
+
+def _unsanitize_site(value: str) -> str:
+    """Reverse-map 'SiteA' back to 'natalies' for DB queries."""
+    if not value:
+        return value
+    return _SITEA_RE.sub("natalies", value)
 
 
 def _generate_sas_url(blob_path: str, container: str = "processed") -> str:
@@ -326,7 +334,7 @@ class JobListView(LoginRequiredMixin, ListView):
         if status:
             qs = qs.filter(status=status)
         if site:
-            qs = qs.filter(video__site_name=site)
+            qs = qs.filter(video__site_name=_unsanitize_site(site))
         if year:
             try:
                 qs = qs.filter(video__year=int(year))
@@ -753,7 +761,7 @@ class _FilteredJobsMixin:
         ).select_related("job__video")
 
         if site:
-            qs = qs.filter(job__video__site_name=site)
+            qs = qs.filter(job__video__site_name=_unsanitize_site(site))
         if year:
             try:
                 qs = qs.filter(job__video__year=int(year))
@@ -930,6 +938,7 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
 
         # Get filter params
         site = self.request.GET.get("site", "")
+        db_site = _unsanitize_site(site)  # reverse-map display name for DB queries
         year = self.request.GET.get("year", "")
         month = self.request.GET.get("month", "")
         day = self.request.GET.get("day", "")
@@ -1002,26 +1011,26 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
 
         # Analytics data — wrap in try/except so page never crashes
         try:
-            ctx["summary"] = get_summary_stats(user, site_name=site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
+            ctx["summary"] = get_summary_stats(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
         except Exception as e:
             logger.error("Analytics summary failed: %s", e, exc_info=True)
             ctx["summary"] = {"total_videos": 0, "total_events": 0, "total_entries": 0,
                               "total_exits": 0, "avg_events_per_video": 0, "total_unique_tracks": 0, "completed_jobs": 0}
 
         try:
-            activity = get_activity_over_time(user, site_name=site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
+            activity = get_activity_over_time(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
             ctx["activity_json"] = json.dumps(activity, default=str)
         except Exception:
             ctx["activity_json"] = "[]"
 
         try:
-            cumulative = get_cumulative_activity(user, site_name=site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
+            cumulative = get_cumulative_activity(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
             ctx["cumulative_json"] = json.dumps(cumulative, default=str)
         except Exception:
             ctx["cumulative_json"] = "[]"
 
         try:
-            averages = get_period_averages(user, site_name=site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
+            averages = get_period_averages(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
             # Convert int keys to string keys for JSON
             ctx["hourly_avg_json"] = json.dumps({str(k): v for k, v in averages["hourly"].items()})
             ctx["daily_avg_json"] = json.dumps({str(k): v for k, v in averages["daily"].items()})
@@ -1040,7 +1049,7 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
             ctx["nest_data_json"] = "[]"
 
         try:
-            vb = get_video_breakdown(user, site_name=site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
+            vb = get_video_breakdown(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
             for row in vb:
                 row["title"] = _sanitize_site(row["title"])
                 row["site"] = _sanitize_site(row["site"])

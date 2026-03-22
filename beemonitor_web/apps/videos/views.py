@@ -14,6 +14,7 @@ from .models import Video
 logger = logging.getLogger(__name__)
 
 _NATALIES_RE = re.compile(r"natalies?", re.IGNORECASE)
+_SITEA_RE = re.compile(r"SiteA", re.IGNORECASE)
 
 
 def _sanitize_site(value: str) -> str:
@@ -21,6 +22,13 @@ def _sanitize_site(value: str) -> str:
     if not value:
         return value
     return _NATALIES_RE.sub("SiteA", value)
+
+
+def _unsanitize_site(value: str) -> str:
+    """Reverse-map 'SiteA' back to 'natalies' for DB queries."""
+    if not value:
+        return value
+    return _SITEA_RE.sub("natalies", value)
 
 
 class VideoListView(LoginRequiredMixin, ListView):
@@ -39,7 +47,7 @@ class VideoListView(LoginRequiredMixin, ListView):
         hour = self.request.GET.get("hour")
 
         if site:
-            qs = qs.filter(site_name=site)
+            qs = qs.filter(site_name=_unsanitize_site(site))
         if year:
             try:
                 qs = qs.filter(year=int(year))
