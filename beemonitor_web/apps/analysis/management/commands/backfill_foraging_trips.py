@@ -10,10 +10,8 @@ Usage:
     python manage.py backfill_foraging_trips --limit 100
 """
 
-import csv
 import io
-import tempfile
-from pathlib import Path
+from collections import defaultdict
 
 import pandas as pd
 from django.conf import settings
@@ -22,13 +20,74 @@ from django.core.management.base import BaseCommand
 from apps.analysis.models import Job, JobResult
 
 
+def _compute_foraging_trips(events_df, fps=30.0, min_sec=10, max_sec=7200):
+    """Pair Exit→Entry events per nest to identify foraging trips."""
+    if events_df is None or events_df.empty:
+        return pd.DataFrame(columns=[
+            "nest", "exit_frame", "entry_frame", "exit_sec",
+            "entry_sec", "duration_sec", "exit_track_id", "entry_track_id",
+        ])
+
+    required = {"action", "nest", "frame_number"}
+    if not required.issubset(events_df.columns):
+        return pd.DataFrame(columns=[
+            "nest", "exit_frame", "entry_frame", "exit_sec",
+            "entry_sec", "duration_sec", "exit_track_id", "entry_track_id",
+        ])
+
+    fps = max(fps, 1.0)
+    trips = []
+    for nest_id, nest_events in events_df.groupby("nest"):
+        nest_sorted = nest_events.sort_values("frame_number").reset_index(drop=True)
+        last_exit = None
+        for _, row in nest_sorted.iterrows():
+            if row["action"] == "Exit":
+                last_exit = row
+            elif row["action"] == "Entry" and last_exit is not None:
+                exit_sec = last_exit["frame_number"] / fps
+                entry_sec = row["frame_number"] / fps
+                duration = entry_sec - exit_sec
+                if min_sec <= duration <= max_sec:
+                    trips.append({
+                        "nest": nest_id,
+                        "exit_frame": int(last_exit["frame_number"]),
+                        "entry_frame": int(row["frame_number"]),
+                        "exit_sec": round(exit_sec, 2),
+                        "entry_sec": round(entry_sec, 2),
+                        "duration_sec": round(duration, 2),
+                        "exit_track_id": last_exit.get("track_id", ""),
+                        "entry_track_id": row.get("track_id", ""),
+                    })
+                last_exit = None
+    return pd.DataFrame(trips)
+
+
+def _compute_trip_summary(trips_df):
+    """Compute summary stats from a foraging trips DataFrame."""
+    if trips_df is None or trips_df.empty:
+        return {
+            "total_trips": 0, "avg_duration_sec": 0, "median_duration_sec": 0,
+            "min_duration_sec": 0, "max_duration_sec": 0, "trips_per_nest": {},
+        }
+    durations = trips_df["duration_sec"]
+    trips_per_nest = {str(k): int(v) for k, v in trips_df.groupby("nest").size().to_dict().items()}
+    return {
+        "total_trips": len(trips_df),
+        "avg_duration_sec": round(durations.mean(), 1),
+        "median_duration_sec": round(durations.median(), 1),
+        "min_duration_sec": round(durations.min(), 1),
+        "max_duration_sec": round(durations.max(), 1),
+        "trips_per_nest": trips_per_nest,
+    }
+
+
 class Command(BaseCommand):
     help = "Backfill foraging trips from existing events CSVs in Azure"
 
     def add_arguments(self, parser):
         parser.add_argument("--dry-run", action="store_true", help="Show what would be done without making changes")
         parser.add_argument("--limit", type=int, default=0, help="Max jobs to process (0 = all)")
-        parser.add_argument("--fps", type=float, default=30.0, help="Video FPS for frame→seconds conversion")
+        parser.add_argument("--fps", type=float, default=30.0, help="Video FPS for frame-to-seconds conversion")
 
     def handle(self, *args, **options):
         dry_run = options["dry_run"]
@@ -59,8 +118,6 @@ class Command(BaseCommand):
 
         from azure.storage.blob import BlobServiceClient
         service = BlobServiceClient.from_connection_string(conn_str)
-
-        from cloud.wrapper.foraging import compute_foraging_trips, compute_trip_summary
 
         processed = 0
         skipped = 0
@@ -94,14 +151,13 @@ class Command(BaseCommand):
                     job_fps = float(stats["video_fps"])
 
                 # Compute foraging trips
-                trips_df = compute_foraging_trips(events_df, fps=job_fps)
-                trip_summary = compute_trip_summary(trips_df)
+                trips_df = _compute_foraging_trips(events_df, fps=job_fps)
+                trip_summary = _compute_trip_summary(trips_df)
 
                 if trips_df.empty:
                     # Update record to reflect 0 trips (so we don't re-process)
                     result.foraging_trip_count = 0
                     result.avg_trip_duration_sec = 0
-                    # Store trip summary in summary_stats
                     stats["foraging_trips"] = trip_summary
                     result.summary_stats = stats
                     result.save(update_fields=[
