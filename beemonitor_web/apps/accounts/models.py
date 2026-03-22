@@ -24,13 +24,13 @@ TIER_LIMITS = {
     "pro": {
         "label": "Pro",
         "monthly_credits": 100000,
-        "max_concurrent_jobs": 200,
+        "max_concurrent_jobs": 50,
         "max_video_hours_per_month": 5000,
     },
     "enterprise": {
         "label": "Enterprise",
         "monthly_credits": 0,  # Unlimited
-        "max_concurrent_jobs": 500,
+        "max_concurrent_jobs": 50,
         "max_video_hours_per_month": 0,  # Unlimited
     },
 }
