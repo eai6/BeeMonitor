@@ -650,15 +650,15 @@ class BatchJobView(LoginRequiredMixin, View):
             )
             return redirect("videos:list")
 
-        # Concurrent job check
+        # Concurrent job check — only block if already at GPU capacity
         active_count = Job.objects.filter(
             user=request.user, status=Job.Status.PROCESSING,
         ).count()
-        if active_count + len(videos_to_process) > profile.max_concurrent_jobs:
+        if active_count >= profile.max_concurrent_jobs:
             messages.error(
                 request,
-                f"Concurrent job limit ({profile.max_concurrent_jobs}) would be exceeded. "
-                f"Currently {active_count} processing. Wait for some to complete."
+                f"All {profile.max_concurrent_jobs} GPU slots are in use. "
+                f"Wait for some to complete before submitting more."
             )
             return redirect("videos:list")
 
