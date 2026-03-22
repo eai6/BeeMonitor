@@ -128,6 +128,7 @@ BEEMONITOR_CREDENTIAL_KEY = os.environ.get("BEEMONITOR_CREDENTIAL_KEY", "")
 
 # File uploads (10 GB max)
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024 * 1024  # 10 GB
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 20000  # Support batch analysis of thousands of videos
 FILE_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024  # 50 MB in memory, rest to disk
 
 # Auth
