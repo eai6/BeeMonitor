@@ -12,6 +12,11 @@
 <div class="bg-white shadow rounded-lg p-4 mb-6">
   <form method="get" class="flex flex-wrap gap-3 items-end">
     <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Search</label>
+      <input type="text" name="q" value="{{ current_search }}" placeholder="Search titles..."
+             class="border border-gray-300 rounded px-3 py-1.5 text-sm focus:ring-amber-500 focus:border-amber-500 w-40">
+    </div>
+    <div>
       <label class="block text-xs font-medium text-gray-500 mb-1">Site</label>
       <select name="site" class="border border-gray-300 rounded px-3 py-1.5 text-sm focus:ring-amber-500 focus:border-amber-500">
         <option value="">All Sites</option>
@@ -59,7 +64,7 @@
     <div>
       <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-1.5 rounded text-sm font-medium border border-gray-300">Filter</button>
     </div>
-    {% if current_site or current_year or current_month or current_day or current_hour %}
+    {% if current_search or current_site or current_year or current_month or current_day or current_hour %}
     <div>
       <a href="{% url 'videos:list' %}" class="text-sm text-amber-600 hover:underline">Clear Filters</a>
     </div>
@@ -80,14 +85,24 @@
       </button>
       <span id="selectedCount" class="text-sm text-gray-500"></span>
     </div>
-    <button type="button" onclick="analyzeSelected()" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">
-      Analyze Selected
-    </button>
+    <div class="flex gap-2">
+      <button type="button" onclick="analyzeSelected()" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">
+        Analyze Selected
+      </button>
+      <button type="button" onclick="deleteSelected()" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded text-sm font-medium">
+        Delete Selected
+      </button>
+    </div>
   </div>
   <!-- Hidden inputs for all filtered video IDs (across pages) -->
   {% for vid in all_video_ids %}
   <input type="hidden" class="all-filtered-id" value="{{ vid }}">
   {% endfor %}
+</form>
+
+<!-- Hidden delete form -->
+<form method="post" action="{% url 'videos:batch_delete' %}" id="deleteForm" style="display:none;">
+  {% csrf_token %}
 </form>
 
 <div class="bg-white shadow rounded-lg overflow-hidden">
@@ -147,11 +162,11 @@
 {% if is_paginated %}
 <div class="flex justify-center mt-6 space-x-2">
   {% if page_obj.has_previous %}
-  <a href="?page={{ page_obj.previous_page_number }}{% if current_site %}&site={{ current_site }}{% endif %}{% if current_year %}&year={{ current_year }}{% endif %}{% if current_month %}&month={{ current_month }}{% endif %}{% if current_day %}&day={{ current_day }}{% endif %}{% if current_hour %}&hour={{ current_hour }}{% endif %}" class="px-3 py-1 border rounded text-sm text-gray-700 hover:bg-gray-50">Previous</a>
+  <a href="?page={{ page_obj.previous_page_number }}{% if current_search %}&q={{ current_search }}{% endif %}{% if current_site %}&site={{ current_site }}{% endif %}{% if current_year %}&year={{ current_year }}{% endif %}{% if current_month %}&month={{ current_month }}{% endif %}{% if current_day %}&day={{ current_day }}{% endif %}{% if current_hour %}&hour={{ current_hour }}{% endif %}" class="px-3 py-1 border rounded text-sm text-gray-700 hover:bg-gray-50">Previous</a>
   {% endif %}
   <span class="px-3 py-1 text-sm text-gray-500">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
   {% if page_obj.has_next %}
-  <a href="?page={{ page_obj.next_page_number }}{% if current_site %}&site={{ current_site }}{% endif %}{% if current_year %}&year={{ current_year }}{% endif %}{% if current_month %}&month={{ current_month }}{% endif %}{% if current_day %}&day={{ current_day }}{% endif %}{% if current_hour %}&hour={{ current_hour }}{% endif %}" class="px-3 py-1 border rounded text-sm text-gray-700 hover:bg-gray-50">Next</a>
+  <a href="?page={{ page_obj.next_page_number }}{% if current_search %}&q={{ current_search }}{% endif %}{% if current_site %}&site={{ current_site }}{% endif %}{% if current_year %}&year={{ current_year }}{% endif %}{% if current_month %}&month={{ current_month }}{% endif %}{% if current_day %}&day={{ current_day }}{% endif %}{% if current_hour %}&hour={{ current_hour }}{% endif %}" class="px-3 py-1 border rounded text-sm text-gray-700 hover:bg-gray-50">Next</a>
   {% endif %}
 </div>
 {% endif %}
@@ -249,6 +264,45 @@ function analyzeSelected() {
         return;
     }
     if (confirm('Submit ' + count + ' analysis job(s)? Each gets a separate GPU.')) {
+        form.submit();
+    }
+}
+
+// Delete selected videos
+function deleteSelected() {
+    const form = document.getElementById('deleteForm');
+    // Remove old hidden video_ids inputs
+    form.querySelectorAll('input[name="video_ids"]').forEach(e => e.remove());
+
+    if (allFilteredSelected) {
+        document.querySelectorAll('.all-filtered-id').forEach(function(el) {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'video_ids';
+            input.value = el.value;
+            form.appendChild(input);
+        });
+    } else {
+        const checked = document.querySelectorAll('.video-checkbox:checked');
+        if (checked.length === 0) {
+            alert('Please select at least one video.');
+            return;
+        }
+        checked.forEach(function(cb) {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'video_ids';
+            input.value = cb.value;
+            form.appendChild(input);
+        });
+    }
+
+    const count = form.querySelectorAll('input[name="video_ids"]').length;
+    if (count === 0) {
+        alert('No videos selected.');
+        return;
+    }
+    if (confirm('DELETE ' + count + ' video(s) and all their analysis data? This cannot be undone.')) {
         form.submit();
     }
 }

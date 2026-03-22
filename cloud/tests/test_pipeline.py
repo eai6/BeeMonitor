@@ -22,7 +22,10 @@ class TestPipelineResult:
             nest_count=48,
             events_csv_path="processed/user1/job1/events.csv",
             tracking_csv_path="processed/user1/job1/tracking_results.csv",
+            foraging_trips_csv_path="processed/user1/job1/foraging_trips.csv",
             annotated_video_path="processed/user1/job1/annotated_video.mp4",
+            foraging_trip_count=3,
+            avg_trip_duration_sec=120.5,
             summary_stats={"total_events": 10},
         )
         d = result.to_dict()

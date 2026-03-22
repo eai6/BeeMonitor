@@ -5,7 +5,9 @@ import uuid
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
+from django.views import View
 from django.views.generic import DetailView, FormView, ListView
 
 from .forms import VideoBatchUploadForm, VideoUploadForm
@@ -40,12 +42,15 @@ class VideoListView(LoginRequiredMixin, ListView):
         qs = Video.objects.filter(user=self.request.user)
 
         # Apply filters from query params
+        search = self.request.GET.get("q", "").strip()
         site = self.request.GET.get("site")
         year = self.request.GET.get("year")
         month = self.request.GET.get("month")
         day = self.request.GET.get("day")
         hour = self.request.GET.get("hour")
 
+        if search:
+            qs = qs.filter(title__icontains=search)
         if site:
             qs = qs.filter(site_name=_unsanitize_site(site))
         if year:
@@ -94,6 +99,7 @@ class VideoListView(LoginRequiredMixin, ListView):
         ))
 
         # Preserve current filter selections
+        ctx["current_search"] = self.request.GET.get("q", "")
         ctx["current_site"] = self.request.GET.get("site", "")
         ctx["current_year"] = self.request.GET.get("year", "")
         ctx["current_month"] = self.request.GET.get("month", "")
@@ -260,3 +266,79 @@ class VideoDetailView(LoginRequiredMixin, DetailView):
                 logger.error("Failed to generate video SAS URL: %s", e)
 
         return ctx
+
+
+def _delete_azure_blobs_for_video(video):
+    """Delete all Azure blobs associated with a video and its analysis results."""
+    conn_str = getattr(settings, "AZURE_STORAGE_CONNECTION_STRING", "")
+    if not conn_str:
+        return
+
+    try:
+        from azure.storage.blob import BlobServiceClient
+        service = BlobServiceClient.from_connection_string(conn_str)
+
+        # Delete raw video blob
+        blob_path = video.azure_blob_path
+        if blob_path and not blob_path.startswith("s3://"):
+            try:
+                blob = service.get_blob_client("raw-videos", blob_path)
+                blob.delete_blob()
+                logger.info("Deleted raw video blob: %s", blob_path)
+            except Exception as e:
+                logger.warning("Could not delete raw blob %s: %s", blob_path, e)
+
+        # Delete processed blobs (events CSV, tracking CSV, trips CSV, annotated video)
+        from apps.analysis.models import JobResult
+        for result in JobResult.objects.filter(job__video=video):
+            for path in [
+                result.events_csv_path,
+                result.tracking_csv_path,
+                result.foraging_trips_csv_path,
+                result.annotated_video_path,
+            ]:
+                if path:
+                    try:
+                        blob = service.get_blob_client("processed", path)
+                        blob.delete_blob()
+                    except Exception:
+                        pass
+            logger.info("Deleted processed blobs for job %s", result.job_id)
+
+    except Exception as e:
+        logger.error("Azure blob cleanup failed for video %s: %s", video.pk, e)
+
+
+class VideoDeleteView(LoginRequiredMixin, View):
+    """Delete a single video and its Azure blobs."""
+
+    def post(self, request, pk):
+        video = get_object_or_404(Video, pk=pk, user=request.user)
+        title = video.title
+
+        _delete_azure_blobs_for_video(video)
+        video.delete()  # CASCADE handles Jobs, JobResults, Annotations
+
+        messages.success(request, f"Deleted video: {title}")
+        return redirect("videos:list")
+
+
+class VideoBatchDeleteView(LoginRequiredMixin, View):
+    """Delete multiple videos and their Azure blobs."""
+
+    def post(self, request):
+        video_ids = request.POST.getlist("video_ids")
+        if not video_ids:
+            messages.warning(request, "No videos selected.")
+            return redirect("videos:list")
+
+        videos = Video.objects.filter(user=request.user, pk__in=video_ids)
+        count = videos.count()
+
+        for video in videos:
+            _delete_azure_blobs_for_video(video)
+
+        videos.delete()
+
+        messages.success(request, f"Deleted {count} video(s) and their analysis data.")
+        return redirect("videos:list")
