@@ -5,7 +5,7 @@ echo "Running migrations..."
 python manage.py migrate --noinput
 
 echo "Backfilling video timestamps..."
-python manage.py backfill_video_timestamps 2>/dev/null || true
+python manage.py backfill_video_timestamps || true
 
 echo "Ensuring admin tier..."
 python -c "
@@ -24,21 +24,27 @@ for u in User.objects.filter(is_superuser=True):
         p.used_credits = 0
         p.save(update_fields=['tier', 'monthly_credits', 'max_concurrent_jobs', 'used_credits'])
         print(f'Upgraded {u.username} to enterprise')
-" 2>/dev/null || true
-
-echo "Backfilling foraging trips..."
-python manage.py backfill_foraging_trips 2>/dev/null || true
+" || true
 
 echo "Cleaning up stale jobs..."
-python manage.py cleanup_stale_jobs 2>/dev/null || true
+python manage.py cleanup_stale_jobs || true
 
 echo "Collecting static files..."
 python manage.py collectstatic --noinput 2>/dev/null || true
 
 echo "Starting Gunicorn..."
-exec gunicorn config.wsgi:application \
+gunicorn config.wsgi:application \
     --bind 0.0.0.0:8000 \
     --workers 2 \
     --timeout 300 \
     --access-logfile - \
-    --error-logfile -
+    --error-logfile - &
+
+GUNICORN_PID=$!
+
+# Run foraging trip backfill in background after Gunicorn is up
+echo "Backfilling foraging trips in background..."
+python manage.py backfill_foraging_trips &
+
+# Wait for Gunicorn (foreground process)
+wait $GUNICORN_PID
