@@ -2,7 +2,7 @@
 
 Downloads each job's events CSV from Azure, computes foraging trips,
 uploads the trips CSV back to Azure, and updates the JobResult record.
-No GPU needed — pure CPU computation.
+No GPU needed — pure CPU computation. Uses only stdlib (no pandas).
 
 Usage:
     python manage.py backfill_foraging_trips
@@ -10,48 +10,63 @@ Usage:
     python manage.py backfill_foraging_trips --limit 100
 """
 
+import csv
 import io
+import statistics
 from collections import defaultdict
 
-import pandas as pd
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from apps.analysis.models import Job, JobResult
 
+TRIP_COLUMNS = [
+    "nest", "exit_frame", "entry_frame", "exit_sec",
+    "entry_sec", "duration_sec", "exit_track_id", "entry_track_id",
+]
 
-def _compute_foraging_trips(events_df, fps=30.0, min_sec=10, max_sec=7200):
-    """Pair Exit→Entry events per nest to identify foraging trips."""
-    if events_df is None or events_df.empty:
-        return pd.DataFrame(columns=[
-            "nest", "exit_frame", "entry_frame", "exit_sec",
-            "entry_sec", "duration_sec", "exit_track_id", "entry_track_id",
-        ])
 
-    required = {"action", "nest", "frame_number"}
-    if not required.issubset(events_df.columns):
-        return pd.DataFrame(columns=[
-            "nest", "exit_frame", "entry_frame", "exit_sec",
-            "entry_sec", "duration_sec", "exit_track_id", "entry_track_id",
-        ])
+def _parse_events_csv(content):
+    """Parse events CSV content into list of dicts. Returns (rows, headers)."""
+    reader = csv.DictReader(io.StringIO(content))
+    return list(reader), reader.fieldnames or []
+
+
+def _compute_foraging_trips(events, fps=30.0, min_sec=10, max_sec=7200):
+    """Pair Exit→Entry events per nest. Events is a list of dicts."""
+    if not events:
+        return []
+
+    # Check required columns
+    sample = events[0]
+    if not all(k in sample for k in ("action", "nest", "frame_number")):
+        return []
 
     fps = max(fps, 1.0)
+
+    # Group by nest
+    by_nest = defaultdict(list)
+    for row in events:
+        by_nest[row["nest"]].append(row)
+
     trips = []
-    for nest_id, nest_events in events_df.groupby("nest"):
-        nest_sorted = nest_events.sort_values("frame_number").reset_index(drop=True)
+    for nest_id, nest_events in by_nest.items():
+        nest_sorted = sorted(nest_events, key=lambda r: float(r["frame_number"]))
         last_exit = None
-        for _, row in nest_sorted.iterrows():
+        for row in nest_sorted:
             if row["action"] == "Exit":
                 last_exit = row
             elif row["action"] == "Entry" and last_exit is not None:
-                exit_sec = last_exit["frame_number"] / fps
-                entry_sec = row["frame_number"] / fps
+                exit_frame = float(last_exit["frame_number"])
+                entry_frame = float(row["frame_number"])
+                exit_sec = exit_frame / fps
+                entry_sec = entry_frame / fps
                 duration = entry_sec - exit_sec
                 if min_sec <= duration <= max_sec:
                     trips.append({
                         "nest": nest_id,
-                        "exit_frame": int(last_exit["frame_number"]),
-                        "entry_frame": int(row["frame_number"]),
+                        "exit_frame": int(exit_frame),
+                        "entry_frame": int(entry_frame),
                         "exit_sec": round(exit_sec, 2),
                         "entry_sec": round(entry_sec, 2),
                         "duration_sec": round(duration, 2),
@@ -59,26 +74,37 @@ def _compute_foraging_trips(events_df, fps=30.0, min_sec=10, max_sec=7200):
                         "entry_track_id": row.get("track_id", ""),
                     })
                 last_exit = None
-    return pd.DataFrame(trips)
+    return trips
 
 
-def _compute_trip_summary(trips_df):
-    """Compute summary stats from a foraging trips DataFrame."""
-    if trips_df is None or trips_df.empty:
+def _compute_trip_summary(trips):
+    """Compute summary stats from a list of trip dicts."""
+    if not trips:
         return {
             "total_trips": 0, "avg_duration_sec": 0, "median_duration_sec": 0,
             "min_duration_sec": 0, "max_duration_sec": 0, "trips_per_nest": {},
         }
-    durations = trips_df["duration_sec"]
-    trips_per_nest = {str(k): int(v) for k, v in trips_df.groupby("nest").size().to_dict().items()}
+    durations = [t["duration_sec"] for t in trips]
+    nest_counts = defaultdict(int)
+    for t in trips:
+        nest_counts[str(t["nest"])] += 1
     return {
-        "total_trips": len(trips_df),
-        "avg_duration_sec": round(durations.mean(), 1),
-        "median_duration_sec": round(durations.median(), 1),
-        "min_duration_sec": round(durations.min(), 1),
-        "max_duration_sec": round(durations.max(), 1),
-        "trips_per_nest": trips_per_nest,
+        "total_trips": len(trips),
+        "avg_duration_sec": round(statistics.mean(durations), 1),
+        "median_duration_sec": round(statistics.median(durations), 1),
+        "min_duration_sec": round(min(durations), 1),
+        "max_duration_sec": round(max(durations), 1),
+        "trips_per_nest": dict(nest_counts),
     }
+
+
+def _trips_to_csv(trips):
+    """Convert list of trip dicts to CSV string."""
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=TRIP_COLUMNS)
+    writer.writeheader()
+    writer.writerows(trips)
+    return output.getvalue()
 
 
 class Command(BaseCommand):
@@ -94,7 +120,6 @@ class Command(BaseCommand):
         limit = options["limit"]
         fps = options["fps"]
 
-        # Find completed jobs without foraging trip data
         qs = JobResult.objects.filter(
             job__status=Job.Status.COMPLETED,
             foraging_trip_count=0,
@@ -135,27 +160,23 @@ class Command(BaseCommand):
                     continue
 
             try:
-                # Download events CSV from Azure
                 blob = service.get_blob_client("processed", events_path)
                 content = blob.download_blob().readall().decode("utf-8")
-                events_df = pd.read_csv(io.StringIO(content))
+                events, _ = _parse_events_csv(content)
 
-                if events_df.empty:
+                if not events:
                     skipped += 1
                     continue
 
-                # Check fps from summary_stats if available
                 job_fps = fps
                 stats = result.summary_stats or {}
                 if stats.get("video_fps"):
                     job_fps = float(stats["video_fps"])
 
-                # Compute foraging trips
-                trips_df = _compute_foraging_trips(events_df, fps=job_fps)
-                trip_summary = _compute_trip_summary(trips_df)
+                trips = _compute_foraging_trips(events, fps=job_fps)
+                trip_summary = _compute_trip_summary(trips)
 
-                if trips_df.empty:
-                    # Update record to reflect 0 trips (so we don't re-process)
+                if not trips:
                     result.foraging_trip_count = 0
                     result.avg_trip_duration_sec = 0
                     stats["foraging_trips"] = trip_summary
@@ -166,17 +187,14 @@ class Command(BaseCommand):
                     skipped += 1
                     continue
 
-                # Build upload path
                 uid = str(result.job.user_id)
                 mid = result.job.modal_job_id or str(result.job.pk)
                 trips_blob_path = f"{uid}/{mid}/foraging_trips.csv"
 
-                # Upload trips CSV to Azure
-                trips_csv_content = trips_df.to_csv(index=False)
+                trips_csv = _trips_to_csv(trips)
                 blob_client = service.get_blob_client("processed", trips_blob_path)
-                blob_client.upload_blob(trips_csv_content.encode("utf-8"), overwrite=True)
+                blob_client.upload_blob(trips_csv.encode("utf-8"), overwrite=True)
 
-                # Update JobResult
                 stats["foraging_trips"] = trip_summary
                 result.foraging_trips_csv_path = trips_blob_path
                 result.foraging_trip_count = trip_summary["total_trips"]
