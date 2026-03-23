@@ -105,3 +105,34 @@ class JobResult(models.Model):
 
     def __str__(self):
         return f"Result for Job {self.job_id} ({self.total_events} events)"
+
+
+class DailyForagingSummary(models.Model):
+    """Aggregated foraging trips across all videos for a site+day.
+
+    Detects cross-video trips where a bee exits in one video and enters
+    in the next video at the same nest.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="daily_foraging",
+    )
+    site_name = models.CharField(max_length=200)
+    date = models.DateField()
+    total_trips = models.IntegerField(default=0)
+    cross_video_trips = models.IntegerField(default=0)
+    avg_duration_sec = models.FloatField(default=0)
+    median_duration_sec = models.FloatField(default=0)
+    trips_per_nest = models.JSONField(default=dict, blank=True)
+    trips_csv_path = models.CharField(max_length=500, blank=True)
+    video_count = models.IntegerField(default=0)
+    computed_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("user", "site_name", "date")
+        ordering = ["-date"]
+
+    def __str__(self):
+        return f"{self.site_name} {self.date}: {self.total_trips} trips ({self.cross_video_trips} cross-video)"

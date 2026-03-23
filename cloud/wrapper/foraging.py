@@ -106,3 +106,90 @@ def compute_trip_summary(trips_df: pd.DataFrame) -> dict:
         "max_duration_sec": round(durations.max(), 1),
         "trips_per_nest": trips_per_nest,
     }
+
+
+def compute_daily_foraging_trips(
+    video_events: list,
+    min_sec: float = 10,
+    max_sec: float = 7200,
+) -> pd.DataFrame:
+    """Compute foraging trips across multiple videos for a site+day.
+
+    Merges events from all videos using absolute timestamps, enabling
+    detection of trips where a bee exits in one video and enters in another.
+
+    Args:
+        video_events: List of dicts, each with:
+            - video_id: identifier for the source video
+            - recorded_at: datetime when video recording started
+            - fps: video frames per second
+            - events_df: DataFrame with action, nest, frame_number, track_id
+        min_sec: Minimum trip duration in seconds
+        max_sec: Maximum trip duration in seconds
+
+    Returns:
+        DataFrame with columns: nest, exit_time, entry_time, duration_sec,
+        exit_video_id, entry_video_id, exit_track_id, entry_track_id, is_cross_video
+    """
+    from datetime import timedelta
+
+    all_events = []
+    for ve in video_events:
+        df = ve["events_df"]
+        if df is None or df.empty:
+            continue
+        if "action" not in df.columns or "nest" not in df.columns or "frame_number" not in df.columns:
+            continue
+
+        recorded_at = ve["recorded_at"]
+        fps = max(ve.get("fps", 30.0), 1.0)
+        video_id = ve.get("video_id", "")
+
+        for _, row in df.iterrows():
+            sec_offset = row["frame_number"] / fps
+            abs_time = recorded_at + timedelta(seconds=sec_offset)
+            all_events.append({
+                "action": row["action"],
+                "nest": row["nest"],
+                "absolute_time": abs_time,
+                "video_id": video_id,
+                "track_id": row.get("track_id", ""),
+            })
+
+    if not all_events:
+        return pd.DataFrame(columns=[
+            "nest", "exit_time", "entry_time", "duration_sec",
+            "exit_video_id", "entry_video_id", "exit_track_id", "entry_track_id",
+            "is_cross_video",
+        ])
+
+    merged = pd.DataFrame(all_events)
+
+    trips = []
+    for nest_id, nest_events in merged.groupby("nest"):
+        nest_sorted = nest_events.sort_values("absolute_time").reset_index(drop=True)
+        last_exit = None
+
+        for _, row in nest_sorted.iterrows():
+            if row["action"] == "Exit":
+                last_exit = row
+            elif row["action"] == "Entry" and last_exit is not None:
+                duration = (row["absolute_time"] - last_exit["absolute_time"]).total_seconds()
+                if min_sec <= duration <= max_sec:
+                    trips.append({
+                        "nest": nest_id,
+                        "exit_time": last_exit["absolute_time"].isoformat(),
+                        "entry_time": row["absolute_time"].isoformat(),
+                        "duration_sec": round(duration, 2),
+                        "exit_video_id": last_exit["video_id"],
+                        "entry_video_id": row["video_id"],
+                        "exit_track_id": last_exit["track_id"],
+                        "entry_track_id": row["track_id"],
+                        "is_cross_video": last_exit["video_id"] != row["video_id"],
+                    })
+                last_exit = None
+
+    result = pd.DataFrame(trips)
+    cross_count = result["is_cross_video"].sum() if not result.empty else 0
+    logger.info("Daily trips: %d total, %d cross-video", len(result), cross_count)
+    return result

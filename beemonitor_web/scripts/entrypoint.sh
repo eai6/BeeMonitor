@@ -42,9 +42,9 @@ gunicorn config.wsgi:application \
 
 GUNICORN_PID=$!
 
-# Run foraging trip backfill in background after Gunicorn is up
+# Run foraging trip backfills in background after Gunicorn is up
 echo "Backfilling foraging trips in background..."
-python manage.py backfill_foraging_trips &
+(python manage.py backfill_foraging_trips && echo "Computing daily cross-video trips..." && python manage.py compute_daily_trips) &
 
 # Wait for Gunicorn (foreground process)
 wait $GUNICORN_PID

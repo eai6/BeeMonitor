@@ -89,6 +89,86 @@ def process_video(
     return result_dict
 
 
+# ── Chunk Processing (multiple videos per GPU) ───────────────────────
+
+@app.function(
+    gpu="A10G",
+    timeout=43200,  # 12 hours for large chunks
+    retries=0,
+    volumes={MODEL_VOLUME_MOUNT: model_volume},
+    secrets=[modal.Secret.from_name("azure-storage")],
+    memory=8192,
+    min_containers=0,
+    max_containers=50,
+    scaledown_window=120,
+)
+def process_video_chunk(chunk: list[dict]) -> list[dict]:
+    """Process multiple videos sequentially on one GPU. Models loaded once.
+
+    Each dict in chunk should have: job_id, user_id, video_blob_path,
+    and optional: detection_mode, confidence_threshold, ml_threshold,
+    visualize, two_mode_tracking, custom_nest_model_path, custom_bee_model_path.
+    """
+    import logging
+    import time
+
+    from cloud.storage.azure_client import AzureBlobClient
+    from cloud.storage.config import StorageConfig
+    from cloud.wrapper.model_manager import ModelManager
+    from cloud.wrapper.pipeline import CloudPipeline
+
+    logger = logging.getLogger(__name__)
+    logger.info("Starting chunk of %d videos", len(chunk))
+
+    config = StorageConfig()
+    storage = AzureBlobClient(config)
+    models = ModelManager(
+        storage_client=storage,
+        storage_config=config,
+        local_cache_dir=MODEL_VOLUME_MOUNT,
+    )
+    pipeline = CloudPipeline(
+        storage_client=storage,
+        storage_config=config,
+        model_manager=models,
+    )
+
+    results = []
+    for i, video_cfg in enumerate(chunk):
+        job_id = video_cfg["job_id"]
+        start_time = time.time()
+        try:
+            logger.info("[%d/%d] Processing %s", i + 1, len(chunk), job_id)
+            result = pipeline.process(
+                job_id=job_id,
+                user_id=video_cfg["user_id"],
+                video_blob_path=video_cfg["video_blob_path"],
+                detection_mode=video_cfg.get("detection_mode", "yolo"),
+                confidence_threshold=video_cfg.get("confidence_threshold", 0.25),
+                ml_threshold=video_cfg.get("ml_threshold", 0.6),
+                visualize=video_cfg.get("visualize", True),
+                two_mode_tracking=video_cfg.get("two_mode_tracking", True),
+                custom_nest_model_path=video_cfg.get("custom_nest_model_path", ""),
+                custom_bee_model_path=video_cfg.get("custom_bee_model_path", ""),
+            )
+            result_dict = result.to_dict()
+            result_dict["execution_seconds"] = round(time.time() - start_time, 1)
+            results.append(result_dict)
+        except Exception as e:
+            logger.error("[%d/%d] Failed %s: %s", i + 1, len(chunk), job_id, e)
+            results.append({
+                "job_id": job_id,
+                "status": "failed",
+                "error_message": str(e),
+            })
+        finally:
+            pipeline.cleanup(job_id)
+
+    model_volume.commit()
+    logger.info("Chunk complete: %d/%d succeeded", sum(1 for r in results if "status" not in r or r.get("status") != "failed"), len(chunk))
+    return results
+
+
 # ── Full Pipeline: S3 Transfer + GPU Processing ──────────────────────
 
 @app.function(

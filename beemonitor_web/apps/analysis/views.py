@@ -229,23 +229,28 @@ def _spawn_modal_job(job_pk: int) -> None:
 
 def _spawn_modal_batch(jobs_data: list, detection_mode: str, confidence: float,
                        custom_nest_model_path: str = "", custom_bee_model_path: str = "") -> None:
-    """Spawn all Modal jobs (non-blocking). Each gets its own GPU container."""
+    """Spawn Modal jobs in chunks. Each chunk shares one GPU (models loaded once)."""
     import django
     django.setup()
     from django.db import connection
 
-    s3_creds_cache = {}
+    MAX_CONTAINERS = 50
+    MAX_CHUNK_SIZE = 128
 
     try:
         import modal
 
-        for jd in jobs_data:
-            try:
-                video = jd["video"]
-                blob_path = video.azure_blob_path
-                meta = video.metadata or {}
+        # Separate S3 vs Azure jobs (S3 still use individual spawn for now)
+        s3_jobs = [jd for jd in jobs_data if jd["video"].azure_blob_path.startswith("s3://")]
+        azure_jobs = [jd for jd in jobs_data if not jd["video"].azure_blob_path.startswith("s3://")]
 
-                if blob_path.startswith("s3://"):
+        # Spawn S3 jobs individually (they need credential handling)
+        if s3_jobs:
+            s3_creds_cache = {}
+            for jd in s3_jobs:
+                try:
+                    video = jd["video"]
+                    meta = video.metadata or {}
                     source = video.source
                     source_id = source.pk if source else None
 
@@ -262,48 +267,61 @@ def _spawn_modal_batch(jobs_data: list, detection_mode: str, confidence: float,
 
                     fn = modal.Function.from_name("beemonitor-cloud", "process_video_from_s3")
                     spawn_kwargs = dict(
-                        job_id=jd["job_id"],
-                        user_id=jd["user_id"],
+                        job_id=jd["job_id"], user_id=jd["user_id"],
                         s3_bucket=meta.get("remote_bucket", creds.get("bucket", "")),
                         s3_key=meta.get("remote_key", ""),
                         s3_access_key_id=creds.get("access_key_id", ""),
                         s3_secret_access_key=creds.get("secret_access_key", ""),
                         s3_region=creds.get("region", "us-east-1"),
-                        detection_mode=detection_mode,
-                        confidence_threshold=confidence,
-                        visualize=True,
+                        detection_mode=detection_mode, confidence_threshold=confidence, visualize=True,
                     )
                     if custom_nest_model_path:
                         spawn_kwargs["custom_nest_model_path"] = custom_nest_model_path
                     if custom_bee_model_path:
                         spawn_kwargs["custom_bee_model_path"] = custom_bee_model_path
                     call = fn.spawn(**spawn_kwargs)
-                else:
-                    fn = modal.Function.from_name("beemonitor-cloud", "process_video")
-                    spawn_kwargs = dict(
-                        job_id=jd["job_id"],
-                        user_id=jd["user_id"],
-                        video_blob_path=blob_path,
-                        detection_mode=detection_mode,
-                        confidence_threshold=confidence,
-                        visualize=True,
-                    )
+                    Job.objects.filter(pk=jd["job_pk"]).update(modal_call_id=call.object_id)
+                except Exception as e:
+                    Job.objects.filter(pk=jd["job_pk"]).update(status="failed", error_message=str(e))
+            for creds in s3_creds_cache.values():
+                creds.clear()
+
+        # Chunk Azure jobs for sequential batch processing
+        if azure_jobs:
+            chunk_size = max(1, len(azure_jobs) // MAX_CONTAINERS)
+            chunk_size = min(chunk_size, MAX_CHUNK_SIZE)
+
+            fn = modal.Function.from_name("beemonitor-cloud", "process_video_chunk")
+
+            for i in range(0, len(azure_jobs), chunk_size):
+                chunk_jobs = azure_jobs[i:i + chunk_size]
+                chunk_configs = []
+                for jd in chunk_jobs:
+                    cfg = {
+                        "job_id": jd["job_id"],
+                        "user_id": jd["user_id"],
+                        "video_blob_path": jd["video"].azure_blob_path,
+                        "detection_mode": detection_mode,
+                        "confidence_threshold": confidence,
+                        "visualize": True,
+                    }
                     if custom_nest_model_path:
-                        spawn_kwargs["custom_nest_model_path"] = custom_nest_model_path
+                        cfg["custom_nest_model_path"] = custom_nest_model_path
                     if custom_bee_model_path:
-                        spawn_kwargs["custom_bee_model_path"] = custom_bee_model_path
-                    call = fn.spawn(**spawn_kwargs)
+                        cfg["custom_bee_model_path"] = custom_bee_model_path
+                    chunk_configs.append(cfg)
 
-                Job.objects.filter(pk=jd["job_pk"]).update(modal_call_id=call.object_id)
-                logger.info("Spawned job %s (call_id=%s)", jd["job_pk"], call.object_id)
+                try:
+                    call = fn.spawn(chunk=chunk_configs)
+                    chunk_pks = [jd["job_pk"] for jd in chunk_jobs]
+                    Job.objects.filter(pk__in=chunk_pks).update(modal_call_id=call.object_id)
+                    logger.info("Spawned chunk of %d videos (call_id=%s)", len(chunk_jobs), call.object_id)
+                except Exception as e:
+                    logger.error("Chunk spawn failed: %s", e)
+                    chunk_pks = [jd["job_pk"] for jd in chunk_jobs]
+                    Job.objects.filter(pk__in=chunk_pks).update(status="failed", error_message=str(e))
 
-            except Exception as e:
-                logger.error("Failed to spawn job %s: %s", jd["job_pk"], e)
-                Job.objects.filter(pk=jd["job_pk"]).update(
-                    status="failed", error_message=str(e),
-                )
-
-        logger.info("Batch spawn complete: %d jobs submitted to Modal", len(jobs_data))
+        logger.info("Batch spawn complete: %d jobs in chunks, %d S3 individual", len(azure_jobs), len(s3_jobs))
 
     except Exception as e:
         logger.exception("Batch spawn failed: %s", e)
@@ -312,8 +330,6 @@ def _spawn_modal_batch(jobs_data: list, detection_mode: str, confidence: float,
             status="failed", error_message=f"Spawn error: {e}",
         )
     finally:
-        for creds in s3_creds_cache.values():
-            creds.clear()
         connection.close()
 
 
@@ -469,6 +485,7 @@ class PollJobsView(LoginRequiredMixin, View):
     """
 
     def get(self, request):
+        from collections import defaultdict
         from django.http import JsonResponse
         from django.utils import timezone
 
@@ -484,74 +501,108 @@ class PollJobsView(LoginRequiredMixin, View):
         try:
             import modal
 
-            for job in processing_jobs[:50]:  # Check max 50 per poll
+            # Group jobs by modal_call_id (chunks share the same call ID)
+            call_id_to_jobs = defaultdict(list)
+            for job in processing_jobs[:200]:
+                call_id_to_jobs[job.modal_call_id].append(job)
+
+            for call_id, jobs_in_call in call_id_to_jobs.items():
                 try:
-                    fc = modal.functions.FunctionCall.from_id(job.modal_call_id)
+                    fc = modal.functions.FunctionCall.from_id(call_id)
                     try:
-                        result = fc.get(timeout=0)  # Non-blocking — returns immediately or raises
+                        raw_result = fc.get(timeout=0)
                     except TimeoutError:
                         continue  # Still running
                     except modal.exception.ExecutionError as e:
+                        Job.objects.filter(
+                            pk__in=[j.pk for j in jobs_in_call]
+                        ).update(status="failed", error_message=str(e))
+                        continue
+
+                    # Handle both single dict (legacy) and list (chunk) results
+                    if isinstance(raw_result, dict):
+                        results_list = [raw_result]
+                    elif isinstance(raw_result, list):
+                        results_list = raw_result
+                    else:
+                        continue
+
+                    # Build lookup: modal_job_id -> Job
+                    job_by_modal_id = {j.modal_job_id: j for j in jobs_in_call}
+
+                    for result in results_list:
+                        if not isinstance(result, dict):
+                            continue
+
+                        # Match result to job by job_id (which is modal_job_id)
+                        result_job_id = result.get("job_id", "")
+                        job = job_by_modal_id.get(result_job_id)
+                        if not job:
+                            # Fallback for single-video results (only 1 job in call)
+                            if len(jobs_in_call) == 1:
+                                job = jobs_in_call[0]
+                            else:
+                                continue
+
+                        # Handle per-video failure within a chunk
+                        if result.get("status") == "failed":
+                            Job.objects.filter(pk=job.pk).update(
+                                status="failed",
+                                error_message=result.get("error_message", "Unknown error"),
+                            )
+                            continue
+
+                        # Update video path if transferred from S3
+                        if result.get("azure_blob_path"):
+                            from apps.videos.models import Video as VideoModel
+                            VideoModel.objects.filter(pk=job.video_id).update(
+                                azure_blob_path=result["azure_blob_path"],
+                                file_size_bytes=result.get("file_size", 0),
+                            )
+
+                        JobResult.objects.update_or_create(
+                            job_id=job.pk,
+                            defaults={
+                                "events_csv_path": result.get("events_csv_path", ""),
+                                "tracking_csv_path": result.get("tracking_csv_path", ""),
+                                "foraging_trips_csv_path": result.get("foraging_trips_csv_path", ""),
+                                "annotated_video_path": result.get("annotated_video_path", ""),
+                                "total_events": result.get("total_events", 0),
+                                "entry_count": result.get("entry_count", 0),
+                                "exit_count": result.get("exit_count", 0),
+                                "unique_tracks": result.get("unique_tracks", 0),
+                                "nest_count": result.get("nest_count", 0),
+                                "foraging_trip_count": result.get("foraging_trip_count", 0),
+                                "avg_trip_duration_sec": result.get("avg_trip_duration_sec"),
+                                "summary_stats": result.get("summary_stats", {}),
+                            },
+                        )
+
+                        exec_secs = result.get("execution_seconds", 0) or 0
+                        credits_used = int(exec_secs)
+                        cost_rate = GPU_TIERS.get(job.gpu_tier, {}).get("cost_per_sec", 0.000306)
+                        cost_usd = round(exec_secs * cost_rate, 4)
+
                         Job.objects.filter(pk=job.pk).update(
-                            status="failed", error_message=str(e),
-                        )
-                        continue
-
-                    if not isinstance(result, dict):
-                        continue
-
-                    # Update video path if transferred from S3
-                    if result.get("azure_blob_path"):
-                        from apps.videos.models import Video as VideoModel
-                        VideoModel.objects.filter(pk=job.video_id).update(
-                            azure_blob_path=result["azure_blob_path"],
-                            file_size_bytes=result.get("file_size", 0),
+                            status="completed", progress_pct=100,
+                            completed_at=timezone.now(),
+                            execution_seconds=exec_secs,
+                            compute_cost_usd=cost_usd,
                         )
 
-                    JobResult.objects.update_or_create(
-                        job_id=job.pk,
-                        defaults={
-                            "events_csv_path": result.get("events_csv_path", ""),
-                            "tracking_csv_path": result.get("tracking_csv_path", ""),
-                            "foraging_trips_csv_path": result.get("foraging_trips_csv_path", ""),
-                            "annotated_video_path": result.get("annotated_video_path", ""),
-                            "total_events": result.get("total_events", 0),
-                            "entry_count": result.get("entry_count", 0),
-                            "exit_count": result.get("exit_count", 0),
-                            "unique_tracks": result.get("unique_tracks", 0),
-                            "nest_count": result.get("nest_count", 0),
-                            "foraging_trip_count": result.get("foraging_trip_count", 0),
-                            "avg_trip_duration_sec": result.get("avg_trip_duration_sec"),
-                            "summary_stats": result.get("summary_stats", {}),
-                        },
-                    )
-                    # Calculate cost and credits (1 credit ≈ 1 GPU-second)
-                    exec_secs = result.get("execution_seconds", 0) or 0
-                    credits_used = int(exec_secs)
-                    cost_rate = GPU_TIERS.get(job.gpu_tier, {}).get("cost_per_sec", 0.000306)
-                    cost_usd = round(exec_secs * cost_rate, 4)
+                        try:
+                            from apps.accounts.models import UserProfile
+                            profile, _ = UserProfile.objects.get_or_create(user=job.user)
+                            profile.charge(credits_used, gpu_seconds=exec_secs)
+                        except Exception as e:
+                            logger.error("Failed to charge credits for job %s: %s", job.pk, e)
 
-                    Job.objects.filter(pk=job.pk).update(
-                        status="completed", progress_pct=100,
-                        completed_at=timezone.now(),
-                        execution_seconds=exec_secs,
-                        compute_cost_usd=cost_usd,
-                    )
-
-                    # Charge user credits
-                    try:
-                        from apps.accounts.models import UserProfile
-                        profile, _ = UserProfile.objects.get_or_create(user=job.user)
-                        profile.charge(credits_used, gpu_seconds=exec_secs)
-                    except Exception as e:
-                        logger.error("Failed to charge credits for job %s: %s", job.pk, e)
-
-                    completed += 1
-                    logger.info("Poll: Job %s completed — %s events, %.1fs, $%.4f",
-                                job.pk, result.get("total_events", 0), exec_secs, cost_usd)
+                        completed += 1
+                        logger.info("Poll: Job %s completed — %s events, %.1fs, $%.4f",
+                                    job.pk, result.get("total_events", 0), exec_secs, cost_usd)
 
                 except Exception as e:
-                    logger.error("Poll error for job %s: %s", job.pk, e)
+                    logger.error("Poll error for call_id %s: %s", call_id, e)
 
         except ImportError:
             pass

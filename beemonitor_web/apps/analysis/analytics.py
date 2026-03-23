@@ -10,7 +10,7 @@ from collections import defaultdict
 
 from django.db.models import Avg, Count, Sum
 
-from .models import Job, JobResult
+from .models import DailyForagingSummary, Job, JobResult
 
 logger = logging.getLogger(__name__)
 
@@ -277,8 +277,34 @@ def get_video_breakdown(user, site_name=None, year=None, month=None, day=None, h
 def get_foraging_trips_over_time(user, site_name=None, year=None, month=None, day=None, hour=None):
     """Return daily foraging trip counts and avg duration.
 
-    Returns: [{"date": "2024-06-01", "trips": 5, "avg_duration": 120.5}, ...]
+    Prefers DailyForagingSummary (cross-video trips) when available,
+    falls back to per-video JobResult aggregation.
+
+    Returns: [{"date": "2024-06-01", "trips": 5, "avg_duration": 120.5, "cross_video": 2}, ...]
     """
+    # Try DailyForagingSummary first (includes cross-video trips)
+    daily_qs = DailyForagingSummary.objects.filter(user=user)
+    if site_name:
+        daily_qs = daily_qs.filter(site_name=site_name)
+    if year:
+        daily_qs = daily_qs.filter(date__year=year)
+    if month:
+        daily_qs = daily_qs.filter(date__month=month)
+    if day:
+        daily_qs = daily_qs.filter(date__day=day)
+
+    if daily_qs.exists():
+        sorted_data = []
+        for ds in daily_qs.order_by("date"):
+            sorted_data.append({
+                "date": ds.date.strftime("%Y-%m-%d"),
+                "trips": ds.total_trips,
+                "avg_duration": ds.avg_duration_sec,
+                "cross_video": ds.cross_video_trips,
+            })
+        return sorted_data
+
+    # Fallback to per-video aggregation
     qs = JobResult.objects.filter(
         job__user=user,
         job__status=Job.Status.COMPLETED,
@@ -309,6 +335,7 @@ def get_foraging_trips_over_time(user, site_name=None, year=None, month=None, da
             "date": date_key,
             "trips": d["trips"],
             "avg_duration": avg_dur,
+            "cross_video": 0,
         })
     return sorted_data
 
