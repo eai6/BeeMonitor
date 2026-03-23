@@ -232,16 +232,40 @@ def get_summary_stats(user, site_name=None, year=None, month=None, day=None, hou
 
     avg_trip_duration = round(trip_duration_sum / trip_duration_count, 1) if trip_duration_count else 0
 
+    # Prefer DailyForagingSummary for trip stats (includes cross-video trips)
+    daily_qs = DailyForagingSummary.objects.filter(user=user)
+    if site_name:
+        daily_qs = daily_qs.filter(site_name=site_name)
+    if year:
+        daily_qs = daily_qs.filter(date__year=year)
+    if month:
+        daily_qs = daily_qs.filter(date__month=month)
+    if day:
+        daily_qs = daily_qs.filter(date__day=day)
+
+    cross_video_trips = 0
+    if daily_qs.exists():
+        daily_totals = daily_qs.aggregate(
+            trips=Sum("total_trips"),
+            cross=Sum("cross_video_trips"),
+        )
+        total_trips = daily_totals["trips"] or total_trips
+        cross_video_trips = daily_totals["cross"] or 0
+        # Recompute avg from daily data
+        daily_dur = daily_qs.exclude(avg_duration_sec=0)
+        if daily_dur.exists():
+            weighted_sum = sum(d.avg_duration_sec * d.total_trips for d in daily_dur if d.total_trips)
+            weighted_count = sum(d.total_trips for d in daily_dur if d.total_trips)
+            avg_trip_duration = round(weighted_sum / weighted_count, 1) if weighted_count else avg_trip_duration
+
     return {
         "total_videos": len(video_ids),
         "total_events": total_events,
         "total_entries": total_entries,
         "total_exits": total_exits,
-        "avg_events_per_video": round(total_events / count, 1) if count else 0,
-        "total_unique_tracks": total_tracks,
         "total_foraging_trips": total_trips,
+        "cross_video_trips": cross_video_trips,
         "avg_trip_duration": avg_trip_duration,
-        "avg_trips_per_video": round(total_trips / count, 1) if count else 0,
         "completed_jobs": count,
     }
 

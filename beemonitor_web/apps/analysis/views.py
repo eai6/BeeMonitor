@@ -1196,7 +1196,7 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
         return ctx
 
 
-def _load_csv_from_azure(blob_path: str, container: str = "processed", max_rows: int = 500) -> dict:
+def _load_csv_from_azure(blob_path: str, container: str = "processed") -> dict:
     """Download a CSV from Azure and return headers + rows for template rendering."""
     if not blob_path:
         return {"headers": [], "rows": []}
@@ -1215,11 +1215,7 @@ def _load_csv_from_azure(blob_path: str, container: str = "processed", max_rows:
 
         reader = csv.reader(io.StringIO(content))
         headers = next(reader, [])
-        rows = []
-        for i, row in enumerate(reader):
-            if i >= max_rows:
-                break
-            rows.append(row)
+        rows = list(reader)
 
         return {"headers": headers, "rows": rows, "total": len(rows)}
     except Exception as e:

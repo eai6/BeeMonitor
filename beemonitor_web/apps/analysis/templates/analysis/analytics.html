@@ -4,8 +4,8 @@
 
 {% block content %}
 <div class="mb-6">
-  <h1 class="text-2xl font-bold text-gray-900">Activity Analytics</h1>
-  <p class="mt-1 text-sm text-gray-500">Visualize bee activity across your monitored sites.</p>
+  <h1 class="text-2xl font-bold text-gray-900">Foraging Analytics</h1>
+  <p class="mt-1 text-sm text-gray-500">Foraging trip analysis across your monitored sites.</p>
 </div>
 
 <!-- Filter Bar -->
@@ -154,45 +154,48 @@
 </div>
 {% endif %}
 
-<!-- Summary Cards -->
-<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
-  <div class="bg-white shadow rounded-lg p-5 text-center">
-    <p class="text-sm text-gray-500">Total Videos</p>
-    <p class="text-3xl font-bold text-gray-900 mt-1">{{ summary.total_videos }}</p>
+<!-- Foraging Trip Summary -->
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+  <div class="bg-amber-50 border border-amber-200 shadow rounded-lg p-5 text-center">
+    <p class="text-sm text-amber-700 font-medium">Foraging Trips</p>
+    <p class="text-4xl font-bold text-amber-600 mt-1">{{ summary.total_foraging_trips }}</p>
+  </div>
+  <div class="bg-purple-50 border border-purple-200 shadow rounded-lg p-5 text-center">
+    <p class="text-sm text-purple-700 font-medium">Avg Trip Duration</p>
+    <p class="text-4xl font-bold text-purple-600 mt-1">{{ summary.avg_trip_duration }}s</p>
+  </div>
+  <div class="bg-blue-50 border border-blue-200 shadow rounded-lg p-5 text-center">
+    <p class="text-sm text-blue-700 font-medium">Cross-Video Trips</p>
+    <p class="text-4xl font-bold text-blue-600 mt-1">{{ summary.cross_video_trips }}</p>
   </div>
   <div class="bg-white shadow rounded-lg p-5 text-center">
-    <p class="text-sm text-gray-500">Total Events</p>
-    <p class="text-3xl font-bold text-gray-900 mt-1">{{ summary.total_events }}</p>
-  </div>
-  <div class="bg-white shadow rounded-lg p-5 text-center">
-    <p class="text-sm text-gray-500">Foraging Trips</p>
-    <p class="text-3xl font-bold text-amber-600 mt-1">{{ summary.total_foraging_trips }}</p>
-  </div>
-  <div class="bg-white shadow rounded-lg p-5 text-center">
-    <p class="text-sm text-gray-500">Avg Trip Duration</p>
-    <p class="text-3xl font-bold text-purple-600 mt-1">{{ summary.avg_trip_duration }}s</p>
-  </div>
-  <div class="bg-white shadow rounded-lg p-5 text-center">
-    <p class="text-sm text-gray-500">Unique Tracks</p>
-    <p class="text-3xl font-bold text-blue-600 mt-1">{{ summary.total_unique_tracks }}</p>
-  </div>
-  <div class="bg-white shadow rounded-lg p-5 text-center">
-    <p class="text-sm text-gray-500">Avg Trips/Video</p>
-    <p class="text-3xl font-bold text-teal-600 mt-1">{{ summary.avg_trips_per_video }}</p>
+    <p class="text-sm text-gray-500">Videos Analyzed</p>
+    <p class="text-4xl font-bold text-gray-900 mt-1">{{ summary.total_videos }}</p>
   </div>
 </div>
 
-<!-- Entry / Exit Summary -->
-<div class="grid grid-cols-2 gap-4 mb-8">
-  <div class="bg-white shadow rounded-lg p-5 text-center">
-    <p class="text-sm text-gray-500">Total Entries</p>
-    <p class="text-3xl font-bold text-green-600 mt-1">{{ summary.total_entries }}</p>
+<!-- Secondary Stats (collapsible) -->
+<details class="mb-8">
+  <summary class="text-sm text-gray-500 cursor-pointer hover:text-gray-700">Show underlying event details</summary>
+  <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-3">
+    <div class="bg-white shadow rounded-lg p-4 text-center">
+      <p class="text-xs text-gray-500">Total Events</p>
+      <p class="text-xl font-bold text-gray-700">{{ summary.total_events }}</p>
+    </div>
+    <div class="bg-white shadow rounded-lg p-4 text-center">
+      <p class="text-xs text-gray-500">Entries</p>
+      <p class="text-xl font-bold text-green-600">{{ summary.total_entries }}</p>
+    </div>
+    <div class="bg-white shadow rounded-lg p-4 text-center">
+      <p class="text-xs text-gray-500">Exits</p>
+      <p class="text-xl font-bold text-red-600">{{ summary.total_exits }}</p>
+    </div>
+    <div class="bg-white shadow rounded-lg p-4 text-center">
+      <p class="text-xs text-gray-500">Completed Jobs</p>
+      <p class="text-xl font-bold text-gray-700">{{ summary.completed_jobs }}</p>
+    </div>
   </div>
-  <div class="bg-white shadow rounded-lg p-5 text-center">
-    <p class="text-sm text-gray-500">Total Exits</p>
-    <p class="text-3xl font-bold text-red-600 mt-1">{{ summary.total_exits }}</p>
-  </div>
-</div>
+</details>
 
 <!-- Download Buttons -->
 {% if summary.completed_jobs > 0 %}
@@ -237,7 +240,7 @@
 {% if video_breakdown %}
 <div class="bg-white shadow rounded-lg mb-8">
   <div class="px-6 py-4 border-b border-gray-200">
-    <h2 class="text-lg font-medium text-gray-900">Video Breakdown ({{ video_breakdown|length }} videos)</h2>
+    <h2 class="text-lg font-medium text-gray-900">Per-Video Trips ({{ video_breakdown|length }} videos)</h2>
   </div>
   <div class="overflow-x-auto" style="max-height: 400px; overflow-y: auto;">
     <table class="min-w-full divide-y divide-gray-200 text-sm">
@@ -246,14 +249,11 @@
           <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Video</th>
           <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Site</th>
           <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Recorded</th>
-          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Events</th>
-          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Entries</th>
-          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Exits</th>
-          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Tracks</th>
-          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Nests</th>
           <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Trips</th>
           <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Avg Trip (s)</th>
-          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Events</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Nests</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Details</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-gray-200">
@@ -264,13 +264,10 @@
             {% if row.site %}<span class="inline-flex px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800">{{ row.site|sanitize_name }}</span>{% else %}--{% endif %}
           </td>
           <td class="px-4 py-2 text-gray-500">{{ row.recorded }}</td>
-          <td class="px-4 py-2 text-right font-bold">{{ row.events }}</td>
-          <td class="px-4 py-2 text-right text-green-600">{{ row.entries }}</td>
-          <td class="px-4 py-2 text-right text-red-600">{{ row.exits }}</td>
-          <td class="px-4 py-2 text-right text-blue-600">{{ row.tracks }}</td>
-          <td class="px-4 py-2 text-right text-amber-600">{{ row.nests }}</td>
-          <td class="px-4 py-2 text-right text-purple-600 font-bold">{{ row.trips }}</td>
-          <td class="px-4 py-2 text-right text-purple-500">{{ row.avg_trip_sec }}</td>
+          <td class="px-4 py-2 text-right text-amber-600 font-bold text-base">{{ row.trips }}</td>
+          <td class="px-4 py-2 text-right text-purple-600">{{ row.avg_trip_sec }}</td>
+          <td class="px-4 py-2 text-right text-gray-500">{{ row.events }}</td>
+          <td class="px-4 py-2 text-right text-gray-500">{{ row.nests }}</td>
           <td class="px-4 py-2">
             <a href="{% url 'analysis:results' row.job_pk %}" class="text-amber-600 hover:underline text-xs">Results</a>
           </td>
@@ -282,13 +279,19 @@
 </div>
 {% endif %}
 
-<!-- Charts -->
+<!-- Foraging Trip Charts -->
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
 
-  <!-- Cumulative Activity Chart -->
+  <!-- Foraging Trips Over Time -->
   <div class="bg-white shadow rounded-lg p-6">
-    <h2 class="text-lg font-medium text-gray-900 mb-4">Cumulative Activity Over Time</h2>
-    <canvas id="cumulativeChart" height="250"></canvas>
+    <h2 class="text-lg font-medium text-gray-900 mb-4">Foraging Trips Over Time</h2>
+    <canvas id="foragingTripsChart" height="250"></canvas>
+  </div>
+
+  <!-- Trips Per Nest -->
+  <div class="bg-white shadow rounded-lg p-6">
+    <h2 class="text-lg font-medium text-gray-900 mb-4">Foraging Trips by Nest</h2>
+    <canvas id="tripsPerNestChart" height="250"></canvas>
   </div>
 
   <!-- Hourly Activity Chart -->
@@ -302,25 +305,22 @@
     <h2 class="text-lg font-medium text-gray-900 mb-4">Average Events by Day of Week</h2>
     <canvas id="dailyChart" height="250"></canvas>
   </div>
-
-  <!-- Monthly Trend Chart -->
-  <div class="bg-white shadow rounded-lg p-6">
-    <h2 class="text-lg font-medium text-gray-900 mb-4">Monthly Activity Trend</h2>
-    <canvas id="monthlyChart" height="250"></canvas>
-  </div>
-
-  <!-- Foraging Trips Over Time -->
-  <div class="bg-white shadow rounded-lg p-6">
-    <h2 class="text-lg font-medium text-gray-900 mb-4">Foraging Trips Over Time</h2>
-    <canvas id="foragingTripsChart" height="250"></canvas>
-  </div>
-
-  <!-- Trips Per Nest -->
-  <div class="bg-white shadow rounded-lg p-6">
-    <h2 class="text-lg font-medium text-gray-900 mb-4">Foraging Trips by Nest</h2>
-    <canvas id="tripsPerNestChart" height="250"></canvas>
-  </div>
 </div>
+
+<!-- Additional Charts -->
+<details class="mb-8">
+  <summary class="text-sm text-gray-500 cursor-pointer hover:text-gray-700 mb-3">Show cumulative and monthly charts</summary>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div class="bg-white shadow rounded-lg p-6">
+      <h2 class="text-lg font-medium text-gray-900 mb-4">Cumulative Activity Over Time</h2>
+      <canvas id="cumulativeChart" height="250"></canvas>
+    </div>
+    <div class="bg-white shadow rounded-lg p-6">
+      <h2 class="text-lg font-medium text-gray-900 mb-4">Monthly Activity Trend</h2>
+      <canvas id="monthlyChart" height="250"></canvas>
+    </div>
+  </div>
+</details>
 
 <!-- Nest Activity Heatmap — 6 rows × 10 columns grid -->
 <div class="bg-white shadow rounded-lg p-6 mb-8">
