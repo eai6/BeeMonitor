@@ -170,47 +170,50 @@ class EventProcessor:
         
         for movement in movements:
             # Handle different tuple lengths (4, 5, or 6 elements)
+            taxon = 'unknown'
             if len(movement) == 6:
-                track_id, centroids, bboxes, frame_numbers, labels, _ = movement
+                track_id, centroids, bboxes, frame_numbers, taxon, _ = movement
             elif len(movement) == 5:
-                track_id, centroids, bboxes, frame_numbers, labels = movement
+                track_id, centroids, bboxes, frame_numbers, taxon = movement
             elif len(movement) == 4:
                 track_id, centroids, bboxes, frame_numbers = movement
             else:
                 logger.warning(f"Unexpected movement tuple length: {len(movement)}, skipping")
                 continue
-            
+
             # Check EXIT (start of trajectory)
             start_frame = frame_numbers[0]
             start_pos = centroids[:window_size]  # First 1 frame
-            
+
             for hole_id, bbox in hole_bboxes.items():
                 # Check if bee starts inside this nest
                 inside = all(self._is_inside_bbox(pos, bbox, padding) for pos in start_pos)
-                
+
                 if inside:
                     events.append({
                         'action': 'Exit',
                         'nest': hole_id,
                         'frame_number': start_frame,
-                        'track_id': track_id
+                        'track_id': track_id,
+                        'taxon': taxon,
                     })
                     break  # One exit per trajectory
-            
+
             # Check ENTRY (end of trajectory)
             end_frame = frame_numbers[-1]
             end_pos = centroids[-window_size:]  # Last 1 frame
-            
+
             for hole_id, bbox in hole_bboxes.items():
                 # Check if bee ends inside this nest
                 inside = all(self._is_inside_bbox(pos, bbox, padding) for pos in end_pos)
-                
+
                 if inside:
                     events.append({
                         'action': 'Entry',
                         'nest': hole_id,
                         'frame_number': end_frame,
-                        'track_id': track_id
+                        'track_id': track_id,
+                        'taxon': taxon,
                     })
                     break  # One entry per trajectory
         
@@ -261,9 +264,9 @@ class EventProcessor:
             for movement in movements:
                 # Handle different tuple lengths (4, 5, or 6 elements)
                 if len(movement) == 6:
-                    track_id, centroids, bboxes, frame_numbers, labels, _ = movement
+                    track_id, centroids, bboxes, frame_numbers, _taxon, _ = movement
                 elif len(movement) == 5:
-                    track_id, centroids, bboxes, frame_numbers, labels = movement
+                    track_id, centroids, bboxes, frame_numbers, _taxon = movement
                 elif len(movement) == 4:
                     track_id, centroids, bboxes, frame_numbers = movement
                 else:

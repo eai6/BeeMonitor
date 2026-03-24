@@ -281,8 +281,14 @@ class BeeMonitor:
                              for _, row in seg_df.iterrows()]
                     frame_numbers = seg_df['frame'].tolist()
                     
-                    most_common_species = 'bee'
-                    species_votes = {'bee': len(frame_numbers)}
+                    # Extract taxon from tracking data (YOLO class label)
+                    if 'taxon' in seg_df.columns:
+                        taxon_counts = seg_df['taxon'].value_counts()
+                        most_common_species = taxon_counts.index[0] if len(taxon_counts) > 0 else 'unknown'
+                        species_votes = taxon_counts.to_dict()
+                    else:
+                        most_common_species = 'unknown'
+                        species_votes = {'unknown': len(frame_numbers)}
                     
                     # v2.3: No min_track_length filtering here - let ML handle it
                     # All tracks are passed to EventProcessor for ML-based filtering

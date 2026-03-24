@@ -637,7 +637,13 @@ def backfill_interactions(jobs: list[dict]) -> list[dict]:
                     results.append({"job_id": job_id, "status": "skipped", "reason": "No interactions", "interaction_count": 0})
                     continue
 
-                # Build CSV with user-friendly columns
+                # Build track_id → taxon lookup from tracking data
+                taxon_lookup = {}
+                if "taxon" in tracking_df.columns and "track_id" in tracking_df.columns:
+                    for tid, grp in tracking_df.groupby("track_id"):
+                        taxon_lookup[tid] = grp["taxon"].mode().iloc[0] if len(grp) > 0 else "unknown"
+
+                # Build CSV with taxon-aware columns
                 track_set = set(id(e) for e in track_interactions)
                 rows = []
                 for event in all_interactions:
@@ -645,7 +651,9 @@ def backfill_interactions(jobs: list[dict]) -> list[dict]:
                     rows.append({
                         "interaction_type": "organism-to-organism" if is_track else "organism-to-reference",
                         "organism_track_id": event.entity1_id,
+                        "organism_taxon": taxon_lookup.get(event.entity1_id, "unknown"),
                         "partner_track_id": event.entity2_id if is_track else "",
+                        "partner_taxon": taxon_lookup.get(event.entity2_id, "") if is_track else "",
                         "reference_id": "" if is_track else event.entity2_id,
                         "start_frame": event.start_frame,
                         "end_frame": event.end_frame,

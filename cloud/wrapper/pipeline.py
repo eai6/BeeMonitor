@@ -184,10 +184,16 @@ class CloudPipeline:
                 interaction_count = len(all_interactions)
 
                 if all_interactions:
+                    # Build track_id → taxon lookup from tracking data
+                    import pandas as pd
+                    taxon_lookup = {}
+                    if tracks is not None and "taxon" in tracks.columns and "track_id" in tracks.columns:
+                        for tid, grp in tracks.groupby("track_id"):
+                            taxon_lookup[tid] = grp["taxon"].mode().iloc[0] if len(grp) > 0 else "unknown"
+
                     # Combined CSV — organism-to-organism and organism-to-reference
                     # Each row is one pairwise interaction. Multi-party encounters
                     # produce multiple rows (e.g., A near B and C = rows A-B, A-C, B-C)
-                    import pandas as pd
                     rows = []
                     track_set = set(id(e) for e in track_interactions)
                     for event in all_interactions:
@@ -195,7 +201,9 @@ class CloudPipeline:
                         rows.append({
                             "interaction_type": "organism-to-organism" if is_track else "organism-to-reference",
                             "organism_track_id": event.entity1_id,
+                            "organism_taxon": taxon_lookup.get(event.entity1_id, "unknown"),
                             "partner_track_id": event.entity2_id if is_track else "",
+                            "partner_taxon": taxon_lookup.get(event.entity2_id, "") if is_track else "",
                             "reference_id": "" if is_track else event.entity2_id,
                             "start_frame": event.start_frame,
                             "end_frame": event.end_frame,

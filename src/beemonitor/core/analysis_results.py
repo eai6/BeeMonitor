@@ -103,15 +103,16 @@ class AnalysisResults:
             elif isinstance(self.tracks, dict):
                 # Extract from Track objects (dict format)
                 track_rows = []
-                
+
                 for track_id, track_obj in self.tracks.items():
                     # Handle Track object with trajectory and bboxes
                     if hasattr(track_obj, 'trajectory') and hasattr(track_obj, 'bboxes'):
+                        taxon = getattr(track_obj, 'taxon', 'unknown')
                         for i, (frame, centroid) in enumerate(track_obj.trajectory):
                             if i < len(track_obj.bboxes):
                                 x, y = centroid
                                 x1, y1, x2, y2 = track_obj.bboxes[i]
-                                
+
                                 track_rows.append({
                                     'frame': int(frame),
                                     'track_id': int(track_id),
@@ -120,7 +121,8 @@ class AnalysisResults:
                                     'x1': float(x1),
                                     'y1': float(y1),
                                     'x2': float(x2),
-                                    'y2': float(y2)
+                                    'y2': float(y2),
+                                    'taxon': taxon,
                                 })
                 
                 if track_rows:
