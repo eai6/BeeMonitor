@@ -33,9 +33,11 @@ class PipelineResult:
     events_csv_path: str  # Azure blob path
     tracking_csv_path: str  # Azure blob path
     foraging_trips_csv_path: str  # Azure blob path
+    interactions_csv_path: str  # Azure blob path
     annotated_video_path: str  # Azure blob path (empty if visualize=False)
     foraging_trip_count: int
     avg_trip_duration_sec: float
+    interaction_count: int
     summary_stats: dict
 
     def to_dict(self) -> dict:
@@ -136,9 +138,10 @@ class CloudPipeline:
             custom_bee_local=custom_bee_local,
         )
 
-        # Step 4 — Compute foraging trips from events
+        # Step 4 — Post-processing: foraging trips + interactions
         events = result.events if result is not None else None
         tracks = result.tracks if result is not None else None
+        nests = result.nests if result is not None else None
 
         from cloud.wrapper.foraging import compute_foraging_trips, compute_trip_summary
 
@@ -158,6 +161,68 @@ class CloudPipeline:
             trips_csv_path = str(output_dir / "foraging_trips.csv")
             trips_df.to_csv(trips_csv_path, index=False)
             logger.info("[%s] Saved %d foraging trips", job_id, len(trips_df))
+
+        # Step 4b — Compute interactions from tracking data
+        interaction_count = 0
+        try:
+            if (tracks is not None and hasattr(tracks, "empty") and not tracks.empty
+                    and nests and isinstance(nests, dict) and nests.get("nests")):
+                from beemonitor.processing.interaction_analyzer import InteractionAnalyzer, nests_to_reference_objects
+
+                analyzer = InteractionAnalyzer(fps=fps)
+
+                # Bee-to-bee interactions
+                track_interactions, _ = analyzer.analyze_track_interactions(tracks)
+
+                # Bee-to-reference (nest) interactions
+                ref_objects = nests_to_reference_objects(
+                    [{"id": k, "bbox": v} for k, v in nests["nests"].items()]
+                )
+                ref_interactions, _ = analyzer.analyze_reference_interactions(tracks, ref_objects)
+
+                all_interactions = track_interactions + ref_interactions
+                interaction_count = len(all_interactions)
+
+                if all_interactions:
+                    # Combined CSV with user-friendly column names
+                    import pandas as pd
+                    rows = []
+                    track_set = set(id(e) for e in track_interactions)
+                    for event in all_interactions:
+                        is_track = id(event) in track_set
+                        if is_track:
+                            # Bee-to-bee interaction
+                            rows.append({
+                                "interaction_type": "bee-to-bee",
+                                "bee": event.entity1_id,
+                                "partner_bee": event.entity2_id,
+                                "reference": "",
+                                "start_frame": event.start_frame,
+                                "end_frame": event.end_frame,
+                                "duration_frames": event.duration_frames,
+                                "duration_seconds": round(event.duration_frames / fps, 2),
+                                "min_distance_px": round(event.min_distance, 1),
+                                "avg_distance_px": round(event.avg_distance, 1),
+                            })
+                        else:
+                            # Bee-to-reference interaction
+                            rows.append({
+                                "interaction_type": "bee-to-reference",
+                                "bee": event.entity1_id,
+                                "partner_bee": "",
+                                "reference": event.entity2_id,
+                                "start_frame": event.start_frame,
+                                "end_frame": event.end_frame,
+                                "duration_frames": event.duration_frames,
+                                "duration_seconds": round(event.duration_frames / fps, 2),
+                                "min_distance_px": round(event.min_distance, 1),
+                                "avg_distance_px": round(event.avg_distance, 1),
+                            })
+                    pd.DataFrame(rows).to_csv(str(output_dir / "interactions.csv"), index=False)
+                    logger.info("[%s] Saved %d interactions (%d bee-to-bee, %d bee-to-reference)",
+                                job_id, len(all_interactions), len(track_interactions), len(ref_interactions))
+        except Exception as e:
+            logger.warning("[%s] Interaction analysis failed (non-fatal): %s", job_id, e)
 
         # Step 5 — Upload results to Azure
         logger.info("[%s] Uploading results to Azure", job_id)
@@ -181,9 +246,18 @@ class CloudPipeline:
         else:
             stats = {}
 
-        # Merge foraging trip summary into stats
+        # Merge foraging trip + interaction summary into stats
         stats["foraging_trips"] = trip_summary
         stats["video_fps"] = fps
+        stats["interaction_count"] = interaction_count
+
+        # Persist nest bounding boxes for future use (avoids re-detection)
+        if nests and isinstance(nests, dict) and nests.get("nests"):
+            # Convert numpy arrays/tuples to plain lists for JSON serialization
+            nest_bboxes = {}
+            for nest_id, bbox in nests["nests"].items():
+                nest_bboxes[str(nest_id)] = [float(x) for x in bbox]
+            stats["nest_bboxes"] = nest_bboxes
 
         total_events = len(events) if events is not None and hasattr(events, "__len__") else 0
         unique_tracks = 0
@@ -201,9 +275,11 @@ class CloudPipeline:
             events_csv_path=azure_paths.get("events_csv", ""),
             tracking_csv_path=azure_paths.get("tracking_csv", ""),
             foraging_trips_csv_path=azure_paths.get("foraging_trips_csv", ""),
+            interactions_csv_path=azure_paths.get("interactions_csv", ""),
             annotated_video_path=azure_paths.get("annotated_video", ""),
             foraging_trip_count=trip_summary["total_trips"],
             avg_trip_duration_sec=trip_summary["avg_duration_sec"],
+            interaction_count=interaction_count,
             summary_stats=stats,
         )
 
@@ -292,6 +368,13 @@ class CloudPipeline:
             blob_path = f"{prefix}/foraging_trips.csv"
             self._storage.upload_file(container, blob_path, str(trips_files[0]))
             uploaded["foraging_trips_csv"] = blob_path
+
+        # Interactions CSV
+        interactions_files = list(output_dir.glob("interactions.csv"))
+        if interactions_files:
+            blob_path = f"{prefix}/interactions.csv"
+            self._storage.upload_file(container, blob_path, str(interactions_files[0]))
+            uploaded["interactions_csv"] = blob_path
 
         # Annotated video — re-encode to H.264 with ffmpeg for browser playback
         video_files = list(output_dir.glob("*.mp4"))

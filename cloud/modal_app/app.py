@@ -519,6 +519,170 @@ def pre_annotate_video(
     }
 
 
+# ── Interaction Backfill (CPU-only) ──────────────────────────────────
+
+@app.function(
+    timeout=14400,  # 4 hours
+    volumes={MODEL_VOLUME_MOUNT: model_volume},
+    secrets=[modal.Secret.from_name("azure-storage")],
+    memory=4096,
+    min_containers=0,
+    max_containers=10,
+)
+def backfill_interactions(jobs: list[dict]) -> list[dict]:
+    """Backfill interaction CSVs for completed jobs. CPU-only (no GPU).
+
+    For each job: download first frame, run nest detection, download
+    tracking CSV, compute interactions, upload interactions.csv.
+
+    Each dict: job_id, user_id, video_blob_path, tracking_csv_path, fps
+    """
+    import csv
+    import io
+    import logging
+    import tempfile
+    from pathlib import Path
+
+    import cv2
+    import numpy as np
+    import pandas as pd
+
+    from cloud.storage.azure_client import AzureBlobClient
+    from cloud.storage.config import StorageConfig
+    from cloud.wrapper.model_manager import ModelManager
+    from beemonitor.detection.nest_detector import NestDetector
+    from beemonitor.processing.interaction_analyzer import InteractionAnalyzer
+
+    logger = logging.getLogger(__name__)
+    logger.info("Backfilling interactions for %d jobs", len(jobs))
+
+    config = StorageConfig()
+    storage = AzureBlobClient(config)
+    models = ModelManager(
+        storage_client=storage,
+        storage_config=config,
+        local_cache_dir=MODEL_VOLUME_MOUNT,
+    )
+
+    # Load nest detection model once
+    model_paths = models.ensure_models()
+    nest_detector = NestDetector(model_path=model_paths.nest_detection)
+
+    results = []
+    for job_cfg in jobs:
+        job_id = job_cfg["job_id"]
+        user_id = job_cfg["user_id"]
+        video_blob_path = job_cfg["video_blob_path"]
+        tracking_csv_path = job_cfg["tracking_csv_path"]
+        fps = job_cfg.get("fps", 30.0)
+        stored_bboxes = job_cfg.get("nest_bboxes", {})
+
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                nest_bboxes = {}
+
+                if stored_bboxes:
+                    # Use pre-stored nest bboxes (no need to download video)
+                    nest_bboxes = {k: tuple(v) for k, v in stored_bboxes.items()}
+                    logger.info("[%s] Using %d stored nest bboxes", job_id, len(nest_bboxes))
+                else:
+                    # Download video and run nest detection on first frame
+                    video_local = str(Path(tmpdir) / "video.mp4")
+                    storage.download_file(config.raw_videos_container, video_blob_path, video_local)
+
+                    cap = cv2.VideoCapture(video_local)
+                    ret, frame = cap.read()
+                    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    detected_fps = cap.get(cv2.CAP_PROP_FPS)
+                    if detected_fps > 0:
+                        fps = detected_fps
+                    cap.release()
+
+                    if not ret or frame is None:
+                        results.append({"job_id": job_id, "status": "failed", "error": "Cannot read video"})
+                        continue
+
+                    nest_result = nest_detector.detect_nests(frame, video_local, height, width)
+                    if nest_result.empty:
+                        results.append({"job_id": job_id, "status": "skipped", "reason": "No nests detected"})
+                        continue
+
+                    nests_dict = nest_detector.organize_nests(nest_result, height, width)
+                    nest_bboxes = nests_dict.get("nests", {})
+
+                if not nest_bboxes:
+                    results.append({"job_id": job_id, "status": "skipped", "reason": "No nest bboxes"})
+                    continue
+
+                # Download tracking CSV
+                blob = storage._service.get_blob_client(config.processed_container, tracking_csv_path)
+                tracking_content = blob.download_blob().readall().decode("utf-8")
+                tracking_df = pd.read_csv(io.StringIO(tracking_content))
+
+                # Normalize column names to lowercase
+                tracking_df.columns = tracking_df.columns.str.lower()
+
+                if tracking_df.empty or "cx" not in tracking_df.columns:
+                    results.append({"job_id": job_id, "status": "skipped", "reason": "No tracking data"})
+                    continue
+
+                # Run interaction analysis
+                analyzer = InteractionAnalyzer(fps=fps)
+                track_interactions, _ = analyzer.analyze_track_interactions(tracking_df)
+                ref_interactions, _ = analyzer.analyze_reference_interactions(tracking_df, nest_bboxes)
+
+                all_interactions = track_interactions + ref_interactions
+                if not all_interactions:
+                    results.append({"job_id": job_id, "status": "skipped", "reason": "No interactions", "interaction_count": 0})
+                    continue
+
+                # Build CSV with user-friendly columns
+                track_set = set(id(e) for e in track_interactions)
+                rows = []
+                for event in all_interactions:
+                    is_track = id(event) in track_set
+                    rows.append({
+                        "interaction_type": "bee-to-bee" if is_track else "bee-to-reference",
+                        "bee": event.entity1_id,
+                        "partner_bee": event.entity2_id if is_track else "",
+                        "reference": "" if is_track else event.entity2_id,
+                        "start_frame": event.start_frame,
+                        "end_frame": event.end_frame,
+                        "duration_frames": event.duration_frames,
+                        "duration_seconds": round(event.duration_frames / fps, 2),
+                        "min_distance_px": round(event.min_distance, 1),
+                        "avg_distance_px": round(event.avg_distance, 1),
+                    })
+
+                # Upload interactions CSV
+                prefix = f"{user_id}/{job_id}"
+                interactions_blob_path = f"{prefix}/interactions.csv"
+                csv_content = pd.DataFrame(rows).to_csv(index=False)
+                blob_client = storage._service.get_blob_client(config.processed_container, interactions_blob_path)
+                blob_client.upload_blob(csv_content.encode("utf-8"), overwrite=True)
+
+                results.append({
+                    "job_id": job_id,
+                    "status": "completed",
+                    "interactions_csv_path": interactions_blob_path,
+                    "interaction_count": len(all_interactions),
+                    "track_interactions": len(track_interactions),
+                    "reference_interactions": len(ref_interactions),
+                })
+                logger.info("[%s] %d interactions (%d track, %d ref)",
+                            job_id, len(all_interactions), len(track_interactions), len(ref_interactions))
+
+        except Exception as e:
+            logger.error("[%s] Backfill failed: %s", job_id, e)
+            results.append({"job_id": job_id, "status": "failed", "error": str(e)})
+
+    model_volume.commit()
+    completed = sum(1 for r in results if r.get("status") == "completed")
+    logger.info("Backfill done: %d/%d completed", completed, len(jobs))
+    return results
+
+
 # ── YOLO Model Training ──────────────────────────────────────────────
 
 @app.function(

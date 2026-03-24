@@ -93,6 +93,7 @@ class JobResult(models.Model):
     events_csv_path = models.CharField(max_length=500, blank=True)
     tracking_csv_path = models.CharField(max_length=500, blank=True)
     foraging_trips_csv_path = models.CharField(max_length=500, blank=True)
+    interactions_csv_path = models.CharField(max_length=500, blank=True)
     annotated_video_path = models.CharField(max_length=500, blank=True)
     total_events = models.IntegerField(default=0)
     entry_count = models.IntegerField(default=0)
@@ -101,6 +102,7 @@ class JobResult(models.Model):
     nest_count = models.IntegerField(default=0)
     foraging_trip_count = models.IntegerField(default=0)
     avg_trip_duration_sec = models.FloatField(null=True, blank=True)
+    interaction_count = models.IntegerField(default=0)
     summary_stats = models.JSONField(default=dict, blank=True)
 
     def __str__(self):

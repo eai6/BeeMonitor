@@ -566,6 +566,7 @@ class PollJobsView(LoginRequiredMixin, View):
                                 "events_csv_path": result.get("events_csv_path", ""),
                                 "tracking_csv_path": result.get("tracking_csv_path", ""),
                                 "foraging_trips_csv_path": result.get("foraging_trips_csv_path", ""),
+                                "interactions_csv_path": result.get("interactions_csv_path", ""),
                                 "annotated_video_path": result.get("annotated_video_path", ""),
                                 "total_events": result.get("total_events", 0),
                                 "entry_count": result.get("entry_count", 0),
@@ -574,6 +575,7 @@ class PollJobsView(LoginRequiredMixin, View):
                                 "nest_count": result.get("nest_count", 0),
                                 "foraging_trip_count": result.get("foraging_trip_count", 0),
                                 "avg_trip_duration_sec": result.get("avg_trip_duration_sec"),
+                                "interaction_count": result.get("interaction_count", 0),
                                 "summary_stats": result.get("summary_stats", {}),
                             },
                         )
@@ -778,7 +780,7 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
 
         events_path = result.events_csv_path or (f"{prefix}/events.csv" if modal_id else "")
         tracking_path = result.tracking_csv_path or (f"{prefix}/tracking_results.csv" if modal_id else "")
-        trips_path = result.foraging_trips_csv_path or (f"{prefix}/foraging_trips.csv" if modal_id else "")
+        interactions_path = result.interactions_csv_path or (f"{prefix}/interactions.csv" if modal_id else "")
         annotated_path = result.annotated_video_path or (f"{prefix}/annotated_video.mp4" if modal_id else "")
 
         # Generate SAS URLs for viewing/downloading
@@ -786,8 +788,8 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
             ctx["events_csv_url"] = _generate_sas_url(events_path)
         if tracking_path:
             ctx["tracking_csv_url"] = _generate_sas_url(tracking_path)
-        if trips_path:
-            ctx["foraging_trips_csv_url"] = _generate_sas_url(trips_path)
+        if interactions_path:
+            ctx["interactions_csv_url"] = _generate_sas_url(interactions_path)
         if annotated_path:
             ctx["annotated_video_url"] = _generate_sas_url(annotated_path)
 
@@ -800,7 +802,7 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         # Load CSV data for display in tables
         ctx["events_data"] = _load_csv_from_azure(events_path)
         ctx["tracking_data"] = _load_csv_from_azure(tracking_path)
-        ctx["foraging_trips_data"] = _load_csv_from_azure(trips_path)
+        ctx["interactions_data"] = _load_csv_from_azure(interactions_path)
 
         return ctx
 
@@ -1049,6 +1051,70 @@ class DownloadTripsCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
         if writer is None:
             writer = csv.writer(response)
             writer.writerow(["No foraging trip data found for this filter"])
+
+        return response
+
+
+class DownloadInteractionsCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
+    """Download combined interactions CSV for all filtered completed jobs."""
+
+    def get(self, request):
+        import csv
+        import io
+        from django.http import HttpResponse
+
+        results, label = self._get_filtered_results(request)
+
+        if not results.exists():
+            from django.contrib import messages as msg
+            msg.warning(request, "No completed jobs matching this filter.")
+            return redirect("analysis:analytics")
+
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = f'attachment; filename="beemonitor_interactions_{label}.csv"'
+
+        writer = None
+        conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
+
+        if conn_str:
+            from azure.storage.blob import BlobServiceClient
+            service = BlobServiceClient.from_connection_string(conn_str)
+
+            for result in results:
+                path = result.interactions_csv_path
+                if not path:
+                    mid = result.job.modal_job_id
+                    uid = str(result.job.user_id)
+                    if mid:
+                        path = f"{uid}/{mid}/interactions.csv"
+                    else:
+                        continue
+
+                try:
+                    blob = service.get_blob_client("processed", path)
+                    content = blob.download_blob().readall().decode("utf-8")
+                    reader = csv.reader(io.StringIO(content))
+                    headers = next(reader, [])
+
+                    if writer is None:
+                        all_headers = ["video_title", "site_name", "recorded_at"] + headers
+                        writer = csv.writer(response)
+                        writer.writerow(all_headers)
+
+                    video = result.job.video
+                    prefix = [
+                        video.title,
+                        video.site_name,
+                        video.recorded_at.isoformat() if video.recorded_at else "",
+                    ]
+                    for row in reader:
+                        writer.writerow(prefix + row)
+                except Exception as e:
+                    logger.error("Failed to read interactions CSV %s: %s", path, e)
+
+        if writer is None:
+            writer = csv.writer(response)
+            writer.writerow(["No interaction data found for this filter"])
 
         return response
 
