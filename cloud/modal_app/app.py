@@ -643,10 +643,10 @@ def backfill_interactions(jobs: list[dict]) -> list[dict]:
                 for event in all_interactions:
                     is_track = id(event) in track_set
                     rows.append({
-                        "interaction_type": "bee-to-bee" if is_track else "bee-to-reference",
-                        "bee": event.entity1_id,
-                        "partner_bee": event.entity2_id if is_track else "",
-                        "reference": "" if is_track else event.entity2_id,
+                        "interaction_type": "organism-to-organism" if is_track else "organism-to-reference",
+                        "organism_track_id": event.entity1_id,
+                        "partner_track_id": event.entity2_id if is_track else "",
+                        "reference_id": "" if is_track else event.entity2_id,
                         "start_frame": event.start_frame,
                         "end_frame": event.end_frame,
                         "duration_frames": event.duration_frames,

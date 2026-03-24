@@ -184,42 +184,28 @@ class CloudPipeline:
                 interaction_count = len(all_interactions)
 
                 if all_interactions:
-                    # Combined CSV with user-friendly column names
+                    # Combined CSV — organism-to-organism and organism-to-reference
+                    # Each row is one pairwise interaction. Multi-party encounters
+                    # produce multiple rows (e.g., A near B and C = rows A-B, A-C, B-C)
                     import pandas as pd
                     rows = []
                     track_set = set(id(e) for e in track_interactions)
                     for event in all_interactions:
                         is_track = id(event) in track_set
-                        if is_track:
-                            # Bee-to-bee interaction
-                            rows.append({
-                                "interaction_type": "bee-to-bee",
-                                "bee": event.entity1_id,
-                                "partner_bee": event.entity2_id,
-                                "reference": "",
-                                "start_frame": event.start_frame,
-                                "end_frame": event.end_frame,
-                                "duration_frames": event.duration_frames,
-                                "duration_seconds": round(event.duration_frames / fps, 2),
-                                "min_distance_px": round(event.min_distance, 1),
-                                "avg_distance_px": round(event.avg_distance, 1),
-                            })
-                        else:
-                            # Bee-to-reference interaction
-                            rows.append({
-                                "interaction_type": "bee-to-reference",
-                                "bee": event.entity1_id,
-                                "partner_bee": "",
-                                "reference": event.entity2_id,
-                                "start_frame": event.start_frame,
-                                "end_frame": event.end_frame,
-                                "duration_frames": event.duration_frames,
-                                "duration_seconds": round(event.duration_frames / fps, 2),
-                                "min_distance_px": round(event.min_distance, 1),
-                                "avg_distance_px": round(event.avg_distance, 1),
-                            })
+                        rows.append({
+                            "interaction_type": "organism-to-organism" if is_track else "organism-to-reference",
+                            "organism_track_id": event.entity1_id,
+                            "partner_track_id": event.entity2_id if is_track else "",
+                            "reference_id": "" if is_track else event.entity2_id,
+                            "start_frame": event.start_frame,
+                            "end_frame": event.end_frame,
+                            "duration_frames": event.duration_frames,
+                            "duration_seconds": round(event.duration_frames / fps, 2),
+                            "min_distance_px": round(event.min_distance, 1),
+                            "avg_distance_px": round(event.avg_distance, 1),
+                        })
                     pd.DataFrame(rows).to_csv(str(output_dir / "interactions.csv"), index=False)
-                    logger.info("[%s] Saved %d interactions (%d bee-to-bee, %d bee-to-reference)",
+                    logger.info("[%s] Saved %d interactions (%d organism-to-organism, %d organism-to-reference)",
                                 job_id, len(all_interactions), len(track_interactions), len(ref_interactions))
         except Exception as e:
             logger.warning("[%s] Interaction analysis failed (non-fatal): %s", job_id, e)
