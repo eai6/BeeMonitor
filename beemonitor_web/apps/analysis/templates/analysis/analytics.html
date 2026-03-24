@@ -265,6 +265,13 @@
   <canvas id="foragingTripsChart" height="200"></canvas>
 </div>
 
+<!-- Weather Conditions (full width) -->
+<div class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-lg font-medium text-gray-900 mb-4">Weather Conditions</h2>
+  <p class="text-xs text-gray-400 mb-3">Temperature and precipitation from Open-Meteo (nearest station).</p>
+  <canvas id="weatherChart" height="180"></canvas>
+</div>
+
 <!-- Nest Activity Heatmap (full width) — 6 rows × 10 columns grid -->
 <div class="bg-white shadow rounded-lg p-6 mb-8">
   <h2 class="text-lg font-medium text-gray-900 mb-2">Nest Activity Heatmap</h2>
@@ -332,6 +339,59 @@ document.addEventListener('DOMContentLoaded', function() {
                     x: { title: { display: true, text: 'Date' } },
                     y: { title: { display: true, text: 'Trips' }, beginAtZero: true, position: 'left' },
                     y1: { title: { display: true, text: 'Avg Duration (min)' }, beginAtZero: true, position: 'right', grid: { drawOnChartArea: false } }
+                }
+            }
+        });
+    }
+
+    // --- Weather Chart ---
+    const weatherData = JSON.parse('{{ weather_json|escapejs }}');
+    if (weatherData.length > 0) {
+        new Chart(document.getElementById('weatherChart'), {
+            data: {
+                labels: weatherData.map(d => d.date),
+                datasets: [
+                    {
+                        type: 'bar',
+                        label: 'Precipitation (mm)',
+                        data: weatherData.map(d => d.precipitation_mm),
+                        backgroundColor: 'rgba(59, 130, 246, 0.6)',
+                        borderRadius: 2,
+                        yAxisID: 'y1',
+                        order: 1,
+                    },
+                    {
+                        type: 'line',
+                        label: 'Max Temp',
+                        data: weatherData.map(d => d.temp_max),
+                        borderColor: '#dc2626',
+                        backgroundColor: 'rgba(220, 38, 38, 0.05)',
+                        tension: 0.3,
+                        pointRadius: 2,
+                        fill: false,
+                        yAxisID: 'y',
+                        order: 0,
+                    },
+                    {
+                        type: 'line',
+                        label: 'Min Temp',
+                        data: weatherData.map(d => d.temp_min),
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.05)',
+                        tension: 0.3,
+                        pointRadius: 2,
+                        fill: '-1',
+                        yAxisID: 'y',
+                        order: 0,
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    x: { title: { display: true, text: 'Date' } },
+                    y: { title: { display: true, text: 'Temperature (°C)' }, position: 'left' },
+                    y1: { title: { display: true, text: 'Precipitation (mm)' }, position: 'right', beginAtZero: true, grid: { drawOnChartArea: false } }
                 }
             }
         });

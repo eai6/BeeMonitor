@@ -1259,7 +1259,56 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
         except Exception:
             ctx["trips_per_nest_json"] = "[]"
 
+        # Fetch weather data for the date range of foraging trips
+        try:
+            foraging_over_time = json.loads(ctx.get("foraging_trips_json", "[]"))
+            if foraging_over_time:
+                dates = [d["date"] for d in foraging_over_time]
+                weather = _fetch_weather_data(dates[0], dates[-1])
+                ctx["weather_json"] = json.dumps(weather, default=str)
+            else:
+                ctx["weather_json"] = "[]"
+        except Exception:
+            ctx["weather_json"] = "[]"
+
         return ctx
+
+
+def _fetch_weather_data(start_date: str, end_date: str, lat: float = 40.79, lon: float = -77.86) -> list:
+    """Fetch historical weather from Open-Meteo (free, no API key).
+
+    Returns list of dicts: [{"date": "2024-04-16", "temp_max": 24.8, "temp_min": 2.0,
+                             "temp_mean": 13.7, "precipitation_mm": 0.0}, ...]
+    """
+    import urllib.request
+
+    url = (
+        f"https://archive-api.open-meteo.com/v1/archive"
+        f"?latitude={lat}&longitude={lon}"
+        f"&start_date={start_date}&end_date={end_date}"
+        f"&daily=temperature_2m_max,temperature_2m_min,temperature_2m_mean,precipitation_sum"
+        f"&timezone=auto"
+    )
+
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        daily = data.get("daily", {})
+        dates = daily.get("time", [])
+        result = []
+        for i, d in enumerate(dates):
+            result.append({
+                "date": d,
+                "temp_max": daily.get("temperature_2m_max", [None])[i],
+                "temp_min": daily.get("temperature_2m_min", [None])[i],
+                "temp_mean": daily.get("temperature_2m_mean", [None])[i],
+                "precipitation_mm": daily.get("precipitation_sum", [0])[i] or 0,
+            })
+        return result
+    except Exception as e:
+        logger.warning("Weather fetch failed: %s", e)
+        return []
 
 
 def _load_csv_from_azure(blob_path: str, container: str = "processed") -> dict:
