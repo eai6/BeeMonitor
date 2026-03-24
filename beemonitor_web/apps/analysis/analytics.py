@@ -264,8 +264,8 @@ def get_summary_stats(user, site_name=None, year=None, month=None, day=None, hou
         "total_entries": total_entries,
         "total_exits": total_exits,
         "total_foraging_trips": total_trips,
-        "cross_video_trips": cross_video_trips,
         "avg_trip_duration": avg_trip_duration,
+        "avg_trip_duration_min": round(avg_trip_duration / 60, 1) if avg_trip_duration else 0,
         "completed_jobs": count,
     }
 
