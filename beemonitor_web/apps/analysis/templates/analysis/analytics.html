@@ -266,9 +266,21 @@
 </div>
 
 <!-- Weather Conditions (full width) -->
-<div class="bg-white shadow rounded-lg p-6 mb-6">
-  <h2 class="text-lg font-medium text-gray-900 mb-4">Weather Conditions</h2>
-  <p class="text-xs text-gray-400 mb-3">Temperature and precipitation from Open-Meteo (nearest station).</p>
+<div class="bg-white shadow rounded-lg p-6 mb-6" x-data="{ view: 'daily' }">
+  <div class="flex justify-between items-center mb-4">
+    <div>
+      <h2 class="text-lg font-medium text-gray-900">Weather Conditions</h2>
+      <p class="text-xs text-gray-400">Temperature and precipitation from Open-Meteo.</p>
+    </div>
+    <div class="flex gap-1 bg-gray-100 rounded p-0.5">
+      <button @click="view = 'daily'; renderWeather('daily')"
+              :class="view === 'daily' ? 'bg-white shadow text-gray-900' : 'text-gray-500'"
+              class="px-3 py-1 rounded text-xs font-medium transition">Daily</button>
+      <button @click="view = 'hourly'; renderWeather('hourly')"
+              :class="view === 'hourly' ? 'bg-white shadow text-gray-900' : 'text-gray-500'"
+              class="px-3 py-1 rounded text-xs font-medium transition">Hourly</button>
+    </div>
+  </div>
   <canvas id="weatherChart" height="180"></canvas>
 </div>
 
@@ -344,58 +356,116 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // --- Weather Chart ---
-    const weatherData = JSON.parse('{{ weather_json|escapejs }}');
-    if (weatherData.length > 0) {
-        new Chart(document.getElementById('weatherChart'), {
-            data: {
-                labels: weatherData.map(d => d.date),
-                datasets: [
-                    {
-                        type: 'bar',
-                        label: 'Precipitation (mm)',
-                        data: weatherData.map(d => d.precipitation_mm),
-                        backgroundColor: 'rgba(59, 130, 246, 0.6)',
-                        borderRadius: 2,
-                        yAxisID: 'y1',
-                        order: 1,
+    // --- Weather Chart (daily/hourly toggle) ---
+    const weatherHourly = JSON.parse('{{ weather_hourly_json|escapejs }}');
+    const weatherDaily = JSON.parse('{{ weather_daily_json|escapejs }}');
+    let weatherChart = null;
+
+    function renderWeather(mode) {
+        const canvas = document.getElementById('weatherChart');
+        if (weatherChart) weatherChart.destroy();
+
+        if (mode === 'hourly' && weatherHourly.length > 0) {
+            weatherChart = new Chart(canvas, {
+                data: {
+                    labels: weatherHourly.map(d => d.time),
+                    datasets: [
+                        {
+                            type: 'bar',
+                            label: 'Precipitation (mm)',
+                            data: weatherHourly.map(d => d.precipitation_mm),
+                            backgroundColor: 'rgba(59, 130, 246, 0.5)',
+                            yAxisID: 'y1',
+                            order: 2,
+                        },
+                        {
+                            type: 'line',
+                            label: 'Temperature (°C)',
+                            data: weatherHourly.map(d => d.temp_c),
+                            borderColor: '#dc2626',
+                            tension: 0.3,
+                            pointRadius: 0,
+                            borderWidth: 1.5,
+                            yAxisID: 'y',
+                            order: 0,
+                        },
+                        {
+                            type: 'line',
+                            label: 'Humidity (%)',
+                            data: weatherHourly.map(d => d.humidity_pct),
+                            borderColor: '#10b981',
+                            borderDash: [4, 2],
+                            tension: 0.3,
+                            pointRadius: 0,
+                            borderWidth: 1,
+                            yAxisID: 'y2',
+                            order: 1,
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        x: { title: { display: true, text: 'Time' }, ticks: { maxTicksLimit: 30, maxRotation: 45 } },
+                        y: { title: { display: true, text: '°C' }, position: 'left' },
+                        y1: { title: { display: true, text: 'mm' }, position: 'right', beginAtZero: true, grid: { drawOnChartArea: false } },
+                        y2: { display: false, min: 0, max: 100 }
                     },
-                    {
-                        type: 'line',
-                        label: 'Max Temp',
-                        data: weatherData.map(d => d.temp_max),
-                        borderColor: '#dc2626',
-                        backgroundColor: 'rgba(220, 38, 38, 0.05)',
-                        tension: 0.3,
-                        pointRadius: 2,
-                        fill: false,
-                        yAxisID: 'y',
-                        order: 0,
-                    },
-                    {
-                        type: 'line',
-                        label: 'Min Temp',
-                        data: weatherData.map(d => d.temp_min),
-                        borderColor: '#3b82f6',
-                        backgroundColor: 'rgba(59, 130, 246, 0.05)',
-                        tension: 0.3,
-                        pointRadius: 2,
-                        fill: '-1',
-                        yAxisID: 'y',
-                        order: 0,
-                    }
-                ]
-            },
-            options: {
-                responsive: true,
-                scales: {
-                    x: { title: { display: true, text: 'Date' } },
-                    y: { title: { display: true, text: 'Temperature (°C)' }, position: 'left' },
-                    y1: { title: { display: true, text: 'Precipitation (mm)' }, position: 'right', beginAtZero: true, grid: { drawOnChartArea: false } }
+                    plugins: { legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } } }
                 }
-            }
-        });
+            });
+        } else if (weatherDaily.length > 0) {
+            weatherChart = new Chart(canvas, {
+                data: {
+                    labels: weatherDaily.map(d => d.date),
+                    datasets: [
+                        {
+                            type: 'bar',
+                            label: 'Precipitation (mm)',
+                            data: weatherDaily.map(d => d.precipitation_mm),
+                            backgroundColor: 'rgba(59, 130, 246, 0.6)',
+                            borderRadius: 2,
+                            yAxisID: 'y1',
+                            order: 1,
+                        },
+                        {
+                            type: 'line',
+                            label: 'Max Temp (°C)',
+                            data: weatherDaily.map(d => d.temp_max),
+                            borderColor: '#dc2626',
+                            tension: 0.3,
+                            pointRadius: 2,
+                            fill: false,
+                            yAxisID: 'y',
+                            order: 0,
+                        },
+                        {
+                            type: 'line',
+                            label: 'Min Temp (°C)',
+                            data: weatherDaily.map(d => d.temp_min),
+                            borderColor: '#3b82f6',
+                            tension: 0.3,
+                            pointRadius: 2,
+                            fill: '-1',
+                            yAxisID: 'y',
+                            order: 0,
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        x: { title: { display: true, text: 'Date' } },
+                        y: { title: { display: true, text: '°C' }, position: 'left' },
+                        y1: { title: { display: true, text: 'mm' }, position: 'right', beginAtZero: true, grid: { drawOnChartArea: false } }
+                    },
+                    plugins: { legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } } }
+                }
+            });
+        }
     }
+    // Render daily view by default
+    renderWeather('daily');
 
     // --- Nest Activity Heatmap (6 rows × 10 columns) ---
     const nestData = JSON.parse('{{ nest_data_json|escapejs }}');

@@ -1265,20 +1265,22 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
             if foraging_over_time:
                 dates = [d["date"] for d in foraging_over_time]
                 weather = _fetch_weather_data(dates[0], dates[-1])
-                ctx["weather_json"] = json.dumps(weather, default=str)
+                ctx["weather_hourly_json"] = json.dumps(weather.get("hourly", []), default=str)
+                ctx["weather_daily_json"] = json.dumps(weather.get("daily", []), default=str)
             else:
-                ctx["weather_json"] = "[]"
+                ctx["weather_hourly_json"] = "[]"
+                ctx["weather_daily_json"] = "[]"
         except Exception:
-            ctx["weather_json"] = "[]"
+            ctx["weather_hourly_json"] = "[]"
+            ctx["weather_daily_json"] = "[]"
 
         return ctx
 
 
-def _fetch_weather_data(start_date: str, end_date: str, lat: float = 40.79, lon: float = -77.86) -> list:
-    """Fetch historical weather from Open-Meteo (free, no API key).
+def _fetch_weather_data(start_date: str, end_date: str, lat: float = 40.79, lon: float = -77.86) -> dict:
+    """Fetch historical hourly + daily weather from Open-Meteo (free, no API key).
 
-    Returns list of dicts: [{"date": "2024-04-16", "temp_max": 24.8, "temp_min": 2.0,
-                             "temp_mean": 13.7, "precipitation_mm": 0.0}, ...]
+    Returns dict with 'hourly' and 'daily' lists.
     """
     import urllib.request
 
@@ -1286,29 +1288,42 @@ def _fetch_weather_data(start_date: str, end_date: str, lat: float = 40.79, lon:
         f"https://archive-api.open-meteo.com/v1/archive"
         f"?latitude={lat}&longitude={lon}"
         f"&start_date={start_date}&end_date={end_date}"
-        f"&daily=temperature_2m_max,temperature_2m_min,temperature_2m_mean,precipitation_sum"
+        f"&hourly=temperature_2m,precipitation,relative_humidity_2m,wind_speed_10m"
+        f"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum"
         f"&timezone=auto"
     )
 
     try:
-        with urllib.request.urlopen(url, timeout=10) as resp:
+        with urllib.request.urlopen(url, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
 
+        hourly = data.get("hourly", {})
+        hourly_times = hourly.get("time", [])
+        hourly_result = []
+        for i, t in enumerate(hourly_times):
+            hourly_result.append({
+                "time": t,
+                "temp_c": hourly.get("temperature_2m", [None])[i],
+                "precipitation_mm": hourly.get("precipitation", [0])[i] or 0,
+                "humidity_pct": hourly.get("relative_humidity_2m", [None])[i],
+                "wind_kmh": hourly.get("wind_speed_10m", [None])[i],
+            })
+
         daily = data.get("daily", {})
-        dates = daily.get("time", [])
-        result = []
-        for i, d in enumerate(dates):
-            result.append({
+        daily_times = daily.get("time", [])
+        daily_result = []
+        for i, d in enumerate(daily_times):
+            daily_result.append({
                 "date": d,
                 "temp_max": daily.get("temperature_2m_max", [None])[i],
                 "temp_min": daily.get("temperature_2m_min", [None])[i],
-                "temp_mean": daily.get("temperature_2m_mean", [None])[i],
                 "precipitation_mm": daily.get("precipitation_sum", [0])[i] or 0,
             })
-        return result
+
+        return {"hourly": hourly_result, "daily": daily_result}
     except Exception as e:
         logger.warning("Weather fetch failed: %s", e)
-        return []
+        return {"hourly": [], "daily": []}
 
 
 def _load_csv_from_azure(blob_path: str, container: str = "processed") -> dict:
