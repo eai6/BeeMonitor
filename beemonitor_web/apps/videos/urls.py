@@ -11,4 +11,5 @@ urlpatterns = [
     path("<int:pk>/", views.VideoDetailView.as_view(), name="detail"),
     path("<int:pk>/delete/", views.VideoDeleteView.as_view(), name="delete"),
     path("batch-delete/", views.VideoBatchDeleteView.as_view(), name="batch_delete"),
+    path("export-csv/", views.VideoExportCSVView.as_view(), name="export_csv"),
 ]

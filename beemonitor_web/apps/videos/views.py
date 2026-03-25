@@ -1,3 +1,4 @@
+import csv
 import logging
 import re
 import uuid
@@ -5,6 +6,7 @@ import uuid
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
 from django.views import View
@@ -307,6 +309,61 @@ def _delete_azure_blobs_for_video(video):
 
     except Exception as e:
         logger.error("Azure blob cleanup failed for video %s: %s", video.pk, e)
+
+
+class VideoExportCSVView(LoginRequiredMixin, View):
+    """Export filtered video filenames as CSV."""
+
+    def get(self, request):
+        qs = Video.objects.filter(user=request.user)
+
+        search = request.GET.get("q", "").strip()
+        site = request.GET.get("site")
+        year = request.GET.get("year")
+        month = request.GET.get("month")
+        day = request.GET.get("day")
+        hour = request.GET.get("hour")
+
+        if search:
+            qs = qs.filter(title__icontains=search)
+        if site:
+            qs = qs.filter(site_name=_unsanitize_site(site))
+        if year:
+            try:
+                qs = qs.filter(year=int(year))
+            except (ValueError, TypeError):
+                pass
+        if month:
+            try:
+                qs = qs.filter(month=int(month))
+            except (ValueError, TypeError):
+                pass
+        if day:
+            try:
+                qs = qs.filter(day=int(day))
+            except (ValueError, TypeError):
+                pass
+        if hour:
+            try:
+                qs = qs.filter(hour=int(hour))
+            except (ValueError, TypeError):
+                pass
+
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = 'attachment; filename="video_filenames.csv"'
+
+        writer = csv.writer(response)
+        writer.writerow(["title", "site", "recorded_at", "status", "size_bytes"])
+        for v in qs.order_by("-recorded_at"):
+            writer.writerow([
+                _sanitize_site(v.title),
+                _sanitize_site(v.site_name or ""),
+                v.recorded_at.isoformat() if v.recorded_at else "",
+                v.get_status_display(),
+                v.file_size_bytes,
+            ])
+
+        return response
 
 
 class VideoDeleteView(LoginRequiredMixin, View):

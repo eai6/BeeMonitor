@@ -64,6 +64,9 @@
     <div>
       <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-1.5 rounded text-sm font-medium border border-gray-300">Filter</button>
     </div>
+    <div>
+      <a id="exportCsvBtn" href="{% url 'videos:export_csv' %}" class="inline-block bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-1.5 rounded text-sm font-medium border border-gray-300">Download CSV</a>
+    </div>
     {% if current_search or current_site or current_year or current_month or current_day or current_hour %}
     <div>
       <a href="{% url 'videos:list' %}" class="text-sm text-amber-600 hover:underline">Clear Filters</a>
@@ -179,6 +182,16 @@
 {% endif %}
 
 <script>
+// Keep CSV export link in sync with current filters
+function updateExportCsvLink() {
+    const btn = document.getElementById('exportCsvBtn');
+    if (!btn) return;
+    const params = new URLSearchParams(window.location.search);
+    params.delete('page');
+    const qs = params.toString();
+    btn.href = '{% url "videos:export_csv" %}' + (qs ? '?' + qs : '');
+}
+
 let allFilteredSelected = false;
 
 // Select all checkbox (current page)
@@ -203,6 +216,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     updateSelectedCount();
+    updateExportCsvLink();
 });
 
 function updateSelectedCount() {
