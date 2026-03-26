@@ -33,7 +33,12 @@ except ImportError:
     raise ImportError("Cannot import beemonitor. Please install the package.")
 
 from .cloud_client import BeeMonitorCloudClient, load_cloud_config, clear_cloud_config
-from .cloud_analysis_thread import CloudAnalysisThread, CloudBatchAnalysisThread
+from .cloud_analysis_thread import (
+    CloudAnalysisThread,
+    CloudBatchAnalysisThread,
+    CloudUploadThread,
+    CloudUploadFolderThread,
+)
 from .cloud_settings_dialog import LoginDialog
 from .constants import VERSION, TITLE, DEFAULT_WINDOW_SIZE, TRAJECTORY_WINDOW
 from .control_panel import ControlPanel
@@ -378,9 +383,11 @@ class BeeMonitorGUI(QMainWindow):
         self.control_panel.reference_config_changed.connect(self.on_reference_config_changed)
         self.control_panel.edit_nests_requested.connect(self.show_nest_editor)
 
-        # Account & cloud analysis signals
+        # Account & cloud signals
         self.control_panel.login_requested.connect(self.show_login_dialog)
         self.control_panel.logout_requested.connect(self.logout)
+        self.control_panel.cloud_upload_requested.connect(self.upload_to_cloud)
+        self.control_panel.cloud_upload_folder_requested.connect(self.upload_folder_to_cloud)
         self.control_panel.cloud_analyze_requested.connect(self.run_cloud_analysis)
         self.control_panel.cloud_analyze_folder_requested.connect(self.run_cloud_folder_analysis)
 
@@ -1743,6 +1750,83 @@ class BeeMonitorGUI(QMainWindow):
         clear_cloud_config()
         self.control_panel.set_logged_out()
         self.control_panel.append_log("Logged out")
+
+    def upload_to_cloud(self):
+        """Upload the loaded video to cloud (no analysis)."""
+        if not self.video_path:
+            QMessageBox.warning(self, "Warning", "Load a video first")
+            return
+        if not self.cloud_client:
+            QMessageBox.warning(self, "Warning", "Login first")
+            return
+
+        self.control_panel.set_cloud_analyzing(True)
+        self.control_panel.append_log(f"\nUploading {Path(self.video_path).name} to cloud...")
+
+        thread = CloudUploadThread(self.cloud_client, self.video_path)
+        thread.progress.connect(self.control_panel.append_log)
+        thread.upload_progress.connect(
+            lambda pct: self.control_panel.set_cloud_progress(pct, f"Uploading: {pct}%")
+        )
+        thread.finished.connect(lambda data: (
+            self.control_panel.set_cloud_analyzing(False),
+            self.control_panel.append_log(f"Upload complete! Video id: {data['id']}"),
+            QMessageBox.information(self, "Upload Complete", f"Uploaded to cloud (id: {data['id']})"),
+        ))
+        thread.error.connect(lambda err: (
+            self.control_panel.set_cloud_analyzing(False),
+            QMessageBox.critical(self, "Upload Error", err),
+        ))
+        self._upload_thread = thread
+        thread.start()
+
+    def upload_folder_to_cloud(self):
+        """Upload all videos in selected folder to cloud (no analysis)."""
+        if not self.folder_path:
+            QMessageBox.warning(self, "Warning", "Select a video folder first")
+            return
+        if not self.cloud_client:
+            QMessageBox.warning(self, "Warning", "Login first")
+            return
+
+        video_files = [
+            f for f in os.listdir(self.folder_path)
+            if f.lower().endswith(('.mp4', '.avi', '.mov', '.mkv'))
+        ]
+        if not video_files:
+            QMessageBox.warning(self, "Warning", "No video files in folder")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Upload Folder",
+            f"Upload {len(video_files)} videos to cloud?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.control_panel.set_cloud_analyzing(True)
+        self.control_panel.set_folder_progress(0, len(video_files))
+        self.control_panel.append_log(f"\nUploading {len(video_files)} videos to cloud...")
+
+        thread = CloudUploadFolderThread(self.cloud_client, self.folder_path)
+        thread.progress.connect(self.control_panel.append_log)
+        thread.progress_update.connect(self.control_panel.set_folder_progress)
+        thread.upload_progress.connect(
+            lambda pct: self.control_panel.set_cloud_progress(pct, f"Uploading: {pct}%")
+        )
+        thread.finished.connect(lambda count: (
+            self.control_panel.set_cloud_analyzing(False),
+            self.control_panel.append_log(f"Upload complete! {count} videos uploaded"),
+            QMessageBox.information(self, "Upload Complete", f"Uploaded {count} videos to cloud"),
+        ))
+        thread.error.connect(lambda err: (
+            self.control_panel.set_cloud_analyzing(False),
+            QMessageBox.critical(self, "Upload Error", err),
+        ))
+        self._upload_folder_thread = thread
+        thread.start()
 
     def run_cloud_analysis(self):
         """Run single video cloud analysis."""

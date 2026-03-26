@@ -39,6 +39,8 @@ class ControlPanel(QScrollArea):
     # Account & cloud signals
     login_requested = pyqtSignal()
     logout_requested = pyqtSignal()
+    cloud_upload_requested = pyqtSignal()
+    cloud_upload_folder_requested = pyqtSignal()
     cloud_analyze_requested = pyqtSignal()
     cloud_analyze_folder_requested = pyqtSignal()
 
@@ -108,6 +110,8 @@ class ControlPanel(QScrollArea):
         self.login_btn.setVisible(True)
         self.logout_btn.setVisible(False)
         # Disable cloud buttons
+        self.upload_cloud_btn.setEnabled(False)
+        self.upload_folder_cloud_btn.setEnabled(False)
         self.cloud_analyze_btn.setEnabled(False)
         self.cloud_analyze_folder_btn.setEnabled(False)
 
@@ -131,6 +135,15 @@ class ControlPanel(QScrollArea):
         self.output_folder_label.setStyleSheet("color: gray; font-size: 9pt;")
         self.output_folder_label.setWordWrap(True)
         video_layout.addWidget(self.output_folder_label)
+
+        # Upload to cloud button
+        self.upload_cloud_btn = QPushButton("Upload to Cloud")
+        self.upload_cloud_btn.setStyleSheet(
+            "background-color: #FF9800; color: white; font-weight: bold; padding: 8px;"
+        )
+        self.upload_cloud_btn.clicked.connect(self.cloud_upload_requested.emit)
+        self.upload_cloud_btn.setEnabled(False)
+        video_layout.addWidget(self.upload_cloud_btn)
 
         video_group.setLayout(video_layout)
         return video_group
@@ -280,6 +293,15 @@ class ControlPanel(QScrollArea):
         self.analyze_folder_btn.clicked.connect(self.analyze_folder_requested.emit)
         self.analyze_folder_btn.setEnabled(False)
         folder_layout.addWidget(self.analyze_folder_btn)
+
+        # Upload folder to cloud button
+        self.upload_folder_cloud_btn = QPushButton("Upload Folder to Cloud")
+        self.upload_folder_cloud_btn.setStyleSheet(
+            "background-color: #FF9800; color: white; font-weight: bold; padding: 10px;"
+        )
+        self.upload_folder_cloud_btn.clicked.connect(self.cloud_upload_folder_requested.emit)
+        self.upload_folder_cloud_btn.setEnabled(False)
+        folder_layout.addWidget(self.upload_folder_cloud_btn)
 
         # Cloud analyze folder button (inline)
         self.cloud_analyze_folder_btn = QPushButton("Analyze in Cloud (GPU)")
@@ -443,10 +465,12 @@ class ControlPanel(QScrollArea):
 
     def set_cloud_video_ready(self, ready: bool):
         """Enable/disable cloud single-video button."""
+        self.upload_cloud_btn.setEnabled(ready)
         self.cloud_analyze_btn.setEnabled(ready)
 
     def set_cloud_folder_ready(self, ready: bool):
         """Enable/disable cloud folder button."""
+        self.upload_folder_cloud_btn.setEnabled(ready)
         self.cloud_analyze_folder_btn.setEnabled(ready)
 
     def set_cloud_analyzing(self, analyzing: bool):

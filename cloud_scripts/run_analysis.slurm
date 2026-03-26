@@ -6,7 +6,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --mem=32G
-#SBATCH --time=04:00:00
+#SBATCH --cpus-per-task=16  # Request 8 CPU cores
+#SBATCH --time=72:00:00
 #SBATCH --output=logs/beemonitor-%j.out
 #SBATCH --error=logs/beemonitor-%j.err
 
@@ -33,17 +34,17 @@ conda activate beemonitor
 export PYTHONUNBUFFERED=1
 
 # Navigate to project
-cd /storage/home/eai6/BeeMonitor_eai6
+cd /storage/work/eai6/eai6/work/eai6/BeeMonitor
 
 echo "Working directory: $(pwd)"
 echo ""
-echo "Input:  /storage/home/eai6/CVPR_Evaluation_Video_Data"
-echo "Output: /storage/home/eai6/CVPR_Output"
+echo "Input:  /storage/group/cmg25/default/osmia_data"
+echo "Output: /storage/group/cmg25/default/osmia_data_processing_output/"
 echo "Mode:   Two-mode tracking (adaptive YOLO ONLY)"
 echo ""
 
 # Count videos
-VIDEO_COUNT=$(find /storage/home/eai6/CVPR_Evaluation_Video_Data -name "*.mp4" -o -name "*.MP4" -o -name "*.avi" | wc -l)
+VIDEO_COUNT=$(find /storage/group/cmg25/default/osmia_data -name "*.mp4" -o -name "*.MP4" -o -name "*.avi" | wc -l)
 echo "Found $VIDEO_COUNT video(s)"
 echo ""
 
@@ -54,7 +55,7 @@ echo ""
 echo "Starting analysis..."
 echo ""
 
-python scripts/batch_process.py
+python cloud_scripts/batch_process.py
 
 EXIT_CODE=$?
 
@@ -68,12 +69,12 @@ echo "=========================================="
 if [ $EXIT_CODE -eq 0 ]; then
     echo ""
     echo "Results saved to:"
-    echo "  /storage/home/eai6/CVPR_Output/"
+    echo "  /storage/group/cmg25/default/osmia_data_processing_output/"
     echo ""
     
-    TRACKING_COUNT=$(find /storage/home/eai6/CVPR_Output -name "*_tracking.csv" | wc -l)
-    EVENTS_COUNT=$(find /storage/home/eai6/CVPR_Output -name "*_events.csv" | wc -l)
-    VIDEO_COUNT=$(find /storage/home/eai6/CVPR_Output -name "*_annotated.mp4" | wc -l)
+    TRACKING_COUNT=$(find /storage/group/cmg25/default/osmia_data_processing_output -name "*_tracking.csv" | wc -l)
+    EVENTS_COUNT=$(find /storage/group/cmg25/default/osmia_data_processing_output -name "*_events.csv" | wc -l)
+    VIDEO_COUNT=$(find /storage/group/cmg25/default/osmia_data_processing_output -name "*_annotated.mp4" | wc -l)
     
     echo "Generated files:"
     echo "  Tracking CSVs:      $TRACKING_COUNT"
@@ -82,11 +83,11 @@ if [ $EXIT_CODE -eq 0 ]; then
     
     echo ""
     echo "File listing:"
-    ls -1h /storage/home/eai6/CVPR_Output/ | head -20
+    ls -1h /storage/group/cmg25/default/osmia_data_processing_output/ | head -20
     
     echo ""
     echo "Total file sizes:"
-    du -sh /storage/home/eai6/CVPR_Output/
+    du -sh /storage/group/cmg25/default/osmia_data_processing_output/
 else
     echo ""
     echo "✗ Processing failed. Check logs for errors."

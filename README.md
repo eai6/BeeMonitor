@@ -198,3 +198,9 @@ AGPL License. See [LICENSE](LICENSE) for details.
 - **Author:** Edward Amoah
 - **Email:** eai6@psu.edu
 - **Lab:** [Grozinger Lab](https://www.grozingerlab.com/), INSECT-NET, Penn State University
+
+Roar ICDS Cloud working directory;
+/storage/work/eai6/eai6/work/eai6/BeeMonitor/
+
+
+Username: edwardamoah                                                                                                               Password: BeeMonitor2025

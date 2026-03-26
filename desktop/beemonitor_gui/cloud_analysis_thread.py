@@ -25,6 +25,85 @@ _RESULT_FILE_FIELDS = [
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 
 
+class CloudUploadThread(QThread):
+    """Background thread for uploading a single video to the cloud (no analysis)."""
+
+    progress = pyqtSignal(str)
+    upload_progress = pyqtSignal(int)
+    finished = pyqtSignal(dict)  # video data from API
+    error = pyqtSignal(str)
+
+    def __init__(self, client: BeeMonitorCloudClient, video_path: str):
+        super().__init__()
+        self.client = client
+        self.video_path = video_path
+
+    def run(self):
+        try:
+            name = Path(self.video_path).name
+            self.progress.emit(f"Uploading {name}...")
+            data = self.client.upload_video(
+                self.video_path,
+                on_progress=lambda pct: self.upload_progress.emit(pct),
+            )
+            self.progress.emit(f"Uploaded {name} (id={data['id']})")
+            self.finished.emit(data)
+        except Exception as e:
+            self.error.emit(f"Upload failed: {e}\n\n{traceback.format_exc()}")
+
+
+class CloudUploadFolderThread(QThread):
+    """Background thread for uploading a folder of videos to the cloud (no analysis)."""
+
+    progress = pyqtSignal(str)
+    progress_update = pyqtSignal(int, int)  # (completed, total)
+    upload_progress = pyqtSignal(int)
+    finished = pyqtSignal(int)  # number uploaded
+    error = pyqtSignal(str)
+
+    def __init__(self, client: BeeMonitorCloudClient, folder_path: str):
+        super().__init__()
+        self.client = client
+        self.folder_path = folder_path
+        self._stop_flag = False
+
+    def run(self):
+        try:
+            video_files = sorted(
+                f for f in os.listdir(self.folder_path)
+                if f.lower().endswith((".mp4", ".avi", ".mov", ".mkv"))
+            )
+            total = len(video_files)
+            if total == 0:
+                self.error.emit("No video files found in folder")
+                return
+
+            self.progress.emit(f"Uploading {total} videos to cloud...")
+            self.progress_update.emit(0, total)
+
+            for i, vf in enumerate(video_files):
+                if self._stop_flag:
+                    break
+                path = os.path.join(self.folder_path, vf)
+                self.progress.emit(f"Uploading {vf} ({i + 1}/{total})...")
+                self.client.upload_video(
+                    path,
+                    on_progress=lambda pct: self.upload_progress.emit(pct),
+                )
+                self.progress_update.emit(i + 1, total)
+
+            uploaded = i + 1 if not self._stop_flag else i
+            self.progress.emit(f"Upload complete: {uploaded}/{total} videos")
+            self.finished.emit(uploaded)
+
+        except Exception as e:
+            self.error.emit(f"Upload failed: {e}\n\n{traceback.format_exc()}")
+
+    def stop(self):
+        self._stop_flag = True
+        self.progress.emit("Stopping upload...")
+
+
 class CloudAnalysisThread(QThread):
     """Background thread for single-video cloud analysis."""
 
