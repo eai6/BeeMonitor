@@ -28,6 +28,11 @@ class LoginView(AuthLoginView):
 
 class LogoutView(AuthLogoutView):
     next_page = reverse_lazy("accounts:login")
+    http_method_names = ["get", "post", "options"]
+
+    def get(self, request, *args, **kwargs):
+        """Allow GET logout for direct URL access (Django 5+ only allows POST)."""
+        return self.post(request, *args, **kwargs)
 
 
 class RegisterView(CreateView):
