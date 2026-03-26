@@ -473,14 +473,23 @@ class LoginView(viewsets.ViewSet):
 
     def create(self, request):
         from django.contrib.auth import authenticate
+        from django.contrib.auth.models import User
 
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        user = authenticate(
-            username=serializer.validated_data["username"],
-            password=serializer.validated_data["password"],
-        )
+        username_or_email = serializer.validated_data["username"]
+        password = serializer.validated_data["password"]
+
+        # Try username first, then email lookup
+        user = authenticate(username=username_or_email, password=password)
+        if user is None and "@" in username_or_email:
+            try:
+                user_obj = User.objects.get(email=username_or_email)
+                user = authenticate(username=user_obj.username, password=password)
+            except User.DoesNotExist:
+                pass
+
         if user is None:
             return Response(
                 {"detail": "Invalid username or password."},

@@ -82,9 +82,9 @@ class LoginDialog(QDialog):
         layout = QVBoxLayout()
         tab.setLayout(layout)
 
-        layout.addWidget(QLabel("Username:"))
+        layout.addWidget(QLabel("Username or Email:"))
         self.login_username = QLineEdit()
-        self.login_username.setPlaceholderText("Enter your username")
+        self.login_username.setPlaceholderText("Enter your username or email")
         layout.addWidget(self.login_username)
 
         layout.addWidget(QLabel("Password:"))
