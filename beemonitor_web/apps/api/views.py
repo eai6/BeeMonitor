@@ -572,6 +572,111 @@ class ResetPasswordView(viewsets.ViewSet):
         return Response({"detail": "If the email exists, the password has been reset."})
 
 
+class SyncJobsView(viewsets.ViewSet):
+    """Force-sync processing jobs from Modal (admin fallback when poll times out)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def create(self, request):
+        from collections import defaultdict
+        from django.utils import timezone as tz
+
+        from apps.analysis.models import GPU_TIERS
+
+        processing_jobs = Job.objects.filter(
+            user=request.user,
+            status=Job.Status.PROCESSING,
+        ).exclude(modal_call_id="")
+
+        if not processing_jobs.exists():
+            return Response({"detail": "No processing jobs to sync.", "synced": 0})
+
+        synced = 0
+        errors = []
+        try:
+            import modal
+
+            call_id_to_jobs = defaultdict(list)
+            for job in processing_jobs[:50]:
+                call_id_to_jobs[job.modal_call_id].append(job)
+
+            for call_id, jobs_in_call in call_id_to_jobs.items():
+                try:
+                    fc = modal.functions.FunctionCall.from_id(call_id)
+                    raw_result = fc.get(timeout=30)
+
+                    if isinstance(raw_result, dict):
+                        results_list = [raw_result]
+                    elif isinstance(raw_result, list):
+                        results_list = raw_result
+                    else:
+                        continue
+
+                    job_by_modal_id = {j.modal_job_id: j for j in jobs_in_call}
+
+                    for result in results_list:
+                        if not isinstance(result, dict):
+                            continue
+                        result_job_id = result.get("job_id", "")
+                        job = job_by_modal_id.get(result_job_id)
+                        if not job and len(jobs_in_call) == 1:
+                            job = jobs_in_call[0]
+                        if not job:
+                            continue
+
+                        if result.get("status") == "failed":
+                            Job.objects.filter(pk=job.pk).update(
+                                status="failed",
+                                error_message=result.get("error_message", ""),
+                            )
+                            continue
+
+                        JobResult.objects.update_or_create(
+                            job_id=job.pk,
+                            defaults={
+                                "events_csv_path": result.get("events_csv_path", ""),
+                                "tracking_csv_path": result.get("tracking_csv_path", ""),
+                                "foraging_trips_csv_path": result.get("foraging_trips_csv_path", ""),
+                                "interactions_csv_path": result.get("interactions_csv_path", ""),
+                                "annotated_video_path": result.get("annotated_video_path", ""),
+                                "total_events": result.get("total_events", 0),
+                                "entry_count": result.get("entry_count", 0),
+                                "exit_count": result.get("exit_count", 0),
+                                "unique_tracks": result.get("unique_tracks", 0),
+                                "nest_count": result.get("nest_count", 0),
+                                "foraging_trip_count": result.get("foraging_trip_count", 0),
+                                "avg_trip_duration_sec": result.get("avg_trip_duration_sec"),
+                                "interaction_count": result.get("interaction_count", 0),
+                                "summary_stats": result.get("summary_stats", {}),
+                            },
+                        )
+
+                        exec_secs = result.get("execution_seconds", 0) or 0
+                        cost_rate = GPU_TIERS.get(job.gpu_tier, {}).get("cost_per_sec", 0.000306)
+                        cost_usd = round(exec_secs * cost_rate, 4)
+
+                        Job.objects.filter(pk=job.pk).update(
+                            status="completed", progress_pct=100,
+                            completed_at=tz.now(),
+                            execution_seconds=exec_secs,
+                            compute_cost_usd=cost_usd,
+                        )
+                        synced += 1
+
+                except TimeoutError:
+                    errors.append(f"Timeout on call {call_id[:20]}...")
+                except Exception as e:
+                    errors.append(f"Error on call {call_id[:20]}: {e}")
+
+        except ImportError:
+            return Response({"detail": "Modal not installed on server."}, status=500)
+
+        return Response({
+            "synced": synced,
+            "errors": errors,
+        })
+
+
 class ProfileView(viewsets.ViewSet):
     """Get the authenticated user's profile."""
 

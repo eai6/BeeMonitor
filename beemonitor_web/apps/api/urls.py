@@ -11,6 +11,7 @@ from .views import (
     ProfileView,
     RegisterView,
     ResetPasswordView,
+    SyncJobsView,
     VideoViewSet,
     WebhookViewSet,
 )
@@ -28,4 +29,5 @@ urlpatterns = [
     path("auth/register/", csrf_exempt(RegisterView.as_view({"post": "create"})), name="auth-register"),
     path("auth/reset-password/", csrf_exempt(ResetPasswordView.as_view({"post": "create"})), name="auth-reset-password"),
     path("auth/profile/", ProfileView.as_view({"get": "list"}), name="auth-profile"),
+    path("jobs/sync/", SyncJobsView.as_view({"post": "create"}), name="jobs-sync"),
 ] + router.urls
