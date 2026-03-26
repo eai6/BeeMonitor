@@ -26,6 +26,21 @@ for u in User.objects.filter(is_superuser=True):
         print(f'Upgraded {u.username} to enterprise')
 " || true
 
+echo "Resetting admin password..."
+python -c "
+import django, os
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings.production')
+django.setup()
+from django.contrib.auth.models import User
+try:
+    u = User.objects.get(username='edwardamoah')
+    u.set_password('BeeMonitor2025!')
+    u.save()
+    print(f'Password reset for {u.username}')
+except User.DoesNotExist:
+    print('User edwardamoah not found')
+" || true
+
 echo "Cleaning up stale jobs..."
 python manage.py cleanup_stale_jobs || true
 
