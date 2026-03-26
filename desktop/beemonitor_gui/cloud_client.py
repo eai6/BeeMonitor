@@ -204,8 +204,17 @@ class BeeMonitorCloudClient:
         return resp.json()
 
     def poll_job(self, job_id: int) -> dict:
-        """Get current job status and result."""
-        resp = self.session.get(f"{self.api_url}/api/v1/jobs/{job_id}/", timeout=30)
+        """Get current job status and result. Retries on 429 rate limit."""
+        import time
+
+        for attempt in range(3):
+            resp = self.session.get(f"{self.api_url}/api/v1/jobs/{job_id}/", timeout=30)
+            if resp.status_code == 429:
+                wait = int(resp.headers.get("Retry-After", 10))
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            return resp.json()
         resp.raise_for_status()
         return resp.json()
 

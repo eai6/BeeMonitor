@@ -74,7 +74,7 @@ class CloudAnalysisThread(QThread):
             while job["status"] not in _TERMINAL_STATUSES:
                 if self._stop_flag:
                     return
-                time.sleep(5)
+                time.sleep(15)
                 job = self.client.poll_job(job_id)
                 pct = job.get("progress_pct", 0)
                 self.progress.emit(f"Processing... {pct}% (status: {job['status']})")
@@ -242,7 +242,7 @@ class CloudBatchAnalysisThread(QThread):
                     jobs[vf] = updated
                 if all_done:
                     break
-                time.sleep(5)
+                time.sleep(15)
 
             # Phase D: Download results for completed jobs
             results: dict[str, str | None] = {}

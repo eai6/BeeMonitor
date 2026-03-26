@@ -139,12 +139,17 @@ class JobResultSerializer(serializers.ModelSerializer):
             "id",
             "events_csv_path",
             "tracking_csv_path",
+            "foraging_trips_csv_path",
+            "interactions_csv_path",
             "annotated_video_path",
             "total_events",
             "entry_count",
             "exit_count",
             "unique_tracks",
             "nest_count",
+            "foraging_trip_count",
+            "avg_trip_duration_sec",
+            "interaction_count",
             "summary_stats",
         ]
         read_only_fields = fields
