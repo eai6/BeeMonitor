@@ -1123,6 +1123,54 @@ class DownloadInteractionsCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
         return response
 
 
+class DownloadNestDataCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
+    """Download per-video nest bounding-box coordinates CSV for all filtered completed jobs."""
+
+    def get(self, request):
+        import csv
+
+        from django.http import HttpResponse
+
+        results, label = self._get_filtered_results(request)
+
+        if not results.exists():
+            from django.contrib import messages as msg
+
+            msg.warning(request, "No completed jobs matching this filter.")
+            return redirect("analysis:analytics")
+
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = (
+            f'attachment; filename="beemonitor_nest_bboxes_{label}.csv"'
+        )
+
+        writer = csv.writer(response)
+        writer.writerow([
+            "video_title", "site_name", "recorded_at",
+            "nest_id", "x1", "y1", "x2", "y2",
+        ])
+
+        for result in results:
+            video = result.job.video
+            prefix = [
+                video.title,
+                video.site_name,
+                video.recorded_at.isoformat() if video.recorded_at else "",
+            ]
+            stats = result.summary_stats or {}
+            bboxes = stats.get("nest_bboxes", {})
+
+            if isinstance(bboxes, dict) and bboxes:
+                for nest_id in sorted(bboxes.keys(), key=lambda k: int(k) if k.isdigit() else k):
+                    coords = bboxes[nest_id]
+                    if isinstance(coords, (list, tuple)) and len(coords) == 4:
+                        writer.writerow(prefix + [nest_id] + [c for c in coords])
+                    else:
+                        writer.writerow(prefix + [nest_id, "", "", "", ""])
+
+        return response
+
+
 class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
     template_name = "analysis/analytics.html"
 
