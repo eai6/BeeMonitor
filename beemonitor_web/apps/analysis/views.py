@@ -486,12 +486,16 @@ class PollJobsView(LoginRequiredMixin, View):
 
     def get(self, request):
         from collections import defaultdict
+        from datetime import timedelta
         from django.http import JsonResponse
         from django.utils import timezone
 
+        # Only poll recent jobs (last 4 hours) to avoid timeouts on stale jobs
+        recent_cutoff = timezone.now() - timedelta(hours=4)
         processing_jobs = Job.objects.filter(
             user=request.user,
             status=Job.Status.PROCESSING,
+            started_at__gte=recent_cutoff,
         ).exclude(modal_call_id="")
 
         if not processing_jobs.exists():

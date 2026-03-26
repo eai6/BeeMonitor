@@ -277,7 +277,7 @@ def process_video_from_s3(
 @app.function(
     timeout=3600,
     memory=4096,
-    min_containers=1,
+    min_containers=0,
 )
 def ingest_video(
     user_id: str,
