@@ -32,6 +32,9 @@ try:
 except ImportError:
     raise ImportError("Cannot import beemonitor. Please install the package.")
 
+from .cloud_client import BeeMonitorCloudClient, load_cloud_config, clear_cloud_config
+from .cloud_analysis_thread import CloudAnalysisThread, CloudBatchAnalysisThread
+from .cloud_settings_dialog import LoginDialog
 from .constants import VERSION, TITLE, DEFAULT_WINDOW_SIZE, TRAJECTORY_WINDOW
 from .control_panel import ControlPanel
 from .video_panel import VideoPanel
@@ -302,7 +305,12 @@ class BeeMonitorGUI(QMainWindow):
         self.analysis_thread = None
         self.folder_path = None
         self.folder_analysis_thread = None
-        
+
+        # Cloud analysis
+        self.cloud_client = None
+        self.cloud_analysis_thread = None
+        self.cloud_batch_thread = None
+
         # Pre-initialize nest detection models
         self.nest_yolo_model = None
         self.nest_config = None
@@ -321,7 +329,9 @@ class BeeMonitorGUI(QMainWindow):
         self.video_canvas.show_detection_sources = True
         
         self.statusBar().showMessage("Ready - Load a video to begin")
-        
+
+        self._init_cloud_client()
+
         print(f"✓ BeeMonitor GUI v{VERSION} initialized")
     
     def _init_nest_detection_models(self):
@@ -367,7 +377,13 @@ class BeeMonitorGUI(QMainWindow):
         # NEW v2.3: Reference configuration signals
         self.control_panel.reference_config_changed.connect(self.on_reference_config_changed)
         self.control_panel.edit_nests_requested.connect(self.show_nest_editor)
-        
+
+        # Account & cloud analysis signals
+        self.control_panel.login_requested.connect(self.show_login_dialog)
+        self.control_panel.logout_requested.connect(self.logout)
+        self.control_panel.cloud_analyze_requested.connect(self.run_cloud_analysis)
+        self.control_panel.cloud_analyze_folder_requested.connect(self.run_cloud_folder_analysis)
+
         self.video_panel.play_pause_toggled.connect(self.toggle_play_pause)
         self.video_panel.frame_changed.connect(self.on_frame_slider_change)
         self.video_panel.frame_step_requested.connect(self.jump_frame)
@@ -653,6 +669,8 @@ class BeeMonitorGUI(QMainWindow):
         print(f"✓ Video loaded: {filepath}")
         
         self.control_panel.set_video_loaded(True)
+        if self.cloud_client:
+            self.control_panel.set_cloud_video_ready(True)
         self.control_panel.append_log(f"✓ Loaded: {Path(filepath).name}")
     
     def _auto_detect_nests(self, first_frame):
@@ -1085,13 +1103,15 @@ class BeeMonitorGUI(QMainWindow):
     def on_folder_selected(self, folder_path):
         """Handle folder selection."""
         self.folder_path = folder_path
-        
-        video_files = [f for f in os.listdir(folder_path) 
+
+        video_files = [f for f in os.listdir(folder_path)
                       if f.endswith(('.mp4', '.avi', '.mov', '.mkv'))]
-        
+
         self.control_panel.append_log(f"✓ Selected folder: {Path(folder_path).name}")
         self.control_panel.append_log(f"  Found {len(video_files)} video files")
-        
+        if self.cloud_client:
+            self.control_panel.set_cloud_folder_ready(True)
+
         self.statusBar().showMessage(f"Folder selected: {len(video_files)} videos found")
     
     def run_folder_analysis(self):
@@ -1672,3 +1692,184 @@ class BeeMonitorGUI(QMainWindow):
             self.jump_frame(-1)
         elif event.key() == Qt.Key.Key_Right:
             self.jump_frame(1)
+
+    # === Account & Cloud Analysis Methods ===
+
+    def _init_cloud_client(self):
+        """Initialize cloud client from saved login session."""
+        try:
+            config = load_cloud_config()
+            api_key = config.get("api_key", "")
+            api_url = config.get("api_url", "")
+            username = config.get("username", "")
+            tier = config.get("tier", "free")
+            if api_key and username:
+                self.cloud_client = BeeMonitorCloudClient(api_url, api_key)
+                self.control_panel.set_logged_in(username, tier)
+                print(f"✓ Logged in as {username} ({tier} tier)")
+            else:
+                self.control_panel.set_logged_out()
+        except Exception as e:
+            print(f"⚠️  Cloud client init failed: {e}")
+            self.control_panel.set_logged_out()
+
+    def show_login_dialog(self):
+        """Open the login/register dialog."""
+        dialog = LoginDialog(self)
+        dialog.logged_in.connect(self._on_logged_in)
+        dialog.exec()
+
+    def _on_logged_in(self, config: dict):
+        """Handle successful login or registration."""
+        api_url = config["api_url"]
+        api_key = config["api_key"]
+        username = config.get("username", "")
+        tier = config.get("tier", "free")
+
+        self.cloud_client = BeeMonitorCloudClient(api_url, api_key)
+        self.control_panel.set_logged_in(username, tier)
+
+        # Enable cloud buttons if video/folder already loaded
+        if self.video_path:
+            self.control_panel.set_cloud_video_ready(True)
+        if self.folder_path:
+            self.control_panel.set_cloud_folder_ready(True)
+
+        self.control_panel.append_log(f"Logged in as {username} ({tier} tier)")
+
+    def logout(self):
+        """Log out and clear saved credentials."""
+        self.cloud_client = None
+        clear_cloud_config()
+        self.control_panel.set_logged_out()
+        self.control_panel.append_log("Logged out")
+
+    def run_cloud_analysis(self):
+        """Run single video cloud analysis."""
+        if not self.video_path:
+            QMessageBox.warning(self, "Warning", "Load a video first")
+            return
+        if not self.cloud_client:
+            QMessageBox.warning(self, "Warning", "Configure cloud settings first")
+            return
+
+        output_folder = self.output_folder or str(
+            Path(self.video_path).parent / f"{Path(self.video_path).stem}_cloud_output"
+        )
+
+        self.control_panel.set_cloud_analyzing(True)
+        self.control_panel.append_log(
+            f"\nStarting cloud analysis for {Path(self.video_path).name}..."
+        )
+
+        self.cloud_analysis_thread = CloudAnalysisThread(
+            self.cloud_client, self.video_path, output_folder
+        )
+        self.cloud_analysis_thread.progress.connect(self.control_panel.append_log)
+        self.cloud_analysis_thread.upload_progress.connect(
+            lambda pct: self.control_panel.set_cloud_progress(pct, f"Uploading: {pct}%")
+        )
+        self.cloud_analysis_thread.download_progress.connect(
+            lambda pct: self.control_panel.set_cloud_progress(pct, f"Downloading: {pct}%")
+        )
+        self.cloud_analysis_thread.finished.connect(self._on_cloud_analysis_finished)
+        self.cloud_analysis_thread.error.connect(self._on_cloud_analysis_error)
+        self.cloud_analysis_thread.start()
+
+    def _on_cloud_analysis_finished(self, output_folder: str):
+        """Handle cloud analysis completion."""
+        self.control_panel.set_cloud_analyzing(False)
+        self.control_panel.append_log(
+            f"Cloud analysis complete! Results in: {output_folder}"
+        )
+
+        # Try to auto-load tracking results
+        tracking_file = find_tracking_file(output_folder)
+        if tracking_file:
+            self.control_panel.append_log(f"Loading results: {Path(tracking_file).name}")
+            try:
+                self.tracking_results = pd.read_csv(tracking_file)
+                self.results_loaded = True
+            except Exception:
+                pass
+
+        QMessageBox.information(
+            self,
+            "Cloud Analysis Complete",
+            f"Results saved to:\n{output_folder}",
+        )
+
+    def _on_cloud_analysis_error(self, error_msg: str):
+        """Handle cloud analysis error."""
+        self.control_panel.set_cloud_analyzing(False)
+        self.control_panel.append_log(f"Cloud analysis error: {error_msg.split(chr(10))[0]}")
+        QMessageBox.critical(self, "Cloud Analysis Error", error_msg)
+
+    def run_cloud_folder_analysis(self):
+        """Run batch cloud analysis for selected folder."""
+        if not self.folder_path:
+            QMessageBox.warning(self, "Warning", "Select a video folder first")
+            return
+        if not self.cloud_client:
+            QMessageBox.warning(self, "Warning", "Configure cloud settings first")
+            return
+
+        video_files = [
+            f for f in os.listdir(self.folder_path)
+            if f.lower().endswith(('.mp4', '.avi', '.mov', '.mkv'))
+        ]
+        if not video_files:
+            QMessageBox.warning(self, "Warning", "No video files in folder")
+            return
+
+        folder_name = Path(self.folder_path).name
+        output_folder = str(
+            Path(self.folder_path).parent / f"{folder_name}_cloud_output"
+        )
+
+        reply = QMessageBox.question(
+            self,
+            "Cloud Batch Analysis",
+            f"Upload and analyze {len(video_files)} videos in the cloud?\n\n"
+            f"Folder: {folder_name}\n"
+            f"Output: {Path(output_folder).name}\n\n"
+            f"This will upload all videos and process them on cloud GPUs.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.control_panel.set_cloud_analyzing(True)
+        self.control_panel.set_folder_progress(0, len(video_files))
+        self.control_panel.clear_log()
+        self.control_panel.append_log(
+            f"Starting cloud batch analysis: {len(video_files)} videos"
+        )
+
+        self.cloud_batch_thread = CloudBatchAnalysisThread(
+            self.cloud_client, self.folder_path, output_folder
+        )
+        self.cloud_batch_thread.progress.connect(self.control_panel.append_log)
+        self.cloud_batch_thread.progress_update.connect(
+            self.control_panel.set_folder_progress
+        )
+        self.cloud_batch_thread.upload_progress.connect(
+            lambda pct: self.control_panel.set_cloud_progress(pct, f"Uploading: {pct}%")
+        )
+        self.cloud_batch_thread.finished.connect(self._on_cloud_batch_finished)
+        self.cloud_batch_thread.error.connect(self._on_cloud_analysis_error)
+        self.cloud_batch_thread.start()
+
+    def _on_cloud_batch_finished(self, results: dict):
+        """Handle cloud batch analysis completion."""
+        self.control_panel.set_cloud_analyzing(False)
+        successful = sum(1 for v in results.values() if v is not None)
+        total = len(results)
+        self.control_panel.append_log(
+            f"Cloud batch complete: {successful}/{total} videos processed"
+        )
+        QMessageBox.information(
+            self,
+            "Cloud Batch Complete",
+            f"Processed {successful}/{total} videos successfully.",
+        )

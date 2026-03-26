@@ -1,3 +1,4 @@
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
@@ -5,6 +6,9 @@ from .views import (
     DataSourceViewSet,
     HealthViewSet,
     JobViewSet,
+    LoginView,
+    ProfileView,
+    RegisterView,
     VideoViewSet,
     WebhookViewSet,
 )
@@ -17,4 +21,8 @@ router.register(r"api-keys", APIKeyViewSet, basename="apikey")
 router.register(r"webhooks", WebhookViewSet, basename="webhook")
 router.register(r"health", HealthViewSet, basename="health")
 
-urlpatterns = router.urls
+urlpatterns = [
+    path("auth/login/", LoginView.as_view({"post": "create"}), name="auth-login"),
+    path("auth/register/", RegisterView.as_view({"post": "create"}), name="auth-register"),
+    path("auth/profile/", ProfileView.as_view({"get": "list"}), name="auth-profile"),
+] + router.urls

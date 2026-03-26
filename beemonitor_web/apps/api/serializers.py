@@ -121,6 +121,14 @@ class VideoUploadSerializer(serializers.Serializer):
         return value
 
 
+class VideoFileUploadSerializer(serializers.Serializer):
+    """Accepts multipart file upload for desktop/programmatic clients."""
+
+    video_file = serializers.FileField()
+    title = serializers.CharField(max_length=300, required=False, allow_blank=True)
+    site_name = serializers.CharField(max_length=200, required=False, allow_blank=True)
+
+
 # ── Analysis ──────────────────────────────────────────────────────────────────
 
 
@@ -187,6 +195,29 @@ class JobCreateSerializer(serializers.Serializer):
     def create(self, validated_data):
         user = self.context["request"].user
         return Job.objects.create(user=user, **validated_data)
+
+
+class BatchSubmitSerializer(serializers.Serializer):
+    """Submit multiple videos for batch GPU analysis (chunked like the web app)."""
+
+    video_ids = serializers.ListField(
+        child=serializers.IntegerField(), min_length=1
+    )
+    config = serializers.JSONField(required=False, default=dict)
+
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+
+
+class LoginSerializer(serializers.Serializer):
+    username = serializers.CharField()
+    password = serializers.CharField(write_only=True)
+
+
+class RegisterSerializer(serializers.Serializer):
+    username = serializers.CharField(max_length=150)
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True, min_length=8)
 
 
 # ── Sources ───────────────────────────────────────────────────────────────────
