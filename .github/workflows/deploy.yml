@@ -38,7 +38,9 @@ jobs:
         run: |
           pip install -r beemonitor_web/requirements/base.txt django-filter
           pip install -r cloud/requirements-cloud.txt
-          pip install pytest moto[s3]
+          # pandas: test_pipeline.py imports cloud.wrapper.pipeline which
+          # uses pandas for foraging-trip aggregation.
+          pip install pytest moto[s3] pandas
 
       - name: Django system check
         working-directory: beemonitor_web
