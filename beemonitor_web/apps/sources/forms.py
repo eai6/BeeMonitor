@@ -16,11 +16,6 @@ class SourceCreateForm(forms.Form):
                                            widget=forms.PasswordInput(render_value=True))
     s3_region = forms.CharField(max_length=50, required=False, label="Region", initial="us-east-1")
 
-    # Azure Blob
-    azure_container = forms.CharField(max_length=200, required=False, label="Container Name")
-    azure_connection_string = forms.CharField(max_length=1000, required=False, label="Connection String",
-                                              widget=forms.Textarea(attrs={"rows": 2}))
-
     # GCS
     gcs_bucket = forms.CharField(max_length=200, required=False, label="GCS Bucket Name")
     gcs_service_account_json = forms.CharField(required=False, label="Service Account JSON",
@@ -44,11 +39,6 @@ class SourceCreateForm(forms.Form):
                 self.add_error("s3_access_key_id", "Access Key ID is required.")
             if not cleaned.get("s3_secret_access_key"):
                 self.add_error("s3_secret_access_key", "Secret Access Key is required.")
-        elif st == "azure_blob":
-            if not cleaned.get("azure_container"):
-                self.add_error("azure_container", "Container name is required.")
-            if not cleaned.get("azure_connection_string"):
-                self.add_error("azure_connection_string", "Connection string is required.")
         elif st == "gcs":
             if not cleaned.get("gcs_bucket"):
                 self.add_error("gcs_bucket", "Bucket name is required.")
@@ -70,11 +60,6 @@ class SourceCreateForm(forms.Form):
                 "access_key_id": self.cleaned_data["s3_access_key_id"],
                 "secret_access_key": self.cleaned_data["s3_secret_access_key"],
                 "region": self.cleaned_data.get("s3_region", "us-east-1"),
-            }
-        elif st == "azure_blob":
-            return {
-                "container": self.cleaned_data["azure_container"],
-                "connection_string": self.cleaned_data["azure_connection_string"],
             }
         elif st == "gcs":
             return {

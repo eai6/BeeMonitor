@@ -136,13 +136,8 @@ class Command(BaseCommand):
             groups = {k: v for k, v in groups.items() if k not in existing}
             self.stdout.write(f"After skipping existing: {len(groups)} groups to process")
 
-        conn_str = getattr(settings, "AZURE_STORAGE_CONNECTION_STRING", "")
-        if not conn_str:
-            self.stderr.write(self.style.ERROR("AZURE_STORAGE_CONNECTION_STRING not set"))
-            return
-
-        from azure.storage.blob import BlobServiceClient
-        service = BlobServiceClient.from_connection_string(conn_str)
+        from config.storage import get_s3_client
+        s3 = get_s3_client()
 
         processed = 0
         errors = 0
@@ -161,8 +156,9 @@ class Command(BaseCommand):
                             continue
 
                     try:
-                        blob = service.get_blob_client("processed", path)
-                        content = blob.download_blob().readall().decode("utf-8")
+                        buf = io.BytesIO()
+                        s3.download_to_stream("processed", path, buf)
+                        content = buf.getvalue().decode("utf-8")
                         reader = csv.DictReader(io.StringIO(content))
                         events = list(reader)
                     except Exception:
@@ -207,8 +203,11 @@ class Command(BaseCommand):
                     writer.writeheader()
                     writer.writerows(trips)
                     blob_path = f"{user_id}/daily_trips/{site_name}_{date}.csv"
-                    blob_client = service.get_blob_client("processed", blob_path)
-                    blob_client.upload_blob(output.getvalue().encode("utf-8"), overwrite=True)
+                    s3.upload_stream(
+                        "processed", blob_path,
+                        io.BytesIO(output.getvalue().encode("utf-8")),
+                        content_type="text/csv",
+                    )
                     trips_csv_path = blob_path
 
                 DailyForagingSummary.objects.update_or_create(

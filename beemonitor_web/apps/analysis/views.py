@@ -12,6 +12,7 @@ from django.views import View
 from django.views.generic import DetailView, FormView, ListView, TemplateView
 
 from apps.videos.models import Video
+from config.storage import get_s3_client
 
 from .analytics import (
     get_activity_over_time,
@@ -46,289 +47,122 @@ def _unsanitize_site(value: str) -> str:
     return _SITEA_RE.sub("natalies", value)
 
 
-def _generate_sas_url(blob_path: str, container: str = "processed") -> str:
-    """Generate a time-limited SAS URL for a blob in Azure Storage."""
+def _generate_presigned_url(blob_path: str, container: str = "processed") -> str:
+    """Time-limited URL for a blob in S3. Empty string on any error."""
+    if not blob_path:
+        return ""
     try:
-        from datetime import datetime, timedelta, timezone
-        from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
-
-        conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
-        if not conn_str:
-            return ""
-
-        service = BlobServiceClient.from_connection_string(conn_str)
-        account_name = service.account_name
-
-        # Extract account key from connection string
-        account_key = ""
-        for part in conn_str.split(";"):
-            if part.startswith("AccountKey="):
-                account_key = part.split("=", 1)[1]
-                break
-
-        token = generate_blob_sas(
-            account_name=account_name,
-            container_name=container,
-            blob_name=blob_path,
-            account_key=account_key,
-            permission=BlobSasPermissions(read=True),
-            expiry=datetime.now(timezone.utc) + timedelta(hours=24),
-        )
-        return f"https://{account_name}.blob.core.windows.net/{container}/{blob_path}?{token}"
+        return get_s3_client().generate_presigned_url(container, blob_path)
     except Exception as e:
-        logger.error("Failed to generate SAS URL for %s: %s", blob_path, e)
+        logger.error("Failed to presign %s/%s: %s", container, blob_path, e)
         return ""
 
 
-def _transfer_s3_to_azure(video) -> str:
-    """If video is on S3, transfer it to Azure Blob Storage. Returns the Azure blob path."""
-    blob_path = video.azure_blob_path
-    if not blob_path.startswith("s3://"):
-        return blob_path  # Already in Azure
+def _ingest_external_s3_to_storage(video) -> str:
+    """Copy a video from an external S3 source into our raw-videos bucket.
+
+    Returns the new ``storage_key`` (the key in our bucket). If the video is
+    already in our storage (``storage_key`` doesn't start with ``s3://``),
+    this is a no-op and returns the existing key.
+    """
+    storage_key = video.storage_key
+    if not storage_key.startswith("s3://"):
+        return storage_key  # already in our bucket
 
     import boto3
-    from azure.storage.blob import BlobServiceClient
-    from django.conf import settings as django_settings
     import tempfile
     from pathlib import Path
 
     meta = video.metadata or {}
-    remote_key = meta.get("remote_key", blob_path.replace("s3://", ""))
+    remote_key = meta.get("remote_key", storage_key.replace("s3://", ""))
     bucket = meta.get("remote_bucket", "")
-
     if not bucket:
         raise ValueError("No S3 bucket in video metadata")
-
-    # Get S3 credentials from the source
-    source = video.source
-    if not source:
+    if not video.source:
         raise ValueError("Video has no linked data source for S3 credentials")
 
     from apps.sources.views import _decrypt_credentials
-    creds = _decrypt_credentials(source)
+    creds = _decrypt_credentials(video.source)
 
-    s3 = boto3.client(
+    external_s3 = boto3.client(
         "s3",
         aws_access_key_id=creds["access_key_id"],
         aws_secret_access_key=creds["secret_access_key"],
         region_name=creds.get("region", "us-east-1"),
     )
 
-    conn_str = django_settings.AZURE_STORAGE_CONNECTION_STRING
-    azure_service = BlobServiceClient.from_connection_string(conn_str)
-
-    # Download from S3 to temp file, then upload to Azure
     filename = remote_key.split("/")[-1]
-    azure_blob_path = f"{video.user_id}/{video.pk}/{filename}"
+    new_key = f"{video.user_id}/{video.pk}/{filename}"
 
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=True) as tmp:
-        logger.info("Transferring s3://%s/%s -> Azure raw-videos/%s", bucket, remote_key, azure_blob_path)
-        s3.download_file(bucket, remote_key, tmp.name)
+        logger.info(
+            "Ingesting external s3://%s/%s -> raw-videos/%s",
+            bucket, remote_key, new_key,
+        )
+        external_s3.download_file(bucket, remote_key, tmp.name)
         file_size = Path(tmp.name).stat().st_size
+        get_s3_client().upload_file(
+            "raw-videos", new_key, tmp.name, content_type="video/mp4",
+        )
 
-        blob = azure_service.get_blob_client("raw-videos", azure_blob_path)
-        with open(tmp.name, "rb") as fh:
-            blob.upload_blob(fh, overwrite=True)
-
-    # Update video record with Azure path and file size
-    video.azure_blob_path = azure_blob_path
+    video.storage_key = new_key
     video.file_size_bytes = file_size
-    video.save(update_fields=["azure_blob_path", "file_size_bytes"])
+    video.save(update_fields=["storage_key", "file_size_bytes"])
     creds.clear()
 
-    logger.info("Transfer complete: %s (%d MB)", azure_blob_path, file_size // (1024 * 1024))
-    return azure_blob_path
+    logger.info("Ingest complete: %s (%d MB)", new_key, file_size // (1024 * 1024))
+    return new_key
 
 
-def _spawn_modal_job(job_pk: int) -> None:
-    """Spawn a Modal function call (non-blocking) and store the call ID.
+def _spawn_gpu_job(job_pk: int) -> None:
+    """Submit a job to the GPU backend.
 
-    Does NOT wait for completion — just fires and stores the call ID.
-    The PollJobsView will check for results later.
+    Phase 4 will replace this stub with a SageMaker Async Inference invoke
+    (see ``memory/09_aws_migration_plan.md``). The Modal app that used to
+    serve this call has been archived to ``archives/modal_app/`` — Modal is
+    no longer the GPU target.
+
+    Until Phase 4 lands, calling this marks the job as ``failed`` with a
+    clear message so the UI surfaces the right state.
     """
     import django
     django.setup()
     from django.db import connection
 
     try:
-        job = Job.objects.select_related("video", "video__source").get(pk=job_pk)
-        modal_job_id = job.modal_job_id
-        user_id = str(job.user_id)
-        video = job.video
-        blob_path = video.azure_blob_path
-        detection_mode = job.config.get("detection_mode", "yolo")
-        confidence = job.config.get("confidence_threshold", 0.25)
-        custom_nest_model_path = job.config.get("custom_nest_model_path", "")
-        custom_bee_model_path = job.config.get("custom_bee_model_path", "")
-        meta = video.metadata or {}
-    except Job.DoesNotExist:
-        return
-    except Exception as e:
-        Job.objects.filter(pk=job_pk).update(status="failed", error_message=str(e))
-        connection.close()
-        return
-
-    try:
-        import modal
-
-        if blob_path.startswith("s3://"):
-            # S3 video — use process_video_from_s3 (handles transfer + analysis)
-            source = video.source
-            if source:
-                from apps.sources.views import _decrypt_credentials
-                creds = _decrypt_credentials(source)
-            else:
-                raise ValueError("No linked source for S3 video")
-
-            fn = modal.Function.from_name("beemonitor-cloud", "process_video_from_s3")
-            spawn_kwargs = dict(
-                job_id=modal_job_id,
-                user_id=user_id,
-                s3_bucket=meta.get("remote_bucket", creds.get("bucket", "")),
-                s3_key=meta.get("remote_key", ""),
-                s3_access_key_id=creds.get("access_key_id", ""),
-                s3_secret_access_key=creds.get("secret_access_key", ""),
-                s3_region=creds.get("region", "us-east-1"),
-                detection_mode=detection_mode,
-                confidence_threshold=confidence,
-                visualize=True,
-            )
-            if custom_nest_model_path:
-                spawn_kwargs["custom_nest_model_path"] = custom_nest_model_path
-            if custom_bee_model_path:
-                spawn_kwargs["custom_bee_model_path"] = custom_bee_model_path
-            call = fn.spawn(**spawn_kwargs)
-            creds.clear()
-        else:
-            # Azure video — direct processing
-            fn = modal.Function.from_name("beemonitor-cloud", "process_video")
-            spawn_kwargs = dict(
-                job_id=modal_job_id,
-                user_id=user_id,
-                video_blob_path=blob_path,
-                detection_mode=detection_mode,
-                confidence_threshold=confidence,
-                visualize=True,
-            )
-            if custom_nest_model_path:
-                spawn_kwargs["custom_nest_model_path"] = custom_nest_model_path
-            if custom_bee_model_path:
-                spawn_kwargs["custom_bee_model_path"] = custom_bee_model_path
-            call = fn.spawn(**spawn_kwargs)
-
-        # Store the call ID for polling
-        Job.objects.filter(pk=job_pk).update(modal_call_id=call.object_id)
-        logger.info("Job %s spawned on Modal (call_id=%s)", job_pk, call.object_id)
-
-    except Exception as e:
-        Job.objects.filter(pk=job_pk).update(status="failed", error_message=str(e))
-        logger.exception("Job %s spawn failed", job_pk)
+        Job.objects.filter(pk=job_pk).update(
+            status="failed",
+            error_message=(
+                "GPU backend not yet wired — Modal was retired; SageMaker "
+                "Async Inference lands in Phase 4 of the AWS migration."
+            ),
+        )
+        logger.warning("Job %s: GPU backend not wired (Phase 4 pending)", job_pk)
     finally:
         connection.close()
 
 
-def _spawn_modal_batch(jobs_data: list, detection_mode: str, confidence: float,
-                       custom_nest_model_path: str = "", custom_bee_model_path: str = "") -> None:
-    """Spawn Modal jobs in chunks. Each chunk shares one GPU (models loaded once)."""
+def _spawn_gpu_batch(jobs_data: list, detection_mode: str, confidence: float,
+                     custom_nest_model_path: str = "", custom_bee_model_path: str = "") -> None:
+    """Submit a batch of jobs to the GPU backend.
+
+    Phase 4 will replace this with SageMaker Async Inference invokes. For now
+    every job in the batch gets marked failed with a clear message.
+    """
     import django
     django.setup()
     from django.db import connection
 
-    MAX_CONTAINERS = 50
-    MAX_CHUNK_SIZE = 128
-
     try:
-        import modal
-
-        # Separate S3 vs Azure jobs (S3 still use individual spawn for now)
-        s3_jobs = [jd for jd in jobs_data if jd["video"].azure_blob_path.startswith("s3://")]
-        azure_jobs = [jd for jd in jobs_data if not jd["video"].azure_blob_path.startswith("s3://")]
-
-        # Spawn S3 jobs individually (they need credential handling)
-        if s3_jobs:
-            s3_creds_cache = {}
-            for jd in s3_jobs:
-                try:
-                    video = jd["video"]
-                    meta = video.metadata or {}
-                    source = video.source
-                    source_id = source.pk if source else None
-
-                    if source_id and source_id not in s3_creds_cache:
-                        from apps.sources.views import _decrypt_credentials
-                        s3_creds_cache[source_id] = _decrypt_credentials(source)
-
-                    creds = s3_creds_cache.get(source_id, {})
-                    if not creds:
-                        Job.objects.filter(pk=jd["job_pk"]).update(
-                            status="failed", error_message="No credentials for S3 source",
-                        )
-                        continue
-
-                    fn = modal.Function.from_name("beemonitor-cloud", "process_video_from_s3")
-                    spawn_kwargs = dict(
-                        job_id=jd["job_id"], user_id=jd["user_id"],
-                        s3_bucket=meta.get("remote_bucket", creds.get("bucket", "")),
-                        s3_key=meta.get("remote_key", ""),
-                        s3_access_key_id=creds.get("access_key_id", ""),
-                        s3_secret_access_key=creds.get("secret_access_key", ""),
-                        s3_region=creds.get("region", "us-east-1"),
-                        detection_mode=detection_mode, confidence_threshold=confidence, visualize=True,
-                    )
-                    if custom_nest_model_path:
-                        spawn_kwargs["custom_nest_model_path"] = custom_nest_model_path
-                    if custom_bee_model_path:
-                        spawn_kwargs["custom_bee_model_path"] = custom_bee_model_path
-                    call = fn.spawn(**spawn_kwargs)
-                    Job.objects.filter(pk=jd["job_pk"]).update(modal_call_id=call.object_id)
-                except Exception as e:
-                    Job.objects.filter(pk=jd["job_pk"]).update(status="failed", error_message=str(e))
-            for creds in s3_creds_cache.values():
-                creds.clear()
-
-        # Chunk Azure jobs for sequential batch processing
-        if azure_jobs:
-            chunk_size = max(1, len(azure_jobs) // MAX_CONTAINERS)
-            chunk_size = min(chunk_size, MAX_CHUNK_SIZE)
-
-            fn = modal.Function.from_name("beemonitor-cloud", "process_video_chunk")
-
-            for i in range(0, len(azure_jobs), chunk_size):
-                chunk_jobs = azure_jobs[i:i + chunk_size]
-                chunk_configs = []
-                for jd in chunk_jobs:
-                    cfg = {
-                        "job_id": jd["job_id"],
-                        "user_id": jd["user_id"],
-                        "video_blob_path": jd["video"].azure_blob_path,
-                        "detection_mode": detection_mode,
-                        "confidence_threshold": confidence,
-                        "visualize": True,
-                    }
-                    if custom_nest_model_path:
-                        cfg["custom_nest_model_path"] = custom_nest_model_path
-                    if custom_bee_model_path:
-                        cfg["custom_bee_model_path"] = custom_bee_model_path
-                    chunk_configs.append(cfg)
-
-                try:
-                    call = fn.spawn(chunk=chunk_configs)
-                    chunk_pks = [jd["job_pk"] for jd in chunk_jobs]
-                    Job.objects.filter(pk__in=chunk_pks).update(modal_call_id=call.object_id)
-                    logger.info("Spawned chunk of %d videos (call_id=%s)", len(chunk_jobs), call.object_id)
-                except Exception as e:
-                    logger.error("Chunk spawn failed: %s", e)
-                    chunk_pks = [jd["job_pk"] for jd in chunk_jobs]
-                    Job.objects.filter(pk__in=chunk_pks).update(status="failed", error_message=str(e))
-
-        logger.info("Batch spawn complete: %d jobs in chunks, %d S3 individual", len(azure_jobs), len(s3_jobs))
-
-    except Exception as e:
-        logger.exception("Batch spawn failed: %s", e)
         job_pks = [jd["job_pk"] for jd in jobs_data]
-        Job.objects.filter(pk__in=job_pks, status="processing").update(
-            status="failed", error_message=f"Spawn error: {e}",
+        Job.objects.filter(pk__in=job_pks).update(
+            status="failed",
+            error_message=(
+                "GPU backend not yet wired — Modal was retired; SageMaker "
+                "Async Inference lands in Phase 4 of the AWS migration."
+            ),
         )
+        logger.warning("Batch of %d jobs: GPU backend not wired", len(jobs_data))
     finally:
         connection.close()
 
@@ -447,7 +281,7 @@ class JobCreateView(LoginRequiredMixin, FormView):
             if model_id:
                 try:
                     cm = CustomModel.objects.get(pk=model_id, user=self.request.user, is_active=True)
-                    config[config_key] = cm.azure_model_path
+                    config[config_key] = cm.storage_key
                 except CustomModel.DoesNotExist:
                     pass
 
@@ -462,7 +296,7 @@ class JobCreateView(LoginRequiredMixin, FormView):
 
         # Spawn on Modal (non-blocking) — PollJobsView checks for results
         thread = threading.Thread(
-            target=_spawn_modal_job,
+            target=_spawn_gpu_job,
             args=(job.pk,),
             daemon=True,
         )
@@ -557,10 +391,10 @@ class PollJobsView(LoginRequiredMixin, View):
                             continue
 
                         # Update video path if transferred from S3
-                        if result.get("azure_blob_path"):
+                        if result.get("storage_key"):
                             from apps.videos.models import Video as VideoModel
                             VideoModel.objects.filter(pk=job.video_id).update(
-                                azure_blob_path=result["azure_blob_path"],
+                                storage_key=result["storage_key"],
                                 file_size_bytes=result.get("file_size", 0),
                             )
 
@@ -656,11 +490,11 @@ class BatchJobView(LoginRequiredMixin, View):
             if model_id:
                 try:
                     cm = CustomModel.objects.get(pk=model_id, user=request.user, is_active=True)
-                    config[config_key] = cm.azure_model_path
+                    config[config_key] = cm.storage_key
                     if key == "custom_nest_model":
-                        custom_nest_model_path = cm.azure_model_path
+                        custom_nest_model_path = cm.storage_key
                     else:
-                        custom_bee_model_path = cm.azure_model_path
+                        custom_bee_model_path = cm.storage_key
                 except CustomModel.DoesNotExist:
                     pass
 
@@ -747,7 +581,7 @@ class BatchJobView(LoginRequiredMixin, View):
 
         # Spawn all jobs on Modal
         thread = threading.Thread(
-            target=_spawn_modal_batch,
+            target=_spawn_gpu_batch,
             args=(jobs_data, detection_mode, confidence, custom_nest_model_path, custom_bee_model_path),
             daemon=True,
         )
@@ -789,24 +623,24 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
 
         # Generate SAS URLs for viewing/downloading
         if events_path:
-            ctx["events_csv_url"] = _generate_sas_url(events_path)
+            ctx["events_csv_url"] = _generate_presigned_url(events_path)
         if tracking_path:
-            ctx["tracking_csv_url"] = _generate_sas_url(tracking_path)
+            ctx["tracking_csv_url"] = _generate_presigned_url(tracking_path)
         if interactions_path:
-            ctx["interactions_csv_url"] = _generate_sas_url(interactions_path)
+            ctx["interactions_csv_url"] = _generate_presigned_url(interactions_path)
         if annotated_path:
-            ctx["annotated_video_url"] = _generate_sas_url(annotated_path)
+            ctx["annotated_video_url"] = _generate_presigned_url(annotated_path)
 
         # Original video SAS URL
-        if job.video.azure_blob_path:
-            ctx["original_video_url"] = _generate_sas_url(
-                job.video.azure_blob_path, container="raw-videos"
+        if job.video.storage_key:
+            ctx["original_video_url"] = _generate_presigned_url(
+                job.video.storage_key, container="raw-videos"
             )
 
         # Load CSV data for display in tables
-        ctx["events_data"] = _load_csv_from_azure(events_path)
-        ctx["tracking_data"] = _load_csv_from_azure(tracking_path)
-        ctx["interactions_data"] = _load_csv_from_azure(interactions_path)
+        ctx["events_data"] = _load_csv_from_storage(events_path)
+        ctx["tracking_data"] = _load_csv_from_storage(tracking_path)
+        ctx["interactions_data"] = _load_csv_from_storage(interactions_path)
 
         return ctx
 
@@ -884,45 +718,41 @@ class DownloadEventsCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
         response["Content-Disposition"] = f'attachment; filename="beemonitor_events_{label}.csv"'
 
         writer = None
-        conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
+        s3 = get_s3_client()
 
-        if conn_str:
-            from azure.storage.blob import BlobServiceClient
-            service = BlobServiceClient.from_connection_string(conn_str)
+        for result in results:
+            path = result.events_csv_path
+            if not path:
+                # Try constructing from modal_job_id
+                mid = result.job.modal_job_id
+                uid = str(result.job.user_id)
+                if mid:
+                    path = f"{uid}/{mid}/events.csv"
+                else:
+                    continue
 
-            for result in results:
-                path = result.events_csv_path
-                if not path:
-                    # Try constructing from modal_job_id
-                    mid = result.job.modal_job_id
-                    uid = str(result.job.user_id)
-                    if mid:
-                        path = f"{uid}/{mid}/events.csv"
-                    else:
-                        continue
+            try:
+                buf = io.BytesIO()
+                s3.download_to_stream("processed", path, buf)
+                content = buf.getvalue().decode("utf-8")
+                reader = csv.reader(io.StringIO(content))
+                headers = next(reader, [])
 
-                try:
-                    blob = service.get_blob_client("processed", path)
-                    content = blob.download_blob().readall().decode("utf-8")
-                    reader = csv.reader(io.StringIO(content))
-                    headers = next(reader, [])
+                if writer is None:
+                    all_headers = ["video_title", "site_name", "recorded_at"] + headers
+                    writer = csv.writer(response)
+                    writer.writerow(all_headers)
 
-                    if writer is None:
-                        # Add source columns
-                        all_headers = ["video_title", "site_name", "recorded_at"] + headers
-                        writer = csv.writer(response)
-                        writer.writerow(all_headers)
-
-                    video = result.job.video
-                    prefix = [
-                        video.title,
-                        video.site_name,
-                        video.recorded_at.isoformat() if video.recorded_at else "",
-                    ]
-                    for row in reader:
-                        writer.writerow(prefix + row)
-                except Exception as e:
-                    logger.error("Failed to read events CSV %s: %s", path, e)
+                video = result.job.video
+                prefix = [
+                    video.title,
+                    video.site_name,
+                    video.recorded_at.isoformat() if video.recorded_at else "",
+                ]
+                for row in reader:
+                    writer.writerow(prefix + row)
+            except Exception as e:
+                logger.error("Failed to read events CSV %s: %s", path, e)
 
         if writer is None:
             writer = csv.writer(response)
@@ -950,43 +780,40 @@ class DownloadTrackingCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
         response["Content-Disposition"] = f'attachment; filename="beemonitor_tracking_{label}.csv"'
 
         writer = None
-        conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
+        s3 = get_s3_client()
 
-        if conn_str:
-            from azure.storage.blob import BlobServiceClient
-            service = BlobServiceClient.from_connection_string(conn_str)
+        for result in results:
+            path = result.tracking_csv_path
+            if not path:
+                mid = result.job.modal_job_id
+                uid = str(result.job.user_id)
+                if mid:
+                    path = f"{uid}/{mid}/tracking_results.csv"
+                else:
+                    continue
 
-            for result in results:
-                path = result.tracking_csv_path
-                if not path:
-                    mid = result.job.modal_job_id
-                    uid = str(result.job.user_id)
-                    if mid:
-                        path = f"{uid}/{mid}/tracking_results.csv"
-                    else:
-                        continue
+            try:
+                buf = io.BytesIO()
+                s3.download_to_stream("processed", path, buf)
+                content = buf.getvalue().decode("utf-8")
+                reader = csv.reader(io.StringIO(content))
+                headers = next(reader, [])
 
-                try:
-                    blob = service.get_blob_client("processed", path)
-                    content = blob.download_blob().readall().decode("utf-8")
-                    reader = csv.reader(io.StringIO(content))
-                    headers = next(reader, [])
+                if writer is None:
+                    all_headers = ["video_title", "site_name", "recorded_at"] + headers
+                    writer = csv.writer(response)
+                    writer.writerow(all_headers)
 
-                    if writer is None:
-                        all_headers = ["video_title", "site_name", "recorded_at"] + headers
-                        writer = csv.writer(response)
-                        writer.writerow(all_headers)
-
-                    video = result.job.video
-                    prefix = [
-                        video.title,
-                        video.site_name,
-                        video.recorded_at.isoformat() if video.recorded_at else "",
-                    ]
-                    for row in reader:
-                        writer.writerow(prefix + row)
-                except Exception as e:
-                    logger.error("Failed to read tracking CSV %s: %s", path, e)
+                video = result.job.video
+                prefix = [
+                    video.title,
+                    video.site_name,
+                    video.recorded_at.isoformat() if video.recorded_at else "",
+                ]
+                for row in reader:
+                    writer.writerow(prefix + row)
+            except Exception as e:
+                logger.error("Failed to read tracking CSV %s: %s", path, e)
 
         if writer is None:
             writer = csv.writer(response)
@@ -1014,43 +841,40 @@ class DownloadTripsCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
         response["Content-Disposition"] = f'attachment; filename="beemonitor_foraging_trips_{label}.csv"'
 
         writer = None
-        conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
+        s3 = get_s3_client()
 
-        if conn_str:
-            from azure.storage.blob import BlobServiceClient
-            service = BlobServiceClient.from_connection_string(conn_str)
+        for result in results:
+            path = result.foraging_trips_csv_path
+            if not path:
+                mid = result.job.modal_job_id
+                uid = str(result.job.user_id)
+                if mid:
+                    path = f"{uid}/{mid}/foraging_trips.csv"
+                else:
+                    continue
 
-            for result in results:
-                path = result.foraging_trips_csv_path
-                if not path:
-                    mid = result.job.modal_job_id
-                    uid = str(result.job.user_id)
-                    if mid:
-                        path = f"{uid}/{mid}/foraging_trips.csv"
-                    else:
-                        continue
+            try:
+                buf = io.BytesIO()
+                s3.download_to_stream("processed", path, buf)
+                content = buf.getvalue().decode("utf-8")
+                reader = csv.reader(io.StringIO(content))
+                headers = next(reader, [])
 
-                try:
-                    blob = service.get_blob_client("processed", path)
-                    content = blob.download_blob().readall().decode("utf-8")
-                    reader = csv.reader(io.StringIO(content))
-                    headers = next(reader, [])
+                if writer is None:
+                    all_headers = ["video_title", "site_name", "recorded_at"] + headers
+                    writer = csv.writer(response)
+                    writer.writerow(all_headers)
 
-                    if writer is None:
-                        all_headers = ["video_title", "site_name", "recorded_at"] + headers
-                        writer = csv.writer(response)
-                        writer.writerow(all_headers)
-
-                    video = result.job.video
-                    prefix = [
-                        video.title,
-                        video.site_name,
-                        video.recorded_at.isoformat() if video.recorded_at else "",
-                    ]
-                    for row in reader:
-                        writer.writerow(prefix + row)
-                except Exception as e:
-                    logger.error("Failed to read foraging trips CSV %s: %s", path, e)
+                video = result.job.video
+                prefix = [
+                    video.title,
+                    video.site_name,
+                    video.recorded_at.isoformat() if video.recorded_at else "",
+                ]
+                for row in reader:
+                    writer.writerow(prefix + row)
+            except Exception as e:
+                logger.error("Failed to read foraging trips CSV %s: %s", path, e)
 
         if writer is None:
             writer = csv.writer(response)
@@ -1078,43 +902,40 @@ class DownloadInteractionsCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
         response["Content-Disposition"] = f'attachment; filename="beemonitor_interactions_{label}.csv"'
 
         writer = None
-        conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
+        s3 = get_s3_client()
 
-        if conn_str:
-            from azure.storage.blob import BlobServiceClient
-            service = BlobServiceClient.from_connection_string(conn_str)
+        for result in results:
+            path = result.interactions_csv_path
+            if not path:
+                mid = result.job.modal_job_id
+                uid = str(result.job.user_id)
+                if mid:
+                    path = f"{uid}/{mid}/interactions.csv"
+                else:
+                    continue
 
-            for result in results:
-                path = result.interactions_csv_path
-                if not path:
-                    mid = result.job.modal_job_id
-                    uid = str(result.job.user_id)
-                    if mid:
-                        path = f"{uid}/{mid}/interactions.csv"
-                    else:
-                        continue
+            try:
+                buf = io.BytesIO()
+                s3.download_to_stream("processed", path, buf)
+                content = buf.getvalue().decode("utf-8")
+                reader = csv.reader(io.StringIO(content))
+                headers = next(reader, [])
 
-                try:
-                    blob = service.get_blob_client("processed", path)
-                    content = blob.download_blob().readall().decode("utf-8")
-                    reader = csv.reader(io.StringIO(content))
-                    headers = next(reader, [])
+                if writer is None:
+                    all_headers = ["video_title", "site_name", "recorded_at"] + headers
+                    writer = csv.writer(response)
+                    writer.writerow(all_headers)
 
-                    if writer is None:
-                        all_headers = ["video_title", "site_name", "recorded_at"] + headers
-                        writer = csv.writer(response)
-                        writer.writerow(all_headers)
-
-                    video = result.job.video
-                    prefix = [
-                        video.title,
-                        video.site_name,
-                        video.recorded_at.isoformat() if video.recorded_at else "",
-                    ]
-                    for row in reader:
-                        writer.writerow(prefix + row)
-                except Exception as e:
-                    logger.error("Failed to read interactions CSV %s: %s", path, e)
+                video = result.job.video
+                prefix = [
+                    video.title,
+                    video.site_name,
+                    video.recorded_at.isoformat() if video.recorded_at else "",
+                ]
+                for row in reader:
+                    writer.writerow(prefix + row)
+            except Exception as e:
+                logger.error("Failed to read interactions CSV %s: %s", path, e)
 
         if writer is None:
             writer = csv.writer(response)
@@ -1378,22 +1199,17 @@ def _fetch_weather_data(start_date: str, end_date: str, lat: float = 40.79, lon:
         return {"hourly": [], "daily": []}
 
 
-def _load_csv_from_azure(blob_path: str, container: str = "processed") -> dict:
-    """Download a CSV from Azure and return headers + rows for template rendering."""
+def _load_csv_from_storage(blob_path: str, container: str = "processed") -> dict:
+    """Download a CSV from S3 and return headers + rows for template rendering."""
     if not blob_path:
         return {"headers": [], "rows": []}
     try:
         import csv
         import io
-        from azure.storage.blob import BlobServiceClient
 
-        conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
-        if not conn_str:
-            return {"headers": [], "rows": []}
-
-        service = BlobServiceClient.from_connection_string(conn_str)
-        blob = service.get_blob_client(container, blob_path)
-        content = blob.download_blob().readall().decode("utf-8")
+        buf = io.BytesIO()
+        get_s3_client().download_to_stream(container, blob_path, buf)
+        content = buf.getvalue().decode("utf-8")
 
         reader = csv.reader(io.StringIO(content))
         headers = next(reader, [])
@@ -1401,5 +1217,5 @@ def _load_csv_from_azure(blob_path: str, container: str = "processed") -> dict:
 
         return {"headers": headers, "rows": rows, "total": len(rows)}
     except Exception as e:
-        logger.error("Failed to load CSV %s: %s", blob_path, e)
+        logger.error("Failed to load CSV %s/%s: %s", container, blob_path, e)
         return {"headers": [], "rows": []}

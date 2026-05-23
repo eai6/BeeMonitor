@@ -47,7 +47,7 @@ class Migration(migrations.Migration):
                 ('name', models.CharField(max_length=200)),
                 ('model_type', models.CharField(choices=[('nest_detection', 'Nest Detection'), ('bee_tracking', 'Bee Tracking'), ('custom', 'Custom')], default='custom', max_length=20)),
                 ('base_model', models.CharField(max_length=50)),
-                ('azure_model_path', models.CharField(blank=True, max_length=500)),
+                ('storage_key', models.CharField(blank=True, max_length=500)),
                 ('classes', models.JSONField(default=list)),
                 ('metrics', models.JSONField(blank=True, default=dict)),
                 ('is_active', models.BooleanField(default=True)),

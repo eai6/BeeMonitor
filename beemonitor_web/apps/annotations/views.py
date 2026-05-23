@@ -110,35 +110,17 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
                 "frame_image_path": ann.frame_image_path or "",
             })
 
-        # Generate SAS URLs for frame thumbnails (batch for performance)
+        # Presigned URLs for frame thumbnails
         try:
-            from django.conf import settings
-            from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
-            from datetime import datetime, timedelta, timezone as dt_tz
-
-            conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
-            if conn_str:
-                service = BlobServiceClient.from_connection_string(conn_str)
-                account_name = service.account_name
-                account_key = ""
-                for part in conn_str.split(";"):
-                    if part.startswith("AccountKey="):
-                        account_key = part.split("=", 1)[1]
-                        break
-
-                for card in frame_cards:
-                    if card["frame_image_path"]:
-                        token = generate_blob_sas(
-                            account_name=account_name,
-                            container_name="processed",
-                            blob_name=card["frame_image_path"],
-                            account_key=account_key,
-                            permission=BlobSasPermissions(read=True),
-                            expiry=datetime.now(dt_tz.utc) + timedelta(hours=2),
-                        )
-                        card["thumbnail_url"] = f"https://{account_name}.blob.core.windows.net/processed/{card['frame_image_path']}?{token}"
+            from config.storage import get_s3_client
+            s3 = get_s3_client()
+            for card in frame_cards:
+                if card["frame_image_path"]:
+                    card["thumbnail_url"] = s3.generate_presigned_url(
+                        "processed", card["frame_image_path"], expiry_hours=2,
+                    )
         except Exception as e:
-            logger.warning("Failed to generate SAS URLs for thumbnails: %s", e)
+            logger.warning("Failed to presign thumbnails: %s", e)
 
         ctx["total_annotations"] = len(frame_cards)
         ctx["total_boxes"] = total_boxes
@@ -227,12 +209,12 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
             except Annotation.DoesNotExist:
                 boxes = []
 
-        # Auto-transfer S3 video to Azure if needed
+        # Auto-ingest external-S3 video into our raw-videos bucket if needed
         ctx["transferring"] = False
-        if video and video.azure_blob_path.startswith("s3://"):
+        if video and video.storage_key.startswith("s3://"):
             try:
                 import threading
-                from apps.analysis.views import _transfer_s3_to_azure
+                from apps.analysis.views import _ingest_external_s3_to_storage
 
                 # Check if already transferring (avoid duplicate)
                 if not getattr(video, '_transfer_started', False):
@@ -278,29 +260,13 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
                 nv, nf = all_frames[idx + 1]
                 ctx["next_frame_url"] = f"{base_url}?video={nv}&frame={nf}"
 
-        # Generate video SAS URL for frame display
-        if video and video.azure_blob_path and not video.azure_blob_path.startswith("s3://"):
+        # Presigned URL for video playback
+        if video and video.storage_key and not video.storage_key.startswith("s3://"):
             try:
-                from datetime import datetime, timedelta, timezone as dt_tz
-                from django.conf import settings
-                from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
-
-                conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
-                if conn_str:
-                    service = BlobServiceClient.from_connection_string(conn_str)
-                    account_name = service.account_name
-                    account_key = ""
-                    for part in conn_str.split(";"):
-                        if part.startswith("AccountKey="):
-                            account_key = part.split("=", 1)[1]
-                            break
-                    token = generate_blob_sas(
-                        account_name=account_name, container_name="raw-videos",
-                        blob_name=video.azure_blob_path, account_key=account_key,
-                        permission=BlobSasPermissions(read=True),
-                        expiry=datetime.now(dt_tz.utc) + timedelta(hours=24),
-                    )
-                    ctx["video_url"] = f"https://{account_name}.blob.core.windows.net/raw-videos/{video.azure_blob_path}?{token}"
+                from config.storage import get_s3_client
+                ctx["video_url"] = get_s3_client().generate_presigned_url(
+                    "raw-videos", video.storage_key,
+                )
             except Exception:
                 pass
 
@@ -308,15 +274,15 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
 
     @staticmethod
     def _do_transfer(video_pk):
-        """Background thread: transfer S3 video to Azure."""
+        """Background thread: ingest external-S3 video into our raw-videos bucket."""
         import django
         django.setup()
         from django.db import connection
         try:
             from apps.videos.models import Video
-            from apps.analysis.views import _transfer_s3_to_azure
+            from apps.analysis.views import _ingest_external_s3_to_storage
             video = Video.objects.select_related("source").get(pk=video_pk)
-            _transfer_s3_to_azure(video)
+            _ingest_external_s3_to_storage(video)
         except Exception as e:
             import logging
             logging.getLogger(__name__).error("Background transfer failed for %s: %s", video_pk, e)
@@ -325,7 +291,7 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
 
 
 class TransferVideoView(LoginRequiredMixin, View):
-    """Transfer a video from S3 to Azure so frames are available for annotation."""
+    """Ingest an external-S3 video into our raw-videos bucket so frames are available."""
 
     def post(self, request, pk):
         from django.shortcuts import redirect
@@ -338,14 +304,14 @@ class TransferVideoView(LoginRequiredMixin, View):
         from apps.videos.models import Video
         video = get_object_or_404(Video, pk=video_id, user=request.user)
 
-        if not video.azure_blob_path.startswith("s3://"):
-            messages.info(request, "Video is already in Azure.")
+        if not video.storage_key.startswith("s3://"):
+            messages.info(request, "Video is already in storage.")
             return redirect(f"/annotations/{pk}/edit/?video={video_id}&frame={frame}")
 
         try:
-            from apps.analysis.views import _transfer_s3_to_azure
-            new_path = _transfer_s3_to_azure(video)
-            messages.success(request, f"Video transferred to Azure. Frames now available.")
+            from apps.analysis.views import _ingest_external_s3_to_storage
+            _ingest_external_s3_to_storage(video)
+            messages.success(request, "Video transferred. Frames now available.")
         except Exception as e:
             logger.error("Transfer failed for video %s: %s", video_id, e)
             messages.error(request, f"Transfer failed: {e}")
@@ -400,7 +366,7 @@ class PreAnnotateView(LoginRequiredMixin, View):
         from apps.videos.models import Video
         video = get_object_or_404(Video, pk=video_id, user=request.user)
 
-        blob_path = video.azure_blob_path
+        blob_path = video.storage_key
 
         # Auto-transfer from S3 if needed, then pre-annotate
         # The background thread handles both transfer and annotation
@@ -429,14 +395,14 @@ class PreAnnotateView(LoginRequiredMixin, View):
             video = Video.objects.select_related("source").get(pk=video_pk)
 
             # Re-read blob_path from DB (might have been updated by analysis job)
-            blob_path = video.azure_blob_path
+            blob_path = video.storage_key
 
             # Transfer from S3 if needed
             if blob_path.startswith("s3://"):
                 logger.info("Pre-annotate: transferring video %s from S3", video_pk)
                 try:
-                    from apps.analysis.views import _transfer_s3_to_azure
-                    blob_path = _transfer_s3_to_azure(video)
+                    from apps.analysis.views import _ingest_external_s3_to_storage
+                    blob_path = _ingest_external_s3_to_storage(video)
                     logger.info("Pre-annotate: transfer done -> %s", blob_path)
                 except Exception as e:
                     logger.error("Pre-annotate: S3 transfer failed for %s: %s", video_pk, e, exc_info=True)
@@ -519,7 +485,7 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
 
         count = 0
         for video in videos:
-            blob_path = video.azure_blob_path
+            blob_path = video.storage_key
             if not blob_path:
                 continue
             thread = threading.Thread(
@@ -540,8 +506,8 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
 class FrameImageView(LoginRequiredMixin, View):
     """Return a JPG image of a specific video frame.
 
-    First tries to serve a pre-saved frame from Azure (uploaded during
-    pre-annotation). Falls back to extracting from video if needed.
+    First tries to serve a pre-saved frame from S3 (uploaded during
+    pre-annotation). Falls back to extracting from the video if needed.
     """
 
     def get(self, request, pk):
@@ -552,36 +518,28 @@ class FrameImageView(LoginRequiredMixin, View):
         from apps.videos.models import Video
         video = get_object_or_404(Video, pk=video_id, user=request.user)
 
-        # Check if we have a pre-saved frame image
         try:
             project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
             ann = Annotation.objects.get(project=project, video=video, frame_number=frame_number)
 
             if ann.frame_image_path:
-                # Serve pre-saved frame from Azure
-                return self._serve_from_azure(ann.frame_image_path, ann if draw_boxes else None)
+                return self._serve_from_storage(ann.frame_image_path, ann if draw_boxes else None)
         except Annotation.DoesNotExist:
             pass
 
-        # Fallback: extract frame from video (slow but works)
         return self._extract_from_video(video, frame_number)
 
-    def _serve_from_azure(self, blob_path, ann_for_boxes=None):
-        """Serve a pre-saved JPEG frame from Azure processed container."""
+    def _serve_from_storage(self, blob_path, ann_for_boxes=None):
+        """Serve a pre-saved JPEG frame from the processed S3 bucket."""
         try:
-            from django.conf import settings
-            from azure.storage.blob import BlobServiceClient
+            import io
+            from config.storage import get_s3_client
 
-            conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
-            if not conn_str:
-                return HttpResponse(status=404)
-
-            service = BlobServiceClient.from_connection_string(conn_str)
-            blob = service.get_blob_client("processed", blob_path)
-            data = blob.download_blob().readall()
+            buf = io.BytesIO()
+            get_s3_client().download_to_stream("processed", blob_path, buf)
+            data = buf.getvalue()
 
             if ann_for_boxes and ann_for_boxes.boxes:
-                # Draw boxes on the image
                 import cv2
                 import numpy as np
                 img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
@@ -592,19 +550,19 @@ class FrameImageView(LoginRequiredMixin, View):
                     cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
                     label = box.get("class", "")
                     cv2.putText(img, label, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-                _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                data = buf.tobytes()
+                _, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                data = encoded.tobytes()
 
             response = HttpResponse(data, content_type="image/jpeg")
             response["Cache-Control"] = "public, max-age=3600"
             return response
         except Exception as e:
-            logger.error("FrameImageView Azure error: %s", e)
+            logger.error("FrameImageView S3 error: %s", e)
             return HttpResponse(status=404)
 
     def _extract_from_video(self, video, frame_number):
         """Fallback: download video and extract frame (slow)."""
-        blob_path = video.azure_blob_path
+        blob_path = video.storage_key
         if not blob_path or blob_path.startswith("s3://"):
             return HttpResponse(status=404)
 
@@ -612,17 +570,11 @@ class FrameImageView(LoginRequiredMixin, View):
             import cv2
             import tempfile
             import os
-            from django.conf import settings
-            from azure.storage.blob import BlobServiceClient
-
-            conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
-            service = BlobServiceClient.from_connection_string(conn_str)
+            from config.storage import get_s3_client
 
             tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-            blob = service.get_blob_client("raw-videos", blob_path)
-            with open(tmp.name, "wb") as fh:
-                stream = blob.download_blob()
-                stream.readinto(fh)
+            tmp.close()
+            get_s3_client().download_file("raw-videos", blob_path, tmp.name)
 
             cap = cv2.VideoCapture(tmp.name)
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
@@ -744,9 +696,9 @@ class ExportProjectView(LoginRequiredMixin, View):
             zf.writestr("data.yaml", data_yaml)
 
             # Group annotations and extract frames from videos
-            from django.conf import settings
-            conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
-            video_cache = {}  # video_pk -> cv2.VideoCapture
+            from config.storage import get_s3_client
+            s3 = get_s3_client()
+            video_cache = {}  # video_pk -> (cv2.VideoCapture, tmp_path)
 
             ann_list = list(annotations)
             split_idx = int(len(ann_list) * 0.8)
@@ -756,24 +708,18 @@ class ExportProjectView(LoginRequiredMixin, View):
                 base_name = f"{ann.video.title}_f{ann.frame_number:06d}"
                 label_name = f"labels/{split}/{base_name}.txt"
 
-                # Write label
                 yolo_txt = ann.to_yolo_format()
                 zf.writestr(label_name, yolo_txt)
 
-                # Extract frame image from video
                 try:
                     if ann.video.pk not in video_cache:
-                        blob_path = ann.video.azure_blob_path
-                        if blob_path and not blob_path.startswith("s3://") and conn_str:
+                        blob_path = ann.video.storage_key
+                        if blob_path and not blob_path.startswith("s3://"):
                             import tempfile, cv2
-                            from azure.storage.blob import BlobServiceClient
 
-                            service = BlobServiceClient.from_connection_string(conn_str)
                             tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-                            blob = service.get_blob_client("raw-videos", blob_path)
-                            with open(tmp.name, "wb") as fh:
-                                stream = blob.download_blob()
-                                stream.readinto(fh)
+                            tmp.close()
+                            s3.download_file("raw-videos", blob_path, tmp.name)
                             cap = cv2.VideoCapture(tmp.name)
                             video_cache[ann.video.pk] = (cap, tmp.name)
 

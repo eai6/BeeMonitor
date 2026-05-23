@@ -5,7 +5,6 @@ from django.db import models
 class DataSource(models.Model):
     class SourceType(models.TextChoices):
         AWS_S3 = "aws_s3", "AWS S3"
-        AZURE_BLOB = "azure_blob", "Azure Blob"
         GCS = "gcs", "Google Cloud Storage"
         GOOGLE_DRIVE = "google_drive", "Google Drive"
 

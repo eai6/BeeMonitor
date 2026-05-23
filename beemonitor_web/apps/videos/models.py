@@ -25,7 +25,7 @@ class Video(models.Model):
         related_name="videos",
     )
     title = models.CharField(max_length=300)
-    azure_blob_path = models.CharField(max_length=500)
+    storage_key = models.CharField(max_length=500)
     file_size_bytes = models.BigIntegerField()
     duration_seconds = models.FloatField(null=True, blank=True)
     resolution = models.CharField(max_length=20, blank=True)

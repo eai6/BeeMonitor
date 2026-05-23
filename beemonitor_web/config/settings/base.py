@@ -1,9 +1,16 @@
 """Base Django settings shared across all environments."""
 
 import os
+import sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+REPO_ROOT = BASE_DIR.parent  # one level above beemonitor_web/, holds cloud/
+
+# Make the repo root importable so Django code can `from cloud.storage...`
+# (cloud/ is a sibling of beemonitor_web/, not a Django app).
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 SECRET_KEY = os.environ.get(
     "DJANGO_SECRET_KEY",
@@ -36,6 +43,9 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # whitenoise serves /static/ in production without S3/CloudFront. Must
+    # come immediately after SecurityMiddleware per the whitenoise docs.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -44,6 +54,16 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
+
+# WhiteNoise: serve hashed + gzipped/brotli static files from STATIC_ROOT.
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
 
 ROOT_URLCONF = "config.urls"
 
@@ -108,9 +128,13 @@ CSRF_TRUSTED_ORIGINS = os.environ.get(
     "CSRF_TRUSTED_ORIGINS", "http://localhost:8000"
 ).split(",")
 
-# Azure Blob Storage
-AZURE_STORAGE_CONNECTION_STRING = os.environ.get("AZURE_STORAGE_CONNECTION_STRING", "")
-AZURE_STORAGE_CONTAINER = os.environ.get("AZURE_STORAGE_CONTAINER", "beemonitor-storage")
+# AWS S3 — primary storage (bucket per logical area; see cloud/storage/config.py).
+# Locally set these in .env; in AWS they come from ECS task env / Secrets Manager.
+AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
+AWS_S3_BUCKET_RAW_VIDEOS = os.environ.get("AWS_S3_BUCKET_RAW_VIDEOS", "")
+AWS_S3_BUCKET_PROCESSED = os.environ.get("AWS_S3_BUCKET_PROCESSED", "")
+AWS_S3_BUCKET_MODELS = os.environ.get("AWS_S3_BUCKET_MODELS", "")
+AWS_S3_BUCKET_USER_CONFIGS = os.environ.get("AWS_S3_BUCKET_USER_CONFIGS", "")
 
 # Modal
 MODAL_TOKEN_ID = os.environ.get("MODAL_TOKEN_ID", "")

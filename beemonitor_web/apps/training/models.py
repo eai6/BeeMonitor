@@ -88,7 +88,7 @@ class CustomModel(models.Model):
         default=ModelType.CUSTOM,
     )
     base_model = models.CharField(max_length=50)
-    azure_model_path = models.CharField(max_length=500, blank=True)
+    storage_key = models.CharField(max_length=500, blank=True)
     classes = models.JSONField(default=list)
     metrics = models.JSONField(default=dict, blank=True)
     is_active = models.BooleanField(default=True)

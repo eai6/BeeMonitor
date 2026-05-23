@@ -20,7 +20,7 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('title', models.CharField(max_length=300)),
-                ('azure_blob_path', models.CharField(max_length=500)),
+                ('storage_key', models.CharField(max_length=500)),
                 ('file_size_bytes', models.BigIntegerField()),
                 ('duration_seconds', models.FloatField(blank=True, null=True)),
                 ('resolution', models.CharField(blank=True, max_length=20)),

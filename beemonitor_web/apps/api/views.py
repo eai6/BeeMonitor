@@ -59,17 +59,17 @@ class VideoViewSet(viewsets.ModelViewSet):
             user=self.request.user,
             title=data["title"],
             source=data.get("source"),
-            azure_blob_path="",  # populated after upload completes
+            storage_key="",  # populated after upload completes
             file_size_bytes=0,
             status=Video.Status.UPLOADING,
         )
 
     @action(detail=False, methods=["post"], parser_classes=[MultiPartParser])
     def upload_file(self, request):
-        """Accept multipart video file, upload to Azure, create Video record.
+        """Accept multipart video file, upload to S3, create Video record.
 
         Used by the desktop GUI and other programmatic clients so they don't
-        need Azure credentials directly.
+        need AWS credentials directly.
         """
         serializer = VideoFileUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -84,12 +84,12 @@ class VideoViewSet(viewsets.ModelViewSet):
         upload_id = uuid.uuid4().hex[:12]
         blob_path = f"{request.user.pk}/{upload_id}/{video_file.name}"
 
-        # Reuse existing Azure upload helper
-        from apps.videos.views import _upload_to_azure
+        # Reuse the S3 upload helper from the videos app
+        from apps.videos.views import _upload_to_storage
 
-        if not _upload_to_azure(blob_path, video_file):
+        if not _upload_to_storage(blob_path, video_file):
             return Response(
-                {"detail": "Azure upload failed."},
+                {"detail": "S3 upload failed."},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
@@ -101,7 +101,7 @@ class VideoViewSet(viewsets.ModelViewSet):
         video = Video.objects.create(
             user=request.user,
             title=title,
-            azure_blob_path=blob_path,
+            storage_key=blob_path,
             file_size_bytes=video_file.size,
             status=Video.Status.READY,
             recorded_at=recorded_at,
@@ -187,42 +187,12 @@ class JobViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Generate SAS URL
         try:
-            from datetime import datetime, timedelta, timezone
-
-            from azure.storage.blob import (
-                BlobSasPermissions,
-                BlobServiceClient,
-                generate_blob_sas,
+            from config.storage import get_s3_client
+            url = get_s3_client().generate_presigned_url(
+                "processed", blob_path, expiry_hours=1,
             )
-
-            conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
-            if not conn_str:
-                return Response(
-                    {"detail": "Storage not configured."},
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-
-            service = BlobServiceClient.from_connection_string(conn_str)
-            account_name = service.account_name
-            account_key = ""
-            for part in conn_str.split(";"):
-                if part.startswith("AccountKey="):
-                    account_key = part.split("=", 1)[1]
-                    break
-
-            token = generate_blob_sas(
-                account_name=account_name,
-                container_name="processed",
-                blob_name=blob_path,
-                account_key=account_key,
-                permission=BlobSasPermissions(read=True),
-                expiry=datetime.now(timezone.utc) + timedelta(hours=1),
-            )
-            url = f"https://{account_name}.blob.core.windows.net/processed/{blob_path}?{token}"
             return Response({"url": url, "file": file_field, "blob_path": blob_path})
-
         except Exception as e:
             return Response(
                 {"detail": f"Failed to generate download URL: {e}"},
@@ -244,7 +214,7 @@ class JobViewSet(viewsets.ModelViewSet):
         from django.utils import timezone as tz
 
         from apps.analysis.models import compute_config_hash
-        from apps.analysis.views import _spawn_modal_batch
+        from apps.analysis.views import _spawn_gpu_batch
 
         serializer = BatchSubmitSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -317,7 +287,7 @@ class JobViewSet(viewsets.ModelViewSet):
 
         # Spawn on Modal in background thread (same as web app)
         thread = threading.Thread(
-            target=_spawn_modal_batch,
+            target=_spawn_gpu_batch,
             args=(jobs_data, detection_mode, confidence,
                   custom_nest_model_path, custom_bee_model_path),
             daemon=True,

@@ -36,11 +36,9 @@ class TestDirectUploadHandler:
     @pytest.fixture
     def handler(self, tmp_path):
         mock_storage = MagicMock()
-        mock_config = MagicMock()
-        mock_config.raw_videos_container = "raw-videos"
         return DirectUploadHandler(
             storage_client=mock_storage,
-            storage_config=mock_config,
+            storage_config=MagicMock(),
             upload_dir=str(tmp_path / "uploads"),
         )
 
@@ -57,7 +55,7 @@ class TestDirectUploadHandler:
         assert r2["complete"] is True
         result = handler.finalize_upload(sid)
         assert result["file_size"] == 10
-        assert "user1" in result["azure_blob_path"]
+        assert "user1" in result["storage_key"]
 
     def test_finalize_with_missing_chunks(self, handler):
         session = handler.init_upload("user1", "video.mp4", 10, 3)

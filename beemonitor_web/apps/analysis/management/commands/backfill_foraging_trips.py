@@ -1,7 +1,7 @@
 """Backfill foraging trips for already-completed jobs.
 
-Downloads each job's events CSV from Azure, computes foraging trips,
-uploads the trips CSV back to Azure, and updates the JobResult record.
+Downloads each job's events CSV from S3, computes foraging trips,
+uploads the trips CSV back to S3, and updates the JobResult record.
 No GPU needed — pure CPU computation. Uses only stdlib (no pandas).
 
 Usage:
@@ -108,7 +108,7 @@ def _trips_to_csv(trips):
 
 
 class Command(BaseCommand):
-    help = "Backfill foraging trips from existing events CSVs in Azure"
+    help = "Backfill foraging trips from existing events CSVs in S3"
 
     def add_arguments(self, parser):
         parser.add_argument("--dry-run", action="store_true", help="Show what would be done without making changes")
@@ -136,13 +136,9 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING("DRY RUN — no changes will be made"))
             return
 
-        conn_str = getattr(settings, "AZURE_STORAGE_CONNECTION_STRING", "")
-        if not conn_str:
-            self.stderr.write(self.style.ERROR("AZURE_STORAGE_CONNECTION_STRING not set"))
-            return
-
-        from azure.storage.blob import BlobServiceClient
-        service = BlobServiceClient.from_connection_string(conn_str)
+        import io
+        from config.storage import get_s3_client
+        s3 = get_s3_client()
 
         processed = 0
         skipped = 0
@@ -160,8 +156,9 @@ class Command(BaseCommand):
                     continue
 
             try:
-                blob = service.get_blob_client("processed", events_path)
-                content = blob.download_blob().readall().decode("utf-8")
+                buf = io.BytesIO()
+                s3.download_to_stream("processed", events_path, buf)
+                content = buf.getvalue().decode("utf-8")
                 events, _ = _parse_events_csv(content)
 
                 if not events:
@@ -192,8 +189,11 @@ class Command(BaseCommand):
                 trips_blob_path = f"{uid}/{mid}/foraging_trips.csv"
 
                 trips_csv = _trips_to_csv(trips)
-                blob_client = service.get_blob_client("processed", trips_blob_path)
-                blob_client.upload_blob(trips_csv.encode("utf-8"), overwrite=True)
+                s3.upload_stream(
+                    "processed", trips_blob_path,
+                    io.BytesIO(trips_csv.encode("utf-8")),
+                    content_type="text/csv",
+                )
 
                 stats["foraging_trips"] = trip_summary
                 result.foraging_trips_csv_path = trips_blob_path

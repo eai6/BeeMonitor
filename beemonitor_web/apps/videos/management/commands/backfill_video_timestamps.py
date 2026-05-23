@@ -1,7 +1,7 @@
 """Backfill temporal fields on existing Video records.
 
 Parses recorded_at, site_name, year, month, day, hour from the
-video filename (azure_blob_path) or title.
+video filename (storage_key) or title.
 
 Usage:
     python manage.py backfill_video_timestamps
@@ -31,7 +31,7 @@ class Command(BaseCommand):
 
         for video in videos:
             # Try parsing from the blob path filename, then from the title
-            filename = video.azure_blob_path.split("/")[-1] if video.azure_blob_path else ""
+            filename = video.storage_key.split("/")[-1] if video.storage_key else ""
             if not filename:
                 filename = video.title
 

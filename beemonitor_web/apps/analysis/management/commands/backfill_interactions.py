@@ -51,7 +51,7 @@ class Command(BaseCommand):
         job_configs = []
         for result in qs.iterator():
             video = result.job.video
-            if not video.azure_blob_path or video.azure_blob_path.startswith("s3://"):
+            if not video.storage_key or video.storage_key.startswith("s3://"):
                 continue
 
             tracking_path = result.tracking_csv_path
@@ -75,7 +75,7 @@ class Command(BaseCommand):
                 "job_id": result.job.modal_job_id or str(result.job.pk),
                 "job_pk": result.job.pk,
                 "user_id": str(result.job.user_id),
-                "video_blob_path": video.azure_blob_path,
+                "video_blob_path": video.storage_key,
                 "tracking_csv_path": tracking_path,
                 "fps": fps,
                 "nest_bboxes": nest_bboxes,

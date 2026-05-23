@@ -10,8 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from cloud.storage.azure_client import AzureBlobClient
-from cloud.storage.config import StorageConfig
+from cloud.storage.config import S3Config
+from cloud.storage.s3_client import S3StorageClient
 
 logger = logging.getLogger(__name__)
 
@@ -32,22 +32,22 @@ class UploadSession:
 
 
 class DirectUploadHandler:
-    """Handle chunked video uploads to Azure Blob Storage.
+    """Handle chunked video uploads to the S3 raw-videos bucket.
 
     Flow:
         1. Client calls init_upload() → gets session_id
         2. Client sends chunks via upload_chunk()
-        3. Client calls finalize_upload() → file assembled and uploaded to Azure
+        3. Client calls finalize_upload() → file assembled and uploaded to S3
     """
 
     def __init__(
         self,
-        storage_client: Optional[AzureBlobClient] = None,
-        storage_config: Optional[StorageConfig] = None,
+        storage_client: Optional[S3StorageClient] = None,
+        storage_config: Optional[S3Config] = None,
         upload_dir: str = "/tmp/beemonitor_uploads",
     ):
-        self._config = storage_config or StorageConfig()
-        self._storage = storage_client or AzureBlobClient(self._config)
+        self._config = storage_config or S3Config()
+        self._storage = storage_client or S3StorageClient(self._config)
         self._upload_dir = Path(upload_dir)
         self._sessions: dict[str, UploadSession] = {}
 
@@ -108,10 +108,10 @@ class DirectUploadHandler:
         }
 
     def finalize_upload(self, session_id: str, upload_id: str | None = None) -> dict:
-        """Assemble chunks and upload the complete file to Azure.
+        """Assemble chunks and upload the complete file to S3.
 
         Returns:
-            Dict with azure_blob_path and file_size.
+            Dict with storage_key and file_size.
         """
         session = self._sessions.get(session_id)
         if session is None:
@@ -121,7 +121,6 @@ class DirectUploadHandler:
             missing = set(range(session.total_chunks)) - session.received_chunks
             raise ValueError(f"Missing chunks: {sorted(missing)}")
 
-        # Assemble chunks into final file
         final_path = Path(session.local_path)
         with open(final_path, "wb") as out:
             for i in range(session.total_chunks):
@@ -132,21 +131,19 @@ class DirectUploadHandler:
         if upload_id is None:
             upload_id = session_id
 
-        # Upload to Azure
-        blob_path = f"{session.user_id}/{upload_id}/{session.filename}"
+        storage_key = f"{session.user_id}/{upload_id}/{session.filename}"
         self._storage.upload_file(
-            self._config.raw_videos_container,
-            blob_path,
+            "raw-videos",
+            storage_key,
             str(final_path),
             content_type="video/mp4",
         )
 
-        # Cleanup
         self._cleanup_session(session_id)
 
         return {
             "upload_id": upload_id,
-            "azure_blob_path": blob_path,
+            "storage_key": storage_key,
             "file_size": file_size,
         }
 

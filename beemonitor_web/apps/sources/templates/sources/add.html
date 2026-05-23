@@ -37,7 +37,6 @@
                 class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
           <option value="">Select type...</option>
           <option value="aws_s3">AWS S3</option>
-          <option value="azure_blob">Azure Blob Storage</option>
           <option value="gcs">Google Cloud Storage</option>
           <option value="google_drive">Google Drive</option>
         </select>
@@ -133,21 +132,6 @@
             <li>[ ] Access keys rotated every 90 days</li>
             <li>[ ] MFA enabled on your AWS account</li>
           </ul>
-        </div>
-      </div>
-
-      <!-- Azure Blob Fields -->
-      <div x-show="sourceType === 'azure_blob'" x-cloak class="space-y-4 mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
-        <h3 class="font-medium text-gray-800">Azure Blob Storage Configuration</h3>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Container Name *</label>
-          <input type="text" name="azure_container" value="{{ form.azure_container.value|default:'' }}"
-                 class="w-full border border-gray-300 rounded px-3 py-2 text-sm">
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Connection String *</label>
-          <textarea name="azure_connection_string" rows="2"
-                    class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">{{ form.azure_connection_string.value|default:'' }}</textarea>
         </div>
       </div>
 

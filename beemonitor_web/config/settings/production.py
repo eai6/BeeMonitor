@@ -22,7 +22,7 @@ DATABASES = {
 }
 
 # Security
-SECURE_SSL_REDIRECT = False  # Azure App Service handles HTTPS termination
+SECURE_SSL_REDIRECT = False  # ALB / fronting load balancer handles HTTPS termination
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_HSTS_SECONDS = 31536000
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True

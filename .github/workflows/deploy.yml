@@ -1,12 +1,29 @@
-name: Build, Test & Deploy
+name: Test & Deploy (AWS)
+
+# What this does:
+#   1. `test`        — Django check + cloud unit tests on every push / PR.
+#   2. `build-push`  — on push to `main` (or a release tag), builds the
+#                      Django container and pushes it to ECR.
+#                      App Runner's auto_deployments_enabled=True watches the
+#                      `:latest` tag and rolls the service on its own — there
+#                      is no explicit deploy step here.
+#
+# Auth: GitHub Actions assumes the IAM role provisioned by Pulumi (Phase 2a)
+# via the OIDC federation. No long-lived AWS keys.
 
 on:
   push:
     branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: eai6/beemonitor/beemonitor-web
+  AWS_REGION: us-east-1
+  # Role created by infra/aws/__main__.py. ARN is not secret — the OIDC trust
+  # policy on the role is what enforces "only this repo, only main/tags".
+  AWS_ROLE_ARN: arn:aws:iam::495331821764:role/beemonitor-dev-github-actions
+  ECR_REPOSITORY: beemonitor-dev-web
 
 jobs:
   test:
@@ -16,68 +33,64 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install cloud deps
-        run: pip install -r cloud/requirements-cloud.txt pytest boto3 modal cryptography pandas
-      - name: Run cloud tests
-        run: python -m pytest cloud/tests/ -v -o "addopts="
+
       - name: Install Django deps
-        run: pip install -r beemonitor_web/requirements/development.txt django-filter
-      - name: Django check
+        run: |
+          pip install -r beemonitor_web/requirements/base.txt django-filter
+          pip install -r cloud/requirements-cloud.txt
+          pip install pytest moto[s3]
+
+      - name: Django system check
         working-directory: beemonitor_web
+        env:
+          # Smoke-only env — the check command shouldn't actually open a DB
+          # connection or hit S3, but Django settings validation reads them.
+          DJANGO_ENV: development
+          AWS_REGION: us-east-1
+          AWS_S3_BUCKET_RAW_VIDEOS: smoke-raw-videos
+          AWS_S3_BUCKET_PROCESSED: smoke-processed
+          AWS_S3_BUCKET_MODELS: smoke-models
+          AWS_S3_BUCKET_USER_CONFIGS: smoke-user-configs
         run: python manage.py check
 
-  build-and-push:
+      - name: Cloud unit tests (moto-backed S3)
+        run: python -m pytest cloud/tests/ -v -o "addopts="
+
+  build-push:
     needs: test
+    # Only build/push from main and version tags — PRs run tests only.
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:
+      # `id-token: write` is required for OIDC federation to AWS.
+      id-token: write
       contents: read
-      packages: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: beemonitor_web
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
 
-  deploy-azure:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    if: contains(github.event.head_commit.message, '[deploy]') || contains(github.event.head_commit.message, '[deploy-web]') || contains(github.event.head_commit.message, '[deploy-all]')
-    steps:
-      - name: Login to Azure
-        uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Deploy to Azure App Service
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: ${{ vars.AZURE_WEBAPP_NAME }}
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-
-  deploy-modal:
-    needs: test
-    runs-on: ubuntu-latest
-    if: contains(github.event.head_commit.message, '[deploy-modal]') || contains(github.event.head_commit.message, '[deploy-all]')
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Deploy Modal functions
-        run: pip install modal && modal deploy cloud/modal_app/app.py
+      - name: Build & push image
         env:
-          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
-          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          # Tag images with the commit SHA for traceability AND with `latest`
+          # so App Runner's auto-deploy (configured to watch `:latest`) picks
+          # them up automatically.
+          SHA_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${ECR_REPOSITORY}"
+          docker build --platform linux/amd64 \
+            -t "${IMAGE}:${SHA_TAG}" \
+            -t "${IMAGE}:latest" .
+          docker push "${IMAGE}:${SHA_TAG}"
+          docker push "${IMAGE}:latest"
+          echo "Pushed ${IMAGE}:${SHA_TAG} and :latest"

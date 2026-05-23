@@ -1,0 +1,10 @@
+name: beemonitor-aws
+runtime:
+  name: python
+  options:
+    virtualenv: venv
+description: >
+  AWS infrastructure for BeeMonitor — phase 2a is foundation only
+  (S3 buckets imported, ECR, GitHub Actions OIDC role, IAM task role,
+  Secrets Manager placeholders). Compute (RDS / Fargate / ALB) lands in
+  phase 2b. See memory/09_aws_migration_plan.md.

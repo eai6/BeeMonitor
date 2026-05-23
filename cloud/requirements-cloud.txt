@@ -1,6 +1,5 @@
-# Azure Blob Storage
-azure-storage-blob>=12.19.0
-azure-identity>=1.15.0
+# AWS S3 — primary storage
+boto3>=1.28.0
 
 # Cryptography (for credential encryption in later stages)
 cryptography>=42.0.0

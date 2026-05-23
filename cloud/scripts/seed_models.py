@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upload local model files to Azure Blob Storage.
+"""Upload local model files to the S3 models bucket.
 
 Usage:
     python -m cloud.scripts.seed_models
@@ -10,8 +10,8 @@ import argparse
 import logging
 from pathlib import Path
 
-from cloud.storage.azure_client import AzureBlobClient
-from cloud.storage.config import StorageConfig
+from cloud.storage.s3_client import S3StorageClient
+from cloud.storage.config import S3Config
 from cloud.wrapper.model_manager import ModelManager, MODEL_FILES
 
 logger = logging.getLogger(__name__)
@@ -20,7 +20,7 @@ DEFAULT_MODELS_DIR = Path(__file__).resolve().parents[2] / "models"
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Seed BeeMonitor models to Azure")
+    parser = argparse.ArgumentParser(description="Seed BeeMonitor models to S3")
     parser.add_argument(
         "--models-dir",
         type=str,
@@ -50,11 +50,11 @@ def main():
             print(f"  {key}: {filename} (NOT FOUND)")
 
     # Upload
-    config = StorageConfig()
-    client = AzureBlobClient(config)
+    config = S3Config()
+    client = S3StorageClient(config)
     manager = ModelManager(storage_client=client, storage_config=config)
 
-    print("\nUploading models to Azure Blob Storage...")
+    print("\nUploading models to S3...")
     uploaded = manager.upload_models(str(models_dir))
     for key, blob_path in uploaded.items():
         print(f"  Uploaded: {key} -> {blob_path}")

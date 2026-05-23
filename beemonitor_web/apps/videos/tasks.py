@@ -16,14 +16,14 @@ def ingest_from_source(
     remote_path: str,
 ) -> None:
     """
-    Download a video file from an external data source and upload it to
-    Azure Blob Storage.
+    Download a video file from an external data source and upload it to the
+    raw-videos S3 bucket.
 
     Steps:
         1. Resolve the DataSource connector.
         2. Stream the file from the remote path.
-        3. Upload to Azure Blob Storage.
-        4. Update the Video record with the blob path and metadata.
+        3. Upload to S3 (raw-videos bucket).
+        4. Update the Video record with the storage key and metadata.
     """
     try:
         video = Video.objects.get(pk=video_id)
@@ -44,20 +44,18 @@ def ingest_from_source(
         video.status = Video.Status.UPLOADING
         video.save(update_fields=["status"])
 
-        # Download from remote source
+        # Download from remote source to a temp file
         local_tmp_path = connector.download(remote_path)
 
-        # TODO: Upload to Azure Blob Storage, e.g.:
-        #   from azure.storage.blob import BlobServiceClient
-        #   blob_client = BlobServiceClient.from_connection_string(...)
-        #   blob_path = f"videos/{video.user_id}/{video.id}/{remote_path.split('/')[-1]}"
-        #   with open(local_tmp_path, "rb") as f:
-        #       blob_client.get_blob_client("videos", blob_path).upload_blob(f)
+        import os
+        from config.storage import get_s3_client
+
         blob_path = (
             f"videos/{video.user_id}/{video.id}/{remote_path.split('/')[-1]}"
         )
-
-        import os
+        get_s3_client().upload_file(
+            "raw-videos", blob_path, local_tmp_path, content_type="video/mp4",
+        )
 
         file_size = (
             os.path.getsize(local_tmp_path)
@@ -65,11 +63,11 @@ def ingest_from_source(
             else 0
         )
 
-        video.azure_blob_path = blob_path
+        video.storage_key = blob_path
         video.file_size_bytes = file_size
         video.status = Video.Status.READY
         video.save(
-            update_fields=["azure_blob_path", "file_size_bytes", "status"]
+            update_fields=["storage_key", "file_size_bytes", "status"]
         )
 
         logger.info(

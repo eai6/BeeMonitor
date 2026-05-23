@@ -128,23 +128,17 @@ class VideoListView(LoginRequiredMixin, ListView):
         return ctx
 
 
-def _upload_to_azure(blob_path, video_file):
-    """Upload a file to Azure Blob Storage. Returns True on success."""
+def _upload_to_storage(blob_path, video_file):
+    """Upload an uploaded-file stream to the raw-videos S3 bucket. True on success."""
     try:
-        from azure.storage.blob import BlobServiceClient
-
-        conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
-        if conn_str:
-            service = BlobServiceClient.from_connection_string(conn_str)
-            blob = service.get_blob_client("raw-videos", blob_path)
-            blob.upload_blob(video_file, overwrite=True)
-            logger.info("Uploaded %s to Azure Blob Storage", blob_path)
-            return True
-        else:
-            logger.warning("No Azure connection string — file metadata saved but not uploaded")
-            return False
+        from config.storage import get_s3_client
+        get_s3_client().upload_stream(
+            "raw-videos", blob_path, video_file, content_type="video/mp4",
+        )
+        logger.info("Uploaded %s to S3 raw-videos", blob_path)
+        return True
     except Exception as e:
-        logger.error("Azure upload failed: %s", e)
+        logger.error("S3 upload failed for %s: %s", blob_path, e)
         return False
 
 
@@ -158,8 +152,8 @@ class VideoUploadView(LoginRequiredMixin, FormView):
         upload_id = uuid.uuid4().hex[:12]
         blob_path = f"{self.request.user.pk}/{upload_id}/{video_file.name}"
 
-        # Upload to Azure Blob Storage
-        if not _upload_to_azure(blob_path, video_file):
+        # Upload to S3 raw-videos
+        if not _upload_to_storage(blob_path, video_file):
             messages.warning(self.request, "Video metadata saved but upload may have failed.")
 
         # Parse timestamp from filename
@@ -168,7 +162,7 @@ class VideoUploadView(LoginRequiredMixin, FormView):
         Video.objects.create(
             user=self.request.user,
             title=form.cleaned_data["title"],
-            azure_blob_path=blob_path,
+            storage_key=blob_path,
             file_size_bytes=video_file.size,
             status=Video.Status.READY,
             recorded_at=recorded_at,
@@ -193,8 +187,8 @@ class VideoBatchUploadView(LoginRequiredMixin, FormView):
             upload_id = uuid.uuid4().hex[:12]
             blob_path = f"{self.request.user.pk}/{upload_id}/{video_file.name}"
 
-            # Upload to Azure
-            upload_ok = _upload_to_azure(blob_path, video_file)
+            # Upload to S3 raw-videos
+            upload_ok = _upload_to_storage(blob_path, video_file)
             if not upload_ok:
                 failed_count += 1
 
@@ -210,7 +204,7 @@ class VideoBatchUploadView(LoginRequiredMixin, FormView):
             Video.objects.create(
                 user=self.request.user,
                 title=title,
-                azure_blob_path=blob_path,
+                storage_key=blob_path,
                 file_size_bytes=video_file.size,
                 status=Video.Status.READY,
                 recorded_at=recorded_at,
@@ -238,59 +232,36 @@ class VideoDetailView(LoginRequiredMixin, DetailView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         video = self.object
-        blob_path = video.azure_blob_path
+        blob_path = video.storage_key
 
-        # Generate SAS URL for video playback
+        # Presigned URL for playback (external-S3-ingested videos have no URL
+        # until they're copied into our raw-videos bucket).
         if blob_path and not blob_path.startswith("s3://"):
             try:
-                from datetime import datetime, timedelta, timezone
-                from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
-
-                conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
-                if conn_str:
-                    service = BlobServiceClient.from_connection_string(conn_str)
-                    account_name = service.account_name
-                    account_key = ""
-                    for part in conn_str.split(";"):
-                        if part.startswith("AccountKey="):
-                            account_key = part.split("=", 1)[1]
-                            break
-                    token = generate_blob_sas(
-                        account_name=account_name,
-                        container_name="raw-videos",
-                        blob_name=blob_path,
-                        account_key=account_key,
-                        permission=BlobSasPermissions(read=True),
-                        expiry=datetime.now(timezone.utc) + timedelta(hours=24),
-                    )
-                    ctx["video_url"] = f"https://{account_name}.blob.core.windows.net/raw-videos/{blob_path}?{token}"
+                from config.storage import get_s3_client
+                ctx["video_url"] = get_s3_client().generate_presigned_url(
+                    "raw-videos", blob_path,
+                )
             except Exception as e:
-                logger.error("Failed to generate video SAS URL: %s", e)
+                logger.error("Failed to presign video URL: %s", e)
 
         return ctx
 
 
-def _delete_azure_blobs_for_video(video):
-    """Delete all Azure blobs associated with a video and its analysis results."""
-    conn_str = getattr(settings, "AZURE_STORAGE_CONNECTION_STRING", "")
-    if not conn_str:
-        return
-
+def _delete_storage_objects_for_video(video):
+    """Delete all S3 objects associated with a video and its analysis results."""
     try:
-        from azure.storage.blob import BlobServiceClient
-        service = BlobServiceClient.from_connection_string(conn_str)
+        from config.storage import get_s3_client
+        s3 = get_s3_client()
 
-        # Delete raw video blob
-        blob_path = video.azure_blob_path
+        blob_path = video.storage_key
         if blob_path and not blob_path.startswith("s3://"):
             try:
-                blob = service.get_blob_client("raw-videos", blob_path)
-                blob.delete_blob()
-                logger.info("Deleted raw video blob: %s", blob_path)
+                s3.delete_blob("raw-videos", blob_path)
+                logger.info("Deleted raw video: %s", blob_path)
             except Exception as e:
-                logger.warning("Could not delete raw blob %s: %s", blob_path, e)
+                logger.warning("Could not delete raw video %s: %s", blob_path, e)
 
-        # Delete processed blobs (events CSV, tracking CSV, trips CSV, annotated video)
         from apps.analysis.models import JobResult
         for result in JobResult.objects.filter(job__video=video):
             for path in [
@@ -301,14 +272,13 @@ def _delete_azure_blobs_for_video(video):
             ]:
                 if path:
                     try:
-                        blob = service.get_blob_client("processed", path)
-                        blob.delete_blob()
+                        s3.delete_blob("processed", path)
                     except Exception:
                         pass
-            logger.info("Deleted processed blobs for job %s", result.job_id)
+            logger.info("Deleted processed objects for job %s", result.job_id)
 
     except Exception as e:
-        logger.error("Azure blob cleanup failed for video %s: %s", video.pk, e)
+        logger.error("S3 cleanup failed for video %s: %s", video.pk, e)
 
 
 class VideoExportCSVView(LoginRequiredMixin, View):
@@ -367,13 +337,13 @@ class VideoExportCSVView(LoginRequiredMixin, View):
 
 
 class VideoDeleteView(LoginRequiredMixin, View):
-    """Delete a single video and its Azure blobs."""
+    """Delete a single video and its S3 objects."""
 
     def post(self, request, pk):
         video = get_object_or_404(Video, pk=pk, user=request.user)
         title = video.title
 
-        _delete_azure_blobs_for_video(video)
+        _delete_storage_objects_for_video(video)
         video.delete()  # CASCADE handles Jobs, JobResults, Annotations
 
         messages.success(request, f"Deleted video: {title}")
@@ -381,7 +351,7 @@ class VideoDeleteView(LoginRequiredMixin, View):
 
 
 class VideoBatchDeleteView(LoginRequiredMixin, View):
-    """Delete multiple videos and their Azure blobs."""
+    """Delete multiple videos and their S3 objects."""
 
     def post(self, request):
         video_ids = request.POST.getlist("video_ids")
@@ -393,7 +363,7 @@ class VideoBatchDeleteView(LoginRequiredMixin, View):
         count = videos.count()
 
         for video in videos:
-            _delete_azure_blobs_for_video(video)
+            _delete_storage_objects_for_video(video)
 
         videos.delete()
 

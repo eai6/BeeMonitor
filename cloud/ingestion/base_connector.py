@@ -22,7 +22,7 @@ class RemoteFile:
 class BaseConnector(abc.ABC):
     """Abstract connector for external cloud storage.
 
-    Each implementation handles one source type (S3, GCS, Azure, GDrive).
+    Each implementation handles one source type (S3, GCS, GDrive).
     """
 
     source_type: str = "base"
@@ -53,25 +53,25 @@ class BaseConnector(abc.ABC):
         Returns bytes written.
         """
 
-    def download_to_azure(
+    def download_to_storage(
         self,
         remote_path: str,
-        azure_client,
-        azure_container: str,
-        azure_blob_path: str,
+        storage_client,
+        container: str,
+        storage_key: str,
     ) -> str:
-        """Transfer a file from remote source directly to Azure Blob.
+        """Transfer a file from the remote source into our S3 storage.
 
         Default implementation streams through memory. Subclasses may
-        override for optimized transfers (e.g., Azure-to-Azure copy).
+        override for optimized transfers (e.g., S3-to-S3 server-side copy).
 
-        Returns the Azure blob path.
+        Returns the storage key.
         """
         import io
 
         buf = io.BytesIO()
         self.download_to_stream(remote_path, buf)
         buf.seek(0)
-        azure_client.upload_stream(azure_container, azure_blob_path, buf)
-        logger.info("Transferred %s -> %s/%s", remote_path, azure_container, azure_blob_path)
-        return azure_blob_path
+        storage_client.upload_stream(container, storage_key, buf)
+        logger.info("Transferred %s -> %s/%s", remote_path, container, storage_key)
+        return storage_key

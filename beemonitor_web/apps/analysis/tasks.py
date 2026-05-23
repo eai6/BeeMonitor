@@ -35,7 +35,7 @@ def submit_analysis_job(self, job_id: int) -> None:
         # TODO: Replace with actual Modal remote call, e.g.:
         #   from cloud.modal_app import process_video
         #   result_payload = process_video.remote(
-        #       blob_path=job.video.azure_blob_path,
+        #       blob_path=job.video.storage_key,
         #       config=job.config,
         #   )
         # For now, simulate a successful result.

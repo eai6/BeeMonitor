@@ -95,7 +95,7 @@
     <ol class="list-decimal list-inside space-y-1 ml-2">
       <li>Click "Upload Videos" on the Videos page</li>
       <li>Select one or more .mp4 video files from your device</li>
-      <li>Videos are uploaded to Azure cloud storage</li>
+      <li>Videos are uploaded to S3</li>
       <li>Once status shows "Ready", they can be analyzed</li>
     </ol>
     <h3 class="font-medium text-gray-900 mt-4">Video Naming Convention</h3>
@@ -118,7 +118,7 @@
       <li>Go to <strong>Sources</strong> in the menu</li>
       <li>Click "Add Source" and enter your S3 credentials (Access Key, Secret Key, Bucket, Region)</li>
       <li>BeeMonitor will list available videos from your bucket</li>
-      <li>Select videos to import &mdash; they are automatically transferred to Azure for processing</li>
+      <li>Select videos to import &mdash; they are automatically copied into our S3 bucket for processing</li>
     </ol>
     <div class="bg-blue-50 border border-blue-200 rounded p-3 mt-2">
       <p class="text-blue-800 text-xs"><strong>Note:</strong> Credentials are encrypted at rest using Fernet symmetric encryption. BeeMonitor never stores plaintext credentials.</p>

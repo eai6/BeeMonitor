@@ -82,7 +82,7 @@ class VideoSerializer(serializers.ModelSerializer):
             "id",
             "title",
             "source",
-            "azure_blob_path",
+            "storage_key",
             "file_size_bytes",
             "duration_seconds",
             "resolution",
@@ -93,7 +93,7 @@ class VideoSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id",
-            "azure_blob_path",
+            "storage_key",
             "file_size_bytes",
             "duration_seconds",
             "resolution",

@@ -1,6 +1,6 @@
 """Reset monthly credits for all users whose reset date has passed.
 
-Run daily via cron or Azure scheduled task:
+Run daily via cron or an EventBridge-scheduled ECS task:
     python manage.py reset_monthly_credits
 """
 

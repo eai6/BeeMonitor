@@ -1,6 +1,6 @@
-"""Azure Blob Storage client and container management."""
+"""S3 storage client."""
 
-from cloud.storage.azure_client import AzureBlobClient
-from cloud.storage.config import StorageConfig
+from cloud.storage.config import S3Config
+from cloud.storage.s3_client import S3StorageClient
 
-__all__ = ["AzureBlobClient", "StorageConfig"]
+__all__ = ["S3StorageClient", "S3Config"]

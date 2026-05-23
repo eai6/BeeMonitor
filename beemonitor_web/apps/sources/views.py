@@ -210,7 +210,7 @@ class SourceSyncView(LoginRequiredMixin, View):
                         user=request.user,
                         source=source,
                         title=title,
-                        azure_blob_path=f"s3://{file_key}",
+                        storage_key=f"s3://{file_key}",
                         file_size_bytes=size_lookup.get(file_key, 0),
                         status=Video.Status.READY,
                         recorded_at=recorded_at,
@@ -267,12 +267,6 @@ def _test_connection(source_type: str, credentials: dict) -> tuple[bool, str]:
             )
             client.head_bucket(Bucket=credentials["bucket"])
             return True, f"Connected to s3://{credentials['bucket']}"
-        elif source_type == "azure_blob":
-            from azure.storage.blob import BlobServiceClient
-            service = BlobServiceClient.from_connection_string(credentials["connection_string"])
-            container = service.get_container_client(credentials["container"])
-            container.get_container_properties()
-            return True, f"Connected to Azure container: {credentials['container']}"
         elif source_type == "gcs":
             return True, "GCS credentials saved"
         elif source_type == "google_drive":
@@ -280,7 +274,7 @@ def _test_connection(source_type: str, credentials: dict) -> tuple[bool, str]:
         return False, "Unknown source type"
     except Exception as e:
         error_msg = str(e)
-        for key in ("access_key_id", "secret_access_key", "connection_string", "oauth_token"):
+        for key in ("access_key_id", "secret_access_key", "oauth_token"):
             if key in credentials and credentials[key] in error_msg:
                 error_msg = error_msg.replace(credentials[key], "***REDACTED***")
         return False, error_msg

@@ -63,35 +63,6 @@ class S3Connector(BaseConnector):
         return tmp.name
 
 
-class AzureBlobConnector(BaseConnector):
-    """Azure Blob Storage connector."""
-
-    def test_connection(self) -> tuple[bool, str]:
-        try:
-            from azure.storage.blob import BlobServiceClient
-
-            service = BlobServiceClient.from_connection_string(
-                self.config["connection_string"]
-            )
-            list(service.list_containers(maxresults=1))
-            return True, "Connected to Azure Blob Storage."
-        except Exception as exc:
-            return False, str(exc)
-
-    def download(self, remote_path: str) -> str:
-        from azure.storage.blob import BlobServiceClient
-
-        service = BlobServiceClient.from_connection_string(
-            self.config["connection_string"]
-        )
-        container = self.config["container"]
-        blob_client = service.get_blob_client(container, remote_path)
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        with open(tmp.name, "wb") as f:
-            f.write(blob_client.download_blob().readall())
-        return tmp.name
-
-
 class GCSConnector(BaseConnector):
     """Google Cloud Storage connector."""
 
@@ -162,7 +133,6 @@ class GoogleDriveConnector(BaseConnector):
 
 _CONNECTOR_MAP: dict[str, type[BaseConnector]] = {
     "aws_s3": S3Connector,
-    "azure_blob": AzureBlobConnector,
     "gcs": GCSConnector,
     "google_drive": GoogleDriveConnector,
 }

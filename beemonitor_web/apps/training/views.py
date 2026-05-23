@@ -67,12 +67,12 @@ def _build_training_payload(job: TrainingJob) -> tuple[str, list[dict]]:
         vid_pk = ann.video_id
         if vid_pk not in video_groups:
             video_groups[vid_pk] = {
-                "video_blob_path": ann.video.azure_blob_path,
+                "video_blob_path": ann.video.storage_key,
                 "frames": [],
             }
             logger.info(
                 "[train:%s] Video pk=%s title='%s' blob_path='%s'",
-                job.pk, vid_pk, ann.video.title, ann.video.azure_blob_path,
+                job.pk, vid_pk, ann.video.title, ann.video.storage_key,
             )
         base_name = f"{ann.video.title}_f{ann.frame_number:06d}"
         yolo_label = ann.to_yolo_format()
@@ -329,7 +329,7 @@ class PollTrainingJobsView(LoginRequiredMixin, View):
 
                     metrics = result.get("metrics", {})
                     exec_secs = result.get("execution_seconds", 0) or 0
-                    azure_model_path = result.get("azure_model_path", "")
+                    storage_key = result.get("storage_key", "")
                     epochs_completed = result.get("epochs_completed", 0)
 
                     logger.info(
@@ -338,7 +338,7 @@ class PollTrainingJobsView(LoginRequiredMixin, View):
                         job.pk,
                         metrics.get("mAP50", 0), metrics.get("mAP50_95", 0),
                         metrics.get("precision", 0), metrics.get("recall", 0),
-                        exec_secs, epochs_completed, azure_model_path,
+                        exec_secs, epochs_completed, storage_key,
                     )
 
                     TrainingJob.objects.filter(pk=job.pk).update(
@@ -350,21 +350,21 @@ class PollTrainingJobsView(LoginRequiredMixin, View):
                     logger.info("[poll] job=%s — DB updated to completed", job.pk)
 
                     # Create CustomModel record if we got a model path
-                    if azure_model_path:
+                    if storage_key:
                         cm = CustomModel.objects.create(
                             user=job.user,
                             training_job=job,
                             name=f"{job.name} (trained)",
                             model_type=CustomModel.ModelType.CUSTOM,
                             base_model=job.base_model,
-                            azure_model_path=azure_model_path,
+                            storage_key=storage_key,
                             classes=job.project.classes or [],
                             metrics=metrics,
                             is_active=True,
                         )
                         logger.info(
                             "[poll] job=%s — CustomModel created: pk=%s name='%s' path='%s'",
-                            job.pk, cm.pk, cm.name, azure_model_path,
+                            job.pk, cm.pk, cm.name, storage_key,
                         )
                     else:
                         logger.warning("[poll] job=%s — no model path returned, skipping CustomModel creation", job.pk)
@@ -431,20 +431,17 @@ class UploadModelView(LoginRequiredMixin, FormView):
             self.request.user.pk, name, model_type, model_file.name, model_file.size,
         )
 
-        # Upload to Azure Blob Storage
+        # Upload to S3 models bucket
         upload_id = uuid.uuid4().hex[:12]
         blob_path = f"custom/{self.request.user.pk}/{upload_id}/{model_file.name}"
 
         try:
-            from azure.storage.blob import BlobServiceClient
-            conn_str = settings.AZURE_STORAGE_CONNECTION_STRING
-            if conn_str:
-                service = BlobServiceClient.from_connection_string(conn_str)
-                blob = service.get_blob_client("models", blob_path)
-                blob.upload_blob(model_file, overwrite=True)
-                logger.info("[upload] Uploaded to Azure: %s", blob_path)
-            else:
-                logger.warning("[upload] No AZURE_STORAGE_CONNECTION_STRING — skipping upload")
+            from config.storage import get_s3_client
+            get_s3_client().upload_stream(
+                "models", blob_path, model_file,
+                content_type="application/octet-stream",
+            )
+            logger.info("[upload] Uploaded to S3 models: %s", blob_path)
         except Exception as e:
             logger.exception("[upload] Upload failed: %s", e)
             messages.error(self.request, f"Upload failed: {e}")
@@ -455,7 +452,7 @@ class UploadModelView(LoginRequiredMixin, FormView):
             name=name,
             model_type=model_type,
             base_model="uploaded",
-            azure_model_path=blob_path,
+            storage_key=blob_path,
             classes=classes,
             metrics={"source": "uploaded", "file_size": model_file.size},
             is_active=True,

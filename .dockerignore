@@ -1,0 +1,60 @@
+# Repo-root .dockerignore for the BeeMonitor web image.
+# Build context = repo root; keep the layer small + reproducible.
+
+# Pulumi state and venvs
+infra/
+**/venv/
+**/.venv/
+venv*
+
+# Python build artifacts
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/*.egg-info/
+**/.pytest_cache/
+**/.coverage
+**/htmlcov/
+
+# IDE / OS
+.git/
+.github/
+.idea/
+.vscode/
+**/.DS_Store
+
+# Local databases + media + test artifacts
+beemonitor_web/db.sqlite3
+beemonitor_web/staticfiles/
+beemonitor_web/static-generated/
+data/
+output/
+runs/
+short_videos/
+research/
+notebooks/
+publication/
+images/
+stl_files/
+build/
+archives/
+
+# Hardware (Pi-side) — not needed in the web image
+hardware/
+
+# Mobile app
+beemonitor-mobile/
+
+# Modal app (archived)
+# (archives/ already excluded above, listed for clarity)
+
+# Anything env / credential
+.env
+.env.*
+credentials/
+backend_credentials/
+
+# Docs / markdown
+docs/
+*.md

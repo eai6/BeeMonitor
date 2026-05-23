@@ -25,9 +25,9 @@
     Your browser does not support the video tag.
   </video>
 </div>
-{% elif video.azure_blob_path and "s3://" in video.azure_blob_path %}
+{% elif video.storage_key and "s3://" in video.storage_key %}
 <div class="bg-gray-50 rounded-lg p-8 text-center mb-6">
-  <p class="text-gray-500">Video is stored on S3. It will be transferred to Azure when analysis is submitted.</p>
+  <p class="text-gray-500">Video is in an external S3 source. It will be copied into our storage when analysis is submitted.</p>
 </div>
 {% endif %}
 

@@ -182,7 +182,7 @@ class AnalysisJobModelTests(TestCase):
         user = create_user()
         video = Video.objects.create(
             user=user, title="test.mp4",
-            azure_blob_path="test/test.mp4",
+            storage_key="test/test.mp4",
             status=Video.Status.READY,
             file_size_bytes=1000000,
         )
@@ -246,7 +246,7 @@ class AnnotationModelTests(TestCase):
         from apps.videos.models import Video
         user = create_user()
         proj = AnnotationProject.objects.create(user=user, name="T", classes=["bee"])
-        video = Video.objects.create(user=user, title="t.mp4", azure_blob_path="t/t.mp4", file_size_bytes=1000)
+        video = Video.objects.create(user=user, title="t.mp4", storage_key="t/t.mp4", file_size_bytes=1000)
         proj.videos.add(video)
         ann = Annotation.objects.create(
             project=proj, video=video, frame_number=0,
@@ -263,7 +263,7 @@ class AnnotationModelTests(TestCase):
         from apps.videos.models import Video
         c, user = logged_in_client()
         proj = AnnotationProject.objects.create(user=user, name="T", classes=["bee"])
-        video = Video.objects.create(user=user, title="t.mp4", azure_blob_path="t/t.mp4", file_size_bytes=1000)
+        video = Video.objects.create(user=user, title="t.mp4", storage_key="t/t.mp4", file_size_bytes=1000)
         proj.videos.add(video)
         r = c.post(
             reverse("annotations:save", args=[proj.pk]),
@@ -326,7 +326,7 @@ class TrainingModelTests(TestCase):
         cm = CustomModel.objects.create(
             user=user, name="My Model",
             model_type="custom", base_model="yolov8n",
-            azure_model_path="custom/1/best.pt",
+            storage_key="custom/1/best.pt",
             classes=["bee", "wasp"],
             metrics={"mAP50": 0.85},
             is_active=True,
@@ -411,7 +411,7 @@ class AnnotationEditorTests(TestCase):
         from apps.videos.models import Video
         video = Video.objects.create(
             user=self.user, title="ed.mp4",
-            azure_blob_path="ed/ed.mp4", file_size_bytes=1000,
+            storage_key="ed/ed.mp4", file_size_bytes=1000,
         )
         self.project.videos.add(video)
         r = self.client.get(
@@ -425,7 +425,7 @@ class AnnotationEditorTests(TestCase):
         from apps.annotations.models import Annotation
         video = Video.objects.create(
             user=self.user, title="nav.mp4",
-            azure_blob_path="nav/nav.mp4", file_size_bytes=1000,
+            storage_key="nav/nav.mp4", file_size_bytes=1000,
         )
         self.project.videos.add(video)
         # Create 3 annotations
