@@ -444,3 +444,141 @@ class AnnotationEditorTests(TestCase):
         self.assertIn("next_frame_url", r.context)
         self.assertTrue(r.context["prev_frame_url"])  # has prev
         self.assertTrue(r.context["next_frame_url"])  # has next
+
+
+# ── Upload Endpoints (Phase 3) ───────────────────────────────────────
+
+
+class UploadEndpointTests(TestCase):
+    """Pi-side upload flow: /api/v1/uploads/{initiate,complete}.
+
+    The S3 client is mocked end-to-end so the tests run offline. We're
+    checking the Django plumbing — auth, prefix-scoping, Video creation —
+    not boto3 behaviour, which has its own coverage in
+    ``cloud/tests/test_s3_client.py``.
+    """
+
+    def setUp(self):
+        from apps.devices.models import Device
+        self.user = create_user(username="owner")
+        self.other_user = create_user(username="stranger", password="x")
+        self.device, self.raw_key = Device.create_with_key(
+            owner=self.user, name="pi-1", location="natalies",
+        )
+        self.client = Client()
+
+    def _auth(self):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self.raw_key}"}
+
+    def test_initiate_returns_presigned_url(self):
+        with patch("apps.api.uploads.get_s3_client") as mock_s3:
+            mock_s3.return_value.generate_presigned_url.return_value = "https://signed-url"
+            r = self.client.post(
+                "/api/v1/uploads/initiate",
+                data={"filename": "natalies_2026-05-23_10_00_00.mp4",
+                      "size_bytes": 12345, "content_type": "video/mp4"},
+                content_type="application/json",
+                **self._auth(),
+            )
+        self.assertEqual(r.status_code, 200, r.content)
+        body = r.json()
+        self.assertEqual(body["method"], "PUT")
+        self.assertEqual(body["upload_url"], "https://signed-url")
+        self.assertTrue(
+            body["storage_key"].startswith(
+                f"users/{self.user.pk}/devices/{self.device.pk}/"
+            )
+        )
+        self.assertTrue(body["storage_key"].endswith(".mp4"))
+
+    def test_initiate_rejects_unknown_extension(self):
+        r = self.client.post(
+            "/api/v1/uploads/initiate",
+            data={"filename": "evil.exe", "size_bytes": 100},
+            content_type="application/json",
+            **self._auth(),
+        )
+        self.assertEqual(r.status_code, 400)
+
+    def test_initiate_requires_device_key(self):
+        # No auth header.
+        r = self.client.post(
+            "/api/v1/uploads/initiate",
+            data={"filename": "x.mp4", "size_bytes": 100},
+            content_type="application/json",
+        )
+        self.assertEqual(r.status_code, 401)
+
+        # Wrong key.
+        r = self.client.post(
+            "/api/v1/uploads/initiate",
+            data={"filename": "x.mp4", "size_bytes": 100},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer bmk_device_not-a-real-key",
+        )
+        self.assertEqual(r.status_code, 401)
+
+    def test_initiate_rejects_zero_size(self):
+        r = self.client.post(
+            "/api/v1/uploads/initiate",
+            data={"filename": "x.mp4", "size_bytes": 0},
+            content_type="application/json",
+            **self._auth(),
+        )
+        self.assertEqual(r.status_code, 400)
+
+    def test_complete_creates_video_and_scopes_to_device(self):
+        from apps.videos.models import Video
+        storage_key = f"users/{self.user.pk}/devices/{self.device.pk}/2026/05/23/abc.mp4"
+        with patch("apps.api.uploads.get_s3_client") as mock_s3:
+            mock_s3.return_value.blob_exists.return_value = True
+            r = self.client.post(
+                "/api/v1/uploads/complete",
+                data={"storage_key": storage_key, "file_size_bytes": 12345,
+                      "recorded_at": "2026-05-23T10:00:00Z"},
+                content_type="application/json",
+                **self._auth(),
+            )
+        self.assertEqual(r.status_code, 201, r.content)
+        body = r.json()
+        video = Video.objects.get(pk=body["video_id"])
+        self.assertEqual(video.user_id, self.user.pk)
+        self.assertEqual(video.storage_key, storage_key)
+        self.assertEqual(video.metadata.get("device_id"), self.device.pk)
+        self.assertEqual(video.file_size_bytes, 12345)
+
+    def test_complete_rejects_storage_key_outside_device_prefix(self):
+        # Storage key for a different user/device.
+        storage_key = f"users/{self.other_user.pk}/devices/9999/2026/05/23/x.mp4"
+        with patch("apps.api.uploads.get_s3_client") as mock_s3:
+            mock_s3.return_value.blob_exists.return_value = True
+            r = self.client.post(
+                "/api/v1/uploads/complete",
+                data={"storage_key": storage_key, "file_size_bytes": 100},
+                content_type="application/json",
+                **self._auth(),
+            )
+        self.assertEqual(r.status_code, 403)
+
+    def test_complete_404_when_object_missing(self):
+        storage_key = f"users/{self.user.pk}/devices/{self.device.pk}/2026/05/23/abc.mp4"
+        with patch("apps.api.uploads.get_s3_client") as mock_s3:
+            mock_s3.return_value.blob_exists.return_value = False
+            r = self.client.post(
+                "/api/v1/uploads/complete",
+                data={"storage_key": storage_key, "file_size_bytes": 100},
+                content_type="application/json",
+                **self._auth(),
+            )
+        self.assertEqual(r.status_code, 404)
+
+    def test_revoked_device_cannot_upload(self):
+        self.device.is_active = False
+        self.device.save(update_fields=["is_active"])
+        r = self.client.post(
+            "/api/v1/uploads/initiate",
+            data={"filename": "x.mp4", "size_bytes": 100},
+            content_type="application/json",
+            **self._auth(),
+        )
+        self.assertEqual(r.status_code, 401)

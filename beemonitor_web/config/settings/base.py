@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     "apps.annotations",
     "apps.training",
     "apps.docs",
+    "apps.devices",
 ]
 
 MIDDLEWARE = [

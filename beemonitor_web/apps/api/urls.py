@@ -2,6 +2,7 @@ from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.routers import DefaultRouter
 
+from .uploads import UploadCompleteView, UploadInitiateView
 from .views import (
     APIKeyViewSet,
     DataSourceViewSet,
@@ -30,4 +31,7 @@ urlpatterns = [
     path("auth/reset-password/", csrf_exempt(ResetPasswordView.as_view({"post": "create"})), name="auth-reset-password"),
     path("auth/profile/", ProfileView.as_view({"get": "list"}), name="auth-profile"),
     path("jobs/sync/", SyncJobsView.as_view({"post": "create"}), name="jobs-sync"),
+    # Pi-side video upload (Phase 3 of the AWS migration plan).
+    path("uploads/initiate", csrf_exempt(UploadInitiateView.as_view()), name="uploads-initiate"),
+    path("uploads/complete", csrf_exempt(UploadCompleteView.as_view()), name="uploads-complete"),
 ] + router.urls

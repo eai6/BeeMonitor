@@ -157,9 +157,14 @@ so Phase 5 scoping is enforced by the key layout itself.
   `main.py` so a network outage cannot stop recording.
 - `hardware/systemd/beemonitor-uploader.service` — unit file. Logs to
   journald. Restart-on-failure with a backoff cap.
-- Bucket policy: deny any PutObject that does not match the
-  `users/<user_id>/devices/<device_id>/*` prefix derived from the
-  presigning principal. Defence-in-depth against a forged client.
+- ~~Bucket policy: deny PutObject outside the user/device prefix.~~
+  Dropped after analysis: the Pi receives a presigned URL bound to one
+  exact ``(bucket, key, content-type)``; S3 itself rejects any PUT under
+  a different key. The storage key is generated server-side from the
+  device's owner_id + id, and ``/uploads/complete`` re-verifies the
+  prefix before creating the ``Video``. A bucket policy would also break
+  the legacy ``_upload_to_storage`` path used by the Django web upload,
+  which uses ``{user_pk}/{upload_id}/...`` keys.
 
 **Validation.**
 - A real Pi with a freshly issued device key uploads a 200 MB recording
