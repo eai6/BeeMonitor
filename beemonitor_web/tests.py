@@ -582,3 +582,70 @@ class UploadEndpointTests(TestCase):
             **self._auth(),
         )
         self.assertEqual(r.status_code, 401)
+
+
+# ── Device UI ────────────────────────────────────────────────────────
+
+
+class DeviceUIViewTests(TestCase):
+    """Smoke tests for /devices/ pages — auth, ownership, raw-key one-shot."""
+
+    def setUp(self):
+        from apps.devices.models import Device
+        self.owner = create_user(username="alice")
+        self.stranger = create_user(username="bob", password="bobpass1")
+        self.client, _ = logged_in_client(self.owner)
+        # Pre-existing device for alice and a different device for bob.
+        self.alice_device, _ = Device.create_with_key(self.owner, "alice-pi-1")
+        self.bob_device, _ = Device.create_with_key(self.stranger, "bob-pi-1")
+
+    def test_list_shows_only_my_devices(self):
+        r = self.client.get(reverse("devices:list"))
+        self.assertEqual(r.status_code, 200)
+        body = r.content.decode()
+        self.assertIn("alice-pi-1", body)
+        self.assertNotIn("bob-pi-1", body)
+
+    def test_create_then_view_raw_key_once(self):
+        # Create.
+        r = self.client.post(
+            reverse("devices:add"),
+            data={"name": "alice-pi-2", "location": "shed"},
+            follow=False,
+        )
+        self.assertEqual(r.status_code, 302)
+        # Pull the new device.
+        from apps.devices.models import Device
+        new_device = Device.objects.get(name="alice-pi-2", owner=self.owner)
+
+        # Follow the redirect — raw key should be visible once.
+        r2 = self.client.get(r.url)
+        self.assertEqual(r2.status_code, 200)
+        body2 = r2.content.decode()
+        self.assertIn("bmk_device_", body2, "raw key should be shown on first view")
+
+        # Refresh / revisit — raw key MUST NOT appear again.
+        r3 = self.client.get(reverse("devices:created", args=[new_device.pk]))
+        self.assertEqual(r3.status_code, 200)
+        self.assertNotIn("bmk_device_", r3.content.decode(),
+                         "raw key must not be re-shown")
+
+    def test_cannot_revoke_someone_elses_device(self):
+        # Alice tries to revoke Bob's device.
+        r = self.client.post(reverse("devices:revoke", args=[self.bob_device.pk]))
+        self.assertEqual(r.status_code, 404)
+        # Bob's device still active.
+        self.bob_device.refresh_from_db()
+        self.assertTrue(self.bob_device.is_active)
+
+    def test_revoke_disables_auth(self):
+        r = self.client.post(reverse("devices:revoke", args=[self.alice_device.pk]))
+        self.assertEqual(r.status_code, 302)
+        self.alice_device.refresh_from_db()
+        self.assertFalse(self.alice_device.is_active)
+
+    def test_unauthenticated_redirected_to_login(self):
+        anon = Client()
+        r = anon.get(reverse("devices:list"))
+        self.assertEqual(r.status_code, 302)
+        self.assertIn("/accounts/login/", r.url)

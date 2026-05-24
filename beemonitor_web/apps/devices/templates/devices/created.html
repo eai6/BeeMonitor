@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Device created - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto">
+  <h1 class="text-2xl font-bold text-gray-900 mb-2">Device created</h1>
+  <p class="text-sm text-gray-500 mb-6">
+    <strong>{{ device.name }}</strong> is ready. Below is the credential the Pi will use to authenticate.
+  </p>
+
+  {% if raw_key %}
+  <div class="bg-yellow-50 border border-yellow-300 rounded-lg p-5 mb-6">
+    <div class="flex items-start">
+      <div class="flex-1">
+        <p class="text-sm font-medium text-yellow-900">Copy this key now — it will never be shown again.</p>
+        <p class="text-xs text-yellow-800 mt-1">
+          BeeMonitor stores only a hash. If you lose this value you'll have to delete this device and create a new one.
+        </p>
+      </div>
+    </div>
+    <div class="mt-4">
+      <label class="block text-xs font-medium text-yellow-900 mb-1">Device key</label>
+      <div class="flex gap-2">
+        <input id="raw-key" type="text" readonly value="{{ raw_key }}"
+               class="flex-1 border border-yellow-300 rounded px-3 py-2 text-sm font-mono bg-white">
+        <button type="button" onclick="copyKey()" id="copy-btn"
+                class="bg-yellow-700 hover:bg-yellow-800 text-white px-3 py-2 rounded text-sm font-medium whitespace-nowrap">
+          Copy
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-white shadow rounded-lg p-5 mb-6">
+    <h2 class="text-sm font-semibold text-gray-900 mb-2">Configure the Pi</h2>
+    <p class="text-xs text-gray-500 mb-3">
+      Paste the key into <code class="bg-gray-100 px-1 rounded">/etc/beemonitor/uploader.env</code> on the Pi:
+    </p>
+    <pre class="bg-gray-900 text-green-400 rounded p-3 text-xs overflow-x-auto"
+>BEEMONITOR_API_BASE=https://mqnafc3ejc.us-east-1.awsapprunner.com
+BEEMONITOR_DEVICE_KEY={{ raw_key }}
+BEEMONITOR_RECORD_DIR=/home/apis/Desktop/cameraOutput/beeHotel
+BEEMONITOR_POLL_SECONDS=30</pre>
+    <p class="text-xs text-gray-500 mt-3">
+      Then enable the systemd service:
+      <code class="bg-gray-100 px-1 rounded">sudo systemctl enable --now beemonitor-uploader</code>.
+      See <code class="bg-gray-100 px-1 rounded">hardware/UPLOADER.md</code> for full setup.
+    </p>
+  </div>
+  {% else %}
+  <div class="bg-gray-50 border border-gray-300 rounded-lg p-5 mb-6">
+    <p class="text-sm text-gray-700">
+      The credential has already been shown for this device. For security it cannot be displayed again.
+      If you didn't capture it, delete this device and create a new one.
+    </p>
+  </div>
+  {% endif %}
+
+  <div class="flex gap-3">
+    <a href="{% url 'devices:list' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">
+      Back to devices
+    </a>
+  </div>
+</div>
+
+{% if raw_key %}
+<script>
+  function copyKey() {
+    const input = document.getElementById('raw-key');
+    input.select();
+    input.setSelectionRange(0, 99999);
+    navigator.clipboard.writeText(input.value).then(() => {
+      const btn = document.getElementById('copy-btn');
+      const original = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = original; }, 1500);
+    });
+  }
+</script>
+{% endif %}
+{% endblock %}
