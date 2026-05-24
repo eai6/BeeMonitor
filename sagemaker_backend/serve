@@ -2,23 +2,31 @@
 # SageMaker entrypoint: `docker run <image> serve` runs this.
 #
 # gunicorn:
-#   --workers 1     : the model lives on the GPU; multiple workers means
-#                     multiple CUDA contexts in one process group, which
-#                     hurts more than it helps for video analysis.
-#   --threads 4     : the work is mostly waiting on opencv / S3; threads
-#                     let us handle a couple of in-flight invocations.
-#   --timeout 3600  : a 10-min video on a g4dn can take a few minutes.
-#                     SageMaker Async has its own 60-min cap upstream.
-#   --preload off   : intentionally NOT preloading; we want the engine
-#                     loaded in the worker, not the master, to avoid a
-#                     forked CUDA context.
+#   --workers 1      : the model lives on the GPU; multiple workers means
+#                      multiple CUDA contexts in one process group, which
+#                      hurts more than it helps for video analysis.
+#   --threads 4      : the work is mostly waiting on opencv / S3; threads
+#                      let us handle a couple of in-flight invocations.
+#   --timeout 14400  : a generous 4-hour worker timeout. BeeMonitor videos
+#                      can take 10-20+ min on a g4dn for a 10-min clip, and
+#                      we'd rather SageMaker's own async cap fire first
+#                      (with a clean .failure object the Django poller
+#                      reads) than gunicorn kill the worker mid-stream.
+#                      ── SageMaker async cap: ~1 hour per invocation by
+#                      default; videos that need longer than that have to
+#                      go through Batch Transform or be chunked client-side.
+#                      Tracked in memory/09_aws_migration_plan.md.
+#   --graceful-timeout 60: don't hold a stuck worker open forever on shutdown.
+#   --preload off (default): we want the model loaded in the worker, not
+#                      the master, to avoid a forked CUDA context.
 set -euo pipefail
 cd /opt/program
 exec gunicorn \
     --bind 0.0.0.0:8080 \
     --workers 1 \
     --threads 4 \
-    --timeout 3600 \
+    --timeout 14400 \
+    --graceful-timeout 60 \
     --access-logfile - \
     --error-logfile - \
     serve:app

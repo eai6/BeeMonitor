@@ -245,6 +245,15 @@ videos, devices, and analyses. Support staff with an `admin` flag can see all.
 - **SageMaker Async cold start.** ~2 minutes for the first request after
   scale-to-zero. Acceptable for batched bee video analysis; surface job
   state clearly in the UI so users don't refresh-spam.
+- **SageMaker Async 1h per-invocation cap.** Hard limit. BeeMonitor's
+  typical 5–15 min videos process in 10–30 min on a g4dn — fits. Long
+  recordings (≥30–45 min source) risk hitting the cap. Mitigations when
+  it bites: (a) chunk the video client-side on the Pi before upload, or
+  (b) move long videos to SageMaker Batch Transform (no 1h cap). The
+  gunicorn worker timeout (14400 s) is intentionally well above the SM
+  cap so SageMaker fails first with a clean ``.failure`` object the
+  poller reads — gunicorn killing the worker mid-stream is hard to
+  observe.
 - **Cost.** RDS + Fargate + Redis floor is ~$60/mo before traffic. Document
   before the first deploy so the Penn State billing path is in place.
 - **Two-cloud period.** Phase 1 ships with Azure still primary so nothing
