@@ -6,171 +6,226 @@
   <a href="{% url 'videos:list' %}" class="text-sm text-amber-600 hover:underline">&larr; Back to Videos</a>
 </div>
 
-<h1 class="text-2xl font-bold text-gray-900 mb-6">Batch Upload Videos</h1>
+<h1 class="text-2xl font-bold text-gray-900 mb-2">Batch Upload Videos</h1>
+<p class="text-sm text-gray-500 mb-6">
+  Each file is uploaded directly from your browser to S3 — videos never pass through the BeeMonitor server.
+</p>
 
 <div class="bg-white shadow rounded-lg p-6">
-  <form method="post" enctype="multipart/form-data" id="batchUploadForm">
-    {% csrf_token %}
+  <form id="csrf-form">{% csrf_token %}</form>
 
-    <!-- Site Name -->
-    <div class="mb-6">
-      <label for="id_site_name" class="block text-sm font-medium text-gray-700 mb-1">Site Name (optional)</label>
-      <input type="text" name="site_name" id="id_site_name"
-             class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-amber-500 focus:border-amber-500"
-             placeholder="e.g. hive_station_alpha"
-             value="{{ form.site_name.value|default_if_none:'' }}">
-      <p class="mt-1 text-xs text-gray-500">If blank, site name is parsed from filenames (format: site_YYYY-MM-DD_HH_MM_SS.mp4).</p>
-    </div>
+  <div class="mb-6">
+    <label for="site_name" class="block text-sm font-medium text-gray-700 mb-1">Site Name (optional)</label>
+    <input type="text" id="site_name"
+           class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-amber-500 focus:border-amber-500"
+           placeholder="e.g. hive_station_alpha">
+    <p class="mt-1 text-xs text-gray-500">If blank, the site name is parsed from filenames (format: <code>site_YYYY-MM-DD_HH_MM_SS.mp4</code>).</p>
+  </div>
 
-    <!-- Drag and Drop Area -->
-    <div class="mb-6">
-      <label class="block text-sm font-medium text-gray-700 mb-1">Video Files</label>
-      <div id="dropZone"
-           class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-amber-500 hover:bg-amber-50 transition-colors">
-        <svg class="mx-auto h-12 w-12 text-gray-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
-        </svg>
-        <p class="text-gray-600 font-medium">Drag and drop video files here</p>
-        <p class="text-sm text-gray-400 mt-1">or click to browse</p>
-        <input type="file" name="video_files" id="id_video_files" multiple accept="video/*"
-               class="hidden">
-      </div>
+  <div class="mb-6">
+    <label class="block text-sm font-medium text-gray-700 mb-1">Video Files</label>
+    <div id="dropZone"
+         class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-amber-500 hover:bg-amber-50 transition-colors">
+      <svg class="mx-auto h-12 w-12 text-gray-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+      </svg>
+      <p class="text-gray-600 font-medium">Drag and drop video files here</p>
+      <p class="text-sm text-gray-400 mt-1">or click to browse</p>
+      <input type="file" id="id_video_files" multiple
+             accept="video/mp4,video/x-matroska,video/quicktime,.h264"
+             class="hidden">
     </div>
+  </div>
 
-    <!-- Selected Files List -->
-    <div id="fileList" class="mb-6 hidden">
-      <h3 class="text-sm font-medium text-gray-700 mb-2">Selected Files</h3>
-      <div id="fileListItems" class="space-y-2 max-h-64 overflow-y-auto"></div>
-      <p id="fileCount" class="mt-2 text-sm text-gray-500"></p>
-    </div>
+  <div id="fileList" class="mb-6 hidden">
+    <h3 class="text-sm font-medium text-gray-700 mb-2">Selected files</h3>
+    <div id="fileListItems" class="space-y-2 max-h-64 overflow-y-auto"></div>
+    <p id="fileCount" class="mt-2 text-sm text-gray-500"></p>
+  </div>
 
-    <!-- Progress Display -->
-    <div id="uploadProgress" class="mb-6 hidden">
-      <div class="flex items-center justify-between mb-1">
-        <span class="text-sm font-medium text-gray-700">Uploading...</span>
-        <span id="progressText" class="text-sm text-gray-500">0%</span>
-      </div>
-      <div class="w-full bg-gray-200 rounded-full h-2.5">
-        <div id="progressBar" class="bg-amber-600 h-2.5 rounded-full transition-all duration-300" style="width: 0%"></div>
-      </div>
-    </div>
+  <div id="errorBox" class="hidden mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700"></div>
 
-    {% if form.errors %}
-    <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
-      {% for field, errors in form.errors.items %}
-        {% for error in errors %}
-          <p>{{ error }}</p>
-        {% endfor %}
-      {% endfor %}
-    </div>
-    {% endif %}
-
-    <div class="flex gap-3">
-      <button type="submit" id="submitBtn"
-              class="bg-amber-600 hover:bg-amber-700 text-white px-6 py-2 rounded text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled>
-        Upload All Files
-      </button>
-      <a href="{% url 'videos:list' %}" class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-6 py-2 rounded text-sm font-medium">
-        Cancel
-      </a>
-    </div>
-  </form>
+  <div class="flex gap-3">
+    <button id="submitBtn" type="button"
+            class="bg-amber-600 hover:bg-amber-700 text-white px-6 py-2 rounded text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled>
+      Upload All Files
+    </button>
+    <a href="{% url 'videos:list' %}" class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-6 py-2 rounded text-sm font-medium">
+      Cancel
+    </a>
+  </div>
 </div>
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const dropZone = document.getElementById('dropZone');
-    const fileInput = document.getElementById('id_video_files');
-    const fileList = document.getElementById('fileList');
-    const fileListItems = document.getElementById('fileListItems');
-    const fileCount = document.getElementById('fileCount');
-    const submitBtn = document.getElementById('submitBtn');
-    const form = document.getElementById('batchUploadForm');
-    const uploadProgress = document.getElementById('uploadProgress');
-    const progressBar = document.getElementById('progressBar');
-    const progressText = document.getElementById('progressText');
+  const csrftoken = document.querySelector('input[name=csrfmiddlewaretoken]').value;
 
-    // Click on drop zone triggers file input
-    dropZone.addEventListener('click', function() {
-        fileInput.click();
-    });
+  const dropZone = document.getElementById('dropZone');
+  const fileInput = document.getElementById('id_video_files');
+  const fileList = document.getElementById('fileList');
+  const fileListItems = document.getElementById('fileListItems');
+  const fileCount = document.getElementById('fileCount');
+  const submitBtn = document.getElementById('submitBtn');
+  const siteNameEl = document.getElementById('site_name');
+  const errorBox = document.getElementById('errorBox');
 
-    // Drag and drop events
-    dropZone.addEventListener('dragover', function(e) {
-        e.preventDefault();
-        dropZone.classList.add('border-amber-500', 'bg-amber-50');
-    });
+  // Per-file state: { file, statusEl, barEl, pctEl, status }
+  let files = [];
 
-    dropZone.addEventListener('dragleave', function(e) {
-        e.preventDefault();
-        dropZone.classList.remove('border-amber-500', 'bg-amber-50');
-    });
+  function fmtSize(b) {
+    if (b < 1024) return b + ' B';
+    if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+    if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+    return (b / 1073741824).toFixed(2) + ' GB';
+  }
 
-    dropZone.addEventListener('drop', function(e) {
-        e.preventDefault();
-        dropZone.classList.remove('border-amber-500', 'bg-amber-50');
-        const dt = new DataTransfer();
-        for (const file of e.dataTransfer.files) {
-            if (file.type.startsWith('video/')) {
-                dt.items.add(file);
-            }
-        }
-        fileInput.files = dt.files;
-        updateFileList();
-    });
+  function showError(msg) {
+    errorBox.textContent = msg;
+    errorBox.classList.remove('hidden');
+  }
 
-    // File input change
-    fileInput.addEventListener('change', updateFileList);
-
-    function formatSize(bytes) {
-        if (bytes < 1024) return bytes + ' B';
-        if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
-        if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
-        return (bytes / 1073741824).toFixed(2) + ' GB';
+  function renderList() {
+    fileListItems.innerHTML = '';
+    if (files.length === 0) {
+      fileList.classList.add('hidden');
+      submitBtn.disabled = true;
+      return;
     }
-
-    function updateFileList() {
-        const files = fileInput.files;
-        if (files.length === 0) {
-            fileList.classList.add('hidden');
-            submitBtn.disabled = true;
-            return;
-        }
-
-        fileList.classList.remove('hidden');
-        submitBtn.disabled = false;
-        fileListItems.innerHTML = '';
-
-        let totalSize = 0;
-        for (const file of files) {
-            totalSize += file.size;
-            const div = document.createElement('div');
-            div.className = 'flex items-center justify-between bg-gray-50 rounded px-3 py-2 text-sm';
-            div.innerHTML = '<span class="text-gray-700 truncate flex-1 mr-2">' + file.name + '</span>' +
-                            '<span class="text-gray-400 whitespace-nowrap">' + formatSize(file.size) + '</span>';
-            fileListItems.appendChild(div);
-        }
-
-        fileCount.textContent = files.length + ' file(s) selected — ' + formatSize(totalSize) + ' total';
-    }
-
-    // Show progress on submit
-    form.addEventListener('submit', function() {
-        uploadProgress.classList.remove('hidden');
-        submitBtn.disabled = true;
-        submitBtn.textContent = 'Uploading...';
-
-        // Simulate progress (actual progress would need XHR)
-        let pct = 0;
-        const interval = setInterval(function() {
-            pct += Math.random() * 15;
-            if (pct > 90) pct = 90;
-            progressBar.style.width = pct + '%';
-            progressText.textContent = Math.round(pct) + '%';
-        }, 500);
+    fileList.classList.remove('hidden');
+    submitBtn.disabled = false;
+    let total = 0;
+    files.forEach((f, i) => {
+      total += f.file.size;
+      const row = document.createElement('div');
+      row.className = 'bg-gray-50 rounded px-3 py-2 text-sm';
+      row.innerHTML = `
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-gray-700 truncate flex-1 mr-2">${f.file.name}</span>
+          <span class="text-gray-400 whitespace-nowrap">${fmtSize(f.file.size)}</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <div class="flex-1 bg-gray-200 rounded-full h-1.5">
+            <div class="bar bg-amber-600 h-1.5 rounded-full transition-all" style="width: 0%"></div>
+          </div>
+          <span class="status text-xs text-gray-500 w-28 text-right">pending</span>
+        </div>
+      `;
+      fileListItems.appendChild(row);
+      f.barEl = row.querySelector('.bar');
+      f.statusEl = row.querySelector('.status');
     });
+    fileCount.textContent = `${files.length} file(s) — ${fmtSize(total)} total`;
+  }
+
+  function setFiles(fileListLike) {
+    files = Array.from(fileListLike)
+      .filter(f => f.type.startsWith('video/') || /\.(mp4|mov|mkv|h264)$/i.test(f.name))
+      .map(file => ({ file, status: 'pending', barEl: null, statusEl: null }));
+    renderList();
+  }
+
+  dropZone.addEventListener('click', () => fileInput.click());
+  dropZone.addEventListener('dragover', e => {
+    e.preventDefault();
+    dropZone.classList.add('border-amber-500', 'bg-amber-50');
+  });
+  dropZone.addEventListener('dragleave', e => {
+    e.preventDefault();
+    dropZone.classList.remove('border-amber-500', 'bg-amber-50');
+  });
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('border-amber-500', 'bg-amber-50');
+    setFiles(e.dataTransfer.files);
+  });
+  fileInput.addEventListener('change', () => setFiles(fileInput.files));
+
+  async function postJson(url, body) {
+    const r = await fetch(url, {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(`${r.status}: ${(await r.text()).slice(0, 200)}`);
+    return r.json();
+  }
+
+  function putToS3(url, file, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', url);
+      xhr.setRequestHeader('Content-Type', file.type || 'video/mp4');
+      xhr.upload.onprogress = e => {
+        if (e.lengthComputable) onProgress(Math.floor((e.loaded / e.total) * 100));
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(new Error(`S3 PUT ${xhr.status}: ${xhr.responseText.slice(0, 200)}`));
+      };
+      xhr.onerror = () => reject(new Error('S3 PUT network error'));
+      xhr.send(file);
+    });
+  }
+
+  async function uploadOne(entry, siteName) {
+    const { file, barEl, statusEl } = entry;
+    statusEl.textContent = 'signing…';
+    const init = await postJson('/api/v1/web-uploads/initiate', {
+      filename: file.name,
+      size_bytes: file.size,
+      content_type: file.type || 'video/mp4',
+    });
+
+    statusEl.textContent = 'uploading';
+    await putToS3(init.upload_url, file, pct => {
+      barEl.style.width = pct + '%';
+      statusEl.textContent = pct + '%';
+    });
+
+    statusEl.textContent = 'finalizing…';
+    const body = {
+      storage_key: init.storage_key,
+      file_size_bytes: file.size,
+    };
+    if (siteName) body.site_name = siteName;
+    await postJson('/api/v1/web-uploads/complete', body);
+
+    barEl.style.width = '100%';
+    barEl.classList.remove('bg-amber-600');
+    barEl.classList.add('bg-green-600');
+    statusEl.textContent = 'done';
+    statusEl.classList.add('text-green-700');
+  }
+
+  submitBtn.addEventListener('click', async () => {
+    errorBox.classList.add('hidden');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Uploading…';
+    const siteName = siteNameEl.value.trim();
+    let failed = 0;
+    for (const entry of files) {
+      try {
+        await uploadOne(entry, siteName);
+      } catch (e) {
+        failed++;
+        entry.statusEl.textContent = 'failed';
+        entry.statusEl.classList.add('text-red-700');
+        entry.barEl.classList.remove('bg-amber-600');
+        entry.barEl.classList.add('bg-red-600');
+        showError(`${entry.file.name}: ${e.message}`);
+      }
+    }
+    submitBtn.textContent = failed
+      ? `Done (${files.length - failed} ok, ${failed} failed)`
+      : 'All done — redirecting…';
+    if (failed === 0) {
+      setTimeout(() => window.location.href = "{% url 'videos:list' %}", 800);
+    } else {
+      submitBtn.disabled = false;
+    }
+  });
 });
 </script>
 {% endblock %}

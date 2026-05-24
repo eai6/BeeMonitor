@@ -846,3 +846,87 @@ class SupportRoleBypassTests(TestCase):
         self.assertEqual(r.status_code, 404, "writes must still 404 cross-user")
         from apps.videos.models import Video as V
         self.assertTrue(V.objects.filter(pk=self.alice_video.pk).exists())
+
+
+# ── Web-form direct-to-S3 uploads ────────────────────────────────────
+
+
+class WebUploadEndpointTests(TestCase):
+    """/api/v1/web-uploads/{initiate,complete} — browser PUTs to S3 directly.
+
+    Session auth + CSRF. S3 is mocked end-to-end."""
+
+    def setUp(self):
+        self.user = create_user(username="alice")
+        self.stranger = create_user(username="bob")
+        self.client, _ = logged_in_client(self.user)
+
+    def _initiate(self, filename="natalies_2026-05-23_10_00_00.mp4", size=1024):
+        with patch("apps.api.web_uploads.get_s3_client") as mock_s3:
+            mock_s3.return_value.generate_presigned_url.return_value = "https://signed-url"
+            return self.client.post(
+                "/api/v1/web-uploads/initiate",
+                data={"filename": filename, "size_bytes": size,
+                      "content_type": "video/mp4"},
+                content_type="application/json",
+            )
+
+    def test_initiate_returns_presigned_url(self):
+        r = self._initiate()
+        self.assertEqual(r.status_code, 200, r.content)
+        body = r.json()
+        self.assertEqual(body["upload_url"], "https://signed-url")
+        self.assertTrue(body["storage_key"].startswith(f"{self.user.pk}/"))
+        self.assertTrue(body["storage_key"].endswith(".mp4"))
+
+    def test_initiate_requires_login(self):
+        anon = Client()
+        r = anon.post(
+            "/api/v1/web-uploads/initiate",
+            data={"filename": "x.mp4", "size_bytes": 100},
+            content_type="application/json",
+        )
+        self.assertIn(r.status_code, (302, 401, 403))
+
+    def test_initiate_rejects_unknown_extension(self):
+        r = self._initiate(filename="evil.exe")
+        self.assertEqual(r.status_code, 400)
+
+    def test_complete_creates_video_in_my_account(self):
+        from apps.videos.models import Video
+        storage_key = f"{self.user.pk}/abc123/test.mp4"
+        with patch("apps.api.web_uploads.get_s3_client") as mock_s3:
+            mock_s3.return_value.blob_exists.return_value = True
+            r = self.client.post(
+                "/api/v1/web-uploads/complete",
+                data={"storage_key": storage_key, "file_size_bytes": 5000,
+                      "title": "My Test Video"},
+                content_type="application/json",
+            )
+        self.assertEqual(r.status_code, 201, r.content)
+        video = Video.objects.get(pk=r.json()["video_id"])
+        self.assertEqual(video.user_id, self.user.pk)
+        self.assertEqual(video.title, "My Test Video")
+        self.assertEqual(video.storage_key, storage_key)
+
+    def test_complete_rejects_other_users_storage_key(self):
+        storage_key = f"{self.stranger.pk}/abc/sneaky.mp4"
+        with patch("apps.api.web_uploads.get_s3_client") as mock_s3:
+            mock_s3.return_value.blob_exists.return_value = True
+            r = self.client.post(
+                "/api/v1/web-uploads/complete",
+                data={"storage_key": storage_key, "file_size_bytes": 100},
+                content_type="application/json",
+            )
+        self.assertEqual(r.status_code, 403)
+
+    def test_complete_404_when_object_missing(self):
+        storage_key = f"{self.user.pk}/abc/missing.mp4"
+        with patch("apps.api.web_uploads.get_s3_client") as mock_s3:
+            mock_s3.return_value.blob_exists.return_value = False
+            r = self.client.post(
+                "/api/v1/web-uploads/complete",
+                data={"storage_key": storage_key, "file_size_bytes": 100},
+                content_type="application/json",
+            )
+        self.assertEqual(r.status_code, 404)

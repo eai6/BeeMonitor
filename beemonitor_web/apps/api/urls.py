@@ -3,6 +3,7 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework.routers import DefaultRouter
 
 from .uploads import UploadCompleteView, UploadInitiateView
+from .web_uploads import WebUploadCompleteView, WebUploadInitiateView
 from .views import (
     APIKeyViewSet,
     DataSourceViewSet,
@@ -34,4 +35,8 @@ urlpatterns = [
     # Pi-side video upload (Phase 3 of the AWS migration plan).
     path("uploads/initiate", csrf_exempt(UploadInitiateView.as_view()), name="uploads-initiate"),
     path("uploads/complete", csrf_exempt(UploadCompleteView.as_view()), name="uploads-complete"),
+    # Browser-side direct-to-S3 uploads. Session auth + CSRF — these are NOT
+    # csrf_exempt so a stolen URL alone can't be used cross-site.
+    path("web-uploads/initiate", WebUploadInitiateView.as_view(), name="web-uploads-initiate"),
+    path("web-uploads/complete", WebUploadCompleteView.as_view(), name="web-uploads-complete"),
 ] + router.urls

@@ -78,6 +78,9 @@ class UploadInitiateView(APIView):
     """Issue a presigned PUT URL for a video the Pi is about to upload."""
 
     authentication_classes = [DeviceKeyAuthentication]
+    # Upload endpoints don't need the TierBasedThrottle — bytes never
+    # pass through Django; the 5 GiB single-PUT cap is the real limiter.
+    throttle_classes: list = []
 
     def post(self, request):
         device: Device = request.auth  # set by DeviceKeyAuthentication
@@ -145,6 +148,7 @@ class UploadCompleteView(APIView):
     """Pi confirms the PUT succeeded; Django creates the Video row."""
 
     authentication_classes = [DeviceKeyAuthentication]
+    throttle_classes: list = []
 
     def post(self, request):
         device: Device = request.auth

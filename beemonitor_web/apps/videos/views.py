@@ -1,18 +1,13 @@
 import csv
 import logging
 import re
-import uuid
 
-from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect
-from django.urls import reverse_lazy
 from django.views import View
-from django.views.generic import DetailView, FormView, ListView
-
-from .forms import VideoBatchUploadForm, VideoUploadForm
+from django.views.generic import DetailView, ListView, TemplateView
 from .models import Video
 
 logger = logging.getLogger(__name__)
@@ -142,84 +137,23 @@ def _upload_to_storage(blob_path, video_file):
         return False
 
 
-class VideoUploadView(LoginRequiredMixin, FormView):
+class VideoUploadView(LoginRequiredMixin, TemplateView):
+    """Just renders the upload page.
+
+    The page's JS calls /api/v1/web-uploads/initiate, PUTs directly to S3,
+    then calls /api/v1/web-uploads/complete — bytes never pass through
+    this Django process. See apps/api/web_uploads.py.
+    """
     template_name = "videos/upload.html"
-    form_class = VideoUploadForm
-    success_url = reverse_lazy("videos:list")
-
-    def form_valid(self, form):
-        video_file = self.request.FILES["video_file"]
-        upload_id = uuid.uuid4().hex[:12]
-        blob_path = f"{self.request.user.pk}/{upload_id}/{video_file.name}"
-
-        # Upload to S3 raw-videos
-        if not _upload_to_storage(blob_path, video_file):
-            messages.warning(self.request, "Video metadata saved but upload may have failed.")
-
-        # Parse timestamp from filename
-        site_name, recorded_at = Video.parse_timestamp_from_filename(video_file.name)
-
-        Video.objects.create(
-            user=self.request.user,
-            title=form.cleaned_data["title"],
-            storage_key=blob_path,
-            file_size_bytes=video_file.size,
-            status=Video.Status.READY,
-            recorded_at=recorded_at,
-            site_name=site_name,
-        )
-        messages.success(self.request, "Video uploaded successfully.")
-        return super().form_valid(form)
 
 
-class VideoBatchUploadView(LoginRequiredMixin, FormView):
+class VideoBatchUploadView(LoginRequiredMixin, TemplateView):
+    """Just renders the batch upload page.
+
+    Same direct-to-S3 flow as VideoUploadView; the page loops over each
+    selected file client-side and reports per-file progress.
+    """
     template_name = "videos/batch_upload.html"
-    form_class = VideoBatchUploadForm
-    success_url = reverse_lazy("videos:list")
-
-    def form_valid(self, form):
-        files = self.request.FILES.getlist("video_files")
-        site_name_override = form.cleaned_data.get("site_name", "")
-        uploaded_count = 0
-        failed_count = 0
-
-        for video_file in files:
-            upload_id = uuid.uuid4().hex[:12]
-            blob_path = f"{self.request.user.pk}/{upload_id}/{video_file.name}"
-
-            # Upload to S3 raw-videos
-            upload_ok = _upload_to_storage(blob_path, video_file)
-            if not upload_ok:
-                failed_count += 1
-
-            # Parse timestamp from filename
-            parsed_site, recorded_at = Video.parse_timestamp_from_filename(video_file.name)
-            final_site = site_name_override or parsed_site
-
-            # Use filename as title (strip extension)
-            title = video_file.name
-            if "." in title:
-                title = title.rsplit(".", 1)[0]
-
-            Video.objects.create(
-                user=self.request.user,
-                title=title,
-                storage_key=blob_path,
-                file_size_bytes=video_file.size,
-                status=Video.Status.READY,
-                recorded_at=recorded_at,
-                site_name=final_site,
-            )
-            uploaded_count += 1
-
-        if failed_count:
-            messages.warning(
-                self.request,
-                f"{uploaded_count} video(s) created. {failed_count} upload(s) may have failed.",
-            )
-        else:
-            messages.success(self.request, f"{uploaded_count} video(s) uploaded successfully.")
-        return super().form_valid(form)
 
 
 class VideoDetailView(LoginRequiredMixin, DetailView):

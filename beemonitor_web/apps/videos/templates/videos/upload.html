@@ -3,36 +3,142 @@
 
 {% block content %}
 <div class="max-w-lg mx-auto">
-  <h1 class="text-2xl font-bold text-gray-900 mb-6">Upload Video</h1>
+  <h1 class="text-2xl font-bold text-gray-900 mb-2">Upload Video</h1>
+  <p class="text-sm text-gray-500 mb-6">
+    The file is uploaded directly from your browser to S3 — it never passes through the BeeMonitor server.
+  </p>
+
   <div class="bg-white shadow rounded-lg p-6">
-    <form method="post" enctype="multipart/form-data">
-      {% csrf_token %}
-      {% if form.errors %}
-      <div class="bg-red-50 text-red-700 rounded p-3 mb-4 text-sm">
-        <ul class="list-disc list-inside">
-          {% for field in form %}
-            {% for error in field.errors %}
-            <li>{{ field.label }}: {{ error }}</li>
-            {% endfor %}
-          {% endfor %}
-        </ul>
+    <form id="csrf-form">{% csrf_token %}</form>
+
+    <div class="mb-4">
+      <label for="title" class="block text-sm font-medium text-gray-700 mb-1">Title</label>
+      <input type="text" id="title" required maxlength="300"
+             class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+    </div>
+
+    <div class="mb-4">
+      <label for="video_file" class="block text-sm font-medium text-gray-700 mb-1">Video File</label>
+      <input type="file" id="video_file" accept="video/mp4,video/x-matroska,video/quicktime,.h264" required
+             class="w-full border border-gray-300 rounded px-3 py-2 text-sm file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:text-sm file:bg-amber-50 file:text-amber-700">
+      <p class="mt-1 text-xs text-gray-500">.mp4 / .mov / .mkv / .h264 — up to 5 GiB.</p>
+    </div>
+
+    <div id="progress" class="mb-4 hidden">
+      <div class="flex items-center justify-between mb-1">
+        <span class="text-sm font-medium text-gray-700" id="progress-label">Uploading…</span>
+        <span class="text-sm text-gray-500" id="progress-pct">0%</span>
       </div>
-      {% endif %}
-      <div class="mb-4">
-        <label for="id_title" class="block text-sm font-medium text-gray-700 mb-1">Title</label>
-        <input type="text" name="title" id="id_title" value="{{ form.title.value|default:'' }}" required
-               class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+      <div class="w-full bg-gray-200 rounded-full h-2.5">
+        <div id="progress-bar" class="bg-amber-600 h-2.5 rounded-full transition-all" style="width: 0%"></div>
       </div>
-      <div class="mb-6">
-        <label for="id_video_file" class="block text-sm font-medium text-gray-700 mb-1">Video File</label>
-        <input type="file" name="video_file" id="id_video_file" accept="video/*" required
-               class="w-full border border-gray-300 rounded px-3 py-2 text-sm file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:text-sm file:bg-amber-50 file:text-amber-700">
-      </div>
-      <div class="flex space-x-3">
-        <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Upload</button>
-        <a href="{% url 'videos:list' %}" class="px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Cancel</a>
-      </div>
-    </form>
+    </div>
+
+    <div id="error" class="mb-4 hidden bg-red-50 border border-red-200 rounded p-3 text-sm text-red-700"></div>
+
+    <div class="flex gap-3">
+      <button id="upload-btn" type="button"
+              class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">
+        Upload
+      </button>
+      <a href="{% url 'videos:list' %}" class="px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Cancel</a>
+    </div>
   </div>
 </div>
+
+<script>
+  // Direct browser -> S3 upload. Same /api/v1/web-uploads/{initiate,complete}
+  // endpoints, browser-session-authed (so the API key isn't required).
+  const csrftoken = document.querySelector('input[name=csrfmiddlewaretoken]').value;
+
+  const titleEl = document.getElementById('title');
+  const fileEl = document.getElementById('video_file');
+  const btn = document.getElementById('upload-btn');
+  const progressEl = document.getElementById('progress');
+  const progressBar = document.getElementById('progress-bar');
+  const progressPct = document.getElementById('progress-pct');
+  const progressLabel = document.getElementById('progress-label');
+  const errorEl = document.getElementById('error');
+
+  function showError(msg) {
+    errorEl.textContent = msg;
+    errorEl.classList.remove('hidden');
+  }
+
+  function setProgress(pct, label) {
+    progressEl.classList.remove('hidden');
+    progressBar.style.width = pct + '%';
+    progressPct.textContent = pct + '%';
+    if (label) progressLabel.textContent = label;
+  }
+
+  async function postJson(url, body) {
+    const r = await fetch(url, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': csrftoken,
+      },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      throw new Error(`${r.status}: ${t.slice(0, 300)}`);
+    }
+    return r.json();
+  }
+
+  function putToS3(url, file, onProgress) {
+    // XHR (not fetch) so we get upload progress events cross-browser.
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', url);
+      xhr.setRequestHeader('Content-Type', file.type || 'video/mp4');
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(Math.floor((e.loaded / e.total) * 100));
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(new Error(`S3 PUT ${xhr.status}: ${xhr.responseText.slice(0, 300)}`));
+      };
+      xhr.onerror = () => reject(new Error('S3 PUT network error'));
+      xhr.send(file);
+    });
+  }
+
+  btn.addEventListener('click', async () => {
+    errorEl.classList.add('hidden');
+    const title = titleEl.value.trim();
+    const file = fileEl.files[0];
+    if (!title || !file) {
+      showError('Title and file are required.');
+      return;
+    }
+    btn.disabled = true;
+    try {
+      setProgress(0, 'Requesting upload URL…');
+      const init = await postJson('/api/v1/web-uploads/initiate', {
+        filename: file.name,
+        size_bytes: file.size,
+        content_type: file.type || 'video/mp4',
+      });
+
+      setProgress(0, 'Uploading to S3…');
+      await putToS3(init.upload_url, file, (pct) => setProgress(pct, 'Uploading to S3…'));
+
+      setProgress(100, 'Finalizing…');
+      await postJson('/api/v1/web-uploads/complete', {
+        storage_key: init.storage_key,
+        file_size_bytes: file.size,
+        title: title,
+      });
+      window.location.href = "{% url 'videos:list' %}";
+    } catch (e) {
+      showError(e.message || String(e));
+      btn.disabled = false;
+      progressEl.classList.add('hidden');
+    }
+  });
+</script>
 {% endblock %}
