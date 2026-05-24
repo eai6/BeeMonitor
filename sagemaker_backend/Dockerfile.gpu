@@ -1,0 +1,63 @@
+# BeeMonitor SageMaker GPU inference image (BYOC).
+#
+# Built and pushed to ECR by .github/workflows/build-sagemaker-image.yml.
+# NEVER built locally — the dev Mac has no NVIDIA GPU.
+#
+# Build context is the REPO ROOT (so `src/beemonitor/`, `cloud/`, and
+# `sagemaker_backend/` are all reachable):
+#
+#   DOCKER_BUILDKIT=1 docker build \
+#     -f sagemaker_backend/Dockerfile.gpu \
+#     -t beemonitor-sm-dev .
+#
+# See Phase 4 of memory/09_aws_migration_plan.md.
+
+FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    # /opt/program holds serving + the vendored BeeMonitor + cloud packages.
+    PYTHONPATH=/opt/program \
+    PATH=/opt/program:$PATH
+
+# System Python 3.10, the libs OpenCV / ffmpeg need at runtime.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-dev \
+        libgl1 libglib2.0-0 \
+        ffmpeg \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3 /usr/local/bin/python
+
+# torch from the CUDA 12.6 wheel index, in its own layer so the ~3 GB pull
+# survives churn in the other deps.
+RUN python -m pip install --upgrade pip \
+    && python -m pip install \
+        --index-url https://download.pytorch.org/whl/cu126 \
+        torch==2.9.1 torchvision==0.24.1
+
+COPY sagemaker_backend/requirements.gpu.txt /tmp/requirements.gpu.txt
+RUN python -m pip install -r /tmp/requirements.gpu.txt
+
+# --- Application code -------------------------------------------------------
+WORKDIR /opt/program
+
+# The BeeMonitor library (analysis core) — vendored, not pip-installed, so
+# its own pyproject deps cannot override the torch / opencv pins above.
+COPY src/beemonitor/ /opt/program/beemonitor/
+
+# The cloud package — CloudPipeline + S3StorageClient.
+COPY cloud/ /opt/program/cloud/
+
+# Serving code itself.
+COPY sagemaker_backend/serve.py \
+     sagemaker_backend/inference.py \
+     sagemaker_backend/serve \
+     /opt/program/
+RUN chmod +x /opt/program/serve
+
+# SageMaker starts the container as `docker run <image> serve` — no
+# ENTRYPOINT, so the `serve` script on PATH runs.
+EXPOSE 8080

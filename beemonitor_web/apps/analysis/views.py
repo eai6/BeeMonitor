@@ -114,57 +114,180 @@ def _ingest_external_s3_to_storage(video) -> str:
     return new_key
 
 
+# ---------------------------------------------------------------------------
+# SageMaker Async Inference spawn (Phase 4)
+# ---------------------------------------------------------------------------
+# The Job model's ``modal_*`` fields are repurposed (no migration needed):
+#   modal_job_id  -> our own UUID, passed through as SageMaker InferenceId.
+#                    Also the key under which payload + output land in S3.
+#   modal_call_id -> the s3:// URI of the expected output JSON. PollJobsView
+#                    head_objects this URI to detect completion.
+
+
+def _sagemaker_runtime():
+    """Boto3 sagemaker-runtime client, region-aware."""
+    import boto3
+    return boto3.client(
+        "sagemaker-runtime",
+        region_name=getattr(settings, "AWS_REGION", "us-east-1"),
+    )
+
+
 def _spawn_gpu_job(job_pk: int) -> None:
-    """Submit a job to the GPU backend.
+    """Invoke the SageMaker Async endpoint for a single job.
 
-    Phase 4 will replace this stub with a SageMaker Async Inference invoke
-    (see ``memory/09_aws_migration_plan.md``). The Modal app that used to
-    serve this call has been archived to ``archives/modal_app/`` — Modal is
-    no longer the GPU target.
-
-    Until Phase 4 lands, calling this marks the job as ``failed`` with a
-    clear message so the UI surfaces the right state.
+    Steps:
+      1. External-S3 ingested videos are copied into our raw-videos bucket
+         (the GPU container only reads from there).
+      2. Payload JSON is written to the SM input bucket.
+      3. ``invoke_endpoint_async`` returns immediately with an ``OutputLocation``
+         — that s3:// URI is stashed on the job so PollJobsView can detect
+         completion by HEAD-ing it.
     """
     import django
     django.setup()
     from django.db import connection
 
     try:
-        Job.objects.filter(pk=job_pk).update(
-            status="failed",
-            error_message=(
-                "GPU backend not yet wired — Modal was retired; SageMaker "
-                "Async Inference lands in Phase 4 of the AWS migration."
-            ),
-        )
-        logger.warning("Job %s: GPU backend not wired (Phase 4 pending)", job_pk)
+        job = Job.objects.select_related("video", "video__source").get(pk=job_pk)
+        user_id = str(job.user_id)
+        video = job.video
+        blob_path = video.storage_key
+    except Job.DoesNotExist:
+        return
+    except Exception as e:
+        Job.objects.filter(pk=job_pk).update(status="failed", error_message=str(e))
+        connection.close()
+        return
+
+    try:
+        if blob_path.startswith("s3://"):
+            blob_path = _ingest_external_s3_to_storage(video)
+
+        payload = {
+            "job_id": job.modal_job_id,
+            "user_id": user_id,
+            "video_blob_path": blob_path,
+            "detection_mode": job.config.get("detection_mode", "yolo"),
+            "confidence_threshold": job.config.get("confidence_threshold", 0.25),
+            "visualize": True,
+        }
+        if job.config.get("custom_nest_model_path"):
+            payload["custom_nest_model_path"] = job.config["custom_nest_model_path"]
+        if job.config.get("custom_bee_model_path"):
+            payload["custom_bee_model_path"] = job.config["custom_bee_model_path"]
+
+        input_uri = _put_inference_payload(job.modal_job_id, payload)
+        output_uri = _invoke_endpoint_async(job.modal_job_id, input_uri)
+
+        Job.objects.filter(pk=job_pk).update(modal_call_id=output_uri)
+        logger.info("Job %s spawned on SageMaker: %s", job_pk, output_uri)
+
+    except Exception as e:
+        Job.objects.filter(pk=job_pk).update(status="failed", error_message=str(e))
+        logger.exception("Job %s spawn failed", job_pk)
     finally:
         connection.close()
 
 
 def _spawn_gpu_batch(jobs_data: list, detection_mode: str, confidence: float,
                      custom_nest_model_path: str = "", custom_bee_model_path: str = "") -> None:
-    """Submit a batch of jobs to the GPU backend.
+    """Spawn each job in the batch individually.
 
-    Phase 4 will replace this with SageMaker Async Inference invokes. For now
-    every job in the batch gets marked failed with a clear message.
+    BeeMonitor's SageMaker endpoint processes one video per invocation —
+    the chunked-Modal pattern (one container handling many videos) is gone
+    because the SageMaker pricing model doesn't reward it: scale-to-zero +
+    per-instance billing means parallelism happens via the endpoint's own
+    autoscaling, not by packing videos into one call.
     """
     import django
     django.setup()
     from django.db import connection
 
     try:
+        # Ingest any external-S3 videos first so SM only sees our buckets.
+        for jd in jobs_data:
+            video = jd["video"]
+            if video.storage_key.startswith("s3://"):
+                try:
+                    _ingest_external_s3_to_storage(video)
+                except Exception as e:
+                    Job.objects.filter(pk=jd["job_pk"]).update(
+                        status="failed", error_message=f"Ingest failed: {e}",
+                    )
+
+        for jd in jobs_data:
+            video = jd["video"]
+            if video.storage_key.startswith("s3://"):
+                continue  # ingest failed; already marked failed above
+            try:
+                payload = {
+                    "job_id": jd["job_id"],
+                    "user_id": jd["user_id"],
+                    "video_blob_path": video.storage_key,
+                    "detection_mode": detection_mode,
+                    "confidence_threshold": confidence,
+                    "visualize": True,
+                }
+                if custom_nest_model_path:
+                    payload["custom_nest_model_path"] = custom_nest_model_path
+                if custom_bee_model_path:
+                    payload["custom_bee_model_path"] = custom_bee_model_path
+
+                input_uri = _put_inference_payload(jd["job_id"], payload)
+                output_uri = _invoke_endpoint_async(jd["job_id"], input_uri)
+                Job.objects.filter(pk=jd["job_pk"]).update(modal_call_id=output_uri)
+                logger.info("Job %s spawned: %s", jd["job_pk"], output_uri)
+            except Exception as e:
+                Job.objects.filter(pk=jd["job_pk"]).update(
+                    status="failed", error_message=str(e),
+                )
+                logger.exception("Job %s batch-spawn failed", jd["job_pk"])
+
+        logger.info("Batch spawn complete: %d jobs", len(jobs_data))
+
+    except Exception as e:
+        logger.exception("Batch spawn failed: %s", e)
         job_pks = [jd["job_pk"] for jd in jobs_data]
-        Job.objects.filter(pk__in=job_pks).update(
-            status="failed",
-            error_message=(
-                "GPU backend not yet wired — Modal was retired; SageMaker "
-                "Async Inference lands in Phase 4 of the AWS migration."
-            ),
+        Job.objects.filter(pk__in=job_pks, status="processing").update(
+            status="failed", error_message=f"Spawn error: {e}",
         )
-        logger.warning("Batch of %d jobs: GPU backend not wired", len(jobs_data))
     finally:
         connection.close()
+
+
+def _put_inference_payload(job_id: str, payload: dict) -> str:
+    """Write the SageMaker request payload to the SM input bucket. Returns s3:// URI."""
+    import json as _json
+    bucket = settings.SAGEMAKER_INPUT_BUCKET
+    if not bucket:
+        raise RuntimeError("SAGEMAKER_INPUT_BUCKET is not configured")
+    key = f"{job_id}.json"
+    # Direct boto3 PUT; the input bucket isn't one of the 4 we wrap in S3StorageClient.
+    import boto3
+    s3 = boto3.client("s3", region_name=getattr(settings, "AWS_REGION", "us-east-1"))
+    s3.put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=_json.dumps(payload).encode("utf-8"),
+        ContentType="application/json",
+    )
+    return f"s3://{bucket}/{key}"
+
+
+def _invoke_endpoint_async(job_id: str, input_uri: str) -> str:
+    """Call invoke_endpoint_async. Returns the s3:// URI where the result will land."""
+    endpoint = settings.SAGEMAKER_ENDPOINT_NAME
+    if not endpoint:
+        raise RuntimeError("SAGEMAKER_ENDPOINT_NAME is not configured")
+    response = _sagemaker_runtime().invoke_endpoint_async(
+        EndpointName=endpoint,
+        InputLocation=input_uri,
+        ContentType="application/json",
+        InferenceId=job_id,
+    )
+    # OutputLocation = s3://<output-bucket>/<inference-id>.out  (typical layout)
+    return response["OutputLocation"]
 
 
 class JobListView(LoginRequiredMixin, ListView):
@@ -311,146 +434,146 @@ class JobCreateView(LoginRequiredMixin, FormView):
 
 
 class PollJobsView(LoginRequiredMixin, View):
-    """HTMX endpoint: check Modal for completed jobs and update DB.
+    """HTMX endpoint: check SageMaker for completed jobs and update DB.
 
-    Called every 10s from the Analysis list page. Checks all 'processing'
-    jobs with a modal_call_id, gets results from Modal if done.
-    Returns updated job list HTML fragment.
+    Called every 10s from the Analysis list page. For each in-flight Job,
+    HEAD-checks the s3:// URI stored in ``modal_call_id`` (now the
+    SageMaker async OutputLocation). If the object exists -> fetch + parse
+    + mark complete. Also checks the parallel ``.failure`` location for
+    inference errors.
     """
 
     def get(self, request):
-        from collections import defaultdict
         from datetime import timedelta
         from django.http import JsonResponse
         from django.utils import timezone
 
-        # Only poll recent jobs (last 4 hours) to avoid timeouts on stale jobs
         recent_cutoff = timezone.now() - timedelta(hours=4)
-        processing_jobs = Job.objects.filter(
+        processing_jobs = list(Job.objects.filter(
             user=request.user,
             status=Job.Status.PROCESSING,
             started_at__gte=recent_cutoff,
-        ).exclude(modal_call_id="")
+        ).exclude(modal_call_id="")[:200])
 
-        if not processing_jobs.exists():
+        if not processing_jobs:
             return JsonResponse({"checked": 0, "completed": 0})
 
-        completed = 0
-        try:
-            import modal
-
-            # Group jobs by modal_call_id (chunks share the same call ID)
-            call_id_to_jobs = defaultdict(list)
-            for job in processing_jobs[:200]:
-                call_id_to_jobs[job.modal_call_id].append(job)
-
-            for call_id, jobs_in_call in call_id_to_jobs.items():
-                try:
-                    fc = modal.functions.FunctionCall.from_id(call_id)
-                    try:
-                        raw_result = fc.get(timeout=0)
-                    except TimeoutError:
-                        continue  # Still running
-                    except modal.exception.ExecutionError as e:
-                        Job.objects.filter(
-                            pk__in=[j.pk for j in jobs_in_call]
-                        ).update(status="failed", error_message=str(e))
-                        continue
-
-                    # Handle both single dict (legacy) and list (chunk) results
-                    if isinstance(raw_result, dict):
-                        results_list = [raw_result]
-                    elif isinstance(raw_result, list):
-                        results_list = raw_result
-                    else:
-                        continue
-
-                    # Build lookup: modal_job_id -> Job
-                    job_by_modal_id = {j.modal_job_id: j for j in jobs_in_call}
-
-                    for result in results_list:
-                        if not isinstance(result, dict):
-                            continue
-
-                        # Match result to job by job_id (which is modal_job_id)
-                        result_job_id = result.get("job_id", "")
-                        job = job_by_modal_id.get(result_job_id)
-                        if not job:
-                            # Fallback for single-video results (only 1 job in call)
-                            if len(jobs_in_call) == 1:
-                                job = jobs_in_call[0]
-                            else:
-                                continue
-
-                        # Handle per-video failure within a chunk
-                        if result.get("status") == "failed":
-                            Job.objects.filter(pk=job.pk).update(
-                                status="failed",
-                                error_message=result.get("error_message", "Unknown error"),
-                            )
-                            continue
-
-                        # Update video path if transferred from S3
-                        if result.get("storage_key"):
-                            from apps.videos.models import Video as VideoModel
-                            VideoModel.objects.filter(pk=job.video_id).update(
-                                storage_key=result["storage_key"],
-                                file_size_bytes=result.get("file_size", 0),
-                            )
-
-                        JobResult.objects.update_or_create(
-                            job_id=job.pk,
-                            defaults={
-                                "events_csv_path": result.get("events_csv_path", ""),
-                                "tracking_csv_path": result.get("tracking_csv_path", ""),
-                                "foraging_trips_csv_path": result.get("foraging_trips_csv_path", ""),
-                                "interactions_csv_path": result.get("interactions_csv_path", ""),
-                                "annotated_video_path": result.get("annotated_video_path", ""),
-                                "total_events": result.get("total_events", 0),
-                                "entry_count": result.get("entry_count", 0),
-                                "exit_count": result.get("exit_count", 0),
-                                "unique_tracks": result.get("unique_tracks", 0),
-                                "nest_count": result.get("nest_count", 0),
-                                "foraging_trip_count": result.get("foraging_trip_count", 0),
-                                "avg_trip_duration_sec": result.get("avg_trip_duration_sec"),
-                                "interaction_count": result.get("interaction_count", 0),
-                                "summary_stats": result.get("summary_stats", {}),
-                            },
-                        )
-
-                        exec_secs = result.get("execution_seconds", 0) or 0
-                        credits_used = int(exec_secs)
-                        cost_rate = GPU_TIERS.get(job.gpu_tier, {}).get("cost_per_sec", 0.000306)
-                        cost_usd = round(exec_secs * cost_rate, 4)
-
-                        Job.objects.filter(pk=job.pk).update(
-                            status="completed", progress_pct=100,
-                            completed_at=timezone.now(),
-                            execution_seconds=exec_secs,
-                            compute_cost_usd=cost_usd,
-                        )
-
-                        try:
-                            from apps.accounts.models import UserProfile
-                            profile, _ = UserProfile.objects.get_or_create(user=job.user)
-                            profile.charge(credits_used, gpu_seconds=exec_secs)
-                        except Exception as e:
-                            logger.error("Failed to charge credits for job %s: %s", job.pk, e)
-
-                        completed += 1
-                        logger.info("Poll: Job %s completed — %s events, %.1fs, $%.4f",
-                                    job.pk, result.get("total_events", 0), exec_secs, cost_usd)
-
-                except Exception as e:
-                    logger.error("Poll error for call_id %s: %s", call_id, e)
-
-        except ImportError:
-            pass
-
+        completed = _poll_sagemaker_results(processing_jobs)
         return JsonResponse({
-            "checked": processing_jobs.count(),
+            "checked": len(processing_jobs),
             "completed": completed,
         })
+
+
+def _poll_sagemaker_results(jobs) -> int:
+    """Check each job's expected output S3 URI. Update DB on completion.
+
+    Returns the number of jobs newly marked completed/failed in this call.
+    """
+    import boto3
+    import json as _json
+    from urllib.parse import urlparse
+    from django.utils import timezone
+    from botocore.exceptions import ClientError
+
+    s3 = boto3.client("s3", region_name=getattr(settings, "AWS_REGION", "us-east-1"))
+    n = 0
+
+    for job in jobs:
+        if not job.modal_call_id:
+            continue
+        try:
+            parsed = urlparse(job.modal_call_id)
+            bucket = parsed.netloc
+            key = parsed.path.lstrip("/")
+            failure_key = key.replace(".out", ".failure") if key.endswith(".out") else key + ".failure"
+
+            # Check for success first.
+            try:
+                body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+                result = _json.loads(body)
+                _apply_result_to_job(job, result)
+                n += 1
+                continue
+            except ClientError as e:
+                code = e.response.get("Error", {}).get("Code", "")
+                if code not in {"NoSuchKey", "404", "NotFound"}:
+                    raise
+
+            # Then check for inference failure.
+            try:
+                body = s3.get_object(Bucket=bucket, Key=failure_key)["Body"].read()
+                Job.objects.filter(pk=job.pk).update(
+                    status="failed",
+                    error_message=f"SageMaker inference failed: {body.decode('utf-8', errors='replace')[:500]}",
+                    completed_at=timezone.now(),
+                )
+                n += 1
+            except ClientError as e:
+                code = e.response.get("Error", {}).get("Code", "")
+                if code not in {"NoSuchKey", "404", "NotFound"}:
+                    raise
+                # Still running — neither output nor failure object exists yet.
+                continue
+        except Exception as e:
+            logger.error("Poll error for job %s (%s): %s", job.pk, job.modal_call_id, e)
+
+    return n
+
+
+def _apply_result_to_job(job, result: dict) -> None:
+    """Write the SageMaker result JSON into JobResult + finalize the Job."""
+    from django.utils import timezone
+
+    if result.get("status") == "failed":
+        Job.objects.filter(pk=job.pk).update(
+            status="failed",
+            error_message=result.get("error_message", "Unknown SM failure"),
+            completed_at=timezone.now(),
+        )
+        return
+
+    JobResult.objects.update_or_create(
+        job_id=job.pk,
+        defaults={
+            "events_csv_path": result.get("events_csv_path", ""),
+            "tracking_csv_path": result.get("tracking_csv_path", ""),
+            "foraging_trips_csv_path": result.get("foraging_trips_csv_path", ""),
+            "interactions_csv_path": result.get("interactions_csv_path", ""),
+            "annotated_video_path": result.get("annotated_video_path", ""),
+            "total_events": result.get("total_events", 0),
+            "entry_count": result.get("entry_count", 0),
+            "exit_count": result.get("exit_count", 0),
+            "unique_tracks": result.get("unique_tracks", 0),
+            "nest_count": result.get("nest_count", 0),
+            "foraging_trip_count": result.get("foraging_trip_count", 0),
+            "avg_trip_duration_sec": result.get("avg_trip_duration_sec"),
+            "interaction_count": result.get("interaction_count", 0),
+            "summary_stats": result.get("summary_stats", {}),
+        },
+    )
+
+    exec_secs = result.get("execution_seconds", 0) or 0
+    credits_used = int(exec_secs)
+    cost_rate = GPU_TIERS.get(job.gpu_tier, {}).get("cost_per_sec", 0.000306)
+    cost_usd = round(exec_secs * cost_rate, 4)
+
+    Job.objects.filter(pk=job.pk).update(
+        status="completed", progress_pct=100,
+        completed_at=timezone.now(),
+        execution_seconds=exec_secs,
+        compute_cost_usd=cost_usd,
+    )
+
+    try:
+        from apps.accounts.models import UserProfile
+        profile, _ = UserProfile.objects.get_or_create(user=job.user)
+        profile.charge(credits_used, gpu_seconds=exec_secs)
+    except Exception as e:
+        logger.error("Failed to charge credits for job %s: %s", job.pk, e)
+
+    logger.info("Poll: Job %s completed — %s events, %.1fs, $%.4f",
+                job.pk, result.get("total_events", 0), exec_secs, cost_usd)
 
 
 class BatchJobView(LoginRequiredMixin, View):

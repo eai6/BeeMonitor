@@ -191,8 +191,14 @@ gh_role = aws.iam.Role(
     }),
 )
 
-# Least-privilege: push to *this* ECR repo and read Pulumi-state-relevant
-# data. Phase 2b will extend this with the ECS deploy permissions.
+# Least-privilege: push to BOTH ECR repos that CI builds for —
+# `beemonitor-{env}-web` (this stack) and `beemonitor-sm-{env}` (the
+# SageMaker stack). The SageMaker ECR repo's ARN follows the same
+# naming convention so we can reference it directly rather than via
+# StackReference.
+sm_ecr_repo_arn = (
+    f"arn:aws:ecr:{region}:{account_id}:repository/beemonitor-sm-{env}"
+)
 ecr_push_policy_doc = ecr_repo.arn.apply(lambda repo_arn: json.dumps({
     "Version": "2012-10-17",
     "Statement": [
@@ -203,7 +209,7 @@ ecr_push_policy_doc = ecr_repo.arn.apply(lambda repo_arn: json.dumps({
             "Resource": "*",
         },
         {
-            "Sid": "EcrPushPullThisRepo",
+            "Sid": "EcrPushPullBeeMonitorRepos",
             "Effect": "Allow",
             "Action": [
                 "ecr:BatchCheckLayerAvailability",
@@ -216,7 +222,7 @@ ecr_push_policy_doc = ecr_repo.arn.apply(lambda repo_arn: json.dumps({
                 "ecr:DescribeRepositories",
                 "ecr:DescribeImages",
             ],
-            "Resource": repo_arn,
+            "Resource": [repo_arn, sm_ecr_repo_arn],
         },
     ],
 }))
@@ -603,6 +609,19 @@ aws.iam.RolePolicyAttachment(
     policy_arn="arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess",
 )
 
+# Attach the SageMaker django-invoke policy so the running container can
+# invoke the BeeMonitor inference endpoint. The policy is created by the
+# separate `infra/aws-sagemaker/` stack; the ARN follows naming convention
+# so we don't need a StackReference.
+sm_django_invoke_policy_arn = (
+    f"arn:aws:iam::{account_id}:policy/beemonitor-sm-{env}-django-invoke"
+)
+aws.iam.RolePolicyAttachment(
+    "apprunner-sagemaker-invoke",
+    role=apprunner_instance_role.name,
+    policy_arn=sm_django_invoke_policy_arn,
+)
+
 
 # ---------------------------------------------------------------------------
 # App Runner service — gated on `deploy-service` (two-pass deploy)
@@ -646,6 +665,10 @@ if deploy_service:
         "AWS_S3_BUCKET_PROCESSED": args[5],
         "AWS_S3_BUCKET_MODELS": args[6],
         "AWS_S3_BUCKET_USER_CONFIGS": args[7],
+        # SageMaker (Phase 4) — set by convention; the SM stack owns the names.
+        "SAGEMAKER_ENDPOINT_NAME": f"beemonitor-sm-{env}",
+        "SAGEMAKER_INPUT_BUCKET": f"beemonitor-sm-{env}-input-{account_id}",
+        "SAGEMAKER_OUTPUT_BUCKET": f"beemonitor-sm-{env}-output-{account_id}",
     })
 
     runtime_secrets = pulumi.Output.all(

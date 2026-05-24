@@ -208,7 +208,14 @@ class UploadCompleteView(APIView):
             file_size_bytes // (1024 * 1024),
         )
 
-        # Phase 4: enqueue analysis here once SageMaker is wired.
+        # Phase 4: auto-spawn a SageMaker analysis job. Best-effort —
+        # a spawn failure must not fail the upload (the video is safely
+        # in S3 either way). The job row carries the failure if SM is down.
+        job_id = None
+        try:
+            job_id = _enqueue_pi_analysis(video, device)
+        except Exception as e:
+            logger.exception("auto-spawn analysis failed for video %s: %s", video.id, e)
 
         return Response(
             {
@@ -216,6 +223,42 @@ class UploadCompleteView(APIView):
                 "storage_key": storage_key,
                 "status": video.status,
                 "recorded_at": final_recorded_at.isoformat(),
+                "analysis_job_id": job_id,
             },
             status=201,
         )
+
+
+def _enqueue_pi_analysis(video, device) -> int | None:
+    """Create an analysis Job for a Pi-uploaded video and fire it off.
+
+    Threaded spawn — same pattern as ``JobCreateView`` (analysis/views.py).
+    Returns the Job pk if the spawn was enqueued, ``None`` if the SageMaker
+    endpoint isn't configured (e.g. local dev / tests).
+    """
+    from django.conf import settings as _s
+    if not getattr(_s, "SAGEMAKER_ENDPOINT_NAME", ""):
+        return None  # Phase 4 endpoint not deployed yet — keep upload happy.
+
+    import threading
+    import uuid as _uuid
+
+    from apps.analysis.models import Job
+    from apps.analysis.views import _spawn_gpu_job
+    from django.utils import timezone
+
+    job = Job.objects.create(
+        user=device.owner,
+        video=video,
+        config={
+            "detection_mode": "yolo",
+            "confidence_threshold": 0.25,
+            "source": "pi-upload",
+            "device_id": device.id,
+        },
+        status=Job.Status.PROCESSING,
+        started_at=timezone.now(),
+        modal_job_id=f"pi_{_uuid.uuid4().hex[:12]}",
+    )
+    threading.Thread(target=_spawn_gpu_job, args=(job.pk,), daemon=True).start()
+    return job.pk

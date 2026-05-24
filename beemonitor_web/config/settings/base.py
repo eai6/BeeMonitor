@@ -137,6 +137,12 @@ AWS_S3_BUCKET_PROCESSED = os.environ.get("AWS_S3_BUCKET_PROCESSED", "")
 AWS_S3_BUCKET_MODELS = os.environ.get("AWS_S3_BUCKET_MODELS", "")
 AWS_S3_BUCKET_USER_CONFIGS = os.environ.get("AWS_S3_BUCKET_USER_CONFIGS", "")
 
+# SageMaker Async Inference (Phase 4 of memory/09_aws_migration_plan.md).
+# The endpoint + buckets are provisioned by infra/aws-sagemaker/.
+SAGEMAKER_ENDPOINT_NAME = os.environ.get("SAGEMAKER_ENDPOINT_NAME", "")
+SAGEMAKER_INPUT_BUCKET = os.environ.get("SAGEMAKER_INPUT_BUCKET", "")
+SAGEMAKER_OUTPUT_BUCKET = os.environ.get("SAGEMAKER_OUTPUT_BUCKET", "")
+
 # Modal
 MODAL_TOKEN_ID = os.environ.get("MODAL_TOKEN_ID", "")
 MODAL_TOKEN_SECRET = os.environ.get("MODAL_TOKEN_SECRET", "")

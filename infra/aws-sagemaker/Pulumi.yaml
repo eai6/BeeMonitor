@@ -1,0 +1,10 @@
+name: beemonitor-sagemaker
+runtime:
+  name: python
+  options:
+    virtualenv: venv
+description: >
+  AWS SageMaker Async Inference for BeeMonitor (Phase 4 of
+  memory/09_aws_migration_plan.md). A separate Pulumi project from the
+  web stack (infra/aws/) so the GPU backend scales — and is billed —
+  independently of the Django app.

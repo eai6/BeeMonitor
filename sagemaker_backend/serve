@@ -1,0 +1,24 @@
+#!/bin/bash
+# SageMaker entrypoint: `docker run <image> serve` runs this.
+#
+# gunicorn:
+#   --workers 1     : the model lives on the GPU; multiple workers means
+#                     multiple CUDA contexts in one process group, which
+#                     hurts more than it helps for video analysis.
+#   --threads 4     : the work is mostly waiting on opencv / S3; threads
+#                     let us handle a couple of in-flight invocations.
+#   --timeout 3600  : a 10-min video on a g4dn can take a few minutes.
+#                     SageMaker Async has its own 60-min cap upstream.
+#   --preload off   : intentionally NOT preloading; we want the engine
+#                     loaded in the worker, not the master, to avoid a
+#                     forked CUDA context.
+set -euo pipefail
+cd /opt/program
+exec gunicorn \
+    --bind 0.0.0.0:8080 \
+    --workers 1 \
+    --threads 4 \
+    --timeout 3600 \
+    --access-logfile - \
+    --error-logfile - \
+    serve:app
