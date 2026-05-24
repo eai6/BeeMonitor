@@ -8,6 +8,6 @@ config:
   # Two-pass deploy: pass 1 (false) creates ECR + buckets + IAM only,
   # then CI builds the GPU image, then flip to true to create the
   # SageMaker Model / EndpointConfig / Endpoint / autoscaling.
-  beemonitor-sagemaker:deploy-endpoint: "false"
+  beemonitor-sagemaker:deploy-endpoint: "true"
   beemonitor-sagemaker:max-capacity: "2"
 encryptionsalt: v1:KP9os4EO1pI=:v1:Uz8+RClcZwOfibt8:95C+OrayaNewT+KduPYUMyEg3dj+cw==

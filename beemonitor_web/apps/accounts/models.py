@@ -65,6 +65,15 @@ class UserProfile(models.Model):
     total_jobs_submitted = models.IntegerField(default=0)
     total_gpu_seconds = models.FloatField(default=0, help_text="Lifetime GPU seconds consumed")
 
+    # Support flag — when True, the user can READ any owner's resources
+    # via the read-bypass views (DeviceListView, JobListView, etc.).
+    # WRITES still go through the regular ownership scoping; support staff
+    # cannot mutate someone else's data without explicit Django admin.
+    is_support = models.BooleanField(
+        default=False,
+        help_text="Allow read-only cross-tenant access (analytics, debugging). Writes still owner-scoped.",
+    )
+
     # Legacy
     monthly_job_count = models.IntegerField(default=0)
     storage_used_bytes = models.BigIntegerField(default=0)

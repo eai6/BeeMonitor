@@ -593,7 +593,7 @@ class DeviceUIViewTests(TestCase):
     def setUp(self):
         from apps.devices.models import Device
         self.owner = create_user(username="alice")
-        self.stranger = create_user(username="bob", password="bobpass1")
+        self.stranger = create_user(username="bob")
         self.client, _ = logged_in_client(self.owner)
         # Pre-existing device for alice and a different device for bob.
         self.alice_device, _ = Device.create_with_key(self.owner, "alice-pi-1")
@@ -649,3 +649,200 @@ class DeviceUIViewTests(TestCase):
         r = anon.get(reverse("devices:list"))
         self.assertEqual(r.status_code, 302)
         self.assertIn("/accounts/login/", r.url)
+
+
+# ── Phase 5: cross-user ownership scoping ────────────────────────────
+
+
+class CrossUserScopingTests(TestCase):
+    """User B must never see user A's resources via any UI/API path.
+
+    Every page that lists, details, or mutates an owned resource gets a
+    targeted check: log in as the wrong user, ask for it by pk, expect
+    404 (NOT 403 — 404 doesn't leak that the resource exists).
+    """
+
+    def setUp(self):
+        from apps.videos.models import Video
+        from apps.analysis.models import Job, JobResult
+        from apps.annotations.models import AnnotationProject
+        from apps.devices.models import Device
+
+        self.alice = create_user(username="alice")
+        self.bob = create_user(username="bob")
+
+        # Alice owns one of each resource.
+        self.alice_video = Video.objects.create(
+            user=self.alice, title="alice.mp4",
+            storage_key="alice/alice.mp4", file_size_bytes=100,
+            status=Video.Status.READY,
+        )
+        self.alice_job = Job.objects.create(
+            user=self.alice, video=self.alice_video,
+            modal_job_id="aj-1", config={},
+            status=Job.Status.COMPLETED,
+        )
+        JobResult.objects.create(
+            job=self.alice_job,
+            events_csv_path="alice/events.csv",
+            tracking_csv_path="alice/tracking.csv",
+        )
+        self.alice_project = AnnotationProject.objects.create(
+            user=self.alice, name="alice-project", classes=["bee"],
+        )
+        self.alice_device, _ = Device.create_with_key(self.alice, "alice-pi")
+
+        # Bob is logged in for every test.
+        self.client, _ = logged_in_client(self.bob)
+
+    # ── Videos ────────────────────────────────────────────────
+    def test_bob_cannot_see_alice_video_detail(self):
+        r = self.client.get(reverse("videos:detail", args=[self.alice_video.pk]))
+        self.assertEqual(r.status_code, 404)
+
+    def test_bob_cannot_delete_alice_video(self):
+        r = self.client.post(reverse("videos:delete", args=[self.alice_video.pk]))
+        self.assertEqual(r.status_code, 404)
+        self.assertTrue(
+            self.alice_video.__class__.objects.filter(pk=self.alice_video.pk).exists()
+        )
+
+    def test_bob_list_does_not_include_alice_videos(self):
+        r = self.client.get(reverse("videos:list"))
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn("alice.mp4", r.content.decode())
+
+    # ── Analysis jobs ─────────────────────────────────────────
+    def test_bob_cannot_see_alice_job_detail(self):
+        r = self.client.get(reverse("analysis:detail", args=[self.alice_job.pk]))
+        self.assertEqual(r.status_code, 404)
+
+    def test_bob_cannot_see_alice_job_results(self):
+        r = self.client.get(reverse("analysis:results", args=[self.alice_job.pk]))
+        self.assertEqual(r.status_code, 404)
+
+    def test_bob_list_does_not_include_alice_jobs(self):
+        # analysis:list redirects to analysis:analytics; follow it.
+        r = self.client.get(reverse("analysis:list"), follow=True)
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn(self.alice_job.modal_job_id, r.content.decode())
+
+    # ── Annotation projects ───────────────────────────────────
+    def test_bob_cannot_see_alice_project(self):
+        r = self.client.get(reverse("annotations:detail", args=[self.alice_project.pk]))
+        self.assertEqual(r.status_code, 404)
+
+    def test_bob_cannot_open_alice_editor(self):
+        r = self.client.get(reverse("annotations:editor", args=[self.alice_project.pk]))
+        self.assertEqual(r.status_code, 404)
+
+    # ── Devices ───────────────────────────────────────────────
+    def test_bob_cannot_revoke_alice_device(self):
+        r = self.client.post(reverse("devices:revoke", args=[self.alice_device.pk]))
+        self.assertEqual(r.status_code, 404)
+
+    def test_bob_cannot_delete_alice_device(self):
+        r = self.client.post(reverse("devices:delete", args=[self.alice_device.pk]))
+        self.assertEqual(r.status_code, 404)
+
+    def test_bob_list_does_not_include_alice_devices(self):
+        r = self.client.get(reverse("devices:list"))
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn("alice-pi", r.content.decode())
+
+
+class APICrossUserScopingTests(TestCase):
+    """DRF API endpoints — Bob's API key must not retrieve Alice's resources."""
+
+    def setUp(self):
+        from apps.accounts.models import APIKey
+        from apps.videos.models import Video
+        from apps.analysis.models import Job, JobResult
+
+        self.alice = create_user(username="alice")
+        self.bob = create_user(username="bob")
+
+        self.alice_video = Video.objects.create(
+            user=self.alice, title="alice.mp4",
+            storage_key="alice/alice.mp4", file_size_bytes=100,
+            status=Video.Status.READY,
+        )
+        self.alice_job = Job.objects.create(
+            user=self.alice, video=self.alice_video,
+            modal_job_id="aj-1", config={},
+            status=Job.Status.COMPLETED,
+        )
+        JobResult.objects.create(
+            job=self.alice_job,
+            events_csv_path="alice/events.csv",
+        )
+
+        _, self.bob_raw_key = APIKey.create_key(self.bob, name="bob-key", key_type="live")
+        self.client = Client()
+
+    def _auth(self):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self.bob_raw_key}"}
+
+    def test_bob_cannot_get_alice_video(self):
+        r = self.client.get(f"/api/v1/videos/{self.alice_video.pk}/", **self._auth())
+        self.assertEqual(r.status_code, 404)
+
+    def test_bob_cannot_get_alice_job(self):
+        r = self.client.get(f"/api/v1/jobs/{self.alice_job.pk}/", **self._auth())
+        self.assertEqual(r.status_code, 404)
+
+    def test_bob_cannot_get_download_url_for_alice_job(self):
+        r = self.client.get(
+            f"/api/v1/jobs/{self.alice_job.pk}/download/?file=events_csv_path",
+            **self._auth(),
+        )
+        # 404 is correct — get_object() raises Http404 for cross-user pk.
+        self.assertEqual(r.status_code, 404)
+
+    def test_bob_videos_list_excludes_alice(self):
+        r = self.client.get("/api/v1/videos/", **self._auth())
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        results = body.get("results", body)
+        if isinstance(results, list):
+            titles = [v.get("title") for v in results]
+            self.assertNotIn("alice.mp4", titles)
+
+
+class SupportRoleBypassTests(TestCase):
+    """is_support gives READ visibility to other users' data, not WRITE."""
+
+    def setUp(self):
+        from apps.accounts.models import UserProfile
+        from apps.videos.models import Video
+
+        self.alice = create_user(username="alice")
+        self.support = create_user(username="support")
+        # A post_save signal on User creates the UserProfile with default
+        # is_support=False; get_or_create returns the existing row.
+        sp, _ = UserProfile.objects.get_or_create(user=self.support)
+        sp.is_support = True
+        sp.save(update_fields=["is_support"])
+        # OneToOne reverse accessors cache; reload self.support so reading
+        # self.support.profile picks up the just-saved is_support flag.
+        self.support.refresh_from_db()
+
+        self.alice_video = Video.objects.create(
+            user=self.alice, title="alice.mp4",
+            storage_key="alice/alice.mp4", file_size_bytes=100,
+            status=Video.Status.READY,
+        )
+
+        self.client, _ = logged_in_client(self.support)
+
+    def test_is_support_helper(self):
+        from apps.accounts.permissions import is_support
+        self.assertTrue(is_support(self.support))
+        self.assertFalse(is_support(self.alice))
+
+    def test_support_user_cannot_write_to_alice_video(self):
+        # Support is read-only — deleting via the per-resource view is owner-scoped.
+        r = self.client.post(reverse("videos:delete", args=[self.alice_video.pk]))
+        self.assertEqual(r.status_code, 404, "writes must still 404 cross-user")
+        from apps.videos.models import Video as V
+        self.assertTrue(V.objects.filter(pk=self.alice_video.pk).exists())
