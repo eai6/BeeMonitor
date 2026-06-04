@@ -1,0 +1,14 @@
+# Sixfab / libqmi packet-data session config.
+# Install to /etc/qmi-network.conf  (read by `qmi-network` in cellular-up.sh).
+#
+#   sudo cp qmi-network.conf.sample /etc/qmi-network.conf
+#   sudo nano /etc/qmi-network.conf   # set APN for your SIM
+#
+# Set APN to your carrier's value, e.g.:
+#   Twilio Super SIM -> super
+#   Hologram         -> hologram
+#   Soracom          -> soracom.io
+
+APN=super
+# APN_USER=
+# APN_PASS=

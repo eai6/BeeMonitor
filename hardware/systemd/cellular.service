@@ -1,0 +1,20 @@
+[Unit]
+Description=Sixfab cellular link (QMI) — bring up and keep alive
+Documentation=https://github.com/eai6/BeeMonitor
+# This service *creates* the network, so it has no network dependency itself.
+# It must come up before the uploader so snippets have a route to S3.
+After=multi-user.target
+Before=beemonitor-uploader.service
+
+[Service]
+Type=simple
+# Long-lived: brings wwan0 up (with retry) then watchdogs it and re-establishes
+# on drop. Runs on every boot / WittyPi wake.
+ExecStart=/usr/local/bin/cellular-up.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
