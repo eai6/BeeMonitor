@@ -12,12 +12,12 @@ Wants=network-online.target cellular.service
 
 [Service]
 Type=simple
-User=apis
-Group=apis
+User=beemonitor
+Group=beemonitor
 # Environment lives in this file (chmod 600) — keeps the bmk_device_* key
 # out of the unit file itself.
 EnvironmentFile=/etc/beemonitor/uploader.env
-ExecStart=/home/apis/BeeMonitor/.venv/bin/python /home/apis/BeeMonitor/hardware/uploader.py
+ExecStart=/home/beemonitor/BeeMonitor/hardware/venv/bin/python /home/beemonitor/BeeMonitor/hardware/uploader.py
 Restart=on-failure
 # Give the script a moment to drain on SIGTERM before SIGKILL.
 TimeoutStopSec=300

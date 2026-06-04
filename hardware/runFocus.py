@@ -15,7 +15,7 @@ cam.start()
 
 time.sleep(1)
 
-cam.start_and_record_video("/home/apis/Desktop/cameraOutput/cameraTesting/focus.mp4", duration = 40)
+cam.start_and_record_video("/home/beemonitor/Desktop/cameraOutput/cameraTesting/focus.mp4", duration = 40)
 
 cam.stop()
 

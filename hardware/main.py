@@ -28,7 +28,7 @@ def record():
     now = datetime.now()
     filename = now.strftime("%Y-%m-%d_%H_%M_%S")
     fmt = '.mp4'
-    root_main = '/home/apis/Desktop/cameraOutput/beeHotel/'
+    root_main = '/home/beemonitor/Desktop/cameraOutput/beeHotel/'
     
     root = root_main + str(now.strftime("%Y-%m-%d"))+"/"
     

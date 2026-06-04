@@ -13,7 +13,7 @@ cam.start()
 
 time.sleep(2)
 
-cam.start_and_record_video("/home/apis/Desktop/cameraOutput/cameraTesting/test.mp4", duration = 20)
+cam.start_and_record_video("/home/beemonitor/Desktop/cameraOutput/cameraTesting/test.mp4", duration = 20)
 
 cam.stop()
 

@@ -6,13 +6,13 @@ After=multi-user.target
 
 [Service]
 Type=simple
-User=apis
-Group=apis
+User=beemonitor
+Group=beemonitor
 # Optional: override any BEEMONITOR_* tuning knobs here (chmod 600).
 # Reuses the same env file as the uploader so BEEMONITOR_RECORD_DIR stays in
 # sync — the recorder writes snippets exactly where the uploader looks.
 EnvironmentFile=-/etc/beemonitor/uploader.env
-ExecStart=/home/apis/BeeMonitor/.venv/bin/python /home/apis/BeeMonitor/hardware/main_motion.py
+ExecStart=/home/beemonitor/BeeMonitor/hardware/venv/bin/python /home/beemonitor/BeeMonitor/hardware/main_motion.py
 Restart=on-failure
 # Let the recorder finalise the in-flight clip + remux on SIGTERM.
 TimeoutStopSec=60

@@ -102,9 +102,9 @@ def _env_bool(name: str, default: bool) -> bool:
 
 # Where finished .mp4 snippets land — keep == uploader's BEEMONITOR_RECORD_DIR.
 RECORD_DIR = Path(os.environ.get(
-    "BEEMONITOR_RECORD_DIR", "/home/apis/Desktop/cameraOutput/beeHotel"))
+    "BEEMONITOR_RECORD_DIR", "/home/beemonitor/Desktop/cameraOutput/beeHotel"))
 # Scratch dir for the raw .h264 segments before remux (kept off the watched tree).
-WORK_DIR = Path(os.environ.get("BEEMONITOR_WORK_DIR", "/home/apis/Desktop/cameraOutput/_work"))
+WORK_DIR = Path(os.environ.get("BEEMONITOR_WORK_DIR", "/home/beemonitor/Desktop/cameraOutput/_work"))
 
 # Capture geometry.
 MAIN_W = _env_int("BEEMONITOR_MAIN_W", 1920)

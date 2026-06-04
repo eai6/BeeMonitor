@@ -20,7 +20,7 @@ It POSTs even if the recorder is dead — a missing image plus
 Config — ``/etc/beemonitor/uploader.env`` (shared with the uploader):
     BEEMONITOR_API_BASE        = https://...
     BEEMONITOR_DEVICE_KEY      = bmk_device_...
-    BEEMONITOR_RECORD_DIR      = /home/apis/Desktop/cameraOutput/beeHotel
+    BEEMONITOR_RECORD_DIR      = /home/beemonitor/Desktop/cameraOutput/beeHotel
     BEEMONITOR_TELEMETRY_QUEUE = <RECORD_DIR>/../telemetry   (default)
     BEEMONITOR_SCHEDULE_WINDOW = "07:50-18:45"               (optional, WittyPi)
 """
@@ -53,7 +53,7 @@ except ImportError:  # pragma: no cover
 API_BASE = os.environ.get("BEEMONITOR_API_BASE", "").rstrip("/")
 DEVICE_KEY = os.environ.get("BEEMONITOR_DEVICE_KEY", "")
 RECORD_DIR = Path(os.environ.get(
-    "BEEMONITOR_RECORD_DIR", "/home/apis/Desktop/cameraOutput/beeHotel"))
+    "BEEMONITOR_RECORD_DIR", "/home/beemonitor/Desktop/cameraOutput/beeHotel"))
 QUEUE_DIR = Path(os.environ.get(
     "BEEMONITOR_TELEMETRY_QUEUE", str(RECORD_DIR.parent / "telemetry")))
 SCHEDULE_WINDOW = os.environ.get("BEEMONITOR_SCHEDULE_WINDOW", "")

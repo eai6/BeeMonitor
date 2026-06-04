@@ -6,12 +6,12 @@ Documentation=https://github.com/eai6/BeeMonitor
 
 [Service]
 Type=oneshot
-User=apis
-Group=apis
+User=beemonitor
+Group=beemonitor
 EnvironmentFile=-/etc/beemonitor/uploader.env
 # YOLO on a Pi 4 is heavy; run it nice/idle so it never starves the recorder.
 Nice=15
 IOSchedulingClass=idle
-ExecStart=/home/apis/BeeMonitor/.venv/bin/python /home/apis/BeeMonitor/hardware/main_motion.py --calibrate
+ExecStart=/home/beemonitor/BeeMonitor/hardware/venv/bin/python /home/beemonitor/BeeMonitor/hardware/main_motion.py --calibrate
 StandardOutput=journal
 StandardError=journal

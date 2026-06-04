@@ -13,7 +13,7 @@ Flow per file:
 Config — set in ``/etc/beemonitor/uploader.env`` (read by the systemd unit):
     BEEMONITOR_API_BASE   = https://mqnafc3ejc.us-east-1.awsapprunner.com
     BEEMONITOR_DEVICE_KEY = bmk_device_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-    BEEMONITOR_RECORD_DIR = /home/apis/Desktop/cameraOutput/beeHotel
+    BEEMONITOR_RECORD_DIR = /home/beemonitor/Desktop/cameraOutput/beeHotel
     BEEMONITOR_POLL_SECONDS = 30
 """
 
@@ -44,7 +44,7 @@ except ImportError:  # pragma: no cover — Pi image installs it via apt/pip
 API_BASE = os.environ.get("BEEMONITOR_API_BASE", "").rstrip("/")
 DEVICE_KEY = os.environ.get("BEEMONITOR_DEVICE_KEY", "")
 RECORD_DIR = Path(os.environ.get(
-    "BEEMONITOR_RECORD_DIR", "/home/apis/Desktop/cameraOutput/beeHotel",
+    "BEEMONITOR_RECORD_DIR", "/home/beemonitor/Desktop/cameraOutput/beeHotel",
 ))
 POLL_SECONDS = int(os.environ.get("BEEMONITOR_POLL_SECONDS", "30"))
 PUT_TIMEOUT_SECONDS = int(os.environ.get("BEEMONITOR_PUT_TIMEOUT", "7200"))  # 2h
