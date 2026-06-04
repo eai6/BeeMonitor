@@ -167,13 +167,16 @@ env file and bringing up the modem. The detailed walkthrough follows in Steps 1�
 cd ~ && git clone https://github.com/eai6/BeeMonitor.git
 cd ~/BeeMonitor/hardware
 
-# 2. Dependencies (ultralytics is heavy — needed only for auto-calibration)
+# 2. System deps + virtualenv (picamera2/cv2 from apt; pip deps in the venv).
+#    --system-site-packages lets the venv import the apt-installed picamera2/cv2.
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y python3-picamera2 python3-opencv ffmpeg python3-requests
-pip3 install ultralytics
+sudo apt install -y python3-picamera2 python3-opencv ffmpeg python3-venv libqmi-utils
+python3 -m venv --system-site-packages ~/BeeMonitor/.venv
+~/BeeMonitor/.venv/bin/pip install --upgrade pip
+~/BeeMonitor/.venv/bin/pip install requests ultralytics   # ultralytics = calibration only
 
 # 3. Output directories
-python3 makeDirectories.py
+~/BeeMonitor/.venv/bin/python makeDirectories.py
 
 # 4. Credentials + tuning  (EDIT: paste your bmk_device_ key, then save)
 sudo mkdir -p /etc/beemonitor
@@ -202,7 +205,7 @@ journalctl -u beemonitor-uploader.service -f   # watch snippets upload to S3
 
 > First boot runs on permissive motion thresholds until the calibrate timer
 > finds bees in the recorded snippets. To calibrate immediately once a few clips
-> exist: `python3 ~/BeeMonitor/hardware/main_motion.py --calibrate --force`
+> exist: `~/BeeMonitor/.venv/bin/python ~/BeeMonitor/hardware/main_motion.py --calibrate --force`
 
 ### Step 1: Download Source Code
 
@@ -215,26 +218,41 @@ cd BeeMonitor/hardware
 > The systemd unit files expect the repo at **`/home/apis/BeeMonitor`**. If you
 > clone elsewhere, edit the `ExecStart=` paths in `hardware/systemd/*.service`.
 
-### Step 2: Install Dependencies
+### Step 2: Install Dependencies (system packages + virtualenv)
+
+`picamera2` and OpenCV must come from **apt** (the camera stack is built against
+the system libraries and doesn't install cleanly via pip). Everything pip-based
+(`requests`, `ultralytics`) goes in a **virtualenv created with
+`--system-site-packages`** so it can still import the apt-installed
+`picamera2`/`cv2`. On Raspberry Pi OS Bookworm a plain `pip install` is blocked
+(PEP 668 "externally managed"), so the venv is required, not optional.
 
 ```bash
 sudo apt update && sudo apt upgrade -y
 
-# Camera, computer vision, and video muxing (ffmpeg remuxes snippets to .mp4)
-sudo apt install -y python3-picamera2 python3-opencv ffmpeg
+# System packages: camera, computer vision, video muxing, venv, cellular tools.
+sudo apt install -y python3-picamera2 python3-opencv ffmpeg \
+                    python3-venv libqmi-utils
 
-# Uploader HTTP client
-sudo apt install -y python3-requests
+# Create the project virtualenv (must see the apt-installed picamera2/cv2).
+python3 -m venv --system-site-packages ~/BeeMonitor/.venv
 
+# Install the pip-only deps into the venv.
+~/BeeMonitor/.venv/bin/pip install --upgrade pip
+~/BeeMonitor/.venv/bin/pip install requests          # uploader + telemetry
 # Calibration ONLY (heavy — pulls in PyTorch). Needed by the calibrate timer.
-# Skip on the Pi if you intend to calibrate on another machine instead.
-pip3 install ultralytics
+# Skip if you'll calibrate on another machine instead.
+~/BeeMonitor/.venv/bin/pip install ultralytics
 ```
+
+> The systemd units run `/home/apis/BeeMonitor/.venv/bin/python`. Keep the venv
+> at that path (or edit the `ExecStart=` lines in `hardware/systemd/*.service`).
+> Sanity check: `~/BeeMonitor/.venv/bin/python -c "import picamera2, cv2, requests; print('ok')"`.
 
 ### Step 3: Create Output Directories
 
 ```bash
-python3 makeDirectories.py
+~/BeeMonitor/.venv/bin/python makeDirectories.py
 ```
 
 (The recorder also auto-creates its working directories on first run.)
@@ -242,7 +260,7 @@ python3 makeDirectories.py
 ### Step 4: Focus the Camera
 
 ```bash
-python3 runFocus.py
+~/BeeMonitor/.venv/bin/python runFocus.py
 ```
 
 **Note:** The camera must be connected when the Pi boots. If it wasn't, reboot:
@@ -325,7 +343,7 @@ journalctl -u beemonitor-uploader.service -f     # upload progress
 > daily calibrate job finds bees in the snippets it writes `calibration.json`,
 > and the recorder **hot-reloads** it within a few minutes (no restart needed).
 > You can force the first calibration once clips exist:
-> `python3 main_motion.py --calibrate --force`
+> `~/BeeMonitor/.venv/bin/python main_motion.py --calibrate --force`
 
 ---
 
@@ -702,10 +720,14 @@ stages need cellular.
 > usually model path or color order (Stage 3), and the AT port not being
 > `/dev/ttyUSB2` (Stage 6).
 
+> Commands below run the scripts with the **project venv** Python
+> (`~/BeeMonitor/.venv/bin/python`). You can instead
+> `source ~/BeeMonitor/.venv/bin/activate` once and then just use `python`.
+
 ### Stage 0 — Code sanity (anywhere)
 ```bash
 cd ~/BeeMonitor/hardware
-python3 -m py_compile main_motion.py && echo OK
+~/BeeMonitor/.venv/bin/python -m py_compile main_motion.py && echo OK
 ```
 
 ### Stage 1 — Recorder bench test (on the Pi, foreground)
@@ -720,7 +742,7 @@ sudo systemctl stop beemonitor-recorder.service 2>/dev/null
 BEEMONITOR_RECORD_DIR=/tmp/bm_test \
 BEEMONITOR_WARMUP=3 \
 BEEMONITOR_HEARTBEAT_INTERVAL=20 \
-python3 main_motion.py
+~/BeeMonitor/.venv/bin/python main_motion.py
 ```
 
 **Wave your hand** in front of the lens. You should see:
@@ -747,7 +769,7 @@ No live bees needed — point it at an **old 1080p clip that contains bees**:
 
 ```bash
 BEEMONITOR_RECORD_DIR=/tmp/bm_test \
-python3 main_motion.py --calibrate-from /path/to/old_bee_clip.mp4 \
+~/BeeMonitor/.venv/bin/python main_motion.py --calibrate-from /path/to/old_bee_clip.mp4 \
   --model ~/BeeMonitor/models/your_bee.pt
 cat /tmp/calibration.json
 ```
@@ -763,10 +785,10 @@ is picked up without a restart (reload interval lowered for the test):
 
 ```bash
 # Terminal A — recorder:
-BEEMONITOR_RECORD_DIR=/tmp/bm_test BEEMONITOR_CALIB_RELOAD_SECONDS=30 python3 main_motion.py
+BEEMONITOR_RECORD_DIR=/tmp/bm_test BEEMONITOR_CALIB_RELOAD_SECONDS=30 ~/BeeMonitor/.venv/bin/python main_motion.py
 
 # Terminal B — force a fresh calibration:
-BEEMONITOR_RECORD_DIR=/tmp/bm_test python3 main_motion.py \
+BEEMONITOR_RECORD_DIR=/tmp/bm_test ~/BeeMonitor/.venv/bin/python main_motion.py \
   --calibrate-from /path/to/old_bee_clip.mp4 --model ~/BeeMonitor/models/your_bee.pt --force
 ```
 ✅ **Pass:** within ~30s Terminal A logs `reloaded calibration: area=[...]`.
@@ -779,7 +801,7 @@ Test over WiFi first to isolate upload logic from cellular:
 sudo BEEMONITOR_API_BASE=https://mqnafc3ejc.us-east-1.awsapprunner.com \
      BEEMONITOR_DEVICE_KEY=bmk_device_yourkey \
      BEEMONITOR_RECORD_DIR=/tmp/bm_test \
-     python3 uploader.py
+     ~/BeeMonitor/.venv/bin/python uploader.py
 ```
 ✅ **Pass:** `uploading <file>` → `uploaded video_id=…`, a `.uploaded` sidecar
 appears next to the mp4, and the clip shows up in the BeeMonitor web app.

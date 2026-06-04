@@ -11,7 +11,7 @@ User=apis
 Group=apis
 EnvironmentFile=/etc/beemonitor/uploader.env
 # Loops internally at BEEMONITOR_TELEMETRY_INTERVAL (3600 prod; set 60 to test).
-ExecStart=/usr/bin/python3 /home/apis/BeeMonitor/hardware/telemetry.py
+ExecStart=/home/apis/BeeMonitor/.venv/bin/python /home/apis/BeeMonitor/hardware/telemetry.py
 Restart=on-failure
 RestartSec=30
 TimeoutStopSec=30

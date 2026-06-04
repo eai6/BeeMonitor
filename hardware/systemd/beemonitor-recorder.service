@@ -12,7 +12,7 @@ Group=apis
 # Reuses the same env file as the uploader so BEEMONITOR_RECORD_DIR stays in
 # sync — the recorder writes snippets exactly where the uploader looks.
 EnvironmentFile=-/etc/beemonitor/uploader.env
-ExecStart=/usr/bin/python3 /home/apis/BeeMonitor/hardware/main_motion.py
+ExecStart=/home/apis/BeeMonitor/.venv/bin/python /home/apis/BeeMonitor/hardware/main_motion.py
 Restart=on-failure
 # Let the recorder finalise the in-flight clip + remux on SIGTERM.
 TimeoutStopSec=60

@@ -1,9 +1,12 @@
 [Unit]
 Description=BeeMonitor Pi -> S3 uploader
 Documentation=https://github.com/eai6/BeeMonitor
-# Don't start until we have a real network.
-After=network-online.target
-Wants=network-online.target
+# Don't start until we have a real network. On a cellular unit that route comes
+# from cellular.service (Sixfab QMI bring-up), so order after it. The uploader's
+# own retry/backoff covers the gap if the link isn't fully up the instant it
+# starts, so this is ordering, not a hard requirement.
+After=network-online.target cellular.service
+Wants=network-online.target cellular.service
 # Run independently of the recorder so a recorder crash doesn't stop uploads
 # (and a network blip doesn't stop recording).
 
@@ -14,7 +17,7 @@ Group=apis
 # Environment lives in this file (chmod 600) — keeps the bmk_device_* key
 # out of the unit file itself.
 EnvironmentFile=/etc/beemonitor/uploader.env
-ExecStart=/usr/bin/python3 /home/apis/BeeMonitor/hardware/uploader.py
+ExecStart=/home/apis/BeeMonitor/.venv/bin/python /home/apis/BeeMonitor/hardware/uploader.py
 Restart=on-failure
 # Give the script a moment to drain on SIGTERM before SIGKILL.
 TimeoutStopSec=300

@@ -12,6 +12,6 @@ EnvironmentFile=-/etc/beemonitor/uploader.env
 # YOLO on a Pi 4 is heavy; run it nice/idle so it never starves the recorder.
 Nice=15
 IOSchedulingClass=idle
-ExecStart=/usr/bin/python3 /home/apis/BeeMonitor/hardware/main_motion.py --calibrate
+ExecStart=/home/apis/BeeMonitor/.venv/bin/python /home/apis/BeeMonitor/hardware/main_motion.py --calibrate
 StandardOutput=journal
 StandardError=journal
