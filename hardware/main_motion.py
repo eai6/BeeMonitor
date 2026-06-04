@@ -122,10 +122,19 @@ POST_ROLL = _env_float("BEEMONITOR_POST_ROLL", 4.0)
 MAX_SEGMENT = _env_float("BEEMONITOR_MAX_SEGMENT", 120.0)   # force-rotate cap
 WARMUP_SECONDS = _env_float("BEEMONITOR_WARMUP", 5.0)        # let MOG2 learn bg
 
-# Heartbeat: record a short clip every interval even with no motion, so you can
-# audit detection remotely. Set interval to 0 to disable.
-HEARTBEAT_INTERVAL = _env_float("BEEMONITOR_HEARTBEAT_INTERVAL", 3600.0)
+# Heartbeat *video clips*: disabled by default — the hourly telemetry image
+# (below) covers the "is the gate working / camera alive" audit far more cheaply.
+# Left in the code for bench/WiFi debugging; set >0 to re-enable.
+HEARTBEAT_INTERVAL = _env_float("BEEMONITOR_HEARTBEAT_INTERVAL", 0.0)
 HEARTBEAT_SECONDS = _env_float("BEEMONITOR_HEARTBEAT_SECONDS", 10.0)
+
+# Telemetry still: drop one downscaled JPEG into the telemetry queue on this
+# interval; the telemetry service (hardware/telemetry.py) ships the latest one
+# over cellular each beat. Match BEEMONITOR_TELEMETRY_INTERVAL.
+TELEMETRY_QUEUE = Path(os.environ.get(
+    "BEEMONITOR_TELEMETRY_QUEUE", str(RECORD_DIR.parent / "telemetry")))
+TELEMETRY_IMAGE_INTERVAL = _env_float("BEEMONITOR_TELEMETRY_IMAGE_INTERVAL", 3600.0)
+TELEMETRY_IMAGE_HEIGHT = _env_int("BEEMONITOR_TELEMETRY_IMAGE_HEIGHT", 720)
 
 # Detection cost knob: run MOG2 on 1 of every N lores frames (timing stays
 # wall-clock based, so this only trades latency for CPU).
@@ -317,6 +326,44 @@ def _snippet_paths(now: datetime):
     return h264, mp4
 
 
+def _save_telemetry_still(cam) -> None:
+    """Capture one downscaled JPEG into the telemetry queue (best-effort).
+
+    The telemetry service ships the latest queued image over cellular. We grab
+    the main (recorded) stream so the still reflects the real framing, then
+    downscale to keep it small. Never let a capture error stop recording.
+    """
+    try:
+        frame = cam.capture_array("main")
+        # Normalise to BGR regardless of the main stream's pixel format.
+        if frame.ndim == 3 and frame.shape[2] >= 3:
+            bgr = cv2.cvtColor(frame[:, :, :3], cv2.COLOR_RGB2BGR)
+        else:  # YUV420 (I420) packed: shape (H*3/2, W)
+            bgr = cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_I420)
+
+        h, w = bgr.shape[:2]
+        if h > TELEMETRY_IMAGE_HEIGHT:
+            scale = TELEMETRY_IMAGE_HEIGHT / h
+            bgr = cv2.resize(
+                bgr, (int(w * scale), TELEMETRY_IMAGE_HEIGHT),
+                interpolation=cv2.INTER_AREA)
+
+        TELEMETRY_QUEUE.mkdir(parents=True, exist_ok=True)
+        out = TELEMETRY_QUEUE / (datetime.now().strftime("%Y-%m-%d_%H_%M_%S") + ".jpg")
+        cv2.imwrite(str(out), bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+
+        # Keep only the few most recent so a stalled uploader can't fill disk.
+        queued = sorted(TELEMETRY_QUEUE.glob("*.jpg"), key=lambda p: p.stat().st_mtime)
+        for old in queued[:-3]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+        log.info("telemetry still -> %s", out.name)
+    except Exception as e:  # pragma: no cover - must never crash recording
+        log.warning("telemetry still capture failed: %s", e)
+
+
 def record() -> None:
     """Main capture loop. Blocks until SIGTERM/SIGINT."""
     if not HAVE_PICAMERA2:
@@ -385,6 +432,10 @@ def record() -> None:
     # Hot-reload of calibration.json written by the scheduled --calibrate job.
     calib_mtime = CALIB_FILE.stat().st_mtime if CALIB_FILE.exists() else 0.0
     last_calib_check = time.monotonic()
+
+    # First telemetry still shortly after warmup, then every interval.
+    next_telemetry_image = (
+        warmup_deadline if TELEMETRY_IMAGE_INTERVAL > 0 else float("inf"))
 
     def _open_segment(now_mono: float, reason: str):
         nonlocal encoding, seg_start, cur_h264, cur_mp4, triggers
@@ -463,6 +514,11 @@ def record() -> None:
                         log.info("reloaded calibration: area=[%.0f, %.0f]",
                                  gate.min_area, gate.max_area)
                     calib_mtime = m
+
+            # Drop a telemetry still for the heartbeat (best-effort).
+            if now_mono >= next_telemetry_image:
+                _save_telemetry_still(cam)
+                next_telemetry_image = now_mono + TELEMETRY_IMAGE_INTERVAL
 
             # Periodic stats line for field tuning.
             if now_mono - last_stats_log >= 300:

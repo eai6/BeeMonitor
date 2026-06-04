@@ -24,6 +24,15 @@ class Video(models.Model):
         blank=True,
         related_name="videos",
     )
+    # The Pi/device that uploaded this video, if any. SET_NULL so deleting a
+    # device preserves its videos (matches DeviceDeleteView's promise).
+    device = models.ForeignKey(
+        "devices.Device",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="videos",
+    )
     title = models.CharField(max_length=300)
     storage_key = models.CharField(max_length=500)
     file_size_bytes = models.BigIntegerField()

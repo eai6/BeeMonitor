@@ -68,3 +68,36 @@ class Device(models.Model):
             prefix=prefix,
         )
         return device, raw_key
+
+
+class DeviceHeartbeat(models.Model):
+    """A periodic health beat from a field device (telemetry + one image).
+
+    Field units send these hourly over cellular (cheap) so we can tell the unit
+    is alive without moving video. The bulk video is WiFi-gated and arrives
+    separately. ``metrics`` holds the free-form payload the Pi reports (storage,
+    uptime, CPU temp, service health, cellular signal, schedule window, …);
+    ``image_storage_key`` points at the JPEG stored in S3 raw-videos.
+
+    "Offline" is never stored — it's derived at view time from the age of the
+    most recent beat vs the device's reported interval.
+    """
+
+    device = models.ForeignKey(
+        Device,
+        on_delete=models.CASCADE,
+        related_name="heartbeats",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    metrics = models.JSONField(default=dict, blank=True)
+    # S3 key (in the raw-videos bucket) of this beat's image, if one was sent.
+    image_storage_key = models.CharField(max_length=500, blank=True)
+    # Denormalised for cheap list-view sorting/highlighting.
+    storage_pct = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["device", "-created_at"])]
+
+    def __str__(self) -> str:
+        return f"heartbeat {self.device.name} @ {self.created_at:%Y-%m-%d %H:%M}"

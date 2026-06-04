@@ -1,0 +1,118 @@
+"""Device heartbeat endpoint.
+
+Field units POST a small health beat hourly over cellular (see
+``hardware/telemetry.py`` and design doc ``memory/10_cellular_telemetry_design.md``).
+This is the *cheap* channel — telemetry JSON + one ~250 KB image — kept separate
+from the WiFi-gated bulk-video upload (``uploads.py``).
+
+  POST /api/v1/devices/heartbeat   (multipart/form-data, device-authenticated)
+      metrics : JSON string  — free-form health payload (storage, uptime, temp,
+                               service health, cellular signal, schedule, …)
+      image   : file (opt.)  — one JPEG still; stored in S3 raw-videos
+
+The endpoint stores the image in S3, records a ``DeviceHeartbeat`` row, and
+returns its id. ``DeviceKeyAuthentication`` already stamps
+``Device.last_seen_at`` on every authenticated call, which is what drives the
+online/offline indicator in the UI.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import uuid
+from datetime import timezone as dt_timezone
+
+from django.utils import timezone
+from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from apps.devices.models import Device, DeviceHeartbeat
+from config.storage import get_s3_client
+
+from .authentication import DeviceKeyAuthentication
+
+logger = logging.getLogger(__name__)
+
+# Reject absurdly large "images" — a heartbeat still is a few hundred KB.
+MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MiB
+
+
+def _heartbeat_image_key(owner_id: int, device_id: int) -> str:
+    """``users/<owner>/devices/<device>/heartbeats/<yyyy>/<mm>/<dd>/<uuid>.jpg``."""
+    now = timezone.now().astimezone(dt_timezone.utc)
+    return (
+        f"users/{owner_id}/devices/{device_id}/heartbeats/"
+        f"{now.year:04d}/{now.month:02d}/{now.day:02d}/{uuid.uuid4().hex}.jpg"
+    )
+
+
+class DeviceHeartbeatView(APIView):
+    """Receive a telemetry beat (+ optional image) from a field device."""
+
+    authentication_classes = [DeviceKeyAuthentication]
+    parser_classes = [MultiPartParser, FormParser]
+    # Bytes are tiny and uploads must never be throttled away — a dropped beat
+    # reads as "device offline".
+    throttle_classes: list = []
+
+    def post(self, request):
+        device: Device = request.auth  # set by DeviceKeyAuthentication
+        if device is None or not isinstance(device, Device):
+            return Response({"detail": "Device authentication required."}, status=401)
+
+        # `metrics` arrives as a JSON string in a multipart field.
+        raw_metrics = request.data.get("metrics", "")
+        if isinstance(raw_metrics, str) and raw_metrics:
+            try:
+                metrics = json.loads(raw_metrics)
+            except ValueError:
+                return Response({"detail": "metrics must be valid JSON."}, status=400)
+        elif isinstance(raw_metrics, dict):
+            metrics = raw_metrics
+        else:
+            metrics = {}
+        if not isinstance(metrics, dict):
+            return Response({"detail": "metrics must be a JSON object."}, status=400)
+
+        # Optional image.
+        image = request.FILES.get("image")
+        image_key = ""
+        if image is not None:
+            if image.size > MAX_IMAGE_BYTES:
+                return Response(
+                    {"detail": f"image exceeds {MAX_IMAGE_BYTES} bytes."}, status=400,
+                )
+            image_key = _heartbeat_image_key(device.owner_id, device.id)
+            try:
+                get_s3_client().upload_stream(
+                    "raw-videos", image_key, image, content_type="image/jpeg",
+                )
+            except Exception as e:
+                logger.exception("heartbeat image upload failed for device %s", device.id)
+                # Don't fail the whole beat over the image — telemetry still lands.
+                image_key = ""
+                metrics.setdefault("_warnings", []).append(f"image_upload_failed: {e}")
+
+        storage_pct = metrics.get("storage_pct")
+        try:
+            storage_pct = float(storage_pct) if storage_pct is not None else None
+        except (TypeError, ValueError):
+            storage_pct = None
+
+        hb = DeviceHeartbeat.objects.create(
+            device=device,
+            metrics=metrics,
+            image_storage_key=image_key,
+            storage_pct=storage_pct,
+        )
+
+        logger.info(
+            "heartbeat: device=%s user=%s hb=%s image=%s",
+            device.id, device.owner_id, hb.id, bool(image_key),
+        )
+        return Response(
+            {"heartbeat_id": hb.id, "image_stored": bool(image_key)},
+            status=201,
+        )

@@ -10,13 +10,40 @@ from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
+from django.utils import timezone
 from django.views import View
-from django.views.generic import FormView, ListView, TemplateView
+from django.views.generic import DetailView, FormView, ListView, TemplateView
 
 from .forms import DeviceCreateForm
 from .models import Device
 
 logger = logging.getLogger(__name__)
+
+# Devices beat hourly; treat a unit as online if seen within 2× that window.
+TELEMETRY_INTERVAL_SECONDS = 3600
+ONLINE_GRACE_MULTIPLIER = 2
+
+
+def _is_online(device) -> bool:
+    """Derived (not stored): has the device checked in recently enough?"""
+    if not device.last_seen_at:
+        return False
+    age = (timezone.now() - device.last_seen_at).total_seconds()
+    return age <= TELEMETRY_INTERVAL_SECONDS * ONLINE_GRACE_MULTIPLIER
+
+
+def _presign_image(storage_key: str):
+    """Short-lived presigned GET URL for a heartbeat image, or None."""
+    if not storage_key:
+        return None
+    try:
+        from config.storage import get_s3_client
+        return get_s3_client().generate_presigned_url(
+            "raw-videos", storage_key, expiry_hours=1,
+        )
+    except Exception as e:  # pragma: no cover - S3 hiccup shouldn't 500 the page
+        logger.warning("presign failed for %s: %s", storage_key, e)
+        return None
 
 
 class DeviceListView(LoginRequiredMixin, ListView):
@@ -25,6 +52,62 @@ class DeviceListView(LoginRequiredMixin, ListView):
 
     def get_queryset(self):
         return Device.objects.filter(owner=self.request.user)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        # Enrich each device with derived status + latest-beat summary for the
+        # list table. Device counts are small, so per-row lookups are fine.
+        for device in ctx["devices"]:
+            latest = device.heartbeats.first()
+            device.online = _is_online(device)
+            device.latest_hb = latest
+            device.storage_pct = latest.storage_pct if latest else None
+            device.thumb_url = _presign_image(latest.image_storage_key) if latest else None
+            device.video_count = device.videos.count()
+        return ctx
+
+
+class DeviceDetailView(LoginRequiredMixin, DetailView):
+    """Per-device dashboard: latest health beat, image timeline, its videos."""
+
+    template_name = "devices/detail.html"
+    context_object_name = "device"
+
+    def get_queryset(self):
+        return Device.objects.filter(owner=self.request.user)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        device = self.object
+
+        latest = device.heartbeats.first()
+        ctx["online"] = _is_online(device)
+        ctx["latest_hb"] = latest
+        metrics = (latest.metrics if latest else {}) or {}
+        ctx["metrics"] = metrics
+        ctx["latest_image_url"] = _presign_image(latest.image_storage_key) if latest else None
+        sp = metrics.get("storage_pct")
+        if sp is None and latest is not None:
+            sp = latest.storage_pct
+        ctx["storage_pct"] = sp
+        ctx["services"] = [
+            {"label": "Recorder", "ok": bool(metrics.get("recorder_active"))},
+            {"label": "Uploader", "ok": bool(metrics.get("uploader_active"))},
+            {"label": "Cellular", "ok": bool(metrics.get("cellular_active"))},
+        ]
+
+        # Image timeline — most recent stills (hourly), each presigned.
+        timeline = []
+        for hb in device.heartbeats.all()[:24]:
+            url = _presign_image(hb.image_storage_key)
+            if url:
+                timeline.append({"created_at": hb.created_at, "url": url})
+        ctx["timeline"] = timeline
+
+        # Videos uploaded by this device (device-scoped slice of /videos/).
+        ctx["videos"] = device.videos.all()[:12]
+        ctx["video_count"] = device.videos.count()
+        return ctx
 
 
 class DeviceCreateView(LoginRequiredMixin, FormView):

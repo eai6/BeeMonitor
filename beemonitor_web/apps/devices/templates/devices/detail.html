@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}{{ device.name }} - Devices - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="mb-2">
+  <a href="{% url 'devices:list' %}" class="text-sm text-gray-500 hover:text-amber-700">&larr; All devices</a>
+</div>
+
+{% if messages %}
+  {% for message in messages %}
+  <div class="mb-4 px-4 py-3 rounded {% if 'error' in message.tags %}bg-red-50 text-red-800 border border-red-200{% else %}bg-green-50 text-green-800 border border-green-200{% endif %}">{{ message }}</div>
+  {% endfor %}
+{% endif %}
+
+<!-- Header -->
+<div class="flex flex-wrap justify-between items-start gap-4 mb-6">
+  <div>
+    <div class="flex items-center gap-3">
+      <h1 class="text-2xl font-bold text-gray-900">{{ device.name }}</h1>
+      {% if not device.is_active %}
+        <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-500">Revoked</span>
+      {% elif online %}
+        <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800"><span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>Online</span>
+      {% else %}
+        <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-red-100 text-red-800"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>Offline</span>
+      {% endif %}
+    </div>
+    <p class="text-sm text-gray-500 mt-1">
+      {{ device.location|default:"No location set" }}
+      · last seen {% if device.last_seen_at %}{{ device.last_seen_at|timesince }} ago{% else %}never{% endif %}
+      · <span class="font-mono">{{ device.prefix }}…</span>
+    </p>
+  </div>
+  <div class="flex gap-2">
+    {% if device.is_active %}
+    <form method="post" action="{% url 'devices:revoke' device.pk %}" onsubmit="return confirm('Revoke {{ device.name }}?')">
+      {% csrf_token %}
+      <button class="px-3 py-1.5 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800 hover:bg-yellow-100">Revoke</button>
+    </form>
+    {% else %}
+    <form method="post" action="{% url 'devices:reactivate' device.pk %}">
+      {% csrf_token %}
+      <button class="px-3 py-1.5 bg-green-50 border border-green-200 rounded text-sm text-green-700 hover:bg-green-100">Reactivate</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if not latest_hb %}
+<div class="bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-4 mb-6 text-sm">
+  No health beats received yet. Once the device's telemetry service runs, hourly
+  status and images will appear here.
+</div>
+{% endif %}
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+  <!-- Latest image -->
+  <div class="lg:col-span-1">
+    <div class="bg-white shadow rounded-lg overflow-hidden">
+      <div class="px-4 py-3 border-b border-gray-100 text-sm font-medium text-gray-700">Latest image</div>
+      {% if latest_image_url %}
+        <img src="{{ latest_image_url }}" alt="latest heartbeat" class="w-full object-cover bg-gray-100">
+        <div class="px-4 py-2 text-xs text-gray-400">{{ latest_hb.created_at|timesince }} ago</div>
+      {% else %}
+        <div class="aspect-video flex items-center justify-center text-gray-300 text-sm">No image</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Health cards -->
+  <div class="lg:col-span-2">
+    <div class="grid grid-cols-2 sm:grid-cols-3 gap-4">
+      <!-- Storage -->
+      <div class="bg-white shadow rounded-lg p-4">
+        <div class="text-xs text-gray-500 uppercase tracking-wide">Storage</div>
+        {% if storage_pct is not None %}
+        <div class="mt-2 text-2xl font-semibold text-gray-900">{{ storage_pct|floatformat:0 }}%</div>
+        <div class="mt-1 text-xs text-gray-400">{{ metrics.storage_free_human|default:"—" }} free</div>
+        {% else %}<div class="mt-2 text-2xl font-semibold text-gray-300">—</div>{% endif %}
+      </div>
+      <!-- Uptime -->
+      <div class="bg-white shadow rounded-lg p-4">
+        <div class="text-xs text-gray-500 uppercase tracking-wide">Uptime</div>
+        <div class="mt-2 text-lg font-semibold text-gray-900">{{ metrics.uptime_human|default:"—" }}</div>
+      </div>
+      <!-- CPU temp -->
+      <div class="bg-white shadow rounded-lg p-4">
+        <div class="text-xs text-gray-500 uppercase tracking-wide">CPU temp</div>
+        <div class="mt-2 text-2xl font-semibold text-gray-900">{% if metrics.cpu_temp_c %}{{ metrics.cpu_temp_c|floatformat:0 }}°C{% else %}—{% endif %}</div>
+      </div>
+      <!-- Activity (snippets are recorded only on motion → activity proxy) -->
+      <div class="bg-white shadow rounded-lg p-4">
+        <div class="text-xs text-gray-500 uppercase tracking-wide">Activity</div>
+        <div class="mt-2 text-2xl font-semibold text-gray-900">{{ metrics.snippets_last_period|default:"—" }}</div>
+        <div class="mt-1 text-xs text-gray-400">snippets / {{ metrics.telemetry_period_human|default:"period" }}</div>
+      </div>
+      <!-- Videos -->
+      <div class="bg-white shadow rounded-lg p-4">
+        <div class="text-xs text-gray-500 uppercase tracking-wide">Videos uploaded</div>
+        <div class="mt-2 text-2xl font-semibold text-gray-900">{{ video_count }}</div>
+        <div class="mt-1 text-xs text-gray-400">{{ metrics.pending_uploads|default:"—" }} pending</div>
+      </div>
+      <!-- Cellular -->
+      <div class="bg-white shadow rounded-lg p-4">
+        <div class="text-xs text-gray-500 uppercase tracking-wide">Cellular</div>
+        <div class="mt-2 text-lg font-semibold text-gray-900">{{ metrics.cellular_signal|default:"—" }}</div>
+      </div>
+      <!-- Services -->
+      <div class="bg-white shadow rounded-lg p-4">
+        <div class="text-xs text-gray-500 uppercase tracking-wide">Services</div>
+        <div class="mt-2 space-y-1 text-sm">
+          {% for s in services %}
+          <div class="flex items-center gap-2">
+            <span class="w-1.5 h-1.5 rounded-full {% if s.ok %}bg-green-500{% else %}bg-gray-300{% endif %}"></span>
+            <span class="text-gray-600">{{ s.label }}</span>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    {% if metrics.schedule_window %}
+    <div class="bg-white shadow rounded-lg p-4 mt-4 text-sm text-gray-600">
+      <span class="text-xs text-gray-500 uppercase tracking-wide">Scheduled window</span>
+      <span class="ml-2">{{ metrics.schedule_window }}</span>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Image timeline -->
+{% if timeline %}
+<div class="mt-8">
+  <h2 class="text-lg font-semibold text-gray-900 mb-3">Recent images</h2>
+  <div class="flex gap-3 overflow-x-auto pb-2">
+    {% for img in timeline %}
+    <a href="{{ img.url }}" target="_blank" class="flex-shrink-0">
+      <img src="{{ img.url }}" alt="" class="w-32 h-24 rounded object-cover bg-gray-100 hover:ring-2 hover:ring-amber-400">
+      <div class="text-xs text-gray-400 mt-1 text-center">{{ img.created_at|date:"M j, H:i" }}</div>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- Videos from this device -->
+<div class="mt-8">
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="text-lg font-semibold text-gray-900">Videos from this device</h2>
+    <a href="{% url 'videos:list' %}" class="text-sm text-amber-600 hover:underline">All videos &rarr;</a>
+  </div>
+  {% if videos %}
+  <div class="bg-white shadow rounded-lg divide-y divide-gray-100">
+    {% for v in videos %}
+    <a href="{% url 'videos:detail' v.pk %}" class="flex items-center justify-between px-4 py-3 hover:bg-gray-50">
+      <span class="text-sm text-gray-900">{{ v.title }}</span>
+      <span class="text-xs text-gray-400">
+        {% if v.recorded_at %}{{ v.recorded_at|date:"M j, Y H:i" }}{% else %}{{ v.uploaded_at|date:"M j, Y" }}{% endif %}
+        · {{ v.get_status_display }}
+      </span>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="bg-white shadow rounded-lg p-8 text-center text-sm text-gray-500">
+    No videos uploaded by this device yet (they arrive over WiFi).
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

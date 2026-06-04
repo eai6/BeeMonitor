@@ -25,28 +25,50 @@
       <tr>
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Location</th>
-        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Key prefix</th>
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last seen</th>
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Storage</th>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Videos</th>
         <th class="px-6 py-3"></th>
       </tr>
     </thead>
     <tbody class="bg-white divide-y divide-gray-200">
       {% for d in devices %}
       <tr>
-        <td class="px-6 py-4 text-sm text-gray-900">{{ d.name }}</td>
+        <td class="px-6 py-4 text-sm">
+          <a href="{% url 'devices:detail' d.pk %}" class="flex items-center gap-3 group">
+            {% if d.thumb_url %}
+              <img src="{{ d.thumb_url }}" alt="" class="w-10 h-10 rounded object-cover bg-gray-100">
+            {% else %}
+              <span class="w-10 h-10 rounded bg-gray-100 flex items-center justify-center text-gray-300 text-xs">—</span>
+            {% endif %}
+            <span class="font-medium text-gray-900 group-hover:text-amber-700">{{ d.name }}</span>
+          </a>
+        </td>
         <td class="px-6 py-4 text-sm text-gray-500">{{ d.location|default:"—" }}</td>
-        <td class="px-6 py-4 text-sm font-mono text-gray-500">{{ d.prefix }}…</td>
         <td class="px-6 py-4 text-sm text-gray-500">
           {% if d.last_seen_at %}{{ d.last_seen_at|timesince }} ago{% else %}never{% endif %}
         </td>
         <td class="px-6 py-4">
-          {% if d.is_active %}
-            <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800">Active</span>
-          {% else %}
+          {% if not d.is_active %}
             <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-500">Revoked</span>
+          {% elif d.online %}
+            <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800"><span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>Online</span>
+          {% else %}
+            <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-red-100 text-red-800"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>Offline</span>
           {% endif %}
         </td>
+        <td class="px-6 py-4 text-sm text-gray-500">
+          {% if d.storage_pct is not None %}
+            <div class="flex items-center gap-2">
+              <div class="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                <div class="h-full {% if d.storage_pct >= 90 %}bg-red-500{% elif d.storage_pct >= 75 %}bg-yellow-500{% else %}bg-green-500{% endif %}" style="width: {{ d.storage_pct }}%"></div>
+              </div>
+              <span>{{ d.storage_pct|floatformat:0 }}%</span>
+            </div>
+          {% else %}—{% endif %}
+        </td>
+        <td class="px-6 py-4 text-sm text-gray-500">{{ d.video_count }}</td>
         <td class="px-6 py-4 text-right">
           <div class="flex gap-2 justify-end">
             {% if d.is_active %}

@@ -143,11 +143,18 @@ and a recorder crash can't stop uploads):
 
 | Unit | Script | Job |
 |------|--------|-----|
-| `beemonitor-recorder.service` | `hardware/main_motion.py` | Records **only activity snippets** (MOG2 motion gate) |
-| `beemonitor-uploader.service` | `hardware/uploader.py` | Streams finished snippets to S3 via the API |
+| `beemonitor-recorder.service` | `hardware/main_motion.py` | Records **only activity snippets** (MOG2 motion gate); drops an hourly telemetry still |
+| `beemonitor-telemetry.service` | `hardware/telemetry.py` | Hourly health beat + image to the cloud, **over cellular** |
+| `beemonitor-uploader.service` | `hardware/uploader.py` | Streams snippets to S3 — **WiFi-gated** (video waits for WiFi) |
 | `beemonitor-calibrate.timer` | `hardware/main_motion.py --calibrate` | Daily: learns the bee blob-size window from recorded snippets with YOLO |
 
-All three read configuration from `/etc/beemonitor/uploader.env`.
+All read configuration from `/etc/beemonitor/uploader.env`.
+
+> **Split transport (cost control).** Telemetry + one image go over **cellular**
+> hourly (tiny — see the dashboard to know the unit is alive); bulk **video is
+> WiFi-gated** and held on disk until WiFi is available. See
+> [How Motion-Gated Recording Works](#how-motion-gated-recording-works) and
+> [Device monitoring](#device-monitoring--telemetry).
 
 ### Quick Install (cellular field unit)
 
@@ -180,11 +187,12 @@ sudo chmod 600 /etc/beemonitor/uploader.env
 
 # 5. Install + enable the three services
 sudo cp systemd/beemonitor-recorder.service  /etc/systemd/system/
+sudo cp systemd/beemonitor-telemetry.service /etc/systemd/system/
 sudo cp systemd/beemonitor-uploader.service  /etc/systemd/system/
 sudo cp systemd/beemonitor-calibrate.service /etc/systemd/system/
 sudo cp systemd/beemonitor-calibrate.timer   /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now beemonitor-recorder.service beemonitor-uploader.service
+sudo systemctl enable --now beemonitor-recorder.service beemonitor-telemetry.service beemonitor-uploader.service
 sudo systemctl enable --now beemonitor-calibrate.timer
 
 # 6. Bring up cellular (see Step 10 for your exact Sixfab kit), then verify:
@@ -284,6 +292,7 @@ Copy the unit files shipped in the repo and reload systemd:
 ```bash
 cd ~/BeeMonitor/hardware
 sudo cp systemd/beemonitor-recorder.service  /etc/systemd/system/
+sudo cp systemd/beemonitor-telemetry.service /etc/systemd/system/
 sudo cp systemd/beemonitor-uploader.service  /etc/systemd/system/
 sudo cp systemd/beemonitor-calibrate.service /etc/systemd/system/
 sudo cp systemd/beemonitor-calibrate.timer   /etc/systemd/system/
@@ -293,8 +302,9 @@ sudo systemctl daemon-reload
 ### Step 7: Start and Enable on Boot
 
 ```bash
-# Record + upload (start now, and on every boot)
+# Record + telemetry + upload (start now, and on every boot)
 sudo systemctl enable --now beemonitor-recorder.service
+sudo systemctl enable --now beemonitor-telemetry.service
 sudo systemctl enable --now beemonitor-uploader.service
 
 # Daily auto-calibration
@@ -367,17 +377,56 @@ required; everything else has a sensible default.
 | `BEEMONITOR_PRE_ROLL` | `3` | Seconds kept *before* motion starts |
 | `BEEMONITOR_POST_ROLL` | `4` | Seconds kept *after* motion stops |
 | `BEEMONITOR_MAX_SEGMENT` | `120` | Force-rotate a clip after this many seconds |
-| `BEEMONITOR_HEARTBEAT_INTERVAL` | `3600` | Seconds between audit clips (`0` disables) |
-| `BEEMONITOR_HEARTBEAT_SECONDS` | `10` | Length of each heartbeat clip |
+| `BEEMONITOR_HEARTBEAT_INTERVAL` | `0` | Motion-independent **video** clips (`0` = off; image telemetry replaces it) |
 | `BEEMONITOR_LORES_W` / `_H` | `640` / `480` | Resolution of the detection stream |
 | `BEEMONITOR_FPS` | `25` | Capture frame rate |
 | `BEEMONITOR_ROI` | (full frame) | `x1,y1,x2,y2` in lores px to restrict detection to the hotel face |
 | `BEEMONITOR_YOLO_MODEL` | `yolo11n.pt` | YOLO weights used by the calibrate job |
 | `BEEMONITOR_CALIB_MAX_AGE_DAYS` | `7` | Skip recalibration if `calibration.json` is younger than this |
 | `BEEMONITOR_POLL_SECONDS` | `30` | How often the uploader scans for new snippets |
+| **`BEEMONITOR_TELEMETRY_INTERVAL`** | `3600` | Telemetry beat cadence + activity window (s). **Set `60` to test** |
+| `BEEMONITOR_TELEMETRY_IMAGE_INTERVAL` | `3600` | Recorder still cadence (s) — match the telemetry interval |
+| `BEEMONITOR_TELEMETRY_IMAGE_HEIGHT` | `720` | Downscale height for the telemetry still |
+| `BEEMONITOR_SCHEDULE_WINDOW` | (none) | WittyPi on/off window string, shown on the dashboard |
+| `BEEMONITOR_WIFI_ONLY_VIDEO` | `true` | Hold video off cellular — upload only when WiFi is up |
 
 Tuning is rarely needed — start with defaults and adjust pre/post-roll or `ROI`
 only if you see clips clipped short or too much background motion triggering.
+
+> **Testing the telemetry loop fast:** set `BEEMONITOR_TELEMETRY_INTERVAL=60`
+> **and** `BEEMONITOR_TELEMETRY_IMAGE_INTERVAL=60` to get a beat + fresh image
+> every minute, then watch `journalctl -u beemonitor-telemetry -f` and the
+> device dashboard. Revert both to `3600` for production.
+
+---
+
+## Device monitoring & telemetry
+
+Because video is too expensive to push over cellular, each unit sends a small
+**hourly health beat + image** over cellular instead — enough to know the unit is
+alive and roughly what the camera sees, for a tiny, predictable data bill
+(~11 beats/day × ~250 KB ≈ **~80 MB/month**). Bulk video stays WiFi-gated.
+
+**What a beat carries** (`hardware/telemetry.py`): storage %, uptime, CPU temp,
+service health (recorder / uploader / cellular), cellular signal, the WittyPi
+schedule window, and **`snippets recorded this period`** — since a snippet only
+exists when motion fired, that count is a direct **activity proxy** (bee activity
+per hour). Each beat attaches the latest still the recorder dropped in the
+telemetry queue.
+
+**Where it shows up:** the web app's **Devices** page lists each unit with an
+Online/Offline badge, storage %, and last image; clicking a device opens a
+**dashboard** — latest image, health cards (incl. Activity), an hourly image
+timeline, and the videos that device has uploaded. The browser pulls images
+straight from S3 via short-lived signed URLs.
+
+**Online/offline** is derived, not stored: a unit shows Offline if no beat has
+arrived within 2× the interval. The device reports its schedule window so
+"off as planned" is distinguishable from "died".
+
+> The hourly images double as a free check on the motion gate: if a still
+> clearly shows bees during a period the gate stayed silent, that's your cue to
+> recalibrate.
 
 ---
 
@@ -489,24 +538,34 @@ rpi-connect status
 
 ## Step 10: Cellular Connectivity (Sixfab 4G-LTE)
 
-This is what lets a remote, off-grid unit upload its snippets — the
-[uploader service](#software-installation) pushes them to AWS S3 over whatever
-internet connection the Pi has, and the Sixfab 4G/LTE kit provides that
-connection where there is no WiFi.
+This is what keeps a remote, off-grid unit reachable. On cellular it carries the
+**hourly telemetry beat + image** (`beemonitor-telemetry.service`) so you can
+monitor the unit; bulk **video is WiFi-gated** and held on disk until WiFi
+appears (see [Device monitoring & telemetry](#device-monitoring--telemetry)).
 
-> **The transport is already built.** `beemonitor-uploader.service` does the
-> AWS transfer (Pi → presigned S3 PUT via the BeeMonitor API). It is
-> network-agnostic — once the modem gives the Pi internet, uploads "just work"
-> with **no software changes**. Motion-gating keeps the data volume small enough
-> for a cellular plan; see [How Motion-Gated Recording Works](#how-motion-gated-recording-works).
+> **The transport is already built.** Both the telemetry beat and (over WiFi)
+> the video upload talk to AWS through the BeeMonitor API — network-agnostic,
+> so once the modem gives the Pi internet, telemetry "just works" with **no
+> software changes**. The split keeps the cellular bill tiny.
 
-We use **ECM mode** — the modem presents itself as a USB Ethernet device
-(`usb0`) that the Linux kernel supports natively (no drivers), and
-NetworkManager brings it up with DHCP automatically. This is a **one-time setup
-on the Pi**; the BeeMonitor software needs no changes.
+We use **QMI mode** (libqmi) — the modem presents a `wwan0` interface that we
+bring up with `qmi-network` + `udhcpc`, and a small systemd service
+(`cellular.service`) re-establishes it on every boot/WittyPi wake and watches it
+for drops. The BeeMonitor software needs **no changes** — once `wwan0` has a
+route, the uploader uses it.
+
+> **Why a service is non-negotiable here.** `qmi-network start` / `udhcpc` create
+> *runtime* state that does **not** survive a reboot, and WittyPi power-cycles the
+> Pi on every wake. Without `cellular.service`, the Pi wakes up with no internet.
+
+> **Heads-up — two default routes.** When WiFi is also on (e.g. at your desk),
+> both WiFi and `wwan0` have default routes and traffic may exit either one. To
+> *prove* an upload actually went over cellular, turn WiFi off first
+> (`nmcli radio wifi off` or `sudo rfkill block wifi`). In the field there is no
+> WiFi, so cellular is the only route.
 
 Reference: [Sixfab — Hardware Assemble](https://docs.sixfab.com/docs/raspberry-pi-4g-lte-cellular-modem-kit-getting-started-with-ecm-mode)
-and [Cellular Internet Connection in ECM Mode](https://docs.sixfab.com/page/cellular-internet-connection-in-ecm-mode).
+and [Setting up a data connection over QMI](https://docs.sixfab.com/page/setting-up-a-data-connection-over-qmi-interface-using-libqmi).
 
 ### 10.1 Insert the SIM and Assemble the HAT
 
@@ -515,102 +574,112 @@ and [Cellular Internet Connection in ECM Mode](https://docs.sixfab.com/page/cell
    diversity/GNSS antenna to its matching port).
 3. Stack the HAT on the Pi's GPIO header (mind clearance with the WittyPi) and
    connect the modem's **USB** jumper to the Pi.
-4. Power the Pi and confirm the modem enumerates:
+4. Power the Pi and confirm the modem enumerates (you should see a Quectel device
+   and a `/dev/cdc-wdm0` control node):
    ```bash
-   lsusb        # should list a Quectel device
+   lsusb
+   ls /dev/cdc-wdm0
    ```
 
-### 10.2 Disable ModemManager
-
-On Raspberry Pi OS (Bookworm+) ModemManager grabs the modem ports and interferes
-with ECM. Turn it off:
+### 10.2 Install Tools and Disable ModemManager
 
 ```bash
-sudo systemctl stop ModemManager.service
-sudo systemctl disable ModemManager.service
+sudo apt install -y libqmi-utils udhcpc
+# ModemManager fights manual QMI control — turn it off:
+sudo systemctl disable --now ModemManager.service
 ```
 
-### 10.3 Set the APN and Enable ECM Mode (one-time, via AT commands)
+### 10.3 Set the APN
 
-Install a serial terminal and connect to the modem's AT port (usually
-`/dev/ttyUSB2` or `/dev/ttyUSB3`):
+`qmi-network` reads the APN from `/etc/qmi-network.conf`. Install the sample and
+edit it for your SIM:
 
 ```bash
-sudo apt install -y minicom
-sudo minicom -D /dev/ttyUSB2 -b 115200
+sudo cp ~/BeeMonitor/hardware/cellular/qmi-network.conf.sample /etc/qmi-network.conf
+sudo nano /etc/qmi-network.conf     # set APN= (e.g. super / hologram / soracom.io)
 ```
 
-At the prompt, set your carrier's APN, then switch the modem to ECM. Replace
-`super` with your SIM's APN (e.g. Twilio Super SIM = `super`, Hologram = `hologram`):
+> If the modem isn't already in QMI/RmNet mode you'll set it once via AT command
+> (`AT+QCFG="usbnet",0`, then power-cycle). `usbnet,0` = QMI, `usbnet,1` = ECM.
+> Most Sixfab kits ship in QMI mode already — check with `lsusb` showing the
+> Quectel and `/dev/cdc-wdm0` present.
 
-```
-AT+CGDCONT=1,"IPV4V6","super"
-AT+QCFG="usbnet",1
-AT+CFUN=1,1
-```
+### 10.4 Pin DNS (immutable resolv.conf)
 
-`AT+QCFG="usbnet",1` switches to ECM and `AT+CFUN=1,1` reboots the modem
-(~30 s). Exit minicom with **Ctrl-A** then **X**. After it reboots you can
-confirm ECM is active (should return `+QCFG: "usbnet",1`):
-
-```
-AT+QCFG="usbnet"
-AT+CPIN?      # +CPIN: READY
-AT+CREG?      # +CREG: 0,1  (or 0,5 = roaming) means registered
-```
-
-### 10.4 Bring Up and Verify the Interface
-
-NetworkManager should auto-DHCP the new `usb0`. Verify:
+QMI/`udhcpc` won't reliably set DNS, so set it once and lock it so nothing
+overwrites it:
 
 ```bash
-ip addr show usb0           # should have an IP
-ping -c 3 -I usb0 8.8.8.8   # connectivity over cellular
+printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' | sudo tee /etc/resolv.conf
+sudo chattr +i /etc/resolv.conf      # immutable — survives reboots
 ```
 
-### 10.5 Make It Persistent (NetworkManager autoconnect profile)
+> This makes `/etc/resolv.conf` the **single source of truth** for DNS. The
+> bring-up script deliberately does not touch DNS. To change nameservers later,
+> unlock first: `sudo chattr -i /etc/resolv.conf`.
 
-To guarantee `usb0` comes up on every boot, create a dedicated, auto-connecting
-NetworkManager profile bound to that interface:
+### 10.5 Bring It Up Manually (verify before automating)
 
 ```bash
-sudo nmcli connection add type ethernet ifname usb0 con-name cellular \
-  ipv4.method auto ipv6.method auto \
-  connection.autoconnect yes \
-  connection.autoconnect-retries 0 \
-  connection.autoconnect-priority 10
-sudo nmcli connection up cellular
+sudo ~/BeeMonitor/hardware/cellular/cellular-up.sh &
+sleep 20
+ip addr show wwan0            # should have an IP
+ping -c 3 -I wwan0 8.8.8.8    # connectivity over cellular
+ping -c 3 google.com         # DNS + connectivity
+kill %1                       # stop the manual run before installing the service
 ```
 
-- `autoconnect yes` + `autoconnect-retries 0` = always bring it up, retry forever
-  (important for a field unit that may boot before the modem has registered).
-- `autoconnect-priority 10` makes cellular the preferred route. If this unit also
-  sometimes has WiFi you'd rather use, give the WiFi profile a **higher** number,
-  or raise the cellular **route metric** so WiFi wins when present:
-  ```bash
-  sudo nmcli connection modify cellular ipv4.route-metric 700
-  ```
+✅ When `google.com` resolves and pings with 0% loss (WiFi off), the link works —
+now make it automatic.
 
-Confirm it survives a reboot:
+### 10.6 Install the Cellular Service (survives reboot + WittyPi wakes)
+
+The repo ships the bring-up script and a keep-alive systemd unit. The script
+brings `wwan0` up with retry, then watchdogs it and re-establishes if the carrier
+drops the session:
+
+```bash
+cd ~/BeeMonitor/hardware
+sudo install -m 755 cellular/cellular-up.sh /usr/local/bin/cellular-up.sh
+sudo cp systemd/cellular.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now cellular.service
+systemctl status cellular.service
+journalctl -u cellular.service -f      # "link up on wwan0"
+```
+
+`cellular.service` is ordered **before** `beemonitor-uploader.service`, so on
+every boot the link comes up before uploads are attempted (and the uploader's
+backoff covers any remaining lag).
+
+### 10.7 Confirm It Survives a Reboot
+
+This is the test that proves field-readiness — no manual commands after boot:
 
 ```bash
 sudo reboot
-# after it comes back:
-nmcli connection show --active     # "cellular" should be listed on usb0
-ip addr show usb0                  # should have an IP
-ping -c 3 -I usb0 8.8.8.8
+# after it returns, with WiFi off to prove traffic goes over cellular:
+nmcli radio wifi off 2>/dev/null || sudo rfkill block wifi
+ip addr show wwan0           # has an IP, hands-free
+ping -c 4 google.com         # resolves + 0% loss
+journalctl -u cellular.service -b   # what the service did this boot
 ```
 
-### 10.6 Confirm Uploads Flow
+### 10.8 Confirm Telemetry Flows (over cellular)
 
-With the modem up, the already-running uploader will drain any pending snippets:
+With the modem up, the telemetry service sends its hourly beat + image over
+cellular (this is what flows on cellular — video waits for WiFi):
 
 ```bash
-journalctl -u beemonitor-uploader.service -f
-# look for: "uploading <file>" then "uploaded video_id=…"
+journalctl -u beemonitor-telemetry.service -f
+# look for: "beat: storage=… snippets/…=…" then "heartbeat ok: {...}"
 ```
 
-### 10.7 Keep Cellular Data Under Control
+The unit should now show **Online** with a fresh image on the web app's
+Devices page. (To test the cadence quickly, set `BEEMONITOR_TELEMETRY_INTERVAL=60`
+and `BEEMONITOR_TELEMETRY_IMAGE_INTERVAL=60`, then revert to `3600`.)
+
+### 10.9 Keep Cellular Data Under Control
 
 - **Motion-gating** is the main lever — only activity snippets are sent.
 - Tune `BEEMONITOR_PRE_ROLL` / `BEEMONITOR_POST_ROLL` down to shrink clips.
@@ -717,33 +786,42 @@ appears next to the mp4, and the clip shows up in the BeeMonitor web app.
 
 ### Stage 6 — Cellular link (after Step 10)
 ```bash
-lsusb                        # Quectel device present
-ip addr show usb0            # has an IP
-ping -c 3 -I usb0 8.8.8.8    # connectivity over cellular
+lsusb                         # Quectel device present
+systemctl status cellular.service
+ip addr show wwan0            # has an IP
+ping -c 3 -I wwan0 8.8.8.8    # connectivity over cellular
+ping -c 3 google.com         # DNS works (immutable resolv.conf)
 ```
-✅ **Pass:** ping replies on `usb0`. If `usb0` is missing, re-check the AT
-commands and that ModemManager is disabled; the AT port may be `/dev/ttyUSB3`.
+✅ **Pass:** ping replies on `wwan0` and `google.com` resolves. If `wwan0` is
+missing, check `journalctl -u cellular.service`, that ModemManager is disabled,
+and that `/etc/qmi-network.conf` has the right APN.
 
-### Stage 7 — Full end-to-end over cellular
+### Stage 7 — Full end-to-end (telemetry over cellular, video over WiFi)
 ```bash
-sudo systemctl start beemonitor-recorder beemonitor-uploader
-journalctl -u beemonitor-uploader.service -f
+nmcli radio wifi off 2>/dev/null || sudo rfkill block wifi   # force telemetry onto cellular
+sudo systemctl start beemonitor-recorder beemonitor-telemetry beemonitor-uploader
+journalctl -u beemonitor-telemetry.service -f
 ```
-Wave at the camera. ✅ **Pass:** a snippet records, uploads over cellular, and
-appears in the web app. (Optionally `sudo nmcli connection down preconfigured`
-to drop WiFi/Ethernet and prove traffic really goes over the modem.)
+Wave at the camera, then check the device dashboard. ✅ **Pass:** a snippet
+records to disk, the unit shows **Online** with a fresh image + activity count
+on the web app (telemetry over cellular). Re-enable WiFi (`nmcli radio wifi on`)
+and ✅ the uploader drains the recorded snippet(s) to S3 and they appear under
+the device's videos. (With WiFi off, video correctly stays queued on disk —
+proving the WiFi gate.)
 
-### Stage 8 — Services + reboot persistence
+### Stage 8 — Services + reboot persistence (the field-readiness test)
 ```bash
-sudo systemctl enable --now beemonitor-recorder beemonitor-uploader beemonitor-calibrate.timer
+sudo systemctl enable --now cellular.service beemonitor-recorder \
+     beemonitor-telemetry beemonitor-uploader beemonitor-calibrate.timer
 sudo reboot
-# after it returns:
-systemctl status beemonitor-recorder beemonitor-uploader
-ip addr show usb0
+# after it returns — with NO manual commands:
+systemctl status cellular.service beemonitor-recorder beemonitor-telemetry beemonitor-uploader
+ip addr show wwan0
 systemctl list-timers beemonitor-calibrate.timer
 ```
-✅ **Pass:** recorder + uploader are `active`, `usb0` has an IP (the
-NetworkManager profile held), and the calibrate timer is scheduled.
+✅ **Pass:** `cellular.service` brought `wwan0` up on its own, recorder +
+telemetry + uploader are `active`, and the calibrate timer is scheduled. This is
+the test that proves the unit will survive WittyPi wake cycles unattended.
 
 > **Clean up after bench testing:** remove the throwaway data so it isn't later
 > mistaken for real recordings — `rm -rf /tmp/bm_test /tmp/calibration.json`.

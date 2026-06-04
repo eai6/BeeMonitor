@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import signal
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -47,6 +48,11 @@ RECORD_DIR = Path(os.environ.get(
 ))
 POLL_SECONDS = int(os.environ.get("BEEMONITOR_POLL_SECONDS", "30"))
 PUT_TIMEOUT_SECONDS = int(os.environ.get("BEEMONITOR_PUT_TIMEOUT", "7200"))  # 2h
+# Video is expensive over cellular — only upload when WiFi is available. The
+# hourly telemetry beat is what flows over cellular; bulk video waits for WiFi.
+# Set BEEMONITOR_WIFI_ONLY_VIDEO=false to upload over any link.
+WIFI_ONLY_VIDEO = os.environ.get(
+    "BEEMONITOR_WIFI_ONLY_VIDEO", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 
 # Backoff for transient API / network failures.
@@ -100,6 +106,40 @@ def _parse_recorded_at(filename: str) -> datetime | None:
         return datetime.fromisoformat(f"{date}T{hh}:{mm}:{ss}+00:00")
     except ValueError:
         return None
+
+
+def _wifi_connected() -> bool:
+    """True if a WiFi link is up (so bulk video upload is cheap).
+
+    Prefers NetworkManager; falls back to checking for a connected wl* iface
+    with an IPv4 address. Cellular (wwan0) does not count.
+    """
+    try:
+        out = subprocess.run(
+            ["nmcli", "-t", "-f", "TYPE,STATE", "device"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout
+        if out.strip():
+            for line in out.splitlines():
+                typ, _, state = line.partition(":")
+                if typ == "wifi" and state.startswith("connected"):
+                    return True
+            return False  # nmcli answered and no wifi is connected
+    except (OSError, subprocess.SubprocessError):
+        pass
+    # Fallback: any wl* interface holding an IPv4 address.
+    try:
+        out = subprocess.run(
+            ["ip", "-o", "-4", "addr", "show"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].startswith("wl"):
+                return True
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return False
 
 
 def _list_pending(record_dir: Path) -> list[Path]:
@@ -217,9 +257,11 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
-    log.info("uploader started — API=%s, record_dir=%s", API_BASE, RECORD_DIR)
+    log.info("uploader started — API=%s, record_dir=%s, wifi_only=%s",
+             API_BASE, RECORD_DIR, WIFI_ONLY_VIDEO)
 
     backoff = INITIAL_BACKOFF
+    holding_logged = False
     while _running:
         try:
             pending = _list_pending(RECORD_DIR)
@@ -232,6 +274,16 @@ def main() -> int:
             time.sleep(POLL_SECONDS)
             backoff = INITIAL_BACKOFF
             continue
+
+        # Hold video off cellular — only drain the backlog when WiFi is up.
+        if WIFI_ONLY_VIDEO and not _wifi_connected():
+            if not holding_logged:
+                log.info("no WiFi — holding %d video(s) on disk until WiFi returns",
+                         len(pending))
+                holding_logged = True
+            time.sleep(POLL_SECONDS)
+            continue
+        holding_logged = False
 
         log.info("found %d pending file(s)", len(pending))
         for mp4 in pending:

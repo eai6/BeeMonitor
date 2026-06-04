@@ -197,6 +197,7 @@ class UploadCompleteView(APIView):
 
         video = Video.objects.create(
             user=device.owner,
+            device=device,
             title=title,
             storage_key=storage_key,
             file_size_bytes=file_size_bytes,

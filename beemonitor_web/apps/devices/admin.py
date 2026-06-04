@@ -8,7 +8,7 @@ admin page navigates away.
 
 from django.contrib import admin, messages
 
-from .models import Device
+from .models import Device, DeviceHeartbeat
 
 
 @admin.register(Device)
@@ -56,3 +56,11 @@ class DeviceAdmin(admin.ModelAdmin):
     def revoke_devices(self, request, queryset):
         updated = queryset.update(is_active=False)
         self.message_user(request, f"Revoked {updated} device(s).")
+
+
+@admin.register(DeviceHeartbeat)
+class DeviceHeartbeatAdmin(admin.ModelAdmin):
+    list_display = ("device", "created_at", "storage_pct", "image_storage_key")
+    list_filter = ("device",)
+    readonly_fields = ("device", "created_at", "metrics", "image_storage_key", "storage_pct")
+    date_hierarchy = "created_at"

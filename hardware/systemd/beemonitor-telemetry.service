@@ -1,0 +1,22 @@
+[Unit]
+Description=BeeMonitor Pi -> cloud telemetry (hourly health beat + image)
+Documentation=https://github.com/eai6/BeeMonitor
+# Needs the network; on a cellular unit that comes from cellular.service.
+After=network-online.target cellular.service
+Wants=network-online.target cellular.service
+
+[Service]
+Type=simple
+User=apis
+Group=apis
+EnvironmentFile=/etc/beemonitor/uploader.env
+# Loops internally at BEEMONITOR_TELEMETRY_INTERVAL (3600 prod; set 60 to test).
+ExecStart=/usr/bin/python3 /home/apis/BeeMonitor/hardware/telemetry.py
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
