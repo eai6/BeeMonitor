@@ -1,0 +1,27 @@
+[Unit]
+Description=BeeMonitor motion-gated recorder
+Documentation=https://github.com/eai6/BeeMonitor
+# Camera is local hardware — no network dependency (unlike the uploader).
+After=multi-user.target
+
+[Service]
+Type=simple
+User=apis
+Group=apis
+# Optional: override any BEEMONITOR_* tuning knobs here (chmod 600).
+# Reuses the same env file as the uploader so BEEMONITOR_RECORD_DIR stays in
+# sync — the recorder writes snippets exactly where the uploader looks.
+EnvironmentFile=-/etc/beemonitor/uploader.env
+ExecStart=/usr/bin/python3 /home/apis/BeeMonitor/hardware/main_motion.py
+Restart=on-failure
+# Let the recorder finalise the in-flight clip + remux on SIGTERM.
+TimeoutStopSec=60
+RestartSec=10
+StartLimitIntervalSec=600
+StartLimitBurst=5
+# Logs go to journalctl -u beemonitor-recorder.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

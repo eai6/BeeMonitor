@@ -1,0 +1,17 @@
+[Unit]
+Description=BeeMonitor blob-threshold calibration (YOLO over recorded snippets)
+Documentation=https://github.com/eai6/BeeMonitor
+# Calibrates from saved .mp4 snippets, so it needs neither the camera nor a
+# live bee — it just reads what the recorder already captured.
+
+[Service]
+Type=oneshot
+User=apis
+Group=apis
+EnvironmentFile=-/etc/beemonitor/uploader.env
+# YOLO on a Pi 4 is heavy; run it nice/idle so it never starves the recorder.
+Nice=15
+IOSchedulingClass=idle
+ExecStart=/usr/bin/python3 /home/apis/BeeMonitor/hardware/main_motion.py --calibrate
+StandardOutput=journal
+StandardError=journal

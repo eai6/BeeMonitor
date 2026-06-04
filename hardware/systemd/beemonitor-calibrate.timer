@@ -1,0 +1,14 @@
+[Unit]
+Description=Run BeeMonitor calibration daily
+Documentation=https://github.com/eai6/BeeMonitor
+
+[Timer]
+# Once a day, mid-afternoon when bees are most likely in the recent snippets.
+OnCalendar=*-*-* 15:00:00
+# If the Pi was asleep/off at the scheduled time, run at next boot.
+Persistent=true
+# The calibrate job itself no-ops if calibration.json is still fresh
+# (BEEMONITOR_CALIB_MAX_AGE_DAYS), so a daily trigger is cheap.
+
+[Install]
+WantedBy=timers.target
