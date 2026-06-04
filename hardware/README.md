@@ -15,9 +15,10 @@
 9. [WittyPi Setup](#step-8-set-up-wittypi)
 10. [Raspberry Pi Connect Setup](#step-9-set-up-raspberry-pi-connect-remote-access)
 11. [Cellular Connectivity (Sixfab 4G-LTE)](#step-10-cellular-connectivity-sixfab-4g-lte)
-12. [Field Deployment](#field-deployment)
-13. [Maintenance](#maintenance)
-14. [Troubleshooting](#troubleshooting)
+12. [Testing & Verification](#testing--verification)
+13. [Field Deployment](#field-deployment)
+14. [Maintenance](#maintenance)
+15. [Troubleshooting](#troubleshooting)
 
 ## Overview
 
@@ -619,6 +620,133 @@ journalctl -u beemonitor-uploader.service -f
   on background motion (waving plants, passers-by).
 - The uploader retries with backoff, so brief signal drops self-heal — clips
   accumulate on disk and upload when signal returns.
+
+## Testing & Verification
+
+Run these stages **in order** before relying on the unit in the field. Each one
+is independently verifiable, so a failure points at a single component instead of
+the whole chain. Do the early stages on the bench over WiFi; only the last
+stages need cellular.
+
+> Most-likely first-run issues (all easy to fix once isolated): motion not
+> triggering at 640×480 (Stage 1), YOLO finding 0 bees during calibration —
+> usually model path or color order (Stage 3), and the AT port not being
+> `/dev/ttyUSB2` (Stage 6).
+
+### Stage 0 — Code sanity (anywhere)
+```bash
+cd ~/BeeMonitor/hardware
+python3 -m py_compile main_motion.py && echo OK
+```
+
+### Stage 1 — Recorder bench test (on the Pi, foreground)
+
+Run it by hand first so you see the logs live. Use a throwaway directory and a
+short heartbeat so a clip is written even before you trigger motion:
+
+```bash
+# Make sure the service isn't already holding the camera:
+sudo systemctl stop beemonitor-recorder.service 2>/dev/null
+
+BEEMONITOR_RECORD_DIR=/tmp/bm_test \
+BEEMONITOR_WARMUP=3 \
+BEEMONITOR_HEARTBEAT_INTERVAL=20 \
+python3 main_motion.py
+```
+
+**Wave your hand** in front of the lens. You should see:
+```
+recorder up: main=1920x1080 lores=640x480 @ 25fps ...
+clip START (motion) -> 2026-06-04_14_03_11.mp4
+clip STOP (idle) len=6.2s -> remux 2026-06-04_14_03_11.mp4
+snippet ready: 2026-06-04_14_03_11.mp4 (1.4 MB)
+```
+Stop with **Ctrl-C**. ✅ **Pass:** snippets exist — `ls -R /tmp/bm_test`. If only
+heartbeat clips appear and motion never fires, the detection thresholds need
+tuning (see [Configuration Reference](#configuration-reference)).
+
+### Stage 2 — Inspect snippet content
+```bash
+ffprobe -v error -show_entries format=duration -of csv=p=0 /tmp/bm_test/*/*.mp4
+```
+✅ **Pass:** the clip plays and its length ≈ pre-roll (3s) + motion + post-roll
+(4s), and the pre-roll shows the moment *before* your hand entered frame.
+
+### Stage 3 — Calibration on existing footage
+
+No live bees needed — point it at an **old 1080p clip that contains bees**:
+
+```bash
+BEEMONITOR_RECORD_DIR=/tmp/bm_test \
+python3 main_motion.py --calibrate-from /path/to/old_bee_clip.mp4 \
+  --model ~/BeeMonitor/models/your_bee.pt
+cat /tmp/calibration.json
+```
+✅ **Pass:** the log reports `bee-frames` > 0 and it writes `min_area`/`max_area`.
+❌ If `bee-frames` is 0, fix the model path / detection before going further —
+calibration depends on it. (`calibration.json` defaults to one level above
+`RECORD_DIR`, i.e. `/tmp/calibration.json` here.)
+
+### Stage 4 — Hot-reload
+
+With the recorder running, write a calibration from another shell and confirm it
+is picked up without a restart (reload interval lowered for the test):
+
+```bash
+# Terminal A — recorder:
+BEEMONITOR_RECORD_DIR=/tmp/bm_test BEEMONITOR_CALIB_RELOAD_SECONDS=30 python3 main_motion.py
+
+# Terminal B — force a fresh calibration:
+BEEMONITOR_RECORD_DIR=/tmp/bm_test python3 main_motion.py \
+  --calibrate-from /path/to/old_bee_clip.mp4 --model ~/BeeMonitor/models/your_bee.pt --force
+```
+✅ **Pass:** within ~30s Terminal A logs `reloaded calibration: area=[...]`.
+
+### Stage 5 — Uploader (device key + any internet)
+
+Test over WiFi first to isolate upload logic from cellular:
+
+```bash
+sudo BEEMONITOR_API_BASE=https://mqnafc3ejc.us-east-1.awsapprunner.com \
+     BEEMONITOR_DEVICE_KEY=bmk_device_yourkey \
+     BEEMONITOR_RECORD_DIR=/tmp/bm_test \
+     python3 uploader.py
+```
+✅ **Pass:** `uploading <file>` → `uploaded video_id=…`, a `.uploaded` sidecar
+appears next to the mp4, and the clip shows up in the BeeMonitor web app.
+
+### Stage 6 — Cellular link (after Step 10)
+```bash
+lsusb                        # Quectel device present
+ip addr show usb0            # has an IP
+ping -c 3 -I usb0 8.8.8.8    # connectivity over cellular
+```
+✅ **Pass:** ping replies on `usb0`. If `usb0` is missing, re-check the AT
+commands and that ModemManager is disabled; the AT port may be `/dev/ttyUSB3`.
+
+### Stage 7 — Full end-to-end over cellular
+```bash
+sudo systemctl start beemonitor-recorder beemonitor-uploader
+journalctl -u beemonitor-uploader.service -f
+```
+Wave at the camera. ✅ **Pass:** a snippet records, uploads over cellular, and
+appears in the web app. (Optionally `sudo nmcli connection down preconfigured`
+to drop WiFi/Ethernet and prove traffic really goes over the modem.)
+
+### Stage 8 — Services + reboot persistence
+```bash
+sudo systemctl enable --now beemonitor-recorder beemonitor-uploader beemonitor-calibrate.timer
+sudo reboot
+# after it returns:
+systemctl status beemonitor-recorder beemonitor-uploader
+ip addr show usb0
+systemctl list-timers beemonitor-calibrate.timer
+```
+✅ **Pass:** recorder + uploader are `active`, `usb0` has an IP (the
+NetworkManager profile held), and the calibrate timer is scheduled.
+
+> **Clean up after bench testing:** remove the throwaway data so it isn't later
+> mistaken for real recordings — `rm -rf /tmp/bm_test /tmp/calibration.json`.
 
 ## Field Deployment
 
