@@ -128,12 +128,12 @@ WARMUP_SECONDS = _env_float("BEEMONITOR_WARMUP", 5.0)        # let MOG2 learn bg
 HEARTBEAT_INTERVAL = _env_float("BEEMONITOR_HEARTBEAT_INTERVAL", 0.0)
 HEARTBEAT_SECONDS = _env_float("BEEMONITOR_HEARTBEAT_SECONDS", 10.0)
 
-# Telemetry still: drop one downscaled JPEG into the telemetry queue on this
-# interval; the telemetry service (hardware/telemetry.py) ships the latest one
-# over cellular each beat. Match BEEMONITOR_TELEMETRY_INTERVAL.
+# Telemetry stills queue. Periodic capture is OFF by default now — telemetry is
+# JSON-only over cellular; stills are captured ON DEMAND (picture / live view).
+# Set BEEMONITOR_TELEMETRY_IMAGE_INTERVAL > 0 to re-enable periodic stills.
 TELEMETRY_QUEUE = Path(os.environ.get(
     "BEEMONITOR_TELEMETRY_QUEUE", str(RECORD_DIR.parent / "telemetry")))
-TELEMETRY_IMAGE_INTERVAL = _env_float("BEEMONITOR_TELEMETRY_IMAGE_INTERVAL", 60.0)
+TELEMETRY_IMAGE_INTERVAL = _env_float("BEEMONITOR_TELEMETRY_IMAGE_INTERVAL", 0.0)
 TELEMETRY_IMAGE_HEIGHT = _env_int("BEEMONITOR_TELEMETRY_IMAGE_HEIGHT", 720)
 
 # Detection cost knob: run MOG2 on 1 of every N lores frames (timing stays

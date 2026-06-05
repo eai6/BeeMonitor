@@ -59,10 +59,12 @@ QUEUE_DIR = Path(os.environ.get(
     "BEEMONITOR_TELEMETRY_QUEUE", str(RECORD_DIR.parent / "telemetry")))
 SCHEDULE_WINDOW = os.environ.get("BEEMONITOR_SCHEDULE_WINDOW", "")
 POST_TIMEOUT = int(os.environ.get("BEEMONITOR_TELEMETRY_TIMEOUT", "120"))
-# Seconds between beats. Defaults to 60; set higher (e.g. 3600) via env to slow
-# the cadence over a metered cellular link. Also the trailing window used for
-# the snippets-per-period activity proxy.
+# Seconds between beats. Defaults to 60 so an offline unit is noticed within a
+# minute. Telemetry is JSON-only (no image) — cheap enough to send this often.
 INTERVAL = int(os.environ.get("BEEMONITOR_TELEMETRY_INTERVAL", "60"))
+# Trailing window for the snippets-per-period activity proxy. Decoupled from the
+# beat cadence: 60s of activity is too coarse to be useful, so default to 1h.
+ACTIVITY_PERIOD = int(os.environ.get("BEEMONITOR_ACTIVITY_PERIOD", "3600"))
 
 # systemd unit names to report health for.
 RECORDER_UNIT = os.environ.get("BEEMONITOR_RECORDER_UNIT", "beemonitor-recorder.service")
@@ -196,14 +198,15 @@ def collect_metrics() -> dict:
     if temp is not None:
         m["cpu_temp_c"] = temp
 
-    vs = _video_stats(INTERVAL)
+    vs = _video_stats(ACTIVITY_PERIOD)
     m["videos_recorded"] = vs["videos_recorded"]
     m["pending_uploads"] = vs["pending_uploads"]
     m["bytes_pending_upload"] = vs["bytes_pending_upload"]
-    # Activity proxy: snippets recorded in the trailing telemetry window.
+    # Activity proxy: snippets recorded in the trailing ACTIVITY_PERIOD window
+    # (decoupled from the 60s beat — 1h by default).
     m["snippets_last_period"] = vs["snippets_last_period"]
-    m["telemetry_period_seconds"] = INTERVAL
-    m["telemetry_period_human"] = _human_duration(INTERVAL)
+    m["telemetry_period_seconds"] = ACTIVITY_PERIOD
+    m["telemetry_period_human"] = _human_duration(ACTIVITY_PERIOD)
     if vs["newest_mtime"]:
         m["last_activity_at"] = datetime.fromtimestamp(
             vs["newest_mtime"], tz=timezone.utc).isoformat()
@@ -259,9 +262,13 @@ def _validate_config() -> None:
         sys.exit(2)
 
 
-def send_beat() -> int:
+def send_beat(image: "Path | None" = None) -> int:
+    """Send one telemetry beat. JSON-only by default (cheap over cellular).
+
+    ``image`` is only passed for on-demand captures (picture/live-view); the
+    regular 60s beat sends no image.
+    """
     metrics = collect_metrics()
-    image = _latest_image()
     url = urljoin(API_BASE + "/", "api/v1/devices/heartbeat")
     headers = {"Authorization": f"Bearer {DEVICE_KEY}"}
     data = {"metrics": json.dumps(metrics)}

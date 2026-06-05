@@ -143,14 +143,14 @@ and a recorder crash can't stop uploads):
 
 | Unit | Script | Job |
 |------|--------|-----|
-| `beemonitor-recorder.service` | `hardware/main_motion.py` | Records **only activity snippets** (MOG2 motion gate); drops a telemetry still each `BEEMONITOR_TELEMETRY_IMAGE_INTERVAL` (60s default) |
-| `beemonitor-telemetry.service` | `hardware/telemetry.py` | Hourly health beat + image to the cloud, **over cellular** |
+| `beemonitor-recorder.service` | `hardware/main_motion.py` | Records **only activity snippets** (MOG2 motion gate); captures stills **on demand** (picture / live view) |
+| `beemonitor-telemetry.service` | `hardware/telemetry.py` | JSON health beat every 60s to the cloud, **over cellular** (no image) |
 | `beemonitor-uploader.service` | `hardware/uploader.py` | Streams snippets to S3 — **WiFi-gated** (video waits for WiFi) |
 | `beemonitor-calibrate.timer` | `hardware/main_motion.py --calibrate` | Daily: learns the bee blob-size window from recorded snippets with YOLO |
 
 All read configuration from `/etc/beemonitor/uploader.env`.
 
-> **Split transport (cost control).** Telemetry + one image go over **cellular**
+> **Split transport (cost control).** A tiny JSON telemetry beat goes over **cellular**
 > hourly (tiny — see the dashboard to know the unit is alive); bulk **video is
 > WiFi-gated** and held on disk until WiFi is available. See
 > [How Motion-Gated Recording Works](#how-motion-gated-recording-works) and
@@ -402,49 +402,47 @@ required; everything else has a sensible default.
 | `BEEMONITOR_YOLO_MODEL` | `yolo11n.pt` | YOLO weights used by the calibrate job |
 | `BEEMONITOR_CALIB_MAX_AGE_DAYS` | `7` | Skip recalibration if `calibration.json` is younger than this |
 | `BEEMONITOR_POLL_SECONDS` | `30` | How often the uploader scans for new snippets |
-| **`BEEMONITOR_TELEMETRY_INTERVAL`** | `60` | Telemetry beat cadence + activity window (s). **Raise (e.g. `3600`) to save cellular data** |
-| `BEEMONITOR_TELEMETRY_IMAGE_INTERVAL` | `60` | Recorder still cadence (s) — match the telemetry interval |
-| `BEEMONITOR_TELEMETRY_IMAGE_HEIGHT` | `720` | Downscale height for the telemetry still |
+| **`BEEMONITOR_TELEMETRY_INTERVAL`** | `60` | Telemetry beat cadence (s). JSON-only, so it's cheap — 60s gives ~1-minute offline detection |
+| **`BEEMONITOR_ACTIVITY_PERIOD`** | `3600` | Trailing window for the snippets/period activity proxy (s), decoupled from the beat |
+| `BEEMONITOR_TELEMETRY_IMAGE_INTERVAL` | `0` | Periodic still capture (s). `0` = off; stills are on-demand only |
+| `BEEMONITOR_TELEMETRY_IMAGE_HEIGHT` | `720` | Downscale height for on-demand stills |
 | `BEEMONITOR_SCHEDULE_WINDOW` | (none) | WittyPi on/off window string, shown on the dashboard |
 | `BEEMONITOR_WIFI_ONLY_VIDEO` | `true` | Hold video off cellular — upload only when WiFi is up |
 
 Tuning is rarely needed — start with defaults and adjust pre/post-roll or `ROI`
 only if you see clips clipped short or too much background motion triggering.
 
-> **Cadence:** both default to `60` — a beat + fresh image every minute. Watch
-> `journalctl -u beemonitor-telemetry -f` and the device dashboard. To save
-> cellular data, raise **both** `BEEMONITOR_TELEMETRY_INTERVAL` **and**
-> `BEEMONITOR_TELEMETRY_IMAGE_INTERVAL` (e.g. to `3600` for an hourly beat).
+> **Telemetry is JSON-only and cheap**, so the 60s beat (fast offline detection)
+> costs almost nothing on cellular. The **activity window** is separate
+> (`BEEMONITOR_ACTIVITY_PERIOD`, 1h) so the dashboard's snippets/period is
+> meaningful even with a 60s beat. Watch `journalctl -u beemonitor-telemetry -f`.
 
 ---
 
 ## Device monitoring & telemetry
 
 Because video is too expensive to push over cellular, each unit sends a small
-**hourly health beat + image** over cellular instead — enough to know the unit is
-alive and roughly what the camera sees, for a tiny, predictable data bill
-(~11 beats/day × ~250 KB ≈ **~80 MB/month**). Bulk video stays WiFi-gated.
+**JSON health beat every 60s** over cellular — no image, so it's tiny and gives
+~1-minute offline detection. Bulk video stays WiFi-gated; images are **on demand
+only** (picture / live view).
 
 **What a beat carries** (`hardware/telemetry.py`): storage %, uptime, CPU temp,
-service health (recorder / uploader / cellular), cellular signal, the WittyPi
-schedule window, and **`snippets recorded this period`** — since a snippet only
-exists when motion fired, that count is a direct **activity proxy** (bee activity
-per hour). Each beat attaches the latest still the recorder dropped in the
-telemetry queue.
+service health (recorder / uploader / cellular), cellular signal, GPS (when the
+modem has a fix), the WittyPi schedule window, and **`snippets recorded this
+period`** — since a snippet only exists when motion fired, that count is a direct
+**activity proxy**. The activity window is `BEEMONITOR_ACTIVITY_PERIOD` (1h),
+decoupled from the 60s beat so it stays meaningful.
 
 **Where it shows up:** the web app's **Devices** page lists each unit with an
-Online/Offline badge, storage %, and last image; clicking a device opens a
-**dashboard** — latest image, health cards (incl. Activity), an hourly image
-timeline, and the videos that device has uploaded. The browser pulls images
-straight from S3 via short-lived signed URLs.
+Online/Offline badge, storage %, and activity; clicking a device opens a
+**dashboard** — health cards (incl. Activity), GPS/map, an activity-over-time
+graph, on-demand picture/live-view, and the videos that device has uploaded.
+On-demand images are pulled straight from S3 via short-lived signed URLs.
 
 **Online/offline** is derived, not stored: a unit shows Offline if no beat has
-arrived within 2× the interval. The device reports its schedule window so
-"off as planned" is distinguishable from "died".
-
-> The hourly images double as a free check on the motion gate: if a still
-> clearly shows bees during a period the gate stayed silent, that's your cue to
-> recalibrate.
+arrived within `DEVICE_ONLINE_GRACE_SECONDS` (default 180 = ~3 missed beats). The
+device reports its schedule window so "off as planned" is distinguishable from
+"died".
 
 ---
 
@@ -557,7 +555,7 @@ rpi-connect status
 ## Step 10: Cellular Connectivity (Sixfab 4G-LTE)
 
 This is what keeps a remote, off-grid unit reachable. On cellular it carries the
-**hourly telemetry beat + image** (`beemonitor-telemetry.service`) so you can
+**60s JSON telemetry beat** (`beemonitor-telemetry.service`) so you can
 monitor the unit; bulk **video is WiFi-gated** and held on disk until WiFi
 appears (see [Device monitoring & telemetry](#device-monitoring--telemetry)).
 
@@ -708,7 +706,7 @@ journalctl -u cellular.service -b   # what the service did this boot
 
 ### 10.8 Confirm Telemetry Flows (over cellular)
 
-With the modem up, the telemetry service sends its hourly beat + image over
+With the modem up, the telemetry service sends its 60s JSON beat over
 cellular (this is what flows on cellular — video waits for WiFi):
 
 ```bash
@@ -716,10 +714,9 @@ journalctl -u beemonitor-telemetry.service -f
 # look for: "beat: storage=… snippets/…=…" then "heartbeat ok: {...}"
 ```
 
-The unit should now show **Online** with a fresh image on the web app's
-Devices page — a beat + fresh image every minute by default. (To save cellular
-data, raise both `BEEMONITOR_TELEMETRY_INTERVAL` and
-`BEEMONITOR_TELEMETRY_IMAGE_INTERVAL`, e.g. to `3600` for an hourly beat.)
+The unit should now show **Online** on the web app's Devices page within a
+minute (the beat is JSON-only — no image — so 60s is cheap on cellular). Stills
+appear only when you request one on-demand (picture / live view).
 
 ### 10.9 Keep Cellular Data Under Control
 
