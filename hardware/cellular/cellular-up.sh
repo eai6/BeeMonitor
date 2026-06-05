@@ -17,6 +17,8 @@ IFACE=wwan0                # network interface the modem presents
 CHECK_HOST=8.8.8.8         # reachability probe target
 CHECK_INTERVAL=60          # seconds between health checks
 RETRY_WAIT=15              # seconds between bring-up attempts
+CELL_METRIC=700            # default-route metric; must be > WiFi's (NM uses 600)
+                           # so an available WiFi link is always preferred.
 
 log() { echo "cellular: $*"; }
 
@@ -43,6 +45,18 @@ bring_up() {
 
     # 4. DHCP for IP + default route. -q quit after lease, -n fail if no lease.
     udhcpc -i "$IFACE" -q -n >/dev/null 2>&1 || { log "no DHCP lease"; return 1; }
+
+    # 4b. udhcpc installs the default route at metric 0, which outranks WiFi
+    #     (metric 600) and silently sends bulk video over metered cellular.
+    #     Re-home it above WiFi so cellular is the fallback, not the default.
+    GW=$(ip route show default dev "$IFACE" | awk '/default/ {print $3; exit}')
+    if [ -n "$GW" ]; then
+        ip route del default dev "$IFACE" 2>/dev/null || true
+        ip route replace default via "$GW" dev "$IFACE" metric "$CELL_METRIC" \
+            || log "warning: could not set cellular route metric"
+    else
+        log "warning: no default route on $IFACE after DHCP"
+    fi
 
     # 5. Prove end-to-end reachability before declaring success.
     ping -c 2 -W 5 -I "$IFACE" "$CHECK_HOST" >/dev/null 2>&1 \
