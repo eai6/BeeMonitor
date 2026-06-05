@@ -5,10 +5,13 @@ staff. End users get this app's pages.
 """
 
 import logging
+from datetime import timedelta
 
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.db.models import Max
+from django.db.models.functions import TruncDay, TruncHour
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
 from django.utils import timezone
@@ -116,7 +119,43 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         # Videos uploaded by this device (device-scoped slice of /videos/).
         ctx["videos"] = device.videos.all()[:12]
         ctx["video_count"] = device.videos.count()
+
+        # Activity-over-time series for the chart (peak snippets/period per bucket).
+        ctx.update(self._activity_series(device))
         return ctx
+
+    # range key -> (days back, bucket granularity, label format)
+    _RANGES = {
+        "24h": (1, "hour", "%H:%M"),
+        "7d": (7, "hour", "%b %d %H:%M"),
+        "30d": (30, "day", "%b %d"),
+        "90d": (90, "day", "%b %d"),
+    }
+
+    def _activity_series(self, device) -> dict:
+        range_key = self.request.GET.get("range", "7d")
+        if range_key not in self._RANGES:
+            range_key = "7d"
+        days, gran, fmt = self._RANGES[range_key]
+        since = timezone.now() - timedelta(days=days)
+        trunc = TruncHour if gran == "hour" else TruncDay
+
+        rows = (
+            device.heartbeats
+            .filter(created_at__gte=since, snippets_last_period__isnull=False)
+            .annotate(bucket=trunc("created_at"))
+            .values("bucket")
+            .annotate(v=Max("snippets_last_period"))
+            .order_by("bucket")
+        )
+        series = [{"t": r["bucket"].strftime(fmt), "v": r["v"]} for r in rows]
+        return {
+            "activity_series": series,
+            "activity_range": range_key,
+            "activity_ranges": [
+                {"key": k, "label": k} for k in self._RANGES
+            ],
+        }
 
 
 class DeviceCreateView(LoginRequiredMixin, FormView):

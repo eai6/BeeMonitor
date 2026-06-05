@@ -105,6 +105,9 @@ class DeviceHeartbeat(models.Model):
     image_storage_key = models.CharField(max_length=500, blank=True)
     # Denormalised for cheap list-view sorting/highlighting.
     storage_pct = models.FloatField(null=True, blank=True)
+    # Denormalised activity proxy (snippets in the trailing activity window) so
+    # the activity-over-time graph can aggregate via the ORM (Max per hour/day).
+    snippets_last_period = models.IntegerField(null=True, blank=True)
     # Per-beat GPS (from the modem GNSS), stored only when
     # settings.DEVICE_STORE_GPS_PER_HEARTBEAT is on (location history/trail).
     lat = models.FloatField(null=True, blank=True)

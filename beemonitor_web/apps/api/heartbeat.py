@@ -110,11 +110,18 @@ class DeviceHeartbeatView(APIView):
         lat = _as_float(metrics.get("gps_lat"))
         lon = _as_float(metrics.get("gps_lon"))
 
+        snips = metrics.get("snippets_last_period")
+        try:
+            snips = int(snips) if snips is not None else None
+        except (TypeError, ValueError):
+            snips = None
+
         hb = DeviceHeartbeat.objects.create(
             device=device,
             metrics=metrics,
             image_storage_key=image_key,
             storage_pct=storage_pct,
+            snippets_last_period=snips,
             lat=lat if settings.DEVICE_STORE_GPS_PER_HEARTBEAT else None,
             lon=lon if settings.DEVICE_STORE_GPS_PER_HEARTBEAT else None,
         )
