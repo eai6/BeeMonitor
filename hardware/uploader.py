@@ -146,6 +146,8 @@ def _list_pending(record_dir: Path) -> list[Path]:
     """Find .mp4 files that don't yet have a .uploaded sidecar."""
     pending: list[Path] = []
     for mp4 in record_dir.rglob("*.mp4"):
+        if ".part." in mp4.name:
+            continue
         if mp4.with_suffix(mp4.suffix + ".uploaded").exists():
             continue
         # Skip files still being written: heuristic = size > min AND mtime > 60s ago.

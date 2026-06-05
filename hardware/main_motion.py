@@ -275,11 +275,11 @@ def _remux(h264_path: Path, mp4_path: Path) -> None:
     """ffmpeg stream-copy .h264 -> .mp4, then delete the .h264. Cheap (no re-encode)."""
     mp4_path.parent.mkdir(parents=True, exist_ok=True)
     # Write to a temp name first so the uploader never sees a half-muxed .mp4.
-    tmp = mp4_path.with_suffix(".mp4.part")
+    tmp = mp4_path.with_suffix(".part.mp4")
     cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
         "-r", str(FPS), "-i", str(h264_path),
-        "-c", "copy", str(tmp),
+        "-c", "copy", "-f", "mp4", str(tmp),
     ]
     try:
         subprocess.run(cmd, check=True)
