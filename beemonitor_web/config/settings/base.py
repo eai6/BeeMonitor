@@ -147,6 +147,14 @@ SAGEMAKER_OUTPUT_BUCKET = os.environ.get("SAGEMAKER_OUTPUT_BUCKET", "")
 MODAL_TOKEN_ID = os.environ.get("MODAL_TOKEN_ID", "")
 MODAL_TOKEN_SECRET = os.environ.get("MODAL_TOKEN_SECRET", "")
 
+# Devices — a unit is "online" only if its last telemetry beat arrived within
+# this many seconds. Telemetry beats every 60s, so ~3 missed beats = offline.
+DEVICE_ONLINE_GRACE_SECONDS = int(os.environ.get("DEVICE_ONLINE_GRACE_SECONDS", "180"))
+# Persist per-heartbeat GPS on DeviceHeartbeat (location history). False = only
+# keep the latest fix on Device.
+DEVICE_STORE_GPS_PER_HEARTBEAT = os.environ.get(
+    "DEVICE_STORE_GPS_PER_HEARTBEAT", "true").strip().lower() in {"1", "true", "yes", "on"}
+
 # Celery
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")

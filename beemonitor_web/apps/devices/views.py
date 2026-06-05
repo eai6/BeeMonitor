@@ -6,6 +6,7 @@ staff. End users get this app's pages.
 
 import logging
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.shortcuts import get_object_or_404, redirect
@@ -19,17 +20,18 @@ from .models import Device
 
 logger = logging.getLogger(__name__)
 
-# Devices beat hourly; treat a unit as online if seen within 2× that window.
-TELEMETRY_INTERVAL_SECONDS = 3600
-ONLINE_GRACE_MULTIPLIER = 2
-
-
 def _is_online(device) -> bool:
-    """Derived (not stored): has the device checked in recently enough?"""
+    """Derived (not stored): has the device beaten recently enough to be 'online'?
+
+    Telemetry beats every ~60s, so a unit that hasn't checked in within
+    ``settings.DEVICE_ONLINE_GRACE_SECONDS`` (default 180 = ~3 missed beats) is
+    considered offline — regardless of ``is_active``. ``last_seen_at`` is bumped
+    by DeviceKeyAuthentication on every beat.
+    """
     if not device.last_seen_at:
         return False
     age = (timezone.now() - device.last_seen_at).total_seconds()
-    return age <= TELEMETRY_INTERVAL_SECONDS * ONLINE_GRACE_MULTIPLIER
+    return age <= settings.DEVICE_ONLINE_GRACE_SECONDS
 
 
 def _presign_image(storage_key: str):

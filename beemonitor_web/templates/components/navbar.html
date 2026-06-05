@@ -10,7 +10,6 @@
           <a href="{% url 'analysis:analytics' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Analytics</a>
           <a href="{% url 'annotations:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Annotate</a>
           <a href="{% url 'training:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Training</a>
-          <a href="{% url 'sources:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Sources</a>
           <a href="{% url 'devices:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Devices</a>
           <a href="{% url 'docs:index' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Docs</a>
         </div>
@@ -42,7 +41,6 @@
       <a href="{% url 'analysis:analytics' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Analytics</a>
       <a href="{% url 'annotations:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Annotate</a>
       <a href="{% url 'training:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Training</a>
-      <a href="{% url 'sources:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Sources</a>
       <a href="{% url 'devices:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Devices</a>
       <a href="{% url 'docs:index' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Docs</a>
       {% if user.is_authenticated %}
