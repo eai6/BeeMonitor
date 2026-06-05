@@ -515,7 +515,16 @@ def record() -> None:
                                  gate.min_area, gate.max_area)
                     calib_mtime = m
 
-            # Drop a telemetry still for the heartbeat (best-effort).
+            # On-demand still requested by telemetry (picture / live view): the
+            # telemetry service drops capture.request, we grab a frame and remove it.
+            if (TELEMETRY_QUEUE / "capture.request").exists():
+                _save_telemetry_still(cam)
+                try:
+                    (TELEMETRY_QUEUE / "capture.request").unlink()
+                except OSError:
+                    pass
+
+            # Optional periodic still (off by default; TELEMETRY_IMAGE_INTERVAL=0).
             if now_mono >= next_telemetry_image:
                 _save_telemetry_still(cam)
                 next_telemetry_image = now_mono + TELEMETRY_IMAGE_INTERVAL

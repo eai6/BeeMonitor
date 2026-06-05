@@ -76,6 +76,9 @@ QMI_DEV = os.environ.get("BEEMONITOR_QMI_DEV", "/dev/cdc-wdm0")
 MODEM_STATUS_FILE = os.environ.get(
     "BEEMONITOR_MODEM_STATUS_FILE", "/run/beemonitor/modem-status.json")
 MODEM_STATUS_MAX_AGE = int(os.environ.get("BEEMONITOR_MODEM_STATUS_MAX_AGE", "300"))
+# On-demand live view (rapid stills) caps.
+STREAM_FPS = float(os.environ.get("BEEMONITOR_STREAM_FPS", "1.5"))
+STREAM_MAX_SECONDS = int(os.environ.get("BEEMONITOR_STREAM_MAX_SECONDS", "120"))
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s telemetry %(message)s", level=logging.INFO,
@@ -277,11 +280,12 @@ def _validate_config() -> None:
         sys.exit(2)
 
 
-def send_beat(image: "Path | None" = None) -> int:
-    """Send one telemetry beat. JSON-only by default (cheap over cellular).
+def send_beat(image: "Path | None" = None):
+    """Send one telemetry beat; return the parsed JSON response (or None on error).
 
-    ``image`` is only passed for on-demand captures (picture/live-view); the
-    regular 60s beat sends no image.
+    JSON-only by default (cheap over cellular). ``image`` is only passed for
+    on-demand captures (picture/live-view); the regular 60s beat sends no image.
+    The response may carry a pending ``command`` for the device to act on.
     """
     metrics = collect_metrics()
     url = urljoin(API_BASE + "/", "api/v1/devices/heartbeat")
@@ -307,19 +311,81 @@ def send_beat(image: "Path | None" = None) -> int:
             r = requests.post(url, headers=headers, data=data, timeout=POST_TIMEOUT)
     except requests.RequestException as e:
         log.error("heartbeat POST failed: %s", e)
-        return 1
+        return None
 
     if not r.ok:
         log.error("heartbeat -> %s: %s", r.status_code, r.text[:300])
-        return 1
+        return None
 
-    log.info("heartbeat ok: %s", r.json())
+    resp = r.json()
+    log.info("heartbeat ok: %s", resp)
     if image is not None:
         _prune_queue(image)
-    return 0
+    return resp
 
 
 _running = True
+
+
+def _safe_mtime(p) -> float:
+    try:
+        return p.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _capture_now(timeout: float = 12.0):
+    """Ask the recorder (via a sentinel file) for one fresh still; return its Path.
+
+    The recorder owns the camera, so telemetry can't grab a frame directly — it
+    drops ``capture.request`` in the queue, the recorder writes a JPEG there, and
+    we return the newest one. None if nothing arrives in ``timeout`` s.
+    """
+    QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    req = QUEUE_DIR / "capture.request"
+    t0 = time.time()
+    try:
+        req.write_text(str(t0))
+    except OSError:
+        return None
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        fresh = [p for p in QUEUE_DIR.glob("*.jpg") if _safe_mtime(p) >= t0 - 0.5]
+        if fresh:
+            return max(fresh, key=_safe_mtime)
+        time.sleep(0.3)
+    try:
+        req.unlink()  # clear stale request so it can't fire a late capture
+    except OSError:
+        pass
+    return None
+
+
+def _capture_and_upload() -> bool:
+    img = _capture_now()
+    if img is None:
+        log.warning("on-demand capture produced no still (is the recorder running?)")
+        return False
+    return send_beat(image=img) is not None
+
+
+def _handle_command(cmd: str, params: dict) -> None:
+    if cmd == "capture_image":
+        log.info("command: capture_image")
+        _capture_and_upload()
+    elif cmd == "stream":
+        duration = min(int(params.get("duration", 60) or 60), STREAM_MAX_SECONDS)
+        gap = 1.0 / STREAM_FPS if STREAM_FPS > 0 else 1.0
+        log.info("command: stream %ds @ %.1f fps", duration, STREAM_FPS)
+        end = time.monotonic() + duration
+        while _running and time.monotonic() < end:
+            start = time.monotonic()
+            _capture_and_upload()
+            rest = gap - (time.monotonic() - start)
+            if rest > 0:
+                time.sleep(rest)
+    else:
+        log.warning("unknown command: %s", cmd)
 
 
 def _handle_signal(signum, frame):  # noqa: ARG001
@@ -334,7 +400,8 @@ def main() -> int:
     # --once: single beat (handy for cron/manual test). Default: loop forever
     # at BEEMONITOR_TELEMETRY_INTERVAL (60 default; raise via env to slow down).
     if "--once" in sys.argv:
-        return send_beat()
+        send_beat()
+        return 0
 
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
@@ -342,7 +409,10 @@ def main() -> int:
 
     while _running:
         try:
-            send_beat()
+            resp = send_beat()
+            # Act on any pending command (picture / live view) the server returned.
+            if resp and resp.get("command"):
+                _handle_command(resp["command"], resp.get("params") or {})
         except Exception as e:  # pragma: no cover - never let the loop die
             log.exception("beat raised: %s", e)
         # Interruptible sleep so SIGTERM stops us promptly.

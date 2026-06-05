@@ -54,16 +54,31 @@
 {% endif %}
 
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-  <!-- Latest image -->
+  <!-- Latest image + on-demand camera -->
   <div class="lg:col-span-1">
-    <div class="bg-white shadow rounded-lg overflow-hidden">
-      <div class="px-4 py-3 border-b border-gray-100 text-sm font-medium text-gray-700">Latest image</div>
-      {% if latest_image_url %}
-        <img src="{{ latest_image_url }}" alt="latest heartbeat" class="w-full object-cover bg-gray-100">
-        <div class="px-4 py-2 text-xs text-gray-400">{{ latest_hb.created_at|timesince }} ago</div>
-      {% else %}
-        <div class="aspect-video flex items-center justify-center text-gray-300 text-sm">No image</div>
-      {% endif %}
+    <div class="bg-white shadow rounded-lg overflow-hidden"
+         data-device-pk="{{ device.pk }}"
+         data-request-image-url="{% url 'devices:request_image' device.pk %}"
+         data-request-stream-url="{% url 'devices:request_stream' device.pk %}"
+         data-latest-image-url="{% url 'devices:latest_image' device.pk %}">
+      <div class="px-4 py-3 border-b border-gray-100 text-sm font-medium text-gray-700">Camera</div>
+      <div class="bg-gray-100 aspect-video flex items-center justify-center">
+        <img id="cam-image" src="{{ latest_image_url|default:'' }}" alt=""
+             class="w-full h-full object-cover {% if not latest_image_url %}hidden{% endif %}">
+        <span id="cam-placeholder" class="text-gray-300 text-sm {% if latest_image_url %}hidden{% endif %}">No image yet</span>
+      </div>
+      <div class="px-4 py-2 flex items-center justify-between">
+        <span id="cam-status" class="text-xs text-gray-400">
+          {% if latest_hb and latest_image_url %}{{ latest_hb.created_at|timesince }} ago{% endif %}
+        </span>
+        <div class="flex gap-2">
+          <button id="cam-photo" class="px-2.5 py-1 text-xs rounded bg-amber-600 hover:bg-amber-700 text-white">Take photo</button>
+          <button id="cam-live" class="px-2.5 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-200">Live view</button>
+        </div>
+      </div>
+      <p class="px-4 pb-2 text-[11px] text-gray-400 leading-tight">
+        On-demand — the device acts on its next beat (≤ telemetry interval), then images stream in.
+      </p>
     </div>
   </div>
 
@@ -229,4 +244,56 @@
 })();
 </script>
 {% endif %}
+
+<!-- On-demand camera: request + poll latest image -->
+<script>
+(function () {
+  var card = document.querySelector('[data-device-pk]');
+  if (!card) return;
+  var CSRF = "{{ csrf_token }}";
+  var img = document.getElementById('cam-image');
+  var ph = document.getElementById('cam-placeholder');
+  var status = document.getElementById('cam-status');
+
+  function getJSON(url) { return fetch(url, { cache: 'no-store' }).then(function (r) { return r.json(); }); }
+
+  function showImage(d) {
+    img.src = d.url; img.classList.remove('hidden'); ph.classList.add('hidden');
+    status.textContent = 'Live • ' + new Date(d.ts).toLocaleTimeString();
+  }
+
+  function requestAndPoll(kind, windowMs, everyMs) {
+    var baseTs = null;
+    getJSON(card.dataset.latestImageUrl).then(function (b) { baseTs = b.ts || null; }).finally(function () {
+      var url = kind === 'stream' ? card.dataset.requestStreamUrl : card.dataset.requestImageUrl;
+      status.textContent = 'Requested — waiting for device (≤ next beat)…';
+      fetch(url, {
+        method: 'POST',
+        headers: { 'X-CSRFToken': CSRF, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: kind === 'stream' ? 'duration=60' : '',
+      });
+      var end = Date.now() + windowMs;
+      (function tick() {
+        if (Date.now() > end) {
+          if (status.textContent.indexOf('Requested') === 0) status.textContent = 'No new image (device offline?)';
+          return;
+        }
+        getJSON(card.dataset.latestImageUrl).then(function (d) {
+          if (d.url && d.ts && d.ts !== baseTs) {
+            showImage(d);
+            if (kind !== 'stream') return;     // photo: stop after first new frame
+            baseTs = d.ts;                       // stream: keep advancing
+          }
+          setTimeout(tick, everyMs);
+        }).catch(function () { setTimeout(tick, everyMs); });
+      })();
+    });
+  }
+
+  var photo = document.getElementById('cam-photo');
+  var live = document.getElementById('cam-live');
+  if (photo) photo.addEventListener('click', function () { requestAndPoll('photo', 120000, 3000); });
+  if (live) live.addEventListener('click', function () { requestAndPoll('stream', 80000, 2000); });
+})();
+</script>
 {% endblock %}

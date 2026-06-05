@@ -12,4 +12,7 @@ urlpatterns = [
     path("<int:pk>/revoke/", views.DeviceRevokeView.as_view(), name="revoke"),
     path("<int:pk>/reactivate/", views.DeviceReactivateView.as_view(), name="reactivate"),
     path("<int:pk>/delete/", views.DeviceDeleteView.as_view(), name="delete"),
+    path("<int:pk>/request-image/", views.DeviceRequestImageView.as_view(), name="request_image"),
+    path("<int:pk>/request-stream/", views.DeviceRequestStreamView.as_view(), name="request_stream"),
+    path("<int:pk>/latest-image.json", views.DeviceLatestImageView.as_view(), name="latest_image"),
 ]

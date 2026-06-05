@@ -12,6 +12,7 @@ from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import Max
 from django.db.models.functions import TruncDay, TruncHour
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
 from django.utils import timezone
@@ -237,3 +238,43 @@ class DeviceDeleteView(LoginRequiredMixin, View):
         device.delete()
         messages.success(request, f"Device '{name}' deleted.")
         return redirect("devices:list")
+
+
+class DeviceRequestImageView(LoginRequiredMixin, View):
+    """Queue a one-shot picture-on-demand; the device acts on its next beat."""
+
+    def post(self, request, pk):
+        device = get_object_or_404(Device, pk=pk, owner=request.user)
+        device.pending_command = "capture_image"
+        device.command_params = {}
+        device.save(update_fields=["pending_command", "command_params"])
+        return JsonResponse({"ok": True, "eta_seconds": settings.DEVICE_ONLINE_GRACE_SECONDS})
+
+
+class DeviceRequestStreamView(LoginRequiredMixin, View):
+    """Queue a bounded live-view (rapid stills) for the device."""
+
+    def post(self, request, pk):
+        device = get_object_or_404(Device, pk=pk, owner=request.user)
+        try:
+            duration = min(max(int(request.POST.get("duration", 60)), 5), 300)
+        except (TypeError, ValueError):
+            duration = 60
+        device.pending_command = "stream"
+        device.command_params = {"duration": duration}
+        device.save(update_fields=["pending_command", "command_params"])
+        return JsonResponse({"ok": True, "duration": duration})
+
+
+class DeviceLatestImageView(LoginRequiredMixin, View):
+    """Latest on-demand image (presigned URL) — polled by the live view."""
+
+    def get(self, request, pk):
+        device = get_object_or_404(Device, pk=pk, owner=request.user)
+        hb = device.heartbeats.exclude(image_storage_key="").first()
+        if not hb:
+            return JsonResponse({"url": None})
+        return JsonResponse({
+            "url": _presign_image(hb.image_storage_key),
+            "ts": hb.created_at.isoformat(),
+        })
