@@ -105,6 +105,16 @@
         <div class="text-xs text-gray-500 uppercase tracking-wide">Cellular</div>
         <div class="mt-2 text-lg font-semibold text-gray-900">{{ metrics.cellular_signal|default:"—" }}</div>
       </div>
+      <!-- GPS -->
+      <div class="bg-white shadow rounded-lg p-4">
+        <div class="text-xs text-gray-500 uppercase tracking-wide">Location</div>
+        {% if device.last_lat is not None and device.last_lon is not None %}
+          <div class="mt-2 text-sm font-mono text-gray-900">{{ device.last_lat|floatformat:5 }}, {{ device.last_lon|floatformat:5 }}</div>
+          <a href="{{ gps_map_url }}" target="_blank" rel="noopener" class="mt-1 inline-block text-xs text-amber-600 hover:underline">View on map →</a>
+        {% else %}
+          <div class="mt-2 text-lg font-semibold text-gray-300">no fix</div>
+        {% endif %}
+      </div>
       <!-- Services -->
       <div class="bg-white shadow rounded-lg p-4">
         <div class="text-xs text-gray-500 uppercase tracking-wide">Services</div>

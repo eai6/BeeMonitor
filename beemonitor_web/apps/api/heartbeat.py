@@ -23,6 +23,7 @@ import logging
 import uuid
 from datetime import timezone as dt_timezone
 
+from django.conf import settings
 from django.utils import timezone
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
@@ -37,6 +38,16 @@ logger = logging.getLogger(__name__)
 
 # Reject absurdly large "images" — a heartbeat still is a few hundred KB.
 MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MiB
+
+
+def _as_float(value):
+    """Coerce a metric to float, or None if missing/unparseable."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _heartbeat_image_key(owner_id: int, device_id: int) -> str:
@@ -95,24 +106,45 @@ class DeviceHeartbeatView(APIView):
                 image_key = ""
                 metrics.setdefault("_warnings", []).append(f"image_upload_failed: {e}")
 
-        storage_pct = metrics.get("storage_pct")
-        try:
-            storage_pct = float(storage_pct) if storage_pct is not None else None
-        except (TypeError, ValueError):
-            storage_pct = None
+        storage_pct = _as_float(metrics.get("storage_pct"))
+        lat = _as_float(metrics.get("gps_lat"))
+        lon = _as_float(metrics.get("gps_lon"))
 
         hb = DeviceHeartbeat.objects.create(
             device=device,
             metrics=metrics,
             image_storage_key=image_key,
             storage_pct=storage_pct,
+            lat=lat if settings.DEVICE_STORE_GPS_PER_HEARTBEAT else None,
+            lon=lon if settings.DEVICE_STORE_GPS_PER_HEARTBEAT else None,
         )
 
+        # Always keep the latest fix on the device (cheap, drives the map).
+        if lat is not None and lon is not None:
+            device.last_lat = lat
+            device.last_lon = lon
+            device.last_fix_at = timezone.now()
+            device.save(update_fields=["last_lat", "last_lon", "last_fix_at"])
+
+        # Hand back any pending command (picture/stream on demand), then clear it.
+        command = device.pending_command or ""
+        params = device.command_params or {}
+        if command:
+            device.pending_command = ""
+            device.command_params = {}
+            device.save(update_fields=["pending_command", "command_params"])
+
         logger.info(
-            "heartbeat: device=%s user=%s hb=%s image=%s",
+            "heartbeat: device=%s user=%s hb=%s image=%s gps=%s cmd=%s",
             device.id, device.owner_id, hb.id, bool(image_key),
+            bool(lat and lon), command or "-",
         )
         return Response(
-            {"heartbeat_id": hb.id, "image_stored": bool(image_key)},
+            {
+                "heartbeat_id": hb.id,
+                "image_stored": bool(image_key),
+                "command": command,
+                "params": params,
+            },
             status=201,
         )

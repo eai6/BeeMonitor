@@ -71,6 +71,11 @@ RECORDER_UNIT = os.environ.get("BEEMONITOR_RECORDER_UNIT", "beemonitor-recorder.
 UPLOADER_UNIT = os.environ.get("BEEMONITOR_UPLOADER_UNIT", "beemonitor-uploader.service")
 CELLULAR_UNIT = os.environ.get("BEEMONITOR_CELLULAR_UNIT", "cellular.service")
 QMI_DEV = os.environ.get("BEEMONITOR_QMI_DEV", "/dev/cdc-wdm0")
+# Modem signal + GPS are probed by cellular-up.sh (root) and written here; we
+# only read this file (telemetry runs as the unprivileged `beemonitor` user).
+MODEM_STATUS_FILE = os.environ.get(
+    "BEEMONITOR_MODEM_STATUS_FILE", "/run/beemonitor/modem-status.json")
+MODEM_STATUS_MAX_AGE = int(os.environ.get("BEEMONITOR_MODEM_STATUS_MAX_AGE", "300"))
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s telemetry %(message)s", level=logging.INFO,
@@ -127,19 +132,25 @@ def _service_active(unit: str) -> bool:
         return False
 
 
-def _cellular_signal():
-    """Best-effort RSSI via qmicli. Returns a string like '-71 dBm' or None."""
+def _modem_status() -> dict:
+    """Read modem signal + GPS from the status file written by cellular-up.sh.
+
+    The telemetry service runs as `beemonitor`, which can't access the QMI/AT
+    device — so `cellular-up.sh` (root) probes the modem each cycle and drops a
+    JSON status file we just read here. Returns {} if absent/unreadable/stale.
+    """
     try:
-        out = subprocess.run(
-            ["qmicli", "-p", "-d", QMI_DEV, "--nas-get-signal-strength"],
-            capture_output=True, text=True, timeout=15,
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return None
-    for line in out.splitlines():
-        if "dBm" in line and ("RSSI" in line or "Network" in line):
-            return line.split(":", 1)[-1].strip()
-    return None
+        raw = Path(MODEM_STATUS_FILE).read_text()
+        data = json.loads(raw)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    # Ignore stale status (modem service stopped writing).
+    ts = data.get("ts")
+    if isinstance(ts, (int, float)) and (time.time() - ts) > MODEM_STATUS_MAX_AGE:
+        return {}
+    return data
 
 
 def _video_stats(window_seconds: int) -> dict:
@@ -215,9 +226,13 @@ def collect_metrics() -> dict:
     m["uploader_active"] = _service_active(UPLOADER_UNIT)
     m["cellular_active"] = _service_active(CELLULAR_UNIT)
 
-    sig = _cellular_signal()
-    if sig:
-        m["cellular_signal"] = sig
+    status = _modem_status()
+    rssi = status.get("rssi_dbm")
+    if rssi is not None:
+        m["cellular_signal"] = f"{rssi} dBm"
+    if status.get("lat") is not None and status.get("lon") is not None:
+        m["gps_lat"] = status["lat"]
+        m["gps_lon"] = status["lon"]
     if SCHEDULE_WINDOW:
         m["schedule_window"] = SCHEDULE_WINDOW
 

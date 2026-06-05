@@ -39,6 +39,17 @@ class Device(models.Model):
     last_seen_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # Last known GPS fix (from the modem's GNSS, reported in telemetry). Always
+    # updated when a beat carries a fix, regardless of per-heartbeat storage.
+    last_lat = models.FloatField(null=True, blank=True)
+    last_lon = models.FloatField(null=True, blank=True)
+    last_fix_at = models.DateTimeField(null=True, blank=True)
+
+    # Pending command for the device, returned in the next heartbeat response and
+    # then cleared. "" | "capture_image" | "stream" (picture / live view).
+    pending_command = models.CharField(max_length=32, blank=True, default="")
+    command_params = models.JSONField(default=dict, blank=True)
+
     class Meta:
         verbose_name = "Device"
         verbose_name_plural = "Devices"
@@ -94,6 +105,10 @@ class DeviceHeartbeat(models.Model):
     image_storage_key = models.CharField(max_length=500, blank=True)
     # Denormalised for cheap list-view sorting/highlighting.
     storage_pct = models.FloatField(null=True, blank=True)
+    # Per-beat GPS (from the modem GNSS), stored only when
+    # settings.DEVICE_STORE_GPS_PER_HEARTBEAT is on (location history/trail).
+    lat = models.FloatField(null=True, blank=True)
+    lon = models.FloatField(null=True, blank=True)
 
     class Meta:
         ordering = ["-created_at"]

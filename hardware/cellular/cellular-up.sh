@@ -19,8 +19,44 @@ CHECK_INTERVAL=60          # seconds between health checks
 RETRY_WAIT=15              # seconds between bring-up attempts
 CELL_METRIC=700            # default-route metric; must be > WiFi's (NM uses 600)
                            # so an available WiFi link is always preferred.
+# Modem status (signal + GPS) for the telemetry service to read. We run as root
+# and own the modem; telemetry (user `beemonitor`) only reads this file.
+STATUS_FILE="${BEEMONITOR_MODEM_STATUS_FILE:-/run/beemonitor/modem-status.json}"
+AT_PORT="${BEEMONITOR_AT_PORT:-/dev/ttyUSB3}"   # Quectel AT port (often USB2/USB3)
 
 log() { echo "cellular: $*"; }
+
+# Send one AT command and echo ~2s of response. Best-effort (modem AT port).
+at_cmd() {
+    local cmd="$1"
+    [ -e "$AT_PORT" ] || return 1
+    stty -F "$AT_PORT" 115200 -echo raw 2>/dev/null || true
+    exec 9<>"$AT_PORT" 2>/dev/null || return 1
+    printf '%s\r\n' "$cmd" >&9
+    timeout 2 cat <&9
+    exec 9>&- 2>/dev/null || true
+}
+
+# Probe signal (qmicli) + GPS (Quectel GNSS) and write the status file (atomic).
+write_modem_status() {
+    local rssi lat lon gps json
+    rssi=$(qmicli -p -d "$DEV" --nas-get-signal-strength 2>/dev/null \
+        | grep -oE -- '-?[0-9]+ dBm' | grep -oE -- '-?[0-9]+' | head -1)
+    gps=$(at_cmd 'AT+QGPSLOC=2' 2>/dev/null | grep -m1 '+QGPSLOC:')
+    if [ -n "$gps" ]; then
+        lat=$(printf '%s' "$gps" | sed 's/.*+QGPSLOC: *//' | cut -d, -f2)
+        lon=$(printf '%s' "$gps" | sed 's/.*+QGPSLOC: *//' | cut -d, -f3)
+    fi
+    json="{\"ts\": $(date +%s)"
+    [ -n "${rssi:-}" ] && json="$json, \"rssi_dbm\": $rssi"
+    if [ -n "${lat:-}" ] && [ -n "${lon:-}" ]; then
+        json="$json, \"lat\": $lat, \"lon\": $lon, \"fix\": true"
+    fi
+    json="$json}"
+    mkdir -p "$(dirname "$STATUS_FILE")"
+    printf '%s\n' "$json" > "${STATUS_FILE}.tmp" 2>/dev/null \
+        && mv "${STATUS_FILE}.tmp" "$STATUS_FILE" 2>/dev/null || true
+}
 
 bring_up() {
     # 1. Wait for the modem to enumerate — cold boot / WittyPi wake is slow.
@@ -80,6 +116,10 @@ until bring_up; do
     sleep "$RETRY_WAIT"
 done
 
+# Enable GNSS once (idempotent; errors if already on — ignore).
+at_cmd 'AT+QGPS=1' >/dev/null 2>&1 || true
+write_modem_status
+
 # --- watchdog: re-establish if the carrier drops the session ----------------
 while true; do
     sleep "$CHECK_INTERVAL"
@@ -89,5 +129,8 @@ while true; do
             log "re-establish failed, retrying in ${RETRY_WAIT}s"
             sleep "$RETRY_WAIT"
         done
+        at_cmd 'AT+QGPS=1' >/dev/null 2>&1 || true
     fi
+    # Refresh signal + GPS for telemetry each cycle.
+    write_modem_status
 done

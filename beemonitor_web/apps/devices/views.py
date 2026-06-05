@@ -98,6 +98,13 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
             {"label": "Cellular", "ok": bool(metrics.get("cellular_active"))},
         ]
 
+        # GPS (last known fix) → coords + OpenStreetMap link.
+        if device.last_lat is not None and device.last_lon is not None:
+            ctx["gps_map_url"] = (
+                f"https://www.openstreetmap.org/?mlat={device.last_lat}"
+                f"&mlon={device.last_lon}#map=15/{device.last_lat}/{device.last_lon}"
+            )
+
         # Image timeline — most recent stills (hourly), each presigned.
         timeline = []
         for hb in device.heartbeats.all()[:24]:
