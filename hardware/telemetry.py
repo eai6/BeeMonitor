@@ -392,7 +392,20 @@ def _wifi_connect(params: dict) -> None:
     if password:
         args += ["password", password]
     args += ["ifname", WIFI_IFACE]
+
     r = _nmcli(args, timeout=60)
+    # nmcli's `device wifi connect` only consults the cached scan list, so a
+    # just-enabled or just-renamed AP (e.g. a phone hotspot that wasn't
+    # broadcasting at the last scan) fails with rc=10 'No network with SSID ...
+    # found'. Force a rescan and retry once — but only for that case, since a bad
+    # password or other error won't be fixed by scanning again.
+    if (r is None or r.returncode != 0) and \
+            "No network with SSID" in (getattr(r, "stderr", "") or ""):
+        log.info("wifi_connect: '%s' not in scan — rescanning and retrying", ssid)
+        _nmcli(["device", "wifi", "rescan"], timeout=20)  # rate-limit error is harmless
+        time.sleep(6)  # let scan results populate before retrying
+        r = _nmcli(args, timeout=60)
+
     # Never log the password — only the SSID + result.
     if r is not None and r.returncode == 0:
         log.info("wifi_connect: joined '%s'", ssid)
