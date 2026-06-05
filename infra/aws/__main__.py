@@ -35,6 +35,10 @@ image_tag = config.get("image-tag") or "latest"
 deploy_service = config.get_bool("deploy-service") or False
 instance_cpu = config.get("instance-cpu") or "1024"   # 1 vCPU
 instance_memory = config.get("instance-memory") or "2048"  # 2 GB
+# Auto-analysis toggle. When false, the app gets an empty SAGEMAKER_ENDPOINT_NAME
+# so Pi uploads do NOT spawn analysis jobs (useful while testing the pipeline).
+_analysis_enabled = config.get_bool("analysis-enabled")
+analysis_enabled = True if _analysis_enabled is None else _analysis_enabled
 
 prefix = f"beemonitor-{env}"
 account_id = aws.get_caller_identity().account_id
@@ -680,7 +684,8 @@ if deploy_service:
         "AWS_S3_BUCKET_MODELS": args[6],
         "AWS_S3_BUCKET_USER_CONFIGS": args[7],
         # SageMaker (Phase 4) — set by convention; the SM stack owns the names.
-        "SAGEMAKER_ENDPOINT_NAME": f"beemonitor-sm-{env}",
+        # Blanked when analysis-enabled=false so uploads don't spawn jobs.
+        "SAGEMAKER_ENDPOINT_NAME": f"beemonitor-sm-{env}" if analysis_enabled else "",
         "SAGEMAKER_INPUT_BUCKET": f"beemonitor-sm-{env}-input-{account_id}",
         "SAGEMAKER_OUTPUT_BUCKET": f"beemonitor-sm-{env}-output-{account_id}",
     })
