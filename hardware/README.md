@@ -658,7 +658,7 @@ drops the session:
 
 ```bash
 cd ~/BeeMonitor/hardware
-sudo install -m 755 cellular/cellular-up.sh /usr/local/bin/cellular-up.sh
+chmod +x cellular/cellular-up.sh          # the unit runs it in place from the repo
 sudo cp systemd/cellular.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now cellular.service
@@ -669,6 +669,29 @@ journalctl -u cellular.service -f      # "link up on wwan0"
 `cellular.service` is ordered **before** `beemonitor-uploader.service`, so on
 every boot the link comes up before uploads are attempted (and the uploader's
 backoff covers any remaining lag).
+
+> **Note:** the unit is `WantedBy=multi-user.target` and deliberately has **no**
+> `After=multi-user.target` — adding that creates a dependency cycle that makes
+> systemd silently delete the start job (the service shows `enabled` but never
+> runs, with an empty journal). If you ever see that symptom, this is the cause.
+
+**Enable network time (NTP) — required for uploads.** The Pi has no RTC, so on
+every cold boot / WittyPi wake it starts with a stale clock restored from
+`fake-hwclock`. A wrong clock fails TLS certificate validation, so S3 uploads and
+telemetry will error until the time is corrected. `systemd-timesyncd` fixes this
+automatically — but only once a network exists, which on a field unit means
+*after* `cellular.service` is up. Make sure it's enabled (idempotent; on
+Raspberry Pi OS it usually already is):
+
+```bash
+sudo timedatectl set-ntp true
+timedatectl       # "NTP service: active"; "System clock synchronized: yes" once cellular is up
+```
+
+> Time sync can't happen until the modem has a route, so right after boot
+> `timedatectl` may briefly show `synchronized: no` — it corrects within seconds
+> of `cellular: link up on wwan0`. The bring-up script also kicks a resync at
+> that moment, so the clock is right before the uploader makes its first request.
 
 ### 10.7 Confirm It Survives a Reboot
 

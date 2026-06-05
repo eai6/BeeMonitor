@@ -3,7 +3,12 @@ Description=Sixfab cellular link (QMI) — bring up and keep alive
 Documentation=https://github.com/eai6/BeeMonitor
 # This service *creates* the network, so it has no network dependency itself.
 # It must come up before the uploader so snippets have a route to S3.
-After=multi-user.target
+#
+# Do NOT add `After=multi-user.target`: this unit is WantedBy=multi-user.target,
+# so ordering it *after* that target is a circular dependency. systemd breaks the
+# cycle by silently deleting this unit's start job — the service never runs and
+# leaves no logs ("enabled, inactive (dead), empty journal"). WantedBy alone
+# already starts it as part of reaching multi-user.target; no After= is needed.
 Before=beemonitor-uploader.service
 
 [Service]

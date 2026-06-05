@@ -62,6 +62,14 @@ bring_up() {
     ping -c 2 -W 5 -I "$IFACE" "$CHECK_HOST" >/dev/null 2>&1 \
         || { log "no connectivity after bring-up"; return 1; }
 
+    # 6. Correct the clock. The Pi has no RTC, so on a cold boot / WittyPi wake it
+    #    starts with stale time (restored from fake-hwclock) and NTP cannot sync
+    #    until a route exists. A wrong clock fails TLS cert validation, so S3
+    #    uploads and telemetry break until it's fixed. Now that we have a route,
+    #    kick timesyncd to resync *before* the uploader sends anything.
+    timedatectl set-ntp true >/dev/null 2>&1 || true
+    systemctl restart systemd-timesyncd.service >/dev/null 2>&1 || true
+
     log "link up on $IFACE"
     return 0
 }
