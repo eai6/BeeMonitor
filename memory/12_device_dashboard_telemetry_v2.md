@@ -134,21 +134,27 @@ Field experience surfaced gaps in the telemetry/dashboard built in doc 10:
 - `DeviceHeartbeat`: add `lat`/`lon` (nullable) — per-beat GPS, written only when
   `DEVICE_STORE_GPS_PER_HEARTBEAT` is on. Migration required.
 
-## Build order (batches)
-1. **Quick wins (no Pi):** remove Sources nav (#1); online=freshness + configurable
-   (#2). Ship immediately.
-2. **Telemetry cheapening (Pi + backend):** JSON-only @60s, drop images (#3);
-   activity period decouple/configurable (#6); recorder still→0. Dashboard shows
-   activity over the 1h window correctly.
-3. **Modem status (Pi):** `cellular-up.sh` writes signal+GPS to status file;
-   `telemetry.py` reads it (#5, #8). Backend stores GPS; detail page shows
-   signal + coords + map link. (Pi-verify.)
-4. **Activity graph (#7):** backend aggregation endpoint + Chart.js on detail page.
-5. **On-demand camera (#4):** `Device.pending_command` + request endpoints +
-   heartbeat-response command + Pi capture/upload + dashboard buttons.
-   - 5a: picture-on-demand (single still).
-   - 5b: live view via bounded rapid-stills burst (auto-refresh on dashboard).
-   - 5c (later): true MJPEG/WebRTC streaming over WiFi.
+## Build order (batches) — STATUS
+1. ✅ **Quick wins:** remove Sources nav (#1); online=freshness + configurable (#2).
+   — commit `cca206b`.
+2. ✅ **Telemetry cheapening:** JSON-only @60s, drop images (#3); activity period
+   decoupled `BEEMONITOR_ACTIVITY_PERIOD` (#6); recorder periodic still→0.
+   — commit `6c2a0cd`.
+3. ✅ **Modem status:** `cellular-up.sh` writes signal+GPS to `/run/beemonitor/
+   modem-status.json`; `telemetry.py` reads it (#5, #8). Device GPS + per-heartbeat
+   GPS; dashboard cellular + Location card. Migration 0003. — commit `c7154ee`.
+   **(Pi-verify: qmicli parse, AT port, GNSS fix.)**
+4. ✅ **Activity graph (#7):** `snippets_last_period` column (migration 0004) +
+   ORM TruncHour/TruncDay aggregation + Chart.js (24h/7d/30d/90d). — commit `3ebb0de`.
+5. ✅ **On-demand camera (#4):** request-image/request-stream endpoints +
+   latest-image.json; heartbeat-response command; Pi capture via sentinel +
+   `send_beat(image=)`; dashboard buttons + polling. — commit `358606a`.
+   - 5a ✅ picture-on-demand (single still).
+   - 5b ✅ live view via bounded rapid-stills (`BEEMONITOR_STREAM_FPS`/`_MAX_SECONDS`).
+   - 5c ⬜ (deferred) true low-latency MJPEG/WebRTC streaming over WiFi.
+
+**All planned batches complete (2026-06-05). Remaining: on-Pi verification of the
+modem-status/GPS path + on-demand capture; and 5c if real-time streaming is wanted.**
 
 ## Open / verify
 - GPS sourcing path (AT+QGPSLOC vs qmicli loc service vs gpsd) — using Quectel AT
