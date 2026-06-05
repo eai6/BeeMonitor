@@ -173,21 +173,6 @@
   </div>
 </div>
 
-<!-- Image timeline -->
-{% if timeline %}
-<div class="mt-8">
-  <h2 class="text-lg font-semibold text-gray-900 mb-3">Recent images</h2>
-  <div class="flex gap-3 overflow-x-auto pb-2">
-    {% for img in timeline %}
-    <a href="{{ img.url }}" target="_blank" class="flex-shrink-0">
-      <img src="{{ img.url }}" alt="" class="w-32 h-24 rounded object-cover bg-gray-100 hover:ring-2 hover:ring-amber-400">
-      <div class="text-xs text-gray-400 mt-1 text-center">{{ img.created_at|date:"M j, H:i" }}</div>
-    </a>
-    {% endfor %}
-  </div>
-</div>
-{% endif %}
-
 <!-- Videos from this device -->
 <div class="mt-8">
   <div class="flex items-center justify-between mb-3">

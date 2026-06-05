@@ -68,7 +68,6 @@ class DeviceListView(LoginRequiredMixin, ListView):
             device.online = _is_online(device)
             device.latest_hb = latest
             device.storage_pct = latest.storage_pct if latest else None
-            device.thumb_url = _presign_image(latest.image_storage_key) if latest else None
             device.video_count = device.videos.count()
         return ctx
 
@@ -108,14 +107,6 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
                 f"https://www.openstreetmap.org/?mlat={device.last_lat}"
                 f"&mlon={device.last_lon}#map=15/{device.last_lat}/{device.last_lon}"
             )
-
-        # Image timeline — most recent stills (hourly), each presigned.
-        timeline = []
-        for hb in device.heartbeats.all()[:24]:
-            url = _presign_image(hb.image_storage_key)
-            if url:
-                timeline.append({"created_at": hb.created_at, "url": url})
-        ctx["timeline"] = timeline
 
         # Videos uploaded by this device (device-scoped slice of /videos/).
         ctx["videos"] = device.videos.all()[:12]

@@ -36,14 +36,7 @@
       {% for d in devices %}
       <tr>
         <td class="px-6 py-4 text-sm">
-          <a href="{% url 'devices:detail' d.pk %}" class="flex items-center gap-3 group">
-            {% if d.thumb_url %}
-              <img src="{{ d.thumb_url }}" alt="" class="w-10 h-10 rounded object-cover bg-gray-100">
-            {% else %}
-              <span class="w-10 h-10 rounded bg-gray-100 flex items-center justify-center text-gray-300 text-xs">—</span>
-            {% endif %}
-            <span class="font-medium text-gray-900 group-hover:text-amber-700">{{ d.name }}</span>
-          </a>
+          <a href="{% url 'devices:detail' d.pk %}" class="font-medium text-gray-900 hover:text-amber-700">{{ d.name }}</a>
         </td>
         <td class="px-6 py-4 text-sm text-gray-500">{{ d.location|default:"—" }}</td>
         <td class="px-6 py-4 text-sm text-gray-500">
