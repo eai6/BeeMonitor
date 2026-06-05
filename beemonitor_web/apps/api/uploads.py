@@ -245,11 +245,10 @@ def _enqueue_pi_analysis(video, device) -> int | None:
     if not getattr(_s, "SAGEMAKER_ENDPOINT_NAME", ""):
         return None  # Phase 4 endpoint not deployed yet — keep upload happy.
 
-    import threading
     import uuid as _uuid
 
     from apps.analysis.models import Job
-    from apps.analysis.views import _spawn_gpu_job
+    from apps.analysis.views import spawn_gpu_job_async
     from django.utils import timezone
 
     job = Job.objects.create(
@@ -265,5 +264,7 @@ def _enqueue_pi_analysis(video, device) -> int | None:
         started_at=timezone.now(),
         modal_job_id=f"pi_{_uuid.uuid4().hex[:12]}",
     )
-    threading.Thread(target=_spawn_gpu_job, args=(job.pk,), daemon=True).start()
+    # Bounded pool, not a raw thread — a backlog drain must not open one DB
+    # connection per upload and exhaust the database.
+    spawn_gpu_job_async(job.pk)
     return job.pk

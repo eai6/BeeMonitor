@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 from django.conf import settings
 from django.contrib import messages
@@ -127,10 +128,26 @@ def _ingest_external_s3_to_storage(video) -> str:
 def _sagemaker_runtime():
     """Boto3 sagemaker-runtime client, region-aware."""
     import boto3
+    from botocore.config import Config
     return boto3.client(
         "sagemaker-runtime",
         region_name=getattr(settings, "AWS_REGION", "us-east-1"),
+        # Fail fast. Without this, a network gap (e.g. a missing VPC endpoint)
+        # blocks the worker — and the DB connection it holds — for 60s+ per call.
+        config=Config(connect_timeout=10, read_timeout=30, retries={"max_attempts": 1}),
     )
+
+
+# Bounded pool for single-job SageMaker spawns. A burst of uploads (e.g. a Pi
+# video backlog draining over WiFi) previously started one thread per upload,
+# each holding a DB connection across a multi-second SageMaker call — enough to
+# exhaust the database's connection slots. Cap the concurrency instead.
+_SPAWN_POOL = ThreadPoolExecutor(max_workers=3, thread_name_prefix="gpu-spawn")
+
+
+def spawn_gpu_job_async(job_pk: int) -> None:
+    """Queue a single-job SageMaker spawn on the bounded pool (non-blocking)."""
+    _SPAWN_POOL.submit(_spawn_gpu_job, job_pk)
 
 
 def _spawn_gpu_job(job_pk: int) -> None:
@@ -154,11 +171,16 @@ def _spawn_gpu_job(job_pk: int) -> None:
         video = job.video
         blob_path = video.storage_key
     except Job.DoesNotExist:
+        connection.close()
         return
     except Exception as e:
         Job.objects.filter(pk=job_pk).update(status="failed", error_message=str(e))
         connection.close()
         return
+
+    # Release the DB connection during the slow S3/SageMaker round-trips so we
+    # never hold a pooled connection across a multi-second network call.
+    connection.close()
 
     try:
         if blob_path.startswith("s3://"):
@@ -417,13 +439,8 @@ class JobCreateView(LoginRequiredMixin, FormView):
             modal_job_id=f"modal_{uuid.uuid4().hex[:12]}",
         )
 
-        # Spawn on Modal (non-blocking) — PollJobsView checks for results
-        thread = threading.Thread(
-            target=_spawn_gpu_job,
-            args=(job.pk,),
-            daemon=True,
-        )
-        thread.start()
+        # Spawn (non-blocking, bounded pool) — PollJobsView checks for results
+        spawn_gpu_job_async(job.pk)
 
         messages.info(self.request, f"Job #{job.pk} submitted — processing on GPU. This page auto-refreshes.")
         self._job_pk = job.pk

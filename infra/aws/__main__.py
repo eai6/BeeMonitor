@@ -523,6 +523,20 @@ aws.ec2.VpcEndpoint(
     private_dns_enabled=True,
 )
 
+# SageMaker Runtime interface endpoint (~$7/mo) — the Django app calls
+# invoke_endpoint_async (auto-analysis on Pi upload). With no NAT/IGW, App Runner
+# otherwise can't reach runtime.sagemaker.<region>.amazonaws.com and every spawn
+# times out after 60s (which also pinned DB connections during upload bursts).
+aws.ec2.VpcEndpoint(
+    "sagemaker-runtime-endpoint",
+    vpc_id=vpc.id,
+    service_name=f"com.amazonaws.{region}.sagemaker.runtime",
+    vpc_endpoint_type="Interface",
+    subnet_ids=[s.id for s in private_subnets],
+    security_group_ids=[vpc_endpoint_sg.id],
+    private_dns_enabled=True,
+)
+
 
 # ---------------------------------------------------------------------------
 # RDS Postgres 16 — the Django database
