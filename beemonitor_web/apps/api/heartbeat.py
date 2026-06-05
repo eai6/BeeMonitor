@@ -164,3 +164,27 @@ class DeviceHeartbeatView(APIView):
             },
             status=201,
         )
+
+
+class DeviceCommandView(APIView):
+    """Lightweight command poll — lets the device pick up an on-demand request
+    (e.g. capture_image) within seconds, without waiting for the 60s beat.
+
+    GET returns the pending command and clears it. Cheap (no metrics/image), so
+    the device can poll this every ~10s between beats.
+    """
+
+    authentication_classes = [DeviceKeyAuthentication]
+    throttle_classes: list = []
+
+    def get(self, request):
+        device: Device = request.auth
+        if device is None or not isinstance(device, Device):
+            return Response({"detail": "Device authentication required."}, status=401)
+        command = device.pending_command or ""
+        params = device.command_params or {}
+        if command:
+            device.pending_command = ""
+            device.command_params = {}
+            device.save(update_fields=["pending_command", "command_params"])
+        return Response({"command": command, "params": params})

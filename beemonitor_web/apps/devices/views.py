@@ -101,17 +101,6 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
             {"label": "Cellular", "ok": bool(metrics.get("cellular_active"))},
         ]
 
-        # 5c: live LAN stream link, shown only while still valid.
-        if device.stream_url and device.stream_expires_at and device.stream_expires_at > timezone.now():
-            ctx["stream_url"] = device.stream_url
-            ctx["stream_expires_at"] = device.stream_expires_at
-
-        # GPS (last known fix) → coords + OpenStreetMap link.
-        if device.last_lat is not None and device.last_lon is not None:
-            ctx["gps_map_url"] = (
-                f"https://www.openstreetmap.org/?mlat={device.last_lat}"
-                f"&mlon={device.last_lon}#map=15/{device.last_lat}/{device.last_lon}"
-            )
 
         # Videos uploaded by this device (device-scoped slice of /videos/).
         ctx["videos"] = device.videos.all()[:12]
@@ -247,38 +236,8 @@ class DeviceRequestImageView(LoginRequiredMixin, View):
         return JsonResponse({"ok": True, "eta_seconds": settings.DEVICE_ONLINE_GRACE_SECONDS})
 
 
-class DeviceRequestStreamView(LoginRequiredMixin, View):
-    """Queue a bounded live-view (rapid stills) for the device."""
-
-    def post(self, request, pk):
-        device = get_object_or_404(Device, pk=pk, owner=request.user)
-        try:
-            duration = min(max(int(request.POST.get("duration", 60)), 5), 300)
-        except (TypeError, ValueError):
-            duration = 60
-        device.pending_command = "stream"
-        device.command_params = {"duration": duration}
-        device.save(update_fields=["pending_command", "command_params"])
-        return JsonResponse({"ok": True, "duration": duration})
-
-
-class DeviceRequestWifiStreamView(LoginRequiredMixin, View):
-    """Ask the device to start a live LAN MJPEG stream (WiFi only, bounded)."""
-
-    def post(self, request, pk):
-        device = get_object_or_404(Device, pk=pk, owner=request.user)
-        try:
-            duration = min(max(int(request.POST.get("duration", 180)), 30), 900)
-        except (TypeError, ValueError):
-            duration = 180
-        device.pending_command = "wifi_stream"
-        device.command_params = {"duration": duration}
-        device.save(update_fields=["pending_command", "command_params"])
-        return JsonResponse({"ok": True, "duration": duration})
-
-
 class DeviceLatestImageView(LoginRequiredMixin, View):
-    """Latest on-demand image (presigned URL) — polled by the live view."""
+    """Latest on-demand image (presigned URL) — polled after a photo request."""
 
     def get(self, request, pk):
         device = get_object_or_404(Device, pk=pk, owner=request.user)

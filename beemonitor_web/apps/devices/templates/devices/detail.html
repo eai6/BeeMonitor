@@ -59,7 +59,6 @@
     <div class="bg-white shadow rounded-lg overflow-hidden"
          data-device-pk="{{ device.pk }}"
          data-request-image-url="{% url 'devices:request_image' device.pk %}"
-         data-request-stream-url="{% url 'devices:request_stream' device.pk %}"
          data-latest-image-url="{% url 'devices:latest_image' device.pk %}">
       <div class="px-4 py-3 border-b border-gray-100 text-sm font-medium text-gray-700">Camera</div>
       <div class="bg-gray-100 aspect-video flex items-center justify-center">
@@ -71,23 +70,8 @@
         <span id="cam-status" class="text-xs text-gray-400">
           {% if latest_hb and latest_image_url %}{{ latest_hb.created_at|timesince }} ago{% endif %}
         </span>
-        <div class="flex gap-2">
-          <button id="cam-photo" class="px-2.5 py-1 text-xs rounded bg-amber-600 hover:bg-amber-700 text-white">Take photo</button>
-          <button id="cam-live" class="px-2.5 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-200">Live view</button>
-          <button id="cam-wifi" data-request-wifi-url="{% url 'devices:request_wifi_stream' device.pk %}"
-                  class="px-2.5 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-200">WiFi stream</button>
-        </div>
+        <button id="cam-photo" class="px-2.5 py-1 text-xs rounded bg-amber-600 hover:bg-amber-700 text-white">Take photo</button>
       </div>
-      {% if stream_url %}
-      <div class="px-4 pb-2">
-        <a href="{{ stream_url }}" target="_blank" rel="noopener"
-           class="inline-block text-xs font-medium text-green-700 hover:underline">● Live LAN stream — open ↗</a>
-        <p class="text-[11px] text-gray-400 leading-tight">Open on the same network as the device (or via Raspberry Pi Connect). Expires {{ stream_expires_at|timeuntil }} from now.</p>
-      </div>
-      {% endif %}
-      <p class="px-4 pb-2 text-[11px] text-gray-400 leading-tight">
-        Photo / live view stream over cellular (≤ next beat latency). <strong>WiFi stream</strong> is real-time MJPEG but only reachable on the device's local network.
-      </p>
     </div>
   </div>
 
@@ -123,21 +107,6 @@
         <div class="text-xs text-gray-500 uppercase tracking-wide">Videos uploaded</div>
         <div class="mt-2 text-2xl font-semibold text-gray-900">{{ video_count }}</div>
         <div class="mt-1 text-xs text-gray-400">{{ metrics.pending_uploads|default:"—" }} pending</div>
-      </div>
-      <!-- Cellular -->
-      <div class="bg-white shadow rounded-lg p-4">
-        <div class="text-xs text-gray-500 uppercase tracking-wide">Cellular</div>
-        <div class="mt-2 text-lg font-semibold text-gray-900">{{ metrics.cellular_signal|default:"—" }}</div>
-      </div>
-      <!-- GPS -->
-      <div class="bg-white shadow rounded-lg p-4">
-        <div class="text-xs text-gray-500 uppercase tracking-wide">Location</div>
-        {% if device.last_lat is not None and device.last_lon is not None %}
-          <div class="mt-2 text-sm font-mono text-gray-900">{{ device.last_lat|floatformat:5 }}, {{ device.last_lon|floatformat:5 }}</div>
-          <a href="{{ gps_map_url }}" target="_blank" rel="noopener" class="mt-1 inline-block text-xs text-amber-600 hover:underline">View on map →</a>
-        {% else %}
-          <div class="mt-2 text-lg font-semibold text-gray-300">no fix</div>
-        {% endif %}
       </div>
       <!-- Services -->
       <div class="bg-white shadow rounded-lg p-4">
@@ -256,47 +225,30 @@
     status.textContent = 'Live • ' + new Date(d.ts).toLocaleTimeString();
   }
 
-  function requestAndPoll(kind, windowMs, everyMs) {
+  function takePhoto() {
     var baseTs = null;
     getJSON(card.dataset.latestImageUrl).then(function (b) { baseTs = b.ts || null; }).finally(function () {
-      var url = kind === 'stream' ? card.dataset.requestStreamUrl : card.dataset.requestImageUrl;
-      status.textContent = 'Requested — waiting for device (≤ next beat)…';
-      fetch(url, {
+      status.textContent = 'Requested — capturing…';
+      fetch(card.dataset.requestImageUrl, {
         method: 'POST',
         headers: { 'X-CSRFToken': CSRF, 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: kind === 'stream' ? 'duration=60' : '',
       });
-      var end = Date.now() + windowMs;
+      var end = Date.now() + 90000;
       (function tick() {
         if (Date.now() > end) {
           if (status.textContent.indexOf('Requested') === 0) status.textContent = 'No new image (device offline?)';
           return;
         }
         getJSON(card.dataset.latestImageUrl).then(function (d) {
-          if (d.url && d.ts && d.ts !== baseTs) {
-            showImage(d);
-            if (kind !== 'stream') return;     // photo: stop after first new frame
-            baseTs = d.ts;                       // stream: keep advancing
-          }
-          setTimeout(tick, everyMs);
-        }).catch(function () { setTimeout(tick, everyMs); });
+          if (d.url && d.ts && d.ts !== baseTs) { showImage(d); return; }  // got the new photo
+          setTimeout(tick, 2000);
+        }).catch(function () { setTimeout(tick, 2000); });
       })();
     });
   }
 
   var photo = document.getElementById('cam-photo');
-  var live = document.getElementById('cam-live');
-  var wifi = document.getElementById('cam-wifi');
-  if (photo) photo.addEventListener('click', function () { requestAndPoll('photo', 120000, 3000); });
-  if (live) live.addEventListener('click', function () { requestAndPoll('stream', 80000, 2000); });
-  if (wifi) wifi.addEventListener('click', function () {
-    status.textContent = 'WiFi stream requested — link appears within a minute…';
-    fetch(wifi.dataset.requestWifiUrl, {
-      method: 'POST',
-      headers: { 'X-CSRFToken': CSRF, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'duration=180',
-    }).then(function () { setTimeout(function () { location.reload(); }, 65000); });
-  });
+  if (photo) photo.addEventListener('click', takePhoto);
 })();
 </script>
 {% endblock %}

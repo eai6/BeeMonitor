@@ -70,15 +70,9 @@ ACTIVITY_PERIOD = int(os.environ.get("BEEMONITOR_ACTIVITY_PERIOD", "3600"))
 RECORDER_UNIT = os.environ.get("BEEMONITOR_RECORDER_UNIT", "beemonitor-recorder.service")
 UPLOADER_UNIT = os.environ.get("BEEMONITOR_UPLOADER_UNIT", "beemonitor-uploader.service")
 CELLULAR_UNIT = os.environ.get("BEEMONITOR_CELLULAR_UNIT", "cellular.service")
-QMI_DEV = os.environ.get("BEEMONITOR_QMI_DEV", "/dev/cdc-wdm0")
-# Modem signal + GPS are probed by cellular-up.sh (root) and written here; we
-# only read this file (telemetry runs as the unprivileged `beemonitor` user).
-MODEM_STATUS_FILE = os.environ.get(
-    "BEEMONITOR_MODEM_STATUS_FILE", "/run/beemonitor/modem-status.json")
-MODEM_STATUS_MAX_AGE = int(os.environ.get("BEEMONITOR_MODEM_STATUS_MAX_AGE", "300"))
-# On-demand live view (rapid stills) caps.
-STREAM_FPS = float(os.environ.get("BEEMONITOR_STREAM_FPS", "1.5"))
-STREAM_MAX_SECONDS = int(os.environ.get("BEEMONITOR_STREAM_MAX_SECONDS", "120"))
+# How often (s) to poll for an on-demand command between beats — keeps the
+# "Take photo" latency low without raising the health-beat cadence.
+COMMAND_POLL_SECONDS = int(os.environ.get("BEEMONITOR_COMMAND_POLL_SECONDS", "8"))
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s telemetry %(message)s", level=logging.INFO,
@@ -133,27 +127,6 @@ def _service_active(unit: str) -> bool:
         ).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
-
-
-def _modem_status() -> dict:
-    """Read modem signal + GPS from the status file written by cellular-up.sh.
-
-    The telemetry service runs as `beemonitor`, which can't access the QMI/AT
-    device — so `cellular-up.sh` (root) probes the modem each cycle and drops a
-    JSON status file we just read here. Returns {} if absent/unreadable/stale.
-    """
-    try:
-        raw = Path(MODEM_STATUS_FILE).read_text()
-        data = json.loads(raw)
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    # Ignore stale status (modem service stopped writing).
-    ts = data.get("ts")
-    if isinstance(ts, (int, float)) and (time.time() - ts) > MODEM_STATUS_MAX_AGE:
-        return {}
-    return data
 
 
 def _video_stats(window_seconds: int) -> dict:
@@ -228,23 +201,6 @@ def collect_metrics() -> dict:
     m["recorder_active"] = _service_active(RECORDER_UNIT)
     m["uploader_active"] = _service_active(UPLOADER_UNIT)
     m["cellular_active"] = _service_active(CELLULAR_UNIT)
-
-    status = _modem_status()
-    rssi = status.get("rssi_dbm")
-    if rssi is not None:
-        m["cellular_signal"] = f"{rssi} dBm"
-    if status.get("lat") is not None and status.get("lon") is not None:
-        m["gps_lat"] = status["lat"]
-        m["gps_lon"] = status["lon"]
-
-    # Live LAN MJPEG stream advertised by the recorder (5c), while still active.
-    try:
-        st = json.loads((QUEUE_DIR / "stream.status").read_text())
-        if st.get("url") and st.get("until", 0) > time.time():
-            m["stream_url"] = st["url"]
-            m["stream_until"] = st["until"]
-    except (OSError, ValueError):
-        pass
 
     if SCHEDULE_WINDOW:
         m["schedule_window"] = SCHEDULE_WINDOW
@@ -383,28 +339,29 @@ def _handle_command(cmd: str, params: dict) -> None:
     if cmd == "capture_image":
         log.info("command: capture_image")
         _capture_and_upload()
-    elif cmd == "stream":
-        duration = min(int(params.get("duration", 60) or 60), STREAM_MAX_SECONDS)
-        gap = 1.0 / STREAM_FPS if STREAM_FPS > 0 else 1.0
-        log.info("command: stream %ds @ %.1f fps", duration, STREAM_FPS)
-        end = time.monotonic() + duration
-        while _running and time.monotonic() < end:
-            start = time.monotonic()
-            _capture_and_upload()
-            rest = gap - (time.monotonic() - start)
-            if rest > 0:
-                time.sleep(rest)
-    elif cmd == "wifi_stream":
-        # Ask the recorder to start its LAN MJPEG server; it writes stream.status,
-        # which collect_metrics() then advertises to the dashboard.
-        dur = int(params.get("duration", 180) or 180)
-        log.info("command: wifi_stream %ds", dur)
-        try:
-            (QUEUE_DIR / "wifistream.request").write_text(str(dur))
-        except OSError as e:
-            log.warning("wifi_stream request failed: %s", e)
     else:
-        log.warning("unknown command: %s", cmd)
+        log.warning("ignoring unknown command: %s", cmd)
+
+
+def _poll_command() -> None:
+    """Lightweight check for a pending on-demand command between beats.
+
+    Cheap GET (no metrics/image), so we can poll it every few seconds — a
+    requested photo arrives in ~COMMAND_POLL_SECONDS instead of waiting for the
+    next 60s beat.
+    """
+    try:
+        r = requests.get(
+            urljoin(API_BASE + "/", "api/v1/devices/command"),
+            headers={"Authorization": f"Bearer {DEVICE_KEY}"},
+            timeout=30,
+        )
+        if r.ok:
+            d = r.json()
+            if d.get("command"):
+                _handle_command(d["command"], d.get("params") or {})
+    except requests.RequestException:
+        pass
 
 
 def _handle_signal(signum, frame):  # noqa: ARG001
@@ -429,17 +386,20 @@ def main() -> int:
     while _running:
         try:
             resp = send_beat()
-            # Act on any pending command (picture / live view) the server returned.
+            # The beat may also carry a command (belt-and-suspenders).
             if resp and resp.get("command"):
                 _handle_command(resp["command"], resp.get("params") or {})
         except Exception as e:  # pragma: no cover - never let the loop die
             log.exception("beat raised: %s", e)
-        # Interruptible sleep so SIGTERM stops us promptly.
+        # Between beats, poll for on-demand commands every COMMAND_POLL_SECONDS so
+        # a requested photo lands in seconds, not up to a full INTERVAL.
         slept = 0
         while _running and slept < INTERVAL:
-            step = min(5, INTERVAL - slept)
+            step = min(COMMAND_POLL_SECONDS, INTERVAL - slept)
             time.sleep(step)
             slept += step
+            if _running and slept < INTERVAL:
+                _poll_command()
     log.info("telemetry stopped")
     return 0
 

@@ -1,5 +1,14 @@
 # 12 — Device Dashboard & Telemetry v2
 
+> **2026-06-05 simplification (field feedback):** trimmed to what's proven —
+> removed **live view (5b)** + **WiFi stream (5c)**, and the **cellular-signal +
+> GPS/Location widgets** (modem-status path was unverified). The recorder MJPEG
+> server and `cellular-up.sh` modem-status probing were reverted. **Kept:**
+> online=freshness, JSON 60s beat, activity card + graph, **take-photo on demand**
+> (now faster via a `GET /api/v1/devices/command` poll every ~8s instead of
+> waiting for the 60s beat). DB columns (stream_url, last_lat/lon, …) left in
+> place (harmless, no drop migration). See commit after a95a5aa.
+
 Status: **planned (not yet implemented)**
 Scope: Pi (`hardware/`), backend (`beemonitor_web/apps/{devices,api,videos}`), web UI
 Builds on: `10_cellular_telemetry_design.md`, `11_cellular_boot_ordering_cycle_fix.md`

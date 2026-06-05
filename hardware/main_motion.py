@@ -55,12 +55,10 @@ it the same way ``driver.py`` launches ``main.py``.
 from __future__ import annotations
 
 import argparse
-import http.server
 import json
 import logging
 import os
 import signal
-import socketserver
 import subprocess
 import sys
 import threading
@@ -137,10 +135,6 @@ TELEMETRY_QUEUE = Path(os.environ.get(
     "BEEMONITOR_TELEMETRY_QUEUE", str(RECORD_DIR.parent / "telemetry")))
 TELEMETRY_IMAGE_INTERVAL = _env_float("BEEMONITOR_TELEMETRY_IMAGE_INTERVAL", 0.0)
 TELEMETRY_IMAGE_HEIGHT = _env_int("BEEMONITOR_TELEMETRY_IMAGE_HEIGHT", 720)
-
-# 5c: on-demand live MJPEG stream over the LAN (WiFi). Bounded; LAN-only.
-STREAM_PORT = _env_int("BEEMONITOR_STREAM_PORT", 8090)
-WIFI_STREAM_MAX_SECONDS = _env_float("BEEMONITOR_WIFI_STREAM_MAX_SECONDS", 900.0)
 
 # Detection cost knob: run MOG2 on 1 of every N lores frames (timing stays
 # wall-clock based, so this only trades latency for CPU).
@@ -370,89 +364,6 @@ def _save_telemetry_still(cam) -> None:
         log.warning("telemetry still capture failed: %s", e)
 
 
-# ---------------------------------------------------------------------------
-# 5c: on-demand live MJPEG stream over the LAN (WiFi). EXPERIMENTAL — verify on
-# hardware. Bounded by duration; reachable only on the device's local network
-# (or via Raspberry Pi Connect), never proxied by the cloud dashboard.
-# ---------------------------------------------------------------------------
-
-class _StreamState:
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.frame = None            # latest JPEG bytes
-        self.active_until = 0.0      # time.monotonic() deadline
-        self.server = None
-
-    def active(self) -> bool:
-        return time.monotonic() < self.active_until
-
-
-_stream = _StreamState()
-
-
-class _MJPEGHandler(http.server.BaseHTTPRequestHandler):
-    def log_message(self, *args):  # silence per-request logging
-        pass
-
-    def do_GET(self):
-        if self.path.startswith("/stream.mjpg"):
-            self.send_response(200)
-            self.send_header("Age", "0")
-            self.send_header("Cache-Control", "no-cache, private")
-            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
-            self.end_headers()
-            try:
-                while _stream.active():
-                    with _stream.lock:
-                        frame = _stream.frame
-                    if frame:
-                        self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n")
-                        self.wfile.write(f"Content-Length: {len(frame)}\r\n\r\n".encode())
-                        self.wfile.write(frame)
-                        self.wfile.write(b"\r\n")
-                    time.sleep(1 / 12.0)  # cap ~12 fps to the client
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-        else:
-            body = (b"<html><body style='margin:0;background:#000'>"
-                    b"<img src='/stream.mjpg' style='width:100%;height:auto'></body></html>")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html")
-            self.end_headers()
-            self.wfile.write(body)
-
-
-def _lan_ip():
-    """First non-cellular IPv4 (wlan*/eth*/en*) — the address to reach the stream."""
-    try:
-        out = subprocess.run(["ip", "-o", "-4", "addr", "show"],
-                             capture_output=True, text=True, timeout=5).stdout
-    except (OSError, subprocess.SubprocessError):
-        return None
-    for line in out.splitlines():
-        parts = line.split()
-        if len(parts) >= 4 and parts[1].startswith(("wl", "eth", "en")):
-            return parts[3].split("/")[0]
-    return None
-
-
-def _start_stream(duration: float):
-    """Start (or extend) the MJPEG server; return the LAN URL or None."""
-    _stream.active_until = time.monotonic() + min(duration, WIFI_STREAM_MAX_SECONDS)
-    if _stream.server is None:
-        try:
-            srv = socketserver.ThreadingTCPServer(("0.0.0.0", STREAM_PORT), _MJPEGHandler)
-            srv.daemon_threads = True
-            _stream.server = srv
-            threading.Thread(target=srv.serve_forever, daemon=True).start()
-            log.info("mjpeg stream server listening on :%d", STREAM_PORT)
-        except OSError as e:
-            log.warning("could not start stream server: %s", e)
-            return None
-    ip = _lan_ip()
-    return f"http://{ip}:{STREAM_PORT}/" if ip else None
-
-
 def record() -> None:
     """Main capture loop. Blocks until SIGTERM/SIGINT."""
     if not HAVE_PICAMERA2:
@@ -612,29 +523,6 @@ def record() -> None:
                     (TELEMETRY_QUEUE / "capture.request").unlink()
                 except OSError:
                     pass
-
-            # 5c: on-demand LAN MJPEG stream. telemetry drops wifistream.request;
-            # we start the server, advertise the URL via stream.status, and feed
-            # frames below while active.
-            sreq = TELEMETRY_QUEUE / "wifistream.request"
-            if sreq.exists():
-                try:
-                    dur = float(sreq.read_text().strip() or WIFI_STREAM_MAX_SECONDS)
-                except (OSError, ValueError):
-                    dur = WIFI_STREAM_MAX_SECONDS
-                url = _start_stream(dur)
-                try:
-                    (TELEMETRY_QUEUE / "stream.status").write_text(
-                        json.dumps({"url": url, "until": time.time() + min(dur, WIFI_STREAM_MAX_SECONDS)}))
-                    sreq.unlink()
-                except OSError:
-                    pass
-            # While streaming, publish the current lores frame as JPEG (cheap).
-            if _stream.active():
-                ok, jpg = cv2.imencode(".jpg", gray, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-                if ok:
-                    with _stream.lock:
-                        _stream.frame = jpg.tobytes()
 
             # Optional periodic still (off by default; TELEMETRY_IMAGE_INTERVAL=0).
             if now_mono >= next_telemetry_image:
