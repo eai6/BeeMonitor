@@ -14,5 +14,6 @@ urlpatterns = [
     path("<int:pk>/delete/", views.DeviceDeleteView.as_view(), name="delete"),
     path("<int:pk>/request-image/", views.DeviceRequestImageView.as_view(), name="request_image"),
     path("<int:pk>/request-stream/", views.DeviceRequestStreamView.as_view(), name="request_stream"),
+    path("<int:pk>/request-wifi-stream/", views.DeviceRequestWifiStreamView.as_view(), name="request_wifi_stream"),
     path("<int:pk>/latest-image.json", views.DeviceLatestImageView.as_view(), name="latest_image"),
 ]

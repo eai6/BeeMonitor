@@ -365,8 +365,7 @@ journalctl -u beemonitor-uploader.service -f     # upload progress
    small `lores` stream fed to the MOG2 motion detector. When motion appears it
    flushes the ring buffer (capturing **pre-roll**) and keeps writing until
    motion stops plus a **post-roll**, then remuxes the clip to `.mp4` under
-   `RECORD_DIR/YYYY-MM-DD/`. A short **heartbeat clip** is recorded periodically
-   even with no motion so you can audit detection remotely.
+   `RECORD_DIR/YYYY-MM-DD/`. 
 2. **Calibrate timer** (`main_motion.py --calibrate`) runs once a day. It does
    *not* need the camera or a live bee — it reads snippets the recorder already
    saved, runs YOLO over them, measures the motion-blob size of every confirmed
@@ -470,7 +469,27 @@ sudo raspi-config
 ```
 Navigate to: **Interface Options → I5 I2C → YES → OK**
 
-### 8.4 Test WittyPi Through 1 Cycle
+### 8.4 Auto power-on when power is applied (no button press)
+
+So a field unit boots itself whenever power appears (solar/battery cycling,
+WittyPi wakes) — you never touch the button:
+
+```bash
+cd ~/wittypi          # or ~/Desktop/wittypi, wherever it's installed
+sudo ./wittyPi.sh
+```
+1. Choose **"Other settings…"** (the configuration submenu, ~option **9**).
+2. Find **"Default state when powered"** (default ON/OFF) and set it to **ON**
+   (default-on / `1`).
+3. Quit to save.
+
+Now: power applied → WittyPi powers the Pi → it boots → systemd starts
+`cellular`, `beemonitor-recorder`, `beemonitor-telemetry`, `beemonitor-uploader`
+automatically. Fully hands-off. (Menu wording/number varies slightly by WittyPi
+firmware; it's under the advanced/other-settings submenu as the default state.)
+This works alongside the scheduled on/off window below.
+
+### 8.5 Test WittyPi Through 1 Cycle
 
 Open terminal:
 ```bash
@@ -490,7 +509,7 @@ sudo ./wittyPi.sh
 
 4. Wait for Pi to shutdown and restart 60 seconds later to verify the cycle works
 
-### 8.5 Create Production Schedule
+### 8.6 Create Production Schedule
 
 Create the scheduler file:
 ```bash
@@ -505,7 +524,7 @@ ON    H10 M15 # will start recording from 7:50am to 6:05pm
 OFF   H13 M45 # will be off until the next day
 ```
 
-### 8.6 Apply the Schedule
+### 8.7 Apply the Schedule
 
 ```bash
 cd ~/Desktop/wittypi/

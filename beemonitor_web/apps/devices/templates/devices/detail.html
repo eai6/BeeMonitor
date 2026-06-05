@@ -74,10 +74,19 @@
         <div class="flex gap-2">
           <button id="cam-photo" class="px-2.5 py-1 text-xs rounded bg-amber-600 hover:bg-amber-700 text-white">Take photo</button>
           <button id="cam-live" class="px-2.5 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-200">Live view</button>
+          <button id="cam-wifi" data-request-wifi-url="{% url 'devices:request_wifi_stream' device.pk %}"
+                  class="px-2.5 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-200">WiFi stream</button>
         </div>
       </div>
+      {% if stream_url %}
+      <div class="px-4 pb-2">
+        <a href="{{ stream_url }}" target="_blank" rel="noopener"
+           class="inline-block text-xs font-medium text-green-700 hover:underline">● Live LAN stream — open ↗</a>
+        <p class="text-[11px] text-gray-400 leading-tight">Open on the same network as the device (or via Raspberry Pi Connect). Expires {{ stream_expires_at|timeuntil }} from now.</p>
+      </div>
+      {% endif %}
       <p class="px-4 pb-2 text-[11px] text-gray-400 leading-tight">
-        On-demand — the device acts on its next beat (≤ telemetry interval), then images stream in.
+        Photo / live view stream over cellular (≤ next beat latency). <strong>WiFi stream</strong> is real-time MJPEG but only reachable on the device's local network.
       </p>
     </div>
   </div>
@@ -277,8 +286,17 @@
 
   var photo = document.getElementById('cam-photo');
   var live = document.getElementById('cam-live');
+  var wifi = document.getElementById('cam-wifi');
   if (photo) photo.addEventListener('click', function () { requestAndPoll('photo', 120000, 3000); });
   if (live) live.addEventListener('click', function () { requestAndPoll('stream', 80000, 2000); });
+  if (wifi) wifi.addEventListener('click', function () {
+    status.textContent = 'WiFi stream requested — link appears within a minute…';
+    fetch(wifi.dataset.requestWifiUrl, {
+      method: 'POST',
+      headers: { 'X-CSRFToken': CSRF, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'duration=180',
+    }).then(function () { setTimeout(function () { location.reload(); }, 65000); });
+  });
 })();
 </script>
 {% endblock %}

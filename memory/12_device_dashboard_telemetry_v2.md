@@ -151,7 +151,11 @@ Field experience surfaced gaps in the telemetry/dashboard built in doc 10:
    `send_beat(image=)`; dashboard buttons + polling. — commit `358606a`.
    - 5a ✅ picture-on-demand (single still).
    - 5b ✅ live view via bounded rapid-stills (`BEEMONITOR_STREAM_FPS`/`_MAX_SECONDS`).
-   - 5c ⬜ (deferred) true low-latency MJPEG/WebRTC streaming over WiFi.
+   - 5c ✅ live LAN MJPEG stream: recorder serves a bounded on-demand MJPEG
+     server (BEEMONITOR_STREAM_PORT 8090); telemetry advertises the LAN URL;
+     dashboard "WiFi stream" button + link. LAN-only (open on same network / via
+     Pi Connect). Device.stream_url/stream_expires_at, migration 0005.
+     **EXPERIMENTAL — Pi-verify.** (WebRTC for cloud-reachable real-time = future.)
 
 **All planned batches complete (2026-06-05). Remaining: on-Pi verification of the
 modem-status/GPS path + on-demand capture; and 5c if real-time streaming is wanted.**

@@ -46,9 +46,15 @@ class Device(models.Model):
     last_fix_at = models.DateTimeField(null=True, blank=True)
 
     # Pending command for the device, returned in the next heartbeat response and
-    # then cleared. "" | "capture_image" | "stream" (picture / live view).
+    # then cleared. "" | "capture_image" | "stream" | "wifi_stream".
     pending_command = models.CharField(max_length=32, blank=True, default="")
     command_params = models.JSONField(default=dict, blank=True)
+
+    # 5c: live MJPEG stream the device serves on its LAN (WiFi) while active.
+    # The URL is a private LAN address — reachable on the same network or via
+    # Raspberry Pi Connect, not from the public dashboard directly.
+    stream_url = models.CharField(max_length=200, blank=True, default="")
+    stream_expires_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         verbose_name = "Device"

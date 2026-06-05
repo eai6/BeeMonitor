@@ -133,6 +133,15 @@ class DeviceHeartbeatView(APIView):
             device.last_fix_at = timezone.now()
             device.save(update_fields=["last_lat", "last_lon", "last_fix_at"])
 
+        # 5c: device advertises a live LAN MJPEG stream while one is active.
+        stream_url = (metrics.get("stream_url") or "").strip()
+        stream_until = _as_float(metrics.get("stream_until"))
+        if stream_url and stream_until:
+            from datetime import datetime, timezone as _tz
+            device.stream_url = stream_url[:200]
+            device.stream_expires_at = datetime.fromtimestamp(stream_until, tz=_tz.utc)
+            device.save(update_fields=["stream_url", "stream_expires_at"])
+
         # Hand back any pending command (picture/stream on demand), then clear it.
         command = device.pending_command or ""
         params = device.command_params or {}

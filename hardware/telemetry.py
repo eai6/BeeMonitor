@@ -236,6 +236,16 @@ def collect_metrics() -> dict:
     if status.get("lat") is not None and status.get("lon") is not None:
         m["gps_lat"] = status["lat"]
         m["gps_lon"] = status["lon"]
+
+    # Live LAN MJPEG stream advertised by the recorder (5c), while still active.
+    try:
+        st = json.loads((QUEUE_DIR / "stream.status").read_text())
+        if st.get("url") and st.get("until", 0) > time.time():
+            m["stream_url"] = st["url"]
+            m["stream_until"] = st["until"]
+    except (OSError, ValueError):
+        pass
+
     if SCHEDULE_WINDOW:
         m["schedule_window"] = SCHEDULE_WINDOW
 
@@ -384,6 +394,15 @@ def _handle_command(cmd: str, params: dict) -> None:
             rest = gap - (time.monotonic() - start)
             if rest > 0:
                 time.sleep(rest)
+    elif cmd == "wifi_stream":
+        # Ask the recorder to start its LAN MJPEG server; it writes stream.status,
+        # which collect_metrics() then advertises to the dashboard.
+        dur = int(params.get("duration", 180) or 180)
+        log.info("command: wifi_stream %ds", dur)
+        try:
+            (QUEUE_DIR / "wifistream.request").write_text(str(dur))
+        except OSError as e:
+            log.warning("wifi_stream request failed: %s", e)
     else:
         log.warning("unknown command: %s", cmd)
 

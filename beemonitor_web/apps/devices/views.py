@@ -101,6 +101,11 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
             {"label": "Cellular", "ok": bool(metrics.get("cellular_active"))},
         ]
 
+        # 5c: live LAN stream link, shown only while still valid.
+        if device.stream_url and device.stream_expires_at and device.stream_expires_at > timezone.now():
+            ctx["stream_url"] = device.stream_url
+            ctx["stream_expires_at"] = device.stream_expires_at
+
         # GPS (last known fix) → coords + OpenStreetMap link.
         if device.last_lat is not None and device.last_lon is not None:
             ctx["gps_map_url"] = (
@@ -252,6 +257,21 @@ class DeviceRequestStreamView(LoginRequiredMixin, View):
         except (TypeError, ValueError):
             duration = 60
         device.pending_command = "stream"
+        device.command_params = {"duration": duration}
+        device.save(update_fields=["pending_command", "command_params"])
+        return JsonResponse({"ok": True, "duration": duration})
+
+
+class DeviceRequestWifiStreamView(LoginRequiredMixin, View):
+    """Ask the device to start a live LAN MJPEG stream (WiFi only, bounded)."""
+
+    def post(self, request, pk):
+        device = get_object_or_404(Device, pk=pk, owner=request.user)
+        try:
+            duration = min(max(int(request.POST.get("duration", 180)), 30), 900)
+        except (TypeError, ValueError):
+            duration = 180
+        device.pending_command = "wifi_stream"
         device.command_params = {"duration": duration}
         device.save(update_fields=["pending_command", "command_params"])
         return JsonResponse({"ok": True, "duration": duration})
