@@ -143,7 +143,7 @@ and a recorder crash can't stop uploads):
 
 | Unit | Script | Job |
 |------|--------|-----|
-| `beemonitor-recorder.service` | `hardware/main_motion.py` | Records **only activity snippets** (MOG2 motion gate); drops an hourly telemetry still |
+| `beemonitor-recorder.service` | `hardware/main_motion.py` | Records **only activity snippets** (MOG2 motion gate); drops a telemetry still each `BEEMONITOR_TELEMETRY_IMAGE_INTERVAL` (60s default) |
 | `beemonitor-telemetry.service` | `hardware/telemetry.py` | Hourly health beat + image to the cloud, **over cellular** |
 | `beemonitor-uploader.service` | `hardware/uploader.py` | Streams snippets to S3 — **WiFi-gated** (video waits for WiFi) |
 | `beemonitor-calibrate.timer` | `hardware/main_motion.py --calibrate` | Daily: learns the bee blob-size window from recorded snippets with YOLO |
@@ -402,8 +402,8 @@ required; everything else has a sensible default.
 | `BEEMONITOR_YOLO_MODEL` | `yolo11n.pt` | YOLO weights used by the calibrate job |
 | `BEEMONITOR_CALIB_MAX_AGE_DAYS` | `7` | Skip recalibration if `calibration.json` is younger than this |
 | `BEEMONITOR_POLL_SECONDS` | `30` | How often the uploader scans for new snippets |
-| **`BEEMONITOR_TELEMETRY_INTERVAL`** | `3600` | Telemetry beat cadence + activity window (s). **Set `60` to test** |
-| `BEEMONITOR_TELEMETRY_IMAGE_INTERVAL` | `3600` | Recorder still cadence (s) — match the telemetry interval |
+| **`BEEMONITOR_TELEMETRY_INTERVAL`** | `60` | Telemetry beat cadence + activity window (s). **Raise (e.g. `3600`) to save cellular data** |
+| `BEEMONITOR_TELEMETRY_IMAGE_INTERVAL` | `60` | Recorder still cadence (s) — match the telemetry interval |
 | `BEEMONITOR_TELEMETRY_IMAGE_HEIGHT` | `720` | Downscale height for the telemetry still |
 | `BEEMONITOR_SCHEDULE_WINDOW` | (none) | WittyPi on/off window string, shown on the dashboard |
 | `BEEMONITOR_WIFI_ONLY_VIDEO` | `true` | Hold video off cellular — upload only when WiFi is up |
@@ -411,10 +411,10 @@ required; everything else has a sensible default.
 Tuning is rarely needed — start with defaults and adjust pre/post-roll or `ROI`
 only if you see clips clipped short or too much background motion triggering.
 
-> **Testing the telemetry loop fast:** set `BEEMONITOR_TELEMETRY_INTERVAL=60`
-> **and** `BEEMONITOR_TELEMETRY_IMAGE_INTERVAL=60` to get a beat + fresh image
-> every minute, then watch `journalctl -u beemonitor-telemetry -f` and the
-> device dashboard. Revert both to `3600` for production.
+> **Cadence:** both default to `60` — a beat + fresh image every minute. Watch
+> `journalctl -u beemonitor-telemetry -f` and the device dashboard. To save
+> cellular data, raise **both** `BEEMONITOR_TELEMETRY_INTERVAL` **and**
+> `BEEMONITOR_TELEMETRY_IMAGE_INTERVAL` (e.g. to `3600` for an hourly beat).
 
 ---
 
@@ -694,8 +694,9 @@ journalctl -u beemonitor-telemetry.service -f
 ```
 
 The unit should now show **Online** with a fresh image on the web app's
-Devices page. (To test the cadence quickly, set `BEEMONITOR_TELEMETRY_INTERVAL=60`
-and `BEEMONITOR_TELEMETRY_IMAGE_INTERVAL=60`, then revert to `3600`.)
+Devices page — a beat + fresh image every minute by default. (To save cellular
+data, raise both `BEEMONITOR_TELEMETRY_INTERVAL` and
+`BEEMONITOR_TELEMETRY_IMAGE_INTERVAL`, e.g. to `3600` for an hourly beat.)
 
 ### 10.9 Keep Cellular Data Under Control
 

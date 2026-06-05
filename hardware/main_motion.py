@@ -122,8 +122,8 @@ POST_ROLL = _env_float("BEEMONITOR_POST_ROLL", 4.0)
 MAX_SEGMENT = _env_float("BEEMONITOR_MAX_SEGMENT", 120.0)   # force-rotate cap
 WARMUP_SECONDS = _env_float("BEEMONITOR_WARMUP", 5.0)        # let MOG2 learn bg
 
-# Heartbeat *video clips*: disabled by default — the hourly telemetry image
-# (below) covers the "is the gate working / camera alive" audit far more cheaply.
+# Heartbeat *video clips*: disabled by default — the telemetry image (below)
+# covers the "is the gate working / camera alive" audit far more cheaply.
 # Left in the code for bench/WiFi debugging; set >0 to re-enable.
 HEARTBEAT_INTERVAL = _env_float("BEEMONITOR_HEARTBEAT_INTERVAL", 0.0)
 HEARTBEAT_SECONDS = _env_float("BEEMONITOR_HEARTBEAT_SECONDS", 10.0)
@@ -133,7 +133,7 @@ HEARTBEAT_SECONDS = _env_float("BEEMONITOR_HEARTBEAT_SECONDS", 10.0)
 # over cellular each beat. Match BEEMONITOR_TELEMETRY_INTERVAL.
 TELEMETRY_QUEUE = Path(os.environ.get(
     "BEEMONITOR_TELEMETRY_QUEUE", str(RECORD_DIR.parent / "telemetry")))
-TELEMETRY_IMAGE_INTERVAL = _env_float("BEEMONITOR_TELEMETRY_IMAGE_INTERVAL", 3600.0)
+TELEMETRY_IMAGE_INTERVAL = _env_float("BEEMONITOR_TELEMETRY_IMAGE_INTERVAL", 60.0)
 TELEMETRY_IMAGE_HEIGHT = _env_int("BEEMONITOR_TELEMETRY_IMAGE_HEIGHT", 720)
 
 # Detection cost knob: run MOG2 on 1 of every N lores frames (timing stays

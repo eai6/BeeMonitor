@@ -1,7 +1,8 @@
 """BeeMonitor Pi -> cloud telemetry beat (cheap, cellular).
 
-Runs once per invocation (driven hourly by ``beemonitor-telemetry.timer``) and
-POSTs a small health beat + one image to the API. This is the *cheap* channel —
+Loops at ``BEEMONITOR_TELEMETRY_INTERVAL`` (60s by default; pass ``--once`` for a
+single beat) and POSTs a small health beat + one image to the API each beat.
+This is the *cheap* channel —
 telemetry JSON + a ~250 KB JPEG — that tells the dashboard the unit is alive,
 kept separate from the WiFi-gated bulk-video upload (``uploader.py``).
 
@@ -58,9 +59,10 @@ QUEUE_DIR = Path(os.environ.get(
     "BEEMONITOR_TELEMETRY_QUEUE", str(RECORD_DIR.parent / "telemetry")))
 SCHEDULE_WINDOW = os.environ.get("BEEMONITOR_SCHEDULE_WINDOW", "")
 POST_TIMEOUT = int(os.environ.get("BEEMONITOR_TELEMETRY_TIMEOUT", "120"))
-# Seconds between beats. 3600 in production; set 60 for testing. Also the
-# trailing window used for the snippets-per-period activity proxy.
-INTERVAL = int(os.environ.get("BEEMONITOR_TELEMETRY_INTERVAL", "3600"))
+# Seconds between beats. Defaults to 60; set higher (e.g. 3600) via env to slow
+# the cadence over a metered cellular link. Also the trailing window used for
+# the snippets-per-period activity proxy.
+INTERVAL = int(os.environ.get("BEEMONITOR_TELEMETRY_INTERVAL", "60"))
 
 # systemd unit names to report health for.
 RECORDER_UNIT = os.environ.get("BEEMONITOR_RECORDER_UNIT", "beemonitor-recorder.service")
@@ -308,7 +310,7 @@ def main() -> int:
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
 
     # --once: single beat (handy for cron/manual test). Default: loop forever
-    # at BEEMONITOR_TELEMETRY_INTERVAL (3600 prod, 60 for testing).
+    # at BEEMONITOR_TELEMETRY_INTERVAL (60 default; raise via env to slow down).
     if "--once" in sys.argv:
         return send_beat()
 
