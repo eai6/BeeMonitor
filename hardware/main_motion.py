@@ -143,6 +143,11 @@ DETECT_EVERY_N = max(1, _env_int("BEEMONITOR_DETECT_EVERY_N", 2))
 # MOG2 / blob params — ported from BlobDetector defaults, scaled for lores.
 MOG2_HISTORY = _env_int("BEEMONITOR_MOG2_HISTORY", 500)
 MOG2_VAR_THRESHOLD = _env_int("BEEMONITOR_MOG2_VAR", 16)
+# Periodically rebuild the background model from scratch so the gate tracks
+# slow scene changes (sun/shadow drift, a moved leaf) in real time instead of
+# letting them bleed in through MOG2's long history. The model is also fresh at
+# recorder start (the gate is constructed then). 0 disables periodic rebuilds.
+BG_RESET_INTERVAL = _env_float("BEEMONITOR_BG_RESET_INTERVAL", 600.0)  # 10 min
 MORPH_KERNEL = _env_int("BEEMONITOR_MORPH_KERNEL", 5)
 MORPH_ITERS = _env_int("BEEMONITOR_MORPH_ITERS", 2)
 # Blob area filters in *lores* pixels. Defaults are deliberately permissive.
@@ -152,14 +157,36 @@ MAX_BLOB_AREA = _env_float("BEEMONITOR_MAX_BLOB_AREA", 5000.0)
 MIN_MOTION_BLOBS = _env_int("BEEMONITOR_MIN_MOTION_BLOBS", 1)
 
 # Optional detection ROI in lores coords: "x1,y1,x2,y2" (e.g. the hotel face).
-# Empty = whole frame.
+# Empty (the default) => auto-detect the hotel with nest_detection.pt at startup,
+# exactly like cloud BeeMonitor; falls back to the whole frame if detection fails.
 ROI = os.environ.get("BEEMONITOR_ROI", "").strip()
 
-# Calibration: where the YOLO-derived blob-area window is stored, and the YOLO
-# model used by the (scheduled, offline) calibration pass over saved snippets.
+# ML models. Default to the repo's models/ committed next to hardware/ so the Pi
+# uses the SAME weights as cloud BeeMonitor with no env to set — we are NOT using
+# the stock yolo11n any more. Override the dir or individual paths via env.
+_DEFAULT_MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
+MODELS_DIR = Path(os.environ.get("BEEMONITOR_MODELS_DIR", str(_DEFAULT_MODELS_DIR)))
+
+# nest_detection.pt — hotel/nest detector. Defines the recording ROI (the hotel)
+# the same way cloud BeeMonitor does: class 0 = hotel, class 1 = nest hole.
+NEST_MODEL = os.environ.get("BEEMONITOR_NEST_MODEL", str(MODELS_DIR / "nest_detection.pt"))
+NEST_CONF = _env_float("BEEMONITOR_NEST_CONF", 0.25)
+# Run hotel detection before recording to set the ROI. Off => whole frame.
+HOTEL_ROI_DETECT = _env_bool("BEEMONITOR_HOTEL_ROI_DETECT", True)
+# Padding around the detected hotel, base px @ 1920x1080, scaled to capture res
+# (mirrors NestConfig.hotel_padding_x/y_base in cloud config.py).
+HOTEL_PAD_X_BASE = _env_float("BEEMONITOR_HOTEL_PAD_X", 100.0)
+HOTEL_PAD_Y_BASE = _env_float("BEEMONITOR_HOTEL_PAD_Y", 50.0)
+# Seconds to let auto-exposure settle before grabbing the hotel-detection frame.
+HOTEL_SETTLE_SECONDS = _env_float("BEEMONITOR_HOTEL_SETTLE", 2.0)
+
+# Calibration: where the blob-area window is stored, and the bee detector used by
+# the (scheduled, offline) calibration pass over saved snippets. bee_tracking.pt
+# is BeeMonitor's own bee/wasp detector — every box is a bee, so calibration no
+# longer needs a COCO class filter.
 CALIB_FILE = Path(os.environ.get(
     "BEEMONITOR_CALIB_FILE", str(RECORD_DIR.parent / "calibration.json")))
-YOLO_MODEL = os.environ.get("BEEMONITOR_YOLO_MODEL", "yolo11n.pt")
+YOLO_MODEL = os.environ.get("BEEMONITOR_YOLO_MODEL", str(MODELS_DIR / "bee_tracking.pt"))
 YOLO_CONF = _env_float("BEEMONITOR_YOLO_CONF", 0.25)
 # Stop once we've measured this many confirmed-bee blobs across snippets.
 # MIN_SAMPLES is the floor below which we refuse to overwrite a calibration.
@@ -210,6 +237,7 @@ class MotionGate:
                  morph_iters=MORPH_ITERS, min_area=MIN_BLOB_AREA,
                  max_area=MAX_BLOB_AREA, min_blobs=MIN_MOTION_BLOBS):
         self.var_threshold = var_threshold
+        self.history = history
         self.bg = cv2.createBackgroundSubtractorMOG2(
             history=history, varThreshold=var_threshold, detectShadows=False)
         self._morph_kernel = morph_kernel
@@ -265,6 +293,17 @@ class MotionGate:
     def warm(self, gray: np.ndarray) -> None:
         """Update the background model without evaluating motion (warmup)."""
         self.bg.apply(self._crop(gray))
+
+    def reset(self) -> None:
+        """Discard and rebuild the background model from scratch.
+
+        Keeps the current var_threshold (calibration may have tuned it). The
+        caller should re-warm for a few seconds before trusting motion again,
+        since the fresh model treats the first frames as all-foreground.
+        """
+        self.bg = cv2.createBackgroundSubtractorMOG2(
+            history=self.history, varThreshold=self.var_threshold,
+            detectShadows=False)
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +365,120 @@ def _snippet_paths(now: datetime):
     return h264, mp4
 
 
+def _main_array_to_bgr(frame):
+    """Normalise a picamera2 main-stream array to BGR regardless of pixel format."""
+    if frame.ndim == 3 and frame.shape[2] >= 3:
+        return cv2.cvtColor(frame[:, :, :3], cv2.COLOR_RGB2BGR)
+    # YUV420 (I420) packed: shape (H*3/2, W)
+    return cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_I420)
+
+
+def _scale_roi(roi, src_wh, dst_wh):
+    """Scale an (x1,y1,x2,y2) box from src resolution to dst, clamped to dst."""
+    x1, y1, x2, y2 = roi
+    sw, sh = src_wh
+    dw, dh = dst_wh
+    sx, sy = dw / sw, dh / sh
+    return (
+        max(0, int(x1 * sx)), max(0, int(y1 * sy)),
+        min(dw, int(x2 * sx)), min(dh, int(y2 * sy)),
+    )
+
+
+def detect_hotel_roi(frame_bgr):
+    """Cloud-faithful hotel ROI from one frame, in that frame's pixel coords.
+
+    Runs nest_detection.pt (class 0 = hotel, class 1 = nest hole) like cloud
+    BeeMonitor. Prefers the highest-confidence hotel box; else the bounding box
+    of all detected nest holes. Pads (100/50 px @ 1920x1080, scaled to the
+    capture res) and clamps. Returns None on any failure -> caller uses the
+    whole frame.
+    """
+    try:
+        from ultralytics import YOLO  # noqa: PLC0415 - heavy, lazy
+    except ImportError:
+        log.warning("ultralytics not installed — cannot detect hotel, using full frame")
+        return None
+    if not Path(NEST_MODEL).exists():
+        log.warning("nest model not found at %s — using full frame", NEST_MODEL)
+        return None
+    try:
+        model = YOLO(NEST_MODEL)
+        results = model.predict(frame_bgr, conf=NEST_CONF, verbose=False)
+    except Exception as e:  # pragma: no cover - model/runtime issues mustn't crash startup
+        log.warning("nest detection failed (%s) — using full frame", e)
+        return None
+
+    boxes = results[0].boxes if results else None
+    if boxes is None or len(boxes) == 0:
+        log.warning("no hotel/nest detections — using full frame")
+        return None
+
+    xyxy = boxes.xyxy.cpu().numpy()
+    cls = boxes.cls.cpu().numpy().astype(int)
+    conf = boxes.conf.cpu().numpy()
+    h, w = frame_bgr.shape[:2]
+    HOTEL_CLASS, NEST_CLASS = 0, 1
+
+    hotel_mask = cls == HOTEL_CLASS
+    if hotel_mask.any():
+        # Highest-confidence hotel box.
+        idx = np.where(hotel_mask)[0]
+        best = idx[conf[idx].argmax()]
+        x1, y1, x2, y2 = xyxy[best]
+        source = f"hotel box (conf {conf[best]:.2f})"
+    else:
+        nests = xyxy[cls == NEST_CLASS]
+        if len(nests) == 0:
+            nests = xyxy  # no class-1 either; bound whatever was found
+        x1, y1 = nests[:, 0].min(), nests[:, 1].min()
+        x2, y2 = nests[:, 2].max(), nests[:, 3].max()
+        source = f"{len(nests)} nest holes"
+
+    pad_x = HOTEL_PAD_X_BASE * (w / 1920.0)
+    pad_y = HOTEL_PAD_Y_BASE * (h / 1080.0)
+    roi = (
+        int(max(0, x1 - pad_x)), int(max(0, y1 - pad_y)),
+        int(min(w, x2 + pad_x)), int(min(h, y2 + pad_y)),
+    )
+    if roi[2] - roi[0] < 10 or roi[3] - roi[1] < 10:
+        log.warning("detected hotel ROI degenerate (%s) — using full frame", roi)
+        return None
+    log.info("hotel ROI from %s: %s in %dx%d frame", source, roi, w, h)
+    return roi
+
+
+def _resolve_record_roi(cam):
+    """Decide the lores-coord detection ROI for recording.
+
+    Priority: explicit BEEMONITOR_ROI (lores coords) > hotel auto-detection >
+    whole frame. Mirrors cloud BeeMonitor, which detects the hotel first and
+    confines downstream detection to it.
+    """
+    env_roi = _parse_roi()
+    if env_roi is not None:
+        log.info("using explicit BEEMONITOR_ROI=%s (lores coords)", env_roi)
+        return env_roi
+    if not HOTEL_ROI_DETECT:
+        log.info("hotel auto-detection disabled — recording on full frame")
+        return None
+    # Let auto-exposure settle, then grab a clean main-stream frame for detection.
+    if HOTEL_SETTLE_SECONDS > 0:
+        time.sleep(HOTEL_SETTLE_SECONDS)
+    try:
+        bgr = _main_array_to_bgr(cam.capture_array("main"))
+    except Exception as e:  # pragma: no cover
+        log.warning("could not grab a frame for hotel detection (%s) — full frame", e)
+        return None
+    roi_main = detect_hotel_roi(bgr)
+    if roi_main is None:
+        log.info("hotel detection unsuccessful — recording on full frame")
+        return None
+    roi_lores = _scale_roi(roi_main, (MAIN_W, MAIN_H), (LORES_W, LORES_H))
+    log.info("hotel ROI scaled to lores: %s", roi_lores)
+    return roi_lores
+
+
 def _save_telemetry_still(cam) -> None:
     """Capture one downscaled JPEG into the telemetry queue (best-effort).
 
@@ -334,12 +487,7 @@ def _save_telemetry_still(cam) -> None:
     downscale to keep it small. Never let a capture error stop recording.
     """
     try:
-        frame = cam.capture_array("main")
-        # Normalise to BGR regardless of the main stream's pixel format.
-        if frame.ndim == 3 and frame.shape[2] >= 3:
-            bgr = cv2.cvtColor(frame[:, :, :3], cv2.COLOR_RGB2BGR)
-        else:  # YUV420 (I420) packed: shape (H*3/2, W)
-            bgr = cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_I420)
+        bgr = _main_array_to_bgr(cam.capture_array("main"))
 
         h, w = bgr.shape[:2]
         if h > TELEMETRY_IMAGE_HEIGHT:
@@ -370,7 +518,6 @@ def record() -> None:
         raise RuntimeError("record() needs picamera2 — run this on the Pi")
     RECORD_DIR.mkdir(parents=True, exist_ok=True)
     WORK_DIR.mkdir(parents=True, exist_ok=True)
-    roi = _parse_roi()
 
     cam = Picamera2()
     config = cam.create_video_configuration(
@@ -397,6 +544,11 @@ def record() -> None:
 
     cam.start_encoder(encoder)
     cam.start()
+
+    # Cloud-faithful step 1: detect the hotel and confine detection to it before
+    # we start recording. Falls back to the whole frame if detection fails.
+    roi = _resolve_record_roi(cam)
+
     log.info(
         "recorder up: main=%dx%d lores=%dx%d @ %dfps | pre=%.1fs post=%.1fs "
         "max=%.0fs roi=%s",
@@ -428,6 +580,11 @@ def record() -> None:
     warmup_deadline = time.monotonic() + WARMUP_SECONDS
     frame_i = 0
     last_stats_log = time.monotonic()
+
+    # Periodic background-model rebuild so the gate tracks slow scene changes.
+    # The model is already fresh here (gate just built + warmup below).
+    next_bg_reset = (
+        time.monotonic() + BG_RESET_INTERVAL if BG_RESET_INTERVAL > 0 else float("inf"))
 
     # Hot-reload of calibration.json written by the scheduled --calibrate job.
     calib_mtime = CALIB_FILE.stat().st_mtime if CALIB_FILE.exists() else 0.0
@@ -501,6 +658,15 @@ def record() -> None:
                 # Normal close: no motion for POST_ROLL and heartbeat window over.
                 elif not in_heartbeat and (now_mono - last_motion) >= POST_ROLL:
                     _close_segment(now_mono, "idle")
+
+            # Periodic background-model rebuild. Deferred while a clip is open so
+            # an active capture isn't cut short; fires as soon as the scene idles.
+            if now_mono >= next_bg_reset and not encoding and not in_heartbeat:
+                gate.reset()
+                warmup_deadline = now_mono + WARMUP_SECONDS  # re-learn before trusting motion
+                next_bg_reset = now_mono + BG_RESET_INTERVAL
+                log.info("background model rebuilt (every %.0fs); re-warming %.1fs",
+                         BG_RESET_INTERVAL, WARMUP_SECONDS)
 
             # Pick up a freshly-written calibration without restarting.
             if now_mono - last_calib_check >= CALIB_RELOAD_SECONDS:

@@ -126,13 +126,6 @@ class DeviceHeartbeatView(APIView):
             lon=lon if settings.DEVICE_STORE_GPS_PER_HEARTBEAT else None,
         )
 
-        # Always keep the latest fix on the device (cheap, drives the map).
-        if lat is not None and lon is not None:
-            device.last_lat = lat
-            device.last_lon = lon
-            device.last_fix_at = timezone.now()
-            device.save(update_fields=["last_lat", "last_lon", "last_fix_at"])
-
         # 5c: device advertises a live LAN MJPEG stream while one is active.
         stream_url = (metrics.get("stream_url") or "").strip()
         stream_until = _as_float(metrics.get("stream_until"))

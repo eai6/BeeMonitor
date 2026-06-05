@@ -17,9 +17,9 @@ from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
 from django.utils import timezone
 from django.views import View
-from django.views.generic import DetailView, FormView, ListView, TemplateView
+from django.views.generic import DetailView, FormView, ListView, TemplateView, UpdateView
 
-from .forms import DeviceCreateForm
+from .forms import DeviceCreateForm, DeviceEditForm
 from .models import Device
 
 logger = logging.getLogger(__name__)
@@ -160,6 +160,8 @@ class DeviceCreateView(LoginRequiredMixin, FormView):
             owner=self.request.user,
             name=form.cleaned_data["name"],
             location=form.cleaned_data.get("location", ""),
+            lat=form.cleaned_data.get("lat"),
+            lon=form.cleaned_data.get("lon"),
         )
         # Stash for the one-shot "created" page.
         self.request.session[f"device_key:{device.pk}"] = raw_key
@@ -187,6 +189,24 @@ class DeviceCreatedView(LoginRequiredMixin, TemplateView):
         ctx["device"] = device
         ctx["raw_key"] = raw_key  # None on refresh — template handles that.
         return ctx
+
+
+class DeviceEditView(LoginRequiredMixin, UpdateView):
+    """Edit a device's name / location label / deployment coordinates."""
+
+    template_name = "devices/edit.html"
+    form_class = DeviceEditForm
+    context_object_name = "device"
+
+    def get_queryset(self):
+        return Device.objects.filter(owner=self.request.user)
+
+    def form_valid(self, form):
+        messages.success(self.request, f"Device '{form.instance.name}' updated.")
+        return super().form_valid(form)
+
+    def get_success_url(self):
+        return reverse_lazy("devices:detail", kwargs={"pk": self.object.pk})
 
 
 class DeviceRevokeView(LoginRequiredMixin, View):
@@ -234,6 +254,56 @@ class DeviceRequestImageView(LoginRequiredMixin, View):
         device.command_params = {}
         device.save(update_fields=["pending_command", "command_params"])
         return JsonResponse({"ok": True, "eta_seconds": settings.DEVICE_ONLINE_GRACE_SECONDS})
+
+
+class DeviceWifiView(LoginRequiredMixin, View):
+    """Queue a WiFi control command (on / off / connect / forget).
+
+    Rides the same cellular command channel as picture-on-demand, so it reaches
+    the device even while WiFi is off — the Pi acts on its next command poll.
+    """
+
+    VALID = {"wifi_on", "wifi_off", "wifi_connect", "wifi_forget"}
+    LABELS = {
+        "wifi_on": "Turn WiFi on",
+        "wifi_off": "Turn WiFi off",
+        "wifi_connect": "Connect WiFi",
+        "wifi_forget": "Forget network",
+    }
+
+    def post(self, request, pk):
+        device = get_object_or_404(Device, pk=pk, owner=request.user)
+        action = request.POST.get("action", "")
+        if action not in self.VALID:
+            messages.error(request, "Unknown WiFi action.")
+            return redirect("devices:detail", pk=pk)
+
+        params: dict = {}
+        if action in ("wifi_connect", "wifi_forget"):
+            ssid = (request.POST.get("ssid") or "").strip()
+            if not ssid:
+                messages.error(request, "A network name (SSID) is required.")
+                return redirect("devices:detail", pk=pk)
+            params["ssid"] = ssid
+            if action == "wifi_connect":
+                # Stored briefly in command_params, then cleared once the device
+                # picks it up. Never written to the server logs.
+                params["password"] = request.POST.get("password") or ""
+
+        device.pending_command = action
+        device.command_params = params
+        device.save(update_fields=["pending_command", "command_params"])
+
+        label = self.LABELS[action]
+        if action == "wifi_connect":
+            label = f"Connect to '{params['ssid']}'"
+        elif action == "wifi_forget":
+            label = f"Forget '{params['ssid']}'"
+        messages.success(
+            request,
+            f"{label} queued — the device will act on its next check-in (within ~1 min).",
+        )
+        return redirect("devices:detail", pk=pk)
 
 
 class DeviceLatestImageView(LoginRequiredMixin, View):

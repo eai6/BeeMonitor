@@ -27,11 +27,15 @@
     </div>
     <p class="text-sm text-gray-500 mt-1">
       {{ device.location|default:"No location set" }}
+      {% if device.map_url %}
+        · <a href="{{ device.map_url }}" target="_blank" rel="noopener" class="text-amber-600 hover:underline">{{ device.lat|floatformat:4 }}, {{ device.lon|floatformat:4 }} ↗</a>
+      {% endif %}
       · last seen {% if device.last_seen_at %}{{ device.last_seen_at|timesince }} ago{% else %}never{% endif %}
       · <span class="font-mono">{{ device.prefix }}…</span>
     </p>
   </div>
   <div class="flex gap-2">
+    <a href="{% url 'devices:edit' device.pk %}" class="px-3 py-1.5 bg-white border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Edit</a>
     {% if device.is_active %}
     <form method="post" action="{% url 'devices:revoke' device.pk %}" onsubmit="return confirm('Revoke {{ device.name }}?')">
       {% csrf_token %}
@@ -128,6 +132,57 @@
       <span class="ml-2">{{ metrics.schedule_window }}</span>
     </div>
     {% endif %}
+  </div>
+</div>
+
+<!-- WiFi control -->
+<div class="mt-6 bg-white shadow rounded-lg p-4">
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">WiFi</h2>
+    <div class="text-xs text-gray-500">
+      {% if 'wifi_enabled' in metrics %}
+        {% if metrics.wifi_enabled %}
+          <span class="inline-flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>Radio on</span>
+          {% if metrics.wifi_ssid %}· joined <span class="font-medium text-gray-700">{{ metrics.wifi_ssid }}</span>{% else %}· not connected{% endif %}
+          {% if metrics.wifi_ip %}· <span class="font-mono">{{ metrics.wifi_ip }}</span>{% endif %}
+        {% else %}
+          <span class="inline-flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-gray-300"></span>Radio off</span>
+        {% endif %}
+      {% else %}
+        <span class="text-gray-400">state unknown (waiting for a beat)</span>
+      {% endif %}
+    </div>
+  </div>
+  <p class="text-xs text-gray-400 mb-3">
+    Video uploads only flow over WiFi; telemetry stays on cellular, so these
+    commands reach the device even with WiFi off. It acts on its next check-in.
+  </p>
+  <div class="flex flex-wrap items-end gap-x-3 gap-y-2">
+    <form method="post" action="{% url 'devices:wifi' device.pk %}">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="wifi_on">
+      <button class="px-3 py-1.5 bg-green-50 border border-green-200 rounded text-sm text-green-700 hover:bg-green-100">Turn on</button>
+    </form>
+    <form method="post" action="{% url 'devices:wifi' device.pk %}" onsubmit="return confirm('Turn WiFi off? Video uploads will pause until it is back on.')">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="wifi_off">
+      <button class="px-3 py-1.5 bg-gray-50 border border-gray-200 rounded text-sm text-gray-700 hover:bg-gray-100">Turn off</button>
+    </form>
+    <form method="post" action="{% url 'devices:wifi' device.pk %}" class="flex flex-wrap items-end gap-2 sm:ml-2 sm:pl-3 sm:border-l sm:border-gray-200">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="wifi_connect">
+      <div>
+        <label for="wifi-ssid" class="block text-xs text-gray-500 mb-1">Network (SSID)</label>
+        <input type="text" name="ssid" id="wifi-ssid" required autocomplete="off"
+               class="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
+      </div>
+      <div>
+        <label for="wifi-pw" class="block text-xs text-gray-500 mb-1">Password</label>
+        <input type="password" name="password" id="wifi-pw" autocomplete="new-password"
+               class="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
+      </div>
+      <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Connect</button>
+    </form>
   </div>
 </div>
 

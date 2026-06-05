@@ -9,9 +9,11 @@ urlpatterns = [
     path("add/", views.DeviceCreateView.as_view(), name="add"),
     path("<int:pk>/", views.DeviceDetailView.as_view(), name="detail"),
     path("<int:pk>/created/", views.DeviceCreatedView.as_view(), name="created"),
+    path("<int:pk>/edit/", views.DeviceEditView.as_view(), name="edit"),
     path("<int:pk>/revoke/", views.DeviceRevokeView.as_view(), name="revoke"),
     path("<int:pk>/reactivate/", views.DeviceReactivateView.as_view(), name="reactivate"),
     path("<int:pk>/delete/", views.DeviceDeleteView.as_view(), name="delete"),
+    path("<int:pk>/wifi/", views.DeviceWifiView.as_view(), name="wifi"),
     path("<int:pk>/request-image/", views.DeviceRequestImageView.as_view(), name="request_image"),
     path("<int:pk>/latest-image.json", views.DeviceLatestImageView.as_view(), name="latest_image"),
 ]

@@ -28,7 +28,11 @@ class Device(models.Model):
         max_length=100,
         help_text="Nickname, e.g. 'field-site-1' or 'pi-natalies-hive-2'.",
     )
-    location = models.CharField(max_length=200, blank=True)
+    location = models.CharField(max_length=200, blank=True, help_text="Optional label, e.g. 'north hedgerow'.")
+    # Manually-set deployment coordinates (decimal degrees). Set at registration
+    # or via edit; shown on the dashboard with a map link.
+    lat = models.FloatField(null=True, blank=True)
+    lon = models.FloatField(null=True, blank=True)
 
     # Auth credential — SHA-256 hash of the raw bmk_device_* token.
     key_hash = models.CharField(max_length=128, unique=True)
@@ -38,12 +42,6 @@ class Device(models.Model):
     is_active = models.BooleanField(default=True)
     last_seen_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
-
-    # Last known GPS fix (from the modem's GNSS, reported in telemetry). Always
-    # updated when a beat carries a fix, regardless of per-heartbeat storage.
-    last_lat = models.FloatField(null=True, blank=True)
-    last_lon = models.FloatField(null=True, blank=True)
-    last_fix_at = models.DateTimeField(null=True, blank=True)
 
     # Pending command for the device, returned in the next heartbeat response and
     # then cleared. "" | "capture_image" | "stream" | "wifi_stream".
@@ -64,8 +62,17 @@ class Device(models.Model):
     def __str__(self) -> str:
         return f"{self.name} ({self.prefix}…)"
 
+    @property
+    def map_url(self) -> str:
+        """OpenStreetMap link for the set coordinates, or '' if none."""
+        if self.lat is not None and self.lon is not None:
+            return (f"https://www.openstreetmap.org/?mlat={self.lat}"
+                    f"&mlon={self.lon}#map=15/{self.lat}/{self.lon}")
+        return ""
+
     @classmethod
-    def create_with_key(cls, owner, name: str, location: str = "") -> tuple["Device", str]:
+    def create_with_key(cls, owner, name: str, location: str = "",
+                        lat=None, lon=None) -> tuple["Device", str]:
         """Create a Device + fresh credential.
 
         Returns ``(device_instance, raw_key)``. The raw key is shown to the
@@ -81,6 +88,8 @@ class Device(models.Model):
             owner=owner,
             name=name,
             location=location,
+            lat=lat,
+            lon=lon,
             key_hash=key_hash,
             prefix=prefix,
         )

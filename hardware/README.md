@@ -194,6 +194,14 @@ sudo cp systemd/beemonitor-telemetry.service /etc/systemd/system/
 sudo cp systemd/beemonitor-uploader.service  /etc/systemd/system/
 sudo cp systemd/beemonitor-calibrate.service /etc/systemd/system/
 sudo cp systemd/beemonitor-calibrate.timer   /etc/systemd/system/
+
+# 5b. Let the telemetry service control WiFi from the dashboard (on/off/connect).
+#     The telemetry service runs as 'beemonitor'; nmcli state changes need root,
+#     so grant passwordless nmcli to that user only.
+echo 'beemonitor ALL=(root) NOPASSWD: /usr/bin/nmcli' | sudo tee /etc/sudoers.d/beemonitor-nmcli >/dev/null
+sudo chmod 440 /etc/sudoers.d/beemonitor-nmcli
+sudo visudo -cf /etc/sudoers.d/beemonitor-nmcli   # syntax-check the drop-in
+
 sudo systemctl daemon-reload
 sudo systemctl enable --now beemonitor-recorder.service beemonitor-telemetry.service beemonitor-uploader.service
 sudo systemctl enable --now beemonitor-calibrate.timer
@@ -286,10 +294,12 @@ BEEMONITOR_API_BASE=https://mqnafc3ejc.us-east-1.awsapprunner.com
 BEEMONITOR_DEVICE_KEY=bmk_device_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 BEEMONITOR_RECORD_DIR=/home/beemonitor/Desktop/cameraOutput/beeHotel
 
-# --- optional: YOLO model for auto-calibration ---
-# Defaults to stock "yolo11n.pt" (downloaded on first calibrate). Point this at
-# your trained bee model for best results.
-# BEEMONITOR_YOLO_MODEL=/home/beemonitor/BeeMonitor/models/bee_yolo.pt
+# --- models: NONE of these are needed ---
+# The recorder uses the BeeMonitor weights committed in the repo's models/
+# automatically (nest_detection.pt for the hotel ROI, bee_tracking.pt for
+# calibration). Only set these to override the auto-resolved repo paths:
+# BEEMONITOR_MODELS_DIR=/home/beemonitor/BeeMonitor/models
+# BEEMONITOR_HOTEL_ROI_DETECT=true        # set false to record on the whole frame
 
 # --- optional tuning (sensible defaults if omitted; see Configuration Reference) ---
 # BEEMONITOR_PRE_ROLL=3
@@ -397,8 +407,15 @@ required; everything else has a sensible default.
 | `BEEMONITOR_HEARTBEAT_INTERVAL` | `0` | Motion-independent **video** clips (`0` = off; image telemetry replaces it) |
 | `BEEMONITOR_LORES_W` / `_H` | `640` / `480` | Resolution of the detection stream |
 | `BEEMONITOR_FPS` | `25` | Capture frame rate |
-| `BEEMONITOR_ROI` | (full frame) | `x1,y1,x2,y2` in lores px to restrict detection to the hotel face |
-| `BEEMONITOR_YOLO_MODEL` | `yolo11n.pt` | YOLO weights used by the calibrate job |
+| `BEEMONITOR_ROI` | (auto-detect) | Manual override `x1,y1,x2,y2` in lores px. Empty ⇒ auto-detect the hotel at startup (below) |
+| `BEEMONITOR_MODELS_DIR` | `<repo>/models` | Where the BeeMonitor weights live. Auto-resolves to the repo's `models/` — no need to set |
+| `BEEMONITOR_NEST_MODEL` | `<models>/nest_detection.pt` | Hotel/nest detector used to set the recording ROI (class 0 = hotel, 1 = nest hole) |
+| `BEEMONITOR_HOTEL_ROI_DETECT` | `true` | Detect the hotel before recording and confine detection to it. `false` ⇒ whole frame |
+| `BEEMONITOR_NEST_CONF` | `0.25` | Confidence threshold for the hotel/nest detector |
+| `BEEMONITOR_HOTEL_PAD_X` / `_Y` | `100` / `50` | Padding (base px @ 1920×1080, scaled) around the detected hotel |
+| `BEEMONITOR_BG_RESET_INTERVAL` | `600` | Rebuild the MOG2 background model this often (s) so the gate tracks sun/shadow drift in real time. Also fresh at startup. `0` = off |
+| `BEEMONITOR_WIFI_IFACE` | `wlan0` | WiFi interface used by the dashboard's WiFi on/off/connect controls |
+| `BEEMONITOR_YOLO_MODEL` | `<models>/bee_tracking.pt` | BeeMonitor's bee/wasp detector, used by the calibrate job |
 | `BEEMONITOR_CALIB_MAX_AGE_DAYS` | `7` | Skip recalibration if `calibration.json` is younger than this |
 | `BEEMONITOR_POLL_SECONDS` | `30` | How often the uploader scans for new snippets |
 | **`BEEMONITOR_TELEMETRY_INTERVAL`** | `60` | Telemetry beat cadence (s). JSON-only, so it's cheap — 60s gives ~1-minute offline detection |
@@ -410,6 +427,23 @@ required; everything else has a sensible default.
 
 Tuning is rarely needed — start with defaults and adjust pre/post-roll or `ROI`
 only if you see clips clipped short or too much background motion triggering.
+
+> **Detection mirrors cloud BeeMonitor.** The recorder uses the same committed
+> weights in `models/` (no `yolo11n` anymore), resolved automatically:
+>
+> 1. **Hotel detection (once, at startup).** Before recording, the recorder runs
+>    `nest_detection.pt` on one settled frame to find the **hotel** (class 0; or
+>    the bounding box of the detected nest holes, class 1), pads it, and uses that
+>    as the detection **ROI** — exactly like the cloud pipeline confines bee
+>    detection to the hotel. If detection fails (no bees/model/ultralytics, empty
+>    result), it **falls back to the whole frame** and keeps recording.
+> 2. **Motion gate (live).** MOG2 runs inside that ROI to gate snippet recording.
+> 3. **Calibration (scheduled, offline).** `bee_tracking.pt` — BeeMonitor's own
+>    bee/wasp detector — measures real bee blob sizes in saved snippets to tune
+>    the MOG2 area window. Every detection is a bee, so no COCO class filter.
+>
+> The models ship in the repo, so a `git pull` on the Pi is all that's needed —
+> the recorder picks them up from `<repo>/models/` with no env to set.
 
 > **Telemetry is JSON-only and cheap**, so the 60s beat (fast offline detection)
 > costs almost nothing on cellular. The **activity window** is separate

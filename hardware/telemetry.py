@@ -70,6 +70,8 @@ ACTIVITY_PERIOD = int(os.environ.get("BEEMONITOR_ACTIVITY_PERIOD", "3600"))
 RECORDER_UNIT = os.environ.get("BEEMONITOR_RECORDER_UNIT", "beemonitor-recorder.service")
 UPLOADER_UNIT = os.environ.get("BEEMONITOR_UPLOADER_UNIT", "beemonitor-uploader.service")
 CELLULAR_UNIT = os.environ.get("BEEMONITOR_CELLULAR_UNIT", "cellular.service")
+# WiFi interface used for the WiFi on/off/connect commands and state reporting.
+WIFI_IFACE = os.environ.get("BEEMONITOR_WIFI_IFACE", "wlan0")
 # How often (s) to poll for an on-demand command between beats — keeps the
 # "Take photo" latency low without raising the health-beat cadence.
 COMMAND_POLL_SECONDS = int(os.environ.get("BEEMONITOR_COMMAND_POLL_SECONDS", "8"))
@@ -127,6 +129,46 @@ def _service_active(unit: str) -> bool:
         ).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def _run(cmd: list[str], timeout: int = 30):
+    """Run a command best-effort; return the CompletedProcess or None."""
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as e:
+        log.warning("command failed %s: %s", cmd[:2], e)
+        return None
+
+
+def _nmcli(args: list[str], timeout: int = 30):
+    """nmcli wrapper. State changes (radio/connect) need root, so prefix sudo
+    when we aren't already root (the install adds a NOPASSWD sudoers rule for
+    nmcli). Read-only queries work as the service user without it."""
+    base = ["nmcli"] if os.geteuid() == 0 else ["sudo", "-n", "nmcli"]
+    return _run(base + args, timeout=timeout)
+
+
+def _wifi_state() -> dict:
+    """Best-effort current WiFi status for the dashboard (radio/SSID/IP)."""
+    out: dict = {}
+    r = _run(["nmcli", "-t", "-f", "WIFI", "radio"])
+    if r and r.returncode == 0:
+        out["wifi_enabled"] = r.stdout.strip().endswith("enabled")
+    r = _run(["nmcli", "-t", "-f", "DEVICE,STATE,CONNECTION", "device", "status"])
+    if r and r.returncode == 0:
+        for line in r.stdout.splitlines():
+            parts = line.split(":")
+            if len(parts) >= 3 and parts[0] == WIFI_IFACE:
+                out["wifi_state"] = parts[1]
+                out["wifi_ssid"] = parts[2] if parts[1] == "connected" else ""
+                break
+    r = _run(["nmcli", "-t", "-f", "IP4.ADDRESS", "device", "show", WIFI_IFACE])
+    if r and r.returncode == 0:
+        for line in r.stdout.splitlines():
+            if line.startswith("IP4.ADDRESS") and ":" in line:
+                out["wifi_ip"] = line.split(":", 1)[1].split("/")[0]
+                break
+    return out
 
 
 def _video_stats(window_seconds: int) -> dict:
@@ -201,6 +243,9 @@ def collect_metrics() -> dict:
     m["recorder_active"] = _service_active(RECORDER_UNIT)
     m["uploader_active"] = _service_active(UPLOADER_UNIT)
     m["cellular_active"] = _service_active(CELLULAR_UNIT)
+
+    # Current WiFi state so the dashboard can show on/off + connected network.
+    m.update(_wifi_state())
 
     if SCHEDULE_WINDOW:
         m["schedule_window"] = SCHEDULE_WINDOW
@@ -335,10 +380,46 @@ def _capture_and_upload() -> bool:
     return send_beat(image=img) is not None
 
 
+def _wifi_connect(params: dict) -> None:
+    """Join a network and persist it (autoconnect) via NetworkManager."""
+    ssid = (params.get("ssid") or "").strip()
+    password = params.get("password") or ""
+    if not ssid:
+        log.warning("wifi_connect: missing ssid")
+        return
+    _nmcli(["radio", "wifi", "on"])  # connecting is pointless with the radio off
+    args = ["device", "wifi", "connect", ssid]
+    if password:
+        args += ["password", password]
+    args += ["ifname", WIFI_IFACE]
+    r = _nmcli(args, timeout=60)
+    # Never log the password — only the SSID + result.
+    if r is not None and r.returncode == 0:
+        log.info("wifi_connect: joined '%s'", ssid)
+    else:
+        log.warning("wifi_connect: failed for '%s' (rc=%s) %s", ssid,
+                    getattr(r, "returncode", None),
+                    (getattr(r, "stderr", "") or "").strip()[:200])
+
+
 def _handle_command(cmd: str, params: dict) -> None:
     if cmd == "capture_image":
         log.info("command: capture_image")
         _capture_and_upload()
+    elif cmd == "wifi_on":
+        log.info("command: wifi_on")
+        _nmcli(["radio", "wifi", "on"])
+    elif cmd == "wifi_off":
+        log.info("command: wifi_off")
+        _nmcli(["radio", "wifi", "off"])
+    elif cmd == "wifi_connect":
+        log.info("command: wifi_connect ssid=%s", (params.get("ssid") or "").strip())
+        _wifi_connect(params)
+    elif cmd == "wifi_forget":
+        ssid = (params.get("ssid") or "").strip()
+        log.info("command: wifi_forget ssid=%s", ssid)
+        if ssid:
+            _nmcli(["connection", "delete", ssid])
     else:
         log.warning("ignoring unknown command: %s", cmd)
 
