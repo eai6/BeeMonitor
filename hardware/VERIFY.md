@@ -1,15 +1,15 @@
-# BeeMonitor — verification runbook (device dashboard v2)
+# BeeMonitor — verification runbook (device dashboard)
 
-Step-by-step verification for everything in the device dashboard v2 work
-(telemetry @60s, cellular signal + GPS, activity card/graph, on-demand
-photo, live view, WiFi LAN MJPEG stream, nav cleanup, WittyPi auto power-on).
+Step-by-step verification for the device dashboard: telemetry @60s + online
+status, activity card/graph, on-demand photo, Sources-nav cleanup, and WittyPi
+auto power-on.
 
 Most checks are a **Pi command** plus **what to look for on the dashboard**.
 Do **Step 0** first, then each feature in order.
 
-The mechanical Pi-side steps (health curl, venv import check, service
-restart, `:8090` stream probe) are also bundled in `hardware/verify.sh` —
-run that on the Pi instead of copying commands by hand:
+The mechanical Pi-side steps (health curl, venv import check, service restart)
+are also bundled in `hardware/verify.sh` — run that on the Pi instead of copying
+commands by hand:
 
 ```bash
 cd ~/BeeMonitor && git pull
@@ -17,15 +17,14 @@ cd ~/BeeMonitor && git pull
 ```
 
 Two caveats up front:
-- The dashboard image cards/links only work once the Pi is on the new code (Step 0).
+- The dashboard camera card only works once the Pi is on the new code (Step 0).
 - Video upload verification needs the Pi on **WiFi**. Telemetry and photos work on cellular.
 
 ---
 
 ## Step 0 — Deploy
 
-Backend auto-deploys via CI (migrations 0003–0005 run on container start).
-Confirm it's up:
+Backend auto-deploys via CI (migrations run on container start). Confirm it's up:
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" \
@@ -50,52 +49,41 @@ journalctl -u beemonitor-telemetry -f        # leave open — your main verifica
 - Stop telemetry (`sudo systemctl stop beemonitor-telemetry`), wait ~3 min → badge flips to
   **Offline**. Then restart it.
 
-## 2 — Cellular signal + GPS
+## 2 — Activity card + graph
 
-```bash
-cat /run/beemonitor/modem-status.json
-# expect: {"ts":…, "rssi_dbm":-71, "lat":…, "lon":…, "fix":true}
-```
-
-- If `rssi_dbm` missing → qmicli issue.
-- If `lat`/`lon` missing → no GNSS fix yet (go outside, wait minutes) **or** wrong AT port →
-  set `BEEMONITOR_AT_PORT=/dev/ttyUSB2` in `/etc/beemonitor/uploader.env`, restart `cellular`.
-- **Dashboard** device page → **Cellular** card shows dBm; **Location** card shows coords + "View on map".
-
-## 3 — Activity card + graph
-
-- Device page → **Activity** card shows `N snippets / 1h` (not `/60s`).
+- Device page → **Activity** card shows `N snippets / 1h` (the activity window is decoupled
+  from the 60s beat).
 - **Activity over time** graph fills in as beats accumulate (range buttons 24h/7d/30d/90d).
   It only has data from after this deploy.
 
-## 4 — On-demand photo
+## 3 — On-demand photo (fast path)
 
-- Device page → **Camera** card → **Take photo**. Within ~60s the image appears.
-- **Pi log:** `command: capture_image`, then recorder writes a still, then `heartbeat ok` with `image=True`.
+- Device page → **Camera** card → **Take photo**. The image appears within **~10–15s**
+  (a lightweight command poll runs every ~8s, then the recorder captures + uploads — no
+  need to wait for the 60s beat).
+- **Pi log:** `command: capture_image`, the recorder writes a still, then `heartbeat ok`
+  with `image=True`.
+- If it doesn't appear: the device is offline, or the recorder isn't running (the recorder
+  is what grabs the frame). Tune cadence with `BEEMONITOR_COMMAND_POLL_SECONDS`.
 
-## 5 — On-demand live view
-
-- Camera → **Live view** → image refreshes (~1.5 fps) for ~60s.
-- **Pi log:** repeated `command: stream` captures.
-
-## 6 — WiFi live stream (5c) — the experimental one
-
-- Camera → **WiFi stream** → wait ~1 beat → a "● Live LAN stream — open ↗" link appears.
-- **Pi log:** `command: wifi_stream`, `recorder: mjpeg stream server listening on :8090`.
-- Quick local check on the Pi:
-
-```bash
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8090/stream.mjpg   # expect 200
-```
-
-- From a laptop on the same WiFi: open `http://<pi-lan-ip>:8090/` → live video.
-  (If the link's IP is wrong, `_lan_ip()` picked the wrong interface — flag it.)
-
-## 7 — Sources nav removed
+## 4 — Sources nav removed
 
 - Top nav: **Sources** is gone; **Devices** present. ✅
 
-## 8 — WittyPi auto power-on
+## 5 — Health cards
 
-- Set it (README §8.4), then pull power and reconnect → the Pi boots without pressing the
-  button → services come up on their own.
+- Device page shows **Storage**, **Uptime**, **CPU temp**, **Activity**, **Videos uploaded**,
+  and a **Services** row with Recorder / Uploader / Cellular dots (green = the matching
+  systemd service is active on the Pi).
+
+## 6 — WittyPi auto power-on
+
+- Set it (README §8.4: *Default state when powered = ON*), then pull power and reconnect →
+  the Pi boots **without** pressing the button → services come up on their own.
+
+---
+
+> **Not in this build (removed for simplicity):** live view, WiFi LAN streaming, and the
+> cellular-signal + GPS/Location widgets. On-demand **photo** is the camera feature; the
+> Cellular **dot** under Services only reflects whether `cellular.service` is running, not
+> signal strength.

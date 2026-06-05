@@ -4,11 +4,9 @@
 #
 # Covers the probeable, copy-error-prone parts of hardware/VERIFY.md:
 #   Step 0  — backend health, venv import check, service restart
-#   Step 2  — modem status (cellular signal + GPS)
-#   Step 6  — local :8090 MJPEG stream probe
 #
-# The human-eye dashboard checks (online badge, activity graph, photo/live
-# view appearing, nav, WittyPi) stay in VERIFY.md — this script can't see them.
+# The human-eye dashboard checks (online badge, activity graph, photo appearing,
+# nav, WittyPi) stay in VERIFY.md — this script can't see them.
 #
 # Usage:
 #   cd ~/BeeMonitor && git pull
@@ -21,7 +19,6 @@ set -uo pipefail
 
 API_BASE="${BEEMONITOR_API_BASE:-https://mqnafc3ejc.us-east-1.awsapprunner.com}"
 VENV_PY="${VENV_PY:-$HOME/BeeMonitor/hardware/venv/bin/python}"
-MODEM_STATUS="${MODEM_STATUS:-/run/beemonitor/modem-status.json}"
 SERVICES="cellular beemonitor-recorder beemonitor-telemetry beemonitor-uploader"
 
 do_restart=1
@@ -61,32 +58,16 @@ for svc in $SERVICES; do
   if [ "$state" = "active" ]; then pass "$svc active"; else warn "$svc is '$state'"; fi
 done
 
-# --- Step 2: modem status ---------------------------------------------------
-hdr "Step 2 — cellular signal + GPS ($MODEM_STATUS)"
-if [ ! -f "$MODEM_STATUS" ]; then
-  warn "no modem-status.json yet (cellular not up, or first run)"
+# --- cellular link (the link itself; signal/GPS widgets were removed) -------
+hdr "Cellular link"
+if ip -o -4 addr show wwan0 >/dev/null 2>&1 && ip -o -4 addr show wwan0 | grep -q inet; then
+  pass "wwan0 has an IPv4 address"
 else
-  cat "$MODEM_STATUS"; echo
-  grep -q '"rssi_dbm"' "$MODEM_STATUS" && pass "rssi_dbm present" || warn "rssi_dbm missing → qmicli issue"
-  if grep -q '"lat"' "$MODEM_STATUS" && grep -q '"lon"' "$MODEM_STATUS"; then
-    pass "lat/lon present"
-  else
-    warn "lat/lon missing → no GNSS fix yet (go outside) or wrong AT port (BEEMONITOR_AT_PORT)"
-  fi
-fi
-
-# --- Step 6: local MJPEG stream --------------------------------------------
-hdr "Step 6 — WiFi LAN stream probe (localhost:8090)"
-scode=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8090/stream.mjpg 2>/dev/null || true)
-scode=${scode:-000}
-if [ "$scode" = "200" ]; then
-  pass "stream.mjpg returned 200"
-else
-  warn "stream.mjpg returned $scode — only up after triggering 'WiFi stream' from the dashboard"
+  warn "wwan0 has no IPv4 (only matters for the cellular link; WiFi units can ignore)"
 fi
 
 # --- summary ----------------------------------------------------------------
-hdr "Next: human-eye checks in hardware/VERIFY.md (steps 1,3,4,5,6,7,8)"
+hdr "Next: human-eye checks in hardware/VERIFY.md (steps 1–6)"
 echo "  Watch the telemetry log while you click through the dashboard:"
 echo "    journalctl -u beemonitor-telemetry -f"
 
