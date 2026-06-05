@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""Offline replay of the motion-gated snippet pipeline against a video file.
+
+The live recorder (`main_motion.record`) reads the Pi camera's lores stream and
+uses the hardware H264 encoder, so it can't ingest an mp4. This tool exercises
+the *same* motion gate (`main_motion.MotionGate`, same thresholds/constants) and
+the *same* segmentation state machine (warmup -> detect-every-N -> pre-roll /
+post-roll / max-segment), but sourced from a video file and writing snippets
+with ffmpeg. Use it to sanity-check what clips the gate would cut from a sample.
+
+    python3 hardware/motion_replay.py short_videos/clip.mp4
+    python3 hardware/motion_replay.py short_videos/clip.mp4 --out /tmp/snips --warmup 1.0
+
+Detection runs on each frame downscaled to the recorder's lores size (so the
+blob-area thresholds stay valid). Snippets are re-encoded (frame-accurate) from
+the original-resolution file. This validates motion gating + segmentation, not
+the hardware encoder path.
+"""
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+import cv2
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import main_motion as mm  # noqa: E402  (reuse the exact gate + constants)
+
+
+def _segments_for(video: Path, warmup_s: float, detect_every: int,
+                  pre_roll: float, post_roll: float, max_seg: float):
+    """Replay the gate over `video`; return (fps, n_frames, [(start_f, end_f, reason)])."""
+    cap = cv2.VideoCapture(str(video))
+    if not cap.isOpened():
+        raise SystemExit(f"cannot open {video}")
+    fps = cap.get(cv2.CAP_PROP_FPS) or mm.FPS
+    warmup_frames = int(warmup_s * fps)
+    post_frames = int(post_roll * fps)
+    pre_frames = int(pre_roll * fps)
+    max_frames = int(max_seg * fps)
+
+    gate = mm.MotionGate(roi=None)  # full frame, like current production scene
+    segments = []
+    encoding = False
+    seg_start = last_motion = 0
+    i = -1
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        i += 1
+        gray = cv2.cvtColor(
+            cv2.resize(frame, (mm.LORES_W, mm.LORES_H)), cv2.COLOR_BGR2GRAY)
+
+        if i < warmup_frames:        # warmup: learn bg, never trigger
+            gate.warm(gray)
+            continue
+
+        motion = False
+        if i % detect_every == 0:
+            motion, n_blobs, area = gate.update(gray)
+            if motion:
+                last_motion = i
+        else:
+            gate.warm(gray)
+
+        if motion and not encoding:
+            encoding = True
+            seg_start = i
+            start_f = max(0, i - pre_frames)   # pre-roll
+            print(f"  clip START (motion) @ {i/fps:5.2f}s "
+                  f"(blobs={n_blobs}, area={area:.0f})")
+            segments.append([start_f, i, "motion"])
+        elif encoding:
+            if i - seg_start >= max_frames:
+                segments[-1][1] = i
+                segments[-1][2] = "max-len"
+                print(f"  clip STOP  (max-len) @ {i/fps:5.2f}s")
+                encoding = False
+            elif (i - last_motion) >= post_frames:
+                end_f = last_motion + post_frames     # post-roll
+                segments[-1][1] = end_f
+                print(f"  clip STOP  (idle)    @ {end_f/fps:5.2f}s "
+                      f"(last motion {last_motion/fps:.2f}s)")
+                encoding = False
+
+    if encoding:
+        segments[-1][1] = i
+        segments[-1][2] = "eof"
+        print(f"  clip STOP  (eof)     @ {i/fps:5.2f}s")
+    cap.release()
+    return fps, i + 1, segments
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("video", type=Path)
+    ap.add_argument("--out", type=Path, default=None,
+                    help="snippet output dir (default: <video_dir>/replay_snippets)")
+    ap.add_argument("--warmup", type=float, default=1.0,
+                    help="MOG2 warmup seconds (production=%.1f; lower for short "
+                         "clips) [default: 1.0]" % mm.WARMUP_SECONDS)
+    ap.add_argument("--detect-every", type=int, default=mm.DETECT_EVERY_N)
+    ap.add_argument("--pre-roll", type=float, default=mm.PRE_ROLL)
+    ap.add_argument("--post-roll", type=float, default=mm.POST_ROLL)
+    ap.add_argument("--max-seg", type=float, default=mm.MAX_SEGMENT)
+    args = ap.parse_args()
+
+    if not args.video.exists():
+        raise SystemExit(f"no such file: {args.video}")
+    out_dir = args.out or (args.video.parent / "replay_snippets")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"replaying {args.video.name} through MotionGate")
+    print(f"  gate: lores={mm.LORES_W}x{mm.LORES_H} detect_every={args.detect_every} "
+          f"area=[{mm.MIN_BLOB_AREA:.0f},{mm.MAX_BLOB_AREA:.0f}] "
+          f"min_blobs={mm.MIN_MOTION_BLOBS} var={mm.MOG2_VAR_THRESHOLD:.0f}")
+    print(f"  seg : warmup={args.warmup}s pre={args.pre_roll}s post={args.post_roll}s "
+          f"max={args.max_seg}s")
+
+    fps, n_frames, segments = _segments_for(
+        args.video, args.warmup, args.detect_every,
+        args.pre_roll, args.post_roll, args.max_seg)
+
+    dur = n_frames / fps
+    print(f"\nsource: {n_frames} frames @ {fps:.2f}fps = {dur:.2f}s")
+    if not segments:
+        print("=> NO motion snippets (try a lower --warmup, or the clip has no "
+              "motion the gate considers bee-sized).")
+        return 0
+
+    # Cut each [start,end] from the original file (frame-accurate re-encode).
+    total_clip = 0.0
+    print(f"\n=> {len(segments)} snippet(s) -> {out_dir}/")
+    for n, (s, e, reason) in enumerate(segments, 1):
+        start_s, end_s = s / fps, e / fps
+        clip_len = end_s - start_s
+        total_clip += clip_len
+        name = f"snippet_{n:02d}_{start_s:05.1f}-{end_s:05.1f}s.mp4"
+        cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(args.video),
+               "-ss", f"{start_s:.3f}", "-to", f"{end_s:.3f}",
+               "-c:v", "libx264", "-preset", "veryfast", "-an", str(out_dir / name)]
+        rc = subprocess.run(cmd).returncode
+        flag = "" if rc == 0 else "  [ffmpeg FAILED]"
+        print(f"  {name}  ({clip_len:.2f}s, {reason}){flag}")
+
+    print(f"\nrecorded {total_clip:.2f}s of {dur:.2f}s "
+          f"({100*total_clip/dur:.0f}% duty)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

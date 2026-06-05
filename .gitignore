@@ -48,3 +48,5 @@ beemonitor-mobile/android/
 
 # Docker
 *.log
+# motion_replay.py generated snippets
+short_videos/replay_snippets/
