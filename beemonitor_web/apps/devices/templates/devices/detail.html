@@ -62,8 +62,8 @@
          data-latest-image-url="{% url 'devices:latest_image' device.pk %}">
       <div class="px-4 py-3 border-b border-gray-100 text-sm font-medium text-gray-700">Camera</div>
       <div class="bg-gray-100 aspect-video flex items-center justify-center">
-        <img id="cam-image" src="{{ latest_image_url|default:'' }}" alt=""
-             class="w-full h-full object-cover {% if not latest_image_url %}hidden{% endif %}">
+        <img id="cam-image" src="{{ latest_image_url|default:'' }}" alt="" title="Click to view full screen"
+             class="w-full h-full object-cover cursor-zoom-in {% if not latest_image_url %}hidden{% endif %}">
         <span id="cam-placeholder" class="text-gray-300 text-sm {% if latest_image_url %}hidden{% endif %}">No image yet</span>
       </div>
       <div class="px-4 py-2 flex items-center justify-between">
@@ -249,6 +249,105 @@
 
   var photo = document.getElementById('cam-photo');
   if (photo) photo.addEventListener('click', takePhoto);
+
+  // Open the full-screen viewer when the camera image is clicked.
+  if (img) img.addEventListener('click', function () {
+    if (img.src) window.BMViewer && window.BMViewer.open(img.src);
+  });
+})();
+</script>
+
+<!-- Full-screen image viewer (zoom + pan; no dependencies) -->
+<div id="img-viewer" class="fixed inset-0 z-50 bg-black/90 hidden" style="touch-action:none;">
+  <div class="absolute top-3 right-3 flex gap-2 z-10">
+    <button id="iv-out"   class="w-9 h-9 rounded bg-white/15 hover:bg-white/25 text-white text-lg leading-none">−</button>
+    <button id="iv-in"    class="w-9 h-9 rounded bg-white/15 hover:bg-white/25 text-white text-lg leading-none">+</button>
+    <button id="iv-reset" class="h-9 px-3 rounded bg-white/15 hover:bg-white/25 text-white text-xs">Reset</button>
+    <button id="iv-close" class="w-9 h-9 rounded bg-white/15 hover:bg-white/25 text-white text-lg leading-none">✕</button>
+  </div>
+  <img id="iv-img" alt="" draggable="false"
+       class="absolute top-0 left-0 select-none max-w-none cursor-grab"
+       style="transform-origin:0 0;">
+</div>
+<script>
+window.BMViewer = (function () {
+  var ov = document.getElementById('img-viewer');
+  var im = document.getElementById('iv-img');
+  var scale = 1, tx = 0, ty = 0, drag = null, pinch = null;
+
+  function apply() { im.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')'; }
+  function clamp(s) { return Math.max(0.1, Math.min(s, 12)); }
+
+  function fit() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var iw = im.naturalWidth || vw, ih = im.naturalHeight || vh;
+    scale = Math.min(vw / iw, vh / ih);
+    tx = (vw - iw * scale) / 2;
+    ty = (vh - ih * scale) / 2;
+    apply();
+  }
+  function zoomAt(cx, cy, factor) {
+    var ns = clamp(scale * factor);
+    tx = cx - (cx - tx) * (ns / scale);
+    ty = cy - (cy - ty) * (ns / scale);
+    scale = ns; apply();
+  }
+  function open(src) {
+    im.src = src;
+    ov.classList.remove('hidden');
+    if (im.complete && im.naturalWidth) fit(); else im.onload = fit;
+    document.body.style.overflow = 'hidden';
+  }
+  function close() { ov.classList.add('hidden'); document.body.style.overflow = ''; im.src = ''; }
+
+  ov.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.15 : 1 / 1.15);
+  }, { passive: false });
+
+  im.addEventListener('dblclick', function (e) { zoomAt(e.clientX, e.clientY, scale < 1.5 ? 2.5 : 0.4); });
+
+  // Mouse pan
+  im.addEventListener('mousedown', function (e) { drag = { x: e.clientX, y: e.clientY }; im.style.cursor = 'grabbing'; e.preventDefault(); });
+  window.addEventListener('mousemove', function (e) {
+    if (!drag) return;
+    tx += e.clientX - drag.x; ty += e.clientY - drag.y; drag = { x: e.clientX, y: e.clientY }; apply();
+  });
+  window.addEventListener('mouseup', function () { drag = null; im.style.cursor = 'grab'; });
+
+  // Touch pan + pinch
+  ov.addEventListener('touchstart', function (e) {
+    if (e.touches.length === 1) drag = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    else if (e.touches.length === 2) {
+      var a = e.touches[0], b = e.touches[1];
+      pinch = { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY),
+                mx: (a.clientX + b.clientX) / 2, my: (a.clientY + b.clientY) / 2 };
+      drag = null;
+    }
+  }, { passive: false });
+  ov.addEventListener('touchmove', function (e) {
+    e.preventDefault();
+    if (e.touches.length === 1 && drag) {
+      var t = e.touches[0];
+      tx += t.clientX - drag.x; ty += t.clientY - drag.y; drag = { x: t.clientX, y: t.clientY }; apply();
+    } else if (e.touches.length === 2 && pinch) {
+      var a = e.touches[0], b = e.touches[1];
+      var d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      zoomAt(pinch.mx, pinch.my, d / pinch.d);
+      pinch.d = d;
+    }
+  }, { passive: false });
+  ov.addEventListener('touchend', function (e) { if (e.touches.length === 0) { drag = null; pinch = null; } });
+
+  document.getElementById('iv-in').addEventListener('click', function () { zoomAt(window.innerWidth / 2, window.innerHeight / 2, 1.3); });
+  document.getElementById('iv-out').addEventListener('click', function () { zoomAt(window.innerWidth / 2, window.innerHeight / 2, 1 / 1.3); });
+  document.getElementById('iv-reset').addEventListener('click', fit);
+  document.getElementById('iv-close').addEventListener('click', close);
+  // Click the dark backdrop (not the image/buttons) to close.
+  ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !ov.classList.contains('hidden')) close(); });
+
+  return { open: open, close: close };
 })();
 </script>
 {% endblock %}
