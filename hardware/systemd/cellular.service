@@ -10,7 +10,7 @@ Before=beemonitor-uploader.service
 Type=simple
 # Long-lived: brings wwan0 up (with retry) then watchdogs it and re-establishes
 # on drop. Runs on every boot / WittyPi wake.
-ExecStart=/usr/local/bin/cellular-up.sh
+ExecStart=/home/beemonitor/BeeMonitor/hardware/cellular/cellular-up.sh
 Restart=always
 RestartSec=10
 StandardOutput=journal

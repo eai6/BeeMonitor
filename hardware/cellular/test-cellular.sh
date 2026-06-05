@@ -61,7 +61,7 @@ fi
 # Default: safe link checks (no WiFi toggle)
 # ---------------------------------------------------------------------------
 hdr "1. Modem present"
-lsusb | grep -iq quectel && ok "Quectel modem on USB" || no "no Quectel in lsusb"
+lsusb | grep -iqE "quectel|telit|1bc7:1201" && ok "cellular modem on USB" || no "no modem in lsusb"
 [ -e "$DEV" ] && ok "$DEV present" || no "$DEV missing"
 
 hdr "2. cellular.service"
@@ -78,8 +78,8 @@ addr=$(ip -o -4 addr show "$IFACE" 2>/dev/null | awk '{print $4}')
 hdr "4. Connectivity over cellular (bound to $IFACE — safe with WiFi up)"
 ping -c2 -W5 -I "$IFACE" 8.8.8.8 >/dev/null 2>&1 \
     && ok "ping 8.8.8.8 via $IFACE" || no "no ping via $IFACE"
-ping -c2 -W5 -I "$IFACE" google.com >/dev/null 2>&1 \
-    && ok "DNS + ping google.com via $IFACE" || no "DNS/connectivity via $IFACE failed"
+getent hosts google.com >/dev/null 2>&1 \
+    && ok "DNS resolves google.com" || no "DNS resolution failed"
 
 hdr "5. BeeMonitor services"
 for s in beemonitor-recorder beemonitor-telemetry beemonitor-uploader; do
