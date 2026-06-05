@@ -31,9 +31,34 @@ import sys
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import main_motion as mm  # noqa: E402  (reuse the exact gate + constants)
+
+
+def _pct(vals, q):
+    return float(np.percentile(vals, q)) if len(vals) else 0.0
+
+
+def _print_sensitivity(stats: dict) -> None:
+    """How trigger-happy was the gate? Shows the % of evaluated frames that
+    fired and the size distribution of every blob it kept — so you can tell
+    whether triggers are bee-sized or noise, and where to set --min-area."""
+    ev = stats["evaluated"]
+    if not ev:
+        return
+    mf = stats["motion_frames"]
+    areas = stats["areas"]
+    counts = stats["blob_counts"]
+    print("sensitivity:")
+    print(f"  motion fired on {mf}/{ev} evaluated frames ({100*mf/ev:.0f}%)")
+    if areas:
+        print(f"  kept blobs: n={len(areas)} area px "
+              f"min={min(areas):.0f} p50={_pct(areas,50):.0f} "
+              f"p90={_pct(areas,90):.0f} p99={_pct(areas,99):.0f} max={max(areas):.0f}")
+    print(f"  blobs/frame: p50={_pct(counts,50):.0f} p90={_pct(counts,90):.0f} "
+          f"max={max(counts) if counts else 0}")
 
 
 def _resolve_roi(video: Path, manual: str | None, full_frame: bool):
@@ -75,8 +100,15 @@ def _resolve_roi(video: Path, manual: str | None, full_frame: bool):
 
 
 def _segments_for(video: Path, roi, warmup_s: float, detect_every: int,
-                  pre_roll: float, post_roll: float, max_seg: float):
-    """Replay the gate over `video`; return (fps, n_frames, [(start_f, end_f, reason)])."""
+                  pre_roll: float, post_roll: float, max_seg: float,
+                  min_area: float, max_area: float, min_blobs: int,
+                  var_threshold: float):
+    """Replay the gate over `video`; return (fps, n_frames, segments, stats).
+
+    `segments` is [(start_f, end_f, reason)]. `stats` quantifies sensitivity:
+    how many evaluated frames registered motion and the size of every blob the
+    gate *kept* (so we can see whether triggers are bee-sized or noise).
+    """
     cap = cv2.VideoCapture(str(video))
     if not cap.isOpened():
         raise SystemExit(f"cannot open {video}")
@@ -86,8 +118,10 @@ def _segments_for(video: Path, roi, warmup_s: float, detect_every: int,
     pre_frames = int(pre_roll * fps)
     max_frames = int(max_seg * fps)
 
-    gate = mm.MotionGate(roi=roi)  # production-faithful: hotel ROI (or full frame)
+    gate = mm.MotionGate(roi=roi, var_threshold=var_threshold, min_area=min_area,
+                         max_area=max_area, min_blobs=min_blobs)
     segments = []
+    stats = {"evaluated": 0, "motion_frames": 0, "blob_counts": [], "areas": []}
     encoding = False
     seg_start = last_motion = 0
     i = -1
@@ -106,8 +140,12 @@ def _segments_for(video: Path, roi, warmup_s: float, detect_every: int,
         motion = False
         if i % detect_every == 0:
             motion, n_blobs, area = gate.update(gray)
+            stats["evaluated"] += 1
+            stats["blob_counts"].append(n_blobs)
+            stats["areas"].extend(b[4] for b in gate.last_blobs)
             if motion:
                 last_motion = i
+                stats["motion_frames"] += 1
         else:
             gate.warm(gray)
 
@@ -115,6 +153,11 @@ def _segments_for(video: Path, roi, warmup_s: float, detect_every: int,
             encoding = True
             seg_start = i
             start_f = max(0, i - pre_frames)   # pre-roll
+            if segments:
+                # The live recorder's CircularOutput never double-records; here we
+                # compute pre-roll from the source, so a new clip's pre-roll could
+                # reach back into the previous clip. Clamp so snippets don't overlap.
+                start_f = max(start_f, segments[-1][1])
             print(f"  clip START (motion) @ {i/fps:5.2f}s "
                   f"(blobs={n_blobs}, area={area:.0f})")
             segments.append([start_f, i, "motion"])
@@ -136,7 +179,7 @@ def _segments_for(video: Path, roi, warmup_s: float, detect_every: int,
         segments[-1][2] = "eof"
         print(f"  clip STOP  (eof)     @ {i/fps:5.2f}s")
     cap.release()
-    return fps, i + 1, segments
+    return fps, i + 1, segments, stats
 
 
 def main() -> int:
@@ -157,6 +200,17 @@ def main() -> int:
                          "detection; same as BEEMONITOR_ROI)")
     ap.add_argument("--full-frame", action="store_true",
                     help="skip hotel detection and gate on the whole frame")
+    # Sensitivity knobs — defaults are the production thresholds; override to sweep.
+    ap.add_argument("--min-area", type=float, default=mm.MIN_BLOB_AREA,
+                    help="min blob area in lores px to count (production=%.0f)" % mm.MIN_BLOB_AREA)
+    ap.add_argument("--max-area", type=float, default=mm.MAX_BLOB_AREA,
+                    help="max blob area in lores px (production=%.0f)" % mm.MAX_BLOB_AREA)
+    ap.add_argument("--min-blobs", type=int, default=mm.MIN_MOTION_BLOBS,
+                    help="qualifying blobs needed to call it motion (production=%d)" % mm.MIN_MOTION_BLOBS)
+    ap.add_argument("--var", type=float, default=mm.MOG2_VAR_THRESHOLD,
+                    help="MOG2 var threshold; higher = less sensitive (production=%.0f)" % mm.MOG2_VAR_THRESHOLD)
+    ap.add_argument("--no-cut", action="store_true",
+                    help="don't write snippet files (fast sensitivity sweeps)")
     args = ap.parse_args()
 
     if not args.video.exists():
@@ -164,21 +218,25 @@ def main() -> int:
     out_dir = args.out or (args.video.parent / "replay_snippets")
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    star = lambda v, d: "" if v == d else " *"  # noqa: E731 - mark overridden knobs
     print(f"replaying {args.video.name} through MotionGate")
     print(f"  gate: lores={mm.LORES_W}x{mm.LORES_H} detect_every={args.detect_every} "
-          f"area=[{mm.MIN_BLOB_AREA:.0f},{mm.MAX_BLOB_AREA:.0f}] "
-          f"min_blobs={mm.MIN_MOTION_BLOBS} var={mm.MOG2_VAR_THRESHOLD:.0f}")
+          f"area=[{args.min_area:.0f},{args.max_area:.0f}]{star(args.min_area, mm.MIN_BLOB_AREA)} "
+          f"min_blobs={args.min_blobs}{star(args.min_blobs, mm.MIN_MOTION_BLOBS)} "
+          f"var={args.var:.0f}{star(args.var, mm.MOG2_VAR_THRESHOLD)}  (* = overridden)")
     print(f"  seg : warmup={args.warmup}s pre={args.pre_roll}s post={args.post_roll}s "
           f"max={args.max_seg}s")
 
     roi = _resolve_roi(args.video, args.roi, args.full_frame)
 
-    fps, n_frames, segments = _segments_for(
+    fps, n_frames, segments, stats = _segments_for(
         args.video, roi, args.warmup, args.detect_every,
-        args.pre_roll, args.post_roll, args.max_seg)
+        args.pre_roll, args.post_roll, args.max_seg,
+        args.min_area, args.max_area, args.min_blobs, args.var)
 
     dur = n_frames / fps
     print(f"\nsource: {n_frames} frames @ {fps:.2f}fps = {dur:.2f}s")
+    _print_sensitivity(stats)
     if not segments:
         print("=> NO motion snippets (try a lower --warmup, or the clip has no "
               "motion the gate considers bee-sized).")
@@ -186,17 +244,20 @@ def main() -> int:
 
     # Cut each [start,end] from the original file (frame-accurate re-encode).
     total_clip = 0.0
-    print(f"\n=> {len(segments)} snippet(s) -> {out_dir}/")
+    dest = "(--no-cut: not written)" if args.no_cut else f"-> {out_dir}/"
+    print(f"\n=> {len(segments)} snippet(s) {dest}")
     for n, (s, e, reason) in enumerate(segments, 1):
         start_s, end_s = s / fps, e / fps
         clip_len = end_s - start_s
         total_clip += clip_len
         name = f"snippet_{n:02d}_{start_s:05.1f}-{end_s:05.1f}s.mp4"
-        cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(args.video),
-               "-ss", f"{start_s:.3f}", "-to", f"{end_s:.3f}",
-               "-c:v", "libx264", "-preset", "veryfast", "-an", str(out_dir / name)]
-        rc = subprocess.run(cmd).returncode
-        flag = "" if rc == 0 else "  [ffmpeg FAILED]"
+        flag = ""
+        if not args.no_cut:
+            cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(args.video),
+                   "-ss", f"{start_s:.3f}", "-to", f"{end_s:.3f}", "-c:v", "libx264",
+                   "-preset", "veryfast", "-an", str(out_dir / name)]
+            if subprocess.run(cmd).returncode != 0:
+                flag = "  [ffmpeg FAILED]"
         print(f"  {name}  ({clip_len:.2f}s, {reason}){flag}")
 
     print(f"\nrecorded {total_clip:.2f}s of {dur:.2f}s "
