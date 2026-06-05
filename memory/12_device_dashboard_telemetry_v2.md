@@ -112,10 +112,18 @@ Field experience surfaced gaps in the telemetry/dashboard built in doc 10:
   of old heartbeats later if it grows (track as future).
 
 ### 8. GPS coordinates from the modem (GNSS) in telemetry
-- Quectel modem has GNSS. Enable once (`AT+QGPS=1`); read position
-  (`AT+QGPSLOC=2` on the AT port, e.g. `/dev/ttyUSB2/3`) — done by **root** in
-  `cellular-up.sh`, written into the modem-status file (#5). `telemetry.py` reads
-  `lat`/`lon` and includes them in the beat.
+- The modem is a **Telit LE910C4-NF** (USB `1bc7:1201`), NOT Quectel. GNSS uses
+  Telit AT commands: power on with `AT$GPSP=1`, read position with `AT$GPSACP`
+  (returns `$GPSACP: <UTC>,<lat>,<lon>,<hdop>,<alt>,<fix>,...`; `<fix>` 2/3 =
+  2D/3D fix, 0/1 = no fix). lat/lon are `ddmm.mmmm[N/S]` / `dddmm.mmmm[E/W]`.
+  **AT port = `/dev/ttyUSB2`** (ttyUSB3 also answers AT). cdc-wdm0/wwan0 carry
+  the QMI data link separately, so reading GPS does not disturb cellular.
+  Verified on-Pi 2026-06-05 via `hardware/cellular/gps-test.sh` (port detect +
+  GPS power + `$GPSACP` parse all work; fix needs antenna + sky view).
+- NOTE: raw-shell serial reads (`stty`/`cat` on the port) are unreliable on these
+  Telit ports — `gps-test.sh` and the eventual telemetry path use **pyserial**.
+- Plan: `cellular-up.sh` (root) writes the fix into the modem-status file (#5);
+  `telemetry.py` reads `lat`/`lon` and includes them in the beat.
 - The Pi always includes `lat`/`lon` in the beat (when it has a fix). Backend
   **always** updates `Device.last_lat/last_lon/last_fix_at`, and **additionally**
   stores per-beat GPS on `DeviceHeartbeat` when
@@ -170,8 +178,9 @@ Field experience surfaced gaps in the telemetry/dashboard built in doc 10:
 modem-status/GPS path + on-demand capture; and 5c if real-time streaming is wanted.**
 
 ## Open / verify
-- GPS sourcing path (AT+QGPSLOC vs qmicli loc service vs gpsd) — using Quectel AT
-  via root in cellular-up.sh; verify on hardware. (okay)
+- GPS sourcing path (Telit `AT$GPSACP` vs qmicli loc service vs gpsd) — using
+  Telit AT via root in cellular-up.sh. Port + commands verified on-Pi 2026-06-05
+  (AT port `/dev/ttyUSB2`); still need a real outdoor fix to confirm coordinates.
 - Cellular signal + GPS both depend on the modem-status-file approach working on
   the Pi (permissions/AT access).
 - Heartbeat row volume at 60s — revisit retention/downsampling for the graph.

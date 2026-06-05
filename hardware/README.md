@@ -609,8 +609,8 @@ and [Setting up a data connection over QMI](https://docs.sixfab.com/page/setting
    diversity/GNSS antenna to its matching port).
 3. Stack the HAT on the Pi's GPIO header (mind clearance with the WittyPi) and
    connect the modem's **USB** jumper to the Pi.
-4. Power the Pi and confirm the modem enumerates (you should see a Quectel device
-   and a `/dev/cdc-wdm0` control node):
+4. Power the Pi and confirm the modem enumerates (you should see the Telit
+   modem — USB `1bc7:1201`, LE910C4-NF — and a `/dev/cdc-wdm0` control node):
    ```bash
    lsusb
    ls /dev/cdc-wdm0
@@ -634,10 +634,11 @@ sudo cp ~/BeeMonitor/hardware/cellular/qmi-network.conf.sample /etc/qmi-network.
 sudo nano /etc/qmi-network.conf     # set APN= (e.g. super / hologram / soracom.io)
 ```
 
-> If the modem isn't already in QMI/RmNet mode you'll set it once via AT command
-> (`AT+QCFG="usbnet",0`, then power-cycle). `usbnet,0` = QMI, `usbnet,1` = ECM.
-> Most Sixfab kits ship in QMI mode already — check with `lsusb` showing the
-> Quectel and `/dev/cdc-wdm0` present.
+> If the modem isn't already in QMI/RmNet mode you'll set it once via AT command,
+> then power-cycle. This is a **Telit** modem, so use `AT#USBCFG=<n>` (query the
+> available compositions with `AT#USBCFG=?`); on a Quectel it would be
+> `AT+QCFG="usbnet",0`. Most Sixfab kits ship in QMI mode already — check with
+> `lsusb` showing the Telit modem (`1bc7:1201`) and `/dev/cdc-wdm0` present.
 
 ### 10.4 Pin DNS (immutable resolv.conf)
 
@@ -848,7 +849,7 @@ appears next to the mp4, and the clip shows up in the BeeMonitor web app.
 
 ### Stage 6 — Cellular link (after Step 10)
 ```bash
-lsusb                         # Quectel device present
+lsusb                         # Telit modem present (1bc7:1201)
 systemctl status cellular.service
 ip addr show wwan0            # has an IP
 ping -c 3 -I wwan0 8.8.8.8    # connectivity over cellular

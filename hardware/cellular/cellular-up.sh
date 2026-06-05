@@ -31,7 +31,7 @@ bring_up() {
     [ -e "$DEV" ] || { log "modem $DEV not present"; return 1; }
 
     # 2. wwan0 is recreated fresh each boot; put it back in raw-IP mode
-    #    (required by qmi_wwan for Quectel modems). Must be done link-down.
+    #    (required by qmi_wwan; this is a Telit LE910C4-NF). Must be done link-down.
     #    Harmless if the modem doesn't expose this knob or it's already set.
     if [ -f "/sys/class/net/$IFACE/qmi/raw_ip" ]; then
         ip link set "$IFACE" down
