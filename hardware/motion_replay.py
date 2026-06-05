@@ -10,6 +10,15 @@ with ffmpeg. Use it to sanity-check what clips the gate would cut from a sample.
 
     python3 hardware/motion_replay.py short_videos/clip.mp4
     python3 hardware/motion_replay.py short_videos/clip.mp4 --out /tmp/snips --warmup 1.0
+    python3 hardware/motion_replay.py short_videos/clip.mp4 --roi 120,40,520,300
+    python3 hardware/motion_replay.py short_videos/clip.mp4 --full-frame
+
+Like production, it first runs the hotel detector (`nest_detection.pt`) on the
+clip's first frame, scales that hotel box into lores coords, and confines the
+motion gate to it — so a replay uses the *exact same ROI* the field unit would.
+`--roi` overrides with a manual lores box (== BEEMONITOR_ROI); `--full-frame`
+skips detection. If detection is unavailable/fails it falls back to the whole
+frame, same as production.
 
 Detection runs on each frame downscaled to the recorder's lores size (so the
 blob-area thresholds stay valid). Snippets are re-encoded (frame-accurate) from
@@ -27,7 +36,45 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import main_motion as mm  # noqa: E402  (reuse the exact gate + constants)
 
 
-def _segments_for(video: Path, warmup_s: float, detect_every: int,
+def _resolve_roi(video: Path, manual: str | None, full_frame: bool):
+    """Decide the lores-coord detection ROI, mirroring production priority:
+    explicit --roi (lores coords) > hotel auto-detection > whole frame.
+
+    Production grabs a main-stream frame and runs nest_detection.pt to find the
+    hotel, then scales that box into lores coords. We do the same here off the
+    video's first frame so a replay uses the *exact same ROI* as the field unit.
+    Returns (x1, y1, x2, y2) in lores coords, or None for the whole frame.
+    """
+    if manual:
+        try:
+            x1, y1, x2, y2 = (int(v) for v in manual.split(","))
+        except ValueError:
+            raise SystemExit(f"bad --roi {manual!r} (want x1,y1,x2,y2 in lores px)")
+        print(f"  roi : manual {(x1, y1, x2, y2)} (lores coords)")
+        return (x1, y1, x2, y2)
+    if full_frame:
+        print("  roi : full frame (--full-frame)")
+        return None
+
+    # Hotel auto-detection on the first frame — the production step 1.
+    cap = cv2.VideoCapture(str(video))
+    ok, frame = cap.read()
+    cap.release()
+    if not ok:
+        print("  roi : full frame (could not read first frame)")
+        return None
+    vh, vw = frame.shape[:2]
+    roi_native = mm.detect_hotel_roi(frame)  # nest_detection.pt; None on failure
+    if roi_native is None:
+        print("  roi : full frame (hotel detection unavailable/failed — same "
+              "fallback as production)")
+        return None
+    roi_lores = mm._scale_roi(roi_native, (vw, vh), (mm.LORES_W, mm.LORES_H))
+    print(f"  roi : hotel {tuple(roi_native)} @ {vw}x{vh} -> {roi_lores} (lores)")
+    return roi_lores
+
+
+def _segments_for(video: Path, roi, warmup_s: float, detect_every: int,
                   pre_roll: float, post_roll: float, max_seg: float):
     """Replay the gate over `video`; return (fps, n_frames, [(start_f, end_f, reason)])."""
     cap = cv2.VideoCapture(str(video))
@@ -39,7 +86,7 @@ def _segments_for(video: Path, warmup_s: float, detect_every: int,
     pre_frames = int(pre_roll * fps)
     max_frames = int(max_seg * fps)
 
-    gate = mm.MotionGate(roi=None)  # full frame, like current production scene
+    gate = mm.MotionGate(roi=roi)  # production-faithful: hotel ROI (or full frame)
     segments = []
     encoding = False
     seg_start = last_motion = 0
@@ -105,6 +152,11 @@ def main() -> int:
     ap.add_argument("--pre-roll", type=float, default=mm.PRE_ROLL)
     ap.add_argument("--post-roll", type=float, default=mm.POST_ROLL)
     ap.add_argument("--max-seg", type=float, default=mm.MAX_SEGMENT)
+    ap.add_argument("--roi", default=None,
+                    help="manual ROI 'x1,y1,x2,y2' in lores px (overrides hotel "
+                         "detection; same as BEEMONITOR_ROI)")
+    ap.add_argument("--full-frame", action="store_true",
+                    help="skip hotel detection and gate on the whole frame")
     args = ap.parse_args()
 
     if not args.video.exists():
@@ -119,8 +171,10 @@ def main() -> int:
     print(f"  seg : warmup={args.warmup}s pre={args.pre_roll}s post={args.post_roll}s "
           f"max={args.max_seg}s")
 
+    roi = _resolve_roi(args.video, args.roi, args.full_frame)
+
     fps, n_frames, segments = _segments_for(
-        args.video, args.warmup, args.detect_every,
+        args.video, roi, args.warmup, args.detect_every,
         args.pre_roll, args.post_roll, args.max_seg)
 
     dur = n_frames / fps
