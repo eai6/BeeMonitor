@@ -45,9 +45,12 @@ class VideoListView(LoginRequiredMixin, ListView):
         month = self.request.GET.get("month")
         day = self.request.GET.get("day")
         hour = self.request.GET.get("hour")
+        device = self.request.GET.get("device")
 
         if search:
             qs = qs.filter(title__icontains=search)
+        if device:
+            qs = qs.filter(device_id=device)
         if site:
             qs = qs.filter(site_name=_unsanitize_site(site))
         if year:
@@ -94,9 +97,15 @@ class VideoListView(LoginRequiredMixin, ListView):
         ctx["hours"] = sorted(set(
             user_videos.exclude(hour=None).values_list("hour", flat=True)
         ))
+        ctx["devices"] = [
+            {"id": r["device_id"], "name": r["device__name"]}
+            for r in user_videos.exclude(device=None)
+            .values("device_id", "device__name").distinct().order_by("device__name")
+        ]
 
         # Preserve current filter selections
         ctx["current_search"] = self.request.GET.get("q", "")
+        ctx["current_device"] = self.request.GET.get("device", "")
         ctx["current_site"] = self.request.GET.get("site", "")
         ctx["current_year"] = self.request.GET.get("year", "")
         ctx["current_month"] = self.request.GET.get("month", "")

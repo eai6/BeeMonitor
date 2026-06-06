@@ -15,10 +15,12 @@ from .models import DailyForagingSummary, Job, JobResult
 logger = logging.getLogger(__name__)
 
 
-def _apply_video_filters(qs, site_name=None, year=None, month=None, day=None, hour=None):
-    """Apply common site/year/month/day/hour filters to a JobResult queryset."""
+def _apply_video_filters(qs, site_name=None, year=None, month=None, day=None, hour=None, device=None):
+    """Apply common site/year/month/day/hour/device filters to a JobResult queryset."""
     if site_name:
         qs = qs.filter(job__video__site_name=site_name)
+    if device:
+        qs = qs.filter(job__video__device_id=device)
     if year:
         qs = qs.filter(job__video__year=year)
     if month:
@@ -30,7 +32,7 @@ def _apply_video_filters(qs, site_name=None, year=None, month=None, day=None, ho
     return qs
 
 
-def get_activity_over_time(user, site_name=None, year=None, month=None, day=None, hour=None):
+def get_activity_over_time(user, site_name=None, year=None, month=None, day=None, hour=None, device=None):
     """
     Return daily event counts across all completed jobs with entry/exit breakdown.
 
@@ -41,7 +43,7 @@ def get_activity_over_time(user, site_name=None, year=None, month=None, day=None
         job__status=Job.Status.COMPLETED,
     ).select_related("job__video")
 
-    qs = _apply_video_filters(qs, site_name, year, month, day, hour)
+    qs = _apply_video_filters(qs, site_name, year, month, day, hour, device)
 
     # Group by date using the video's recorded_at or uploaded_at
     daily = defaultdict(lambda: {"entries": 0, "exits": 0, "total": 0})
@@ -69,7 +71,7 @@ def get_activity_over_time(user, site_name=None, year=None, month=None, day=None
     return sorted_data
 
 
-def get_period_averages(user, site_name=None, year=None, month=None, day=None, hour=None):
+def get_period_averages(user, site_name=None, year=None, month=None, day=None, hour=None, device=None):
     """
     Return average events per hour-of-day, per day-of-week, and per month.
     """
@@ -78,7 +80,7 @@ def get_period_averages(user, site_name=None, year=None, month=None, day=None, h
         job__status=Job.Status.COMPLETED,
     ).select_related("job__video")
 
-    qs = _apply_video_filters(qs, site_name, year, month, day, hour)
+    qs = _apply_video_filters(qs, site_name, year, month, day, hour, device)
 
     hourly_totals = defaultdict(list)
     daily_totals = defaultdict(list)
@@ -103,11 +105,11 @@ def get_period_averages(user, site_name=None, year=None, month=None, day=None, h
     }
 
 
-def get_cumulative_activity(user, site_name=None, year=None, month=None, day=None, hour=None):
+def get_cumulative_activity(user, site_name=None, year=None, month=None, day=None, hour=None, device=None):
     """
     Return cumulative sum of events over time (sorted by date).
     """
-    daily_data = get_activity_over_time(user, site_name=site_name, year=year, month=month, day=day, hour=hour)
+    daily_data = get_activity_over_time(user, site_name=site_name, year=year, month=month, day=day, hour=hour, device=device)
 
     cumulative = 0
     result = []
@@ -180,7 +182,7 @@ def get_nest_activity_heatmap(user, job_id=None):
     return result_list
 
 
-def get_summary_stats(user, site_name=None, year=None, month=None, day=None, hour=None):
+def get_summary_stats(user, site_name=None, year=None, month=None, day=None, hour=None, device=None):
     """
     Return high-level summary statistics.
 
@@ -200,7 +202,7 @@ def get_summary_stats(user, site_name=None, year=None, month=None, day=None, hou
         job__status=Job.Status.COMPLETED,
     ).select_related("job__video")
 
-    qs = _apply_video_filters(qs, site_name, year, month, day, hour)
+    qs = _apply_video_filters(qs, site_name, year, month, day, hour, device)
 
     count = qs.count()
     if count == 0:
@@ -270,14 +272,14 @@ def get_summary_stats(user, site_name=None, year=None, month=None, day=None, hou
     }
 
 
-def get_video_breakdown(user, site_name=None, year=None, month=None, day=None, hour=None):
+def get_video_breakdown(user, site_name=None, year=None, month=None, day=None, hour=None, device=None):
     """Return per-video event breakdown for the analytics table."""
     qs = JobResult.objects.filter(
         job__user=user,
         job__status=Job.Status.COMPLETED,
     ).select_related("job__video")
 
-    qs = _apply_video_filters(qs, site_name, year, month, day, hour)
+    qs = _apply_video_filters(qs, site_name, year, month, day, hour, device)
 
     rows = []
     for r in qs.order_by("-job__video__recorded_at", "-job__created_at"):
@@ -298,7 +300,7 @@ def get_video_breakdown(user, site_name=None, year=None, month=None, day=None, h
     return rows
 
 
-def get_foraging_trips_over_time(user, site_name=None, year=None, month=None, day=None, hour=None):
+def get_foraging_trips_over_time(user, site_name=None, year=None, month=None, day=None, hour=None, device=None):
     """Return daily foraging trip counts and avg duration.
 
     Prefers DailyForagingSummary (cross-video trips) when available,
@@ -334,7 +336,7 @@ def get_foraging_trips_over_time(user, site_name=None, year=None, month=None, da
         job__status=Job.Status.COMPLETED,
     ).select_related("job__video")
 
-    qs = _apply_video_filters(qs, site_name, year, month, day, hour)
+    qs = _apply_video_filters(qs, site_name, year, month, day, hour, device)
 
     daily = defaultdict(lambda: {"trips": 0, "duration_sum": 0.0, "duration_count": 0})
 
@@ -364,7 +366,7 @@ def get_foraging_trips_over_time(user, site_name=None, year=None, month=None, da
     return sorted_data
 
 
-def get_trips_per_nest(user, site_name=None, year=None, month=None, day=None, hour=None):
+def get_trips_per_nest(user, site_name=None, year=None, month=None, day=None, hour=None, device=None):
     """Aggregate foraging trips per nest from summary_stats.
 
     Returns: [{"nest_id": "11", "trips": 15}, ...]
@@ -374,7 +376,7 @@ def get_trips_per_nest(user, site_name=None, year=None, month=None, day=None, ho
         job__status=Job.Status.COMPLETED,
     ).select_related("job__video")
 
-    qs = _apply_video_filters(qs, site_name, year, month, day, hour)
+    qs = _apply_video_filters(qs, site_name, year, month, day, hour, device)
 
     nest_trips = defaultdict(int)
 

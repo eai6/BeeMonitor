@@ -17,6 +17,15 @@
 <div class="bg-white shadow rounded-lg p-4 mb-6">
   <form method="get" class="flex flex-wrap gap-3 items-end">
     <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Device</label>
+      <select name="device" class="border border-gray-300 rounded px-3 py-1.5 text-sm focus:ring-amber-500 focus:border-amber-500">
+        <option value="">All Devices</option>
+        {% for d in devices %}
+        <option value="{{ d.id }}" {% if current_device == d.id|stringformat:"d" %}selected{% endif %}>{{ d.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
       <label class="block text-xs font-medium text-gray-500 mb-1">Site</label>
       <select name="site" class="border border-gray-300 rounded px-3 py-1.5 text-sm focus:ring-amber-500 focus:border-amber-500">
         <option value="">All Sites</option>
@@ -188,35 +197,35 @@
       {% if current_hour %} hour <strong>{{ current_hour }}:00</strong>{% endif %}
     </p>
     <div class="flex gap-2">
-      <a href="{% url 'analysis:download_events' %}?site={{ current_site }}&year={{ current_year }}&month={{ current_month }}&day={{ current_day }}&hour={{ current_hour }}"
+      <a href="{% url 'analysis:download_events' %}?site={{ current_site }}&year={{ current_year }}&month={{ current_month }}&day={{ current_day }}&hour={{ current_hour }}&device={{ current_device }}"
          class="inline-flex items-center gap-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
         </svg>
         All Events CSV
       </a>
-      <a href="{% url 'analysis:download_tracking' %}?site={{ current_site }}&year={{ current_year }}&month={{ current_month }}&day={{ current_day }}&hour={{ current_hour }}"
+      <a href="{% url 'analysis:download_tracking' %}?site={{ current_site }}&year={{ current_year }}&month={{ current_month }}&day={{ current_day }}&hour={{ current_hour }}&device={{ current_device }}"
          class="inline-flex items-center gap-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
         </svg>
         All Tracking CSV
       </a>
-      <a href="{% url 'analysis:download_trips' %}?site={{ current_site }}&year={{ current_year }}&month={{ current_month }}&day={{ current_day }}&hour={{ current_hour }}"
+      <a href="{% url 'analysis:download_trips' %}?site={{ current_site }}&year={{ current_year }}&month={{ current_month }}&day={{ current_day }}&hour={{ current_hour }}&device={{ current_device }}"
          class="inline-flex items-center gap-1 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded text-sm font-medium">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
         </svg>
         Foraging Trips CSV
       </a>
-      <a href="{% url 'analysis:download_interactions' %}?site={{ current_site }}&year={{ current_year }}&month={{ current_month }}&day={{ current_day }}&hour={{ current_hour }}"
+      <a href="{% url 'analysis:download_interactions' %}?site={{ current_site }}&year={{ current_year }}&month={{ current_month }}&day={{ current_day }}&hour={{ current_hour }}&device={{ current_device }}"
          class="inline-flex items-center gap-1 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded text-sm font-medium">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
         </svg>
         Interactions CSV
       </a>
-      <a href="{% url 'analysis:download_nest_data' %}?site={{ current_site }}&year={{ current_year }}&month={{ current_month }}&day={{ current_day }}&hour={{ current_hour }}"
+      <a href="{% url 'analysis:download_nest_data' %}?site={{ current_site }}&year={{ current_year }}&month={{ current_month }}&day={{ current_day }}&hour={{ current_hour }}&device={{ current_device }}"
          class="inline-flex items-center gap-1 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm font-medium">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>

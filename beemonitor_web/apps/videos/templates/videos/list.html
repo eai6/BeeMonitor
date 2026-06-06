@@ -17,6 +17,15 @@
              class="border border-gray-300 rounded px-3 py-1.5 text-sm focus:ring-amber-500 focus:border-amber-500 w-40">
     </div>
     <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Device</label>
+      <select name="device" class="border border-gray-300 rounded px-3 py-1.5 text-sm focus:ring-amber-500 focus:border-amber-500">
+        <option value="">All Devices</option>
+        {% for d in devices %}
+        <option value="{{ d.id }}" {% if current_device == d.id|stringformat:"d" %}selected{% endif %}>{{ d.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
       <label class="block text-xs font-medium text-gray-500 mb-1">Site</label>
       <select name="site" class="border border-gray-300 rounded px-3 py-1.5 text-sm focus:ring-amber-500 focus:border-amber-500">
         <option value="">All Sites</option>

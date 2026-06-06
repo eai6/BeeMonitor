@@ -794,12 +794,15 @@ class _FilteredJobsMixin:
         month = request.GET.get("month", "")
         day = request.GET.get("day", "")
         hour = request.GET.get("hour", "")
+        device = request.GET.get("device", "")
 
         qs = JobResult.objects.filter(
             job__user=request.user,
             job__status=Job.Status.COMPLETED,
         ).select_related("job__video")
 
+        if device:
+            qs = qs.filter(job__video__device_id=device)
         if site:
             qs = qs.filter(job__video__site_name=_unsanitize_site(site))
         if year:
@@ -824,6 +827,8 @@ class _FilteredJobsMixin:
                 pass
 
         label_parts = []
+        if device:
+            label_parts.append(f"device{device}")
         if site:
             label_parts.append(site)
         if year:
@@ -1146,11 +1151,13 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
         month = self.request.GET.get("month", "")
         day = self.request.GET.get("day", "")
         hour = self.request.GET.get("hour", "")
+        device = self.request.GET.get("device", "")
 
         year_int = None
         month_int = None
         day_int = None
         hour_int = None
+        device_int = None
         if year:
             try:
                 year_int = int(year)
@@ -1171,9 +1178,19 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
                 hour_int = int(hour)
             except (ValueError, TypeError):
                 pass
+        if device:
+            try:
+                device_int = int(device)
+            except (ValueError, TypeError):
+                pass
 
         # Filter options (use set() to guarantee uniqueness)
         user_videos = Video.objects.filter(user=user)
+        ctx["devices"] = [
+            {"id": r["device_id"], "name": r["device__name"]}
+            for r in user_videos.exclude(device=None)
+            .values("device_id", "device__name").distinct().order_by("device__name")
+        ]
         ctx["site_names"] = sorted(set(
             _sanitize_site(s) for s in
             user_videos.exclude(site_name="")
@@ -1194,6 +1211,7 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
         ctx["current_month"] = month
         ctx["current_day"] = day
         ctx["current_hour"] = hour
+        ctx["current_device"] = device
 
         # Job progress metrics
         user_jobs = Job.objects.filter(user=user)
@@ -1214,26 +1232,26 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
 
         # Analytics data — wrap in try/except so page never crashes
         try:
-            ctx["summary"] = get_summary_stats(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
+            ctx["summary"] = get_summary_stats(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int, device=device_int)
         except Exception as e:
             logger.error("Analytics summary failed: %s", e, exc_info=True)
             ctx["summary"] = {"total_videos": 0, "total_events": 0, "total_entries": 0,
                               "total_exits": 0, "avg_events_per_video": 0, "total_unique_tracks": 0, "completed_jobs": 0}
 
         try:
-            activity = get_activity_over_time(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
+            activity = get_activity_over_time(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int, device=device_int)
             ctx["activity_json"] = json.dumps(activity, default=str)
         except Exception:
             ctx["activity_json"] = "[]"
 
         try:
-            cumulative = get_cumulative_activity(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
+            cumulative = get_cumulative_activity(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int, device=device_int)
             ctx["cumulative_json"] = json.dumps(cumulative, default=str)
         except Exception:
             ctx["cumulative_json"] = "[]"
 
         try:
-            averages = get_period_averages(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
+            averages = get_period_averages(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int, device=device_int)
             # Convert int keys to string keys for JSON
             ctx["hourly_avg_json"] = json.dumps({str(k): v for k, v in averages["hourly"].items()})
             ctx["daily_avg_json"] = json.dumps({str(k): v for k, v in averages["daily"].items()})
@@ -1252,7 +1270,7 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
             ctx["nest_data_json"] = "[]"
 
         try:
-            vb = get_video_breakdown(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
+            vb = get_video_breakdown(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int, device=device_int)
             for row in vb:
                 row["title"] = _sanitize_site(row["title"])
                 row["site"] = _sanitize_site(row["site"])
@@ -1261,13 +1279,13 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
             ctx["video_breakdown"] = []
 
         try:
-            foraging_over_time = get_foraging_trips_over_time(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
+            foraging_over_time = get_foraging_trips_over_time(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int, device=device_int)
             ctx["foraging_trips_json"] = json.dumps(foraging_over_time, default=str)
         except Exception:
             ctx["foraging_trips_json"] = "[]"
 
         try:
-            trips_per_nest = get_trips_per_nest(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int)
+            trips_per_nest = get_trips_per_nest(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int, device=device_int)
             ctx["trips_per_nest_json"] = json.dumps(trips_per_nest, default=str)
         except Exception:
             ctx["trips_per_nest_json"] = "[]"
