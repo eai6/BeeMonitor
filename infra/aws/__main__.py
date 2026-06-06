@@ -431,9 +431,10 @@ aws.iam.RolePolicy(
 # VPC + subnets — App Runner VPC connector lives here, RDS lives here too.
 # ---------------------------------------------------------------------------
 # Pattern mirrors EcoMorph's web stack: a dedicated /16 with two private /20
-# subnets across the first two AZs. No IGW / NAT — App Runner reaches AWS
-# services via VPC endpoints below; outside-internet egress is intentionally
-# absent (the container does not need it, and removing NAT saves ~$30/mo).
+# subnets across the first two AZs. App Runner reaches AWS services via the VPC
+# endpoints below; a NAT gateway (see "Internet egress" below) gives the
+# container outbound internet for third-party APIs like Open-Meteo (the device
+# weather overlay). AWS-service traffic still prefers the cheaper VPC endpoints.
 
 azs = aws.get_availability_zones(state="available").names[:2]
 
@@ -455,6 +456,66 @@ private_subnets = [
     )
     for i, az in enumerate(azs)
 ]
+
+# ---------------------------------------------------------------------------
+# Internet egress (NAT) — App Runner's VPC connector routes ALL container egress
+# through the private subnets, so they need a NAT gateway to reach the public
+# internet (e.g. Open-Meteo, for the device weather overlay). A small public
+# subnet with an IGW route hosts the NAT; the private subnets' route table (the
+# VPC default) sends 0.0.0.0/0 to it. Cost: ~$32/mo + ~$0.045/GB (weather calls
+# are tiny). AWS-service traffic still uses the cheaper VPC endpoints below.
+# ---------------------------------------------------------------------------
+igw = aws.ec2.InternetGateway(
+    "web-igw",
+    vpc_id=vpc.id,
+    tags={"Name": f"{prefix}-igw"},
+)
+
+public_subnet = aws.ec2.Subnet(
+    "public-subnet-0",
+    vpc_id=vpc.id,
+    cidr_block="10.30.250.0/24",
+    availability_zone=azs[0],
+    map_public_ip_on_launch=True,
+    tags={"Name": f"{prefix}-public-{azs[0]}"},
+)
+
+public_rt = aws.ec2.RouteTable(
+    "public-rt",
+    vpc_id=vpc.id,
+    routes=[aws.ec2.RouteTableRouteArgs(cidr_block="0.0.0.0/0", gateway_id=igw.id)],
+    tags={"Name": f"{prefix}-public-rt"},
+)
+
+aws.ec2.RouteTableAssociation(
+    "public-rt-assoc",
+    subnet_id=public_subnet.id,
+    route_table_id=public_rt.id,
+)
+
+nat_eip = aws.ec2.Eip(
+    "nat-eip",
+    domain="vpc",
+    tags={"Name": f"{prefix}-nat-eip"},
+)
+
+nat_gateway = aws.ec2.NatGateway(
+    "nat-gateway",
+    allocation_id=nat_eip.id,
+    subnet_id=public_subnet.id,
+    tags={"Name": f"{prefix}-nat"},
+    opts=pulumi.ResourceOptions(depends_on=[igw]),
+)
+
+# Private subnets use the VPC default route table (also home to the S3 gateway
+# endpoint). Send everything-else to the NAT for outbound internet.
+aws.ec2.Route(
+    "private-default-to-nat",
+    route_table_id=vpc.default_route_table_id,
+    destination_cidr_block="0.0.0.0/0",
+    nat_gateway_id=nat_gateway.id,
+)
+
 
 rds_sg = aws.ec2.SecurityGroup(
     "rds-sg",
