@@ -29,6 +29,11 @@
       {{ device.location|default:"No location set" }}
       {% if device.map_url %}
         · <a href="{{ device.map_url }}" target="_blank" rel="noopener" class="text-amber-600 hover:underline">{{ device.lat|floatformat:4 }}, {{ device.lon|floatformat:4 }} ↗</a>
+        · <a href="https://beescape.psu.edu/" target="_blank" rel="noopener"
+             class="text-amber-600 hover:underline"
+             title="Opens Beescape. The coordinates are copied to your clipboard — paste them into Beescape's search box to jump here."
+             onclick="if(navigator.clipboard){navigator.clipboard.writeText('{{ device.lat }}, {{ device.lon }}');var s=document.getElementById('bs-copied');if(s){s.classList.remove('hidden');setTimeout(function(){s.classList.add('hidden');},4000);}}">Beescape ↗</a>
+        <span id="bs-copied" class="hidden text-green-600">coords copied — paste into Beescape search</span>
       {% endif %}
       · last seen {% if device.last_seen_at %}{{ device.last_seen_at|timesince }} ago{% else %}never{% endif %}
       · <span class="font-mono">{{ device.prefix }}…</span>
