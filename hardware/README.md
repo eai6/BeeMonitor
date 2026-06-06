@@ -304,7 +304,6 @@ BEEMONITOR_RECORD_DIR=/home/beemonitor/Desktop/cameraOutput/beeHotel
 # --- optional tuning (sensible defaults if omitted; see Configuration Reference) ---
 # BEEMONITOR_PRE_ROLL=3
 # BEEMONITOR_POST_ROLL=4
-# BEEMONITOR_HEARTBEAT_INTERVAL=3600
 ```
 
 The file holds the device key, so lock it down:
@@ -404,7 +403,6 @@ required; everything else has a sensible default.
 | `BEEMONITOR_PRE_ROLL` | `3` | Seconds kept *before* motion starts |
 | `BEEMONITOR_POST_ROLL` | `4` | Seconds kept *after* motion stops |
 | `BEEMONITOR_MAX_SEGMENT` | `120` | Force-rotate a clip after this many seconds |
-| `BEEMONITOR_HEARTBEAT_INTERVAL` | `0` | Motion-independent **video** clips (`0` = off; image telemetry replaces it) |
 | `BEEMONITOR_LORES_W` / `_H` | `640` / `480` | Resolution of the detection stream |
 | `BEEMONITOR_FPS` | `25` | Capture frame rate |
 | `BEEMONITOR_ROI` | (auto-detect) | Manual override `x1,y1,x2,y2` in lores px. Empty ⇒ auto-detect the hotel at startup (below) |
@@ -776,8 +774,6 @@ appear only when you request one on-demand (picture / live view).
 
 - **Motion-gating** is the main lever — only activity snippets are sent.
 - Tune `BEEMONITOR_PRE_ROLL` / `BEEMONITOR_POST_ROLL` down to shrink clips.
-- Lower `BEEMONITOR_HEARTBEAT_INTERVAL` frequency (or set `0`) if audit clips are
-  eating into your plan.
 - Restrict detection to the hotel face with `BEEMONITOR_ROI` to avoid triggering
   on background motion (waving plants, passers-by).
 - The uploader retries with backoff, so brief signal drops self-heal — clips
@@ -808,7 +804,7 @@ cd ~/BeeMonitor/hardware
 ### Stage 1 — Recorder bench test (on the Pi, foreground)
 
 Run it by hand first so you see the logs live. Use a throwaway directory and a
-short heartbeat so a clip is written even before you trigger motion:
+short warmup so the gate starts looking for motion quickly:
 
 ```bash
 # Make sure the service isn't already holding the camera:
@@ -816,7 +812,6 @@ sudo systemctl stop beemonitor-recorder.service 2>/dev/null
 
 BEEMONITOR_RECORD_DIR=/tmp/bm_test \
 BEEMONITOR_WARMUP=3 \
-BEEMONITOR_HEARTBEAT_INTERVAL=20 \
 ~/BeeMonitor/hardware/venv/bin/python main_motion.py
 ```
 
@@ -827,9 +822,9 @@ clip START (motion) -> 2026-06-04_14_03_11.mp4
 clip STOP (idle) len=6.2s -> remux 2026-06-04_14_03_11.mp4
 snippet ready: 2026-06-04_14_03_11.mp4 (1.4 MB)
 ```
-Stop with **Ctrl-C**. ✅ **Pass:** snippets exist — `ls -R /tmp/bm_test`. If only
-heartbeat clips appear and motion never fires, the detection thresholds need
-tuning (see [Configuration Reference](#configuration-reference)).
+Stop with **Ctrl-C**. ✅ **Pass:** snippets exist — `ls -R /tmp/bm_test`. If no
+clips appear when you wave, the detection thresholds need tuning (see
+[Configuration Reference](#configuration-reference)).
 
 ### Stage 2 — Inspect snippet content
 ```bash

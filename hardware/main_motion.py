@@ -21,8 +21,6 @@ Segment lifecycle:
     motion ongoing -> keep writing
     motion stops   -> after POST_ROLL seconds, close + remux to .mp4
     (safety)       -> a segment is force-rotated after MAX_SEGMENT seconds
-    (audit)        -> an optional heartbeat clip is recorded every hour so you
-                      can verify detection quality remotely and recalibrate
 
 Snippets are written as ``RECORD_DIR/YYYY-MM-DD/YYYY-MM-DD_HH_MM_SS.mp4`` — the
 exact convention ``uploader.py`` already scans for, so the existing uploader
@@ -30,8 +28,8 @@ service ships them unchanged.
 
 IMPORTANT — on-device gating means a missed detection is permanent data loss.
 Defaults here favour *over*-triggering. Validate with the logged stats
-(triggers/hour, snippet length) and the heartbeat clips before trusting it in
-the field, then tighten thresholds.
+(triggers/hour, snippet length) before trusting it in the field, then tighten
+thresholds.
 
 Calibrating the thresholds
 --------------------------
@@ -121,12 +119,6 @@ PRE_ROLL = _env_float("BEEMONITOR_PRE_ROLL", 3.0)
 POST_ROLL = _env_float("BEEMONITOR_POST_ROLL", 4.0)
 MAX_SEGMENT = _env_float("BEEMONITOR_MAX_SEGMENT", 120.0)   # force-rotate cap
 WARMUP_SECONDS = _env_float("BEEMONITOR_WARMUP", 5.0)        # let MOG2 learn bg
-
-# Heartbeat *video clips*: disabled by default — the telemetry image (below)
-# covers the "is the gate working / camera alive" audit far more cheaply.
-# Left in the code for bench/WiFi debugging; set >0 to re-enable.
-HEARTBEAT_INTERVAL = _env_float("BEEMONITOR_HEARTBEAT_INTERVAL", 0.0)
-HEARTBEAT_SECONDS = _env_float("BEEMONITOR_HEARTBEAT_SECONDS", 10.0)
 
 # Telemetry stills queue. Periodic capture is OFF by default now — telemetry is
 # JSON-only over cellular; stills are captured ON DEMAND (picture / live view).
@@ -571,8 +563,6 @@ def record() -> None:
     last_motion = 0.0
     cur_h264: Path | None = None
     cur_mp4: Path | None = None
-    heartbeat_until = 0.0
-    next_heartbeat = (time.monotonic() + HEARTBEAT_INTERVAL) if HEARTBEAT_INTERVAL > 0 else float("inf")
 
     # Per-segment / rolling stats for tuning.
     triggers = 0
@@ -639,13 +629,6 @@ def record() -> None:
                 # Still keep the bg model current on skipped frames.
                 gate.warm(gray)
 
-            # Heartbeat: schedule a forced clip window when idle.
-            if not encoding and now_mono >= next_heartbeat:
-                heartbeat_until = now_mono + HEARTBEAT_SECONDS
-                next_heartbeat = now_mono + HEARTBEAT_INTERVAL
-                _open_segment(now_mono, "heartbeat")
-            in_heartbeat = now_mono < heartbeat_until
-
             if motion and not encoding:
                 _open_segment(now_mono, "motion")
 
@@ -655,13 +638,13 @@ def record() -> None:
                     _close_segment(now_mono, "max-len")
                     if motion:  # still active -> immediately start a fresh clip
                         _open_segment(now_mono, "motion-continued")
-                # Normal close: no motion for POST_ROLL and heartbeat window over.
-                elif not in_heartbeat and (now_mono - last_motion) >= POST_ROLL:
+                # Normal close: no motion for POST_ROLL.
+                elif (now_mono - last_motion) >= POST_ROLL:
                     _close_segment(now_mono, "idle")
 
             # Periodic background-model rebuild. Deferred while a clip is open so
             # an active capture isn't cut short; fires as soon as the scene idles.
-            if now_mono >= next_bg_reset and not encoding and not in_heartbeat:
+            if now_mono >= next_bg_reset and not encoding:
                 gate.reset()
                 warmup_deadline = now_mono + WARMUP_SECONDS  # re-learn before trusting motion
                 next_bg_reset = now_mono + BG_RESET_INTERVAL
