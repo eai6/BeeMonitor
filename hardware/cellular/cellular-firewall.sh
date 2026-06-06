@@ -33,7 +33,7 @@ fi
 # Replace any previous version of our table atomically.
 nft list table inet "$TABLE" >/dev/null 2>&1 && nft delete table inet "$TABLE"
 
-nft -f - <<EOF
+if ! nft -f - <<EOF
 table inet ${TABLE} {
     chain output {
         type filter hook output priority 0; policy accept;
@@ -54,9 +54,13 @@ table inet ${TABLE} {
         socket cgroupv2 level 2 "system.slice/${TELEMETRY_UNIT}" accept
 
         # Everything else leaving cellular is blocked (apt, snap, rpi-connect, …).
-        counter comment "cellular-blocked-nontelemetry" drop
+        counter drop comment "cellular-blocked-nontelemetry"
     }
 }
 EOF
+then
+    echo "cellular-firewall: failed to load nftables ruleset — cellular is NOT gated" >&2
+    exit 1
+fi
 
 echo "cellular-firewall: egress on ${IFACE} gated to ${TELEMETRY_UNIT} (+DNS/DHCP/NTP/ICMP)"
