@@ -1,0 +1,19 @@
+[Unit]
+Description=BeeMonitor cellular egress firewall (telemetry-only on wwan0)
+Documentation=https://github.com/eai6/BeeMonitor
+# Firewall setup belongs in the pre-network slot, and must be in place BEFORE the
+# cellular link comes up so there is no window where other traffic can leak out.
+# network-pre.target / Before=cellular.service avoid any ordering cycle with
+# multi-user.target (this unit is WantedBy=multi-user.target).
+Wants=network-pre.target
+After=network-pre.target
+Before=cellular.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/beemonitor/BeeMonitor/hardware/cellular/cellular-firewall.sh
+ExecReload=/home/beemonitor/BeeMonitor/hardware/cellular/cellular-firewall.sh
+
+[Install]
+WantedBy=multi-user.target

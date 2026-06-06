@@ -725,6 +725,45 @@ backoff covers any remaining lag).
 > systemd silently delete the start job (the service shows `enabled` but never
 > runs, with an empty journal). If you ever see that symptom, this is the cause.
 
+### 10.7 Gate cellular to BeeMonitor only (don't let anything else eat your SIM)
+
+When WiFi is down, `wwan0` becomes the default route and **any** process — `apt`
+/ `unattended-upgrades`, `snapd`, `rpi-connect`, OS background jobs — will push
+bytes over your metered SIM. The repo ships an nftables egress allowlist that
+permits **only** the telemetry beat on cellular and drops everything else.
+Allowed on `wwan0`: the `beemonitor-telemetry.service` cgroup (heartbeat JSON +
+on-demand image + command poll), DNS, DHCP renew, NTP, and ICMP (the watchdog
+ping). WiFi (`wlan0`) is untouched, so normal operation is unaffected. The video
+uploader is intentionally *not* allowed on cellular — bulk video stays WiFi-only
+even at the network layer.
+
+```bash
+cd ~/BeeMonitor/hardware
+sudo apt install -y nftables
+chmod +x cellular/cellular-firewall.sh
+sudo cp systemd/cellular-firewall.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now cellular-firewall.service
+```
+
+Verify (with WiFi **off** so cellular is the only link):
+
+```bash
+sudo nft list table inet beemon_cell        # shows the rules + a "drop" counter
+journalctl -u beemonitor-telemetry -f       # beats still succeed
+sudo apt update                              # should hang/fail — blocked, as intended
+sudo nft list table inet beemon_cell        # the drop counter has climbed
+```
+
+> Optional belt-and-suspenders: stop the worst offenders from even trying, so the
+> firewall has less to drop:
+> ```bash
+> sudo systemctl mask apt-daily.timer apt-daily-upgrade.timer
+> sudo systemctl disable --now unattended-upgrades 2>/dev/null || true
+> ```
+> `rpi-connect` keeps working over WiFi; it's just blocked over cellular. To allow
+> remote access over cellular too, add its cgroup to `cellular-firewall.sh`.
+
 **Enable network time (NTP) — required for uploads.** The Pi has no RTC, so on
 every cold boot / WittyPi wake it starts with a stale clock restored from
 `fake-hwclock`. A wrong clock fails TLS certificate validation, so S3 uploads and
