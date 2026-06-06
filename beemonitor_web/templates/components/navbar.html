@@ -1,22 +1,32 @@
+<style>[x-cloak]{display:none !important;}</style>
 <nav class="bg-amber-600 shadow" x-data="{ open: false }">
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
     <div class="flex justify-between h-16">
       <div class="flex items-center">
+        <!-- Brand doubles as the Home / Analytics button -->
         <a href="{% url 'analysis:analytics' %}" class="flex items-center">
           <span class="text-white text-xl font-bold tracking-tight">BeeMonitor</span>
         </a>
-        <div class="hidden md:flex md:ml-10 md:space-x-4">
-          <a href="{% url 'videos:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Videos</a>
-          <a href="{% url 'analysis:analytics' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Analytics</a>
-          <a href="{% url 'annotations:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Annotate</a>
-          <a href="{% url 'training:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Training</a>
+        <div class="hidden md:flex md:ml-10 md:space-x-4 md:items-center">
+          <!-- Fine-tuning dropdown: annotate + training -->
+          <div class="relative" x-data="{ ft: false }" @click.away="ft = false">
+            <button @click="ft = !ft"
+                    class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium inline-flex items-center gap-1">
+              Fine-tuning
+              <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </button>
+            <div x-show="ft" x-cloak x-transition
+                 class="absolute left-0 mt-1 w-44 bg-white rounded-md shadow-lg py-1 z-50">
+              <a href="{% url 'annotations:list' %}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-amber-50">Annotate</a>
+              <a href="{% url 'training:list' %}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-amber-50">Training</a>
+            </div>
+          </div>
           <a href="{% url 'devices:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Devices</a>
-          <a href="{% url 'docs:index' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Docs</a>
         </div>
       </div>
       <div class="hidden md:flex md:items-center md:space-x-3">
         {% if user.is_authenticated %}
-        <a href="{% url 'accounts:usage' %}" class="text-amber-100 hover:text-white text-sm">{{ user.username }}</a>
+        <a href="{% url 'accounts:usage' %}" class="text-amber-100 hover:text-white text-sm" title="Account &amp; settings">{{ user.username }}</a>
         <form method="post" action="{% url 'accounts:logout' %}" class="inline">{% csrf_token %}<button type="submit" class="bg-amber-700 hover:bg-amber-800 text-white px-3 py-1.5 rounded text-sm">Logout</button></form>
         {% else %}
         <a href="{% url 'accounts:login' %}" class="text-amber-100 hover:text-white px-3 py-2 text-sm font-medium">Login</a>
@@ -37,13 +47,13 @@
   <!-- Mobile menu -->
   <div x-show="open" class="md:hidden bg-amber-700">
     <div class="px-2 pt-2 pb-3 space-y-1">
-      <a href="{% url 'videos:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Videos</a>
-      <a href="{% url 'analysis:analytics' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Analytics</a>
+      <a href="{% url 'analysis:analytics' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Home</a>
+      <div class="px-3 pt-2 text-xs uppercase tracking-wide text-amber-200">Fine-tuning</div>
       <a href="{% url 'annotations:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Annotate</a>
       <a href="{% url 'training:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Training</a>
       <a href="{% url 'devices:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Devices</a>
-      <a href="{% url 'docs:index' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Docs</a>
       {% if user.is_authenticated %}
+      <a href="{% url 'accounts:usage' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Account &amp; settings</a>
       <form method="post" action="{% url 'accounts:logout' %}">{% csrf_token %}<button type="submit" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium w-full text-left">Logout</button></form>
       {% else %}
       <a href="{% url 'accounts:login' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Login</a>

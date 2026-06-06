@@ -2,7 +2,12 @@
 {% block title %}Usage & Credits - BeeMonitor{% endblock %}
 
 {% block content %}
-<h1 class="text-2xl font-bold text-gray-900 mb-6">Usage & Credits</h1>
+<div class="mb-6 flex flex-wrap items-center justify-between gap-3">
+  <h1 class="text-2xl font-bold text-gray-900">Usage & Credits</h1>
+  <a href="{% url 'docs:index' %}" class="inline-flex items-center gap-1 px-3 py-2 bg-white border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 font-medium">
+    Documentation &rarr;
+  </a>
+</div>
 
 <!-- Credit Balance -->
 <div class="bg-white shadow rounded-lg p-6 mb-6">
