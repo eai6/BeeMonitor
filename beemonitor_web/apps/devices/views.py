@@ -4,12 +4,16 @@ The Django admin has the same capabilities, but admin access is restricted to
 staff. End users get this app's pages.
 """
 
+import json
 import logging
-from datetime import timedelta
+import urllib.parse
+import urllib.request
+from datetime import timedelta, timezone as dt_timezone
 
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.core.cache import cache
 from django.db.models import Max
 from django.db.models.functions import TruncDay, TruncHour
 from django.http import JsonResponse
@@ -36,6 +40,81 @@ def _is_online(device) -> bool:
         return False
     age = (timezone.now() - device.last_seen_at).total_seconds()
     return age <= settings.DEVICE_ONLINE_GRACE_SECONDS
+
+
+def _fetch_weather(lat: float, lon: float, start_date: str, end_date: str, hourly: bool) -> dict:
+    """Hourly/daily temperature + precipitation from Open-Meteo (free, no key).
+
+    Uses the *forecast* endpoint with start/end dates: unlike the archive API it
+    covers the recent past through today, which is what a live device chart needs.
+    Cached for an hour (historical weather doesn't change) so we don't refetch on
+    every page load. Returns {} on any failure -> the chart just omits weather.
+    """
+    cache_key = f"wx:{lat:.3f}:{lon:.3f}:{start_date}:{end_date}:{'h' if hourly else 'd'}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    params = {
+        "latitude": f"{lat:.4f}",
+        "longitude": f"{lon:.4f}",
+        "start_date": start_date,
+        "end_date": end_date,
+        "timezone": "UTC",  # matches our UTC heartbeat buckets exactly
+    }
+    if hourly:
+        params["hourly"] = "temperature_2m,precipitation"
+    else:
+        params["daily"] = "temperature_2m_max,precipitation_sum"
+    url = "https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode(params)
+
+    data: dict = {}
+    try:
+        with urllib.request.urlopen(url, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:  # pragma: no cover - network hiccup must not 500 the page
+        logger.warning("weather fetch failed for (%.3f,%.3f): %s", lat, lon, e)
+        data = {}
+    cache.set(cache_key, data, 60 * 60)  # 1 hour
+    return data
+
+
+def _weather_lookup(buckets, gran, lat, lon) -> dict:
+    """Map each activity bucket (UTC) -> {"temp", "precip"} from Open-Meteo.
+
+    Hourly granularity keys on "YYYY-MM-DDTHH"; daily on "YYYY-MM-DD". Both the
+    request and the bucket keys are UTC, so they align exactly.
+    """
+    if not buckets:
+        return {}
+    utc = [b.astimezone(dt_timezone.utc) for b in buckets]
+    start = min(utc).strftime("%Y-%m-%d")
+    end = max(utc).strftime("%Y-%m-%d")
+    hourly = gran == "hour"
+    data = _fetch_weather(lat, lon, start, end, hourly=hourly)
+
+    out: dict = {}
+    if hourly:
+        h = data.get("hourly", {})
+        times = h.get("time", [])
+        temps = h.get("temperature_2m", []) or []
+        precs = h.get("precipitation", []) or []
+        for i, t in enumerate(times):
+            out[t[:13]] = {  # "2026-06-04T18:00" -> "2026-06-04T18"
+                "temp": temps[i] if i < len(temps) else None,
+                "precip": (precs[i] if i < len(precs) else None) or 0,
+            }
+    else:
+        d = data.get("daily", {})
+        times = d.get("time", [])
+        tmax = d.get("temperature_2m_max", []) or []
+        psum = d.get("precipitation_sum", []) or []
+        for i, t in enumerate(times):
+            out[t] = {
+                "temp": tmax[i] if i < len(tmax) else None,
+                "precip": (psum[i] if i < len(psum) else None) or 0,
+            }
+    return out
 
 
 def _presign_image(storage_key: str):
@@ -126,7 +205,7 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         since = timezone.now() - timedelta(days=days)
         trunc = TruncHour if gran == "hour" else TruncDay
 
-        rows = (
+        rows = list(
             device.heartbeats
             .filter(created_at__gte=since, snippets_last_period__isnull=False)
             .annotate(bucket=trunc("created_at"))
@@ -134,13 +213,32 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
             .annotate(v=Max("snippets_last_period"))
             .order_by("bucket")
         )
-        series = [{"t": r["bucket"].strftime(fmt), "v": r["v"]} for r in rows]
+
+        # Overlay weather (Open-Meteo) when the device has coordinates set.
+        weather_enabled = device.lat is not None and device.lon is not None
+        wx = {}
+        if weather_enabled and rows:
+            wx = _weather_lookup(
+                [r["bucket"] for r in rows], gran, device.lat, device.lon)
+
+        wkey = "%Y-%m-%dT%H" if gran == "hour" else "%Y-%m-%d"
+        series = []
+        for r in rows:
+            b = r["bucket"]
+            w = wx.get(b.astimezone(dt_timezone.utc).strftime(wkey), {})
+            series.append({
+                "t": b.strftime(fmt),
+                "v": r["v"],
+                "temp": w.get("temp"),
+                "precip": w.get("precip"),
+            })
         return {
             "activity_series": series,
             "activity_range": range_key,
             "activity_ranges": [
                 {"key": k, "label": k} for k in self._RANGES
             ],
+            "weather_enabled": weather_enabled,
         }
 
 

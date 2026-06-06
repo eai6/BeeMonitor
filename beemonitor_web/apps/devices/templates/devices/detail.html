@@ -36,17 +36,6 @@
   </div>
   <div class="flex gap-2">
     <a href="{% url 'devices:edit' device.pk %}" class="px-3 py-1.5 bg-white border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Edit</a>
-    {% if device.is_active %}
-    <form method="post" action="{% url 'devices:revoke' device.pk %}" onsubmit="return confirm('Revoke {{ device.name }}?')">
-      {% csrf_token %}
-      <button class="px-3 py-1.5 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800 hover:bg-yellow-100">Revoke</button>
-    </form>
-    {% else %}
-    <form method="post" action="{% url 'devices:reactivate' device.pk %}">
-      {% csrf_token %}
-      <button class="px-3 py-1.5 bg-green-50 border border-green-200 rounded text-sm text-green-700 hover:bg-green-100">Reactivate</button>
-    </form>
-    {% endif %}
   </div>
 </div>
 
@@ -144,7 +133,6 @@
         {% if metrics.wifi_enabled %}
           <span class="inline-flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>Radio on</span>
           {% if metrics.wifi_ssid %}· joined <span class="font-medium text-gray-700">{{ metrics.wifi_ssid }}</span>{% else %}· not connected{% endif %}
-          {% if metrics.wifi_ip %}· <span class="font-mono">{{ metrics.wifi_ip }}</span>{% endif %}
         {% else %}
           <span class="inline-flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-gray-300"></span>Radio off</span>
         {% endif %}
@@ -200,6 +188,16 @@
     {% if activity_series %}
       <canvas id="activityChart" height="90"></canvas>
       {{ activity_series|json_script:"activity-data" }}
+      <p class="text-xs text-gray-400 mt-2">
+        {% if weather_enabled %}
+          Snippet activity with temperature &amp; precipitation overlaid — weather via
+          <a href="https://open-meteo.com/" target="_blank" rel="noopener" class="hover:underline">Open-Meteo</a>
+          for this device's coordinates.
+        {% else %}
+          <a href="{% url 'devices:edit' device.pk %}" class="text-amber-600 hover:underline">Set the device location</a>
+          to overlay temperature &amp; precipitation.
+        {% endif %}
+      </p>
     {% else %}
       <p class="text-sm text-gray-500 text-center py-8">No activity data yet for this range. (Snippet counts accrue once the device beats with the new telemetry.)</p>
     {% endif %}
@@ -238,25 +236,53 @@
   var el = document.getElementById('activity-data');
   if (!el || typeof Chart === 'undefined') return;
   var rows = JSON.parse(el.textContent);
+  var weatherEnabled = {{ weather_enabled|yesno:"true,false" }};
+  var hasTemp = weatherEnabled && rows.some(function (d) { return d.temp != null; });
+  var hasPrecip = weatherEnabled && rows.some(function (d) { return d.precip != null; });
+
+  var datasets = [];
+  // Precipitation bars first (order high = drawn behind the lines).
+  if (hasPrecip) {
+    datasets.push({
+      type: 'bar', label: 'Precipitation (mm)',
+      data: rows.map(function (d) { return d.precip; }),
+      backgroundColor: 'rgba(59,130,246,0.30)', yAxisID: 'yP', order: 3,
+    });
+  }
+  datasets.push({
+    type: 'line', label: 'Snippets (peak/period)',
+    data: rows.map(function (d) { return d.v; }),
+    borderColor: '#d97706', backgroundColor: 'rgba(217,119,6,0.12)',
+    fill: true, tension: 0.3, pointRadius: 1, borderWidth: 2, yAxisID: 'y', order: 1,
+  });
+  if (hasTemp) {
+    datasets.push({
+      type: 'line', label: 'Temp (°C)',
+      data: rows.map(function (d) { return d.temp; }),
+      borderColor: '#dc2626', tension: 0.3, pointRadius: 0, borderWidth: 1.5,
+      spanGaps: true, yAxisID: 'yT', order: 0,
+    });
+  }
+
+  var scales = {
+    x: { ticks: { maxTicksLimit: 10, autoSkip: true } },
+    y: { beginAtZero: true, position: 'left', title: { display: true, text: 'Snippets' }, ticks: { precision: 0 } },
+  };
+  if (hasTemp) {
+    scales.yT = { position: 'right', title: { display: true, text: '°C' }, grid: { drawOnChartArea: false } };
+  }
+  if (hasPrecip) {
+    scales.yP = { position: 'right', display: false, beginAtZero: true };
+  }
+
   new Chart(document.getElementById('activityChart'), {
     type: 'line',
-    data: {
-      labels: rows.map(function (d) { return d.t; }),
-      datasets: [{
-        label: 'Snippets (peak/period)',
-        data: rows.map(function (d) { return d.v; }),
-        borderColor: '#d97706',
-        backgroundColor: 'rgba(217,119,6,0.12)',
-        fill: true, tension: 0.3, pointRadius: 1, borderWidth: 2,
-      }],
-    },
+    data: { labels: rows.map(function (d) { return d.t; }), datasets: datasets },
     options: {
       responsive: true, maintainAspectRatio: true,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { ticks: { maxTicksLimit: 10, autoSkip: true } },
-        y: { beginAtZero: true, ticks: { precision: 0 } },
-      },
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { display: datasets.length > 1, labels: { boxWidth: 12, font: { size: 11 } } } },
+      scales: scales,
     },
   });
 })();
