@@ -93,7 +93,7 @@
       <div class="bg-white shadow rounded-lg p-4">
         <div class="text-xs text-gray-500 uppercase tracking-wide">Activity</div>
         <div class="mt-2 text-2xl font-semibold text-gray-900">{{ metrics.snippets_last_period|default:"—" }}</div>
-        <div class="mt-1 text-xs text-gray-400">snippets / {{ metrics.telemetry_period_human|default:"period" }}</div>
+        <div class="mt-1 text-xs text-gray-400">activity / {{ metrics.telemetry_period_human|default:"period" }}</div>
       </div>
       <!-- Videos -->
       <div class="bg-white shadow rounded-lg p-4">
@@ -190,16 +190,16 @@
       {{ activity_series|json_script:"activity-data" }}
       <p class="text-xs text-gray-400 mt-2">
         {% if weather_enabled %}
-          Snippet activity with temperature &amp; precipitation overlaid — weather via
+          Activity with temperature &amp; precipitation overlaid — weather via
           <a href="https://open-meteo.com/" target="_blank" rel="noopener" class="hover:underline">Open-Meteo</a>
-          for this device's coordinates.
+          for this device's coordinates. Times shown in your local timezone.
         {% else %}
           <a href="{% url 'devices:edit' device.pk %}" class="text-amber-600 hover:underline">Set the device location</a>
           to overlay temperature &amp; precipitation.
         {% endif %}
       </p>
     {% else %}
-      <p class="text-sm text-gray-500 text-center py-8">No activity data yet for this range. (Snippet counts accrue once the device beats with the new telemetry.)</p>
+      <p class="text-sm text-gray-500 text-center py-8">No activity data yet for this range. (Activity accrues once the device beats with the new telemetry.)</p>
     {% endif %}
   </div>
 </div>
@@ -237,8 +237,20 @@
   if (!el || typeof Chart === 'undefined') return;
   var rows = JSON.parse(el.textContent);
   var weatherEnabled = {{ weather_enabled|yesno:"true,false" }};
+  var gran = "{{ activity_gran }}";  // "hour" | "day"
   var hasTemp = weatherEnabled && rows.some(function (d) { return d.temp != null; });
   var hasPrecip = weatherEnabled && rows.some(function (d) { return d.precip != null; });
+
+  // Format each point's UTC timestamp into the viewer's LOCAL timezone (the
+  // server stores/buckets in UTC). Falls back to the server label if no iso.
+  function label(d) {
+    if (!d.iso) return d.t;
+    var dt = new Date(d.iso);
+    if (isNaN(dt)) return d.t;
+    return gran === 'day'
+      ? dt.toLocaleDateString([], { month: 'short', day: 'numeric' })
+      : dt.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
 
   var datasets = [];
   // Precipitation bars first (order high = drawn behind the lines).
@@ -250,7 +262,7 @@
     });
   }
   datasets.push({
-    type: 'line', label: 'Snippets (peak/period)',
+    type: 'line', label: 'Activity (peak/period)',
     data: rows.map(function (d) { return d.v; }),
     borderColor: '#d97706', backgroundColor: 'rgba(217,119,6,0.12)',
     fill: true, tension: 0.3, pointRadius: 1, borderWidth: 2, yAxisID: 'y', order: 1,
@@ -266,7 +278,7 @@
 
   var scales = {
     x: { ticks: { maxTicksLimit: 10, autoSkip: true } },
-    y: { beginAtZero: true, position: 'left', title: { display: true, text: 'Snippets' }, ticks: { precision: 0 } },
+    y: { beginAtZero: true, position: 'left', title: { display: true, text: 'Activity' }, ticks: { precision: 0 } },
   };
   if (hasTemp) {
     scales.yT = { position: 'right', title: { display: true, text: '°C' }, grid: { drawOnChartArea: false } };
@@ -277,7 +289,7 @@
 
   new Chart(document.getElementById('activityChart'), {
     type: 'line',
-    data: { labels: rows.map(function (d) { return d.t; }), datasets: datasets },
+    data: { labels: rows.map(label), datasets: datasets },
     options: {
       responsive: true, maintainAspectRatio: true,
       interaction: { mode: 'index', intersect: false },

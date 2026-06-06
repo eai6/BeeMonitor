@@ -225,9 +225,13 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         series = []
         for r in rows:
             b = r["bucket"]
-            w = wx.get(b.astimezone(dt_timezone.utc).strftime(wkey), {})
+            bu = b.astimezone(dt_timezone.utc)
+            w = wx.get(bu.strftime(wkey), {})
             series.append({
-                "t": b.strftime(fmt),
+                # iso is UTC; the browser formats the x-axis label in the
+                # viewer's local timezone (the server runs in UTC).
+                "iso": bu.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "t": b.strftime(fmt),  # fallback label if JS can't format
                 "v": r["v"],
                 "temp": w.get("temp"),
                 "precip": w.get("precip"),
@@ -238,6 +242,7 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
             "activity_ranges": [
                 {"key": k, "label": k} for k in self._RANGES
             ],
+            "activity_gran": gran,  # "hour" | "day" — picks the label format
             "weather_enabled": weather_enabled,
         }
 
