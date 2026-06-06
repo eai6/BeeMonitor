@@ -122,6 +122,16 @@ class DailyForagingSummary(models.Model):
         related_name="daily_foraging",
     )
     site_name = models.CharField(max_length=200)
+    # The device whose videos this summary aggregates. Null for legacy rows /
+    # videos with no device. Cross-video trips are detected within one device
+    # (a single camera), so device-keyed aggregation keeps that valid.
+    device = models.ForeignKey(
+        "devices.Device",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="daily_foraging",
+    )
     date = models.DateField()
     total_trips = models.IntegerField(default=0)
     cross_video_trips = models.IntegerField(default=0)
@@ -133,7 +143,7 @@ class DailyForagingSummary(models.Model):
     computed_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = ("user", "site_name", "date")
+        unique_together = ("user", "site_name", "device", "date")
         ordering = ["-date"]
 
     def __str__(self):

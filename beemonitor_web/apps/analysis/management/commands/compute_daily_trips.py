@@ -117,21 +117,31 @@ class Command(BaseCommand):
                 self.stderr.write(f"Invalid date: {date_filter}")
                 return
 
-        # Group by (user, site, date)
+        # Group by (user, site, device, date). One device == one camera, so
+        # cross-video pairing stays valid within a device's own videos.
         groups = defaultdict(list)
         for result in qs.iterator():
             video = result.job.video
             if not video.recorded_at or not video.site_name:
                 continue
-            key = (result.job.user_id, video.site_name, video.recorded_at.date())
+            key = (result.job.user_id, video.site_name, video.device_id, video.recorded_at.date())
             groups[key].append(result)
 
-        self.stdout.write(f"Found {len(groups)} site+day groups")
+        self.stdout.write(f"Found {len(groups)} site+device+day groups")
 
-        if not recompute:
+        if recompute:
+            # Clear prior summaries (including legacy device=NULL rows) for the
+            # site+days we're about to rebuild, so the new device-keyed rows can't
+            # double-count alongside stale ones.
+            site_day_keys = {(uid, site, date) for (uid, site, _dev, date) in groups}
+            for uid, site, date in site_day_keys:
+                DailyForagingSummary.objects.filter(
+                    user_id=uid, site_name=site, date=date).delete()
+        else:
             # Skip groups that already have a summary
             existing = set(
-                DailyForagingSummary.objects.values_list("user_id", "site_name", "date")
+                DailyForagingSummary.objects.values_list(
+                    "user_id", "site_name", "device_id", "date")
             )
             groups = {k: v for k, v in groups.items() if k not in existing}
             self.stdout.write(f"After skipping existing: {len(groups)} groups to process")
@@ -142,7 +152,7 @@ class Command(BaseCommand):
         processed = 0
         errors = 0
 
-        for (user_id, site_name, date), results in groups.items():
+        for (user_id, site_name, device_id, date), results in groups.items():
             try:
                 video_events = []
                 for result in results:
@@ -202,7 +212,7 @@ class Command(BaseCommand):
                     writer = csv.DictWriter(output, fieldnames=TRIP_COLUMNS)
                     writer.writeheader()
                     writer.writerows(trips)
-                    blob_path = f"{user_id}/daily_trips/{site_name}_{date}.csv"
+                    blob_path = f"{user_id}/daily_trips/{site_name}_dev{device_id}_{date}.csv"
                     s3.upload_stream(
                         "processed", blob_path,
                         io.BytesIO(output.getvalue().encode("utf-8")),
@@ -213,6 +223,7 @@ class Command(BaseCommand):
                 DailyForagingSummary.objects.update_or_create(
                     user_id=user_id,
                     site_name=site_name,
+                    device_id=device_id,
                     date=date,
                     defaults={
                         "total_trips": len(trips),
