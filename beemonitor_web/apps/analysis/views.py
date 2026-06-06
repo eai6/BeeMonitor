@@ -1262,14 +1262,6 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
             ctx["monthly_avg_json"] = "{}"
 
         try:
-            nest_data = get_nest_activity_heatmap(user)
-            ctx["nest_data"] = nest_data
-            ctx["nest_data_json"] = json.dumps(nest_data, default=str)
-        except Exception:
-            ctx["nest_data"] = []
-            ctx["nest_data_json"] = "[]"
-
-        try:
             vb = get_video_breakdown(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int, device=device_int)
             for row in vb:
                 row["title"] = _sanitize_site(row["title"])

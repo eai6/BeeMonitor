@@ -305,29 +305,6 @@
   <canvas id="weatherChart" height="180"></canvas>
 </div>
 
-<!-- Nest Activity Heatmap (full width) — 6 rows × 10 columns grid -->
-<div class="bg-white shadow rounded-lg p-6 mb-8">
-  <h2 class="text-lg font-medium text-gray-900 mb-2">Nest Activity Heatmap</h2>
-  <p class="text-sm text-gray-500 mb-4">6 rows × 10 nest tubes. Color intensity shows foraging trip activity. Click a nest to filter.</p>
-  <div id="nestHeatmap" class="flex flex-col items-center gap-1">
-    <!-- Rendered by JS below -->
-  </div>
-  <div class="flex items-center justify-center gap-4 mt-4 text-xs text-gray-500">
-    <div class="flex items-center gap-1">
-      <div class="w-4 h-4 rounded" style="background: #f0f9ff;"></div> No activity
-    </div>
-    <div class="flex items-center gap-1">
-      <div class="w-4 h-4 rounded" style="background: #fbbf24;"></div> Low
-    </div>
-    <div class="flex items-center gap-1">
-      <div class="w-4 h-4 rounded" style="background: #f97316;"></div> Medium
-    </div>
-    <div class="flex items-center gap-1">
-      <div class="w-4 h-4 rounded" style="background: #dc2626;"></div> High
-    </div>
-  </div>
-</div>
-
 {% if job_stats.processing > 0 or job_stats.queued > 0 %}
 <!-- Auto-refresh when jobs are running -->
 <script>
@@ -487,56 +464,6 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     // Render daily view by default
     renderWeather('daily');
-
-    // --- Nest Activity Heatmap (6 rows × 10 columns) ---
-    const nestData = JSON.parse('{{ nest_data_json|escapejs }}');
-    const ROWS = 6;
-    const COLS = 10;
-
-    const nestLookup = {};
-    let maxActivity = 1;
-    nestData.forEach(n => {
-        nestLookup[n.nest_id] = n;
-        if (n.total > maxActivity) maxActivity = n.total;
-    });
-
-    function getColor(value) {
-        if (value === 0) return '#f0f9ff';
-        const ratio = value / maxActivity;
-        if (ratio < 0.25) return '#fef3c7';
-        if (ratio < 0.5) return '#fbbf24';
-        if (ratio < 0.75) return '#f97316';
-        return '#dc2626';
-    }
-
-    const container = document.getElementById('nestHeatmap');
-    const headerRow = document.createElement('div');
-    headerRow.className = 'flex gap-1 items-center';
-    headerRow.innerHTML = '<div class="w-8 text-xs text-gray-400 text-right pr-1"></div>';
-    for (let c = 1; c <= COLS; c++) {
-        headerRow.innerHTML += `<div class="w-10 h-6 text-center text-xs text-gray-400">${c}</div>`;
-    }
-    container.appendChild(headerRow);
-
-    for (let r = 1; r <= ROWS; r++) {
-        const row = document.createElement('div');
-        row.className = 'flex gap-1 items-center';
-        row.innerHTML = `<div class="w-8 text-xs text-gray-400 text-right pr-1">R${r}</div>`;
-
-        for (let c = 1; c <= COLS; c++) {
-            const nestIdx = (r - 1) * COLS + c;
-            const nestId = `nest_${nestIdx}`;
-            const data = nestLookup[nestId] || { entries: 0, exits: 0, total: 0 };
-            const color = getColor(data.total);
-
-            row.innerHTML += `<div class="w-10 h-10 rounded cursor-pointer border border-gray-200 flex items-center justify-center text-xs font-mono transition-transform hover:scale-110"
-                style="background: ${color};"
-                title="Nest ${nestIdx}\nEntries: ${data.entries}\nExits: ${data.exits}\nTotal: ${data.total}">
-                ${data.total > 0 ? data.total : ''}
-            </div>`;
-        }
-        container.appendChild(row);
-    }
 });
 </script>
 {% endblock %}
