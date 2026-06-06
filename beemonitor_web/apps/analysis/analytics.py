@@ -234,7 +234,9 @@ def get_summary_stats(user, site_name=None, year=None, month=None, day=None, hou
 
     avg_trip_duration = round(trip_duration_sum / trip_duration_count, 1) if trip_duration_count else 0
 
-    # Prefer DailyForagingSummary for trip stats (includes cross-video trips)
+    # Prefer DailyForagingSummary for trip stats (includes cross-video trips).
+    # It is keyed by site (not device), so when a device filter is active we skip
+    # it and use the device-filtered per-video totals computed above instead.
     daily_qs = DailyForagingSummary.objects.filter(user=user)
     if site_name:
         daily_qs = daily_qs.filter(site_name=site_name)
@@ -246,7 +248,7 @@ def get_summary_stats(user, site_name=None, year=None, month=None, day=None, hou
         daily_qs = daily_qs.filter(date__day=day)
 
     cross_video_trips = 0
-    if daily_qs.exists():
+    if not device and daily_qs.exists():
         daily_totals = daily_qs.aggregate(
             trips=Sum("total_trips"),
             cross=Sum("cross_video_trips"),
@@ -303,12 +305,15 @@ def get_video_breakdown(user, site_name=None, year=None, month=None, day=None, h
 def get_foraging_trips_over_time(user, site_name=None, year=None, month=None, day=None, hour=None, device=None):
     """Return daily foraging trip counts and avg duration.
 
-    Prefers DailyForagingSummary (cross-video trips) when available,
-    falls back to per-video JobResult aggregation.
+    Prefers DailyForagingSummary (cross-video trips) when available, falls back
+    to per-video JobResult aggregation. DailyForagingSummary is keyed by site
+    (not device), so a device filter routes straight to the device-filtered
+    per-video path below.
 
     Returns: [{"date": "2024-06-01", "trips": 5, "avg_duration": 120.5, "cross_video": 2}, ...]
     """
-    # Try DailyForagingSummary first (includes cross-video trips)
+    # Try DailyForagingSummary first (includes cross-video trips) — but not when
+    # filtering by device, since that aggregate isn't device-scoped.
     daily_qs = DailyForagingSummary.objects.filter(user=user)
     if site_name:
         daily_qs = daily_qs.filter(site_name=site_name)
@@ -319,7 +324,7 @@ def get_foraging_trips_over_time(user, site_name=None, year=None, month=None, da
     if day:
         daily_qs = daily_qs.filter(date__day=day)
 
-    if daily_qs.exists():
+    if not device and daily_qs.exists():
         sorted_data = []
         for ds in daily_qs.order_by("date"):
             sorted_data.append({
