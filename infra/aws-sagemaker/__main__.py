@@ -447,9 +447,15 @@ if deploy_endpoint:
         ecr_repo.repository_url, ":", image_tag,
     )
 
+    # Suffix Model + EndpointConfig names with the image tag so a new tag yields
+    # new resource names -> the Endpoint updates to the new config (a real
+    # rolling deploy). With fixed names, an image change only replaces the Model
+    # and the live endpoint keeps serving the old image.
+    tag_slug = "".join(c for c in image_tag if c.isalnum())[:12] or "latest"
+
     model = aws.sagemaker.Model(
         "model",
-        name=f"{prefix}-model",
+        name=f"{prefix}-model-{tag_slug}",
         execution_role_arn=sagemaker_role.arn,
         primary_container=aws.sagemaker.ModelPrimaryContainerArgs(
             image=image_uri,
@@ -467,7 +473,7 @@ if deploy_endpoint:
 
     endpoint_config = aws.sagemaker.EndpointConfiguration(
         "endpoint-config",
-        name=f"{prefix}-config",
+        name=f"{prefix}-config-{tag_slug}",
         production_variants=[
             aws.sagemaker.EndpointConfigurationProductionVariantArgs(
                 variant_name=VARIANT_NAME,
