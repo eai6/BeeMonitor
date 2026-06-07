@@ -7,6 +7,13 @@
     <h1 class="text-2xl font-bold text-gray-900">{{ model.name }}</h1>
     <div class="flex items-center gap-2 mt-1">
       <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800">{{ model.get_model_type_display }}</span>
+      {% if model.status == 'ready' %}
+      <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800">Ready</span>
+      {% elif model.status == 'training' %}
+      <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 text-amber-800">Training</span>
+      {% else %}
+      <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-red-100 text-red-800">Failed</span>
+      {% endif %}
       {% if model.is_active %}
       <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800">Active</span>
       {% else %}

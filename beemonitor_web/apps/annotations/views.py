@@ -146,6 +146,14 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         ctx["class_counts"] = class_counts
         ctx["frame_cards"] = frame_cards
 
+        # Defaults for the AI pre-annotate sampling controls.
+        from django.conf import settings
+        ctx["preannotate_defaults"] = {
+            "sample_interval": settings.PREANNOTATE_SAMPLE_INTERVAL,
+            "max_frames": settings.PREANNOTATE_MAX_FRAMES,
+            "confidence": settings.PREANNOTATE_CONFIDENCE,
+        }
+
         return ctx
 
 
