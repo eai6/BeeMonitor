@@ -70,7 +70,15 @@ def input_fn(request_body, content_type):
 
 
 def predict_fn(payload, pipeline):
-    """Run BeeMonitor analysis on one video. Returns a serializable dict."""
+    """Run BeeMonitor analysis on one video. Returns a serializable dict.
+
+    Two tasks share this endpoint: the default full analysis, and
+    ``task="pre_annotate"`` (sampled-frame YOLO detection that seeds the
+    annotation editor). Both reuse the pipeline's models + S3 client.
+    """
+    if payload.get("task") == "pre_annotate":
+        return _pre_annotate(payload, pipeline)
+
     job_id = payload["job_id"]
     user_id = str(payload["user_id"])
     video_blob_path = payload["video_blob_path"]
@@ -115,6 +123,106 @@ def output_fn(prediction, accept):
     if accept != JSON_CONTENT_TYPE:
         raise ValueError(f"unsupported accept {accept!r}; expected {JSON_CONTENT_TYPE}")
     return json.dumps(prediction), JSON_CONTENT_TYPE
+
+
+# ---------------------------------------------------------------------------
+# Pre-annotation (AI-assisted) — sampled-frame YOLO detection
+# ---------------------------------------------------------------------------
+
+def _pre_annotate(payload, pipeline) -> dict:
+    """Run the bee detector on sampled frames; return boxes to seed annotations.
+
+    Mirrors the legacy Modal ``pre_annotate_video``: sample every Nth frame, run
+    the bee/wasp detector, keep only boxes whose class is in the project's
+    classes (mapping to the project's class_id), save each hit frame's JPEG to
+    the processed bucket, and return the frame list. Nest boxes stay manual.
+    """
+    import tempfile
+    import cv2
+
+    started = time.time()
+    video_blob_path = payload["video_blob_path"]
+    classes = payload.get("classes") or ["bee", "wasp", "nest"]
+    sample_interval = max(1, int(payload.get("sample_interval", 10)))
+    max_frames = int(payload.get("max_frames", 300))
+    conf = float(payload.get("confidence_threshold", 0.15))
+    class_index = {c.lower(): i for i, c in enumerate(classes)}
+
+    storage = pipeline._storage
+    model_paths = pipeline._models.ensure_models()
+    from ultralytics import YOLO
+    yolo = YOLO(model_paths.bee_tracking)
+
+    frames_out = []
+    checked = total_detections = 0
+    width = height = 0
+    fps = 30.0
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=True) as tmp:
+        storage.download_file("raw-videos", video_blob_path, tmp.name)
+        cap = cv2.VideoCapture(tmp.name)
+        if not cap.isOpened():
+            return {"status": "completed", "frames": [], "error": "could not open video",
+                    "execution_seconds": round(time.time() - started, 2)}
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        frame_num = 0
+        while frame_num < total and len(frames_out) < max_frames:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
+            ret, frame = cap.read()
+            if not ret:
+                frame_num += sample_interval
+                continue
+            checked += 1
+            boxes = []
+            for r in yolo(frame, conf=conf, verbose=False):
+                for box in r.boxes:
+                    cls_id = int(box.cls[0])
+                    name = (r.names.get(cls_id, f"class_{cls_id}") or "").lower()
+                    if name not in class_index:
+                        continue
+                    x1, y1, x2, y2 = box.xyxy[0].tolist()
+                    boxes.append({
+                        "x": round(x1), "y": round(y1),
+                        "w": round(x2 - x1), "h": round(y2 - y1),
+                        "class": classes[class_index[name]],
+                        "class_id": class_index[name],
+                        "confidence": round(float(box.conf[0]), 3),
+                    })
+            if boxes:
+                frame_blob = f"frames/{video_blob_path.replace('/', '_')}/f{frame_num:06d}.jpg"
+                try:
+                    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=True) as jt:
+                        jt.write(buf.tobytes())
+                        jt.flush()
+                        storage.upload_file("processed", frame_blob, jt.name)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("pre_annotate: frame %d upload failed: %s", frame_num, e)
+                    frame_blob = ""
+                frames_out.append({
+                    "frame_number": frame_num, "boxes": boxes,
+                    "frame_image_path": frame_blob,
+                })
+                total_detections += len(boxes)
+            frame_num += sample_interval
+        cap.release()
+
+    logger.info("pre_annotate: %s -> %d frames, %d detections (%d checked)",
+                video_blob_path, len(frames_out), total_detections, checked)
+    return {
+        "status": "completed",
+        "frames": frames_out,
+        "total_frames_checked": checked,
+        "frames_with_activity": len(frames_out),
+        "total_detections": total_detections,
+        "video_fps": fps,
+        "video_width": width,
+        "video_height": height,
+        "execution_seconds": round(time.time() - started, 2),
+    }
 
 
 # ---------------------------------------------------------------------------

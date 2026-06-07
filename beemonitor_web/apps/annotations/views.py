@@ -386,84 +386,123 @@ class PreAnnotateView(LoginRequiredMixin, View):
 
     @staticmethod
     def _run_pre_annotate(project_pk, video_pk, blob_path):
-        import django
-        django.setup()
+        """Invoke the SageMaker async endpoint (task=pre_annotate), poll the
+        result from S3, then create Annotation rows. Runs in a daemon thread."""
+        import json
+        import time
+        from urllib.parse import urlparse
+
+        import boto3
+        from botocore.config import Config
+        from botocore.exceptions import ClientError
+        from django.conf import settings
         from django.db import connection
 
         try:
-            from apps.videos.models import Video
-            video = Video.objects.select_related("source").get(pk=video_pk)
-
-            # Re-read blob_path from DB (might have been updated by analysis job)
-            blob_path = video.storage_key
-
-            # Transfer from S3 if needed
-            if blob_path.startswith("s3://"):
-                logger.info("Pre-annotate: transferring video %s from S3", video_pk)
-                try:
-                    from apps.analysis.views import _ingest_external_s3_to_storage
-                    blob_path = _ingest_external_s3_to_storage(video)
-                    logger.info("Pre-annotate: transfer done -> %s", blob_path)
-                except Exception as e:
-                    logger.error("Pre-annotate: S3 transfer failed for %s: %s", video_pk, e, exc_info=True)
-                    return
-
-            connection.close()
-
-            logger.info("Pre-annotate: calling Modal for video %s, path=%s", video_pk, blob_path)
-            import modal
-            fn = modal.Function.from_name("beemonitor-cloud", "pre_annotate_video")
-            result = fn.remote(video_blob_path=blob_path, sample_interval=10, max_frames=300)
-
-            logger.info("Pre-annotate: Modal returned %s frames, %s detections",
-                        len(result.get("frames", [])) if result else 0,
-                        result.get("total_detections", 0) if result else 0)
-
-            if not result or not result.get("frames"):
-                logger.info("Pre-annotate: no frames returned for video %s", video_pk)
-                return
-
             from apps.annotations.models import Annotation, AnnotationProject
             from apps.videos.models import Video
+
+            video = Video.objects.select_related("source").get(pk=video_pk)
+            blob_path = video.storage_key
+            if blob_path.startswith("s3://"):
+                logger.info("pre-annotate: transferring video %s from S3", video_pk)
+                from apps.analysis.views import _ingest_external_s3_to_storage
+                blob_path = _ingest_external_s3_to_storage(video)
+
+            project = AnnotationProject.objects.get(pk=project_pk)
+            classes = project.classes or ["bee", "wasp", "nest"]
+            user_id = project.user_id
+
+            endpoint = settings.SAGEMAKER_ENDPOINT_NAME
+            if not endpoint:
+                logger.error("pre-annotate: SAGEMAKER_ENDPOINT_NAME unset — endpoint not deployed?")
+                return
+            in_bucket = settings.SAGEMAKER_INPUT_BUCKET
+            region = settings.AWS_REGION
+            connection.close()  # don't hold a DB conn across the long poll
+
+            cfg = Config(connect_timeout=10, read_timeout=30, retries={"max_attempts": 2})
+            s3 = boto3.client("s3", region_name=region, config=cfg)
+            smrt = boto3.client("sagemaker-runtime", region_name=region, config=cfg)
+
+            payload = {
+                "task": "pre_annotate",
+                "job_id": f"preannot-{project_pk}-{video_pk}",
+                "user_id": str(user_id),
+                "video_blob_path": blob_path,
+                "classes": classes,
+                "sample_interval": 10,
+                "max_frames": 300,
+                "confidence_threshold": 0.15,
+            }
+            key = f"preannotate/{project_pk}/{video_pk}.json"
+            s3.put_object(Bucket=in_bucket, Key=key,
+                          Body=json.dumps(payload).encode("utf-8"),
+                          ContentType="application/json")
+            resp = smrt.invoke_endpoint_async(
+                EndpointName=endpoint,
+                InputLocation=f"s3://{in_bucket}/{key}",
+                ContentType="application/json",
+                InferenceId=f"preannot-{project_pk}-{video_pk}",
+            )
+            out = urlparse(resp["OutputLocation"])
+            out_bucket, out_key = out.netloc, out.path.lstrip("/")
+            fail_key = out_key.replace(".out", ".failure")
+
+            # Poll the async output (cold start can take a few minutes).
+            result = None
+            deadline = time.time() + 15 * 60
+            while time.time() < deadline:
+                time.sleep(10)
+                try:
+                    body = s3.get_object(Bucket=out_bucket, Key=out_key)["Body"].read()
+                    result = json.loads(body)
+                    break
+                except ClientError as e:
+                    if e.response["Error"]["Code"] not in ("NoSuchKey", "404", "NotFound"):
+                        raise
+                    try:
+                        fail = s3.get_object(Bucket=out_bucket, Key=fail_key)["Body"].read()
+                        logger.error("pre-annotate: endpoint failure for video %s: %s",
+                                     video_pk, fail[:500])
+                        return
+                    except ClientError:
+                        continue  # still running
+
+            if not result or not result.get("frames"):
+                logger.info("pre-annotate: no frames for video %s (timeout or empty)", video_pk)
+                return
 
             project = AnnotationProject.objects.get(pk=project_pk)
             video = Video.objects.get(pk=video_pk)
             width = result.get("video_width", 1280)
             height = result.get("video_height", 720)
-
             created = 0
             for frame_data in result["frames"]:
                 _, was_created = Annotation.objects.update_or_create(
-                    project=project,
-                    video=video,
+                    project=project, video=video,
                     frame_number=frame_data["frame_number"],
                     defaults={
                         "boxes": frame_data["boxes"],
-                        "image_width": width,
-                        "image_height": height,
+                        "image_width": width, "image_height": height,
                         "frame_image_path": frame_data.get("frame_image_path", ""),
                     },
                 )
-                if was_created:
-                    created += 1
+                created += int(was_created)
+            logger.info("pre-annotated video %s: %d frames, %d new", video_pk,
+                        len(result["frames"]), created)
 
-            logger.info("Pre-annotated video %s: %d frames, %d new annotations",
-                        video_pk, len(result["frames"]), created)
-
-            # Charge credits for pre-annotation GPU time
             exec_secs = result.get("execution_seconds", 0) or 0
-            credits_used = int(exec_secs) if exec_secs else 30  # minimum 30 credits if no time reported
+            credits_used = int(exec_secs) if exec_secs else 30
             try:
                 from apps.accounts.models import UserProfile
-                user = project.user
-                profile, _ = UserProfile.objects.get_or_create(user=user)
+                profile, _ = UserProfile.objects.get_or_create(user=project.user)
                 profile.charge(credits_used, gpu_seconds=exec_secs or credits_used)
-                logger.info("Pre-annotate: charged %d credits for video %s", credits_used, video_pk)
             except Exception as charge_err:
-                logger.error("Pre-annotate: failed to charge credits for video %s: %s", video_pk, charge_err)
+                logger.error("pre-annotate: credit charge failed for %s: %s", video_pk, charge_err)
 
         except Exception as e:
-            logger.error("Pre-annotate failed for video %s: %s", video_pk, e, exc_info=True)
+            logger.error("pre-annotate failed for video %s: %s", video_pk, e, exc_info=True)
         finally:
             connection.close()
 
