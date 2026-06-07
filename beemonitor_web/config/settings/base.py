@@ -142,6 +142,10 @@ AWS_S3_BUCKET_USER_CONFIGS = os.environ.get("AWS_S3_BUCKET_USER_CONFIGS", "")
 SAGEMAKER_ENDPOINT_NAME = os.environ.get("SAGEMAKER_ENDPOINT_NAME", "")
 SAGEMAKER_INPUT_BUCKET = os.environ.get("SAGEMAKER_INPUT_BUCKET", "")
 SAGEMAKER_OUTPUT_BUCKET = os.environ.get("SAGEMAKER_OUTPUT_BUCKET", "")
+# Fine-tuning (SageMaker training jobs) — role SageMaker assumes for the job and
+# the training image. Set by the aws-sagemaker stack via App Runner env.
+SAGEMAKER_TRAINING_ROLE_ARN = os.environ.get("SAGEMAKER_TRAINING_ROLE_ARN", "")
+SAGEMAKER_TRAINING_IMAGE = os.environ.get("SAGEMAKER_TRAINING_IMAGE", "")
 
 # Modal
 MODAL_TOKEN_ID = os.environ.get("MODAL_TOKEN_ID", "")

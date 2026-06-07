@@ -1,6 +1,7 @@
+import json
 import logging
-import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 from django.conf import settings
 from django.contrib import messages
@@ -16,6 +17,29 @@ from .forms import TrainingCreateForm, ModelUploadForm
 from .models import CustomModel, TrainingJob
 
 logger = logging.getLogger(__name__)
+
+# Cap concurrent SageMaker training-job spawns (each holds a DB conn briefly).
+_TRAIN_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="train-spawn")
+
+# Map the user-facing GPU tier to a SageMaker *training* instance type.
+_INSTANCE_BY_TIER = {
+    "T4": "ml.g4dn.xlarge",
+    "L4": "ml.g6.xlarge",
+    "A10G": "ml.g5.xlarge",
+    "L40S": "ml.g6e.xlarge",
+    "A100": "ml.p4d.24xlarge",
+}
+_DEFAULT_INSTANCE = "ml.g5.xlarge"
+_MAX_TRAIN_SECONDS = 4 * 60 * 60  # SageMaker StoppingCondition cap
+
+
+def _boto3(service: str):
+    import boto3
+    from botocore.config import Config
+    return boto3.client(
+        service, region_name=getattr(settings, "AWS_REGION", "us-east-1"),
+        config=Config(connect_timeout=10, read_timeout=30, retries={"max_attempts": 2}),
+    )
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -99,12 +123,14 @@ def _build_training_payload(job: TrainingJob) -> tuple[str, list[dict]]:
 
 
 def _spawn_training_job(job_pk: int) -> None:
-    """Spawn the Modal training function in a background thread."""
-    import django
-    django.setup()
-    from django.db import connection
+    """Create a SageMaker training job for this TrainingJob (background thread).
 
-    logger.info("[train:%s] Background thread started — loading job from DB", job_pk)
+    Writes the manifest to the SageMaker input bucket and calls
+    create_training_job; the training container (Dockerfile.training) reads the
+    manifest, trains, and writes best.pt + result.json. The SageMaker
+    TrainingJobName is stored in ``modal_call_id`` (legacy field name) for polling.
+    """
+    from django.db import connection
 
     try:
         job = TrainingJob.objects.select_related("project").get(pk=job_pk)
@@ -112,57 +138,82 @@ def _spawn_training_job(job_pk: int) -> None:
         logger.error("[train:%s] Job not found in DB — aborting", job_pk)
         return
 
-    logger.info(
-        "[train:%s] Job loaded — name='%s' base_model=%s epochs=%d imgsz=%d batch=%d gpu=%s project='%s'",
-        job_pk, job.name, job.base_model, job.epochs, job.image_size,
-        job.batch_size, job.gpu_tier, job.project.name,
-    )
+    if not settings.SAGEMAKER_TRAINING_ROLE_ARN or not settings.SAGEMAKER_TRAINING_IMAGE:
+        TrainingJob.objects.filter(pk=job_pk).update(
+            status=TrainingJob.Status.FAILED,
+            error_message="SageMaker training is not configured (role/image env unset).",
+        )
+        connection.close()
+        return
 
     try:
-        logger.info("[train:%s] Building training payload...", job_pk)
-        dataset_yaml, video_annotations = _build_training_payload(job)
+        _dataset_yaml, video_annotations = _build_training_payload(job)
+        classes = job.project.classes or ["bee", "wasp", "nest"]
+        model_key = f"custom/{job.user_id}/{job.pk}/best.pt"
+        result_key = f"training/{job.pk}/result.json"
+        manifest = {
+            "job_id": str(job.pk),
+            "user_id": str(job.user_id),
+            "base_model": job.base_model,
+            "epochs": job.epochs,
+            "imgsz": job.image_size,
+            "batch_size": job.batch_size,
+            "classes": classes,
+            "video_annotations": video_annotations,
+            "model_key": model_key,
+            "result_key": result_key,
+        }
 
-        logger.info("[train:%s] Importing modal SDK...", job_pk)
-        import modal
-
-        logger.info("[train:%s] Looking up Modal function 'beemonitor-cloud/train_yolo_model'...", job_pk)
-        fn = modal.Function.from_name("beemonitor-cloud", "train_yolo_model")
-        logger.info("[train:%s] Modal function resolved — spawning async call...", job_pk)
-
-        call = fn.spawn(
-            job_id=str(job.pk),
-            user_id=str(job.user_id),
-            base_model=job.base_model,
-            dataset_yaml_content=dataset_yaml,
-            video_annotations=video_annotations,
-            epochs=job.epochs,
-            imgsz=job.image_size,
-            batch_size=job.batch_size,
+        input_bucket = settings.SAGEMAKER_INPUT_BUCKET
+        manifest_prefix = f"training/{job.pk}/"
+        _boto3("s3").put_object(
+            Bucket=input_bucket, Key=f"{manifest_prefix}manifest.json",
+            Body=json.dumps(manifest).encode("utf-8"), ContentType="application/json",
         )
 
-        modal_call_id = call.object_id
-        logger.info("[train:%s] Modal call spawned — call_id=%s", job_pk, modal_call_id)
+        job_name = f"bm-train-{job.pk}-{uuid.uuid4().hex[:8]}"  # <=63 chars, [A-Za-z0-9-]
+        instance = _INSTANCE_BY_TIER.get(job.gpu_tier, _DEFAULT_INSTANCE)
+        _boto3("sagemaker").create_training_job(
+            TrainingJobName=job_name,
+            RoleArn=settings.SAGEMAKER_TRAINING_ROLE_ARN,
+            AlgorithmSpecification={
+                "TrainingImage": settings.SAGEMAKER_TRAINING_IMAGE,
+                "TrainingInputMode": "File",
+            },
+            InputDataConfig=[{
+                "ChannelName": "manifest",
+                "DataSource": {"S3DataSource": {
+                    "S3DataType": "S3Prefix",
+                    "S3Uri": f"s3://{input_bucket}/{manifest_prefix}",
+                    "S3DataDistributionType": "FullyReplicated",
+                }},
+            }],
+            OutputDataConfig={"S3OutputPath": f"s3://{settings.SAGEMAKER_OUTPUT_BUCKET}/training-artifacts/"},
+            ResourceConfig={"InstanceType": instance, "InstanceCount": 1, "VolumeSizeInGB": 100},
+            StoppingCondition={"MaxRuntimeInSeconds": _MAX_TRAIN_SECONDS},
+            Environment={
+                "AWS_S3_BUCKET_RAW_VIDEOS": settings.AWS_S3_BUCKET_RAW_VIDEOS,
+                "AWS_S3_BUCKET_MODELS": settings.AWS_S3_BUCKET_MODELS,
+                "SAGEMAKER_OUTPUT_BUCKET": settings.SAGEMAKER_OUTPUT_BUCKET,
+                "AWS_REGION": settings.AWS_REGION,
+            },
+        )
 
         TrainingJob.objects.filter(pk=job_pk).update(
             status=TrainingJob.Status.PREPARING,
-            modal_call_id=modal_call_id,
+            modal_call_id=job_name,
             started_at=timezone.now(),
         )
-        logger.info(
-            "[train:%s] DB updated — status=preparing, modal_call_id=%s, started_at=%s",
-            job_pk, modal_call_id, timezone.now().isoformat(),
-        )
+        logger.info("[train:%s] SageMaker training job created: %s (%s)", job_pk, job_name, instance)
 
     except Exception as e:
         logger.exception("[train:%s] SPAWN FAILED — %s: %s", job_pk, type(e).__name__, e)
         TrainingJob.objects.filter(pk=job_pk).update(
             status=TrainingJob.Status.FAILED,
-            error_message=str(e),
+            error_message=str(e)[:1000],
         )
-        logger.info("[train:%s] DB updated — status=failed, error_message='%s'", job_pk, str(e)[:200])
     finally:
         connection.close()
-        logger.info("[train:%s] Background thread finished — DB connection closed", job_pk)
 
 
 # ── Views ────────────────────────────────────────────────────────────
@@ -203,17 +254,11 @@ class TrainingCreateView(LoginRequiredMixin, CreateView):
         )
 
         response = super().form_valid(form)
-        logger.info("[train:%s] TrainingJob saved to DB — pk=%s status=%s", self.object.pk, self.object.pk, self.object.status)
+        logger.info("[train:%s] TrainingJob saved (status=%s) — dispatching to SageMaker",
+                    self.object.pk, self.object.status)
 
-        # Dispatch to Modal in a background thread
-        logger.info("[train:%s] Launching background thread for Modal dispatch...", self.object.pk)
-        thread = threading.Thread(
-            target=_spawn_training_job,
-            args=(self.object.pk,),
-            daemon=True,
-        )
-        thread.start()
-        logger.info("[train:%s] Background thread started (thread=%s)", self.object.pk, thread.name)
+        # Create the SageMaker training job off-request (bounded pool).
+        _TRAIN_POOL.submit(_spawn_training_job, self.object.pk)
 
         messages.info(
             self.request,
@@ -243,156 +288,119 @@ class TrainingDetailView(LoginRequiredMixin, DetailView):
 
 
 class PollTrainingJobsView(LoginRequiredMixin, View):
-    """HTMX/JSON endpoint: check Modal for completed training jobs."""
+    """JSON endpoint: poll SageMaker describe_training_job for active jobs."""
 
     def get(self, request):
-        active_jobs = TrainingJob.objects.filter(
-            user=request.user,
-            status__in=[
-                TrainingJob.Status.QUEUED,
-                TrainingJob.Status.PREPARING,
-                TrainingJob.Status.TRAINING,
-            ],
-        ).exclude(modal_call_id="")
-
-        active_count = active_jobs.count()
-        logger.info(
-            "[poll] user=%s — %d active training job(s) with modal_call_id",
-            request.user.pk, active_count,
-        )
-
-        if active_count == 0:
-            # Also check for stuck queued jobs without modal_call_id
-            stuck_jobs = TrainingJob.objects.filter(
+        active_jobs = list(
+            TrainingJob.objects.filter(
                 user=request.user,
-                status=TrainingJob.Status.QUEUED,
-                modal_call_id="",
-            )
-            stuck_count = stuck_jobs.count()
-            if stuck_count:
-                logger.warning(
-                    "[poll] user=%s has %d queued job(s) with NO modal_call_id (stuck?): pks=%s",
-                    request.user.pk, stuck_count,
-                    list(stuck_jobs.values_list("pk", flat=True)[:10]),
-                )
+                status__in=[
+                    TrainingJob.Status.QUEUED,
+                    TrainingJob.Status.PREPARING,
+                    TrainingJob.Status.TRAINING,
+                ],
+            ).exclude(modal_call_id="")[:20]
+        )
+        if not active_jobs:
             return JsonResponse({"checked": 0, "completed": 0})
 
+        sm = _boto3("sagemaker")
+        s3 = _boto3("s3")
         completed = 0
-        try:
-            import modal
 
-            for job in active_jobs[:10]:
-                logger.info(
-                    "[poll] Checking job pk=%s — status=%s, modal_call_id=%s, created=%s",
-                    job.pk, job.status, job.modal_call_id, job.created_at.isoformat(),
+        for job in active_jobs:
+            try:
+                d = sm.describe_training_job(TrainingJobName=job.modal_call_id)
+            except Exception as e:
+                logger.warning("[poll] job=%s describe failed: %s", job.pk, e)
+                continue
+
+            st = d.get("TrainingJobStatus", "")
+            if st == "InProgress":
+                secondary = d.get("SecondaryStatus", "")
+                new_status = (
+                    TrainingJob.Status.TRAINING
+                    if secondary in ("Training", "Uploading")
+                    else TrainingJob.Status.PREPARING
                 )
+                if job.status != new_status:
+                    TrainingJob.objects.filter(pk=job.pk).update(status=new_status)
+                continue
+
+            if st in ("Failed", "Stopped", "Stopping"):
+                TrainingJob.objects.filter(pk=job.pk).update(
+                    status=TrainingJob.Status.FAILED,
+                    error_message=d.get("FailureReason", f"training {st.lower()}")[:1000],
+                    completed_at=timezone.now(),
+                )
+                completed += 1
+                continue
+
+            if st != "Completed":
+                continue
+
+            # Completed — read the result.json the container wrote to the output bucket.
+            result = {}
+            try:
+                body = s3.get_object(
+                    Bucket=settings.SAGEMAKER_OUTPUT_BUCKET,
+                    Key=f"training/{job.pk}/result.json",
+                )["Body"].read()
+                result = json.loads(body)
+            except Exception as e:
+                logger.warning("[poll] job=%s no result.json yet: %s", job.pk, e)
+
+            if result.get("status") == "failed":
+                TrainingJob.objects.filter(pk=job.pk).update(
+                    status=TrainingJob.Status.FAILED,
+                    error_message=str(result.get("error", "training failed"))[:1000],
+                    completed_at=timezone.now(),
+                )
+                completed += 1
+                continue
+
+            metrics = result.get("metrics", {}) or {}
+            storage_key = result.get("storage_key", "")
+            exec_secs = float(result.get("execution_seconds") or d.get("TrainingTimeInSeconds") or 0)
+
+            TrainingJob.objects.filter(pk=job.pk).update(
+                status=TrainingJob.Status.COMPLETED,
+                completed_at=timezone.now(),
+                execution_seconds=exec_secs,
+                metrics=metrics,
+            )
+
+            if storage_key:
+                CustomModel.objects.get_or_create(
+                    training_job=job,
+                    defaults={
+                        "user": job.user,
+                        "name": f"{job.name} (trained)",
+                        "model_type": CustomModel.ModelType.CUSTOM,
+                        "base_model": job.base_model,
+                        "storage_key": storage_key,
+                        "classes": job.project.classes or [],
+                        "metrics": metrics,
+                        "status": CustomModel.Status.READY,
+                        "is_active": True,
+                    },
+                )
+                logger.info("[poll] job=%s COMPLETED -> CustomModel (%s)", job.pk, storage_key)
+            else:
+                logger.warning("[poll] job=%s completed but no storage_key in result", job.pk)
+
+            credits_used = int(exec_secs)
+            if credits_used > 0:
                 try:
-                    fc = modal.functions.FunctionCall.from_id(job.modal_call_id)
-                    logger.debug("[poll] job=%s — FunctionCall handle obtained", job.pk)
-
-                    try:
-                        result = fc.get(timeout=0)
-                    except TimeoutError:
-                        # Still running — update status to training if needed
-                        if job.status != TrainingJob.Status.TRAINING:
-                            TrainingJob.objects.filter(pk=job.pk).update(
-                                status=TrainingJob.Status.TRAINING,
-                            )
-                            logger.info("[poll] job=%s — still running, updated status queued/preparing -> training", job.pk)
-                        else:
-                            logger.info("[poll] job=%s — still running (status=training)", job.pk)
-                        continue
-                    except modal.exception.ExecutionError as e:
-                        logger.error("[poll] job=%s — Modal execution error: %s", job.pk, e)
-                        TrainingJob.objects.filter(pk=job.pk).update(
-                            status=TrainingJob.Status.FAILED,
-                            error_message=str(e),
-                        )
-                        continue
-
-                    logger.info("[poll] job=%s — got result from Modal: type=%s", job.pk, type(result).__name__)
-
-                    if not isinstance(result, dict):
-                        logger.error("[poll] job=%s — unexpected result type: %s, value=%s", job.pk, type(result).__name__, str(result)[:500])
-                        continue
-
-                    logger.info("[poll] job=%s — result keys: %s", job.pk, list(result.keys()))
-
-                    # Check for errors from the Modal function
-                    if result.get("error"):
-                        logger.error("[poll] job=%s — Modal function returned error: %s", job.pk, result["error"])
-                        TrainingJob.objects.filter(pk=job.pk).update(
-                            status=TrainingJob.Status.FAILED,
-                            error_message=result["error"],
-                        )
-                        continue
-
-                    metrics = result.get("metrics", {})
-                    exec_secs = result.get("execution_seconds", 0) or 0
-                    storage_key = result.get("storage_key", "")
-                    epochs_completed = result.get("epochs_completed", 0)
-
-                    logger.info(
-                        "[poll] job=%s — COMPLETED: mAP50=%.4f, mAP50-95=%.4f, precision=%.4f, recall=%.4f, "
-                        "exec_secs=%.1f, epochs=%d, model_path='%s'",
-                        job.pk,
-                        metrics.get("mAP50", 0), metrics.get("mAP50_95", 0),
-                        metrics.get("precision", 0), metrics.get("recall", 0),
-                        exec_secs, epochs_completed, storage_key,
-                    )
-
-                    TrainingJob.objects.filter(pk=job.pk).update(
-                        status=TrainingJob.Status.COMPLETED,
-                        completed_at=timezone.now(),
-                        execution_seconds=exec_secs,
-                        metrics=metrics,
-                    )
-                    logger.info("[poll] job=%s — DB updated to completed", job.pk)
-
-                    # Create CustomModel record if we got a model path
-                    if storage_key:
-                        cm = CustomModel.objects.create(
-                            user=job.user,
-                            training_job=job,
-                            name=f"{job.name} (trained)",
-                            model_type=CustomModel.ModelType.CUSTOM,
-                            base_model=job.base_model,
-                            storage_key=storage_key,
-                            classes=job.project.classes or [],
-                            metrics=metrics,
-                            is_active=True,
-                        )
-                        logger.info(
-                            "[poll] job=%s — CustomModel created: pk=%s name='%s' path='%s'",
-                            job.pk, cm.pk, cm.name, storage_key,
-                        )
-                    else:
-                        logger.warning("[poll] job=%s — no model path returned, skipping CustomModel creation", job.pk)
-
-                    # Charge credits (1 credit ≈ 1 GPU-second)
-                    credits_used = int(exec_secs)
-                    if credits_used > 0:
-                        try:
-                            from apps.accounts.models import UserProfile
-                            profile, _ = UserProfile.objects.get_or_create(user=job.user)
-                            profile.charge(credits_used, gpu_seconds=exec_secs)
-                            logger.info("[poll] job=%s — charged %d credits (%.1fs GPU)", job.pk, credits_used, exec_secs)
-                        except Exception as e:
-                            logger.error("[poll] job=%s — failed to charge credits: %s", job.pk, e)
-
-                    completed += 1
-
+                    from apps.accounts.models import UserProfile
+                    profile, _ = UserProfile.objects.get_or_create(user=job.user)
+                    profile.charge(credits_used, gpu_seconds=exec_secs)
                 except Exception as e:
-                    logger.exception("[poll] job=%s — unexpected error: %s: %s", job.pk, type(e).__name__, e)
+                    logger.error("[poll] job=%s credit charge failed: %s", job.pk, e)
 
-        except ImportError as e:
-            logger.error("[poll] Failed to import modal SDK: %s", e)
+            completed += 1
 
-        logger.info("[poll] Poll complete — checked=%d, completed=%d", active_count, completed)
-        return JsonResponse({
-            "checked": active_count,
-            "completed": completed,
-        })
+        return JsonResponse({"checked": len(active_jobs), "completed": completed})
 
 
 class CustomModelListView(LoginRequiredMixin, ListView):

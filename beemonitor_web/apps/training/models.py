@@ -91,6 +91,17 @@ class CustomModel(models.Model):
     storage_key = models.CharField(max_length=500, blank=True)
     classes = models.JSONField(default=list)
     metrics = models.JSONField(default=dict, blank=True)
+
+    class Status(models.TextChoices):
+        READY = "ready", "Ready"
+        TRAINING = "training", "Training"
+        FAILED = "failed", "Failed"
+
+    # Lifecycle: uploads land READY; training-produced models flip READY on
+    # success. Distinct from is_active (user enable/disable for selection).
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.READY,
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
