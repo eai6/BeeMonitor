@@ -1,0 +1,6 @@
+#!/bin/bash
+# SageMaker training entrypoint: `docker run <image> train` runs this.
+# (Mirror of the inference `serve` wrapper, but for a one-shot training job.)
+set -euo pipefail
+cd /opt/program
+exec python train.py

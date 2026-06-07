@@ -1,0 +1,9 @@
+# Deps for the SageMaker training image (torch comes from the CUDA wheel layer
+# in Dockerfile.training, like the inference image). Kept lean — training only
+# needs ultralytics + frame extraction + S3 I/O, not the Flask serving stack.
+ultralytics>=8.4.0
+opencv-python-headless>=4.8.0
+boto3>=1.28.0
+pyyaml>=6.0
+numpy
+Pillow
