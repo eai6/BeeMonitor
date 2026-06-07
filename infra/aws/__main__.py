@@ -203,6 +203,10 @@ gh_role = aws.iam.Role(
 sm_ecr_repo_arn = (
     f"arn:aws:ecr:{region}:{account_id}:repository/beemonitor-sm-{env}"
 )
+# The fine-tuning trainer image (built by the build-push-training CI job).
+sm_training_ecr_repo_arn = (
+    f"arn:aws:ecr:{region}:{account_id}:repository/beemonitor-sm-{env}-training"
+)
 ecr_push_policy_doc = ecr_repo.arn.apply(lambda repo_arn: json.dumps({
     "Version": "2012-10-17",
     "Statement": [
@@ -226,7 +230,7 @@ ecr_push_policy_doc = ecr_repo.arn.apply(lambda repo_arn: json.dumps({
                 "ecr:DescribeRepositories",
                 "ecr:DescribeImages",
             ],
-            "Resource": [repo_arn, sm_ecr_repo_arn],
+            "Resource": [repo_arn, sm_ecr_repo_arn, sm_training_ecr_repo_arn],
         },
     ],
 }))
