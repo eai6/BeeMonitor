@@ -701,6 +701,15 @@ aws.iam.RolePolicyAttachment(
     policy_arn=sm_django_invoke_policy_arn,
 )
 
+# Attach the SageMaker django-training policy (create/describe training jobs +
+# pass the training role + manifest/result S3 I/O). Same naming convention, also
+# from the aws-sagemaker stack.
+aws.iam.RolePolicyAttachment(
+    "apprunner-sagemaker-training",
+    role=apprunner_instance_role.name,
+    policy_arn=f"arn:aws:iam::{account_id}:policy/beemonitor-sm-{env}-django-training",
+)
+
 
 # ---------------------------------------------------------------------------
 # App Runner service — gated on `deploy-service` (two-pass deploy)
@@ -749,6 +758,10 @@ if deploy_service:
         "SAGEMAKER_ENDPOINT_NAME": f"beemonitor-sm-{env}" if analysis_enabled else "",
         "SAGEMAKER_INPUT_BUCKET": f"beemonitor-sm-{env}-input-{account_id}",
         "SAGEMAKER_OUTPUT_BUCKET": f"beemonitor-sm-{env}-output-{account_id}",
+        # Fine-tuning (SageMaker training jobs) — names by convention from the SM
+        # stack; Django passes the role + image to create_training_job.
+        "SAGEMAKER_TRAINING_ROLE_ARN": f"arn:aws:iam::{account_id}:role/beemonitor-sm-{env}-training-exec-role",
+        "SAGEMAKER_TRAINING_IMAGE": f"{account_id}.dkr.ecr.{region}.amazonaws.com/beemonitor-sm-{env}-training:latest",
     })
 
     runtime_secrets = pulumi.Output.all(

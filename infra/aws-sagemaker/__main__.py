@@ -277,6 +277,166 @@ django_invoke_policy = aws.iam.Policy(
 
 
 # ---------------------------------------------------------------------------
+# Fine-tuning (SageMaker Training Jobs) — ECR repo + roles
+# ---------------------------------------------------------------------------
+# Training jobs are created on demand by Django (boto3 create_training_job), so
+# there is no always-on resource here — just the image repo and the IAM the job
+# + Django need. The training container (sagemaker_backend/Dockerfile.training)
+# reads a manifest, assembles a YOLO dataset from annotated frames, trains, and
+# writes best.pt to the models bucket + result.json to the output bucket.
+
+training_ecr_repo = aws.ecr.Repository(
+    "training-repo",
+    name=f"{prefix}-training",  # must match the CI workflow
+    image_tag_mutability="MUTABLE",
+    image_scanning_configuration=aws.ecr.RepositoryImageScanningConfigurationArgs(
+        scan_on_push=True,
+    ),
+    force_delete=False,
+)
+
+aws.ecr.LifecyclePolicy(
+    "training-repo-lifecycle",
+    repository=training_ecr_repo.name,
+    policy=json.dumps({
+        "rules": [{
+            "rulePriority": 1,
+            "description": "Expire untagged images after 14 days",
+            "selection": {
+                "tagStatus": "untagged",
+                "countType": "sinceImagePushed",
+                "countUnit": "days",
+                "countNumber": 14,
+            },
+            "action": {"type": "expire"},
+        }],
+    }),
+)
+
+# Execution role assumed by the training container.
+#   - Read the manifest (sm-input) + raw videos.
+#   - Write best.pt to the models bucket + result.json to sm-output.
+#   - Pull ECR, write CloudWatch.
+training_role = aws.iam.Role(
+    "sagemaker-training-role",
+    name=f"{prefix}-training-exec-role",
+    assume_role_policy=json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Allow",
+            "Principal": {"Service": "sagemaker.amazonaws.com"},
+            "Action": "sts:AssumeRole",
+        }],
+    }),
+)
+
+aws.iam.RolePolicy(
+    "sagemaker-training-policy",
+    role=training_role.id,
+    policy=pulumi.Output.all(input_bucket.arn, output_bucket.arn).apply(
+        lambda arns: json.dumps({
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "ReadManifest",
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject", "s3:ListBucket"],
+                    "Resource": [arns[0], f"{arns[0]}/*"],
+                },
+                {
+                    "Sid": "WriteResult",
+                    "Effect": "Allow",
+                    "Action": ["s3:PutObject", "s3:GetObject", "s3:ListBucket"],
+                    "Resource": [arns[1], f"{arns[1]}/*"],
+                },
+                {
+                    "Sid": "ReadRawVideos",
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject", "s3:ListBucket"],
+                    "Resource": [web_raw_videos_arn, f"{web_raw_videos_arn}/*"],
+                },
+                {
+                    "Sid": "WriteModels",
+                    "Effect": "Allow",
+                    "Action": ["s3:PutObject", "s3:GetObject", "s3:ListBucket"],
+                    "Resource": [web_models_arn, f"{web_models_arn}/*"],
+                },
+                {
+                    "Sid": "ECRPull",
+                    "Effect": "Allow",
+                    "Action": [
+                        "ecr:GetAuthorizationToken",
+                        "ecr:BatchCheckLayerAvailability",
+                        "ecr:GetDownloadUrlForLayer",
+                        "ecr:BatchGetImage",
+                    ],
+                    "Resource": "*",
+                },
+                {
+                    "Sid": "CloudWatch",
+                    "Effect": "Allow",
+                    "Action": [
+                        "logs:CreateLogGroup",
+                        "logs:CreateLogStream",
+                        "logs:PutLogEvents",
+                        "logs:DescribeLogStreams",
+                        "cloudwatch:PutMetricData",
+                    ],
+                    "Resource": "*",
+                },
+            ],
+        })
+    ),
+)
+
+# Managed policy for the Django (App Runner) role: create/describe/stop training
+# jobs, pass the training execution role to SageMaker, and write the manifest /
+# read the result. Attached by ARN in the web stack (no StackReference).
+django_training_policy = aws.iam.Policy(
+    "django-training-policy",
+    name=f"{prefix}-django-training",
+    description="Django web app: create/describe BeeMonitor SageMaker training jobs + S3 I/O",
+    policy=pulumi.Output.all(
+        input_bucket.arn, output_bucket.arn, training_role.arn,
+    ).apply(lambda a: json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "ManageTrainingJobs",
+                "Effect": "Allow",
+                "Action": [
+                    "sagemaker:CreateTrainingJob",
+                    "sagemaker:DescribeTrainingJob",
+                    "sagemaker:StopTrainingJob",
+                    "sagemaker:AddTags",
+                ],
+                "Resource": f"arn:aws:sagemaker:{region}:{account_id}:training-job/*",
+            },
+            {
+                "Sid": "PassTrainingRole",
+                "Effect": "Allow",
+                "Action": "iam:PassRole",
+                "Resource": a[2],
+                "Condition": {"StringEquals": {"iam:PassedToService": "sagemaker.amazonaws.com"}},
+            },
+            {
+                "Sid": "PutManifest",
+                "Effect": "Allow",
+                "Action": ["s3:PutObject"],
+                "Resource": f"{a[0]}/*",
+            },
+            {
+                "Sid": "ReadTrainingResult",
+                "Effect": "Allow",
+                "Action": ["s3:GetObject", "s3:ListBucket"],
+                "Resource": [a[1], f"{a[1]}/*"],
+            },
+        ],
+    })),
+)
+
+
+# ---------------------------------------------------------------------------
 # SageMaker Model / EndpointConfig / Endpoint / Autoscaling
 # ---------------------------------------------------------------------------
 # Gated on deploy-endpoint so pass 1 (no image yet) doesn't try to pull a
@@ -377,3 +537,6 @@ pulumi.export("sm_input_bucket", input_bucket.bucket)
 pulumi.export("sm_output_bucket", output_bucket.bucket)
 pulumi.export("sagemaker_exec_role_arn", sagemaker_role.arn)
 pulumi.export("django_invoke_policy_arn", django_invoke_policy.arn)
+pulumi.export("training_ecr_repo_url", training_ecr_repo.repository_url)
+pulumi.export("sagemaker_training_role_arn", training_role.arn)
+pulumi.export("django_training_policy_arn", django_training_policy.arn)
