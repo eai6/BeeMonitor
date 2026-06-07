@@ -45,10 +45,23 @@ class TrainingCreateForm(forms.ModelForm):
             }),
         }
 
+    # Training is per-instance-hour (no scale-to-zero), so restrict to the
+    # affordable single-GPU instances — drop L40S/A100 (ml.p4d.24xlarge is
+    # ~$37/hr). Labels name the SageMaker instance each maps to (see
+    # training/views.py _INSTANCE_BY_TIER).
+    TRAINING_GPU_CHOICES = [
+        ("T4", "T4 — ml.g4dn.xlarge (cheapest, slower)"),
+        ("L4", "L4 — ml.g6.xlarge (balanced)"),
+        ("A10G", "A10G — ml.g5.xlarge (fast, recommended)"),
+    ]
+
     def __init__(self, *args, user=None, **kwargs):
         super().__init__(*args, **kwargs)
         if user:
             self.fields["project"].queryset = AnnotationProject.objects.filter(user=user)
+        self.fields["gpu_tier"].choices = self.TRAINING_GPU_CHOICES
+        if not self.initial.get("gpu_tier"):
+            self.initial["gpu_tier"] = "A10G"
 
 
 class ModelUploadForm(forms.Form):

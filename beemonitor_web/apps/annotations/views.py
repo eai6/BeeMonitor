@@ -17,6 +17,25 @@ from .models import Annotation, AnnotationProject
 logger = logging.getLogger(__name__)
 
 
+def _preannotate_opts(request):
+    """(sample_interval, max_frames, confidence) from POST, clamped, with
+    settings-based defaults. Lets power users tune sampling per request."""
+    from django.conf import settings
+
+    def _clamp(name, default, lo, hi, cast=int):
+        try:
+            v = cast(request.POST.get(name) or default)
+        except (TypeError, ValueError):
+            v = default
+        return max(lo, min(hi, v))
+
+    return (
+        _clamp("sample_interval", settings.PREANNOTATE_SAMPLE_INTERVAL, 1, 120),
+        _clamp("max_frames", settings.PREANNOTATE_MAX_FRAMES, 10, 2000),
+        _clamp("confidence", settings.PREANNOTATE_CONFIDENCE, 0.01, 0.9, cast=float),
+    )
+
+
 class ProjectListView(LoginRequiredMixin, ListView):
     model = AnnotationProject
     template_name = "annotations/list.html"
@@ -367,12 +386,13 @@ class PreAnnotateView(LoginRequiredMixin, View):
         video = get_object_or_404(Video, pk=video_id, user=request.user)
 
         blob_path = video.storage_key
+        sample_interval, max_frames, confidence = _preannotate_opts(request)
 
         # Auto-transfer from S3 if needed, then pre-annotate
         # The background thread handles both transfer and annotation
         thread = threading.Thread(
             target=self._run_pre_annotate,
-            args=(project.pk, video.pk, blob_path),
+            args=(project.pk, video.pk, blob_path, sample_interval, max_frames, confidence),
             daemon=True,
         )
         thread.start()
@@ -385,7 +405,8 @@ class PreAnnotateView(LoginRequiredMixin, View):
         return redirect("annotations:detail", pk=pk)
 
     @staticmethod
-    def _run_pre_annotate(project_pk, video_pk, blob_path):
+    def _run_pre_annotate(project_pk, video_pk, blob_path,
+                          sample_interval=10, max_frames=300, confidence=0.15):
         """Invoke the SageMaker async endpoint (task=pre_annotate), poll the
         result from S3, then create Annotation rows. Runs in a daemon thread."""
         import json
@@ -431,9 +452,9 @@ class PreAnnotateView(LoginRequiredMixin, View):
                 "user_id": str(user_id),
                 "video_blob_path": blob_path,
                 "classes": classes,
-                "sample_interval": 10,
-                "max_frames": 300,
-                "confidence_threshold": 0.15,
+                "sample_interval": sample_interval,
+                "max_frames": max_frames,
+                "confidence_threshold": confidence,
             }
             key = f"preannotate/{project_pk}/{video_pk}.json"
             s3.put_object(Bucket=in_bucket, Key=key,
@@ -522,6 +543,7 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
             messages.warning(request, "No videos in this project.")
             return redirect("annotations:detail", pk=pk)
 
+        sample_interval, max_frames, confidence = _preannotate_opts(request)
         count = 0
         for video in videos:
             blob_path = video.storage_key
@@ -529,7 +551,7 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
                 continue
             thread = threading.Thread(
                 target=PreAnnotateView._run_pre_annotate,
-                args=(project.pk, video.pk, blob_path),
+                args=(project.pk, video.pk, blob_path, sample_interval, max_frames, confidence),
                 daemon=True,
             )
             thread.start()
