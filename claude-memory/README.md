@@ -8,8 +8,16 @@ machine; this folder is a committed backup so the knowledge travels with the rep
 and survives a re-clone.
 
 > Not loaded automatically by Claude — the live `~/.claude/.../memory/` is. Treat
-> this as documentation / a seed. To restore onto a new machine, copy these files
-> back into that path.
+> this as documentation / a seed.
+
+Keep this backup in sync with [`scripts/sync-claude-memory.sh`](../scripts/sync-claude-memory.sh):
+
+```bash
+scripts/sync-claude-memory.sh            # backup:  live store -> this folder (then commit)
+scripts/sync-claude-memory.sh --restore  # restore: this folder -> live store (new machine)
+scripts/sync-claude-memory.sh --dry-run  # preview changes, copy nothing
+```
+This `README.md` is repo-only and is never copied to / deleted from the live store.
 
 `MEMORY.md` is the index; each other file is one note. Current notes:
 
