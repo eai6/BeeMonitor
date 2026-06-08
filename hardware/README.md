@@ -233,8 +233,12 @@ sudo systemctl disable --now ModemManager.service 2>/dev/null || true  # fights 
 sudo cp cellular/qmi-network.conf.sample /etc/qmi-network.conf
 # sudo nano /etc/qmi-network.conf                          # only if NOT a Sixfab SIM
 # Pin DNS as the single source of truth. chattr -i first so re-runs don't fail
-# on an already-immutable file (tee can't write it while +i is set).
+# on an already-immutable file; rm -f removes the managed SYMLINK that fresh Pi
+# OS images use (NetworkManager/systemd-resolved), so we write a REAL static file
+# instead of writing through the link (which leaves DNS pointed at 127.0.0.53 and
+# breaks name resolution over cellular — 8.8.8.8 pings but google.com doesn't).
 sudo chattr -i /etc/resolv.conf 2>/dev/null || true
+sudo rm -f /etc/resolv.conf
 printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' | sudo tee /etc/resolv.conf
 sudo chattr +i /etc/resolv.conf                            # pin DNS (immutable)
 chmod +x cellular/cellular-up.sh cellular/cellular-firewall.sh
@@ -927,9 +931,18 @@ overwrites it:
 
 ```bash
 sudo chattr -i /etc/resolv.conf 2>/dev/null || true   # unlock if already pinned (re-runs)
+sudo rm -f /etc/resolv.conf                            # remove the managed symlink (see note)
 printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' | sudo tee /etc/resolv.conf
 sudo chattr +i /etc/resolv.conf      # immutable — survives reboots
 ```
+
+> **Why `rm -f` first.** On a fresh Pi OS image `/etc/resolv.conf` is usually a
+> **symlink** to a NetworkManager/systemd-resolved file (often pointing at the
+> `127.0.0.53` stub). Without removing it, `tee` writes *through* the symlink and
+> the system keeps resolving via the stub, which has no upstream over cellular —
+> so `ping 8.8.8.8` works but `ping google.com` fails. Deleting the symlink first
+> guarantees a real static file. Verify with `ls -l /etc/resolv.conf` — it should
+> be a regular file (`-`), not a symlink (`l ... ->`).
 
 > This makes `/etc/resolv.conf` the **single source of truth** for DNS. The
 > bring-up script deliberately does not touch DNS. To change nameservers later,
@@ -1292,6 +1305,7 @@ monitor or Raspberry Pi Connect screen sharing.
 | Recorder active but "permission denied" saving video | Output tree is root-owned (`makeDirectories.py` or a file copy run with `sudo`). Fix: `sudo chown -R beemonitor:beemonitor /home/beemonitor/Desktop/cameraOutput` then restart the recorder |
 | No uploads | Confirm cellular is up (`ping 8.8.8.8`); check `beemonitor-uploader` journal; verify `BEEMONITOR_DEVICE_KEY` |
 | `wwan0` no IP / 100% loss; QMI error 14 `CallFailed`, reason `ipv4-only-allowed` | Carrier grants IPv4 only but the call asked for dual-stack. Add `IP_TYPE=4` to `/etc/qmi-network.conf`, then re-run `cellular-up.sh`. (If `CallFailed` with `service-option-not-subscribed`, the SIM isn't activated — activate it in Sixfab Connect.) |
+| `ping 8.8.8.8` works but `ping google.com` fails (DNS) | `/etc/resolv.conf` is still the managed symlink (stub `127.0.0.53`). Re-pin as a real file: `sudo chattr -i /etc/resolv.conf; sudo rm -f /etc/resolv.conf; printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' \| sudo tee /etc/resolv.conf; sudo chattr +i /etc/resolv.conf` (see Step 10.4) |
 | Too many / too few clips | Force a recalibration (`main_motion.py --calibrate --force`); tune `BEEMONITOR_ROI` |
 | Calibration never written | Need bee-containing snippets first; check `beemonitor-calibrate.service` journal and that `ultralytics` is installed |
 | WittyPi not detected | Run `i2cdetect -y 1`, should show device at 0x08 |
