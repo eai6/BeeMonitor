@@ -1,0 +1,12 @@
+{
+  "min_area": 61.8,
+  "max_area": 553.8,
+  "var_threshold": 16,
+  "min_blobs": 1,
+  "lores": [
+    640,
+    480
+  ],
+  "model": "models/bee_tracking.pt",
+  "note": "STARTER calibration shipped with the repo. Seed it to <RECORD_DIR>/../calibration.json so a fresh unit starts on a tight bee-sized blob-area window [62, 554] instead of the wide-open code defaults [20, 5000]. Derived by running bee_tracking.pt over the committed short_videos samples (union of two clips, 39 bee blobs) at lores 640x480. The daily beemonitor-calibrate job overwrites this with values learned from THIS unit's own snippets, so it self-tunes to the actual camera framing."
+}

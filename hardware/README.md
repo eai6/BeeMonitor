@@ -201,8 +201,11 @@ python3 -m venv --system-site-packages ~/BeeMonitor/hardware/venv
 ~/BeeMonitor/hardware/venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 ~/BeeMonitor/hardware/venv/bin/pip install ultralytics
 
-# 3. Output directories
+# 3. Output directories + seed the starter motion calibration so the recorder
+#    starts on a tight bee-sized window [62, 554] instead of wide-open [20, 5000].
+#    The daily calibrate job later replaces it with values learned on THIS unit.
 ~/BeeMonitor/hardware/venv/bin/python makeDirectories.py
+cp calibration.sample.json /home/beemonitor/Desktop/cameraOutput/calibration.json
 
 # 4. Credentials + tuning  (EDIT: paste your bmk_device_ key, then save)
 sudo mkdir -p /etc/beemonitor
@@ -262,9 +265,11 @@ ping -c 3 8.8.8.8
 journalctl -u beemonitor-uploader.service -f   # watch snippets upload to S3
 ```
 
-> First boot runs on permissive motion thresholds until the calibrate timer
-> finds bees in the recorded snippets. To calibrate immediately once a few clips
-> exist: `~/BeeMonitor/hardware/venv/bin/python ~/BeeMonitor/hardware/main_motion.py --calibrate --force`
+> With the seed calibration from step 3 the recorder starts on a tight window
+> (`[62, 554]`); the daily calibrate timer then refines it from this unit's own
+> snippets. (Skip the seed and it starts wide-open at `[20, 5000]` until the first
+> calibration.) To calibrate immediately once a few clips exist:
+> `~/BeeMonitor/hardware/venv/bin/python ~/BeeMonitor/hardware/main_motion.py --calibrate --force`
 
 > **WiFi / bench unit?** Skip steps 5, the two cellular `cp` lines in step 6, and
 > the `cellular-firewall.service cellular.service` line in step 7. The app layer
@@ -371,13 +376,30 @@ python3 -m venv --system-site-packages ~/BeeMonitor/hardware/venv
 > at that path (or edit the `ExecStart=` lines in `hardware/systemd/*.service`).
 > Sanity check: `~/BeeMonitor/hardware/venv/bin/python -c "import picamera2, cv2, requests; print('ok')"`.
 
-### Step 3: Create Output Directories
+### Step 3: Create Output Directories (and seed the motion calibration)
 
 ```bash
 ~/BeeMonitor/hardware/venv/bin/python makeDirectories.py
 ```
 
 (The recorder also auto-creates its working directories on first run.)
+
+Seed the **starter motion calibration** so the recorder begins on a tight,
+bee-sized blob-area window instead of the wide-open code defaults. Without this
+file the gate runs at `[20, 5000]` (permissive — over-triggers) until the daily
+calibrate job produces one; the shipped seed starts it at `[62, 554]`:
+
+```bash
+cp ~/BeeMonitor/hardware/calibration.sample.json \
+   /home/beemonitor/Desktop/cameraOutput/calibration.json
+```
+
+> The seed is derived from the repo's `short_videos` samples (lores 640×480). It
+> is just a **starting point** — the daily `beemonitor-calibrate` job overwrites
+> it with values learned from this unit's own snippets, so it self-tunes to the
+> actual camera framing. If your unit recorded at a different resolution or framing,
+> the first daily calibration will correct it. Confirm what's loaded in the log:
+> `journalctl -u beemonitor-recorder | grep -i "loaded calibration"` → `area=[62, 554]`.
 
 ### Step 4: Focus the Camera
 
@@ -463,12 +485,14 @@ journalctl -u beemonitor-recorder.service -f     # clip START / STOP lines
 journalctl -u beemonitor-uploader.service -f     # upload progress
 ```
 
-> **First run:** until the recorder has captured a few activity clips, the
-> calibrate job has nothing to learn from and the recorder runs on *permissive
-> defaults* (it over-triggers slightly — safe, just less selective). Once the
-> daily calibrate job finds bees in the snippets it writes `calibration.json`,
-> and the recorder **hot-reloads** it within a few minutes (no restart needed).
-> You can force the first calibration once clips exist:
+> **First run:** with the **seed calibration** from [Step 3](#step-3-create-output-directories-and-seed-the-motion-calibration)
+> the recorder already starts on a tight window (`[62, 554]`). Without it, until
+> the recorder has captured a few activity clips the calibrate job has nothing to
+> learn from and the recorder runs on *permissive defaults* `[20, 5000]` (it
+> over-triggers slightly — safe, just less selective). Either way, once the daily
+> calibrate job finds bees in the snippets it writes `calibration.json`, and the
+> recorder **hot-reloads** it within ~5 min (no restart needed). You can force the
+> first calibration once clips exist:
 > `~/BeeMonitor/hardware/venv/bin/python main_motion.py --calibrate --force`
 
 ---
