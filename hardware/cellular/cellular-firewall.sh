@@ -16,10 +16,22 @@
 # The video uploader is deliberately NOT in the allowlist: even if its WiFi-only
 # guard were misconfigured, bulk video still can't escape over cellular.
 #
-# Applied by cellular-firewall.service (before cellular.service) on every boot.
-# Re-run any time:  sudo bash cellular-firewall.sh
+# TWO-PHASE LOAD (the telemetry allow rule matches a cgroup that only exists
+# once beemonitor-telemetry.service is running, so it can't be loaded early):
+#
+#   base       default-drop on wwan0 + link essentials, NO cgroup rule. Has no
+#              dependency on a running service, so cellular-firewall.service loads
+#              it EARLY (before cellular.service) — this closes the leak window.
+#   telemetry  the same table PLUS the telemetry-cgroup allow rule. Applied by
+#              beemonitor-telemetry.service's ExecStartPost once its cgroup
+#              exists, and re-applied on every (re)start so the cgroup id is
+#              re-resolved after a restart. (default mode)
+#
+# Re-run any time:  sudo bash cellular-firewall.sh base       # phase 1 only
+#                   sudo bash cellular-firewall.sh telemetry  # full (needs telemetry up)
 set -u
 
+MODE="${1:-telemetry}"
 IFACE="${BEEMONITOR_CELL_IFACE:-wwan0}"
 TABLE="beemon_cell"
 # systemd service whose traffic is allowed on cellular (the telemetry beat).
@@ -29,6 +41,23 @@ if ! command -v nft >/dev/null 2>&1; then
     echo "cellular-firewall: nft not found — install with 'sudo apt install nftables'" >&2
     exit 1
 fi
+
+case "$MODE" in
+    base)
+        # No cgroup rule — telemetry is also dropped, but it isn't running yet
+        # at this phase, so nothing legitimate is blocked. Safe to load early.
+        TELEMETRY_RULE="# (telemetry allow rule added in phase 2 once its cgroup exists)"
+        ;;
+    telemetry)
+        # nft resolves this cgroup path to an id AT LOAD TIME, so the cgroup must
+        # already exist (i.e. beemonitor-telemetry.service has started).
+        TELEMETRY_RULE="socket cgroupv2 level 2 \"system.slice/${TELEMETRY_UNIT}\" accept"
+        ;;
+    *)
+        echo "cellular-firewall: unknown mode '$MODE' (use 'base' or 'telemetry')" >&2
+        exit 2
+        ;;
+esac
 
 # Replace any previous version of our table atomically.
 nft list table inet "$TABLE" >/dev/null 2>&1 && nft delete table inet "$TABLE"
@@ -51,7 +80,7 @@ table inet ${TABLE} {
         tcp dport 53 accept
 
         # The telemetry service — the ONLY app allowed to use mobile data.
-        socket cgroupv2 level 2 "system.slice/${TELEMETRY_UNIT}" accept
+        ${TELEMETRY_RULE}
 
         # Everything else leaving cellular is blocked (apt, snap, rpi-connect, …).
         counter drop comment "cellular-blocked-nontelemetry"
@@ -59,8 +88,12 @@ table inet ${TABLE} {
 }
 EOF
 then
-    echo "cellular-firewall: failed to load nftables ruleset — cellular is NOT gated" >&2
+    echo "cellular-firewall: failed to load nftables ruleset ($MODE) — cellular is NOT gated" >&2
     exit 1
 fi
 
-echo "cellular-firewall: egress on ${IFACE} gated to ${TELEMETRY_UNIT} (+DNS/DHCP/NTP/ICMP)"
+if [ "$MODE" = "telemetry" ]; then
+    echo "cellular-firewall: egress on ${IFACE} gated to ${TELEMETRY_UNIT} (+DNS/DHCP/NTP/ICMP)"
+else
+    echo "cellular-firewall: base drop on ${IFACE} loaded (+DNS/DHCP/NTP/ICMP); telemetry allow pending phase 2"
+fi

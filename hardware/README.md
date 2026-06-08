@@ -147,7 +147,7 @@ layers:
 
 | Unit | Script | Job |
 |------|--------|-----|
-| `cellular-firewall.service` | `cellular/cellular-firewall.sh` | nftables egress gate — allows **only telemetry** on `wwan0`, drops everything else (incl. video). Comes up *before* the link |
+| `cellular-firewall.service` | `cellular/cellular-firewall.sh` | nftables egress gate — allows **only telemetry** on `wwan0`, drops everything else (incl. video). Loads the base drop *before* the link; the telemetry allow rule is added by `beemonitor-telemetry`'s `ExecStartPost` once its cgroup exists (two-phase) |
 | `cellular.service` | `cellular/cellular-up.sh` | Brings the Sixfab `wwan0` link up (QMI) and keeps it alive across drops / WittyPi wakes |
 
 **Application layer:**
@@ -514,6 +514,9 @@ a `*.service` file or running `git pull` on the units themselves, run
 > `cellular-firewall.service` *active (exited)* (it's a oneshot — exited is
 > correct), recorder/telemetry/uploader all *active (running)*, and
 > `beemonitor-calibrate.timer` *active (waiting)* with a future trigger time.
+> The cellular allow rule is applied by telemetry's `ExecStartPost`, so the
+> `socket cgroupv2 … beemonitor-telemetry.service` line in
+> `sudo nft list table inet beemon_cell` only appears **after** telemetry is up.
 
 | Symptom | Likely cause / fix |
 |---------|--------------------|
@@ -936,19 +939,40 @@ ping). WiFi (`wlan0`) is untouched, so normal operation is unaffected. The video
 uploader is intentionally *not* allowed on cellular — bulk video stays WiFi-only
 even at the network layer.
 
+> **Loaded in two phases.** The telemetry allow rule matches the
+> `beemonitor-telemetry.service` **cgroup**, which only exists once that service
+> is running — and nftables resolves the cgroup path to an id *at load time*. So
+> the firewall can't load the allow rule before telemetry starts. Instead:
+> 1. **`cellular-firewall.service`** loads a **base default-drop** early (before
+>    the link comes up) — `wwan0` is locked to DNS/DHCP/NTP/ICMP only, closing the
+>    leak window. No cgroup, so it never fails to load.
+> 2. **`beemonitor-telemetry.service`**'s `ExecStartPost` adds the telemetry allow
+>    rule once its cgroup exists, and re-adds it on every (re)start so the rule
+>    survives a telemetry restart (the cgroup id changes each time).
+>
+> Net effect: `wwan0` is gated the whole time; telemetry becomes allowed the
+> instant its service is up. Both units are copied/enabled already (Steps 6–7).
+
 ```bash
 cd ~/BeeMonitor/hardware
 sudo apt install -y nftables
 chmod +x cellular/cellular-firewall.sh
+# Both units carry the firewall now: cellular-firewall.service = base drop (phase
+# 1), beemonitor-telemetry.service = the allow rule (phase 2). If you copied all
+# units in Step 6 they're already installed; this re-applies just these two.
 sudo cp systemd/cellular-firewall.service /etc/systemd/system/
+sudo cp systemd/beemonitor-telemetry.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now cellular-firewall.service
+sudo systemctl restart beemonitor-telemetry.service   # applies phase 2
 ```
 
-Verify (with WiFi **off** so cellular is the only link):
+Verify (with WiFi **off** so cellular is the only link). The table only shows the
+telemetry allow rule **after** telemetry has started (phase 2):
 
 ```bash
-sudo nft list table inet beemon_cell        # shows the rules + a "drop" counter
+sudo nft list table inet beemon_cell        # rules + a "drop" counter; look for the cgroupv2 line
+systemctl is-active cellular-firewall.service   # active (the base drop loaded)
 journalctl -u beemonitor-telemetry -f       # beats still succeed
 sudo apt update                              # should hang/fail — blocked, as intended
 sudo nft list table inet beemon_cell        # the drop counter has climbed

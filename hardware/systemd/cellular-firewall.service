@@ -5,6 +5,11 @@ Documentation=https://github.com/eai6/BeeMonitor
 # cellular link comes up so there is no window where other traffic can leak out.
 # network-pre.target / Before=cellular.service avoid any ordering cycle with
 # multi-user.target (this unit is WantedBy=multi-user.target).
+#
+# Phase 1 only: loads the BASE default-drop (no cgroup rule), which has no
+# dependency on a running service so it can load this early. The telemetry allow
+# rule (phase 2) is added by beemonitor-telemetry.service's ExecStartPost once
+# that service's cgroup exists — see cellular-firewall.sh.
 Wants=network-pre.target
 After=network-pre.target
 Before=cellular.service
@@ -12,8 +17,8 @@ Before=cellular.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/home/beemonitor/BeeMonitor/hardware/cellular/cellular-firewall.sh
-ExecReload=/home/beemonitor/BeeMonitor/hardware/cellular/cellular-firewall.sh
+ExecStart=/home/beemonitor/BeeMonitor/hardware/cellular/cellular-firewall.sh base
+ExecReload=/home/beemonitor/BeeMonitor/hardware/cellular/cellular-firewall.sh base
 
 [Install]
 WantedBy=multi-user.target

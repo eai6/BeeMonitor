@@ -12,6 +12,13 @@ Group=beemonitor
 EnvironmentFile=/etc/beemonitor/uploader.env
 # Loops internally at BEEMONITOR_TELEMETRY_INTERVAL (60s default; raise to slow).
 ExecStart=/home/beemonitor/BeeMonitor/hardware/venv/bin/python /home/beemonitor/BeeMonitor/hardware/telemetry.py
+# Phase 2 of the cellular egress firewall: add the allow rule for THIS service's
+# cgroup, which only exists now that we've started (cellular-firewall.service
+# loaded the base drop earlier). Runs on every (re)start incl. auto-restart, so
+# the cgroup id is always re-resolved. '+' runs it as root (the service drops to
+# 'beemonitor'); '-' so a missing/failed firewall never blocks telemetry, and it
+# no-ops cleanly on a WiFi/bench unit (no nft table / no wwan0).
+ExecStartPost=+-/home/beemonitor/BeeMonitor/hardware/cellular/cellular-firewall.sh telemetry
 Restart=on-failure
 RestartSec=30
 TimeoutStopSec=30
