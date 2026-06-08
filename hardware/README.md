@@ -215,10 +215,16 @@ sudo nano /etc/beemonitor/uploader.env      # <-- paste the real device key
 sudo chmod 600 /etc/beemonitor/uploader.env
 
 # 5. Cellular modem prep (SKIP on a WiFi/bench unit — go to step 6).
-#    See Step 10 for kit-specifics (SIM, antennas, USB-mode). Mechanics:
+#    See Step 10 for kit-specifics (SIM, antennas, and the one-time USB-mode
+#    switch — Telit LE910C4-NF uses AT#USBCFG, not Quectel's AT+QCFG).
+#    First confirm the modem enumerated in QMI mode (else do Step 10.1 first):
+lsusb | grep -i 1bc7:1201 && ls /dev/cdc-wdm0   # Telit modem + QMI control node
 sudo systemctl disable --now ModemManager.service          # fights manual QMI
 sudo cp cellular/qmi-network.conf.sample /etc/qmi-network.conf
 sudo nano /etc/qmi-network.conf                            # <-- set your APN
+# Pin DNS as the single source of truth. chattr -i first so re-runs don't fail
+# on an already-immutable file (tee can't write it while +i is set).
+sudo chattr -i /etc/resolv.conf 2>/dev/null || true
 printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' | sudo tee /etc/resolv.conf
 sudo chattr +i /etc/resolv.conf                            # pin DNS (immutable)
 chmod +x cellular/cellular-up.sh cellular/cellular-firewall.sh
@@ -865,6 +871,7 @@ QMI/`udhcpc` won't reliably set DNS, so set it once and lock it so nothing
 overwrites it:
 
 ```bash
+sudo chattr -i /etc/resolv.conf 2>/dev/null || true   # unlock if already pinned (re-runs)
 printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' | sudo tee /etc/resolv.conf
 sudo chattr +i /etc/resolv.conf      # immutable — survives reboots
 ```
