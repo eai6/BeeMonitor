@@ -10,15 +10,16 @@
 4. [3D Printed Enclosure](#3d-printed-enclosure)
 5. [Assembly Instructions](#assembly-instructions)
 6. [Software Installation](#software-installation)
-7. [How Motion-Gated Recording Works](#how-motion-gated-recording-works)
-8. [Configuration Reference](#configuration-reference)
-9. [WittyPi Setup](#step-8-set-up-wittypi)
-10. [Raspberry Pi Connect Setup](#step-9-set-up-raspberry-pi-connect-remote-access)
-11. [Cellular Connectivity (Sixfab 4G-LTE)](#step-10-cellular-connectivity-sixfab-4g-lte)
-12. [Testing & Verification](#testing--verification)
-13. [Field Deployment](#field-deployment)
-14. [Maintenance](#maintenance)
-15. [Troubleshooting](#troubleshooting)
+7. [Manage all services](#manage-all-services)
+8. [How Motion-Gated Recording Works](#how-motion-gated-recording-works)
+9. [Configuration Reference](#configuration-reference)
+10. [WittyPi Setup](#step-8-set-up-wittypi)
+11. [Raspberry Pi Connect Setup](#step-9-set-up-raspberry-pi-connect-remote-access)
+12. [Cellular Connectivity (Sixfab 4G-LTE)](#step-10-cellular-connectivity-sixfab-4g-lte)
+13. [Testing & Verification](#testing--verification)
+14. [Field Deployment](#field-deployment)
+15. [Maintenance](#maintenance)
+16. [Troubleshooting](#troubleshooting)
 
 ## Overview
 
@@ -137,18 +138,33 @@ Located in `/hardware/enclosure/`:
 
 ## Software Installation
 
-The field system runs **three independent systemd services** (kept separate so a
-failure in one never stops the others — a network outage can't stop recording,
-and a recorder crash can't stop uploads):
+A fully-provisioned cellular field unit runs **seven systemd units**, kept
+independent so a failure in one never stops the others — a network outage can't
+stop recording, and a recorder crash can't stop uploads. They fall into two
+layers:
+
+**Network layer (cellular field units only — skip on a WiFi/bench unit):**
 
 | Unit | Script | Job |
 |------|--------|-----|
-| `beemonitor-recorder.service` | `hardware/main_motion.py` | Records **only activity snippets** (MOG2 motion gate); captures stills **on demand** (picture / live view) |
-| `beemonitor-telemetry.service` | `hardware/telemetry.py` | JSON health beat every 60s to the cloud, **over cellular** (no image) |
-| `beemonitor-uploader.service` | `hardware/uploader.py` | Streams snippets to S3 — **WiFi-gated** (video waits for WiFi) |
-| `beemonitor-calibrate.timer` | `hardware/main_motion.py --calibrate` | Daily: learns the bee blob-size window from recorded snippets with YOLO |
+| `cellular-firewall.service` | `cellular/cellular-firewall.sh` | nftables egress gate — allows **only telemetry** on `wwan0`, drops everything else (incl. video). Comes up *before* the link |
+| `cellular.service` | `cellular/cellular-up.sh` | Brings the Sixfab `wwan0` link up (QMI) and keeps it alive across drops / WittyPi wakes |
 
-All read configuration from `/etc/beemonitor/uploader.env`.
+**Application layer:**
+
+| Unit | Script | Job |
+|------|--------|-----|
+| `beemonitor-recorder.service` | `main_motion.py` | Records **only activity snippets** (MOG2 motion gate); captures stills **on demand** (picture / live view) |
+| `beemonitor-telemetry.service` | `telemetry.py` | JSON health beat every 60s to the cloud, **over cellular** (no image) |
+| `beemonitor-uploader.service` | `uploader.py` | Streams snippets to S3 — **WiFi-gated** (video waits for WiFi) |
+| `beemonitor-calibrate.timer` → `.service` | `main_motion.py --calibrate` | Daily (15:00): learns the bee blob-size window from recorded snippets with YOLO |
+
+All read configuration from `/etc/beemonitor/uploader.env`. Two paths to install
+them: the **[Quick Install](#quick-install-cellular-field-unit)** copy-paste
+recipe below (everything in one go), or the step-by-step **[Steps 1–7](#step-1-download-source-code)**
++ **[Step 10](#step-10-cellular-connectivity-sixfab-4g-lte)** walkthrough. Either
+way, **[Manage all services](#manage-all-services)** is the single reference for
+enabling, checking, and restarting the whole set once installed.
 
 > **Split transport (cost control).** A tiny JSON telemetry beat goes over **cellular**
 > hourly (tiny — see the dashboard to know the unit is alive); bulk **video is
@@ -169,8 +185,10 @@ cd ~/BeeMonitor/hardware
 
 # 2. System deps + virtualenv (picamera2/cv2 from apt; pip deps in the venv).
 #    --system-site-packages lets the venv import the apt-installed picamera2/cv2.
+#    libqmi-utils/udhcpc/nftables are the cellular stack (skip on a WiFi unit).
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y python3-picamera2 python3-opencv ffmpeg python3-venv libqmi-utils
+sudo apt install -y python3-picamera2 python3-opencv ffmpeg python3-venv \
+                    libqmi-utils udhcpc nftables
 python3 -m venv --system-site-packages ~/BeeMonitor/hardware/venv
 ~/BeeMonitor/hardware/venv/bin/pip install --upgrade pip
 ~/BeeMonitor/hardware/venv/bin/pip install requests
@@ -192,25 +210,41 @@ EOF
 sudo nano /etc/beemonitor/uploader.env      # <-- paste the real device key
 sudo chmod 600 /etc/beemonitor/uploader.env
 
-# 5. Install + enable the three services
+# 5. Cellular modem prep (SKIP on a WiFi/bench unit — go to step 6).
+#    See Step 10 for kit-specifics (SIM, antennas, USB-mode). Mechanics:
+sudo systemctl disable --now ModemManager.service          # fights manual QMI
+sudo cp cellular/qmi-network.conf.sample /etc/qmi-network.conf
+sudo nano /etc/qmi-network.conf                            # <-- set your APN
+printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' | sudo tee /etc/resolv.conf
+sudo chattr +i /etc/resolv.conf                            # pin DNS (immutable)
+chmod +x cellular/cellular-up.sh cellular/cellular-firewall.sh
+
+# 6. Install ALL unit files (drop the two cellular units on a WiFi/bench unit)
+sudo cp systemd/cellular-firewall.service    /etc/systemd/system/
+sudo cp systemd/cellular.service             /etc/systemd/system/
 sudo cp systemd/beemonitor-recorder.service  /etc/systemd/system/
 sudo cp systemd/beemonitor-telemetry.service /etc/systemd/system/
 sudo cp systemd/beemonitor-uploader.service  /etc/systemd/system/
 sudo cp systemd/beemonitor-calibrate.service /etc/systemd/system/
 sudo cp systemd/beemonitor-calibrate.timer   /etc/systemd/system/
 
-# 5b. Let the telemetry service control WiFi from the dashboard (on/off/connect).
+# 6b. Let the telemetry service control WiFi from the dashboard (on/off/connect).
 #     The telemetry service runs as 'beemonitor'; nmcli state changes need root,
 #     so grant passwordless nmcli to that user only.
 echo 'beemonitor ALL=(root) NOPASSWD: /usr/bin/nmcli' | sudo tee /etc/sudoers.d/beemonitor-nmcli >/dev/null
 sudo chmod 440 /etc/sudoers.d/beemonitor-nmcli
 sudo visudo -cf /etc/sudoers.d/beemonitor-nmcli   # syntax-check the drop-in
 
+# 7. Enable + start everything (firewall and link first, then the app layer).
+#    On a WiFi/bench unit, omit the cellular-firewall + cellular line.
 sudo systemctl daemon-reload
+sudo systemctl enable --now cellular-firewall.service cellular.service
 sudo systemctl enable --now beemonitor-recorder.service beemonitor-telemetry.service beemonitor-uploader.service
 sudo systemctl enable --now beemonitor-calibrate.timer
 
-# 6. Bring up cellular (see Step 10 for your exact Sixfab kit), then verify:
+# 8. Verify the whole stack (see "Manage all services" for the one-liners)
+systemctl --no-pager status cellular.service beemonitor-recorder.service \
+  beemonitor-telemetry.service beemonitor-uploader.service
 ping -c 3 8.8.8.8
 journalctl -u beemonitor-uploader.service -f   # watch snippets upload to S3
 ```
@@ -218,6 +252,10 @@ journalctl -u beemonitor-uploader.service -f   # watch snippets upload to S3
 > First boot runs on permissive motion thresholds until the calibrate timer
 > finds bees in the recorded snippets. To calibrate immediately once a few clips
 > exist: `~/BeeMonitor/hardware/venv/bin/python ~/BeeMonitor/hardware/main_motion.py --calibrate --force`
+
+> **WiFi / bench unit?** Skip steps 5, the two cellular `cp` lines in step 6, and
+> the `cellular-firewall.service cellular.service` line in step 7. The app layer
+> works over any network — it just needs a route to the internet.
 
 ### Step 1: Download Source Code
 
@@ -363,6 +401,57 @@ journalctl -u beemonitor-uploader.service -f     # upload progress
 > and the recorder **hot-reloads** it within a few minutes (no restart needed).
 > You can force the first calibration once clips exist:
 > `~/BeeMonitor/hardware/venv/bin/python main_motion.py --calibrate --force`
+
+---
+
+## Manage all services
+
+Once installed, treat the unit set as one group. These commands act on the whole
+stack — drop the two `cellular*` units on a WiFi/bench unit. The recorder writes
+to `journal`, so all logs are in `journalctl`.
+
+```bash
+# Names, kept in one place for copy-paste:
+SVCS="cellular-firewall.service cellular.service beemonitor-recorder.service \
+beemonitor-telemetry.service beemonitor-uploader.service"
+
+# Enable + start everything on boot (firewall + link first, then the app layer):
+sudo systemctl enable --now $SVCS beemonitor-calibrate.timer
+
+# Status of all services at a glance:
+systemctl --no-pager status $SVCS
+systemctl list-timers beemonitor-calibrate.timer    # next calibration run
+
+# Follow logs from all of them at once:
+journalctl -f -u cellular.service -u beemonitor-recorder.service \
+  -u beemonitor-telemetry.service -u beemonitor-uploader.service
+
+# Restart the app layer (e.g. after a `git pull` or env-file edit):
+sudo systemctl restart beemonitor-recorder beemonitor-telemetry beemonitor-uploader
+
+# Stop everything (e.g. to free the camera for a bench test):
+sudo systemctl stop $SVCS
+
+# Disable on boot (without uninstalling):
+sudo systemctl disable $SVCS beemonitor-calibrate.timer
+```
+
+After editing `/etc/beemonitor/uploader.env`, restart the affected services so
+they pick up the new values (`recorder`, `telemetry`, `uploader`). After editing
+a `*.service` file or running `git pull` on the units themselves, run
+`sudo systemctl daemon-reload` first, then restart.
+
+> **What "healthy" looks like:** `cellular.service` *active (running)*,
+> `cellular-firewall.service` *active (exited)* (it's a oneshot — exited is
+> correct), recorder/telemetry/uploader all *active (running)*, and
+> `beemonitor-calibrate.timer` *active (waiting)* with a future trigger time.
+
+| Symptom | Likely cause / fix |
+|---------|--------------------|
+| `cellular.service` *enabled* but never runs, empty journal | Dependency cycle — never add `After=multi-user.target` to it (see [Step 10.6](#106-install-the-cellular-service-survives-reboot--wittypi-wakes)) |
+| Recorder fails with "camera in use" | Another recorder (old `driver.py` in WittyPi `afterStartup.sh`, or a bench run) holds the camera — stop it first |
+| Uploads error with TLS / cert failures | Clock is stale after a cold boot — wait for `cellular.service` then NTP sync (see [Step 10.7](#step-10-cellular-connectivity-sixfab-4g-lte)) |
+| `calibrate.service` writes nothing | No bee-containing snippets yet, or `ultralytics`/CPU-torch not installed in the venv |
 
 ---
 
