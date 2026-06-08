@@ -15,3 +15,10 @@
 APN=super
 # APN_USER=
 # APN_PASS=
+
+# Request an IPv4-only data session. Most IoT carriers (incl. the Sixfab/Twilio
+# Super SIM) only grant IPv4; if we ask for the default dual-stack IPv4v6 the
+# network rejects the call with "ipv4-only-allowed" (QMI error 14 'CallFailed')
+# and wwan0 never gets an address. Force IPv4 to avoid that. Set to 6 only if
+# your carrier is genuinely IPv6-only.
+IP_TYPE=4

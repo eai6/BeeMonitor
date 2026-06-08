@@ -898,14 +898,21 @@ sudo systemctl disable --now ModemManager.service 2>/dev/null || true
 ### 10.3 Set the APN
 
 `qmi-network` reads the APN from `/etc/qmi-network.conf`. The sample already sets
-`APN=super`, which is the APN for the **Sixfab SIM** (Sixfab resells the Twilio
-Super SIM), so for a Sixfab SIM just install it as-is — no editing needed:
+`APN=super` (the APN for the **Sixfab SIM** — Sixfab resells the Twilio Super SIM)
+**and `IP_TYPE=4`** (IPv4-only — see the note below), so for a Sixfab SIM just
+install it as-is — no editing needed:
 
 ```bash
 sudo cp ~/BeeMonitor/hardware/cellular/qmi-network.conf.sample /etc/qmi-network.conf
 # Only if you're NOT on a Sixfab SIM, set your carrier's APN (e.g. hologram / soracom.io):
 # sudo nano /etc/qmi-network.conf
 ```
+
+> **`IP_TYPE=4` matters.** Most IoT carriers grant **IPv4 only**. If the data
+> session requests the default dual-stack IPv4v6, the network rejects it with
+> `ipv4-only-allowed` → **QMI error 14 `CallFailed`** and `wwan0` never gets an
+> IP (10.5 shows 100% packet loss). The shipped sample forces IPv4 to avoid this.
+> If you wrote `/etc/qmi-network.conf` by hand, make sure it has `IP_TYPE=4`.
 
 > If the modem isn't already in QMI/RmNet mode you'll set it once via AT command,
 > then power-cycle. This is a **Telit** modem, so use `AT#USBCFG=<n>` (query the
@@ -1284,6 +1291,7 @@ monitor or Raspberry Pi Connect screen sharing.
 | Recorder not starting | `systemctl status beemonitor-recorder.service`; check journal for errors |
 | Recorder active but "permission denied" saving video | Output tree is root-owned (`makeDirectories.py` or a file copy run with `sudo`). Fix: `sudo chown -R beemonitor:beemonitor /home/beemonitor/Desktop/cameraOutput` then restart the recorder |
 | No uploads | Confirm cellular is up (`ping 8.8.8.8`); check `beemonitor-uploader` journal; verify `BEEMONITOR_DEVICE_KEY` |
+| `wwan0` no IP / 100% loss; QMI error 14 `CallFailed`, reason `ipv4-only-allowed` | Carrier grants IPv4 only but the call asked for dual-stack. Add `IP_TYPE=4` to `/etc/qmi-network.conf`, then re-run `cellular-up.sh`. (If `CallFailed` with `service-option-not-subscribed`, the SIM isn't activated — activate it in Sixfab Connect.) |
 | Too many / too few clips | Force a recalibration (`main_motion.py --calibrate --force`); tune `BEEMONITOR_ROI` |
 | Calibration never written | Need bee-containing snippets first; check `beemonitor-calibrate.service` journal and that `ultralytics` is installed |
 | WittyPi not detected | Run `i2cdetect -y 1`, should show device at 0x08 |
