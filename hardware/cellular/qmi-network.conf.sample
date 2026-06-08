@@ -2,13 +2,16 @@
 # Install to /etc/qmi-network.conf  (read by `qmi-network` in cellular-up.sh).
 #
 #   sudo cp qmi-network.conf.sample /etc/qmi-network.conf
+#   # Default below works as-is for the Sixfab SIM; only edit for another carrier:
 #   sudo nano /etc/qmi-network.conf   # set APN for your SIM
 #
 # Set APN to your carrier's value, e.g.:
+#   Sixfab SIM       -> super   (Sixfab resells the Twilio Super SIM)
 #   Twilio Super SIM -> super
 #   Hologram         -> hologram
 #   Soracom          -> soracom.io
 
+# Default APN for the Sixfab SIM (the SIM that ships with the kit).
 APN=super
 # APN_USER=
 # APN_PASS=

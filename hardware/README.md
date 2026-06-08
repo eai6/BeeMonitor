@@ -220,8 +220,11 @@ sudo chmod 600 /etc/beemonitor/uploader.env
 #    First confirm the modem enumerated in QMI mode (else do Step 10.1 first):
 lsusb | grep -i 1bc7:1201 && ls /dev/cdc-wdm0   # Telit modem + QMI control node
 sudo systemctl disable --now ModemManager.service          # fights manual QMI
+# The sample already sets APN=super — the APN for the Sixfab SIM (Sixfab
+# resells the Twilio Super SIM). So for a Sixfab SIM the cp is all you need;
+# only nano the file if you're on a different carrier (hologram, soracom.io, …).
 sudo cp cellular/qmi-network.conf.sample /etc/qmi-network.conf
-sudo nano /etc/qmi-network.conf                            # <-- set your APN
+# sudo nano /etc/qmi-network.conf                          # only if NOT a Sixfab SIM
 # Pin DNS as the single source of truth. chattr -i first so re-runs don't fail
 # on an already-immutable file (tee can't write it while +i is set).
 sudo chattr -i /etc/resolv.conf 2>/dev/null || true
@@ -851,12 +854,14 @@ sudo systemctl disable --now ModemManager.service
 
 ### 10.3 Set the APN
 
-`qmi-network` reads the APN from `/etc/qmi-network.conf`. Install the sample and
-edit it for your SIM:
+`qmi-network` reads the APN from `/etc/qmi-network.conf`. The sample already sets
+`APN=super`, which is the APN for the **Sixfab SIM** (Sixfab resells the Twilio
+Super SIM), so for a Sixfab SIM just install it as-is — no editing needed:
 
 ```bash
 sudo cp ~/BeeMonitor/hardware/cellular/qmi-network.conf.sample /etc/qmi-network.conf
-sudo nano /etc/qmi-network.conf     # set APN= (e.g. super / hologram / soracom.io)
+# Only if you're NOT on a Sixfab SIM, set your carrier's APN (e.g. hologram / soracom.io):
+# sudo nano /etc/qmi-network.conf
 ```
 
 > If the modem isn't already in QMI/RmNet mode you'll set it once via AT command,
