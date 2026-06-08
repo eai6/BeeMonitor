@@ -204,6 +204,10 @@ python3 -m venv --system-site-packages ~/BeeMonitor/hardware/venv
 # 3. Output directories + seed the starter motion calibration so the recorder
 #    starts on a tight bee-sized window [62, 554] instead of wide-open [20, 5000].
 #    The daily calibrate job later replaces it with values learned on THIS unit.
+#    Run WITHOUT sudo (NO `sudo` below) — the recorder runs as 'beemonitor' and
+#    can't write a root-owned output tree ("permission denied" saving video).
+#    Already ran it as root? Fix with:
+#      sudo chown -R beemonitor:beemonitor /home/beemonitor/Desktop/cameraOutput
 ~/BeeMonitor/hardware/venv/bin/python makeDirectories.py
 cp calibration.sample.json /home/beemonitor/Desktop/cameraOutput/calibration.json
 
@@ -383,6 +387,15 @@ python3 -m venv --system-site-packages ~/BeeMonitor/hardware/venv
 ```
 
 (The recorder also auto-creates its working directories on first run.)
+
+> ⚠️ **Do NOT run this with `sudo`.** The recorder service runs as the
+> `beemonitor` user and writes its snippets here; if the output tree is created by
+> root, the recorder fails with **"permission denied"** when it tries to save a
+> video. If you already ran it (or copied files here) as root, fix the ownership:
+> ```bash
+> sudo chown -R beemonitor:beemonitor /home/beemonitor/Desktop/cameraOutput
+> sudo systemctl restart beemonitor-recorder.service
+> ```
 
 Seed the **starter motion calibration** so the recorder begins on a tight,
 bee-sized blob-area window instead of the wide-open code defaults. Without this
@@ -1266,6 +1279,7 @@ monitor or Raspberry Pi Connect screen sharing.
 |-------|----------|
 | Camera not detected | Check ribbon cable, reboot if camera wasn't connected at boot |
 | Recorder not starting | `systemctl status beemonitor-recorder.service`; check journal for errors |
+| Recorder active but "permission denied" saving video | Output tree is root-owned (`makeDirectories.py` or a file copy run with `sudo`). Fix: `sudo chown -R beemonitor:beemonitor /home/beemonitor/Desktop/cameraOutput` then restart the recorder |
 | No uploads | Confirm cellular is up (`ping 8.8.8.8`); check `beemonitor-uploader` journal; verify `BEEMONITOR_DEVICE_KEY` |
 | Too many / too few clips | Force a recalibration (`main_motion.py --calibrate --force`); tune `BEEMONITOR_ROI` |
 | Calibration never written | Need bee-containing snippets first; check `beemonitor-calibrate.service` journal and that `ultralytics` is installed |
