@@ -402,8 +402,11 @@ BEEMONITOR_RECORD_DIR=/home/beemonitor/Desktop/cameraOutput/beeHotel
 # --- models: NONE of these are needed ---
 # The recorder uses the BeeMonitor weights committed in the repo's models/
 # automatically (nest_detection.pt for the hotel ROI, bee_tracking.pt for
-# calibration). Only set these to override the auto-resolved repo paths:
-# BEEMONITOR_MODELS_DIR=/home/beemonitor/BeeMonitor/models
+# calibration). Only set these to override the auto-resolved repo paths, e.g.
+# to point at a fine-tuned model (see "Where the model path comes from"):
+# BEEMONITOR_NEST_MODEL=/home/beemonitor/BeeMonitor/models/nest_detection.pt  # hotel/ROI detector (NOT *_HOTEL_MODEL)
+# BEEMONITOR_YOLO_MODEL=/home/beemonitor/BeeMonitor/models/bee_tracking.pt    # calibration bee detector
+# BEEMONITOR_MODELS_DIR=/home/beemonitor/BeeMonitor/models                    # or swap the whole folder
 # BEEMONITOR_HOTEL_ROI_DETECT=true        # set false to record on the whole frame
 
 # --- optional tuning (sensible defaults if omitted; see Configuration Reference) ---
@@ -598,6 +601,34 @@ only if you see clips clipped short or too much background motion triggering.
 >
 > The models ship in the repo, so a `git pull` on the Pi is all that's needed —
 > the recorder picks them up from `<repo>/models/` with no env to set.
+
+> **Where the model path comes from (and using a fine-tuned model).** The paths
+> are **not hardcoded** — they resolve in three tiers, most specific first, so a
+> fine-tuned model can always be swapped in *without editing code*:
+>
+> 1. **`BEEMONITOR_NEST_MODEL`** (and `BEEMONITOR_YOLO_MODEL`) — a full path to a
+>    single `.pt`. Point this at your fine-tuned weights, anywhere on disk.
+> 2. **`BEEMONITOR_MODELS_DIR`** — swap the whole folder, keeping the filenames
+>    `nest_detection.pt` / `bee_tracking.pt`.
+> 3. **Default** — `models/` resolved *relative to the source file*
+>    (`Path(__file__).parent.parent / "models"` in `main_motion.py`), **not** an
+>    absolute literal. Clone the repo anywhere and it still finds its own `models/`.
+>
+> So to run a fine-tuned hotel detector, set the path and restart the recorder:
+> ```ini
+> # in /etc/beemonitor/uploader.env
+> BEEMONITOR_NEST_MODEL=/home/beemonitor/BeeMonitor/models/nest_detection.pt
+> ```
+> ```bash
+> sudo systemctl restart beemonitor-recorder
+> journalctl -u beemonitor-recorder -n 20 --no-pager | grep "hotel ROI"
+> ```
+> ⚠️ The variable is **`BEEMONITOR_NEST_MODEL`** — there is **no**
+> `BEEMONITOR_HOTEL_MODEL` (a common mistake; that name is silently ignored).
+> Confirm the new model boxes the hotel tightly in the `hotel ROI from …` log
+> line — a full-frame box (`(0,0,W,H)`) at low confidence means the detector
+> isn't confining anything; raise `BEEMONITOR_NEST_CONF` or pin a manual
+> `BEEMONITOR_ROI` instead.
 
 > **Telemetry is JSON-only and cheap**, so the 60s beat (fast offline detection)
 > costs almost nothing on cellular. The **activity window** is separate
