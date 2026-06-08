@@ -226,7 +226,7 @@ sudo chmod 600 /etc/beemonitor/uploader.env
 #    switch — Telit LE910C4-NF uses AT#USBCFG, not Quectel's AT+QCFG).
 #    First confirm the modem enumerated in QMI mode (else do Step 10.1 first):
 lsusb | grep -i 1bc7:1201 && ls /dev/cdc-wdm0   # Telit modem + QMI control node
-sudo systemctl disable --now ModemManager.service          # fights manual QMI
+sudo systemctl disable --now ModemManager.service 2>/dev/null || true  # fights QMI; harmless if not installed
 # The sample already sets APN=super — the APN for the Sixfab SIM (Sixfab
 # resells the Twilio Super SIM). So for a Sixfab SIM the cp is all you need;
 # only nano the file if you're on a different carrier (hologram, soracom.io, …).
@@ -888,8 +888,11 @@ and [Setting up a data connection over QMI](https://docs.sixfab.com/page/setting
 
 ```bash
 sudo apt install -y libqmi-utils udhcpc
-# ModemManager fights manual QMI control — turn it off:
-sudo systemctl disable --now ModemManager.service
+# ModemManager fights manual QMI control — turn it off. The `|| true` is there
+# because many Pi OS images don't ship ModemManager at all; a "Unit
+# ModemManager.service does not exist" error just means it's already absent
+# (which is fine — nothing to disable), so don't let it stop the script.
+sudo systemctl disable --now ModemManager.service 2>/dev/null || true
 ```
 
 ### 10.3 Set the APN
