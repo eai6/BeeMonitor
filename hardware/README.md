@@ -159,12 +159,14 @@ layers:
 | `beemonitor-uploader.service` | `uploader.py` | Streams snippets to S3 — **WiFi-gated** (video waits for WiFi) |
 | `beemonitor-calibrate.timer` → `.service` | `main_motion.py --calibrate` | Daily (15:00): learns the bee blob-size window from recorded snippets with YOLO |
 
-All read configuration from `/etc/beemonitor/uploader.env`. Two paths to install
-them: the **[Quick Install](#quick-install-cellular-field-unit)** copy-paste
-recipe below (everything in one go), or the step-by-step **[Steps 1–7](#step-1-download-source-code)**
-+ **[Step 10](#step-10-cellular-connectivity-sixfab-4g-lte)** walkthrough. Either
-way, **[Manage all services](#manage-all-services)** is the single reference for
-enabling, checking, and restarting the whole set once installed.
+All read configuration from `/etc/beemonitor/uploader.env`. Both paths assume the
+Pi is already running Raspberry Pi OS — see **[Step 0](#step-0-flash-raspberry-pi-os)**
+to flash it first. Then pick one: the **[Quick Install](#quick-install-cellular-field-unit)**
+copy-paste recipe below (everything in one go), or the step-by-step
+**[Steps 0–7](#step-0-flash-raspberry-pi-os)** + **[Step 10](#step-10-cellular-connectivity-sixfab-4g-lte)**
+walkthrough. Either way, **[Manage all services](#manage-all-services)** is the
+single reference for enabling, checking, and restarting the whole set once
+installed.
 
 > **Split transport (cost control).** A tiny JSON telemetry beat goes over **cellular**
 > hourly (tiny — see the dashboard to know the unit is alive); bulk **video is
@@ -174,9 +176,11 @@ enabling, checking, and restarting the whole set once installed.
 
 ### Quick Install (cellular field unit)
 
-For a fast (re)deploy on a Pi that already has the camera focused and WittyPi
-set up. Run the blocks below top-to-bottom; the only manual steps are editing the
-env file and bringing up the modem. The detailed walkthrough follows in Steps 1–7.
+For a fast (re)deploy on a Pi that already has Raspberry Pi OS flashed (with the
+`beemonitor` user — see [Step 0](#step-0-flash-raspberry-pi-os)), the camera
+focused, and WittyPi set up. Run the blocks below top-to-bottom; the only manual
+steps are editing the env file and bringing up the modem. The detailed
+walkthrough follows in Steps 1–7.
 
 ```bash
 # 1. Code
@@ -256,6 +260,59 @@ journalctl -u beemonitor-uploader.service -f   # watch snippets upload to S3
 > **WiFi / bench unit?** Skip steps 5, the two cellular `cp` lines in step 6, and
 > the `cellular-firewall.service cellular.service` line in step 7. The app layer
 > works over any network — it just needs a route to the internet.
+
+### Step 0: Flash Raspberry Pi OS
+
+Start from a clean OS image. Everything below — the `picamera2` camera stack, the
+CPU PyTorch wheels, and **every hardcoded path in this guide** — assumes
+**Raspberry Pi OS (Bookworm), 64-bit**, with a user named **`beemonitor`** whose
+home is `/home/beemonitor`. Match these exactly or the systemd units (which run
+as `User=beemonitor` and `ExecStart=/home/beemonitor/BeeMonitor/...`) won't find
+their paths.
+
+> **Why these choices.** `picamera2` ships only on Bookworm. **64-bit** is
+> required — the CPU PyTorch wheels used for calibration are `aarch64`/64-bit only
+> (a 32-bit OS can't run YOLO at all). A Raspberry Pi 4 (4GB) on a 256GB card is
+> the reference build.
+
+1. **Install Raspberry Pi Imager** on your laptop from
+   <https://www.raspberrypi.com/software/> and insert the microSD card.
+
+2. **Choose the OS and storage:**
+   - *Device:* Raspberry Pi 4
+   - *Operating System:* **Raspberry Pi OS (64-bit)** — the Bookworm release.
+     (Lite is fine for a headless field unit; pick the Desktop image only if you
+     want Raspberry Pi Connect *screen* sharing, see [Step 9](#step-9-set-up-raspberry-pi-connect-remote-access).)
+   - *Storage:* your 256GB microSD card.
+
+3. **Edit settings before writing** (gear icon / "Edit Settings"). This bakes in
+   the headless config so the Pi is reachable on first boot — no monitor needed:
+   - **Hostname:** e.g. `beemonitor` (or `beemonitor-01` for a fleet)
+   - **Username:** **`beemonitor`** ← must be exactly this; **Password:** set a strong one
+   - **WiFi:** your bench SSID + country (so first-boot pip/apt and uploads work)
+   - **Locale / timezone:** set your timezone
+   - On the **Services** tab: **Enable SSH** → *Use password authentication*
+     (or paste a public key for key-only login).
+
+4. **Write**, then put the card in the Pi and power on. Find it on the network and
+   SSH in:
+   ```bash
+   ssh beemonitor@beemonitor.local        # or ssh beemonitor@<pi-ip>
+   ```
+
+5. **Update the OS and confirm the basics** before installing anything:
+   ```bash
+   sudo apt update && sudo apt full-upgrade -y
+   getconf LONG_BIT        # must print 64
+   whoami                  # must print beemonitor
+   echo $HOME              # must print /home/beemonitor
+   ```
+   ✅ When SSH works, `LONG_BIT` is `64`, and the user/home are `beemonitor`,
+   continue to Step 1.
+
+> Connect the **HQ Camera ribbon before first boot** — the camera is only probed
+> at boot. On Bookworm the camera stack auto-enables; verify later in Step 4 with
+> `libcamera-hello --list-cameras`.
 
 ### Step 1: Download Source Code
 
