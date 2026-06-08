@@ -850,6 +850,10 @@ This is what keeps a remote, off-grid unit reachable. On cellular it carries the
 monitor the unit; bulk **video is WiFi-gated** and held on disk until WiFi
 appears (see [Device monitoring & telemetry](#device-monitoring--telemetry)).
 
+> 🔧 **Link or DNS not working?** See **[cellular/DIAGNOSTICS.md](cellular/DIAGNOSTICS.md)**
+> — a stage-by-stage runbook (modem → registration → IP type → link → routing →
+> DNS → firewall) with a one-shot health check and the fix for each failure.
+
 > **The transport is already built.** Both the telemetry beat and (over WiFi)
 > the video upload talk to AWS through the BeeMonitor API — network-agnostic,
 > so once the modem gives the Pi internet, telemetry "just works" with **no
