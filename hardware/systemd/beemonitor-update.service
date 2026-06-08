@@ -1,0 +1,14 @@
+[Unit]
+Description=BeeMonitor remote update — apply phase (restart + health-check + rollback)
+Documentation=https://github.com/eai6/BeeMonitor
+# Triggered on demand by update.sh's fetch phase (NOT enabled at boot). Runs as
+# its own unit so it survives the telemetry restart it performs, and offline (no
+# network) — the fetch phase already downloaded everything in telemetry's cgroup.
+
+[Service]
+Type=oneshot
+ExecStart=/home/beemonitor/BeeMonitor/hardware/update.sh apply
+# Give the restarted services time to come up / roll back without being killed.
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal

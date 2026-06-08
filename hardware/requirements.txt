@@ -1,0 +1,12 @@
+# Runtime pip dependencies for the FIELD Pi (installed into hardware/venv).
+#
+# This is intentionally tiny and is NOT the repo-root requirements.txt (that file
+# is the full cloud/web/desktop stack). The remote updater (update.sh) reinstalls
+# from THIS file when it changes between commits.
+#
+# torch / torchvision are deliberately NOT listed: on the Pi they must be the
+# CPU (aarch64) wheels from https://download.pytorch.org/whl/cpu or YOLO inference
+# SIGILLs. They are installed once at setup and are NOT touched by remote updates
+# (do torch/model changes over WiFi). See hardware/README.md.
+requests        # uploader + telemetry
+ultralytics     # calibration only (pulls torch, which must already be the CPU wheel)

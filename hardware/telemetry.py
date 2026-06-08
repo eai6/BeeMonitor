@@ -76,6 +76,13 @@ WIFI_IFACE = os.environ.get("BEEMONITOR_WIFI_IFACE", "wlan0")
 # "Take photo" latency low without raising the health-beat cadence.
 COMMAND_POLL_SECONDS = int(os.environ.get("BEEMONITOR_COMMAND_POLL_SECONDS", "8"))
 
+# Remote software update (the "update" command). REPO_DIR is the git checkout this
+# file lives in; the updater and the status file it writes live there/below.
+REPO_DIR = Path(__file__).resolve().parent.parent
+UPDATE_SCRIPT = REPO_DIR / "hardware" / "update.sh"
+STATE_DIR = Path(os.environ.get("BEEMONITOR_STATE_DIR", "/home/beemonitor/.beemonitor"))
+UPDATE_STATUS_FILE = STATE_DIR / "update-status.json"
+
 logging.basicConfig(
     format="%(asctime)s %(levelname)s telemetry %(message)s", level=logging.INFO,
 )
@@ -205,6 +212,20 @@ def _video_stats(window_seconds: int) -> dict:
     }
 
 
+def _git_commit() -> str:
+    """Short SHA of the deployed code, so the dashboard can show the version."""
+    r = _run(["git", "-C", str(REPO_DIR), "rev-parse", "--short", "HEAD"])
+    return r.stdout.strip() if r and r.returncode == 0 else ""
+
+
+def _update_status() -> dict | None:
+    """Last remote-update result (written by update.sh), reported in the beat."""
+    try:
+        return json.loads(UPDATE_STATUS_FILE.read_text())
+    except (OSError, ValueError):
+        return None
+
+
 def collect_metrics() -> dict:
     m: dict = {}
 
@@ -249,6 +270,14 @@ def collect_metrics() -> dict:
 
     if SCHEDULE_WINDOW:
         m["schedule_window"] = SCHEDULE_WINDOW
+
+    # Deployed code version + last remote-update result, for the dashboard.
+    commit = _git_commit()
+    if commit:
+        m["code_commit"] = commit
+    upd = _update_status()
+    if upd:
+        m["update"] = upd
 
     return m
 
@@ -415,10 +444,35 @@ def _wifi_connect(params: dict) -> None:
                     (getattr(r, "stderr", "") or "").strip()[:200])
 
 
+def _start_update(params: dict) -> None:
+    """Spawn the updater's fetch phase as a detached child.
+
+    The child stays in THIS service's cgroup, so its git/pip traffic is allowed
+    through the cellular firewall. We return immediately (don't block the beat
+    loop while it fetches); the updater hands off to beemonitor-update.service to
+    restart + health-check + roll back. See hardware/update.sh.
+    """
+    ref = (params.get("ref") or "origin/main").strip() or "origin/main"
+    if not UPDATE_SCRIPT.exists():
+        log.warning("command: update — %s missing, ignoring", UPDATE_SCRIPT)
+        return
+    log.info("command: update ref=%s — spawning fetch phase", ref)
+    try:
+        subprocess.Popen(
+            ["bash", str(UPDATE_SCRIPT), "fetch", ref],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True, cwd=str(REPO_DIR),
+        )
+    except OSError as e:
+        log.warning("command: update — failed to spawn updater: %s", e)
+
+
 def _handle_command(cmd: str, params: dict) -> None:
     if cmd == "capture_image":
         log.info("command: capture_image")
         _capture_and_upload()
+    elif cmd == "update":
+        _start_update(params)
     elif cmd == "wifi_on":
         log.info("command: wifi_on")
         _nmcli(["radio", "wifi", "on"])
