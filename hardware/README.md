@@ -482,6 +482,18 @@ sudo cp systemd/beemonitor-calibrate.timer   /etc/systemd/system/
 sudo systemctl daemon-reload
 ```
 
+**Grant the telemetry service permission to control WiFi.** The dashboard's WiFi
+on/off/connect buttons work by the telemetry service running `nmcli` — but it runs
+as the `beemonitor` user, and radio state changes need root. Add a NOPASSWD
+sudoers rule scoped to `nmcli` only (without this, the dashboard WiFi toggle
+silently does nothing — `sudo -n nmcli` fails for lack of the rule):
+
+```bash
+echo 'beemonitor ALL=(root) NOPASSWD: /usr/bin/nmcli' | sudo tee /etc/sudoers.d/beemonitor-nmcli
+sudo chmod 440 /etc/sudoers.d/beemonitor-nmcli
+sudo visudo -cf /etc/sudoers.d/beemonitor-nmcli   # syntax-check; must print "parsed OK"
+```
+
 ### Step 7: Start and Enable on Boot
 
 ```bash
@@ -1310,6 +1322,7 @@ monitor or Raspberry Pi Connect screen sharing.
 | No uploads | Confirm cellular is up (`ping 8.8.8.8`); check `beemonitor-uploader` journal; verify `BEEMONITOR_DEVICE_KEY` |
 | `wwan0` no IP / 100% loss; QMI error 14 `CallFailed`, reason `ipv4-only-allowed` | Carrier grants IPv4 only but the call asked for dual-stack. Add `IP_TYPE=4` to `/etc/qmi-network.conf`, then re-run `cellular-up.sh`. (If `CallFailed` with `service-option-not-subscribed`, the SIM isn't activated — activate it in Sixfab Connect.) |
 | `ping 8.8.8.8` works but `ping google.com` fails (DNS) | `/etc/resolv.conf` is still the managed symlink (stub `127.0.0.53`). Re-pin as a real file: `sudo chattr -i /etc/resolv.conf; sudo rm -f /etc/resolv.conf; printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' \| sudo tee /etc/resolv.conf; sudo chattr +i /etc/resolv.conf` (see Step 10.4) |
+| Dashboard WiFi on/off/connect does nothing | Missing nmcli sudoers rule, so telemetry's `sudo -n nmcli` fails. Add it: `echo 'beemonitor ALL=(root) NOPASSWD: /usr/bin/nmcli' \| sudo tee /etc/sudoers.d/beemonitor-nmcli && sudo chmod 440 /etc/sudoers.d/beemonitor-nmcli` (Step 6). Check `journalctl -u beemonitor-telemetry \| grep -i wifi` |
 | Too many / too few clips | Force a recalibration (`main_motion.py --calibrate --force`); tune `BEEMONITOR_ROI` |
 | Calibration never written | Need bee-containing snippets first; check `beemonitor-calibrate.service` journal and that `ultralytics` is installed |
 | WittyPi not detected | Run `i2cdetect -y 1`, should show device at 0x08 |
