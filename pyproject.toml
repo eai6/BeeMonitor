@@ -10,11 +10,11 @@ readme = "README.md"
 authors = [
     {name = "Edward Amoah", email = "eai6@psu.edu"}
 ]
-license = {text = "MIT"}
+license = {text = "AGPL-3.0-or-later"}
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
@@ -52,13 +52,16 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/bee-monitor"
-Documentation = "https://github.com/yourusername/bee-monitor/docs"
-Repository = "https://github.com/yourusername/bee-monitor"
-"Bug Tracker" = "https://github.com/yourusername/bee-monitor/issues"
+Homepage = "https://github.com/eai6/BeeMonitor"
+Documentation = "https://github.com/eai6/BeeMonitor"
+Repository = "https://github.com/eai6/BeeMonitor"
+"Bug Tracker" = "https://github.com/eai6/BeeMonitor/issues"
 
-[project.scripts]
-bee-monitor = "bee_monitor.cli:main"
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.black]
 line-length = 100
@@ -108,7 +111,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = [
     "--verbose",
-    "--cov=bee_monitor",
+    "--cov=beemonitor",
     "--cov-report=html",
     "--cov-report=term-missing",
 ]

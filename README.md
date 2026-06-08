@@ -46,11 +46,25 @@ Evaluated on 110 minutes of video containing 300 manually annotated foraging eve
 
 ```bash
 git clone https://github.com/eai6/BeeMonitor.git
-cd beemonitor
+cd BeeMonitor
+
+# Install the CPU build of PyTorch first (avoids pulling the large
+# NVIDIA/CUDA packages, and is required on Raspberry Pi — the default
+# wheels SIGILL on the Pi's ARM CPU).
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+# Then install BeeMonitor and the rest of its dependencies.
 pip install -e .
 ```
 
-This installs all dependencies including PyTorch, Ultralytics, OpenCV, and scikit-learn.
+This installs all remaining dependencies including Ultralytics, OpenCV, and scikit-learn.
+
+> **Note:** Always install `torch`/`torchvision` from the CPU index above before
+> `pip install -e .`. If you let pip resolve PyTorch on its own it will download
+> the CUDA build, which wastes several GB on machines without an NVIDIA GPU and
+> crashes YOLO inference on the Raspberry Pi (illegal-instruction / `status=4`).
+> On a machine with a real NVIDIA GPU, install the matching CUDA build from
+> <https://pytorch.org/get-started/locally/> instead.
 
 ### Verify Installation
 
@@ -198,9 +212,3 @@ AGPL License. See [LICENSE](LICENSE) for details.
 - **Author:** Edward Amoah
 - **Email:** eai6@psu.edu
 - **Lab:** [Grozinger Lab](https://www.grozingerlab.com/), INSECT-NET, Penn State University
-
-Roar ICDS Cloud working directory;
-/storage/work/eai6/eai6/work/eai6/BeeMonitor/
-
-
-Username: edwardamoah                                                                                                               Password: BeeMonitor2025

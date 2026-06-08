@@ -173,7 +173,11 @@ sudo apt update && sudo apt upgrade -y
 sudo apt install -y python3-picamera2 python3-opencv ffmpeg python3-venv libqmi-utils
 python3 -m venv --system-site-packages ~/BeeMonitor/hardware/venv
 ~/BeeMonitor/hardware/venv/bin/pip install --upgrade pip
-~/BeeMonitor/hardware/venv/bin/pip install requests ultralytics   # ultralytics = calibration only
+~/BeeMonitor/hardware/venv/bin/pip install requests
+# ultralytics = calibration only. Install the CPU torch wheels FIRST, or YOLO
+# inference SIGILLs on the Pi's ARM CPU (illegal instruction / status=4).
+~/BeeMonitor/hardware/venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+~/BeeMonitor/hardware/venv/bin/pip install ultralytics
 
 # 3. Output directories
 ~/BeeMonitor/hardware/venv/bin/python makeDirectories.py
@@ -250,6 +254,12 @@ python3 -m venv --system-site-packages ~/BeeMonitor/hardware/venv
 ~/BeeMonitor/hardware/venv/bin/pip install requests          # uploader + telemetry
 # Calibration ONLY (heavy — pulls in PyTorch). Needed by the calibrate timer.
 # Skip if you'll calibrate on another machine instead.
+#
+# Install the CPU build of torch/torchvision FIRST, from the PyTorch CPU index.
+# This is REQUIRED on the Pi: the default wheels are not built for the Pi's ARM
+# CPU and YOLO inference SIGILLs (illegal instruction / status=4). Installing
+# ultralytics afterwards reuses these CPU wheels instead of pulling its own.
+~/BeeMonitor/hardware/venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 ~/BeeMonitor/hardware/venv/bin/pip install ultralytics
 ```
 
