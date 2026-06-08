@@ -1123,6 +1123,58 @@ appear only when you request one on-demand (picture / live view).
 - The uploader retries with backoff, so brief signal drops self-heal — clips
   accumulate on disk and upload when signal returns.
 
+## Remote Software Updates (over cellular)
+
+A field unit can update its code remotely — no site visit, no WiFi — triggered by
+an `update` command from the dashboard (defaults to `origin/main`). It's designed
+around the cellular firewall and the fact that an update must restart telemetry
+itself, so it runs in **two phases**:
+
+| Phase | Runs as | Job |
+|-------|---------|-----|
+| **fetch** (`update.sh fetch <ref>`) | spawned by `beemonitor-telemetry` (so it's in the firewall-allowed cgroup) | `git fetch` + `reset` + `pip install` if `hardware/requirements.txt` changed. **All network happens here.** |
+| **apply** (`beemonitor-update.service`) | its own oneshot unit (root, offline) | restart services, health-check, and **roll back to the previous commit** if they don't come up. Separate unit so restarting telemetry can't kill the updater. |
+
+The beat reports `code_commit` (deployed SHA) and the last `update` result, so the
+dashboard shows each unit's version and whether the last update succeeded or
+rolled back.
+
+**Scope:** code + the Pi's pip deps (`hardware/requirements.txt`). **`torch`,
+`torchvision`, and the model weights are intentionally NOT updated remotely** —
+they're CPU-wheel/large and must be changed over WiFi (a non-CPU torch SIGILLs
+the Pi). A commit that only bumps those won't be pulled usefully over cellular.
+
+### Install (in addition to Step 6)
+
+```bash
+cd ~/BeeMonitor/hardware
+chmod +x update.sh
+sudo cp systemd/beemonitor-update.service /etc/systemd/system/
+sudo systemctl daemon-reload     # do NOT enable it — it's started on demand
+# Let the telemetry user trigger the apply phase (scoped to this one unit):
+echo 'beemonitor ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block beemonitor-update.service' \
+    | sudo tee /etc/sudoers.d/beemonitor-update
+sudo chmod 440 /etc/sudoers.d/beemonitor-update
+sudo visudo -cf /etc/sudoers.d/beemonitor-update   # must print "parsed OK"
+```
+
+### Trigger / verify
+
+The dashboard issues the `update` command (or queue `pending_command="update"`,
+`command_params={"ref": "origin/main"}`). To run it by hand on the unit:
+
+```bash
+bash ~/BeeMonitor/hardware/update.sh fetch origin/main
+journalctl -u beemonitor-update.service -n 30 --no-pager   # apply-phase log
+cat ~/.beemonitor/update-status.json                       # {state: ok|rolledback|idle, commit, ...}
+git -C ~/BeeMonitor rev-parse --short HEAD                 # current version
+```
+
+> Auto-rollback: the apply phase snapshots the current commit first; if
+> `beemonitor-recorder`/`-uploader`/`-telemetry` aren't `active` ~15s after the
+> restart, it `git reset`s back and restarts again, and the beat reports
+> `rolledback` — so a bad push can't strand an unreachable unit.
+
 ## Testing & Verification
 
 Run these stages **in order** before relying on the unit in the field. Each one
