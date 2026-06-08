@@ -135,6 +135,15 @@ DETECT_EVERY_N = max(1, _env_int("BEEMONITOR_DETECT_EVERY_N", 2))
 # MOG2 / blob params — ported from BlobDetector defaults, scaled for lores.
 MOG2_HISTORY = _env_int("BEEMONITOR_MOG2_HISTORY", 500)
 MOG2_VAR_THRESHOLD = _env_int("BEEMONITOR_MOG2_VAR", 16)
+# Treat cast shadows and soft illumination changes as background, not motion.
+# With this on, MOG2 classifies shadow pixels (same chromaticity as background
+# but darker — moving shadows, the hotel's own shadow drifting with the sun,
+# passing clouds) separately, and we threshold them out before counting blobs.
+# This is the main lever against shadow / background-light false triggers.
+DETECT_SHADOWS = _env_bool("BEEMONITOR_DETECT_SHADOWS", True)
+# MOG2 shadow tau (0..1): a pixel is shadow if its intensity is within
+# [tau*bg, bg]. Lower = more aggressive shadow rejection. 0.5 is OpenCV default.
+SHADOW_THRESHOLD = _env_float("BEEMONITOR_SHADOW_THRESHOLD", 0.5)
 # Periodically rebuild the background model from scratch so the gate tracks
 # slow scene changes (sun/shadow drift, a moved leaf) in real time instead of
 # letting them bleed in through MOG2's long history. The model is also fresh at
@@ -227,11 +236,13 @@ class MotionGate:
     def __init__(self, roi=None, history=MOG2_HISTORY,
                  var_threshold=MOG2_VAR_THRESHOLD, morph_kernel=MORPH_KERNEL,
                  morph_iters=MORPH_ITERS, min_area=MIN_BLOB_AREA,
-                 max_area=MAX_BLOB_AREA, min_blobs=MIN_MOTION_BLOBS):
+                 max_area=MAX_BLOB_AREA, min_blobs=MIN_MOTION_BLOBS,
+                 detect_shadows=DETECT_SHADOWS, shadow_threshold=SHADOW_THRESHOLD):
         self.var_threshold = var_threshold
         self.history = history
-        self.bg = cv2.createBackgroundSubtractorMOG2(
-            history=history, varThreshold=var_threshold, detectShadows=False)
+        self.detect_shadows = detect_shadows
+        self.shadow_threshold = shadow_threshold
+        self.bg = self._make_bg()
         self._morph_kernel = morph_kernel
         self.kernel = cv2.getStructuringElement(
             cv2.MORPH_ELLIPSE, (morph_kernel, morph_kernel))
@@ -242,6 +253,15 @@ class MotionGate:
         self.roi = roi  # (x1, y1, x2, y2) in lores coords, or None
         self.last_mask = None
         self.last_blobs = []   # list of (x, y, w, h, area) for kept blobs
+
+    def _make_bg(self):
+        """Build a MOG2 subtractor with the current shadow/threshold settings."""
+        bg = cv2.createBackgroundSubtractorMOG2(
+            history=self.history, varThreshold=self.var_threshold,
+            detectShadows=self.detect_shadows)
+        if self.detect_shadows:
+            bg.setShadowThreshold(self.shadow_threshold)
+        return bg
 
     def set_var_threshold(self, value: float) -> None:
         self.var_threshold = value
@@ -263,6 +283,10 @@ class MotionGate:
         gray = self._crop(gray)
 
         fg = self.bg.apply(gray)
+        if self.detect_shadows:
+            # MOG2 marks shadow pixels as 127 (vs 255 for hard foreground); drop
+            # them so moving shadows / illumination changes don't count as motion.
+            _, fg = cv2.threshold(fg, 200, 255, cv2.THRESH_BINARY)
         fg = cv2.morphologyEx(fg, cv2.MORPH_OPEN, self.kernel, iterations=self.morph_iters)
 
         contours, _ = cv2.findContours(fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -289,13 +313,12 @@ class MotionGate:
     def reset(self) -> None:
         """Discard and rebuild the background model from scratch.
 
-        Keeps the current var_threshold (calibration may have tuned it). The
-        caller should re-warm for a few seconds before trusting motion again,
-        since the fresh model treats the first frames as all-foreground.
+        Keeps the current var_threshold (calibration may have tuned it) and the
+        shadow setting. The caller should re-warm for a few seconds before
+        trusting motion again, since the fresh model treats the first frames as
+        all-foreground.
         """
-        self.bg = cv2.createBackgroundSubtractorMOG2(
-            history=self.history, varThreshold=self.var_threshold,
-            detectShadows=False)
+        self.bg = self._make_bg()
 
 
 # ---------------------------------------------------------------------------

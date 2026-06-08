@@ -636,6 +636,8 @@ required; everything else has a sensible default.
 | `BEEMONITOR_NEST_CONF` | `0.25` | Confidence threshold for the hotel/nest detector |
 | `BEEMONITOR_HOTEL_PAD_X` / `_Y` | `100` / `50` | Padding (base px @ 1920×1080, scaled) around the detected hotel |
 | `BEEMONITOR_BG_RESET_INTERVAL` | `600` | Rebuild the MOG2 background model this often (s) so the gate tracks sun/shadow drift in real time. Also fresh at startup. `0` = off |
+| `BEEMONITOR_DETECT_SHADOWS` | `true` | Classify cast shadows / soft light changes as background (not motion) and drop them before counting blobs. The main lever against shadow & background-light false triggers. `false` ⇒ shadows count as motion |
+| `BEEMONITOR_SHADOW_THRESHOLD` | `0.5` | MOG2 shadow tau (0–1). **Lower = more aggressive** shadow rejection (wider shadow band); **raise** toward `0.7` if real bees are being missed as shadows |
 | `BEEMONITOR_WIFI_IFACE` | `wlan0` | WiFi interface used by the dashboard's WiFi on/off/connect controls |
 | `BEEMONITOR_YOLO_MODEL` | `<models>/bee_tracking.pt` | BeeMonitor's bee/wasp detector, used by the calibrate job |
 | `BEEMONITOR_CALIB_MAX_AGE_DAYS` | `7` | Skip recalibration if `calibration.json` is younger than this |
@@ -648,7 +650,11 @@ required; everything else has a sensible default.
 | `BEEMONITOR_WIFI_ONLY_VIDEO` | `true` | Hold video off cellular — upload only when WiFi is up |
 
 Tuning is rarely needed — start with defaults and adjust pre/post-roll or `ROI`
-only if you see clips clipped short or too much background motion triggering.
+only if you see clips clipped short or too much background motion triggering. If
+**shadows or changing light** trigger clips, shadow rejection (`DETECT_SHADOWS`)
+is on by default; you can A/B it offline on a recorded clip with
+`motion_replay.py` (`BEEMONITOR_DETECT_SHADOWS=false …` vs `=true …`) and compare
+the "motion fired on N frames" line.
 
 > **Detection mirrors cloud BeeMonitor.** The recorder uses the same committed
 > weights in `models/` (no `yolo11n` anymore), resolved automatically:
@@ -1324,6 +1330,7 @@ monitor or Raspberry Pi Connect screen sharing.
 | `ping 8.8.8.8` works but `ping google.com` fails (DNS) | `/etc/resolv.conf` is still the managed symlink (stub `127.0.0.53`). Re-pin as a real file: `sudo chattr -i /etc/resolv.conf; sudo rm -f /etc/resolv.conf; printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' \| sudo tee /etc/resolv.conf; sudo chattr +i /etc/resolv.conf` (see Step 10.4) |
 | Dashboard WiFi on/off/connect does nothing | Missing nmcli sudoers rule, so telemetry's `sudo -n nmcli` fails. Add it: `echo 'beemonitor ALL=(root) NOPASSWD: /usr/bin/nmcli' \| sudo tee /etc/sudoers.d/beemonitor-nmcli && sudo chmod 440 /etc/sudoers.d/beemonitor-nmcli` (Step 6). Check `journalctl -u beemonitor-telemetry \| grep -i wifi` |
 | Too many / too few clips | Force a recalibration (`main_motion.py --calibrate --force`); tune `BEEMONITOR_ROI` |
+| Clips triggered by shadows / changing light | Shadow rejection is on by default (`BEEMONITOR_DETECT_SHADOWS=true`); if still triggering, lower `BEEMONITOR_SHADOW_THRESHOLD` toward `0.4`. If real bees get missed, raise it toward `0.7`. Verify offline with `motion_replay.py` |
 | Calibration never written | Need bee-containing snippets first; check `beemonitor-calibrate.service` journal and that `ultralytics` is installed |
 | WittyPi not detected | Run `i2cdetect -y 1`, should show device at 0x08 |
 | Storage full | Prune already-uploaded clips (those with a `.uploaded` sidecar) |
