@@ -4,6 +4,7 @@ import re
 
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.db.models import Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.views import View
@@ -170,11 +171,17 @@ class VideoDetailView(LoginRequiredMixin, DetailView):
     context_object_name = "video"
 
     def get_queryset(self):
-        return Video.objects.filter(user=self.request.user)
+        # Own videos, plus videos from a device shared with me (view-only).
+        u = self.request.user
+        return Video.objects.filter(
+            Q(user=u) | Q(device__shares__user=u)
+        ).distinct()
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         video = self.object
+        # Shared (non-owner) viewers see the video read-only — hide owner actions.
+        ctx["is_owner"] = video.user_id == self.request.user.id
         blob_path = video.storage_key
 
         # Presigned URL for playback (external-S3-ingested videos have no URL

@@ -24,6 +24,11 @@
       {% else %}
         <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-red-100 text-red-800"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>Offline</span>
       {% endif %}
+      {% if role == 'manager' %}
+        <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800" title="Shared with you with management access">Shared · Manager</span>
+      {% elif role == 'viewer' %}
+        <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600" title="Shared with you (data only)">Shared · Viewer</span>
+      {% endif %}
     </div>
     <p class="text-sm text-gray-500 mt-1">
       {{ device.location|default:"No location set" }}
@@ -42,7 +47,9 @@
     </p>
   </div>
   <div class="flex gap-2">
+    {% if can_manage %}
     <a href="{% url 'devices:edit' device.pk %}" class="px-3 py-1.5 bg-white border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Edit</a>
+    {% endif %}
   </div>
 </div>
 
@@ -152,6 +159,7 @@
     Video uploads only flow over WiFi; telemetry stays on cellular, so these
     commands reach the device even with WiFi off. It acts on its next check-in.
   </p>
+  {% if can_manage %}
   <div class="flex flex-wrap items-end gap-x-3 gap-y-2">
     <form method="post" action="{% url 'devices:wifi' device.pk %}">
       {% csrf_token %}
@@ -179,6 +187,9 @@
       <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Connect</button>
     </form>
   </div>
+  {% else %}
+  <p class="text-xs text-gray-400 italic">Read-only — WiFi control requires manager access.</p>
+  {% endif %}
 </div>
 
 <!-- Software / remote update -->
@@ -213,6 +224,7 @@
   {% endif %}
   {% endwith %}
 
+  {% if can_manage %}
   <p class="text-xs text-gray-400 mb-3">
     Pulls the latest code over cellular and restarts the services, then
     automatically rolls back to the previous version if they don't come up.
@@ -225,6 +237,7 @@
     <input type="hidden" name="ref" value="origin/main">
     <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Update to latest</button>
   </form>
+  {% endif %}
 </div>
 
 <!-- Activity over time -->
@@ -246,9 +259,11 @@
           Activity with temperature &amp; precipitation overlaid — weather via
           <a href="https://open-meteo.com/" target="_blank" rel="noopener" class="hover:underline">Open-Meteo</a>
           for this device's coordinates. Times shown in your local timezone.
-        {% else %}
+        {% elif can_manage %}
           <a href="{% url 'devices:edit' device.pk %}" class="text-amber-600 hover:underline">Set the device location</a>
           to overlay temperature &amp; precipitation.
+        {% else %}
+          Set the device location (ask the owner) to overlay temperature &amp; precipitation.
         {% endif %}
       </p>
     {% else %}

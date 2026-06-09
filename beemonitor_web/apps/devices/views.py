@@ -12,9 +12,11 @@ from datetime import timedelta, timezone as dt_timezone
 
 from django.conf import settings
 from django.contrib import messages
+from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.cache import cache
-from django.db.models import Max
+from django.core.exceptions import PermissionDenied
+from django.db.models import Max, Q
 from django.db.models.functions import TruncDay, TruncHour
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
@@ -24,9 +26,21 @@ from django.views import View
 from django.views.generic import DetailView, FormView, ListView, TemplateView, UpdateView
 
 from .forms import DeviceCreateForm, DeviceEditForm
-from .models import Device
+from .models import Device, DeviceShare
 
 logger = logging.getLogger(__name__)
+
+
+def _device_or_403(user, pk, level="viewer") -> Device:
+    """Fetch a device the user can access at >= ``level``, else 404/403.
+
+    404 if the device doesn't exist; PermissionDenied (403) if it exists but the
+    user's role is below the required level. ``level`` is viewer|manager|owner.
+    """
+    device = get_object_or_404(Device, pk=pk)
+    if not device.can(user, level):
+        raise PermissionDenied("You don't have access to this device.")
+    return device
 
 def _is_online(device) -> bool:
     """Derived (not stored): has the device beaten recently enough to be 'online'?
@@ -136,7 +150,8 @@ class DeviceListView(LoginRequiredMixin, ListView):
     context_object_name = "devices"
 
     def get_queryset(self):
-        return Device.objects.filter(owner=self.request.user)
+        # Owned + shared devices.
+        return Device.accessible(self.request.user)
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -148,6 +163,7 @@ class DeviceListView(LoginRequiredMixin, ListView):
             device.latest_hb = latest
             device.storage_pct = latest.storage_pct if latest else None
             device.video_count = device.videos.count()
+            device.my_role = device.role_for(self.request.user)
         return ctx
 
 
@@ -158,11 +174,18 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
     context_object_name = "device"
 
     def get_queryset(self):
-        return Device.objects.filter(owner=self.request.user)
+        return Device.accessible(self.request.user)
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         device = self.object
+
+        # Role-based UI gating: viewers see data only; managers + owner see
+        # the maintenance controls.
+        role = device.role_for(self.request.user)
+        ctx["role"] = role
+        ctx["is_owner"] = role == "owner"
+        ctx["can_manage"] = device.can(self.request.user, "manager")
 
         latest = device.heartbeats.first()
         ctx["online"] = _is_online(device)
@@ -301,8 +324,19 @@ class DeviceEditView(LoginRequiredMixin, UpdateView):
     form_class = DeviceEditForm
     context_object_name = "device"
 
-    def get_queryset(self):
-        return Device.objects.filter(owner=self.request.user)
+    def get_object(self, queryset=None):
+        # Managers + owner can edit; only the owner sees sharing/delete (gated
+        # in the template via is_owner).
+        return _device_or_403(self.request.user, self.kwargs["pk"], "manager")
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        device = self.object
+        ctx["is_owner"] = device.owner_id == self.request.user.id
+        if ctx["is_owner"]:
+            ctx["shares"] = device.shares.select_related("user").all()
+            ctx["share_roles"] = DeviceShare.Role.choices
+        return ctx
 
     def form_valid(self, form):
         messages.success(self.request, f"Device '{form.instance.name}' updated.")
@@ -316,7 +350,7 @@ class DeviceRevokeView(LoginRequiredMixin, View):
     """Mark a device inactive — it can no longer authenticate."""
 
     def post(self, request, pk):
-        device = get_object_or_404(Device, pk=pk, owner=request.user)
+        device = _device_or_403(request.user, pk, "manager")
         device.is_active = False
         device.save(update_fields=["is_active"])
         messages.success(
@@ -330,7 +364,7 @@ class DeviceReactivateView(LoginRequiredMixin, View):
     """Un-revoke a device (re-enable an old key)."""
 
     def post(self, request, pk):
-        device = get_object_or_404(Device, pk=pk, owner=request.user)
+        device = _device_or_403(request.user, pk, "manager")
         device.is_active = True
         device.save(update_fields=["is_active"])
         messages.success(request, f"Device '{device.name}' reactivated.")
@@ -341,7 +375,7 @@ class DeviceDeleteView(LoginRequiredMixin, View):
     """Hard delete a device. Existing videos uploaded by it are preserved."""
 
     def post(self, request, pk):
-        device = get_object_or_404(Device, pk=pk, owner=request.user)
+        device = _device_or_403(request.user, pk, "owner")
         name = device.name
         device.delete()
         messages.success(request, f"Device '{name}' deleted.")
@@ -352,7 +386,7 @@ class DeviceRequestImageView(LoginRequiredMixin, View):
     """Queue a one-shot picture-on-demand; the device acts on its next beat."""
 
     def post(self, request, pk):
-        device = get_object_or_404(Device, pk=pk, owner=request.user)
+        device = _device_or_403(request.user, pk, "viewer")  # on-demand photo is data, not control
         device.pending_command = "capture_image"
         device.command_params = {}
         device.save(update_fields=["pending_command", "command_params"])
@@ -375,7 +409,7 @@ class DeviceWifiView(LoginRequiredMixin, View):
     }
 
     def post(self, request, pk):
-        device = get_object_or_404(Device, pk=pk, owner=request.user)
+        device = _device_or_403(request.user, pk, "manager")
         action = request.POST.get("action", "")
         if action not in self.VALID:
             messages.error(request, "Unknown WiFi action.")
@@ -421,7 +455,7 @@ class DeviceUpdateView(LoginRequiredMixin, View):
     """
 
     def post(self, request, pk):
-        device = get_object_or_404(Device, pk=pk, owner=request.user)
+        device = _device_or_403(request.user, pk, "manager")
         ref = (request.POST.get("ref") or "origin/main").strip() or "origin/main"
         device.pending_command = "update"
         device.command_params = {"ref": ref}
@@ -439,7 +473,7 @@ class DeviceLatestImageView(LoginRequiredMixin, View):
     """Latest on-demand image (presigned URL) — polled after a photo request."""
 
     def get(self, request, pk):
-        device = get_object_or_404(Device, pk=pk, owner=request.user)
+        device = _device_or_403(request.user, pk, "viewer")
         hb = device.heartbeats.exclude(image_storage_key="").first()
         if not hb:
             return JsonResponse({"url": None})
@@ -447,3 +481,55 @@ class DeviceLatestImageView(LoginRequiredMixin, View):
             "url": _presign_image(hb.image_storage_key),
             "ts": hb.created_at.isoformat(),
         })
+
+
+class DeviceShareAddView(LoginRequiredMixin, View):
+    """Owner shares the device with another account (viewer or manager)."""
+
+    def post(self, request, pk):
+        device = _device_or_403(request.user, pk, "owner")
+        identifier = (request.POST.get("identifier") or "").strip()
+        role = request.POST.get("role", DeviceShare.Role.VIEWER)
+        if role not in dict(DeviceShare.Role.choices):
+            role = DeviceShare.Role.VIEWER
+        if not identifier:
+            messages.error(request, "Enter the person's email or username.")
+            return redirect("devices:edit", pk=pk)
+
+        User = get_user_model()
+        grantee = User.objects.filter(
+            Q(email__iexact=identifier) | Q(username__iexact=identifier)
+        ).first()
+        if not grantee:
+            messages.error(
+                request,
+                f"No account found for '{identifier}'. Ask them to register first, "
+                "then share again.",
+            )
+            return redirect("devices:edit", pk=pk)
+        if grantee.id == device.owner_id:
+            messages.error(request, "You already own this device.")
+            return redirect("devices:edit", pk=pk)
+
+        share, created = DeviceShare.objects.update_or_create(
+            device=device, user=grantee,
+            defaults={"role": role, "created_by": request.user},
+        )
+        verb = "shared with" if created else "updated for"
+        messages.success(
+            request,
+            f"Device {verb} {grantee.username} as {share.get_role_display()}.",
+        )
+        return redirect("devices:edit", pk=pk)
+
+
+class DeviceShareRemoveView(LoginRequiredMixin, View):
+    """Owner revokes a share."""
+
+    def post(self, request, pk):
+        device = _device_or_403(request.user, pk, "owner")
+        share = get_object_or_404(DeviceShare, pk=request.POST.get("share_id"), device=device)
+        username = share.user.username
+        share.delete()
+        messages.success(request, f"Removed {username}'s access to '{device.name}'.")
+        return redirect("devices:edit", pk=pk)

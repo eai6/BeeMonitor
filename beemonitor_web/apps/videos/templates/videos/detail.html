@@ -9,12 +9,16 @@
 
 <div class="flex justify-between items-center mb-4">
   <h1 class="text-2xl font-bold text-gray-900">{{ video.title|sanitize_name }}</h1>
+  {% if is_owner %}
   <form method="post" action="{% url 'videos:delete' video.pk %}" onsubmit="return confirm('Delete this video and all its analysis data? This cannot be undone.');">
     {% csrf_token %}
     <button type="submit" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded text-sm font-medium">
       Delete Video
     </button>
   </form>
+  {% else %}
+  <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">Shared · view only</span>
+  {% endif %}
 </div>
 
 <!-- Video Player -->
@@ -102,12 +106,14 @@
       {% if video.device_deleted_at %}
         <span class="inline-flex px-3 py-1.5 text-sm rounded bg-green-50 text-green-700 border border-green-200">Freed</span>
       {% elif video.device_delete_requested %}
+        {% if is_owner %}
         <form method="post" action="{% url 'videos:device_delete' video.pk %}">
           {% csrf_token %}
           <input type="hidden" name="cancel" value="1">
           <button class="px-3 py-1.5 bg-white border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Cancel</button>
         </form>
-      {% else %}
+        {% endif %}
+      {% elif is_owner %}
         <form method="post" action="{% url 'videos:device_delete' video.pk %}"
               onsubmit="return confirm('Delete this clip from the device to free space? The server copy is kept. This cannot be undone once the device acts.');">
           {% csrf_token %}

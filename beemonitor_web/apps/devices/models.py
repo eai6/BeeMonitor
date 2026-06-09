@@ -16,6 +16,10 @@ import secrets
 
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
+
+# Access levels, lowest -> highest. "owner" is implicit (Device.owner).
+_ROLE_RANK = {"viewer": 1, "manager": 2, "owner": 3}
 
 
 class Device(models.Model):
@@ -61,6 +65,30 @@ class Device(models.Model):
 
     def __str__(self) -> str:
         return f"{self.name} ({self.prefix}…)"
+
+    # ------------------------------------------------------------------
+    # Sharing / access control
+    # ------------------------------------------------------------------
+    @staticmethod
+    def accessible(user):
+        """Devices the user owns OR has been shared (any role)."""
+        return Device.objects.filter(
+            Q(owner=user) | Q(shares__user=user)
+        ).distinct()
+
+    def role_for(self, user) -> "str | None":
+        """'owner' | 'manager' | 'viewer' | None for ``user`` on this device."""
+        if not user or not user.is_authenticated:
+            return None
+        if self.owner_id == user.id:
+            return "owner"
+        share = self.shares.filter(user=user).first()
+        return share.role if share else None
+
+    def can(self, user, level: str) -> bool:
+        """True if ``user``'s role on this device is >= ``level``."""
+        role = self.role_for(user)
+        return role is not None and _ROLE_RANK[role] >= _ROLE_RANK[level]
 
     @property
     def map_url(self) -> str:
@@ -134,3 +162,42 @@ class DeviceHeartbeat(models.Model):
 
     def __str__(self) -> str:
         return f"heartbeat {self.device.name} @ {self.created_at:%Y-%m-%d %H:%M}"
+
+
+class DeviceShare(models.Model):
+    """Grants another account access to a device.
+
+    The owner keeps full control (and is the only one who can manage shares).
+    A *viewer* sees data only (telemetry, weather, activity, videos, on-demand
+    photo); a *manager* additionally does maintenance (edit, WiFi, update,
+    revoke/reactivate). Use case: a teacher gets shared access to some devices
+    while the owner retains management until they choose to change it.
+    """
+
+    class Role(models.TextChoices):
+        VIEWER = "viewer", "Viewer — data only"
+        MANAGER = "manager", "Manager — data + control"
+
+    device = models.ForeignKey(
+        Device, on_delete=models.CASCADE, related_name="shares",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="shared_devices",
+    )
+    role = models.CharField(
+        max_length=16, choices=Role.choices, default=Role.VIEWER,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    # Who granted the share (the owner at grant time).
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="+",
+    )
+
+    class Meta:
+        unique_together = ("device", "user")
+        ordering = ["user__username"]
+
+    def __str__(self) -> str:
+        return f"{self.device.name} -> {self.user} ({self.role})"
