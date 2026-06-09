@@ -55,6 +55,15 @@ class Video(models.Model):
     day = models.IntegerField(null=True, blank=True)
     hour = models.IntegerField(null=True, blank=True)
 
+    # Device storage cleanup (free SD-card space on the field unit). Two-key gate:
+    # a clip is removed from the device only when it has uploaded (this Video row
+    # exists) AND a human explicitly requests it via the dashboard — never auto.
+    # `device_delete_requested` is set by that human action; `device_deleted_at`
+    # is stamped once the device confirms it removed the local file. The server's
+    # own copy (S3 + this row) is unaffected — see VideoDeleteView for that.
+    device_delete_requested = models.BooleanField(default=False)
+    device_deleted_at = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         ordering = ["-uploaded_at"]
 

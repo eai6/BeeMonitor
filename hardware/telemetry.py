@@ -83,6 +83,11 @@ UPDATE_SCRIPT = REPO_DIR / "hardware" / "update.sh"
 STATE_DIR = Path(os.environ.get("BEEMONITOR_STATE_DIR", "/home/beemonitor/.beemonitor"))
 UPDATE_STATUS_FILE = STATE_DIR / "update-status.json"
 
+# Storage cleanup: delete local clips a human cleared for deletion on the
+# dashboard (GET/POST /api/v1/devices/cleanup). Cheap JSON, runs over cellular.
+# Seconds between cleanup passes; 0 disables.
+CLEANUP_INTERVAL = int(os.environ.get("BEEMONITOR_CLEANUP_INTERVAL", "600"))
+
 logging.basicConfig(
     format="%(asctime)s %(levelname)s telemetry %(message)s", level=logging.INFO,
 )
@@ -517,6 +522,83 @@ def _handle_signal(signum, frame):  # noqa: ARG001
     _running = False
 
 
+def _scan_uploaded_video_ids() -> dict:
+    """Map server video_id -> local .mp4 Path, read from the .uploaded sidecars.
+
+    The uploader writes ``video_id=<id>`` into ``<clip>.mp4.uploaded`` on success,
+    so a sidecar's presence proves the clip is on the server — the first of the
+    two deletion keys.
+    """
+    out: dict = {}
+    try:
+        sidecars = RECORD_DIR.rglob("*.uploaded")
+    except OSError:
+        return out
+    for sidecar in sidecars:
+        try:
+            for line in sidecar.read_text().splitlines():
+                if line.startswith("video_id="):
+                    vid = line.split("=", 1)[1].strip()
+                    if vid.isdigit():
+                        out[int(vid)] = sidecar.with_suffix("")  # strip ".uploaded"
+                    break
+        except OSError:
+            continue
+    return out
+
+
+def _run_cleanup() -> None:
+    """Delete local clips a human cleared for deletion on the dashboard.
+
+    Two-key safety: a clip is eligible only if it uploaded (it has an .uploaded
+    sidecar with a server video_id) AND the server returns its id (a human
+    requested deletion). We delete only those, then POST a confirmation so the
+    server stamps device_deleted_at and stops listing them.
+    """
+    base = API_BASE + "/"
+    hdrs = {"Authorization": f"Bearer {DEVICE_KEY}"}
+    try:
+        r = requests.get(urljoin(base, "api/v1/devices/cleanup"), headers=hdrs,
+                         timeout=POST_TIMEOUT)
+    except requests.RequestException as e:
+        log.warning("cleanup: list failed: %s", e)
+        return
+    if r.status_code != 200:
+        log.warning("cleanup: list -> %s %s", r.status_code, r.text[:200])
+        return
+    ids = (r.json() or {}).get("video_ids") or []
+    if not ids:
+        return
+
+    local = _scan_uploaded_video_ids()
+    deleted, freed = [], 0
+    for vid in ids:
+        vid = int(vid)
+        mp4 = local.get(vid)
+        if mp4 and mp4.exists():
+            try:
+                freed += mp4.stat().st_size
+                mp4.unlink()
+                sidecar = mp4.with_suffix(mp4.suffix + ".uploaded")
+                if sidecar.exists():
+                    sidecar.unlink()
+                deleted.append(vid)
+            except OSError as e:
+                log.warning("cleanup: could not delete %s: %s", mp4, e)
+        else:
+            # Not here anymore — confirm anyway so the server stops listing it.
+            deleted.append(vid)
+    if not deleted:
+        return
+    try:
+        requests.post(urljoin(base, "api/v1/devices/cleanup"), headers=hdrs,
+                      json={"deleted": deleted}, timeout=POST_TIMEOUT)
+    except requests.RequestException as e:
+        log.warning("cleanup: confirm failed (will retry next pass): %s", e)
+        return
+    log.info("cleanup: freed %s across %d clip(s)", _human_bytes(freed), len(deleted))
+
+
 def main() -> int:
     _validate_config()
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
@@ -531,12 +613,17 @@ def main() -> int:
     signal.signal(signal.SIGINT, _handle_signal)
     log.info("telemetry loop started — interval=%ds, queue=%s", INTERVAL, QUEUE_DIR)
 
+    last_cleanup = 0.0
     while _running:
         try:
             resp = send_beat()
             # The beat may also carry a command (belt-and-suspenders).
             if resp and resp.get("command"):
                 _handle_command(resp["command"], resp.get("params") or {})
+            # Free SD space: delete clips a human cleared on the dashboard.
+            if CLEANUP_INTERVAL > 0 and time.time() - last_cleanup >= CLEANUP_INTERVAL:
+                _run_cleanup()
+                last_cleanup = time.time()
         except Exception as e:  # pragma: no cover - never let the loop die
             log.exception("beat raised: %s", e)
         # Between beats, poll for on-demand commands every COMMAND_POLL_SECONDS so

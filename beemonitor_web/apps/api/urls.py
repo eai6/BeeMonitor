@@ -2,6 +2,7 @@ from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.routers import DefaultRouter
 
+from .cleanup import DeviceCleanupView
 from .heartbeat import DeviceCommandView, DeviceHeartbeatView
 from .uploads import UploadCompleteView, UploadInitiateView
 from .web_uploads import WebUploadCompleteView, WebUploadInitiateView
@@ -40,6 +41,8 @@ urlpatterns = [
     path("devices/heartbeat", csrf_exempt(DeviceHeartbeatView.as_view()), name="devices-heartbeat"),
     # Lightweight command poll (fast on-demand picture, no full beat).
     path("devices/command", csrf_exempt(DeviceCommandView.as_view()), name="devices-command"),
+    # Device storage cleanup: list human-cleared clips to delete + confirm.
+    path("devices/cleanup", csrf_exempt(DeviceCleanupView.as_view()), name="devices-cleanup"),
     # Browser-side direct-to-S3 uploads. Session auth + CSRF — these are NOT
     # csrf_exempt so a stolen URL alone can't be used cross-site.
     path("web-uploads/initiate", WebUploadInitiateView.as_view(), name="web-uploads-initiate"),
