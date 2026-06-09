@@ -104,6 +104,9 @@
       <button type="button" onclick="deleteSelected()" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded text-sm font-medium">
         Delete Selected
       </button>
+      <button type="button" onclick="deleteFromDeviceSelected()" class="bg-white border border-amber-300 text-amber-700 hover:bg-amber-50 px-4 py-2 rounded text-sm font-medium" title="Free SD-card space on the source device. Server copies are kept.">
+        Delete from Device
+      </button>
     </div>
   </div>
   <!-- Hidden inputs for all filtered video IDs (across pages) -->
@@ -114,6 +117,11 @@
 
 <!-- Hidden delete form -->
 <form method="post" action="{% url 'videos:batch_delete' %}" id="deleteForm" style="display:none;">
+  {% csrf_token %}
+</form>
+
+<!-- Hidden "delete from device" form (clears clips for device-side deletion) -->
+<form method="post" action="{% url 'videos:batch_device_delete' %}" id="deviceDeleteForm" style="display:none;">
   {% csrf_token %}
 </form>
 
@@ -326,6 +334,45 @@ function deleteSelected() {
         return;
     }
     if (confirm('DELETE ' + count + ' video(s) and all their analysis data? This cannot be undone.')) {
+        form.submit();
+    }
+}
+
+// Clear selected videos for deletion on their SOURCE DEVICES (free SD space).
+// Server copies are kept; only clips uploaded from a device are affected.
+function deleteFromDeviceSelected() {
+    const form = document.getElementById('deviceDeleteForm');
+    form.querySelectorAll('input[name="video_ids"]').forEach(e => e.remove());
+
+    if (allFilteredSelected) {
+        document.querySelectorAll('.all-filtered-id').forEach(function(el) {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'video_ids';
+            input.value = el.value;
+            form.appendChild(input);
+        });
+    } else {
+        const checked = document.querySelectorAll('.video-checkbox:checked');
+        if (checked.length === 0) {
+            alert('Please select at least one video.');
+            return;
+        }
+        checked.forEach(function(cb) {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'video_ids';
+            input.value = cb.value;
+            form.appendChild(input);
+        });
+    }
+
+    const count = form.querySelectorAll('input[name="video_ids"]').length;
+    if (count === 0) {
+        alert('No videos selected.');
+        return;
+    }
+    if (confirm('Clear ' + count + ' video(s) for deletion on their devices to free SD space? Server copies are kept; only already-uploaded clips from a device are affected.')) {
         form.submit();
     }
 }

@@ -312,3 +312,54 @@ class VideoBatchDeleteView(LoginRequiredMixin, View):
 
         messages.success(request, f"Deleted {count} video(s) and their analysis data.")
         return redirect("videos:list")
+
+
+class VideoDeviceDeleteView(LoginRequiredMixin, View):
+    """Clear a single uploaded video for deletion on its SOURCE DEVICE (free SD
+    space). This is the human-confirm gate only — it does NOT delete the server
+    copy (use VideoDeleteView for that). The device frees the local file on its
+    next cleanup pass and confirms back. POST ``cancel=1`` to undo before then.
+    """
+
+    def post(self, request, pk):
+        video = get_object_or_404(Video, pk=pk, user=request.user)
+        if request.POST.get("cancel"):
+            if video.device_deleted_at is None and video.device_delete_requested:
+                video.device_delete_requested = False
+                video.save(update_fields=["device_delete_requested"])
+                messages.info(request, "Cancelled — the device will keep this clip.")
+            return redirect("videos:detail", pk=pk)
+        if video.device_id is None:
+            messages.warning(request, "This video has no source device to free.")
+            return redirect("videos:detail", pk=pk)
+        if not video.device_delete_requested:
+            video.device_delete_requested = True
+            video.save(update_fields=["device_delete_requested"])
+        messages.success(
+            request,
+            f"'{video.title}' cleared for deletion on its device — the server copy is "
+            "kept; the device frees the local file on its next check-in.",
+        )
+        return redirect("videos:detail", pk=pk)
+
+
+class VideoBatchDeviceDeleteView(LoginRequiredMixin, View):
+    """Clear multiple uploaded videos for deletion on their source devices.
+
+    Only affects videos that came from a device; the server copies are untouched.
+    """
+
+    def post(self, request):
+        video_ids = request.POST.getlist("video_ids")
+        if not video_ids:
+            messages.warning(request, "No videos selected.")
+            return redirect("videos:list")
+        n = (
+            Video.objects.filter(user=request.user, pk__in=video_ids, device__isnull=False)
+            .update(device_delete_requested=True)
+        )
+        if n:
+            messages.success(request, f"{n} video(s) cleared for deletion on their devices (server copies kept).")
+        else:
+            messages.warning(request, "None of the selected videos came from a device.")
+        return redirect("videos:list")

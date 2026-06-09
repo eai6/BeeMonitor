@@ -82,6 +82,43 @@
   </div>
 </div>
 
+<!-- Device storage (free SD space on the source unit; server copy is kept) -->
+{% if video.device %}
+<div class="bg-white shadow rounded-lg p-6 mb-6">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <p class="text-gray-500 text-sm">Device storage</p>
+      {% if video.device_deleted_at %}
+        <p class="font-medium text-sm text-gray-700">Freed on device {{ video.device_deleted_at|date:"Y-m-d H:i" }}</p>
+      {% elif video.device_delete_requested %}
+        <p class="font-medium text-sm text-amber-700">Cleared for deletion — pending the device's next check-in</p>
+      {% else %}
+        <p class="font-medium text-sm text-gray-700">On
+          <a href="{% url 'devices:detail' video.device.pk %}" class="text-amber-600 hover:underline">{{ video.device.name }}</a></p>
+      {% endif %}
+      <p class="text-xs text-gray-400 mt-1">Frees SD-card space on the field unit. This server copy is kept.</p>
+    </div>
+    <div>
+      {% if video.device_deleted_at %}
+        <span class="inline-flex px-3 py-1.5 text-sm rounded bg-green-50 text-green-700 border border-green-200">Freed</span>
+      {% elif video.device_delete_requested %}
+        <form method="post" action="{% url 'videos:device_delete' video.pk %}">
+          {% csrf_token %}
+          <input type="hidden" name="cancel" value="1">
+          <button class="px-3 py-1.5 bg-white border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Cancel</button>
+        </form>
+      {% else %}
+        <form method="post" action="{% url 'videos:device_delete' video.pk %}"
+              onsubmit="return confirm('Delete this clip from the device to free space? The server copy is kept. This cannot be undone once the device acts.');">
+          {% csrf_token %}
+          <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Delete from device</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <!-- Jobs for this video -->
 <div class="bg-white shadow rounded-lg">
   <div class="px-6 py-4 border-b border-gray-200">
