@@ -1,13 +1,13 @@
 ---
 name: remote-update-two-phase
-description: Remote software update over cellular is two-phase (telemetry-cgroup fetch + separate apply unit) with auto-rollback. Device side done; dashboard pending.
+description: Remote software update over cellular is two-phase (telemetry-cgroup fetch + separate apply unit) with auto-rollback. Device + dashboard done.
 metadata: 
   node_type: memory
   type: project
   originSessionId: 416c68fc-5615-46ab-98ac-9e38009bdaf2
 ---
 
-Field Pis update their code remotely over cellular via an `update` command (params.ref, default `origin/main`). Built device-first in commits 2d0f5a1 + d28606c; fully tested on the dev Pi (happy path + auto-rollback). **Dashboard/cloud trigger UI still TODO.**
+Field Pis update their code remotely over cellular via an `update` command (params.ref, default `origin/main`). Device side: commits 2d0f5a1 + d28606c, fully tested on the dev Pi (happy path + auto-rollback). Dashboard/cloud side: commit 64c9393 — `DeviceUpdateView` (apps/devices/views.py) sets pending_command="update", `devices:update` URL, and a "Software" panel on the device detail page showing `metrics.code_commit` + a colored last-update badge (`metrics.update.state`) + "Update to latest" button. No migration (code_commit/update ride in the heartbeat metrics JSON).
 
 **Why two phases** (the core design constraint): the cellular firewall only lets the `beemonitor-telemetry.service` cgroup egress on wwan0, AND an update must restart telemetry itself — but one process can't keep network access (telemetry cgroup) while restarting its own cgroup. So:
 - **fetch** (`hardware/update.sh fetch <ref>`): spawned BY telemetry (`subprocess.Popen(..., start_new_session=True)`), so it stays in telemetry's firewall-allowed cgroup and child git/pip can reach GitHub/PyPI over cellular. Does ALL network: git fetch + reset + `pip install -r hardware/requirements.txt` if it changed. Then writes a handoff file and triggers phase B.
