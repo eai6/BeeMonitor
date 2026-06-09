@@ -409,6 +409,32 @@ class DeviceWifiView(LoginRequiredMixin, View):
         return redirect("devices:detail", pk=pk)
 
 
+class DeviceUpdateView(LoginRequiredMixin, View):
+    """Queue a remote software-update command.
+
+    Rides the same cellular command channel as the other commands. On the device,
+    a two-phase updater fetches in telemetry's firewall-allowed cgroup, then a
+    separate unit restarts the services, health-checks, and rolls back to the
+    previous commit if they don't come up. See hardware/update.sh. The deployed
+    commit + last-update result come back in the heartbeat (metrics.code_commit /
+    metrics.update) and are shown on the device page.
+    """
+
+    def post(self, request, pk):
+        device = get_object_or_404(Device, pk=pk, owner=request.user)
+        ref = (request.POST.get("ref") or "origin/main").strip() or "origin/main"
+        device.pending_command = "update"
+        device.command_params = {"ref": ref}
+        device.save(update_fields=["pending_command", "command_params"])
+        messages.success(
+            request,
+            f"Software update to '{ref}' queued — the device will fetch, restart, and "
+            "auto-roll-back if unhealthy. This can take a few minutes over cellular; "
+            "watch the version below.",
+        )
+        return redirect("devices:detail", pk=pk)
+
+
 class DeviceLatestImageView(LoginRequiredMixin, View):
     """Latest on-demand image (presigned URL) — polled after a photo request."""
 
