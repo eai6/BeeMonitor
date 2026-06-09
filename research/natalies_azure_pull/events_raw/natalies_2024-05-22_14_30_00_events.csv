@@ -1,0 +1,3 @@
+action,nest,frame_number,track_id,ml_confidence,timestamp
+Exit,14,6921,4,0.8580284176780434,2024-05-22 14:33:50.700
+Entry,14,6936,4,0.7689591939359207,2024-05-22 14:33:51.200
