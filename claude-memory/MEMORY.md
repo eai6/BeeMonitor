@@ -7,3 +7,4 @@
 - [Cellular DNS resolv.conf symlink](cellular-dns-resolv-symlink.md) — must rm the managed /etc/resolv.conf symlink before pinning static nameservers, else DNS stays on the 127.0.0.53 stub (8.8.8.8 pings but google.com fails over cellular).
 - [Dashboard WiFi needs nmcli sudoers](dashboard-wifi-needs-nmcli-sudoers.md) — dashboard WiFi on/off/connect needs /etc/sudoers.d/beemonitor-nmcli (NOPASSWD nmcli); without it telemetry's `sudo -n nmcli` silently fails.
 - [Motion gate uses shadow detection](motion-gate-shadow-detection.md) — MOG2 gate runs detectShadows=True + thresholds out shadow pixels to reject shadows/light-changes; don't revert to False. Tune BEEMONITOR_SHADOW_THRESHOLD; test via motion_replay.py.
+- [Remote update is two-phase](remote-update-two-phase.md) — cellular code update: fetch in telemetry's cgroup (firewall) + separate beemonitor-update.service apply with auto-rollback. Device side done (2d0f5a1/d28606c); dashboard TODO. torch/models excluded.
