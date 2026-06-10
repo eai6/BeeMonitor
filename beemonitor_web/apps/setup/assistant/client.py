@@ -24,6 +24,23 @@ logger = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 4
 
+
+def _content_params(blocks):
+    """Rebuild assistant content blocks as clean input params.
+
+    The SDK's model_dump() carries response-only fields (e.g. parsed_output)
+    that the Messages API rejects on input, so we keep only what's allowed.
+    """
+    out = []
+    for b in blocks:
+        t = getattr(b, "type", None)
+        if t == "text":
+            out.append({"type": "text", "text": b.text})
+        elif t == "tool_use":
+            out.append({"type": "tool_use", "id": b.id,
+                        "name": b.name, "input": b.input})
+    return out
+
 _SYSTEM_RULES = """You are the BeeMonitor Setup Assistant — a patient tutor and \
 debugging copilot for people building a Raspberry Pi bee-monitoring field device \
 (camera + motion-gated recorder, cellular/WiFi telemetry, systemd services).
@@ -125,7 +142,7 @@ def stream_reply(messages, user, current_step="", device_state=None):
 
             # Run the requested read-only tools, feed results back, loop.
             convo.append({"role": "assistant",
-                          "content": [b.model_dump() for b in final.content]})
+                          "content": _content_params(final.content)})
             results = []
             for block in final.content:
                 if getattr(block, "type", None) == "tool_use":

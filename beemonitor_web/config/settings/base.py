@@ -7,6 +7,15 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 REPO_ROOT = BASE_DIR.parent  # one level above beemonitor_web/, holds cloud/
 
+# Load a local .env (repo root) for development convenience. Real environment
+# variables — e.g. the App Runner task env in production — are NOT overridden,
+# and in prod there is no .env file, so this is a no-op there.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(REPO_ROOT / ".env", override=False)
+except ImportError:
+    pass
+
 # Make the repo root importable so Django code can `from cloud.storage...`
 # (cloud/ is a sibling of beemonitor_web/, not a Django app).
 if str(REPO_ROOT) not in sys.path:
