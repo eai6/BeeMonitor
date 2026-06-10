@@ -1183,29 +1183,39 @@ field, then upload them to the cloud later. Transfers are tracked per-clip with 
 re-plugging only copies *new* clips, and the device page shows the count
 (`Clips: … · N to USB`).
 
-**One-time setup (auto-copy on plug-in):**
+There are three ways to trigger it: a **dashboard button**, **auto on plug-in**,
+or **manually**. All accept **any** USB drive (no special label needed).
+
+**One-time setup:**
 ```bash
 cd ~/BeeMonitor/hardware
 chmod +x usb-transfer.sh
+# auto-copy on plug-in (any USB)
 sudo cp systemd/beemonitor-usb-transfer@.service /etc/systemd/system/
 sudo cp cellular/99-beemonitor-usb.rules /etc/udev/rules.d/
 sudo udevadm control --reload && sudo systemctl daemon-reload
+# let the dashboard "Copy to USB" button run it (telemetry runs as 'beemonitor';
+# mounting the USB needs root)
+echo 'beemonitor ALL=(root) NOPASSWD: /home/beemonitor/BeeMonitor/hardware/usb-transfer.sh' \
+  | sudo tee /etc/sudoers.d/beemonitor-usb >/dev/null
+sudo chmod 440 /etc/sudoers.d/beemonitor-usb && sudo visudo -cf /etc/sudoers.d/beemonitor-usb
 ```
-Label a stick once so only intended drives trigger it:
-```bash
-sudo fatlabel /dev/sdX1 BEEMONITOR     # or: sudo mkfs.vfat -n BEEMONITOR /dev/sdX1
-```
-Now just **plug it in** — a drive labelled `BEEMONITOR` is detected, all new clips
-are copied to `BeeMonitor/<hostname>/…` (date structure preserved) with a
-`manifest.csv`, sidecars are written, and the stick is unmounted. Watch it:
+
+**Dashboard button:** on the device page, **Copy to USB** (managers/owner) queues
+the copy; the device runs it on its next check-in to whatever USB is plugged in.
+
+**Auto on plug-in:** just plug a USB in — new clips are copied to
+`BeeMonitor/<hostname>/…` (date structure preserved) with a `manifest.csv`,
+sidecars written, stick unmounted. Watch it:
 ```bash
 journalctl -u 'beemonitor-usb-transfer@*' -f      # "done: copied N, skipped …"
 ```
 
-**Manual (any stick, no label needed):**
+**Manual:**
 ```bash
-sudo bash ~/BeeMonitor/hardware/usb-transfer.sh /media/pi/STICK   # or /dev/sda1, or no arg to auto-detect
-BEEMONITOR_USB_ALL=1 sudo bash usb-transfer.sh …                  # re-copy everything
+sudo bash ~/BeeMonitor/hardware/usb-transfer.sh                 # auto-detect any plugged USB
+sudo bash ~/BeeMonitor/hardware/usb-transfer.sh /media/pi/STICK # or a mountpoint / /dev/sda1
+BEEMONITOR_USB_ALL=1 sudo bash usb-transfer.sh …               # re-copy everything
 ```
 
 **Get them into the cloud:** on the web app, **Videos → Upload** (or batch),

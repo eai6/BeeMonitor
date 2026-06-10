@@ -469,6 +469,28 @@ class DeviceUpdateView(LoginRequiredMixin, View):
         return redirect("devices:detail", pk=pk)
 
 
+class DeviceUsbTransferView(LoginRequiredMixin, View):
+    """Queue an on-demand copy of new recordings to a plugged-in USB drive.
+
+    The device runs usb-transfer.sh on its next command poll, which copies new
+    clips to whatever USB is connected and marks them with a .usb sidecar. A USB
+    drive must be physically plugged into the Pi.
+    """
+
+    def post(self, request, pk):
+        device = _device_or_403(request.user, pk, "manager")
+        device.pending_command = "usb_transfer"
+        device.command_params = {}
+        device.save(update_fields=["pending_command", "command_params"])
+        messages.success(
+            request,
+            "USB copy queued — make sure a USB drive is plugged into the device. "
+            "It copies new clips on its next check-in; the 'to USB' count updates "
+            "after the next beat.",
+        )
+        return redirect("devices:detail", pk=pk)
+
+
 class DeviceLatestImageView(LoginRequiredMixin, View):
     """Latest on-demand image (presigned URL) — polled after a photo request."""
 

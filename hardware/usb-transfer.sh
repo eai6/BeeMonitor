@@ -32,9 +32,19 @@ DEV_PREFIX=""
 TARGET="${1:-}"
 MOUNTED_BY_US=""
 if [ -z "$TARGET" ]; then
-    # auto-detect: first mounted *removable* partition
-    TARGET="$(lsblk -rno MOUNTPOINT,RM,TYPE | awk '$2==1 && $3=="part" && $1!="" {print $1; exit}')"
-    [ -n "$TARGET" ] || { log "no USB mount found (pass a mountpoint or /dev/sdX1)"; exit 1; }
+    # Auto-detect ANY hot-plugged (USB) partition — by name, no label needed.
+    # Use its existing mount if it has one, otherwise mount it ourselves.
+    part="$(lsblk -rno NAME,HOTPLUG,TYPE | awk '$2==1 && $3=="part" {print $1; exit}')"
+    [ -n "$part" ] || { log "no USB drive found (plug one in, or pass a mountpoint / /dev/sdX1)"; exit 1; }
+    dev="/dev/$part"
+    mp="$(lsblk -no MOUNTPOINT "$dev" 2>/dev/null | head -1)"
+    if [ -z "$mp" ]; then
+        mp="/run/beemonitor-usb"; mkdir -p "$mp"
+        mount "$dev" "$mp" || { log "mount $dev failed"; exit 1; }
+        MOUNTED_BY_US="$mp"
+    fi
+    TARGET="$mp"
+    log "using USB $dev -> $mp"
 elif [ -b "$TARGET" ]; then
     mp="$(lsblk -no MOUNTPOINT "$TARGET" 2>/dev/null | head -1)"
     if [ -z "$mp" ]; then

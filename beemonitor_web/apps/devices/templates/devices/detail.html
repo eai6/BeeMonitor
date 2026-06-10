@@ -95,6 +95,13 @@
         {% if metrics.recordings_human %}
         <div class="mt-1 text-xs text-gray-500">Clips: <span class="font-medium text-gray-700">{{ metrics.recordings_human }}</span>{% if metrics.videos_recorded %} · {{ metrics.videos_recorded }} on device{% endif %}{% if metrics.usb_transferred %} · {{ metrics.usb_transferred }} to USB{% endif %}</div>
         {% endif %}
+        {% if can_manage %}
+        <form method="post" action="{% url 'devices:usb_transfer' device.pk %}" class="mt-2"
+              onsubmit="return confirm('Copy new recordings to a USB drive plugged into the device? It runs on the device\'s next check-in.')">
+          {% csrf_token %}
+          <button class="px-2.5 py-1 text-xs rounded bg-white border border-gray-300 text-gray-700 hover:bg-gray-50">Copy to USB</button>
+        </form>
+        {% endif %}
       </div>
       <!-- Uptime -->
       <div class="bg-white shadow rounded-lg p-4">

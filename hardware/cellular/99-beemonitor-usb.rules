@@ -1,10 +1,9 @@
-# Auto-copy BeeMonitor recordings when a USB drive LABELLED "BEEMONITOR" is
-# plugged in. Gating on the label means a random stick won't trigger a copy.
+# Auto-copy BeeMonitor recordings when ANY USB drive is plugged in (no label
+# needed). The transfer is idempotent (per-clip .usb sidecars), so re-plugging
+# only copies new clips.
 #
 # Install:
 #   sudo cp hardware/cellular/99-beemonitor-usb.rules /etc/udev/rules.d/
 #   sudo cp hardware/systemd/beemonitor-usb-transfer@.service /etc/systemd/system/
 #   sudo udevadm control --reload && sudo systemctl daemon-reload
-#
-# Label a stick once:  sudo fatlabel /dev/sdX1 BEEMONITOR   (or mkfs.vfat -n BEEMONITOR)
-ACTION=="add", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{DEVTYPE}=="partition", ENV{ID_FS_LABEL}=="BEEMONITOR", RUN+="/usr/bin/systemctl start beemonitor-usb-transfer@%k.service"
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{DEVTYPE}=="partition", RUN+="/usr/bin/systemctl start beemonitor-usb-transfer@%k.service"

@@ -80,6 +80,7 @@ COMMAND_POLL_SECONDS = int(os.environ.get("BEEMONITOR_COMMAND_POLL_SECONDS", "8"
 # file lives in; the updater and the status file it writes live there/below.
 REPO_DIR = Path(__file__).resolve().parent.parent
 UPDATE_SCRIPT = REPO_DIR / "hardware" / "update.sh"
+USB_SCRIPT = REPO_DIR / "hardware" / "usb-transfer.sh"
 STATE_DIR = Path(os.environ.get("BEEMONITOR_STATE_DIR", "/home/beemonitor/.beemonitor"))
 UPDATE_STATUS_FILE = STATE_DIR / "update-status.json"
 
@@ -491,6 +492,14 @@ def _handle_command(cmd: str, params: dict) -> None:
         _capture_and_upload()
     elif cmd == "update":
         _start_update(params)
+    elif cmd == "usb_transfer":
+        log.info("command: usb_transfer")
+        # Needs root to mount the USB; run via the NOPASSWD sudoers rule (see
+        # README). The script auto-detects any plugged-in USB.
+        r = _run(["sudo", "-n", str(USB_SCRIPT)], timeout=900)
+        if r is not None:
+            log.info("usb_transfer rc=%s %s", r.returncode,
+                     (r.stdout or r.stderr or "").strip().splitlines()[-1:])
     elif cmd == "wifi_on":
         log.info("command: wifi_on")
         _nmcli(["radio", "wifi", "on"])
