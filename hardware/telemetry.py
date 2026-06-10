@@ -72,6 +72,14 @@ UPLOADER_UNIT = os.environ.get("BEEMONITOR_UPLOADER_UNIT", "beemonitor-uploader.
 CELLULAR_UNIT = os.environ.get("BEEMONITOR_CELLULAR_UNIT", "cellular.service")
 # WiFi interface used for the WiFi on/off/connect commands and state reporting.
 WIFI_IFACE = os.environ.get("BEEMONITOR_WIFI_IFACE", "wlan0")
+# Cellular interface (for transport reporting).
+CELL_IFACE = os.environ.get("BEEMONITOR_CELL_IFACE", "wwan0")
+# When WiFi is up, pin its default-route metric below cellular's (cellular-up.sh
+# uses 700) so ALL traffic — incl. telemetry — rides WiFi, with cellular as the
+# fallback. Saves metered mobile data whenever WiFi is connected.
+WIFI_ROUTE_METRIC = int(os.environ.get("BEEMONITOR_WIFI_ROUTE_METRIC", "100"))
+# Lowest beat interval the dashboard may set (seconds).
+MIN_INTERVAL = int(os.environ.get("BEEMONITOR_MIN_INTERVAL", "1"))
 # How often (s) to poll for an on-demand command between beats — keeps the
 # "Take photo" latency low without raising the health-beat cadence.
 COMMAND_POLL_SECONDS = int(os.environ.get("BEEMONITOR_COMMAND_POLL_SECONDS", "8"))
@@ -184,6 +192,57 @@ def _wifi_state() -> dict:
     return out
 
 
+def _active_transport() -> str:
+    """Which interface telemetry is actually leaving on right now.
+
+    Reads the kernel's chosen route to the internet, so it reflects the live
+    WiFi-vs-cellular decision the dashboard wants to see.
+    """
+    r = _run(["ip", "route", "get", "1.1.1.1"])
+    if r and r.returncode == 0 and "dev" in r.stdout:
+        parts = r.stdout.split()
+        try:
+            dev = parts[parts.index("dev") + 1]
+        except (ValueError, IndexError):
+            return ""
+        if dev == WIFI_IFACE:
+            return "wifi"
+        if dev == CELL_IFACE or dev.startswith("wwan") or dev.startswith("ppp"):
+            return "cellular"
+        return dev
+    return ""
+
+
+def _prefer_wifi_route() -> None:
+    """Ensure the active WiFi connection outranks cellular as the default route.
+
+    cellular-up.sh sets wwan0's metric to 700; we pin the live WiFi connection's
+    ipv4.route-metric to WIFI_ROUTE_METRIC (100 by default) so WiFi always wins
+    while it's up. nmcli applies route-metric on (re)activation, so we modify +
+    bring the connection up only when its metric is wrong (a brief, rare blip).
+    """
+    # Find the connection name currently active on the WiFi interface.
+    r = _nmcli(["-t", "-f", "DEVICE,STATE,CONNECTION", "device", "status"])
+    if not (r and r.returncode == 0):
+        return
+    conn = ""
+    for line in r.stdout.splitlines():
+        parts = line.split(":")
+        if len(parts) >= 3 and parts[0] == WIFI_IFACE and parts[1] == "connected":
+            conn = parts[2]
+            break
+    if not conn:
+        return  # WiFi not connected — nothing to prefer; cellular carries it.
+    # Already at the desired metric? Then don't disrupt the live connection.
+    cur = _nmcli(["-t", "-f", "ipv4.route-metric", "connection", "show", conn])
+    if cur and cur.returncode == 0 and cur.stdout.strip().endswith(str(WIFI_ROUTE_METRIC)):
+        return
+    log.info("prefer-wifi: pinning '%s' route-metric=%d (was %s)", conn,
+             WIFI_ROUTE_METRIC, (cur.stdout.strip() if cur else "?"))
+    _nmcli(["connection", "modify", conn, "ipv4.route-metric", str(WIFI_ROUTE_METRIC)])
+    _nmcli(["connection", "up", conn], timeout=45)
+
+
 def _video_stats(window_seconds: int) -> dict:
     """Single pass over the recordings dir.
 
@@ -286,6 +345,11 @@ def collect_metrics() -> dict:
 
     # Current WiFi state so the dashboard can show on/off + connected network.
     m.update(_wifi_state())
+    # Which link this beat is actually leaving on (wifi when connected, else
+    # cellular) — lets the dashboard confirm telemetry rode WiFi.
+    transport = _active_transport()
+    if transport:
+        m["active_transport"] = transport
 
     if SCHEDULE_WINDOW:
         m["schedule_window"] = SCHEDULE_WINDOW
@@ -385,6 +449,24 @@ def send_beat(image: "Path | None" = None):
 
 _running = True
 
+# Live beat interval — starts at the env default but can be changed from the
+# dashboard (the heartbeat + command responses carry telemetry_interval).
+_interval = INTERVAL
+
+
+def _apply_interval(value) -> None:
+    """Adopt a dashboard-set beat interval (clamped to >= MIN_INTERVAL)."""
+    global _interval
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return
+    if v < MIN_INTERVAL:
+        v = MIN_INTERVAL
+    if v != _interval:
+        log.info("telemetry interval changed %ds -> %ds (from dashboard)", _interval, v)
+        _interval = v
+
 
 def _safe_mtime(p) -> float:
     try:
@@ -457,6 +539,7 @@ def _wifi_connect(params: dict) -> None:
     # Never log the password — only the SSID + result.
     if r is not None and r.returncode == 0:
         log.info("wifi_connect: joined '%s'", ssid)
+        _prefer_wifi_route()  # make telemetry ride this WiFi, not cellular
     else:
         log.warning("wifi_connect: failed for '%s' (rc=%s) %s", ssid,
                     getattr(r, "returncode", None),
@@ -518,12 +601,13 @@ def _handle_command(cmd: str, params: dict) -> None:
         log.warning("ignoring unknown command: %s", cmd)
 
 
-def _poll_command() -> None:
+def _poll_command() -> "dict | None":
     """Lightweight check for a pending on-demand command between beats.
 
     Cheap GET (no metrics/image), so we can poll it every few seconds — a
     requested photo arrives in ~COMMAND_POLL_SECONDS instead of waiting for the
-    next 60s beat.
+    next 60s beat. Returns the parsed response (carries telemetry_interval too,
+    so a rate change applies within seconds even on a slow beat cadence).
     """
     try:
         r = requests.get(
@@ -535,8 +619,10 @@ def _poll_command() -> None:
             d = r.json()
             if d.get("command"):
                 _handle_command(d["command"], d.get("params") or {})
+            return d
     except requests.RequestException:
         pass
+    return None
 
 
 def _handle_signal(signum, frame):  # noqa: ARG001
@@ -633,15 +719,20 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
-    log.info("telemetry loop started — interval=%ds, queue=%s", INTERVAL, QUEUE_DIR)
+    # Make telemetry ride WiFi (not metered cellular) whenever WiFi is connected.
+    _prefer_wifi_route()
+    log.info("telemetry loop started — interval=%ds, queue=%s", _interval, QUEUE_DIR)
 
     last_cleanup = 0.0
     while _running:
         try:
             resp = send_beat()
-            # The beat may also carry a command (belt-and-suspenders).
-            if resp and resp.get("command"):
-                _handle_command(resp["command"], resp.get("params") or {})
+            if resp:
+                # The beat may also carry a command (belt-and-suspenders)...
+                if resp.get("command"):
+                    _handle_command(resp["command"], resp.get("params") or {})
+                # ...and the dashboard-set beat interval.
+                _apply_interval(resp.get("telemetry_interval"))
             # Free SD space: delete clips a human cleared on the dashboard.
             if CLEANUP_INTERVAL > 0 and time.time() - last_cleanup >= CLEANUP_INTERVAL:
                 _run_cleanup()
@@ -649,14 +740,17 @@ def main() -> int:
         except Exception as e:  # pragma: no cover - never let the loop die
             log.exception("beat raised: %s", e)
         # Between beats, poll for on-demand commands every COMMAND_POLL_SECONDS so
-        # a requested photo lands in seconds, not up to a full INTERVAL.
+        # a requested photo lands in seconds, not up to a full interval. The poll
+        # also carries telemetry_interval, so a rate change (even from 1d to 1s)
+        # takes effect within ~COMMAND_POLL_SECONDS. ``_interval`` is read live so
+        # lowering it breaks the wait early.
         slept = 0
-        while _running and slept < INTERVAL:
-            step = min(COMMAND_POLL_SECONDS, INTERVAL - slept)
+        while _running and slept < _interval:
+            step = min(COMMAND_POLL_SECONDS, _interval - slept)
             time.sleep(step)
             slept += step
-            if _running and slept < INTERVAL:
-                _poll_command()
+            if _running and slept < _interval:
+                _apply_interval((_poll_command() or {}).get("telemetry_interval"))
     log.info("telemetry stopped")
     return 0
 

@@ -202,6 +202,10 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
             {"label": "Uploader", "ok": bool(metrics.get("uploader_active"))},
             {"label": "Cellular", "ok": bool(metrics.get("cellular_active"))},
         ]
+        # Telemetry rate control (manager+) + which link the last beat rode.
+        from .models import TELEMETRY_INTERVAL_CHOICES
+        ctx["telemetry_interval_choices"] = TELEMETRY_INTERVAL_CHOICES
+        ctx["active_transport"] = metrics.get("active_transport")
 
 
         # Videos uploaded by this device (device-scoped slice of /videos/).
@@ -491,6 +495,33 @@ class DeviceUsbTransferView(LoginRequiredMixin, View):
             "USB copy queued — make sure a USB drive is plugged into the device. "
             "It copies new clips on its next check-in; the 'to USB' count updates "
             "after the next beat.",
+        )
+        return redirect("devices:detail", pk=pk)
+
+
+class DeviceTelemetryRateView(LoginRequiredMixin, View):
+    """Set how often the device sends a telemetry beat.
+
+    Validated against the allowed presets; the device adopts the new rate via
+    its next heartbeat/command response (within ~COMMAND_POLL_SECONDS).
+    """
+
+    def post(self, request, pk):
+        from .models import TELEMETRY_INTERVAL_VALUES
+        device = _device_or_403(request.user, pk, "manager")
+        try:
+            secs = int(request.POST.get("interval", ""))
+        except (TypeError, ValueError):
+            secs = None
+        if secs not in TELEMETRY_INTERVAL_VALUES:
+            messages.error(request, "Invalid telemetry rate.")
+            return redirect("devices:detail", pk=pk)
+        device.telemetry_interval_seconds = secs
+        device.save(update_fields=["telemetry_interval_seconds"])
+        messages.success(
+            request,
+            f"Telemetry rate set to {device.telemetry_interval_label}. The device "
+            "will adopt it on its next check-in.",
         )
         return redirect("devices:detail", pk=pk)
 

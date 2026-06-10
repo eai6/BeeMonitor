@@ -148,6 +148,40 @@
   </div>
 </div>
 
+<!-- Telemetry rate + transport -->
+<div class="mt-6 bg-white shadow rounded-lg p-4">
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Telemetry</h2>
+    <div class="text-xs text-gray-500">
+      Every <span class="font-medium text-gray-700">{{ device.telemetry_interval_label }}</span>
+      {% if active_transport == 'wifi' %}
+        · <span class="inline-flex items-center gap-1 text-green-700"><span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>via WiFi</span>
+      {% elif active_transport == 'cellular' %}
+        · <span class="inline-flex items-center gap-1 text-amber-700"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>via cellular</span>
+      {% elif active_transport %}
+        · via {{ active_transport }}
+      {% endif %}
+    </div>
+  </div>
+  <p class="text-xs text-gray-400 mb-3">
+    How often the unit sends a health beat. Faster = fresher dashboard but more
+    data/power; slower saves both. The device adopts a change within seconds.
+  </p>
+  {% if can_manage %}
+  <form method="post" action="{% url 'devices:telemetry_rate' device.pk %}" class="flex flex-wrap items-center gap-2">
+    {% csrf_token %}
+    <select name="interval" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      {% for secs, label in telemetry_interval_choices %}
+      <option value="{{ secs }}" {% if secs == device.telemetry_interval_seconds %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Set rate</button>
+  </form>
+  {% else %}
+  <p class="text-xs text-gray-400 italic">Read-only — changing the telemetry rate requires manager access.</p>
+  {% endif %}
+</div>
+
 <!-- WiFi control -->
 <div class="mt-6 bg-white shadow rounded-lg p-4">
   <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
@@ -166,8 +200,9 @@
     </div>
   </div>
   <p class="text-xs text-gray-400 mb-3">
-    Video uploads only flow over WiFi; telemetry stays on cellular, so these
-    commands reach the device even with WiFi off. It acts on its next check-in.
+    Video uploads only flow over WiFi. Telemetry rides WiFi whenever it's
+    connected (falling back to cellular when it isn't), so these commands reach
+    the device either way. It acts on its next check-in.
   </p>
   {% if can_manage %}
   <div class="flex flex-wrap items-end gap-x-3 gap-y-2">

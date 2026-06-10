@@ -21,6 +21,20 @@ from django.db.models import Q
 # Access levels, lowest -> highest. "owner" is implicit (Device.owner).
 _ROLE_RANK = {"viewer": 1, "manager": 2, "owner": 3}
 
+# Allowed telemetry beat intervals (seconds -> label) for the dashboard control.
+# The device picks the new rate up via the heartbeat/command response.
+TELEMETRY_INTERVAL_CHOICES = [
+    (1, "1 second"),
+    (10, "10 seconds"),
+    (30, "30 seconds"),
+    (60, "1 minute"),
+    (300, "5 minutes"),
+    (1800, "30 minutes"),
+    (3600, "1 hour"),
+    (86400, "1 day"),
+]
+TELEMETRY_INTERVAL_VALUES = [v for v, _ in TELEMETRY_INTERVAL_CHOICES]
+
 
 class Device(models.Model):
     owner = models.ForeignKey(
@@ -46,6 +60,10 @@ class Device(models.Model):
     is_active = models.BooleanField(default=True)
     last_seen_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    # How often the device sends a telemetry beat (seconds). Set from the
+    # dashboard; the device adopts it via the heartbeat/command response.
+    telemetry_interval_seconds = models.PositiveIntegerField(default=60)
 
     # Pending command for the device, returned in the next heartbeat response and
     # then cleared. "" | "capture_image" | "stream" | "wifi_stream".
@@ -89,6 +107,12 @@ class Device(models.Model):
         """True if ``user``'s role on this device is >= ``level``."""
         role = self.role_for(user)
         return role is not None and _ROLE_RANK[role] >= _ROLE_RANK[level]
+
+    @property
+    def telemetry_interval_label(self) -> str:
+        """Human label for the current beat interval (e.g. '1 minute')."""
+        return dict(TELEMETRY_INTERVAL_CHOICES).get(
+            self.telemetry_interval_seconds, f"{self.telemetry_interval_seconds}s")
 
     @property
     def map_url(self) -> str:

@@ -154,6 +154,8 @@ class DeviceHeartbeatView(APIView):
                 "image_stored": bool(image_key),
                 "command": command,
                 "params": params,
+                # The device adopts this as its beat cadence (dashboard-set).
+                "telemetry_interval": device.telemetry_interval_seconds,
             },
             status=201,
         )
@@ -180,4 +182,10 @@ class DeviceCommandView(APIView):
             device.pending_command = ""
             device.command_params = {}
             device.save(update_fields=["pending_command", "command_params"])
-        return Response({"command": command, "params": params})
+        return Response({
+            "command": command,
+            "params": params,
+            # Carry the cadence here too so a rate change applies within seconds
+            # even when the beat interval is long.
+            "telemetry_interval": device.telemetry_interval_seconds,
+        })
