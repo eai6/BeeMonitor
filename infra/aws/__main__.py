@@ -355,6 +355,10 @@ credential_key_secret = _secret(
     "credential-key", "credential-key",
     "Fernet key encrypting external cloud-source credentials (apps/sources/)",
 )
+anthropic_api_key_secret = _secret(
+    "anthropic-api-key", "anthropic-api-key",
+    "Anthropic API key for the in-dashboard setup assistant (apps/setup/)",
+)
 
 # Populate the secret values via pulumi_random so they never appear in source.
 # pulumi_random keeps the generated value in the (passphrase-encrypted) state
@@ -405,11 +409,21 @@ aws.secretsmanager.SecretVersion(
     secret_string=credential_key_value.base64,
 )
 
+# The Anthropic key is externally provided (not generated): its value comes from
+# the passphrase-encrypted Pulumi config (`pulumi config set --secret
+# anthropic-api-key ...`) so it never appears in plaintext source.
+aws.secretsmanager.SecretVersion(
+    "anthropic-api-key-v1",
+    secret_id=anthropic_api_key_secret.id,
+    secret_string=config.require_secret("anthropic-api-key"),
+)
+
 # The task role needs to read these secrets at runtime. Restrict to the
-# four secret ARNs above.
+# five secret ARNs above.
 task_secrets_policy_doc = pulumi.Output.all(
     django_secret_key.arn, db_password_secret.arn,
     api_key_pepper.arn, credential_key_secret.arn,
+    anthropic_api_key_secret.arn,
 ).apply(lambda arns: json.dumps({
     "Version": "2012-10-17",
     "Statement": [{
@@ -773,11 +787,13 @@ if deploy_service:
         db_password_secret.arn,
         api_key_pepper.arn,
         credential_key_secret.arn,
+        anthropic_api_key_secret.arn,
     ).apply(lambda arns: {
         "DJANGO_SECRET_KEY": arns[0],
         "DB_PASSWORD": arns[1],
         "BEEMONITOR_API_KEY_PEPPER": arns[2],
         "BEEMONITOR_CREDENTIAL_KEY": arns[3],
+        "ANTHROPIC_API_KEY": arns[4],
     })
 
     web_service = aws.apprunner.Service(
