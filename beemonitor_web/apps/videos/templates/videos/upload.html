@@ -18,6 +18,18 @@
     </div>
 
     <div class="mb-4">
+      <label for="deviceSelect" class="block text-sm font-medium text-gray-700 mb-1">Device (optional)</label>
+      <select id="deviceSelect"
+              class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+        <option value="">— no device —</option>
+        {% for d in devices %}
+        <option value="{{ d.id }}">{{ d.name }}{% if d.location %} ({{ d.location }}){% endif %}</option>
+        {% endfor %}
+      </select>
+      <p class="mt-1 text-xs text-gray-500">Attribute this clip to a device (e.g. a USB copy) so it shows on the device page, in device filters, and inherits its location.</p>
+    </div>
+
+    <div class="mb-4">
       <label for="video_file" class="block text-sm font-medium text-gray-700 mb-1">Video File</label>
       <input type="file" id="video_file" accept="video/mp4,video/x-matroska,video/quicktime,.h264" required
              class="w-full border border-gray-300 rounded px-3 py-2 text-sm file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:text-sm file:bg-amber-50 file:text-amber-700">
@@ -128,11 +140,14 @@
       await putToS3(init.upload_url, file, (pct) => setProgress(pct, 'Uploading to S3…'));
 
       setProgress(100, 'Finalizing…');
-      await postJson('/api/v1/web-uploads/complete', {
+      const body = {
         storage_key: init.storage_key,
         file_size_bytes: file.size,
         title: title,
-      });
+      };
+      const deviceEl = document.getElementById('deviceSelect');
+      if (deviceEl && deviceEl.value) body.device_id = deviceEl.value;
+      await postJson('/api/v1/web-uploads/complete', body);
       window.location.href = "{% url 'videos:list' %}";
     } catch (e) {
       showError(e.message || String(e));

@@ -129,6 +129,7 @@ class WebUploadCompleteView(APIView):
             return Response({"detail": "file_size_bytes must be an integer."}, status=400)
         title = (request.data.get("title") or "").strip()
         site_name_override = (request.data.get("site_name") or "").strip()
+        device_id = request.data.get("device_id")
 
         if not storage_key:
             return Response({"detail": "storage_key is required."}, status=400)
@@ -157,12 +158,23 @@ class WebUploadCompleteView(APIView):
         if not title:
             title = filename.rsplit(".", 1)[0] if "." in filename else filename
 
+        # Optional device attribution (e.g. uploading USB-copied clips so they
+        # land in the cloud the same as cellular/WiFi uploads). Only devices the
+        # user owns; the site name defaults to the device's location.
+        device = None
+        if device_id:
+            from apps.devices.models import Device
+            device = Device.objects.filter(pk=device_id, owner=user).first()
+            if device is None:
+                return Response({"detail": "Unknown device."}, status=400)
+
         parsed_site, parsed_recorded_at = Video.parse_timestamp_from_filename(filename)
-        final_site = site_name_override or parsed_site or ""
+        final_site = site_name_override or (device.location if device else "") or parsed_site or ""
         final_recorded_at = parsed_recorded_at or timezone.now().astimezone(dt_timezone.utc)
 
         video = Video.objects.create(
             user=user,
+            device=device,
             title=title,
             storage_key=storage_key,
             file_size_bytes=file_size_bytes,

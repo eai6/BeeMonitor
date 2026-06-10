@@ -15,11 +15,23 @@
   <form id="csrf-form">{% csrf_token %}</form>
 
   <div class="mb-6">
+    <label for="deviceSelect" class="block text-sm font-medium text-gray-700 mb-1">Device (optional)</label>
+    <select id="deviceSelect"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-amber-500 focus:border-amber-500">
+      <option value="">— no device —</option>
+      {% for d in devices %}
+      <option value="{{ d.id }}">{{ d.name }}{% if d.location %} ({{ d.location }}){% endif %}</option>
+      {% endfor %}
+    </select>
+    <p class="mt-1 text-xs text-gray-500">Attribute these clips to a device (e.g. a field USB copy) — they appear on the device page, in device filters, and inherit its location.</p>
+  </div>
+
+  <div class="mb-6">
     <label for="site_name" class="block text-sm font-medium text-gray-700 mb-1">Site Name (optional)</label>
     <input type="text" id="site_name"
            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-amber-500 focus:border-amber-500"
            placeholder="e.g. hive_station_alpha">
-    <p class="mt-1 text-xs text-gray-500">If blank, the site name is parsed from filenames (format: <code>site_YYYY-MM-DD_HH_MM_SS.mp4</code>).</p>
+    <p class="mt-1 text-xs text-gray-500">Overrides the device location. If both blank, parsed from filenames (<code>site_YYYY-MM-DD_HH_MM_SS.mp4</code>).</p>
   </div>
 
   <div class="mb-6">
@@ -69,6 +81,7 @@ document.addEventListener('DOMContentLoaded', function() {
   const fileCount = document.getElementById('fileCount');
   const submitBtn = document.getElementById('submitBtn');
   const siteNameEl = document.getElementById('site_name');
+  const deviceEl = document.getElementById('deviceSelect');
   const errorBox = document.getElementById('errorBox');
 
   // Per-file state: { file, statusEl, barEl, pctEl, status }
@@ -169,7 +182,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
 
-  async function uploadOne(entry, siteName) {
+  async function uploadOne(entry, siteName, deviceId) {
     const { file, barEl, statusEl } = entry;
     statusEl.textContent = 'signing…';
     const init = await postJson('/api/v1/web-uploads/initiate', {
@@ -190,6 +203,7 @@ document.addEventListener('DOMContentLoaded', function() {
       file_size_bytes: file.size,
     };
     if (siteName) body.site_name = siteName;
+    if (deviceId) body.device_id = deviceId;
     await postJson('/api/v1/web-uploads/complete', body);
 
     barEl.style.width = '100%';
@@ -204,10 +218,11 @@ document.addEventListener('DOMContentLoaded', function() {
     submitBtn.disabled = true;
     submitBtn.textContent = 'Uploading…';
     const siteName = siteNameEl.value.trim();
+    const deviceId = deviceEl ? deviceEl.value : '';
     let failed = 0;
     for (const entry of files) {
       try {
-        await uploadOne(entry, siteName);
+        await uploadOne(entry, siteName, deviceId);
       } catch (e) {
         failed++;
         entry.statusEl.textContent = 'failed';

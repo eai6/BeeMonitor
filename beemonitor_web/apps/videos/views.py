@@ -147,6 +147,12 @@ def _upload_to_storage(blob_path, video_file):
         return False
 
 
+def _user_devices(user):
+    """Devices the user can attribute uploads to (owned)."""
+    from apps.devices.models import Device
+    return Device.objects.filter(owner=user).order_by("name")
+
+
 class VideoUploadView(LoginRequiredMixin, TemplateView):
     """Just renders the upload page.
 
@@ -156,6 +162,11 @@ class VideoUploadView(LoginRequiredMixin, TemplateView):
     """
     template_name = "videos/upload.html"
 
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["devices"] = _user_devices(self.request.user)
+        return ctx
+
 
 class VideoBatchUploadView(LoginRequiredMixin, TemplateView):
     """Just renders the batch upload page.
@@ -164,6 +175,11 @@ class VideoBatchUploadView(LoginRequiredMixin, TemplateView):
     selected file client-side and reports per-file progress.
     """
     template_name = "videos/batch_upload.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["devices"] = _user_devices(self.request.user)
+        return ctx
 
 
 class VideoDetailView(LoginRequiredMixin, DetailView):
