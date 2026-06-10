@@ -159,12 +159,11 @@ layers:
 | `beemonitor-uploader.service` | `uploader.py` | Streams snippets to S3 — **WiFi-gated** (video waits for WiFi) |
 | `beemonitor-calibrate.timer` → `.service` | `main_motion.py --calibrate` | Daily (15:00): learns the bee blob-size window from recorded snippets with YOLO |
 
-All read configuration from `/etc/beemonitor/uploader.env`. Both paths assume the
+All read configuration from `/etc/beemonitor/uploader.env`. Installation assumes the
 Pi is already running Raspberry Pi OS — see **[Step 0](#step-0-flash-raspberry-pi-os)**
-to flash it first. Then pick one: the **[Quick Install](#quick-install-cellular-field-unit)**
-copy-paste recipe below (everything in one go), or the step-by-step
+to flash it first, then work through the step-by-step
 **[Steps 0–7](#step-0-flash-raspberry-pi-os)** + **[Step 10](#step-10-cellular-connectivity-sixfab-4g-lte)**
-walkthrough. Either way, **[Manage all services](#manage-all-services)** is the
+walkthrough. **[Manage all services](#manage-all-services)** is the
 single reference for enabling, checking, and restarting the whole set once
 installed.
 
@@ -173,115 +172,6 @@ installed.
 > WiFi-gated** and held on disk until WiFi is available. See
 > [How Motion-Gated Recording Works](#how-motion-gated-recording-works) and
 > [Device monitoring](#device-monitoring--telemetry).
-
-### Quick Install (cellular field unit)
-
-For a fast (re)deploy on a Pi that already has Raspberry Pi OS flashed (with the
-`beemonitor` user — see [Step 0](#step-0-flash-raspberry-pi-os)), the camera
-focused, and WittyPi set up. Run the blocks below top-to-bottom; the only manual
-steps are editing the env file and bringing up the modem. The detailed
-walkthrough follows in Steps 1–7.
-
-```bash
-# 1. Code
-cd ~ && git clone https://github.com/eai6/BeeMonitor.git
-cd ~/BeeMonitor/hardware
-
-# 2. System deps + virtualenv (picamera2/cv2 from apt; pip deps in the venv).
-#    --system-site-packages lets the venv import the apt-installed picamera2/cv2.
-#    libqmi-utils/udhcpc/nftables are the cellular stack (skip on a WiFi unit).
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y python3-picamera2 python3-opencv ffmpeg python3-venv \
-                    libqmi-utils udhcpc nftables
-python3 -m venv --system-site-packages ~/BeeMonitor/hardware/venv
-~/BeeMonitor/hardware/venv/bin/pip install --upgrade pip
-~/BeeMonitor/hardware/venv/bin/pip install requests
-# ultralytics = calibration only. Install the CPU torch wheels FIRST, or YOLO
-# inference SIGILLs on the Pi's ARM CPU (illegal instruction / status=4).
-~/BeeMonitor/hardware/venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-~/BeeMonitor/hardware/venv/bin/pip install ultralytics
-
-# 3. Output directories + seed the starter motion calibration so the recorder
-#    starts on a tight bee-sized window [62, 554] instead of wide-open [20, 5000].
-#    The daily calibrate job later replaces it with values learned on THIS unit.
-#    Run WITHOUT sudo (NO `sudo` below) — the recorder runs as 'beemonitor' and
-#    can't write a root-owned output tree ("permission denied" saving video).
-#    Already ran it as root? Fix with:
-#      sudo chown -R beemonitor:beemonitor /home/beemonitor/Desktop/cameraOutput
-~/BeeMonitor/hardware/venv/bin/python makeDirectories.py
-cp calibration.sample.json /home/beemonitor/Desktop/cameraOutput/calibration.json
-
-# 4. Credentials + tuning  (EDIT: paste your bmk_device_ key, then save)
-sudo mkdir -p /etc/beemonitor
-sudo tee /etc/beemonitor/uploader.env >/dev/null <<'EOF'
-BEEMONITOR_API_BASE=https://mqnafc3ejc.us-east-1.awsapprunner.com
-BEEMONITOR_DEVICE_KEY=bmk_device_REPLACE_ME
-BEEMONITOR_RECORD_DIR=/home/beemonitor/Desktop/cameraOutput/beeHotel
-EOF
-sudo nano /etc/beemonitor/uploader.env      # <-- paste the real device key
-sudo chmod 600 /etc/beemonitor/uploader.env
-
-# 5. Cellular modem prep (SKIP on a WiFi/bench unit — go to step 6).
-#    See Step 10 for kit-specifics (SIM, antennas, and the one-time USB-mode
-#    switch — Telit LE910C4-NF uses AT#USBCFG, not Quectel's AT+QCFG).
-#    First confirm the modem enumerated in QMI mode (else do Step 10.1 first):
-lsusb | grep -i 1bc7:1201 && ls /dev/cdc-wdm0   # Telit modem + QMI control node
-sudo systemctl disable --now ModemManager.service 2>/dev/null || true  # fights QMI; harmless if not installed
-# The sample already sets APN=super — the APN for the Sixfab SIM (Sixfab
-# resells the Twilio Super SIM). So for a Sixfab SIM the cp is all you need;
-# only nano the file if you're on a different carrier (hologram, soracom.io, …).
-sudo cp cellular/qmi-network.conf.sample /etc/qmi-network.conf
-# sudo nano /etc/qmi-network.conf                          # only if NOT a Sixfab SIM
-# Pin DNS as the single source of truth. chattr -i first so re-runs don't fail
-# on an already-immutable file; rm -f removes the managed SYMLINK that fresh Pi
-# OS images use (NetworkManager/systemd-resolved), so we write a REAL static file
-# instead of writing through the link (which leaves DNS pointed at 127.0.0.53 and
-# breaks name resolution over cellular — 8.8.8.8 pings but google.com doesn't).
-sudo chattr -i /etc/resolv.conf 2>/dev/null || true
-sudo rm -f /etc/resolv.conf
-printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' | sudo tee /etc/resolv.conf
-sudo chattr +i /etc/resolv.conf                            # pin DNS (immutable)
-chmod +x cellular/cellular-up.sh cellular/cellular-firewall.sh
-
-# 6. Install ALL unit files (drop the two cellular units on a WiFi/bench unit)
-sudo cp systemd/cellular-firewall.service    /etc/systemd/system/
-sudo cp systemd/cellular.service             /etc/systemd/system/
-sudo cp systemd/beemonitor-recorder.service  /etc/systemd/system/
-sudo cp systemd/beemonitor-telemetry.service /etc/systemd/system/
-sudo cp systemd/beemonitor-uploader.service  /etc/systemd/system/
-sudo cp systemd/beemonitor-calibrate.service /etc/systemd/system/
-sudo cp systemd/beemonitor-calibrate.timer   /etc/systemd/system/
-
-# 6b. Let the telemetry service control WiFi from the dashboard (on/off/connect).
-#     The telemetry service runs as 'beemonitor'; nmcli state changes need root,
-#     so grant passwordless nmcli to that user only.
-echo 'beemonitor ALL=(root) NOPASSWD: /usr/bin/nmcli' | sudo tee /etc/sudoers.d/beemonitor-nmcli >/dev/null
-sudo chmod 440 /etc/sudoers.d/beemonitor-nmcli
-sudo visudo -cf /etc/sudoers.d/beemonitor-nmcli   # syntax-check the drop-in
-
-# 7. Enable + start everything (firewall and link first, then the app layer).
-#    On a WiFi/bench unit, omit the cellular-firewall + cellular line.
-sudo systemctl daemon-reload
-sudo systemctl enable --now cellular-firewall.service cellular.service
-sudo systemctl enable --now beemonitor-recorder.service beemonitor-telemetry.service beemonitor-uploader.service
-sudo systemctl enable --now beemonitor-calibrate.timer
-
-# 8. Verify the whole stack (see "Manage all services" for the one-liners)
-systemctl --no-pager status cellular.service beemonitor-recorder.service \
-  beemonitor-telemetry.service beemonitor-uploader.service
-ping -c 3 8.8.8.8
-journalctl -u beemonitor-uploader.service -f   # watch snippets upload to S3
-```
-
-> With the seed calibration from step 3 the recorder starts on a tight window
-> (`[62, 554]`); the daily calibrate timer then refines it from this unit's own
-> snippets. (Skip the seed and it starts wide-open at `[20, 5000]` until the first
-> calibration.) To calibrate immediately once a few clips exist:
-> `~/BeeMonitor/hardware/venv/bin/python ~/BeeMonitor/hardware/main_motion.py --calibrate --force`
-
-> **WiFi / bench unit?** Skip steps 5, the two cellular `cp` lines in step 6, and
-> the `cellular-firewall.service cellular.service` line in step 7. The app layer
-> works over any network — it just needs a route to the internet.
 
 ### Step 0: Flash Raspberry Pi OS
 
