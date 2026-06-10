@@ -132,3 +132,29 @@ class Video(models.Model):
             self.day = self.recorded_at.day
             self.hour = self.recorded_at.hour
         super().save(*args, **kwargs)
+
+
+class PendingDeviceDeletion(models.Model):
+    """Tombstone so a clip's on-device (SD) copy still gets freed after the
+    cloud Video row is deleted.
+
+    The device cleanup endpoint normally lists live ``Video`` rows the user
+    cleared for device deletion. But cloud-deleting a Video removes that row, so
+    if its SD copy hadn't been freed yet it would be orphaned forever. On
+    cloud-delete we drop a tombstone here keyed by the *original* video id —
+    which still matches the Pi's ``<clip>.uploaded`` sidecar — so the device
+    frees it on the next cleanup pass. The device's confirmation deletes the
+    tombstone.
+    """
+
+    device = models.ForeignKey(
+        "devices.Device", on_delete=models.CASCADE, related_name="pending_deletions",
+    )
+    video_id = models.IntegerField()  # the now-deleted Video.id; matches the sidecar
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("device", "video_id")
+
+    def __str__(self) -> str:
+        return f"pending device-delete dev={self.device_id} video={self.video_id}"

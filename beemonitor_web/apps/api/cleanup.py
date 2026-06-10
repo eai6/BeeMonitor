@@ -18,7 +18,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.devices.models import Device
-from apps.videos.models import Video
+from apps.videos.models import PendingDeviceDeletion, Video
 
 from .authentication import DeviceKeyAuthentication
 
@@ -47,6 +47,15 @@ class DeviceCleanupView(APIView):
             .order_by("uploaded_at")
             .values_list("id", flat=True)[:MAX_BATCH]
         )
+        # Also include tombstones — clips whose cloud Video was deleted while an
+        # on-device copy may still exist (the id still matches the Pi's sidecar).
+        if len(ids) < MAX_BATCH:
+            tomb = list(
+                PendingDeviceDeletion.objects.filter(device=device)
+                .order_by("created_at")
+                .values_list("video_id", flat=True)[: MAX_BATCH - len(ids)]
+            )
+            ids = list(dict.fromkeys(ids + tomb))  # de-dup, preserve order
         return Response({"video_ids": ids})
 
     def post(self, request):
@@ -67,5 +76,7 @@ class DeviceCleanupView(APIView):
                 device_deleted_at__isnull=True,
             ).update(device_deleted_at=timezone.now())
         )
-        logger.info("device %s confirmed %d local deletions", device.id, n)
-        return Response({"confirmed": n})
+        # Clear any tombstones the device just freed (cloud copy already gone).
+        t = PendingDeviceDeletion.objects.filter(device=device, video_id__in=ids).delete()[0]
+        logger.info("device %s confirmed %d local deletions (+%d tombstoned)", device.id, n, t)
+        return Response({"confirmed": n + t})

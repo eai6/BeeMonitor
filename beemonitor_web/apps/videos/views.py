@@ -286,6 +286,16 @@ class VideoExportCSVView(LoginRequiredMixin, View):
         return response
 
 
+def _tombstone_device_copy(video):
+    """Leave a tombstone so the device frees the clip's SD copy after the cloud
+    Video row is deleted (otherwise an un-freed on-device copy is orphaned)."""
+    if video.device_id and video.device_deleted_at is None:
+        from .models import PendingDeviceDeletion
+        PendingDeviceDeletion.objects.get_or_create(
+            device_id=video.device_id, video_id=video.id,
+        )
+
+
 class VideoDeleteView(LoginRequiredMixin, View):
     """Delete a single video and its S3 objects."""
 
@@ -294,6 +304,7 @@ class VideoDeleteView(LoginRequiredMixin, View):
         title = video.title
 
         _delete_storage_objects_for_video(video)
+        _tombstone_device_copy(video)  # keep the device cleanup intent alive
         video.delete()  # CASCADE handles Jobs, JobResults, Annotations
 
         messages.success(request, f"Deleted video: {title}")
@@ -314,6 +325,7 @@ class VideoBatchDeleteView(LoginRequiredMixin, View):
 
         for video in videos:
             _delete_storage_objects_for_video(video)
+            _tombstone_device_copy(video)
 
         videos.delete()
 
