@@ -89,9 +89,12 @@
       <div class="bg-white shadow rounded-lg p-4">
         <div class="text-xs text-gray-500 uppercase tracking-wide">Storage</div>
         {% if storage_pct is not None %}
-        <div class="mt-2 text-2xl font-semibold text-gray-900">{{ storage_pct|floatformat:0 }}%</div>
-        <div class="mt-1 text-xs text-gray-400">{{ metrics.storage_free_human|default:"—" }} free</div>
+        <div class="mt-2 text-2xl font-semibold text-gray-900">{{ storage_pct|floatformat:1 }}%</div>
+        <div class="mt-1 text-xs text-gray-400">{{ metrics.storage_free_human|default:"—" }} free (whole card)</div>
         {% else %}<div class="mt-2 text-2xl font-semibold text-gray-300">—</div>{% endif %}
+        {% if metrics.recordings_human %}
+        <div class="mt-1 text-xs text-gray-500">Clips: <span class="font-medium text-gray-700">{{ metrics.recordings_human }}</span>{% if metrics.videos_recorded %} · {{ metrics.videos_recorded }} on device{% endif %}</div>
+        {% endif %}
       </div>
       <!-- Uptime -->
       <div class="bg-white shadow rounded-lg p-4">

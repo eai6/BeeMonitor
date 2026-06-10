@@ -193,6 +193,7 @@ def _video_stats(window_seconds: int) -> dict:
     """
     now = time.time()
     total = pending = pending_bytes = recent = 0
+    recordings_bytes = 0
     newest = 0.0
     if RECORD_DIR.is_dir():
         for mp4 in RECORD_DIR.rglob("*.mp4"):
@@ -201,6 +202,7 @@ def _video_stats(window_seconds: int) -> dict:
                 st = mp4.stat()
             except OSError:
                 continue
+            recordings_bytes += st.st_size  # footprint of ALL clips on the card
             if st.st_mtime > newest:
                 newest = st.st_mtime
             if st.st_mtime >= now - window_seconds:
@@ -212,6 +214,7 @@ def _video_stats(window_seconds: int) -> dict:
         "videos_recorded": total,
         "pending_uploads": pending,
         "bytes_pending_upload": pending_bytes,
+        "recordings_bytes": recordings_bytes,
         "snippets_last_period": recent,
         "newest_mtime": newest,
     }
@@ -257,6 +260,10 @@ def collect_metrics() -> dict:
     m["videos_recorded"] = vs["videos_recorded"]
     m["pending_uploads"] = vs["pending_uploads"]
     m["bytes_pending_upload"] = vs["bytes_pending_upload"]
+    # Footprint of the recorded clips themselves (responds to device cleanup,
+    # unlike whole-card storage_pct).
+    m["recordings_bytes"] = vs["recordings_bytes"]
+    m["recordings_human"] = _human_bytes(vs["recordings_bytes"])
     # Activity proxy: snippets recorded in the trailing ACTIVITY_PERIOD window
     # (decoupled from the 60s beat — 1h by default).
     m["snippets_last_period"] = vs["snippets_last_period"]
