@@ -9,3 +9,5 @@ boto3>=1.28.0
 cryptography>=42.0.0
 whitenoise>=6.6
 gunicorn>=21.2
+anthropic>=0.109
+python-dotenv>=1.0
