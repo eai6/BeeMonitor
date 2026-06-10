@@ -93,7 +93,7 @@
         <div class="mt-1 text-xs text-gray-400">{{ metrics.storage_free_human|default:"—" }} free (whole card)</div>
         {% else %}<div class="mt-2 text-2xl font-semibold text-gray-300">—</div>{% endif %}
         {% if metrics.recordings_human %}
-        <div class="mt-1 text-xs text-gray-500">Clips: <span class="font-medium text-gray-700">{{ metrics.recordings_human }}</span>{% if metrics.videos_recorded %} · {{ metrics.videos_recorded }} on device{% endif %}</div>
+        <div class="mt-1 text-xs text-gray-500">Clips: <span class="font-medium text-gray-700">{{ metrics.recordings_human }}</span>{% if metrics.videos_recorded %} · {{ metrics.videos_recorded }} on device{% endif %}{% if metrics.usb_transferred %} · {{ metrics.usb_transferred }} to USB{% endif %}</div>
         {% endif %}
       </div>
       <!-- Uptime -->

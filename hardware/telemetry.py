@@ -194,6 +194,7 @@ def _video_stats(window_seconds: int) -> dict:
     now = time.time()
     total = pending = pending_bytes = recent = 0
     recordings_bytes = 0
+    usb_transferred = 0
     newest = 0.0
     if RECORD_DIR.is_dir():
         for mp4 in RECORD_DIR.rglob("*.mp4"):
@@ -210,11 +211,14 @@ def _video_stats(window_seconds: int) -> dict:
             if not mp4.with_suffix(mp4.suffix + ".uploaded").exists():
                 pending += 1
                 pending_bytes += st.st_size
+            if mp4.with_suffix(mp4.suffix + ".usb").exists():
+                usb_transferred += 1  # copied to a field USB (see usb-transfer.sh)
     return {
         "videos_recorded": total,
         "pending_uploads": pending,
         "bytes_pending_upload": pending_bytes,
         "recordings_bytes": recordings_bytes,
+        "usb_transferred": usb_transferred,
         "snippets_last_period": recent,
         "newest_mtime": newest,
     }
@@ -264,6 +268,8 @@ def collect_metrics() -> dict:
     # unlike whole-card storage_pct).
     m["recordings_bytes"] = vs["recordings_bytes"]
     m["recordings_human"] = _human_bytes(vs["recordings_bytes"])
+    # Clips copied to a field USB (usb-transfer.sh writes a .usb sidecar).
+    m["usb_transferred"] = vs["usb_transferred"]
     # Activity proxy: snippets recorded in the trailing ACTIVITY_PERIOD window
     # (decoupled from the 60s beat — 1h by default).
     m["snippets_last_period"] = vs["snippets_last_period"]

@@ -1175,6 +1175,45 @@ git -C ~/BeeMonitor rev-parse --short HEAD                 # current version
 > restart, it `git reset`s back and restarts again, and the beat reports
 > `rolledback` — so a bad push can't strand an unreachable unit.
 
+## Field USB Transfer (copy clips without a laptop)
+
+For sites with no usable WiFi, you can pull recordings onto a USB stick in the
+field, then upload them to the cloud later. Transfers are tracked per-clip with a
+`<clip>.mp4.usb` sidecar — the same idea as the `.uploaded` cloud marker — so
+re-plugging only copies *new* clips, and the device page shows the count
+(`Clips: … · N to USB`).
+
+**One-time setup (auto-copy on plug-in):**
+```bash
+cd ~/BeeMonitor/hardware
+chmod +x usb-transfer.sh
+sudo cp systemd/beemonitor-usb-transfer@.service /etc/systemd/system/
+sudo cp cellular/99-beemonitor-usb.rules /etc/udev/rules.d/
+sudo udevadm control --reload && sudo systemctl daemon-reload
+```
+Label a stick once so only intended drives trigger it:
+```bash
+sudo fatlabel /dev/sdX1 BEEMONITOR     # or: sudo mkfs.vfat -n BEEMONITOR /dev/sdX1
+```
+Now just **plug it in** — a drive labelled `BEEMONITOR` is detected, all new clips
+are copied to `BeeMonitor/<hostname>/…` (date structure preserved) with a
+`manifest.csv`, sidecars are written, and the stick is unmounted. Watch it:
+```bash
+journalctl -u 'beemonitor-usb-transfer@*' -f      # "done: copied N, skipped …"
+```
+
+**Manual (any stick, no label needed):**
+```bash
+sudo bash ~/BeeMonitor/hardware/usb-transfer.sh /media/pi/STICK   # or /dev/sda1, or no arg to auto-detect
+BEEMONITOR_USB_ALL=1 sudo bash usb-transfer.sh …                  # re-copy everything
+```
+
+**Get them into the cloud:** on the web app, **Videos → Upload** (or batch),
+pick the **Device** in the dropdown, and select the files from the stick. They
+land attributed to that device (and its location) exactly like cellular/WiFi
+uploads — appearing on the device page, in device filters, and device-aware
+analytics. The USB `manifest.csv` lists which device each clip came from.
+
 ## Testing & Verification
 
 Run these stages **in order** before relying on the unit in the field. Each one

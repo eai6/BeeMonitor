@@ -1,0 +1,12 @@
+[Unit]
+Description=BeeMonitor USB transfer (%i)
+# Triggered by udev (99-beemonitor-usb.rules) when a USB drive labelled
+# BEEMONITOR is plugged in. %i is the kernel block name, e.g. sda1.
+After=local-fs.target
+
+[Service]
+Type=oneshot
+# RECORD_DIR + BEEMONITOR_DEVICE_KEY come from the shared env file.
+EnvironmentFile=-/etc/beemonitor/uploader.env
+ExecStart=/home/beemonitor/BeeMonitor/hardware/usb-transfer.sh /dev/%i
+# No [Install]: started on demand by udev, not enabled at boot.
