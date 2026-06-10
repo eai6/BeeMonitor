@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Set up a device - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto">
+  <h1 class="text-2xl font-bold text-gray-900 mb-1">Set up a device</h1>
+  <p class="text-sm text-gray-500 mb-6">
+    A guided, step-by-step walkthrough to build and bring a BeeMonitor unit
+    online — with your device key pre-filled and live checks that confirm each
+    part is working.
+  </p>
+
+  {% if devices %}
+  <div class="space-y-3">
+    {% for d in devices %}
+    <a href="{% url 'setup:walkthrough' d.device.pk %}"
+       class="flex items-center justify-between bg-white shadow rounded-lg p-4 hover:bg-amber-50 transition">
+      <div>
+        <div class="font-medium text-gray-900">{{ d.device.name }}</div>
+        <div class="text-xs text-gray-500">
+          {% if d.device.location %}{{ d.device.location }} · {% endif %}
+          {% if d.unit_type == 'wifi' %}WiFi / bench{% elif d.unit_type == 'cellular' %}Cellular field{% else %}unit type not chosen{% endif %}
+        </div>
+      </div>
+      <span class="text-sm font-medium text-amber-700">
+        {% if d.in_progress %}Resume setup →{% else %}Start setup →{% endif %}
+      </span>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="bg-white shadow rounded-lg p-6 text-center">
+    <p class="text-sm text-gray-600 mb-4">You don't have any devices yet. Create
+      one first — you'll get a device key, then we'll walk you through the build.</p>
+    <a href="{% url 'devices:add' %}"
+       class="inline-block bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">
+      Create a device
+    </a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

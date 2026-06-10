@@ -1,0 +1,261 @@
+{% extends "base.html" %}
+{% block title %}Set up {{ device.name }} - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+  <div class="flex items-center justify-between flex-wrap gap-2">
+    <div>
+      <a href="{% url 'setup:index' %}" class="text-xs text-amber-700 hover:underline">&larr; All devices</a>
+      <h1 class="text-2xl font-bold text-gray-900">Set up {{ device.name }}</h1>
+    </div>
+    {% if unit_chosen %}
+    <div class="text-right">
+      <div class="text-xs text-gray-500">{{ steps_done }} of {{ steps_total }} steps</div>
+      <div class="w-48 bg-gray-200 rounded-full h-2 mt-1">
+        <div class="bg-amber-600 h-2 rounded-full" style="width: {{ progress_pct }}%"></div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% if not unit_chosen %}
+  <!-- Branch: WiFi vs cellular -->
+  <div class="max-w-2xl mx-auto bg-white shadow rounded-lg p-6">
+    <h2 class="text-lg font-semibold text-gray-900 mb-1">Which kind of unit are you building?</h2>
+    <p class="text-sm text-gray-500 mb-5">This tailors the steps — cellular units have extra modem/firewall steps.</p>
+    <form method="post" action="{% url 'setup:set_unit' device.pk %}" class="grid sm:grid-cols-2 gap-4">
+      {% csrf_token %}
+      <button name="unit_type" value="wifi"
+              class="border-2 border-gray-200 hover:border-amber-500 rounded-lg p-5 text-left">
+        <div class="font-semibold text-gray-900">WiFi / bench unit</div>
+        <div class="text-xs text-gray-500 mt-1">Uploads over WiFi. No cellular modem. Simplest build.</div>
+      </button>
+      <button name="unit_type" value="cellular"
+              class="border-2 border-gray-200 hover:border-amber-500 rounded-lg p-5 text-left">
+        <div class="font-semibold text-gray-900">Cellular field unit</div>
+        <div class="text-xs text-gray-500 mt-1">Sixfab 4G LTE for remote sites. Adds modem, APN, and firewall steps.</div>
+      </button>
+    </form>
+  </div>
+{% else %}
+
+<div class="grid lg:grid-cols-3 gap-6">
+  <!-- Stepper -->
+  <div class="lg:col-span-2 space-y-8">
+    {% if not has_key %}
+    <div class="bg-yellow-50 border border-yellow-300 rounded-md p-3 text-xs text-yellow-900">
+      Your one-time device key isn't available in this browser session, so command
+      blocks show a placeholder. Paste your saved key where you see
+      <code>bmk_device_REPLACE_ME</code>.
+    </div>
+    {% endif %}
+
+    {% for phase in phases %}
+    <section>
+      <h2 class="text-lg font-semibold text-gray-900">{{ phase.title }}</h2>
+      <p class="text-sm text-gray-500 mb-3">{{ phase.subtitle }}</p>
+
+      <div class="space-y-3">
+        {% for step in phase.steps %}
+        <div id="step-{{ step.id }}"
+             class="bg-white shadow rounded-lg p-4 border-l-4
+             {% if step.status == 'passed' %}border-green-500{% elif step.status == 'skipped' %}border-gray-300{% elif step.status == 'failed' %}border-red-500{% elif step.id == current_step %}border-amber-500{% else %}border-transparent{% endif %}">
+          <div class="flex items-start justify-between gap-3">
+            <div class="flex-1">
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="text-base">
+                  {% if step.status == 'passed' %}✅{% elif step.status == 'skipped' %}⏭️{% elif step.status == 'failed' %}❌{% else %}⬜{% endif %}
+                </span>
+                <h3 class="font-medium text-gray-900">{{ step.title }}</h3>
+                {% if step.optional %}<span class="text-[10px] uppercase tracking-wide bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">optional</span>{% endif %}
+                {% if step.applies_to != 'both' %}<span class="text-[10px] uppercase tracking-wide bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">{{ step.applies_to }}</span>{% endif %}
+                <span class="text-[10px] text-gray-400">~{{ step.minutes }} min · {{ step.difficulty }}</span>
+              </div>
+              <p class="text-sm text-gray-600 mt-2">{{ step.concept }}</p>
+            </div>
+          </div>
+
+          {% if step.rendered_command %}
+          <div class="relative mt-3">
+            <button type="button" onclick="copyCmd(this)"
+                    class="absolute right-2 top-2 bg-gray-700 hover:bg-gray-600 text-white text-[11px] px-2 py-1 rounded">Copy</button>
+            <pre class="bg-gray-900 text-green-400 rounded p-3 pr-16 text-xs overflow-x-auto whitespace-pre">{{ step.rendered_command }}</pre>
+          </div>
+          {% endif %}
+
+          {% if step.expected %}
+          <p class="text-xs text-gray-500 mt-2"><span class="font-medium text-gray-700">What you should see:</span> {{ step.expected }}</p>
+          {% endif %}
+
+          {% for ce in step.common_errors %}
+          <div class="mt-2 text-xs bg-red-50 border border-red-200 rounded px-2 py-1.5 text-red-800">
+            <span class="font-medium">⚠️ {{ ce.symptom }}</span> — {{ ce.fix }}
+          </div>
+          {% endfor %}
+
+          {% if step.verify %}
+          <div class="mt-3 flex items-center gap-2 flex-wrap" data-verify="{{ step.verify }}" data-step="{{ step.id }}">
+            <button type="button" onclick="runVerify(this)"
+                    class="bg-amber-600 hover:bg-amber-700 text-white text-xs px-3 py-1.5 rounded">Check now</button>
+            <span class="verify-result text-xs text-gray-500">
+              {% if step.state_detail %}{{ step.state_detail }}{% else %}Runs a live check against your device.{% endif %}
+            </span>
+          </div>
+          {% endif %}
+
+          <div class="mt-3 flex gap-2">
+            {% if step.status != 'passed' %}
+            <button type="button" onclick="stepAction('complete','{{ step.id }}')"
+                    class="bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1.5 rounded">Mark done</button>
+            {% endif %}
+            {% if step.optional and step.status != 'skipped' %}
+            <button type="button" onclick="stepAction('skip','{{ step.id }}')"
+                    class="bg-gray-200 hover:bg-gray-300 text-gray-700 text-xs px-3 py-1.5 rounded">Skip</button>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endfor %}
+  </div>
+
+  <!-- AI assistant -->
+  <div class="lg:col-span-1">
+    <div class="lg:sticky lg:top-4 bg-white shadow rounded-lg flex flex-col" style="max-height: 80vh;"
+         x-data="assistant({deviceId: {{ device.pk }}, step: '{{ current_step }}'})">
+      <div class="px-4 py-3 border-b">
+        <div class="font-semibold text-gray-900 text-sm">🐝 Setup Assistant</div>
+        <div class="text-xs text-gray-500">Asks your device, cites the guide, helps you debug.</div>
+      </div>
+
+      {% if assistant_enabled %}
+      <div class="flex-1 overflow-y-auto p-3 space-y-3 text-sm" x-ref="log" aria-live="polite">
+        <template x-for="(m, i) in messages" :key="i">
+          <div :class="m.role === 'user' ? 'text-right' : ''">
+            <div :class="m.role === 'user' ? 'inline-block bg-amber-100 text-gray-800' : 'inline-block bg-gray-100 text-gray-800'"
+                 class="rounded-lg px-3 py-2 whitespace-pre-wrap text-left max-w-[95%]" x-text="m.text"></div>
+          </div>
+        </template>
+        <div x-show="tool" class="text-xs text-gray-400 italic" x-text="tool"></div>
+      </div>
+      <form class="border-t p-3 flex gap-2" @submit.prevent="send()">
+        <input x-model="draft" type="text" :disabled="busy"
+               placeholder="Ask about this step, or paste an error…"
+               class="flex-1 border border-gray-300 rounded px-3 py-2 text-sm">
+        <button type="submit" :disabled="busy || !draft.trim()"
+                class="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white px-3 py-2 rounded text-sm">Send</button>
+      </form>
+      {% else %}
+      <div class="p-4 text-sm text-gray-500">
+        The AI assistant isn't enabled on this server yet
+        (<code>ANTHROPIC_API_KEY</code> not set).
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<script>
+  const CSRF = "{{ csrf_token }}";
+  const DEVICE_PK = {{ device.pk }};
+
+  function copyCmd(btn) {
+    const pre = btn.parentElement.querySelector('pre');
+    navigator.clipboard.writeText(pre.textContent).then(() => {
+      const t = btn.textContent; btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = t; }, 1500);
+    });
+  }
+
+  function stepAction(action, stepId) {
+    const fd = new FormData();
+    fd.append('action', action); fd.append('step_id', stepId);
+    fetch(`/setup/d/${DEVICE_PK}/step/`, {
+      method: 'POST', headers: {'X-CSRFToken': CSRF}, body: fd,
+    }).then(r => r.json()).then(() => location.reload());
+  }
+
+  function renderVerify(wrap, data) {
+    const span = wrap.querySelector('.verify-result');
+    const colors = {pass: 'text-green-700', fail: 'text-red-700', waiting: 'text-gray-500'};
+    span.className = 'verify-result text-xs ' + (colors[data.status] || 'text-gray-500');
+    const icon = data.status === 'pass' ? '✅ ' : data.status === 'fail' ? '❌ ' : '⏳ ';
+    span.textContent = icon + data.detail;
+    if (data.status === 'pass') setTimeout(() => location.reload(), 900);
+  }
+
+  function runVerify(btn) {
+    const wrap = btn.closest('[data-verify]');
+    const check = wrap.dataset.verify;
+    const span = wrap.querySelector('.verify-result');
+    span.textContent = 'Checking…';
+    fetch(`/setup/d/${DEVICE_PK}/verify/${check}/`)
+      .then(r => r.json()).then(d => renderVerify(wrap, d));
+  }
+
+  // Auto-poll the current step's check until it passes.
+  (function () {
+    const current = document.getElementById('step-{{ current_step }}');
+    const wrap = current && current.querySelector('[data-verify]');
+    if (!wrap) return;
+    const check = wrap.dataset.verify;
+    const timer = setInterval(() => {
+      fetch(`/setup/d/${DEVICE_PK}/verify/${check}/`)
+        .then(r => r.json()).then(d => {
+          renderVerify(wrap, d);
+          if (d.status === 'pass') clearInterval(timer);
+        }).catch(() => {});
+    }, 6000);
+  })();
+
+  function assistant({deviceId, step}) {
+    return {
+      deviceId, step, conversationId: null,
+      messages: [], draft: '', busy: false, tool: '',
+      send() {
+        const text = this.draft.trim();
+        if (!text || this.busy) return;
+        this.messages.push({role: 'user', text});
+        this.draft = ''; this.busy = true; this.tool = '';
+        const idx = this.messages.push({role: 'assistant', text: ''}) - 1;
+        this.scroll();
+        fetch('/setup/assistant/send/', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF},
+          body: JSON.stringify({
+            device_id: this.deviceId, step_id: this.step,
+            conversation_id: this.conversationId, message: text,
+          }),
+        }).then(resp => {
+          if (!resp.ok) { return resp.json().then(e => { throw new Error(e.error || 'error'); }); }
+          const reader = resp.body.getReader();
+          const dec = new TextDecoder();
+          let buf = '';
+          const pump = () => reader.read().then(({done, value}) => {
+            if (done) { this.busy = false; this.tool = ''; return; }
+            buf += dec.decode(value, {stream: true});
+            const parts = buf.split('\n\n'); buf = parts.pop();
+            for (const p of parts) {
+              const line = p.replace(/^data: /, '').trim();
+              if (!line) continue;
+              let ev; try { ev = JSON.parse(line); } catch (e) { continue; }
+              if (ev.type === 'meta') this.conversationId = ev.conversation_id;
+              else if (ev.type === 'text') { this.messages[idx].text += ev.text; this.scroll(); }
+              else if (ev.type === 'tool') this.tool = '…checking ' + ev.name.replace(/_/g, ' ');
+              else if (ev.type === 'error') { this.messages[idx].text += '\n[' + ev.text + ']'; }
+            }
+            return pump();
+          });
+          return pump();
+        }).catch(err => {
+          this.messages[idx].text = '[' + err.message + ']'; this.busy = false; this.tool = '';
+        });
+      },
+      scroll() { this.$nextTick(() => { const l = this.$refs.log; if (l) l.scrollTop = l.scrollHeight; }); },
+    };
+  }
+</script>
+{% endblock %}

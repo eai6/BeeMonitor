@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     "apps.training",
     "apps.docs",
     "apps.devices",
+    "apps.setup",
 ]
 
 MIDDLEWARE = [
@@ -159,6 +160,21 @@ MODAL_TOKEN_SECRET = os.environ.get("MODAL_TOKEN_SECRET", "")
 # Devices — a unit is "online" only if its last telemetry beat arrived within
 # this many seconds. Telemetry beats every 60s, so ~3 missed beats = offline.
 DEVICE_ONLINE_GRACE_SECONDS = int(os.environ.get("DEVICE_ONLINE_GRACE_SECONDS", "180"))
+# Base URL a field device's telemetry/uploader points at (baked into the setup
+# guide's uploader.env block). The App Runner host in prod.
+BEEMONITOR_DEVICE_API_BASE = os.environ.get(
+    "BEEMONITOR_DEVICE_API_BASE", "https://mqnafc3ejc.us-east-1.awsapprunner.com")
+
+# --- AI setup assistant (Claude) -------------------------------------------
+# Set ANTHROPIC_API_KEY in the environment to enable the in-dashboard tutor.
+# When empty, the assistant degrades gracefully to a "not configured" notice.
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+# Worker model for the tutor/debugger; Haiku for cheap routing/risk-classify.
+ASSISTANT_MODEL = os.environ.get("ASSISTANT_MODEL", "claude-sonnet-4-6")
+ASSISTANT_FAST_MODEL = os.environ.get("ASSISTANT_FAST_MODEL", "claude-haiku-4-5-20251001")
+ASSISTANT_MAX_TOKENS = int(os.environ.get("ASSISTANT_MAX_TOKENS", "1500"))
+# Per-user safety valve so a runaway chat can't burn the account.
+ASSISTANT_DAILY_MESSAGE_LIMIT = int(os.environ.get("ASSISTANT_DAILY_MESSAGE_LIMIT", "200"))
 # Persist per-heartbeat GPS on DeviceHeartbeat (location history). False = only
 # keep the latest fix on Device.
 DEVICE_STORE_GPS_PER_HEARTBEAT = os.environ.get(

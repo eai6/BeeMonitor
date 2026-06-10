@@ -291,6 +291,9 @@ class DeviceCreateView(LoginRequiredMixin, FormView):
         )
         # Stash for the one-shot "created" page.
         self.request.session[f"device_key:{device.pk}"] = raw_key
+        # Also keep it available (peeked, not popped) for the guided setup
+        # walkthrough so its command blocks can pre-fill the real key.
+        self.request.session[f"setup_key:{device.pk}"] = raw_key
         logger.info("device created: user=%s name=%s id=%s",
                     self.request.user.pk, device.name, device.pk)
         return redirect("devices:created", pk=device.pk)
@@ -314,6 +317,7 @@ class DeviceCreatedView(LoginRequiredMixin, TemplateView):
         raw_key = self.request.session.pop(f"device_key:{device.pk}", None)
         ctx["device"] = device
         ctx["raw_key"] = raw_key  # None on refresh — template handles that.
+        ctx["api_base"] = settings.BEEMONITOR_DEVICE_API_BASE
         return ctx
 
 

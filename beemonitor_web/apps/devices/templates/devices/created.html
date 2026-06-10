@@ -37,9 +37,9 @@
       Paste the key into <code class="bg-gray-100 px-1 rounded">/etc/beemonitor/uploader.env</code> on the Pi:
     </p>
     <pre class="bg-gray-900 text-green-400 rounded p-3 text-xs overflow-x-auto"
->BEEMONITOR_API_BASE=https://mqnafc3ejc.us-east-1.awsapprunner.com
+>BEEMONITOR_API_BASE={{ api_base }}
 BEEMONITOR_DEVICE_KEY={{ raw_key }}
-BEEMONITOR_RECORD_DIR=/home/apis/Desktop/cameraOutput/beeHotel
+BEEMONITOR_RECORD_DIR=/home/beemonitor/Desktop/cameraOutput/beeHotel
 BEEMONITOR_POLL_SECONDS=30</pre>
     <p class="text-xs text-gray-500 mt-3">
       Then enable the systemd service:
@@ -57,7 +57,10 @@ BEEMONITOR_POLL_SECONDS=30</pre>
   {% endif %}
 
   <div class="flex gap-3">
-    <a href="{% url 'devices:list' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">
+    <a href="{% url 'setup:walkthrough' device.pk %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">
+      Set up this device →
+    </a>
+    <a href="{% url 'devices:list' %}" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded text-sm font-medium">
       Back to devices
     </a>
   </div>
