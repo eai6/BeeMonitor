@@ -501,8 +501,10 @@ class DeviceRequestImageView(LoginRequiredMixin, View):
 
     def post(self, request, pk):
         device = _device_or_403(request.user, pk, "viewer")  # on-demand photo is data, not control
+        # Optional debug overlay: motion ROI + nest-hole detections on the still.
+        roi = request.POST.get("roi") in ("1", "true", "on")
         device.pending_command = "capture_image"
-        device.command_params = {}
+        device.command_params = {"roi": True} if roi else {}
         device.save(update_fields=["pending_command", "command_params"])
         return JsonResponse({"ok": True, "eta_seconds": settings.DEVICE_ONLINE_GRACE_SECONDS})
 

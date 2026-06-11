@@ -578,18 +578,21 @@ def _safe_mtime(p) -> float:
         return 0.0
 
 
-def _capture_now(timeout: float = 12.0):
+def _capture_now(timeout: float = 12.0, roi: bool = False):
     """Ask the recorder (via a sentinel file) for one fresh still; return its Path.
 
     The recorder owns the camera, so telemetry can't grab a frame directly — it
     drops ``capture.request`` in the queue, the recorder writes a JPEG there, and
-    we return the newest one. None if nothing arrives in ``timeout`` s.
+    we return the newest one. None if nothing arrives in ``timeout`` s. When
+    ``roi`` is set the request asks the recorder to overlay the motion ROI +
+    nest-hole detections (a debug aid; the recorder runs the model, so allow
+    more time).
     """
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
     req = QUEUE_DIR / "capture.request"
     t0 = time.time()
     try:
-        req.write_text(str(t0))
+        req.write_text("roi" if roi else str(t0))
     except OSError:
         return None
     deadline = time.time() + timeout
@@ -605,8 +608,10 @@ def _capture_now(timeout: float = 12.0):
     return None
 
 
-def _capture_and_upload() -> bool:
-    img = _capture_now()
+def _capture_and_upload(params: dict | None = None) -> bool:
+    roi = bool((params or {}).get("roi"))
+    # The ROI overlay makes the recorder run the nest model — give it longer.
+    img = _capture_now(timeout=30.0 if roi else 12.0, roi=roi)
     if img is None:
         log.warning("on-demand capture produced no still (is the recorder running?)")
         return False
@@ -692,8 +697,8 @@ def _cache_location(value) -> None:
 
 def _handle_command(cmd: str, params: dict) -> None:
     if cmd == "capture_image":
-        log.info("command: capture_image")
-        _capture_and_upload()
+        log.info("command: capture_image roi=%s", bool(params.get("roi")))
+        _capture_and_upload(params)
     elif cmd == "update":
         _start_update(params)
     elif cmd == "usb_transfer":

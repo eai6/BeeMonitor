@@ -79,7 +79,12 @@
         <span id="cam-status" class="text-xs text-gray-400">
           {% if latest_hb and latest_image_url %}{{ latest_hb.created_at|timesince }} ago{% endif %}
         </span>
-        <button id="cam-photo" class="px-2.5 py-1 text-xs rounded bg-amber-600 hover:bg-amber-700 text-white">Take photo</button>
+        <div class="flex items-center gap-2">
+          <label class="text-xs text-gray-500 inline-flex items-center gap-1" title="Overlay the motion ROI (hotel region) + nest-hole detections on the photo — for debugging motion sensitivity">
+            <input id="cam-roi" type="checkbox" class="rounded border-gray-300"> ROI
+          </label>
+          <button id="cam-photo" class="px-2.5 py-1 text-xs rounded bg-amber-600 hover:bg-amber-700 text-white">Take photo</button>
+        </div>
       </div>
     </div>
   </div>
@@ -507,10 +512,13 @@
   function takePhoto() {
     var baseTs = null;
     getJSON(card.dataset.latestImageUrl).then(function (b) { baseTs = b.ts || null; }).finally(function () {
-      status.textContent = 'Requested — capturing…';
+      var roiEl = document.getElementById('cam-roi');
+      var wantRoi = roiEl && roiEl.checked;
+      status.textContent = wantRoi ? 'Requested — capturing + detecting…' : 'Requested — capturing…';
       fetch(card.dataset.requestImageUrl, {
         method: 'POST',
         headers: { 'X-CSRFToken': CSRF, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: wantRoi ? 'roi=1' : '',
       });
       var end = Date.now() + 90000;
       (function tick() {

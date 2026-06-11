@@ -463,6 +463,31 @@ def detect_hotel_roi(frame_bgr):
     return roi
 
 
+def detect_nest_boxes(frame_bgr):
+    """Nest-hole detections (class 1 of nest_detection.pt) in the frame's pixel
+    coords — for the on-demand debug overlay. Returns a list of (x1,y1,x2,y2);
+    empty on any failure. Runs the model fresh (only used on debug captures)."""
+    try:
+        from ultralytics import YOLO  # noqa: PLC0415 - heavy, lazy
+    except ImportError:
+        return []
+    if not Path(NEST_MODEL).exists():
+        return []
+    try:
+        model = YOLO(NEST_MODEL)
+        results = model.predict(frame_bgr, conf=NEST_CONF, verbose=False)
+    except Exception as e:  # pragma: no cover
+        log.warning("nest detection (overlay) failed: %s", e)
+        return []
+    boxes = results[0].boxes if results else None
+    if boxes is None or len(boxes) == 0:
+        return []
+    xyxy = boxes.xyxy.cpu().numpy()
+    cls = boxes.cls.cpu().numpy().astype(int)
+    NEST_CLASS = 1
+    return [tuple(int(v) for v in b) for b, c in zip(xyxy, cls) if c == NEST_CLASS]
+
+
 def _resolve_record_roi(cam):
     """Decide the lores-coord detection ROI for recording.
 
@@ -494,17 +519,45 @@ def _resolve_record_roi(cam):
     return roi_lores
 
 
-def _save_telemetry_still(cam) -> None:
+def _save_telemetry_still(cam, roi=None, draw_roi=False) -> None:
     """Capture one downscaled JPEG into the telemetry queue (best-effort).
 
     The telemetry service ships the latest queued image over cellular. We grab
     the main (recorded) stream so the still reflects the real framing, then
     downscale to keep it small. Never let a capture error stop recording.
+
+    ``draw_roi`` overlays the active motion ROI (the hotel region, in lores
+    coords) — a debugging aid so the dashboard can show exactly where motion is
+    gated. If ``roi`` is None the gate runs on the whole frame (more sensitive),
+    which we mark explicitly.
     """
     try:
         bgr = _main_array_to_bgr(cam.capture_array("main"))
 
         h, w = bgr.shape[:2]
+        if draw_roi:
+            th = max(2, w // 400)
+            # Nest-hole detections (red boxes + IDs), in main-frame coords.
+            nest_boxes = detect_nest_boxes(bgr)
+            for i, (nx1, ny1, nx2, ny2) in enumerate(nest_boxes, start=1):
+                cv2.rectangle(bgr, (nx1, ny1), (nx2, ny2), (0, 0, 255), max(1, th // 2))
+                ty = ny1 - 6 if ny1 > 20 else ny2 + 22
+                cv2.putText(bgr, str(i), (nx1, ty), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7, (0, 0, 255), max(1, th // 2), cv2.LINE_AA)
+            # Active motion ROI (green hotel box) or full-frame (orange).
+            if roi is not None:
+                rx = _scale_roi(roi, (LORES_W, LORES_H), (w, h))
+                cv2.rectangle(bgr, (rx[0], rx[1]), (rx[2], rx[3]), (0, 255, 0), th)
+                _label = "motion ROI · %d nests" % len(nest_boxes)
+                _color = (0, 255, 0)
+            else:
+                cv2.rectangle(bgr, (0, 0), (w - 1, h - 1), (0, 165, 255), th)
+                _label = "ROI: full frame · %d nests" % len(nest_boxes)
+                _color = (0, 165, 255)
+            cv2.putText(bgr, _label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.9, (0, 0, 0), th + 2, cv2.LINE_AA)
+            cv2.putText(bgr, _label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.9, _color, th, cv2.LINE_AA)
         if h > TELEMETRY_IMAGE_HEIGHT:
             scale = TELEMETRY_IMAGE_HEIGHT / h
             bgr = cv2.resize(
@@ -688,11 +741,17 @@ def record() -> None:
                     calib_mtime = m
 
             # On-demand still requested by telemetry (picture / live view): the
-            # telemetry service drops capture.request, we grab a frame and remove it.
-            if (TELEMETRY_QUEUE / "capture.request").exists():
-                _save_telemetry_still(cam)
+            # telemetry service drops capture.request; if its content is "roi" we
+            # overlay the motion ROI + nest-hole detections (a debug aid).
+            req_file = TELEMETRY_QUEUE / "capture.request"
+            if req_file.exists():
                 try:
-                    (TELEMETRY_QUEUE / "capture.request").unlink()
+                    want_roi = req_file.read_text().strip() == "roi"
+                except OSError:
+                    want_roi = False
+                _save_telemetry_still(cam, roi=roi, draw_roi=want_roi)
+                try:
+                    req_file.unlink()
                 except OSError:
                     pass
 
