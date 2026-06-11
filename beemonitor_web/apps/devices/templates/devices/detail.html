@@ -467,7 +467,7 @@
         buildActivityChart(d.activity_series, d.weather_enabled, d.activity_gran);
       }).catch(function () {});
   }
-  setInterval(poll, 20000);
+  setInterval(poll, 10000);  // matches the 10s minimum beat rate
 })();
 </script>
 
