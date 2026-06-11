@@ -153,7 +153,7 @@
   <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
     <h2 class="text-sm font-semibold text-gray-700">Telemetry</h2>
     <div class="text-xs text-gray-500">
-      Every <span class="font-medium text-gray-700">{{ device.telemetry_interval_label }}</span>
+      Every <span id="tele-label" class="font-medium text-gray-700">{{ device.telemetry_interval_label }}</span>
       {% if active_transport == 'wifi' %}
         · <span class="inline-flex items-center gap-1 text-green-700"><span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>via WiFi</span>
       {% elif active_transport == 'cellular' %}
@@ -168,7 +168,7 @@
     data/power; slower saves both. The device adopts a change within seconds.
   </p>
   {% if can_manage %}
-  <form method="post" action="{% url 'devices:telemetry_rate' device.pk %}" class="flex flex-wrap items-center gap-2">
+  <form id="tele-form" method="post" action="{% url 'devices:telemetry_rate' device.pk %}" class="flex flex-wrap items-center gap-2">
     {% csrf_token %}
     <select name="interval" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
       {% for secs, label in telemetry_interval_choices %}
@@ -176,7 +176,32 @@
       {% endfor %}
     </select>
     <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Set rate</button>
+    <span id="tele-saved" class="text-xs text-green-700 hidden">Saved ✓</span>
   </form>
+  <script>
+    (function () {
+      var f = document.getElementById('tele-form');
+      if (!f) return;
+      f.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var token = f.querySelector('[name=csrfmiddlewaretoken]').value;
+        fetch(f.action, {
+          method: 'POST',
+          headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': token},
+          body: new FormData(f),
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          if (d && d.ok) {
+            var lbl = document.getElementById('tele-label');
+            if (lbl) lbl.textContent = d.label;
+            var s = document.getElementById('tele-saved');
+            if (s) { s.classList.remove('hidden'); setTimeout(function () { s.classList.add('hidden'); }, 2500); }
+          } else {
+            alert((d && d.error) || 'Could not set the telemetry rate.');
+          }
+        }).catch(function () { alert('Could not set the telemetry rate.'); });
+      });
+    })();
+  </script>
   {% else %}
   <p class="text-xs text-gray-400 italic">Read-only — changing the telemetry rate requires manager access.</p>
   {% endif %}

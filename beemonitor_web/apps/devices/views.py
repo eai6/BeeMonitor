@@ -509,15 +509,23 @@ class DeviceTelemetryRateView(LoginRequiredMixin, View):
     def post(self, request, pk):
         from .models import TELEMETRY_INTERVAL_VALUES
         device = _device_or_403(request.user, pk, "manager")
+        is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
         try:
             secs = int(request.POST.get("interval", ""))
         except (TypeError, ValueError):
             secs = None
         if secs not in TELEMETRY_INTERVAL_VALUES:
+            if is_ajax:
+                return JsonResponse({"error": "Invalid telemetry rate."}, status=400)
             messages.error(request, "Invalid telemetry rate.")
             return redirect("devices:detail", pk=pk)
         device.telemetry_interval_seconds = secs
         device.save(update_fields=["telemetry_interval_seconds"])
+        if is_ajax:
+            return JsonResponse({
+                "ok": True, "interval": secs,
+                "label": device.telemetry_interval_label,
+            })
         messages.success(
             request,
             f"Telemetry rate set to {device.telemetry_interval_label}. The device "
