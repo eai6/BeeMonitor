@@ -155,7 +155,10 @@ STEPS: list[dict] = [
         "id": "credentials", "phase": "configure", "title": "Credentials & tuning",
         "concept": "Point the unit at YOUR account. The device key below is "
                    "filled in for this device — paste the whole block into "
-                   "/etc/beemonitor/uploader.env.",
+                   "/etc/beemonitor/uploader.env. (Provisioning a fleet? Use "
+                   "Devices → Zero-touch enrollment instead: put one "
+                   "BEEMONITOR_ENROLL_TOKEN in the image and every unit "
+                   "self-registers on first boot — no per-device key.)",
         "command": "sudo mkdir -p /etc/beemonitor\n"
                    "sudo tee /etc/beemonitor/uploader.env >/dev/null <<'EOF'\n"
                    "BEEMONITOR_API_BASE={{api_base}}\n"
@@ -184,6 +187,7 @@ STEPS: list[dict] = [
                    "beemonitor-telemetry.service systemd/beemonitor-uploader.service "
                    "systemd/beemonitor-calibrate.service systemd/"
                    "beemonitor-calibrate.timer systemd/beemonitor-update.service "
+                   "systemd/beemonitor-enroll.service "
                    "systemd/beemonitor-usb-transfer@.service /etc/systemd/system/\n"
                    "sudo cp cellular/99-beemonitor-usb.rules /etc/udev/rules.d/\n"
                    "chmod +x usb-transfer.sh\n"
@@ -212,7 +216,8 @@ STEPS: list[dict] = [
         "id": "start_services", "phase": "services", "title": "Start & enable on boot",
         "concept": "Enable and start the app layer. After this the unit should "
                    "check in — watch the dashboard flip to ONLINE here.",
-        "command": "sudo systemctl enable --now beemonitor-recorder.service "
+        "command": "sudo systemctl enable --now beemonitor-enroll.service\n"
+                   "sudo systemctl enable --now beemonitor-recorder.service "
                    "beemonitor-telemetry.service beemonitor-uploader.service\n"
                    "sudo systemctl enable --now beemonitor-calibrate.timer",
         "expected": "The dashboard shows this device as ONLINE within a minute "

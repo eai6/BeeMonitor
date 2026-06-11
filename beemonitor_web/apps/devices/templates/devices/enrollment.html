@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Zero-touch enrollment - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto">
+  <div class="mb-4">
+    <a href="{% url 'devices:list' %}" class="text-sm text-amber-700 hover:underline">&larr; Devices</a>
+    <h1 class="text-2xl font-bold text-gray-900">Zero-touch enrollment</h1>
+    <p class="text-sm text-gray-500">
+      Bake an enrollment token into your SD image once, then every unit you flash
+      <strong>self-registers on first boot</strong> — no per-device key to copy.
+      The device appears here automatically; you just set its name, location, and
+      coordinates.
+    </p>
+  </div>
+
+  {% if new_token %}
+  <div class="bg-yellow-50 border border-yellow-300 rounded-lg p-5 mb-6">
+    <p class="text-sm font-medium text-yellow-900">Copy this token now — it won't be shown again.</p>
+    <div class="mt-3 flex gap-2">
+      <input id="tok" type="text" readonly value="{{ new_token }}"
+             class="flex-1 border border-yellow-300 rounded px-3 py-2 text-sm font-mono bg-white">
+      <button type="button" onclick="copyTok()" id="tok-btn"
+              class="bg-yellow-700 hover:bg-yellow-800 text-white px-3 py-2 rounded text-sm font-medium whitespace-nowrap">Copy</button>
+    </div>
+    <div class="mt-4">
+      <p class="text-xs text-yellow-900 font-medium mb-1">Put it on the SD card's config (one line in <code>/etc/beemonitor/uploader.env</code>):</p>
+      <pre class="bg-gray-900 text-green-400 rounded p-3 text-xs overflow-x-auto"
+>BEEMONITOR_API_BASE={{ api_base }}
+BEEMONITOR_ENROLL_TOKEN={{ new_token }}
+BEEMONITOR_RECORD_DIR=/home/beemonitor/Desktop/cameraOutput/beeHotel</pre>
+      <p class="text-xs text-yellow-800 mt-2">
+        On first boot (no device key present), the unit enrolls itself, writes its
+        own key, and starts recording. Re-flashing the same Pi re-binds to the
+        same device.
+      </p>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="text-sm font-semibold text-gray-700">Your tokens</h2>
+    <form method="post" class="flex gap-2">
+      {% csrf_token %}
+      <input name="label" placeholder="label (e.g. spring 2026 batch)" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      <button class="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded text-sm">Generate token</button>
+    </form>
+  </div>
+
+  {% if tokens %}
+  <div class="bg-white shadow rounded-lg divide-y divide-gray-100">
+    {% for t in tokens %}
+    <div class="flex items-center justify-between px-4 py-3">
+      <div>
+        <span class="font-mono text-sm text-gray-900">{{ t.prefix }}…</span>
+        {% if t.label %}<span class="text-xs text-gray-500 ml-2">{{ t.label }}</span>{% endif %}
+        {% if t.revoked %}<span class="ml-2 text-[10px] uppercase bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">revoked</span>{% endif %}
+        <div class="text-xs text-gray-400">created {{ t.created_at|date:"M j, Y" }}{% if t.last_used_at %} · last used {{ t.last_used_at|timesince }} ago{% endif %}</div>
+      </div>
+      {% if not t.revoked %}
+      <form method="post" action="{% url 'devices:enrollment_revoke' t.pk %}" onsubmit="return confirm('Revoke this token? Devices already enrolled keep working; new ones can no longer use it.')">
+        {% csrf_token %}
+        <button class="text-xs text-red-600 hover:underline">Revoke</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="bg-white shadow rounded-lg p-6 text-sm text-gray-500 text-center">No enrollment tokens yet.</div>
+  {% endif %}
+</div>
+
+{% if new_token %}
+<script>
+  function copyTok() {
+    var i = document.getElementById('tok'); i.select(); i.setSelectionRange(0, 99999);
+    navigator.clipboard.writeText(i.value).then(function () {
+      var b = document.getElementById('tok-btn'); var o = b.textContent;
+      b.textContent = 'Copied!'; setTimeout(function () { b.textContent = o; }, 1500);
+    });
+  }
+</script>
+{% endif %}
+{% endblock %}

@@ -93,6 +93,10 @@ class Device(models.Model):
     roi_override = models.JSONField(null=True, blank=True)
     nest_layout = models.JSONField(default=list, blank=True)
 
+    # Hardware id (Pi serial), set during zero-touch enrollment so re-enrolling
+    # the same physical unit maps back to the same Device instead of duplicating.
+    hw_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
+
     # Pending command for the device, returned in the next heartbeat response and
     # then cleared. "" | "capture_image" | "stream" | "wifi_stream".
     pending_command = models.CharField(max_length=32, blank=True, default="")
@@ -188,6 +192,19 @@ class Device(models.Model):
         )
         return device, raw_key
 
+    def rotate_key(self) -> str:
+        """Issue a fresh credential for this device; returns the new raw key.
+
+        Used by zero-touch re-enrollment (a re-flashed unit can't recover its old
+        key, so we mint a new one). Only the hash is stored.
+        """
+        random_part = secrets.token_urlsafe(32)
+        raw_key = f"bmk_device_{random_part}"
+        self.key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+        self.prefix = raw_key[:16]
+        self.save(update_fields=["key_hash", "prefix"])
+        return raw_key
+
 
 class DeviceHeartbeat(models.Model):
     """A periodic health beat from a field device (telemetry + one image).
@@ -266,3 +283,40 @@ class DeviceShare(models.Model):
 
     def __str__(self) -> str:
         return f"{self.device.name} -> {self.user} ({self.role})"
+
+
+class EnrollmentToken(models.Model):
+    """A per-user secret baked into a field unit's SD image for zero-touch setup.
+
+    On first boot a device with no key POSTs this token + its hardware id to
+    /api/v1/devices/enroll; the server creates a Device for this user and returns
+    a fresh device key — no copy-paste. Only the SHA-256 hash is stored; the raw
+    ``bmk_enroll_*`` value is shown once. Revoke to stop new enrollments.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="enrollment_tokens",
+    )
+    label = models.CharField(max_length=100, blank=True, default="")
+    key_hash = models.CharField(max_length=128, unique=True)
+    prefix = models.CharField(max_length=20)
+    revoked = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"enroll {self.prefix}… ({self.user})"
+
+    @classmethod
+    def create_token(cls, user, label: str = "") -> "tuple[EnrollmentToken, str]":
+        raw = f"bmk_enroll_{secrets.token_urlsafe(32)}"
+        tok = cls.objects.create(
+            user=user, label=label,
+            key_hash=hashlib.sha256(raw.encode()).hexdigest(),
+            prefix=raw[:18],
+        )
+        return tok, raw

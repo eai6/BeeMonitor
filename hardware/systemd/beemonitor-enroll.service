@@ -1,0 +1,19 @@
+# Zero-touch enrollment: on first boot, if the unit has an enrollment token but
+# no device key, register with the cloud and write the issued key into
+# uploader.env — BEFORE the app services start (they read the key from it).
+# Runs as root (default) so it can write the root-owned uploader.env, using the
+# system python3 (stdlib only). A no-op once a key exists.
+[Unit]
+Description=BeeMonitor zero-touch enrollment (provision device key)
+After=network-online.target
+Wants=network-online.target
+Before=beemonitor-telemetry.service beemonitor-uploader.service beemonitor-recorder.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/beemonitor/uploader.env
+ExecStart=/usr/bin/python3 /home/beemonitor/BeeMonitor/hardware/enroll.py
+
+[Install]
+WantedBy=multi-user.target

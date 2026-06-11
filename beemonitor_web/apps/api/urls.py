@@ -3,6 +3,7 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework.routers import DefaultRouter
 
 from .cleanup import DeviceCleanupView
+from .enroll import DeviceEnrollView
 from .heartbeat import DeviceCommandView, DeviceHeartbeatView
 from .uploads import UploadCompleteView, UploadInitiateView
 from .web_uploads import WebUploadCompleteView, WebUploadInitiateView
@@ -38,6 +39,7 @@ urlpatterns = [
     path("uploads/initiate", csrf_exempt(UploadInitiateView.as_view()), name="uploads-initiate"),
     path("uploads/complete", csrf_exempt(UploadCompleteView.as_view()), name="uploads-complete"),
     # Pi-side hourly health beat (telemetry + image) over cellular.
+    path("devices/enroll", csrf_exempt(DeviceEnrollView.as_view()), name="devices-enroll"),
     path("devices/heartbeat", csrf_exempt(DeviceHeartbeatView.as_view()), name="devices-heartbeat"),
     # Lightweight command poll (fast on-demand picture, no full beat).
     path("devices/command", csrf_exempt(DeviceCommandView.as_view()), name="devices-command"),

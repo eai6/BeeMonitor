@@ -442,6 +442,44 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         return ctx
 
 
+class DeviceEnrollmentView(LoginRequiredMixin, TemplateView):
+    """Manage enrollment tokens for zero-touch device setup.
+
+    Generate a token, bake it into the SD image, and units self-register on first
+    boot — no per-device key copy-paste.
+    """
+
+    template_name = "devices/enrollment.html"
+
+    def get_context_data(self, **kwargs):
+        from .models import EnrollmentToken
+        ctx = super().get_context_data(**kwargs)
+        ctx["tokens"] = EnrollmentToken.objects.filter(user=self.request.user)
+        ctx["new_token"] = self.request.session.pop("enroll_token_raw", None)
+        ctx["api_base"] = settings.BEEMONITOR_DEVICE_API_BASE
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        from .models import EnrollmentToken
+        label = (request.POST.get("label") or "").strip()[:100]
+        _, raw = EnrollmentToken.create_token(request.user, label=label)
+        request.session["enroll_token_raw"] = raw  # shown once
+        messages.success(request, "Enrollment token created — copy it now.")
+        return redirect("devices:enrollment")
+
+
+class EnrollmentTokenRevokeView(LoginRequiredMixin, View):
+    """Revoke an enrollment token (stops new devices enrolling with it)."""
+
+    def post(self, request, pk):
+        from .models import EnrollmentToken
+        tok = get_object_or_404(EnrollmentToken, pk=pk, user=request.user)
+        tok.revoked = True
+        tok.save(update_fields=["revoked"])
+        messages.success(request, "Enrollment token revoked.")
+        return redirect("devices:enrollment")
+
+
 class DeviceCreateView(LoginRequiredMixin, FormView):
     """Create a device + show the raw key once on the next page.
 

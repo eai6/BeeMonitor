@@ -85,7 +85,7 @@ Run the focus helper and turn the lens until the preview is sharp on the bee hot
 
 ### Credentials & tuning  (~5 min)
 
-Point the unit at YOUR account. The device key below is filled in for this device — paste the whole block into /etc/beemonitor/uploader.env.
+Point the unit at YOUR account. The device key below is filled in for this device — paste the whole block into /etc/beemonitor/uploader.env. (Provisioning a fleet? Use Devices → Zero-touch enrollment instead: put one BEEMONITOR_ENROLL_TOKEN in the image and every unit self-registers on first boot — no per-device key.)
 
 ```bash
 sudo mkdir -p /etc/beemonitor
@@ -111,7 +111,7 @@ Copy the systemd units (incl. the remote-update + USB units) and grant the non-r
 
 ```bash
 cd ~/BeeMonitor/hardware
-sudo cp systemd/beemonitor-recorder.service systemd/beemonitor-telemetry.service systemd/beemonitor-uploader.service systemd/beemonitor-calibrate.service systemd/beemonitor-calibrate.timer systemd/beemonitor-update.service systemd/beemonitor-usb-transfer@.service /etc/systemd/system/
+sudo cp systemd/beemonitor-recorder.service systemd/beemonitor-telemetry.service systemd/beemonitor-uploader.service systemd/beemonitor-calibrate.service systemd/beemonitor-calibrate.timer systemd/beemonitor-update.service systemd/beemonitor-enroll.service systemd/beemonitor-usb-transfer@.service /etc/systemd/system/
 sudo cp cellular/99-beemonitor-usb.rules /etc/udev/rules.d/
 chmod +x usb-transfer.sh
 printf 'beemonitor ALL=(root) NOPASSWD: /usr/bin/nmcli\nbeemonitor ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block beemonitor-update.service\nbeemonitor ALL=(root) NOPASSWD: /home/beemonitor/BeeMonitor/hardware/usb-transfer.sh\n' | sudo tee /etc/sudoers.d/beemonitor >/dev/null
@@ -129,6 +129,7 @@ sudo udevadm control --reload && sudo systemctl daemon-reload
 Enable and start the app layer. After this the unit should check in — watch the dashboard flip to ONLINE here.
 
 ```bash
+sudo systemctl enable --now beemonitor-enroll.service
 sudo systemctl enable --now beemonitor-recorder.service beemonitor-telemetry.service beemonitor-uploader.service
 sudo systemctl enable --now beemonitor-calibrate.timer
 ```
