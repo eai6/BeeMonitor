@@ -812,7 +812,9 @@ def record() -> None:
                     want_roi = req_file.read_text().strip() == "roi"
                 except OSError:
                     want_roi = False
-                _save_telemetry_still(cam, roi=roi, draw_roi=want_roi)
+                # Draw the LIVE gate ROI (it may have been hot-reloaded from a
+                # dashboard edit), not the stale startup value.
+                _save_telemetry_still(cam, roi=gate.roi, draw_roi=want_roi)
                 try:
                     req_file.unlink()
                 except OSError:
