@@ -56,6 +56,33 @@ def _is_online(device) -> bool:
     return age <= settings.DEVICE_ONLINE_GRACE_SECONDS
 
 
+# Friendly text for the last USB-transfer result the device reported.
+_USB_ERRORS = {
+    "no_usb": "No USB drive detected — plug one into the device and try again.",
+    "mount_failed": "Found a USB but couldn't mount it (unsupported filesystem?).",
+    "not_writable": "USB is read-only or full.",
+    "bad_target": "USB target wasn't a usable folder.",
+    "no_record_dir": "Recordings folder missing on the device.",
+}
+
+
+def _usb_text(usb) -> "dict | None":
+    """Turn the device's raw usb-status dict into {ok, text} for display."""
+    if not usb:
+        return None
+    if usb.get("ok"):
+        c, s, f = usb.get("copied", 0), usb.get("skipped", 0), usb.get("failed", 0)
+        h = usb.get("human") or ""
+        parts = [f"copied {c}" + (f" ({h})" if h and c else "")]
+        if s:
+            parts.append(f"{s} already on USB")
+        if f:
+            parts.append(f"{f} failed")
+        return {"ok": True, "text": "USB: " + ", ".join(parts)}
+    detail = usb.get("detail", "")
+    return {"ok": False, "text": _USB_ERRORS.get(detail, detail or "USB transfer failed.")}
+
+
 def _fetch_weather(lat: float, lon: float, start_date: str, end_date: str, hourly: bool) -> dict:
     """Hourly/daily temperature + precipitation from Open-Meteo (free, no key).
 
@@ -265,6 +292,7 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         from .models import TELEMETRY_INTERVAL_CHOICES
         ctx["telemetry_interval_choices"] = TELEMETRY_INTERVAL_CHOICES
         ctx["active_transport"] = metrics.get("active_transport")
+        ctx["usb_status"] = _usb_text(metrics.get("usb"))  # last USB result (or None)
 
 
         # Videos uploaded by this device (device-scoped slice of /videos/).
@@ -570,6 +598,7 @@ class DeviceStatusView(LoginRequiredMixin, View):
             "wifi_enabled": metrics.get("wifi_enabled"),
             "wifi_ssid": metrics.get("wifi_ssid"),
             "active_transport": metrics.get("active_transport"),
+            "usb_status": _usb_text(metrics.get("usb")),
             "telemetry_interval_label": device.telemetry_interval_label,
             "activity_series": activity["activity_series"],
             "activity_gran": activity["activity_gran"],

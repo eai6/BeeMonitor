@@ -78,10 +78,11 @@ CELL_IFACE = os.environ.get("BEEMONITOR_CELL_IFACE", "wwan0")
 # uses 700) so ALL traffic — incl. telemetry — rides WiFi, with cellular as the
 # fallback. Saves metered mobile data whenever WiFi is connected.
 WIFI_ROUTE_METRIC = int(os.environ.get("BEEMONITOR_WIFI_ROUTE_METRIC", "100"))
-# Lowest beat interval the dashboard may set (seconds). Floored at 10s — faster
-# is dominated by per-beat work (nmcli/systemctl + the POST) and hammers the
-# server/radio for no real gain.
-MIN_INTERVAL = int(os.environ.get("BEEMONITOR_MIN_INTERVAL", "10"))
+# Lowest beat interval the dashboard may set (seconds). Floored at 5s. WiFi can
+# usually sustain 5s; over cellular a beat's own work (nmcli/systemctl + the
+# POST) often takes longer, so the loop just beats as fast as it can — it never
+# beats faster than this, but may be slower on a slow link.
+MIN_INTERVAL = int(os.environ.get("BEEMONITOR_MIN_INTERVAL", "5"))
 # How often (s) to poll for an on-demand command between beats — keeps the
 # "Take photo" latency low without raising the health-beat cadence.
 COMMAND_POLL_SECONDS = int(os.environ.get("BEEMONITOR_COMMAND_POLL_SECONDS", "8"))
@@ -93,6 +94,9 @@ UPDATE_SCRIPT = REPO_DIR / "hardware" / "update.sh"
 USB_SCRIPT = REPO_DIR / "hardware" / "usb-transfer.sh"
 STATE_DIR = Path(os.environ.get("BEEMONITOR_STATE_DIR", "/home/beemonitor/.beemonitor"))
 UPDATE_STATUS_FILE = STATE_DIR / "update-status.json"
+# Last USB-transfer result (written by usb-transfer.sh), reported in the beat so
+# the dashboard can show "copied N" / "no USB detected".
+USB_STATUS_FILE = STATE_DIR / "usb-status.json"
 
 # Storage cleanup: delete local clips a human cleared for deletion on the
 # dashboard (GET/POST /api/v1/devices/cleanup). Cheap JSON, runs over cellular.
@@ -300,6 +304,14 @@ def _update_status() -> dict | None:
         return None
 
 
+def _usb_status() -> dict | None:
+    """Last USB-transfer result (written by usb-transfer.sh)."""
+    try:
+        return json.loads(USB_STATUS_FILE.read_text())
+    except (OSError, ValueError):
+        return None
+
+
 def collect_metrics() -> dict:
     m: dict = {}
 
@@ -363,6 +375,9 @@ def collect_metrics() -> dict:
     upd = _update_status()
     if upd:
         m["update"] = upd
+    usb = _usb_status()
+    if usb:
+        m["usb"] = usb
 
     return m
 

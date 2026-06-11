@@ -24,6 +24,7 @@ _ROLE_RANK = {"viewer": 1, "manager": 2, "owner": 3}
 # Allowed telemetry beat intervals (seconds -> label) for the dashboard control.
 # The device picks the new rate up via the heartbeat/command response.
 TELEMETRY_INTERVAL_CHOICES = [
+    (5, "5 seconds"),
     (10, "10 seconds"),
     (30, "30 seconds"),
     (60, "1 minute"),
