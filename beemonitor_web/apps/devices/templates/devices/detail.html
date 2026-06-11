@@ -17,6 +17,7 @@
   <div>
     <div class="flex items-center gap-3">
       <h1 class="text-2xl font-bold text-gray-900">{{ device.name }}</h1>
+      <span id="hdr-status">
       {% if not device.is_active %}
         <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-500">Revoked</span>
       {% elif online %}
@@ -24,6 +25,7 @@
       {% else %}
         <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-red-100 text-red-800"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>Offline</span>
       {% endif %}
+      </span>
       {% if role == 'manager' %}
         <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800" title="Shared with you with management access">Shared · Manager</span>
       {% elif role == 'viewer' %}
@@ -42,7 +44,7 @@
         · <a href="https://beescape.psu.edu/" target="_blank" rel="noopener" class="text-amber-600 hover:underline">Beescape ↗</a>
         <span id="bs-copied" class="hidden text-green-600">copied — paste into Beescape's search</span>
       {% endif %}
-      · last seen {% if device.last_seen_at %}{{ device.last_seen_at|timesince }} ago{% else %}never{% endif %}
+      · last seen <span id="hdr-lastseen">{% if device.last_seen_at %}{{ device.last_seen_at|timesince }} ago{% else %}never{% endif %}</span>
       · <span class="font-mono">{{ device.prefix }}…</span>
     </p>
   </div>
@@ -88,13 +90,9 @@
       <!-- Storage -->
       <div class="bg-white shadow rounded-lg p-4">
         <div class="text-xs text-gray-500 uppercase tracking-wide">Storage</div>
-        {% if storage_pct is not None %}
-        <div class="mt-2 text-2xl font-semibold text-gray-900">{{ storage_pct|floatformat:1 }}%</div>
-        <div class="mt-1 text-xs text-gray-400">{{ metrics.storage_free_human|default:"—" }} free (whole card)</div>
-        {% else %}<div class="mt-2 text-2xl font-semibold text-gray-300">—</div>{% endif %}
-        {% if metrics.recordings_human %}
-        <div class="mt-1 text-xs text-gray-500">Clips: <span class="font-medium text-gray-700">{{ metrics.recordings_human }}</span>{% if metrics.videos_recorded %} · {{ metrics.videos_recorded }} on device{% endif %}{% if metrics.usb_transferred %} · {{ metrics.usb_transferred }} to USB{% endif %}</div>
-        {% endif %}
+        <div class="mt-2 text-2xl font-semibold {% if storage_pct is None %}text-gray-300{% else %}text-gray-900{% endif %}" id="m-storage-pct">{% if storage_pct is not None %}{{ storage_pct|floatformat:1 }}%{% else %}—{% endif %}</div>
+        <div class="mt-1 text-xs text-gray-400" id="m-storage-free">{% if storage_pct is not None %}{{ metrics.storage_free_human|default:"—" }} free (whole card){% endif %}</div>
+        <div class="mt-1 text-xs text-gray-500" id="m-recordings">{% if metrics.recordings_human %}Clips: <span class="font-medium text-gray-700">{{ metrics.recordings_human }}</span>{% if metrics.videos_recorded %} · {{ metrics.videos_recorded }} on device{% endif %}{% if metrics.usb_transferred %} · {{ metrics.usb_transferred }} to USB{% endif %}{% endif %}</div>
         {% if can_manage %}
         <form method="post" action="{% url 'devices:usb_transfer' device.pk %}" class="mt-2"
               onsubmit="return confirm('Copy new recordings to a USB drive plugged into the device? It runs on the device\'s next check-in.')">
@@ -116,7 +114,7 @@
       <!-- Activity (snippets are recorded only on motion → activity proxy) -->
       <div class="bg-white shadow rounded-lg p-4">
         <div class="text-xs text-gray-500 uppercase tracking-wide">Activity</div>
-        <div class="mt-2 text-2xl font-semibold text-gray-900">{{ metrics.snippets_last_period|default:"—" }}</div>
+        <div class="mt-2 text-2xl font-semibold text-gray-900" id="m-activity">{{ metrics.snippets_last_period|default:"—" }}</div>
         <div class="mt-1 text-xs text-gray-400">activity / {{ metrics.telemetry_period_human|default:"period" }}</div>
       </div>
       <!-- Videos -->
@@ -128,7 +126,7 @@
       <!-- Services -->
       <div class="bg-white shadow rounded-lg p-4">
         <div class="text-xs text-gray-500 uppercase tracking-wide">Services</div>
-        <div class="mt-2 space-y-1 text-sm">
+        <div class="mt-2 space-y-1 text-sm" id="m-services">
           {% for s in services %}
           <div class="flex items-center gap-2">
             <span class="w-1.5 h-1.5 rounded-full {% if s.ok %}bg-green-500{% else %}bg-gray-300{% endif %}"></span>
@@ -154,13 +152,7 @@
     <h2 class="text-sm font-semibold text-gray-700">Telemetry</h2>
     <div class="text-xs text-gray-500">
       Every <span id="tele-label" class="font-medium text-gray-700">{{ device.telemetry_interval_label }}</span>
-      {% if active_transport == 'wifi' %}
-        · <span class="inline-flex items-center gap-1 text-green-700"><span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>via WiFi</span>
-      {% elif active_transport == 'cellular' %}
-        · <span class="inline-flex items-center gap-1 text-amber-700"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>via cellular</span>
-      {% elif active_transport %}
-        · via {{ active_transport }}
-      {% endif %}
+      <span id="m-transport">{% if active_transport == 'wifi' %}· <span class="inline-flex items-center gap-1 text-green-700"><span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>via WiFi</span>{% elif active_transport == 'cellular' %}· <span class="inline-flex items-center gap-1 text-amber-700"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>via cellular</span>{% elif active_transport %}· via {{ active_transport }}{% endif %}</span>
     </div>
   </div>
   <p class="text-xs text-gray-400 mb-3">
@@ -211,7 +203,7 @@
 <div class="mt-6 bg-white shadow rounded-lg p-4">
   <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
     <h2 class="text-sm font-semibold text-gray-700">WiFi</h2>
-    <div class="text-xs text-gray-500">
+    <div class="text-xs text-gray-500" id="m-wifi">
       {% if 'wifi_enabled' in metrics %}
         {% if metrics.wifi_enabled %}
           <span class="inline-flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>Radio on</span>
@@ -321,24 +313,21 @@
     </div>
   </div>
   <div class="bg-white shadow rounded-lg p-4">
-    {% if activity_series %}
-      <canvas id="activityChart" height="90"></canvas>
-      {{ activity_series|json_script:"activity-data" }}
-      <p class="text-xs text-gray-400 mt-2">
-        {% if weather_enabled %}
-          Activity with temperature &amp; precipitation overlaid — weather via
-          <a href="https://open-meteo.com/" target="_blank" rel="noopener" class="hover:underline">Open-Meteo</a>
-          for this device's coordinates. Times shown in your local timezone.
-        {% elif can_manage %}
-          <a href="{% url 'devices:edit' device.pk %}" class="text-amber-600 hover:underline">Set the device location</a>
-          to overlay temperature &amp; precipitation.
-        {% else %}
-          Set the device location (ask the owner) to overlay temperature &amp; precipitation.
-        {% endif %}
-      </p>
-    {% else %}
-      <p class="text-sm text-gray-500 text-center py-8">No activity data yet for this range. (Counts the snippets recorded in each clock hour, from this device's uploaded clips.)</p>
-    {% endif %}
+    <canvas id="activityChart" height="90" class="{% if not activity_series %}hidden{% endif %}"></canvas>
+    {{ activity_series|json_script:"activity-data" }}
+    <p id="activity-empty" class="text-sm text-gray-500 text-center py-8 {% if activity_series %}hidden{% endif %}">No activity data yet for this range. (Counts the snippets recorded in each clock hour, from this device's uploaded clips.)</p>
+    <p class="text-xs text-gray-400 mt-2">
+      {% if weather_enabled %}
+        Activity with temperature &amp; precipitation overlaid — weather via
+        <a href="https://open-meteo.com/" target="_blank" rel="noopener" class="hover:underline">Open-Meteo</a>
+        for this device's coordinates. Times shown in your local timezone.
+      {% elif can_manage %}
+        <a href="{% url 'devices:edit' device.pk %}" class="text-amber-600 hover:underline">Set the device location</a>
+        to overlay temperature &amp; precipitation.
+      {% else %}
+        Set the device location (ask the owner) to overlay temperature &amp; precipitation.
+      {% endif %}
+    </p>
   </div>
 </div>
 
@@ -367,77 +356,120 @@
   {% endif %}
 </div>
 
-{% if activity_series %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script>
 (function () {
-  var el = document.getElementById('activity-data');
-  if (!el || typeof Chart === 'undefined') return;
-  var rows = JSON.parse(el.textContent);
-  var weatherEnabled = {{ weather_enabled|yesno:"true,false" }};
-  var gran = "{{ activity_gran }}";  // "hour" | "day"
-  var hasTemp = weatherEnabled && rows.some(function (d) { return d.temp != null; });
-  var hasPrecip = weatherEnabled && rows.some(function (d) { return d.precip != null; });
+  var RANGE = "{{ activity_range }}";
+  var IS_ACTIVE = {{ device.is_active|yesno:"true,false" }};
 
-  // Format each point's UTC timestamp into the viewer's LOCAL timezone (the
-  // server stores/buckets in UTC). Falls back to the server label if no iso.
-  function label(d) {
-    if (!d.iso) return d.t;
-    var dt = new Date(d.iso);
-    if (isNaN(dt)) return d.t;
-    return gran === 'day'
-      ? dt.toLocaleDateString([], { month: 'short', day: 'numeric' })
-      : dt.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-  }
-
-  var datasets = [];
-  // Precipitation bars first (order high = drawn behind the lines).
-  if (hasPrecip) {
-    datasets.push({
-      type: 'bar', label: 'Precipitation (mm)',
+  // (Re)build the activity chart in place — used on load AND on each live poll.
+  window.buildActivityChart = function (rows, weatherEnabled, gran) {
+    var canvas = document.getElementById('activityChart');
+    var empty = document.getElementById('activity-empty');
+    if (!canvas || typeof Chart === 'undefined') return;
+    if (!rows || !rows.length) {
+      if (window._actChart) { window._actChart.destroy(); window._actChart = null; }
+      canvas.classList.add('hidden'); if (empty) empty.classList.remove('hidden');
+      return;
+    }
+    canvas.classList.remove('hidden'); if (empty) empty.classList.add('hidden');
+    var hasTemp = weatherEnabled && rows.some(function (d) { return d.temp != null; });
+    var hasPrecip = weatherEnabled && rows.some(function (d) { return d.precip != null; });
+    function lbl(d) {
+      if (!d.iso) return d.t;
+      var dt = new Date(d.iso);
+      if (isNaN(dt)) return d.t;
+      return gran === 'day'
+        ? dt.toLocaleDateString([], { month: 'short', day: 'numeric' })
+        : dt.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+    var datasets = [];
+    if (hasPrecip) datasets.push({ type: 'bar', label: 'Precipitation (mm)',
       data: rows.map(function (d) { return d.precip; }),
-      backgroundColor: 'rgba(59,130,246,0.30)', yAxisID: 'yP', order: 3,
-    });
-  }
-  datasets.push({
-    type: 'line', label: 'Activity (peak/period)',
-    data: rows.map(function (d) { return d.v; }),
-    borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,0.12)',
-    fill: true, tension: 0.3, pointRadius: 1, borderWidth: 2, yAxisID: 'y', order: 1,
-  });
-  if (hasTemp) {
-    datasets.push({
-      type: 'line', label: 'Temp (°C)',
+      backgroundColor: 'rgba(59,130,246,0.30)', yAxisID: 'yP', order: 3 });
+    datasets.push({ type: 'line', label: 'Activity (snippets)',
+      data: rows.map(function (d) { return d.v; }),
+      borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,0.12)',
+      fill: true, tension: 0.3, pointRadius: 1, borderWidth: 2, yAxisID: 'y', order: 1 });
+    if (hasTemp) datasets.push({ type: 'line', label: 'Temp (°C)',
       data: rows.map(function (d) { return d.temp; }),
       borderColor: '#dc2626', tension: 0.3, pointRadius: 0, borderWidth: 1.5,
-      spanGaps: true, yAxisID: 'yT', order: 0,
+      spanGaps: true, yAxisID: 'yT', order: 0 });
+    var scales = {
+      x: { ticks: { maxTicksLimit: 10, autoSkip: true } },
+      y: { beginAtZero: true, position: 'left', title: { display: true, text: 'Activity' }, ticks: { precision: 0 } },
+    };
+    if (hasTemp) scales.yT = { position: 'right', title: { display: true, text: '°C' }, grid: { drawOnChartArea: false } };
+    if (hasPrecip) scales.yP = { position: 'right', display: false, beginAtZero: true };
+    if (window._actChart) window._actChart.destroy();
+    window._actChart = new Chart(canvas, {
+      type: 'line',
+      data: { labels: rows.map(lbl), datasets: datasets },
+      options: {
+        responsive: true, maintainAspectRatio: true,
+        interaction: { mode: 'index', intersect: false },
+        plugins: { legend: { display: datasets.length > 1, labels: { boxWidth: 12, font: { size: 11 } } } },
+        scales: scales,
+      },
     });
-  }
-
-  var scales = {
-    x: { ticks: { maxTicksLimit: 10, autoSkip: true } },
-    y: { beginAtZero: true, position: 'left', title: { display: true, text: 'Activity' }, ticks: { precision: 0 } },
   };
-  if (hasTemp) {
-    scales.yT = { position: 'right', title: { display: true, text: '°C' }, grid: { drawOnChartArea: false } };
-  }
-  if (hasPrecip) {
-    scales.yP = { position: 'right', display: false, beginAtZero: true };
-  }
 
-  new Chart(document.getElementById('activityChart'), {
-    type: 'line',
-    data: { labels: rows.map(label), datasets: datasets },
-    options: {
-      responsive: true, maintainAspectRatio: true,
-      interaction: { mode: 'index', intersect: false },
-      plugins: { legend: { display: datasets.length > 1, labels: { boxWidth: 12, font: { size: 11 } } } },
-      scales: scales,
-    },
-  });
+  // Initial render from server-embedded data.
+  var el = document.getElementById('activity-data');
+  buildActivityChart(el ? JSON.parse(el.textContent) : [],
+                     {{ weather_enabled|yesno:"true,false" }}, "{{ activity_gran }}");
+
+  // Live poll: refresh telemetry tiles + chart in place — no manual refresh.
+  function setText(id, v) { var e = document.getElementById(id); if (e && v != null) e.textContent = v; }
+  function dot(ok) { return '<span class="w-1.5 h-1.5 rounded-full ' + (ok ? 'bg-green-500' : 'bg-gray-300') + '"></span>'; }
+  function poll() {
+    fetch("{% url 'devices:status' device.pk %}?range=" + encodeURIComponent(RANGE), { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (IS_ACTIVE) {
+          var hs = document.getElementById('hdr-status');
+          if (hs) hs.innerHTML = d.online
+            ? '<span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800">' + dot(true) + 'Online</span>'
+            : '<span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-red-100 text-red-800"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>Offline</span>';
+        }
+        setText('hdr-lastseen', d.last_seen);
+        setText('m-storage-pct', d.storage_pct != null ? (Math.round(d.storage_pct * 10) / 10) + '%' : '—');
+        setText('m-storage-free', d.storage_free_human ? d.storage_free_human + ' free (whole card)' : '');
+        setText('m-activity', d.snippets_last_period != null ? d.snippets_last_period : '—');
+        var rec = document.getElementById('m-recordings');
+        if (rec) {
+          if (d.recordings_human) {
+            var h = 'Clips: <span class="font-medium text-gray-700">' + d.recordings_human + '</span>';
+            if (d.videos_recorded) h += ' · ' + d.videos_recorded + ' on device';
+            if (d.usb_transferred) h += ' · ' + d.usb_transferred + ' to USB';
+            rec.innerHTML = h;
+          } else rec.innerHTML = '';
+        }
+        var sv = document.getElementById('m-services');
+        if (sv && d.services) {
+          sv.innerHTML = [['Recorder', d.services.recorder], ['Uploader', d.services.uploader], ['Cellular', d.services.cellular]]
+            .map(function (n) { return '<div class="flex items-center gap-2">' + dot(n[1]) + '<span class="text-gray-600">' + n[0] + '</span></div>'; }).join('');
+        }
+        var wf = document.getElementById('m-wifi');
+        if (wf) {
+          if (d.wifi_enabled == null) wf.innerHTML = '<span class="text-gray-400">state unknown (waiting for a beat)</span>';
+          else if (d.wifi_enabled) wf.innerHTML = '<span class="inline-flex items-center gap-1">' + dot(true) + 'Radio on</span> ' + (d.wifi_ssid ? '· joined <span class="font-medium text-gray-700">' + d.wifi_ssid + '</span>' : '· not connected');
+          else wf.innerHTML = '<span class="inline-flex items-center gap-1">' + dot(false) + 'Radio off</span>';
+        }
+        var tr = document.getElementById('m-transport');
+        if (tr) {
+          if (d.active_transport === 'wifi') tr.innerHTML = '· <span class="inline-flex items-center gap-1 text-green-700">' + dot(true) + 'via WiFi</span>';
+          else if (d.active_transport === 'cellular') tr.innerHTML = '· <span class="inline-flex items-center gap-1 text-amber-700"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>via cellular</span>';
+          else if (d.active_transport) tr.innerHTML = '· via ' + d.active_transport;
+          else tr.innerHTML = '';
+        }
+        setText('tele-label', d.telemetry_interval_label);
+        buildActivityChart(d.activity_series, d.weather_enabled, d.activity_gran);
+      }).catch(function () {});
+  }
+  setInterval(poll, 20000);
 })();
 </script>
-{% endif %}
 
 <!-- On-demand camera: request + poll latest image -->
 <script>

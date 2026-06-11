@@ -167,6 +167,65 @@ class DeviceListView(LoginRequiredMixin, ListView):
         return ctx
 
 
+# range key -> (days back, bucket granularity, label format)
+_ACTIVITY_RANGES = {
+    "24h": (1, "hour", "%H:%M"),
+    "7d": (7, "hour", "%b %d %H:%M"),
+    "30d": (30, "day", "%b %d"),
+    "90d": (90, "day", "%b %d"),
+}
+
+
+def _build_activity_series(device, range_key: str) -> dict:
+    """Snippets recorded per real clock-hour/day, keyed off each clip's
+    recorded_at (not a rolling window). Shared by the page + the live poll."""
+    from django.db.models import Count
+    from apps.videos.models import Video
+
+    if range_key not in _ACTIVITY_RANGES:
+        range_key = "7d"
+    days, gran, fmt = _ACTIVITY_RANGES[range_key]
+    since = timezone.now() - timedelta(days=days)
+    trunc = TruncHour if gran == "hour" else TruncDay
+
+    rows = list(
+        Video.objects
+        .filter(device=device, recorded_at__isnull=False, recorded_at__gte=since)
+        .annotate(bucket=trunc("recorded_at"))
+        .values("bucket")
+        .annotate(v=Count("id"))
+        .order_by("bucket")
+    )
+
+    # Overlay weather (Open-Meteo, cached 1h) when the device has coordinates.
+    weather_enabled = device.lat is not None and device.lon is not None
+    wx = {}
+    if weather_enabled and rows:
+        wx = _weather_lookup([r["bucket"] for r in rows], gran, device.lat, device.lon)
+
+    wkey = "%Y-%m-%dT%H" if gran == "hour" else "%Y-%m-%d"
+    series = []
+    for r in rows:
+        b = r["bucket"]
+        bu = b.astimezone(dt_timezone.utc)
+        w = wx.get(bu.strftime(wkey), {})
+        series.append({
+            # iso is UTC; the browser formats the x-axis label in local time.
+            "iso": bu.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "t": b.strftime(fmt),
+            "v": r["v"],
+            "temp": w.get("temp"),
+            "precip": w.get("precip"),
+        })
+    return {
+        "activity_series": series,
+        "activity_range": range_key,
+        "activity_ranges": [{"key": k, "label": k} for k in _ACTIVITY_RANGES],
+        "activity_gran": gran,
+        "weather_enabled": weather_enabled,
+    }
+
+
 class DeviceDetailView(LoginRequiredMixin, DetailView):
     """Per-device dashboard: latest health beat, image timeline, its videos."""
 
@@ -212,73 +271,10 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         ctx["videos"] = device.videos.all()[:12]
         ctx["video_count"] = device.videos.count()
 
-        # Activity-over-time series for the chart (peak snippets/period per bucket).
-        ctx.update(self._activity_series(device))
+        # Activity-over-time series for the chart (actual snippets per bucket).
+        ctx.update(_build_activity_series(
+            device, self.request.GET.get("range", "7d")))
         return ctx
-
-    # range key -> (days back, bucket granularity, label format)
-    _RANGES = {
-        "24h": (1, "hour", "%H:%M"),
-        "7d": (7, "hour", "%b %d %H:%M"),
-        "30d": (30, "day", "%b %d"),
-        "90d": (90, "day", "%b %d"),
-    }
-
-    def _activity_series(self, device) -> dict:
-        range_key = self.request.GET.get("range", "7d")
-        if range_key not in self._RANGES:
-            range_key = "7d"
-        days, gran, fmt = self._RANGES[range_key]
-        since = timezone.now() - timedelta(days=days)
-        trunc = TruncHour if gran == "hour" else TruncDay
-
-        # Count the snippets actually recorded in each real clock-hour (or day),
-        # keyed off each clip's recorded_at — so an 8-9am bucket is the activity
-        # that happened 8-9am, not a rolling "last hour" window tied to beat
-        # timing. (Buckets are UTC; the browser relabels them in local time, so
-        # whole-hour-offset zones land on the right local hour.)
-        from django.db.models import Count
-        from apps.videos.models import Video
-        rows = list(
-            Video.objects
-            .filter(device=device, recorded_at__isnull=False, recorded_at__gte=since)
-            .annotate(bucket=trunc("recorded_at"))
-            .values("bucket")
-            .annotate(v=Count("id"))
-            .order_by("bucket")
-        )
-
-        # Overlay weather (Open-Meteo) when the device has coordinates set.
-        weather_enabled = device.lat is not None and device.lon is not None
-        wx = {}
-        if weather_enabled and rows:
-            wx = _weather_lookup(
-                [r["bucket"] for r in rows], gran, device.lat, device.lon)
-
-        wkey = "%Y-%m-%dT%H" if gran == "hour" else "%Y-%m-%d"
-        series = []
-        for r in rows:
-            b = r["bucket"]
-            bu = b.astimezone(dt_timezone.utc)
-            w = wx.get(bu.strftime(wkey), {})
-            series.append({
-                # iso is UTC; the browser formats the x-axis label in the
-                # viewer's local timezone (the server runs in UTC).
-                "iso": bu.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "t": b.strftime(fmt),  # fallback label if JS can't format
-                "v": r["v"],
-                "temp": w.get("temp"),
-                "precip": w.get("precip"),
-            })
-        return {
-            "activity_series": series,
-            "activity_range": range_key,
-            "activity_ranges": [
-                {"key": k, "label": k} for k in self._RANGES
-            ],
-            "activity_gran": gran,  # "hour" | "day" — picks the label format
-            "weather_enabled": weather_enabled,
-        }
 
 
 class DeviceCreateView(LoginRequiredMixin, FormView):
@@ -539,6 +535,46 @@ class DeviceTelemetryRateView(LoginRequiredMixin, View):
             "will adopt it on its next check-in.",
         )
         return redirect("devices:detail", pk=pk)
+
+
+class DeviceStatusView(LoginRequiredMixin, View):
+    """Live telemetry snapshot, polled by the device page so it refreshes in
+    place (online, last seen, storage, services, WiFi, transport, activity) —
+    no manual page reload needed."""
+
+    def get(self, request, pk):
+        from django.utils.timesince import timesince
+        device = _device_or_403(request.user, pk, "viewer")
+        latest = device.heartbeats.first()
+        metrics = (latest.metrics if latest else {}) or {}
+        sp = metrics.get("storage_pct")
+        if sp is None and latest is not None:
+            sp = latest.storage_pct
+        last_seen = (timesince(device.last_seen_at) + " ago"
+                     if device.last_seen_at else "never")
+        activity = _build_activity_series(device, request.GET.get("range", "7d"))
+        return JsonResponse({
+            "online": _is_online(device),
+            "last_seen": last_seen,
+            "storage_pct": sp,
+            "storage_free_human": metrics.get("storage_free_human"),
+            "recordings_human": metrics.get("recordings_human"),
+            "videos_recorded": metrics.get("videos_recorded"),
+            "usb_transferred": metrics.get("usb_transferred"),
+            "snippets_last_period": metrics.get("snippets_last_period"),
+            "services": {
+                "recorder": bool(metrics.get("recorder_active")),
+                "uploader": bool(metrics.get("uploader_active")),
+                "cellular": bool(metrics.get("cellular_active")),
+            },
+            "wifi_enabled": metrics.get("wifi_enabled"),
+            "wifi_ssid": metrics.get("wifi_ssid"),
+            "active_transport": metrics.get("active_transport"),
+            "telemetry_interval_label": device.telemetry_interval_label,
+            "activity_series": activity["activity_series"],
+            "activity_gran": activity["activity_gran"],
+            "weather_enabled": activity["weather_enabled"],
+        })
 
 
 class DeviceLatestImageView(LoginRequiredMixin, View):
