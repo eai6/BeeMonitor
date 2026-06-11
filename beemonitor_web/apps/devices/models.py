@@ -70,6 +70,10 @@ class Device(models.Model):
     # spread across timezones reads correctly no matter where it's viewed from.
     tz_name = models.CharField(max_length=64, blank=True, default="")
     tz_offset_min = models.IntegerField(null=True, blank=True)
+    # User-chosen timezone the dashboard displays this device's activity in
+    # (IANA, e.g. "America/New_York"). Blank = use the device-reported tz_name
+    # (then UTC). Charts/tile are converted to this from each clip's true instant.
+    display_tz = models.CharField(max_length=64, blank=True, default="")
 
     # Manual motion-tuning overrides (null = use the device's auto-calibration).
     # Applied by the recorder on top of calibration.json. Higher var_threshold or

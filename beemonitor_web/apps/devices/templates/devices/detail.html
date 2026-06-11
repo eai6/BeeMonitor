@@ -369,14 +369,41 @@
 
 <!-- Activity over time -->
 <div class="mt-8">
-  <div class="flex items-center justify-between mb-3">
+  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
     <h2 class="text-lg font-semibold text-gray-900">Activity over time</h2>
-    <div class="flex gap-1 text-xs">
-      {% for r in activity_ranges %}
-        <a href="?range={{ r.key }}" class="px-2 py-1 rounded {% if r.key == activity_range %}bg-amber-600 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-gray-200{% endif %}">{{ r.label }}</a>
-      {% endfor %}
+    <div class="flex items-center gap-2 text-xs">
+      {% if can_manage %}
+      <select id="tz-select" title="Timezone to display this device's activity in"
+              class="border border-gray-300 rounded px-2 py-1 text-xs">
+        <option value="" {% if not device.display_tz %}selected{% endif %}>Auto{% if device.tz_name %} ({{ device.tz_name }}){% endif %}</option>
+        {% for tz in common_tzs %}
+        <option value="{{ tz }}" {% if device.display_tz == tz %}selected{% endif %}>{{ tz }}</option>
+        {% endfor %}
+      </select>
+      {% endif %}
+      <div class="flex gap-1">
+        {% for r in activity_ranges %}
+          <a href="?range={{ r.key }}" class="px-2 py-1 rounded {% if r.key == activity_range %}bg-amber-600 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-gray-200{% endif %}">{{ r.label }}</a>
+        {% endfor %}
+      </div>
     </div>
   </div>
+  {% if can_manage %}
+  <script>
+    (function () {
+      var sel = document.getElementById('tz-select');
+      if (!sel) return;
+      sel.addEventListener('change', function () {
+        var fd = new FormData(); fd.append('display_tz', sel.value);
+        fetch("{% url 'devices:display_tz' device.pk %}", {
+          method: 'POST', headers: {'X-Requested-With':'XMLHttpRequest','X-CSRFToken':"{{ csrf_token }}"}, body: fd,
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          if (d && d.ok) location.reload(); else alert((d && d.error) || 'Could not set timezone.');
+        }).catch(function () { alert('Could not set timezone.'); });
+      });
+    })();
+  </script>
+  {% endif %}
   <div class="bg-white shadow rounded-lg p-4">
     <canvas id="activityChart" height="90" class="{% if not activity_series %}hidden{% endif %}"></canvas>
     {{ activity_series|json_script:"activity-data" }}
@@ -385,7 +412,7 @@
       {% if weather_enabled %}
         Activity with temperature &amp; precipitation overlaid — weather via
         <a href="https://open-meteo.com/" target="_blank" rel="noopener" class="hover:underline">Open-Meteo</a>
-        for this device's coordinates. Times shown in the device's local time{% if tz_name %} ({{ tz_name }}){% endif %}.
+        for this device's coordinates. Times shown in {{ display_tz|default:"UTC" }}.
       {% elif can_manage %}
         <a href="{% url 'devices:edit' device.pk %}" class="text-amber-600 hover:underline">Set the device location</a>
         to overlay temperature &amp; precipitation.

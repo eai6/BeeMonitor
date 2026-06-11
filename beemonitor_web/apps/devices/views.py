@@ -8,7 +8,8 @@ import json
 import logging
 import urllib.parse
 import urllib.request
-from datetime import timedelta, timezone as dt_timezone
+from datetime import datetime, timedelta, timezone as dt_timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.conf import settings
 from django.contrib import messages
@@ -17,7 +18,6 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
 from django.db.models import Q
-from django.db.models.functions import TruncDay, TruncHour
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
@@ -74,15 +74,20 @@ def _activity_this_hour(device) -> int:
     hive's current hour and count from there — correct wherever the device sits.
     """
     from apps.videos.models import Video
-    offset = timedelta(minutes=device.tz_offset_min or 0)
-    hive_now = timezone.now() + offset
-    start = hive_now.replace(minute=0, second=0, microsecond=0)
-    cloud = Video.objects.filter(device=device, recorded_at__gte=start).count()
-    # Prefer the device's creation-based count (clips on the card this hour) so
-    # it updates immediately, not after upload. max() so we never under-report.
+    zone, _ = _display_zone(device)
+    pi_off = timedelta(minutes=device.tz_offset_min or 0)
+    now_loc = timezone.now().astimezone(zone)
+    start_loc = now_loc.replace(minute=0, second=0, microsecond=0)
+    # clip true_utc >= start  <=>  recorded_at - pi_off >= start  <=>  recorded_at >= start + pi_off
+    thresh = start_loc.astimezone(dt_timezone.utc) + pi_off
+    cloud = Video.objects.filter(device=device, recorded_at__gte=thresh).count()
+    # The device's on-card count is for the Pi's clock hour; only use it when the
+    # display tz currently matches the Pi's offset (else it's a different hour).
     latest = device.heartbeats.first()
     dev_hour = ((latest.metrics or {}) if latest else {}).get("clips_this_hour")
-    if isinstance(dev_hour, (int, float)):
+    display_off_now = int((now_loc.utcoffset() or timedelta()).total_seconds() // 60)
+    if (isinstance(dev_hour, (int, float)) and device.tz_offset_min is not None
+            and int(device.tz_offset_min) == display_off_now):
         return max(cloud, int(dev_hour))
     return cloud
 
@@ -128,7 +133,8 @@ def _usb_text(usb) -> "dict | None":
     return {"ok": False, "text": _USB_ERRORS.get(detail, detail or "USB transfer failed.")}
 
 
-def _fetch_weather(lat: float, lon: float, start_date: str, end_date: str, hourly: bool) -> dict:
+def _fetch_weather(lat: float, lon: float, start_date: str, end_date: str,
+                   hourly: bool, tz: str = "auto") -> dict:
     """Hourly/daily temperature + precipitation from Open-Meteo (free, no key).
 
     Uses the *forecast* endpoint with start/end dates: unlike the archive API it
@@ -136,7 +142,7 @@ def _fetch_weather(lat: float, lon: float, start_date: str, end_date: str, hourl
     Cached for an hour (historical weather doesn't change) so we don't refetch on
     every page load. Returns {} on any failure -> the chart just omits weather.
     """
-    cache_key = f"wx:{lat:.3f}:{lon:.3f}:{start_date}:{end_date}:{'h' if hourly else 'd'}"
+    cache_key = f"wx:{lat:.3f}:{lon:.3f}:{start_date}:{end_date}:{'h' if hourly else 'd'}:{tz}"
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
@@ -146,11 +152,9 @@ def _fetch_weather(lat: float, lon: float, start_date: str, end_date: str, hourl
         "longitude": f"{lon:.4f}",
         "start_date": start_date,
         "end_date": end_date,
-        # Return weather in the HIVE's local time (derived from lat/lon) so its
-        # hour-keys line up with the activity buckets, which are keyed by the
-        # clip filenames' local wall-clock. (UTC here shifted the overlay by the
-        # device's offset.)
-        "timezone": "auto",
+        # Return weather in the device's DISPLAY timezone so its hour/day keys
+        # line up with the activity buckets (which are in that same tz).
+        "timezone": tz or "auto",
     }
     if hourly:
         params["hourly"] = "temperature_2m,precipitation"
@@ -169,20 +173,18 @@ def _fetch_weather(lat: float, lon: float, start_date: str, end_date: str, hourl
     return data
 
 
-def _weather_lookup(buckets, gran, lat, lon) -> dict:
+def _weather_lookup(buckets, gran, lat, lon, tz="auto") -> dict:
     """Map each activity bucket -> {"temp", "precip"} from Open-Meteo.
 
-    Hourly granularity keys on "YYYY-MM-DDTHH"; daily on "YYYY-MM-DD". The
-    activity buckets are the clips' local wall-clock and Open-Meteo is requested
-    with timezone=auto (the hive's local tz), so the keys line up.
+    ``buckets`` are display-tz-local datetimes; Open-Meteo is requested in that
+    same tz so its "YYYY-MM-DDTHH" / "YYYY-MM-DD" keys line up with them.
     """
     if not buckets:
         return {}
-    utc = [b.astimezone(dt_timezone.utc) for b in buckets]
-    start = min(utc).strftime("%Y-%m-%d")
-    end = max(utc).strftime("%Y-%m-%d")
+    start = min(buckets).strftime("%Y-%m-%d")
+    end = max(buckets).strftime("%Y-%m-%d")
     hourly = gran == "hour"
-    data = _fetch_weather(lat, lon, start, end, hourly=hourly)
+    data = _fetch_weather(lat, lon, start, end, hourly=hourly, tz=tz)
 
     out: dict = {}
     if hourly:
@@ -253,70 +255,91 @@ _ACTIVITY_RANGES = {
 }
 
 
+def _display_zone(device):
+    """The timezone to render this device's activity in: the user's display_tz,
+    else the device-reported tz_name, else UTC. Returns (ZoneInfo, name)."""
+    name = (device.display_tz or device.tz_name or "UTC").strip() or "UTC"
+    try:
+        return ZoneInfo(name), name
+    except (ZoneInfoNotFoundError, ValueError):
+        return ZoneInfo("UTC"), "UTC"
+
+
+def _true_utc(device_recorded_at_or_naive, pi_off):
+    """Recover the true UTC instant from a clip's stored time.
+
+    recorded_at (and the device histogram keys) carry the Pi's wall-clock labeled
+    UTC, so subtracting the Pi's reported offset yields the real instant — works
+    whether the Pi clock is local or UTC.
+    """
+    return device_recorded_at_or_naive - pi_off
+
+
 def _build_activity_series(device, range_key: str) -> dict:
-    """Snippets recorded per real clock-hour/day, keyed off each clip's
-    recorded_at (not a rolling window). Shared by the page + the live poll."""
-    from django.db.models import Count
+    """Snippets per clock-hour/day in the device's DISPLAY timezone. Combines
+    uploaded clips (recorded_at) with the device's on-card histogram, converting
+    each to its true instant then to the display tz. Shared by page + poll."""
     from apps.videos.models import Video
 
     if range_key not in _ACTIVITY_RANGES:
         range_key = "7d"
     days, gran, fmt = _ACTIVITY_RANGES[range_key]
-    since = timezone.now() - timedelta(days=days)
-    trunc = TruncHour if gran == "hour" else TruncDay
+    zone, zone_name = _display_zone(device)
+    pi_off = timedelta(minutes=device.tz_offset_min or 0)
+    now_loc = timezone.now().astimezone(zone)
+    start_loc = now_loc - timedelta(days=days)
+    since = timezone.now() - timedelta(days=days + 1)  # tz slack on the query
 
-    rows = list(
-        Video.objects
-        .filter(device=device, recorded_at__isnull=False, recorded_at__gte=since)
-        .annotate(bucket=trunc("recorded_at"))
-        .values("bucket")
-        .annotate(v=Count("id"))
-        .order_by("bucket")
-    )
+    def bucket(local_dt):
+        if gran == "hour":
+            b = local_dt.replace(minute=0, second=0, microsecond=0)
+            return b.strftime("%Y-%m-%dT%H"), b
+        b = local_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        return b.strftime("%Y-%m-%d"), b
 
-    # Overlay weather (Open-Meteo, cached 1h) when the device has coordinates.
-    weather_enabled = device.lat is not None and device.lon is not None
-    wx = {}
-    if weather_enabled and rows:
-        wx = _weather_lookup([r["bucket"] for r in rows], gran, device.lat, device.lon)
+    counts, key_dt = {}, {}
+    for ra in (Video.objects.filter(device=device, recorded_at__isnull=False,
+                                    recorded_at__gte=since)
+               .values_list("recorded_at", flat=True)):
+        loc = _true_utc(ra, pi_off).astimezone(zone)
+        if loc < start_loc:
+            continue
+        k, b = bucket(loc)
+        counts[k] = counts.get(k, 0) + 1
+        key_dt[k] = b
 
-    wkey = "%Y-%m-%dT%H" if gran == "hour" else "%Y-%m-%d"
-    counts = {}     # bucket key -> clip count
-    key_dt = {}     # bucket key -> aware datetime (wall-clock, for label/iso)
-    for r in rows:
-        bu = r["bucket"].astimezone(dt_timezone.utc)
-        k = bu.strftime(wkey)
-        counts[k] = r["v"]
-        key_dt[k] = bu
-
-    # Overlay the device's creation-based per-hour histogram (clips on the card),
-    # so recent hours show activity the moment a clip is recorded — before it
-    # uploads. Hour-granularity ranges only; older day-ranges are fully uploaded.
+    # Device on-card histogram (creation-based) for hour ranges — clips on the
+    # card show before they upload. Keys are the Pi's wall-clock hour.
     if gran == "hour":
         latest = device.heartbeats.first()
         hist = ((latest.metrics or {}) if latest else {}).get("activity_by_hour")
         if isinstance(hist, dict):
-            from datetime import datetime as _dt
-            floor = since - timedelta(hours=24)  # generous (tz offset slack)
-            for k, c in hist.items():
+            for hk, c in hist.items():
                 try:
-                    dt = _dt.strptime(k, "%Y-%m-%dT%H").replace(tzinfo=dt_timezone.utc)
+                    naive = datetime.strptime(hk, "%Y-%m-%dT%H").replace(tzinfo=dt_timezone.utc)
                 except (ValueError, TypeError):
                     continue
-                if dt < floor:
+                loc = _true_utc(naive, pi_off).astimezone(zone)
+                if loc < start_loc:
                     continue
-                counts[k] = max(counts.get(k, 0), int(c))  # device ≥ cloud while on card
-                key_dt.setdefault(k, dt)
+                k, b = bucket(loc)
+                counts[k] = max(counts.get(k, 0), int(c))
+                key_dt.setdefault(k, b)
+
+    # Weather (Open-Meteo, cached) in the SAME display tz so it lines up.
+    weather_enabled = device.lat is not None and device.lon is not None
+    wkey = "%Y-%m-%dT%H" if gran == "hour" else "%Y-%m-%d"
+    wx = {}
+    if weather_enabled and key_dt:
+        wx = _weather_lookup(list(key_dt.values()), gran, device.lat, device.lon, zone_name)
 
     series = []
     for k in sorted(counts, key=lambda kk: key_dt[kk]):
-        bu = key_dt[k]
-        w = wx.get(bu.strftime(wkey), {})
+        b = key_dt[k]
+        w = wx.get(b.strftime(wkey), {})
         series.append({
-            # iso is the bucket's wall-clock (device-local); the browser shows
-            # the server label `t` as-is (see chart JS), so it isn't re-shifted.
-            "iso": bu.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "t": bu.strftime(fmt),
+            "iso": b.astimezone(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "t": b.strftime(fmt),  # display-tz label; the chart shows it as-is
             "v": counts[k],
             "temp": w.get("temp"),
             "precip": w.get("precip"),
@@ -327,6 +350,7 @@ def _build_activity_series(device, range_key: str) -> dict:
         "activity_ranges": [{"key": k, "label": k} for k in _ACTIVITY_RANGES],
         "activity_gran": gran,
         "weather_enabled": weather_enabled,
+        "display_tz": zone_name,
     }
 
 
@@ -377,6 +401,7 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         ctx["usb_present"] = metrics.get("usb_present")     # USB plugged in now?
         ctx["activity_hour"] = _activity_this_hour(device)  # clips in this clock hour
         ctx["tz_name"] = device.tz_name
+        ctx["common_tzs"] = COMMON_TIMEZONES
 
 
         # Videos uploaded by this device (device-scoped slice of /videos/).
@@ -784,6 +809,40 @@ def _norm_box(b):
     if hi_x - lo_x < 0.01 or hi_y - lo_y < 0.01:  # too small to be real
         return None
     return [round(lo_x, 5), round(lo_y, 5), round(hi_x, 5), round(hi_y, 5)]
+
+
+# Curated list for the display-tz dropdown (IANA names). "" = auto (device tz).
+COMMON_TIMEZONES = [
+    "UTC", "America/New_York", "America/Chicago", "America/Denver",
+    "America/Phoenix", "America/Los_Angeles", "America/Anchorage",
+    "Pacific/Honolulu", "America/Toronto", "America/Sao_Paulo",
+    "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Madrid",
+    "Africa/Nairobi", "Asia/Jerusalem", "Asia/Kolkata", "Asia/Shanghai",
+    "Asia/Tokyo", "Australia/Sydney", "Pacific/Auckland",
+]
+
+
+class DeviceDisplayTzView(LoginRequiredMixin, View):
+    """Set the timezone the dashboard displays this device's activity in."""
+
+    def post(self, request, pk):
+        device = _device_or_403(request.user, pk, "manager")
+        is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        tz = (request.POST.get("display_tz") or "").strip()
+        if tz:
+            try:
+                ZoneInfo(tz)
+            except (ZoneInfoNotFoundError, ValueError):
+                if is_ajax:
+                    return JsonResponse({"error": "Unknown timezone."}, status=400)
+                messages.error(request, "Unknown timezone.")
+                return redirect("devices:detail", pk=pk)
+        device.display_tz = tz
+        device.save(update_fields=["display_tz"])
+        if is_ajax:
+            return JsonResponse({"ok": True, "display_tz": tz})
+        messages.success(request, "Display timezone updated.")
+        return redirect("devices:detail", pk=pk)
 
 
 class DeviceRoiEditorView(LoginRequiredMixin, View):
