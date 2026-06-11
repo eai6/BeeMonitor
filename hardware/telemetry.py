@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -249,6 +250,21 @@ def _prefer_wifi_route() -> None:
     _nmcli(["connection", "up", conn], timeout=45)
 
 
+# Recording time from the clip filename: site_YYYY-MM-DD_HH_MM_SS.mp4 (the
+# HH-MM-SS separators may be '_' or '-'). The hour is all we need to bucket.
+_CLIP_RE = re.compile(r"_(\d{4})-(\d{2})-(\d{2})_(\d{2})[_\-.]")
+
+
+def _clip_hour_key(name: str, mtime: float) -> str:
+    """Local-hour key 'YYYY-MM-DDTHH' for a clip, from its FILENAME (stable
+    across restarts/mtime changes). Falls back to mtime if the name doesn't
+    parse."""
+    m = _CLIP_RE.search(name)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}T{m.group(4)}"
+    return time.strftime("%Y-%m-%dT%H", time.localtime(mtime))
+
+
 def _video_stats(window_seconds: int) -> dict:
     """Single pass over the recordings dir.
 
@@ -264,8 +280,10 @@ def _video_stats(window_seconds: int) -> dict:
     newest = 0.0
     # Per-LOCAL-hour histogram of clips on the card, so the dashboard can show
     # activity the moment a clip is RECORDED — no waiting for the (WiFi-gated)
-    # cloud upload. Keyed by the hive's local wall-clock hour. Bounded to ~8 days
-    # to cover the dashboard's 7d view without a huge payload.
+    # cloud upload. Keyed by the recording hour parsed from the FILENAME (the Pi
+    # names clips site_YYYY-MM-DD_HH_MM_SS.mp4), so the count is a pure function
+    # of the files on disk — unaffected by mtime changes or service restarts.
+    # Bounded to ~8 days to cover the dashboard's 7d view without a huge payload.
     by_hour: dict = {}
     hist_cutoff = now - 8 * 86400
     cur_key = time.strftime("%Y-%m-%dT%H", time.localtime(now))
@@ -282,7 +300,7 @@ def _video_stats(window_seconds: int) -> dict:
             if st.st_mtime >= now - window_seconds:
                 recent += 1
             if st.st_mtime >= hist_cutoff:
-                key = time.strftime("%Y-%m-%dT%H", time.localtime(st.st_mtime))
+                key = _clip_hour_key(mp4.name, st.st_mtime)
                 by_hour[key] = by_hour.get(key, 0) + 1
             if not mp4.with_suffix(mp4.suffix + ".uploaded").exists():
                 pending += 1
