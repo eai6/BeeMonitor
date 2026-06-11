@@ -79,6 +79,10 @@ class Device(models.Model):
     motion_max_area = models.FloatField(null=True, blank=True)
     motion_min_blobs = models.PositiveIntegerField(null=True, blank=True)
 
+    # One-shot: auto-capture a first picture when the device first comes online
+    # so the camera card isn't blank. Set once it's been requested.
+    first_image_requested = models.BooleanField(default=False)
+
     # Pending command for the device, returned in the next heartbeat response and
     # then cleared. "" | "capture_image" | "stream" | "wifi_stream".
     pending_command = models.CharField(max_length=32, blank=True, default="")

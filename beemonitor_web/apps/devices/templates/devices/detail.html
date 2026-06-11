@@ -72,12 +72,13 @@
       <div class="px-4 py-3 border-b border-gray-100 text-sm font-medium text-gray-700">Camera</div>
       <div class="bg-gray-100 aspect-video flex items-center justify-center">
         <img id="cam-image" src="{{ latest_image_url|default:'' }}" alt="" title="Click to view full screen"
+             data-ts="{% if image_hb %}{{ image_hb.created_at.isoformat }}{% endif %}"
              class="w-full h-full object-cover cursor-zoom-in {% if not latest_image_url %}hidden{% endif %}">
         <span id="cam-placeholder" class="text-gray-300 text-sm {% if latest_image_url %}hidden{% endif %}">No image yet</span>
       </div>
       <div class="px-4 py-2 flex items-center justify-between">
         <span id="cam-status" class="text-xs text-gray-400">
-          {% if latest_hb and latest_image_url %}{{ latest_hb.created_at|timesince }} ago{% endif %}
+          {% if image_hb and latest_image_url %}{{ image_hb.created_at|timesince }} ago{% endif %}
         </span>
         <div class="flex items-center gap-2">
           <label class="text-xs text-gray-500 inline-flex items-center gap-1" title="Overlay the motion ROI (hotel region) + nest-hole detections on the photo — for debugging motion sensitivity">
@@ -546,6 +547,19 @@
               }).join('') + '</div>';
           } else {
             vids.innerHTML = '<div class="bg-white shadow rounded-lg p-8 text-center text-sm text-gray-500">No videos uploaded by this device yet (they arrive over WiFi).</div>';
+          }
+        }
+        // Keep the camera card showing the most recent picture automatically.
+        if (d.image && d.image.url) {
+          var im = document.getElementById('cam-image');
+          if (im && im.dataset.ts !== d.image.ts) {
+            im.dataset.ts = d.image.ts; im.src = d.image.url;
+            im.classList.remove('hidden');
+            var ph = document.getElementById('cam-placeholder'); if (ph) ph.classList.add('hidden');
+            var cs = document.getElementById('cam-status');
+            if (cs && cs.textContent.indexOf('Requested') !== 0 && cs.textContent.indexOf('capturing') < 0) {
+              cs.textContent = new Date(d.image.ts).toLocaleString();
+            }
           }
         }
         buildActivityChart(d.activity_series, d.weather_enabled, d.activity_gran);

@@ -488,6 +488,34 @@ def detect_nest_boxes(frame_bgr):
     return [tuple(int(v) for v in b) for b, c in zip(xyxy, cls) if c == NEST_CLASS]
 
 
+def _order_nest_boxes(boxes):
+    """Order nest boxes top→bottom, left→right and assign IDs the same way as the
+    beemonitor nest_detector: cluster into rows (by y), sort each row by x, and
+    label id = (col+1) + row*10 (row 1 → 1-10, row 2 → 11-20, …). Returns a list
+    of (id:int, box) in that order."""
+    if not boxes:
+        return []
+    items = [((b[1] + b[3]) / 2.0, (b[0] + b[2]) / 2.0, b) for b in boxes]  # (cy, cx, box)
+    heights = sorted(b[3] - b[1] for b in boxes)
+    med_h = heights[len(heights) // 2] if heights else 20
+    row_gap = max(8.0, med_h * 0.6)
+    items.sort(key=lambda t: t[0])  # by cy
+    rows, cur, cur_sum = [], [items[0]], items[0][0]
+    for it in items[1:]:
+        row_mean = cur_sum / len(cur)
+        if it[0] - row_mean > row_gap:
+            rows.append(cur); cur, cur_sum = [it], it[0]
+        else:
+            cur.append(it); cur_sum += it[0]
+    rows.append(cur)
+    out = []
+    for ri, row in enumerate(rows):
+        row.sort(key=lambda t: t[1])  # by cx
+        for ci, (_cy, _cx, box) in enumerate(row):
+            out.append(((ci + 1) + ri * 10, box))
+    return out
+
+
 def _resolve_record_roi(cam):
     """Decide the lores-coord detection ROI for recording.
 
@@ -537,12 +565,13 @@ def _save_telemetry_still(cam, roi=None, draw_roi=False) -> None:
         h, w = bgr.shape[:2]
         if draw_roi:
             th = max(2, w // 400)
-            # Nest-hole detections (red boxes + IDs), in main-frame coords.
-            nest_boxes = detect_nest_boxes(bgr)
-            for i, (nx1, ny1, nx2, ny2) in enumerate(nest_boxes, start=1):
+            # Nest-hole detections (red boxes + IDs), in main-frame coords. IDs
+            # follow the nest_detector scheme: top→bottom, left→right, row*10+col.
+            nest_boxes = _order_nest_boxes(detect_nest_boxes(bgr))
+            for nid, (nx1, ny1, nx2, ny2) in nest_boxes:
                 cv2.rectangle(bgr, (nx1, ny1), (nx2, ny2), (0, 0, 255), max(1, th // 2))
                 ty = ny1 - 6 if ny1 > 20 else ny2 + 22
-                cv2.putText(bgr, str(i), (nx1, ty), cv2.FONT_HERSHEY_SIMPLEX,
+                cv2.putText(bgr, str(nid), (nx1, ty), cv2.FONT_HERSHEY_SIMPLEX,
                             0.7, (0, 0, 255), max(1, th // 2), cv2.LINE_AA)
             # Active motion ROI (green hotel box) or full-frame (orange).
             if roi is not None:

@@ -149,6 +149,16 @@ class DeviceHeartbeatView(APIView):
             device.stream_expires_at = datetime.fromtimestamp(stream_until, tz=_tz.utc)
             device.save(update_fields=["stream_url", "stream_expires_at"])
 
+        # Auto-capture one picture the first time a device is online with no
+        # image yet, so the camera card isn't blank. Fires once per device.
+        if (not device.first_image_requested and not device.pending_command
+                and not device.heartbeats.exclude(image_storage_key="").exists()):
+            device.pending_command = "capture_image"
+            device.command_params = {}
+            device.first_image_requested = True
+            device.save(update_fields=["pending_command", "command_params",
+                                       "first_image_requested"])
+
         # Hand back any pending command (picture/stream on demand), then clear it.
         command = device.pending_command or ""
         params = device.command_params or {}

@@ -350,7 +350,11 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         ctx["latest_hb"] = latest
         metrics = (latest.metrics if latest else {}) or {}
         ctx["metrics"] = metrics
-        ctx["latest_image_url"] = _presign_image(latest.image_storage_key) if latest else None
+        # Always show the most RECENT image-bearing beat (regular beats carry no
+        # image), so the camera card is never blank once any picture exists.
+        image_hb = device.heartbeats.exclude(image_storage_key="").first()
+        ctx["image_hb"] = image_hb
+        ctx["latest_image_url"] = _presign_image(image_hb.image_storage_key) if image_hb else None
         sp = metrics.get("storage_pct")
         if sp is None and latest is not None:
             sp = latest.storage_pct
@@ -673,6 +677,9 @@ class DeviceStatusView(LoginRequiredMixin, View):
             sp = latest.storage_pct
         last_seen = (timesince(device.last_seen_at) + " ago"
                      if device.last_seen_at else "never")
+        img_hb = device.heartbeats.exclude(image_storage_key="").first()
+        image = ({"url": _presign_image(img_hb.image_storage_key),
+                  "ts": img_hb.created_at.isoformat()} if img_hb else None)
         activity = _build_activity_series(device, request.GET.get("range", "7d"))
         return JsonResponse({
             "online": _is_online(device),
@@ -702,6 +709,7 @@ class DeviceStatusView(LoginRequiredMixin, View):
             "active_transport": metrics.get("active_transport"),
             "usb_status": _usb_text(metrics.get("usb")),
             "usb_present": metrics.get("usb_present"),
+            "image": image,
             "telemetry_interval_label": device.telemetry_interval_label,
             "activity_series": activity["activity_series"],
             "activity_gran": activity["activity_gran"],
