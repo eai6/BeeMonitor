@@ -33,18 +33,47 @@ HOST="$(hostname)"
 log() { echo "usb-transfer: $*"; }
 
 copied=0; skipped=0; failed=0; bytes=0; human=""; STATUS_DEV=""
+total_to_copy=0; done_count=0; STATE="idle"
 
 # Write a small JSON status the dashboard can read (via telemetry). Called on
-# every exit path so "no USB found" / "mount failed" surface too, not just success.
+# every exit path (incl. mid-copy progress) so "no USB found" / "mount failed" /
+# "copying 45%" / "done" / "ejected" all surface — that's how the user knows
+# when it's safe to remove the stick.
 write_status() {  # ok(true|false) detail
     mkdir -p "$STATE_DIR" 2>/dev/null
-    printf '{"at":"%s","ok":%s,"detail":"%s","device":"%s","copied":%s,"skipped":%s,"failed":%s,"bytes":%s,"human":"%s"}\n' \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$STATUS_DEV" \
-        "$copied" "$skipped" "$failed" "$bytes" "$human" \
+    local pct=0
+    [ "$total_to_copy" -gt 0 ] && pct=$(( done_count * 100 / total_to_copy ))
+    [ "$STATE" = "done" ] && pct=100
+    printf '{"at":"%s","state":"%s","ok":%s,"detail":"%s","device":"%s","copied":%s,"skipped":%s,"failed":%s,"done":%s,"total":%s,"pct":%s,"bytes":%s,"human":"%s"}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$STATE" "$1" "$2" "$STATUS_DEV" \
+        "$copied" "$skipped" "$failed" "$done_count" "$total_to_copy" "$pct" "$bytes" "$human" \
         > "$STATUS_FILE" 2>/dev/null
     chmod 644 "$STATUS_FILE" 2>/dev/null
 }
-fail() { log "$2"; write_status false "$1"; exit 1; }
+fail() { STATE=error; log "$2"; write_status false "$1"; exit 1; }
+
+# --eject: safely unmount any plugged-in USB so the user can pull it out. Runs
+# instead of a copy (dashboard "Eject" button -> usb_eject command).
+do_eject() {
+    STATE=ejected
+    if mountpoint -q /run/beemonitor-usb 2>/dev/null; then
+        sync; umount /run/beemonitor-usb 2>/dev/null && rmdir /run/beemonitor-usb 2>/dev/null
+    fi
+    root_src="$(findmnt -no SOURCE / 2>/dev/null)"
+    root_disk="$(lsblk -no PKNAME "$root_src" 2>/dev/null | head -1)"
+    for disk in $(lsblk -rno NAME,TYPE,TRAN | awk '$2=="disk" && $3=="usb" {print $1}'); do
+        [ -n "$root_disk" ] && [ "$disk" = "$root_disk" ] && continue
+        STATUS_DEV="/dev/$disk"
+        for mp in $(lsblk -rno MOUNTPOINT "/dev/$disk" 2>/dev/null | grep -v '^$'); do
+            sync; umount "$mp" 2>/dev/null
+        done
+        udisksctl power-off -b "/dev/$disk" >/dev/null 2>&1 || true
+    done
+    log "ejected — safe to remove the USB"
+    write_status true "ejected — safe to remove the USB"
+    exit 0
+}
+[ "${1:-}" = "--eject" ] && do_eject
 
 # Device identity for the manifest — the key PREFIX only, never the secret.
 # DEV_ID is a short, stable hash of the key; it's the FALLBACK folder suffix
@@ -122,6 +151,17 @@ MANIFEST="$DEST/manifest.csv"
 
 # --- copy ----------------------------------------------------------------
 cd "$RECORD_DIR" 2>/dev/null || fail "no_record_dir" "record dir $RECORD_DIR missing"
+
+# Count how many clips we'll actually copy (those not already on this USB), so
+# the dashboard can show a real percentage. Quick extra scan.
+while IFS= read -r -d '' f; do
+    if [ "$COPY_ALL" = "1" ] || [ ! -f "$f.usb" ]; then total_to_copy=$((total_to_copy+1)); fi
+done < <(find . -type f -name '*.mp4' -print0)
+STATE=running
+write_status true "starting"
+# Re-write progress every ~2% (and at least every file when there are few).
+step=$(( total_to_copy / 50 )); [ "$step" -lt 1 ] && step=1
+
 while IFS= read -r -d '' mp4; do
     rel="${mp4#./}"
     sidecar="$mp4.usb"
@@ -136,10 +176,16 @@ while IFS= read -r -d '' mp4; do
     else
         log "copy failed: $rel"; rm -f "$out" 2>/dev/null; failed=$((failed+1))
     fi
+    done_count=$((done_count+1))
+    if [ $(( done_count % step )) -eq 0 ]; then
+        bytes_h="$(numfmt --to=iec "$bytes" 2>/dev/null || echo "${bytes}B")"
+        human="$bytes_h"; write_status true "copying"
+    fi
 done < <(find . -type f -name '*.mp4' -print0)
 
 sync
 human="$(numfmt --to=iec "$bytes" 2>/dev/null || echo "${bytes}B")"
+STATE=done
 log "done: copied $copied, skipped $skipped (already on USB), failed $failed ($human) -> $DEST"
 write_status true "copied $copied, skipped $skipped, failed $failed"
 

@@ -104,9 +104,17 @@ def _videos_payload(device, limit: int = 12) -> list:
 
 
 def _usb_text(usb) -> "dict | None":
-    """Turn the device's raw usb-status dict into {ok, text} for display."""
+    """Turn the device's raw usb-status dict into {ok, text, running?, pct?}."""
     if not usb:
         return None
+    state = usb.get("state")
+    if state == "running":
+        pct = int(usb.get("pct") or 0)
+        done, total = usb.get("done") or 0, usb.get("total") or 0
+        return {"ok": True, "running": True, "pct": pct,
+                "text": f"Copying to USB… {pct}% ({done}/{total})"}
+    if state == "ejected":
+        return {"ok": True, "text": "USB ejected — safe to remove."}
     if usb.get("ok"):
         c, s, f = usb.get("copied", 0), usb.get("skipped", 0), usb.get("failed", 0)
         h = usb.get("human") or ""
@@ -357,6 +365,7 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         ctx["telemetry_interval_choices"] = TELEMETRY_INTERVAL_CHOICES
         ctx["active_transport"] = metrics.get("active_transport")
         ctx["usb_status"] = _usb_text(metrics.get("usb"))  # last USB result (or None)
+        ctx["usb_present"] = metrics.get("usb_present")     # USB plugged in now?
         ctx["activity_hour"] = _activity_this_hour(device)  # clips in this clock hour
         ctx["tz_name"] = device.tz_name
 
@@ -590,8 +599,24 @@ class DeviceUsbTransferView(LoginRequiredMixin, View):
         messages.success(
             request,
             "USB copy queued — make sure a USB drive is plugged into the device. "
-            "It copies new clips on its next check-in; the 'to USB' count updates "
-            "after the next beat.",
+            "It copies new clips on its next check-in; watch the progress bar, "
+            "then Eject before removing the stick.",
+        )
+        return redirect("devices:detail", pk=pk)
+
+
+class DeviceUsbEjectView(LoginRequiredMixin, View):
+    """Queue a safe-eject (unmount) of the device's plugged-in USB drive."""
+
+    def post(self, request, pk):
+        device = _device_or_403(request.user, pk, "manager")
+        device.pending_command = "usb_eject"
+        device.command_params = {}
+        device.save(update_fields=["pending_command", "command_params"])
+        messages.success(
+            request,
+            "Eject queued — the device will unmount the USB on its next check-in. "
+            "Wait for 'USB ejected — safe to remove' before pulling it out.",
         )
         return redirect("devices:detail", pk=pk)
 
@@ -674,6 +699,7 @@ class DeviceStatusView(LoginRequiredMixin, View):
             "wifi_ssid": metrics.get("wifi_ssid"),
             "active_transport": metrics.get("active_transport"),
             "usb_status": _usb_text(metrics.get("usb")),
+            "usb_present": metrics.get("usb_present"),
             "telemetry_interval_label": device.telemetry_interval_label,
             "activity_series": activity["activity_series"],
             "activity_gran": activity["activity_gran"],

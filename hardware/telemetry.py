@@ -345,6 +345,27 @@ def _usb_status() -> dict | None:
         return None
 
 
+def _usb_present() -> bool:
+    """Is a USB drive plugged into the Pi right now? Detected by transport
+    (tran==usb disk), excluding the SD card / OS-root disk — same signal
+    usb-transfer.sh uses. Drives the dashboard's 'USB connected' indicator."""
+    r = _run(["lsblk", "-rno", "NAME,TYPE,TRAN"])
+    if not (r and r.returncode == 0):
+        return False
+    root_disk = ""
+    rs = _run(["findmnt", "-no", "SOURCE", "/"])
+    if rs and rs.returncode == 0 and rs.stdout.strip():
+        pk = _run(["lsblk", "-no", "PKNAME", rs.stdout.strip()])
+        if pk and pk.returncode == 0 and pk.stdout.strip():
+            root_disk = pk.stdout.strip().splitlines()[0]
+    for line in r.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[1] == "disk" and parts[2] == "usb" \
+                and parts[0] != root_disk:
+            return True
+    return False
+
+
 def _timezone_info() -> dict:
     """The device's local timezone (IANA name + current UTC offset). Lets the
     dashboard bucket activity by the hive's local clock-hour wherever it's
@@ -433,6 +454,11 @@ def collect_metrics() -> dict:
     usb = _usb_status()
     if usb:
         m["usb"] = usb
+    # Reap a finished background copy (so it's not left a zombie) and report
+    # whether a USB is currently connected.
+    if _usb_proc is not None:
+        _usb_proc.poll()
+    m["usb_present"] = _usb_present()
     m.update(_timezone_info())
 
     return m
@@ -521,6 +547,10 @@ def send_beat(image: "Path | None" = None):
 
 
 _running = True
+
+# Handle of a background USB copy, so beats keep flowing (and report progress)
+# while it runs, and we can avoid launching a second copy on top of it.
+_usb_proc = None
 
 # Live beat interval — starts at the env default but can be changed from the
 # dashboard (the heartbeat + command responses carry telemetry_interval).
@@ -667,14 +697,27 @@ def _handle_command(cmd: str, params: dict) -> None:
     elif cmd == "update":
         _start_update(params)
     elif cmd == "usb_transfer":
-        log.info("command: usb_transfer")
-        # Needs root to mount the USB; run via the NOPASSWD sudoers rule (see
-        # README). The script auto-detects any plugged-in USB and names the
-        # folder from the cached device location (LOCATION_FILE).
-        r = _run(["sudo", "-n", str(USB_SCRIPT)], timeout=900)
-        if r is not None:
-            log.info("usb_transfer rc=%s %s", r.returncode,
-                     (r.stdout or r.stderr or "").strip().splitlines()[-1:])
+        # Run the copy in the BACKGROUND so beats keep flowing — the script
+        # writes progress to usb-status.json each step, which we report every
+        # beat, so the dashboard shows a live percentage. Needs root to mount the
+        # USB (NOPASSWD sudoers rule). Skip if a copy is already running.
+        global _usb_proc
+        if _usb_proc is not None and _usb_proc.poll() is None:
+            log.info("command: usb_transfer — a copy is already running; ignoring")
+        else:
+            log.info("command: usb_transfer — starting background copy")
+            try:
+                _usb_proc = subprocess.Popen(
+                    ["sudo", "-n", str(USB_SCRIPT)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            except OSError as e:
+                log.warning("command: usb_transfer — failed to start: %s", e)
+    elif cmd == "usb_eject":
+        log.info("command: usb_eject")
+        # Quick (just unmounts); fine to run inline.
+        _run(["sudo", "-n", str(USB_SCRIPT), "--eject"], timeout=60)
     elif cmd == "wifi_on":
         log.info("command: wifi_on")
         _nmcli(["radio", "wifi", "on"])

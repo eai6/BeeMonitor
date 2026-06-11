@@ -93,14 +93,24 @@
         <div class="mt-2 text-2xl font-semibold {% if storage_pct is None %}text-gray-300{% else %}text-gray-900{% endif %}" id="m-storage-pct">{% if storage_pct is not None %}{{ storage_pct|floatformat:1 }}%{% else %}—{% endif %}</div>
         <div class="mt-1 text-xs text-gray-400" id="m-storage-free">{% if storage_pct is not None %}{{ metrics.storage_free_human|default:"—" }} free (whole card){% endif %}</div>
         <div class="mt-1 text-xs text-gray-500" id="m-recordings">{% if metrics.recordings_human %}Clips: <span class="font-medium text-gray-700">{{ metrics.recordings_human }}</span>{% if metrics.videos_recorded %} · {{ metrics.videos_recorded }} on device{% endif %}{% if metrics.usb_transferred %} · {{ metrics.usb_transferred }} to USB{% endif %}{% endif %}</div>
+        <div id="m-usb-present" class="mt-2 text-xs inline-flex items-center gap-1 {% if usb_present %}text-green-700{% else %}text-gray-400{% endif %}">
+          <span class="w-1.5 h-1.5 rounded-full {% if usb_present %}bg-green-500{% else %}bg-gray-300{% endif %}"></span>{% if usb_present %}USB connected{% else %}No USB connected{% endif %}
+        </div>
         {% if can_manage %}
-        <form method="post" action="{% url 'devices:usb_transfer' device.pk %}" class="mt-2"
-              onsubmit="return confirm('Copy new recordings to a USB drive plugged into the device? It runs on the device\'s next check-in.')">
-          {% csrf_token %}
-          <button class="px-2.5 py-1 text-xs rounded bg-white border border-gray-300 text-gray-700 hover:bg-gray-50">Copy to USB</button>
-        </form>
+        <div class="mt-2 flex gap-2">
+          <form method="post" action="{% url 'devices:usb_transfer' device.pk %}"
+                onsubmit="return confirm('Copy new recordings to a USB drive plugged into the device? It runs on the device\'s next check-in.')">
+            {% csrf_token %}
+            <button class="px-2.5 py-1 text-xs rounded bg-white border border-gray-300 text-gray-700 hover:bg-gray-50">Copy to USB</button>
+          </form>
+          <form method="post" action="{% url 'devices:usb_eject' device.pk %}"
+                onsubmit="return confirm('Eject the USB so it is safe to remove? It unmounts on the next check-in.')">
+            {% csrf_token %}
+            <button class="px-2.5 py-1 text-xs rounded bg-white border border-gray-300 text-gray-700 hover:bg-gray-50">Eject</button>
+          </form>
+        </div>
         {% endif %}
-        <div id="m-usb-status" class="mt-1 text-xs {% if usb_status.ok %}text-green-700{% elif usb_status %}text-red-700{% endif %}">{% if usb_status %}{% if usb_status.ok %}✓ {% else %}✕ {% endif %}{{ usb_status.text }}{% endif %}</div>
+        <div id="m-usb-status" class="mt-1 text-xs">{% if usb_status %}{% if usb_status.running %}<div class="text-gray-600">{{ usb_status.text }}</div><div class="w-full bg-gray-200 rounded-full h-1.5 mt-1"><div class="bg-amber-600 h-1.5 rounded-full" style="width: {{ usb_status.pct }}%"></div></div>{% else %}<span class="{% if usb_status.ok %}text-green-700{% else %}text-red-700{% endif %}">{% if usb_status.ok %}✓ {% else %}✕ {% endif %}{{ usb_status.text }}</span>{% endif %}{% endif %}</div>
       </div>
       <!-- Uptime -->
       <div class="bg-white shadow rounded-lg p-4">
@@ -489,12 +499,23 @@
             vids.innerHTML = '<div class="bg-white shadow rounded-lg p-8 text-center text-sm text-gray-500">No videos uploaded by this device yet (they arrive over WiFi).</div>';
           }
         }
+        var present = document.getElementById('m-usb-present');
+        if (present) {
+          var on = !!d.usb_present;
+          present.className = 'mt-2 text-xs inline-flex items-center gap-1 ' + (on ? 'text-green-700' : 'text-gray-400');
+          present.innerHTML = '<span class="w-1.5 h-1.5 rounded-full ' + (on ? 'bg-green-500' : 'bg-gray-300') + '"></span>' + (on ? 'USB connected' : 'No USB connected');
+        }
         var usb = document.getElementById('m-usb-status');
         if (usb) {
-          if (d.usb_status) {
-            usb.className = 'mt-1 text-xs ' + (d.usb_status.ok ? 'text-green-700' : 'text-red-700');
-            usb.textContent = (d.usb_status.ok ? '✓ ' : '✕ ') + d.usb_status.text;
-          } else { usb.textContent = ''; }
+          var u = d.usb_status;
+          if (u && u.running) {
+            usb.className = 'mt-1 text-xs';
+            usb.innerHTML = '<div class="text-gray-600">' + esc(u.text) + '</div>' +
+              '<div class="w-full bg-gray-200 rounded-full h-1.5 mt-1"><div class="bg-amber-600 h-1.5 rounded-full" style="width: ' + (u.pct || 0) + '%"></div></div>';
+          } else if (u) {
+            usb.className = 'mt-1 text-xs ' + (u.ok ? 'text-green-700' : 'text-red-700');
+            usb.textContent = (u.ok ? '✓ ' : '✕ ') + u.text;
+          } else { usb.innerHTML = ''; }
         }
         buildActivityChart(d.activity_series, d.weather_enabled, d.activity_gran);
       }).catch(function () {});
