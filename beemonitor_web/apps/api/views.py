@@ -495,7 +495,7 @@ class RegisterView(viewsets.ViewSet):
                 {"detail": "Username already taken."},
                 status=status.HTTP_409_CONFLICT,
             )
-        if User.objects.filter(email=email).exists():
+        if User.objects.filter(email__iexact=email).exists():
             return Response(
                 {"detail": "Email already registered."},
                 status=status.HTTP_409_CONFLICT,
@@ -531,9 +531,12 @@ class ResetPasswordView(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        try:
-            user = User.objects.get(email=email)
-        except User.DoesNotExist:
+        # Case-insensitive, and duplicate-safe: Django's User.email isn't unique,
+        # so .get() would 500 (MultipleObjectsReturned) on a repeated email. Match
+        # case-insensitively and reset the most recently-active matching account.
+        user = (User.objects.filter(email__iexact=email)
+                .order_by("-last_login", "-id").first())
+        if user is None:
             # Don't reveal whether email exists
             return Response({"detail": "If the email exists, the password has been reset."})
 

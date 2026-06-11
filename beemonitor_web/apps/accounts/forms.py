@@ -12,6 +12,16 @@ class UserRegistrationForm(UserCreationForm):
         model = User
         fields = ("username", "email", "password1", "password2")
 
+    def clean_email(self):
+        # Django's User.email isn't unique; enforce it (case-insensitively) here
+        # so we don't create duplicates that later break password reset.
+        email = self.cleaned_data["email"]
+        if User.objects.filter(email__iexact=email).exists():
+            raise forms.ValidationError(
+                "An account with this email already exists. Try logging in or "
+                "resetting your password.")
+        return email
+
 
 class CouponForm(forms.ModelForm):
     class Meta:
