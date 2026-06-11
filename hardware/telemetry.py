@@ -98,6 +98,9 @@ UPDATE_STATUS_FILE = STATE_DIR / "update-status.json"
 # Last USB-transfer result (written by usb-transfer.sh), reported in the beat so
 # the dashboard can show "copied N" / "no USB detected".
 USB_STATUS_FILE = STATE_DIR / "usb-status.json"
+# Device's dashboard location, cached from the heartbeat so usb-transfer.sh can
+# name the USB folder after the hive (one stick, several hives, clear folders).
+LOCATION_FILE = STATE_DIR / "location"
 
 # Storage cleanup: delete local clips a human cleared for deletion on the
 # dashboard (GET/POST /api/v1/devices/cleanup). Cheap JSON, runs over cellular.
@@ -639,6 +642,24 @@ def _start_update(params: dict) -> None:
         log.warning("command: update — failed to spawn updater: %s", e)
 
 
+def _cache_location(value) -> None:
+    """Persist the device's dashboard location so usb-transfer.sh can name the
+    USB folder after the hive. Written only when it changes (cheap, idempotent),
+    and BEFORE any command runs so an immediate usb_transfer uses a fresh label.
+    """
+    if not isinstance(value, str):
+        return
+    loc = value.strip()
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        cur = LOCATION_FILE.read_text().strip() if LOCATION_FILE.exists() else ""
+        if loc != cur:
+            LOCATION_FILE.write_text(loc)
+            log.info("device location cached: %r", loc)
+    except OSError as e:
+        log.debug("could not cache location: %s", e)
+
+
 def _handle_command(cmd: str, params: dict) -> None:
     if cmd == "capture_image":
         log.info("command: capture_image")
@@ -648,7 +669,8 @@ def _handle_command(cmd: str, params: dict) -> None:
     elif cmd == "usb_transfer":
         log.info("command: usb_transfer")
         # Needs root to mount the USB; run via the NOPASSWD sudoers rule (see
-        # README). The script auto-detects any plugged-in USB.
+        # README). The script auto-detects any plugged-in USB and names the
+        # folder from the cached device location (LOCATION_FILE).
         r = _run(["sudo", "-n", str(USB_SCRIPT)], timeout=900)
         if r is not None:
             log.info("usb_transfer rc=%s %s", r.returncode,
@@ -687,6 +709,7 @@ def _poll_command() -> "dict | None":
         )
         if r.ok:
             d = r.json()
+            _cache_location(d.get("location"))  # before the command, so usb_transfer sees it
             if d.get("command"):
                 _handle_command(d["command"], d.get("params") or {})
             return d
@@ -798,6 +821,7 @@ def main() -> int:
         try:
             resp = send_beat()
             if resp:
+                _cache_location(resp.get("location"))  # keep the USB-folder label fresh
                 # The beat may also carry a command (belt-and-suspenders)...
                 if resp.get("command"):
                     _handle_command(resp["command"], resp.get("params") or {})

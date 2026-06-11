@@ -47,8 +47,15 @@ write_status() {  # ok(true|false) detail
 fail() { log "$2"; write_status false "$1"; exit 1; }
 
 # Device identity for the manifest — the key PREFIX only, never the secret.
-DEV_PREFIX=""
-[ -f "$ENV_FILE" ] && DEV_PREFIX="$(grep -E '^BEEMONITOR_DEVICE_KEY=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | cut -c1-16)"
+# DEV_ID is a short, stable hash of the key; it's the FALLBACK folder suffix
+# ("<hostname>-<dev-id>") used only when no dashboard location is known, so two
+# devices that both default to the hostname "raspberrypi" still get distinct
+# folders. The hash can't be reversed to the key. Empty when no key is set.
+DEV_KEY=""
+[ -f "$ENV_FILE" ] && DEV_KEY="$(grep -E '^BEEMONITOR_DEVICE_KEY=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
+DEV_PREFIX="$(printf '%s' "$DEV_KEY" | cut -c1-16)"
+DEV_ID="$(printf '%s' "$DEV_KEY" | sha256sum 2>/dev/null | cut -c1-8)"
+[ -n "$DEV_KEY" ] || DEV_ID=""
 
 # --- resolve the destination mount ---------------------------------------
 TARGET="${1:-}"
@@ -65,13 +72,24 @@ mount_dev() {  # $1=device node -> echoes mountpoint, mounts if needed
 }
 
 if [ -z "$TARGET" ]; then
-    # Auto-detect ANY hot-plugged USB with a filesystem — partition first, then
-    # a whole-disk filesystem (some sticks are formatted without a partition
-    # table). Requiring a non-empty FSTYPE skips unmountable junk.
-    part="$(lsblk -rno NAME,HOTPLUG,TYPE,FSTYPE | awk '$2==1 && $3=="part" && $4!="" {print $1; exit}')"
-    [ -n "$part" ] || part="$(lsblk -rno NAME,HOTPLUG,TYPE,FSTYPE | awk '$2==1 && $3=="disk" && $4!="" {print $1; exit}')"
-    [ -n "$part" ] || fail "no_usb" "no USB drive found (plug one in, or pass a mountpoint / /dev/sdX1)"
-    dev="/dev/$part"; STATUS_DEV="$dev"
+    # Auto-detect a plugged-in USB drive by TRANSPORT (tran==usb), not the
+    # HOTPLUG flag. On the Pi the flag is inverted: the USB stick reports
+    # HOTPLUG=0 while the SD card reports HOTPLUG=1, so the old hotplug
+    # heuristic picked the SD card's /boot/firmware partition instead of the
+    # stick. Transport is the dependable signal. For each USB disk take its
+    # first partition with a filesystem (or a whole-disk fs for unpartitioned
+    # sticks); skip the disk backing the OS root in case the Pi boots from USB.
+    root_src="$(findmnt -no SOURCE / 2>/dev/null)"
+    root_disk="$(lsblk -no PKNAME "$root_src" 2>/dev/null | head -1)"
+    dev=""
+    for disk in $(lsblk -rno NAME,TYPE,TRAN | awk '$2=="disk" && $3=="usb" {print $1}'); do
+        [ -n "$root_disk" ] && [ "$disk" = "$root_disk" ] && continue
+        cand="$(lsblk -rno NAME,TYPE,FSTYPE "/dev/$disk" | awk '$2=="part" && $3!="" {print $1; exit}')"
+        [ -n "$cand" ] || cand="$(lsblk -rno NAME,TYPE,FSTYPE "/dev/$disk" | awk '$2=="disk" && $3!="" {print $1; exit}')"
+        [ -n "$cand" ] && { dev="/dev/$cand"; break; }
+    done
+    [ -n "$dev" ] || fail "no_usb" "no USB drive found (plug one in, or pass a mountpoint / /dev/sdX1)"
+    STATUS_DEV="$dev"
     mp="$(mount_dev "$dev")" || fail "mount_failed" "could not mount $dev (unsupported filesystem? try exfat/ntfs support)"
     TARGET="$mp"
     log "using USB $dev -> $mp"
@@ -84,7 +102,20 @@ else
 fi
 [ -d "$TARGET" ] || fail "bad_target" "destination '$TARGET' is not a directory"
 
-DEST="$TARGET/BeeMonitor/$HOST"
+# Per-device subfolder named after the device's dashboard LOCATION, so one stick
+# can hold several hives in clearly-labelled folders (e.g. "north_hedgerow").
+# telemetry.py caches the location to STATE_DIR/location from the heartbeat;
+# BEEMONITOR_USB_LABEL overrides it (handy for manual runs). When no location is
+# known, fall back to "<hostname>-<dev-id>" — hostname alone isn't unique because
+# Pis often all default to "raspberrypi".
+fat_safe() {  # FAT-safe folder name: keep [A-Za-z0-9._-], collapse the rest to _
+    printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_' | sed -E 's/_+/_/g; s/^[._-]+//; s/[._-]+$//'
+}
+LABEL="${BEEMONITOR_USB_LABEL:-}"
+[ -n "$LABEL" ] || LABEL="$(cat "$STATE_DIR/location" 2>/dev/null)"
+SUBDIR="$(fat_safe "$LABEL")"
+[ -n "$SUBDIR" ] || SUBDIR="$HOST${DEV_ID:+-$DEV_ID}"
+DEST="$TARGET/BeeMonitor/$SUBDIR"
 mkdir -p "$DEST" || fail "not_writable" "cannot write to $DEST (USB read-only or full?)"
 MANIFEST="$DEST/manifest.csv"
 [ -f "$MANIFEST" ] || echo "relpath,bytes,mtime_utc,device_host,device_key_prefix" > "$MANIFEST"

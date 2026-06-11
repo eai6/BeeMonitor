@@ -168,6 +168,9 @@ class DeviceHeartbeatView(APIView):
                 "image_stored": bool(image_key),
                 "command": command,
                 "params": params,
+                # Device caches this to name the USB-transfer folder per hive
+                # (hardware/usb-transfer.sh); see telemetry's _cache_location.
+                "location": device.location or "",
                 # The device adopts this as its beat cadence (dashboard-set).
                 "telemetry_interval": device.telemetry_interval_seconds,
             },
@@ -199,6 +202,8 @@ class DeviceCommandView(APIView):
         return Response({
             "command": command,
             "params": params,
+            # Cached device-side to name the USB-transfer folder per hive.
+            "location": device.location or "",
             # Carry the cadence here too so a rate change applies within seconds
             # even when the beat interval is long.
             "telemetry_interval": device.telemetry_interval_seconds,
