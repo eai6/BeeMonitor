@@ -7,28 +7,21 @@
 
 *Get Raspberry Pi OS onto the card and reachable over SSH.*
 
-### Flash Raspberry Pi OS  (~10 min)
+### Flash & first boot  (~15 min)
 
-Write Raspberry Pi OS (Bookworm, 64-bit) with Raspberry Pi Imager. In the Imager's settings, set the username to exactly 'beemonitor', enable SSH, and enter your bench WiFi — every path in this guide assumes that user.
-
-**What you should see:** The card writes and verifies. 64-bit is required (the calibration PyTorch wheels are aarch64-only).
-
-> ⚠️ **Username isn't 'beemonitor'** — Re-flash — the systemd units hardcode /home/beemonitor paths and run as User=beemonitor.
-
-### Boot & SSH in  (~10 min)
-
-Connect the HQ Camera ribbon BEFORE first boot (it's only probed at boot), power on, then SSH in and update the OS.
+Write Raspberry Pi OS (Bookworm, 64-bit) with Raspberry Pi Imager; in its settings set the username to exactly 'beemonitor' and your WiFi (every path here assumes that user). Connect the HQ Camera ribbon BEFORE first boot, then boot with a monitor, keyboard, and mouse — setup is done on-screen, no SSH needed. Open a Terminal and update:
 
 ```bash
-ssh beemonitor@beemonitor.local
 sudo apt update && sudo apt full-upgrade -y
 getconf LONG_BIT   # must print 64
 whoami             # must print beemonitor
 ```
 
-**What you should see:** SSH connects, LONG_BIT is 64, and whoami is beemonitor.
+**What you should see:** The desktop loads; LONG_BIT is 64 and whoami is beemonitor. 64-bit is required (the calibration PyTorch wheels are aarch64-only).
 
-> ⚠️ **can't resolve <host>.local** — Use the Pi's IP from your router instead of mDNS: ssh beemonitor@<pi-ip>.
+> ⚠️ **Username isn't 'beemonitor'** — Re-flash — the systemd units hardcode /home/beemonitor paths and run as User=beemonitor.
+
+> ⚠️ **no display / black screen** — Use the micro-HDMI port nearest the USB-C power, and connect the monitor before powering on.
 
 ## Install software
 

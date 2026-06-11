@@ -590,6 +590,13 @@ class DeviceStatusView(LoginRequiredMixin, View):
             "videos_recorded": metrics.get("videos_recorded"),
             "usb_transferred": metrics.get("usb_transferred"),
             "snippets_last_period": metrics.get("snippets_last_period"),
+            "telemetry_period_human": metrics.get("telemetry_period_human"),
+            "uptime_human": metrics.get("uptime_human"),
+            "cpu_temp_c": metrics.get("cpu_temp_c"),
+            "video_count": device.videos.count(),
+            "pending_uploads": metrics.get("pending_uploads"),
+            "schedule_window": metrics.get("schedule_window"),
+            "code_commit": metrics.get("code_commit"),
             "services": {
                 "recorder": bool(metrics.get("recorder_active")),
                 "uploader": bool(metrics.get("uploader_active")),

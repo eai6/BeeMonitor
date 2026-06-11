@@ -105,24 +105,24 @@
       <!-- Uptime -->
       <div class="bg-white shadow rounded-lg p-4">
         <div class="text-xs text-gray-500 uppercase tracking-wide">Uptime</div>
-        <div class="mt-2 text-lg font-semibold text-gray-900">{{ metrics.uptime_human|default:"—" }}</div>
+        <div class="mt-2 text-lg font-semibold text-gray-900" id="m-uptime">{{ metrics.uptime_human|default:"—" }}</div>
       </div>
       <!-- CPU temp -->
       <div class="bg-white shadow rounded-lg p-4">
         <div class="text-xs text-gray-500 uppercase tracking-wide">CPU temp</div>
-        <div class="mt-2 text-2xl font-semibold text-gray-900">{% if metrics.cpu_temp_c %}{{ metrics.cpu_temp_c|floatformat:0 }}°C{% else %}—{% endif %}</div>
+        <div class="mt-2 text-2xl font-semibold text-gray-900" id="m-cputemp">{% if metrics.cpu_temp_c %}{{ metrics.cpu_temp_c|floatformat:0 }}°C{% else %}—{% endif %}</div>
       </div>
       <!-- Activity (snippets are recorded only on motion → activity proxy) -->
       <div class="bg-white shadow rounded-lg p-4">
         <div class="text-xs text-gray-500 uppercase tracking-wide">Activity</div>
         <div class="mt-2 text-2xl font-semibold text-gray-900" id="m-activity">{{ metrics.snippets_last_period|default:"—" }}</div>
-        <div class="mt-1 text-xs text-gray-400">activity / {{ metrics.telemetry_period_human|default:"period" }}</div>
+        <div class="mt-1 text-xs text-gray-400" id="m-activity-sub">activity / {{ metrics.telemetry_period_human|default:"period" }}</div>
       </div>
       <!-- Videos -->
       <div class="bg-white shadow rounded-lg p-4">
         <div class="text-xs text-gray-500 uppercase tracking-wide">Videos uploaded</div>
-        <div class="mt-2 text-2xl font-semibold text-gray-900">{{ video_count }}</div>
-        <div class="mt-1 text-xs text-gray-400">{{ metrics.pending_uploads|default:"—" }} pending</div>
+        <div class="mt-2 text-2xl font-semibold text-gray-900" id="m-videocount">{{ video_count }}</div>
+        <div class="mt-1 text-xs text-gray-400" id="m-pending">{{ metrics.pending_uploads|default:"—" }} pending</div>
       </div>
       <!-- Services -->
       <div class="bg-white shadow rounded-lg p-4">
@@ -141,7 +141,7 @@
     {% if metrics.schedule_window %}
     <div class="bg-white shadow rounded-lg p-4 mt-4 text-sm text-gray-600">
       <span class="text-xs text-gray-500 uppercase tracking-wide">Scheduled window</span>
-      <span class="ml-2">{{ metrics.schedule_window }}</span>
+      <span class="ml-2" id="m-schedule">{{ metrics.schedule_window }}</span>
     </div>
     {% endif %}
   </div>
@@ -259,7 +259,7 @@
 <div class="mt-6 bg-white shadow rounded-lg p-4">
   <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
     <h2 class="text-sm font-semibold text-gray-700">Software</h2>
-    <div class="text-xs text-gray-500">
+    <div class="text-xs text-gray-500" id="m-version">
       {% if metrics.code_commit %}
         version <span class="font-mono font-medium text-gray-700">{{ metrics.code_commit }}</span>
       {% else %}
@@ -436,7 +436,17 @@
         setText('hdr-lastseen', d.last_seen);
         setText('m-storage-pct', d.storage_pct != null ? (Math.round(d.storage_pct * 10) / 10) + '%' : '—');
         setText('m-storage-free', d.storage_free_human ? d.storage_free_human + ' free (whole card)' : '');
+        setText('m-uptime', d.uptime_human || '—');
+        setText('m-cputemp', d.cpu_temp_c != null ? Math.round(d.cpu_temp_c) + '°C' : '—');
         setText('m-activity', d.snippets_last_period != null ? d.snippets_last_period : '—');
+        setText('m-activity-sub', 'activity / ' + (d.telemetry_period_human || 'period'));
+        setText('m-videocount', d.video_count != null ? d.video_count : '—');
+        setText('m-pending', (d.pending_uploads != null ? d.pending_uploads : '—') + ' pending');
+        setText('m-schedule', d.schedule_window || '');
+        var ver = document.getElementById('m-version');
+        if (ver) ver.innerHTML = d.code_commit
+          ? 'version <span class="font-mono font-medium text-gray-700">' + d.code_commit + '</span>'
+          : '<span class="text-gray-400">version unknown (waiting for a beat)</span>';
         var rec = document.getElementById('m-recordings');
         if (rec) {
           if (d.recordings_human) {

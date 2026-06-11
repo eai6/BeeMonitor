@@ -56,38 +56,29 @@ PHASES = [
 STEPS: list[dict] = [
     # ---------------------------------------------------------------- flash
     {
-        "id": "flash_os", "phase": "flash", "title": "Flash Raspberry Pi OS",
+        "id": "flash_os", "phase": "flash", "title": "Flash & first boot",
         "concept": "Write Raspberry Pi OS (Bookworm, 64-bit) with Raspberry Pi "
-                   "Imager. In the Imager's settings, set the username to "
-                   "exactly 'beemonitor', enable SSH, and enter your bench WiFi "
-                   "— every path in this guide assumes that user.",
-        "command": "",
-        "expected": "The card writes and verifies. 64-bit is required (the "
-                    "calibration PyTorch wheels are aarch64-only).",
+                   "Imager; in its settings set the username to exactly "
+                   "'beemonitor' and your WiFi (every path here assumes that "
+                   "user). Connect the HQ Camera ribbon BEFORE first boot, then "
+                   "boot with a monitor, keyboard, and mouse — setup is done "
+                   "on-screen, no SSH needed. Open a Terminal and update:",
+        "command": "sudo apt update && sudo apt full-upgrade -y\n"
+                   "getconf LONG_BIT   # must print 64\n"
+                   "whoami             # must print beemonitor",
+        "expected": "The desktop loads; LONG_BIT is 64 and whoami is beemonitor. "
+                    "64-bit is required (the calibration PyTorch wheels are "
+                    "aarch64-only).",
         "verify": None,
         "common_errors": [
             {"symptom": "Username isn't 'beemonitor'",
              "fix": "Re-flash — the systemd units hardcode /home/beemonitor "
                     "paths and run as User=beemonitor."},
+            {"symptom": "no display / black screen",
+             "fix": "Use the micro-HDMI port nearest the USB-C power, and "
+                    "connect the monitor before powering on."},
         ],
-        "minutes": 10, "difficulty": "easy", "optional": False, "applies_to": "both",
-    },
-    {
-        "id": "first_boot", "phase": "flash", "title": "Boot & SSH in",
-        "concept": "Connect the HQ Camera ribbon BEFORE first boot (it's only "
-                   "probed at boot), power on, then SSH in and update the OS.",
-        "command": "ssh beemonitor@{{hostname}}.local\n"
-                   "sudo apt update && sudo apt full-upgrade -y\n"
-                   "getconf LONG_BIT   # must print 64\n"
-                   "whoami             # must print beemonitor",
-        "expected": "SSH connects, LONG_BIT is 64, and whoami is beemonitor.",
-        "verify": None,
-        "common_errors": [
-            {"symptom": "can't resolve <host>.local",
-             "fix": "Use the Pi's IP from your router instead of mDNS: "
-                    "ssh beemonitor@<pi-ip>."},
-        ],
-        "minutes": 10, "difficulty": "easy", "optional": False, "applies_to": "both",
+        "minutes": 15, "difficulty": "easy", "optional": False, "applies_to": "both",
     },
     # ------------------------------------------------------------- software
     {
