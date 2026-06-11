@@ -146,7 +146,11 @@ def _fetch_weather(lat: float, lon: float, start_date: str, end_date: str, hourl
         "longitude": f"{lon:.4f}",
         "start_date": start_date,
         "end_date": end_date,
-        "timezone": "UTC",  # matches our UTC heartbeat buckets exactly
+        # Return weather in the HIVE's local time (derived from lat/lon) so its
+        # hour-keys line up with the activity buckets, which are keyed by the
+        # clip filenames' local wall-clock. (UTC here shifted the overlay by the
+        # device's offset.)
+        "timezone": "auto",
     }
     if hourly:
         params["hourly"] = "temperature_2m,precipitation"
@@ -166,10 +170,11 @@ def _fetch_weather(lat: float, lon: float, start_date: str, end_date: str, hourl
 
 
 def _weather_lookup(buckets, gran, lat, lon) -> dict:
-    """Map each activity bucket (UTC) -> {"temp", "precip"} from Open-Meteo.
+    """Map each activity bucket -> {"temp", "precip"} from Open-Meteo.
 
-    Hourly granularity keys on "YYYY-MM-DDTHH"; daily on "YYYY-MM-DD". Both the
-    request and the bucket keys are UTC, so they align exactly.
+    Hourly granularity keys on "YYYY-MM-DDTHH"; daily on "YYYY-MM-DD". The
+    activity buckets are the clips' local wall-clock and Open-Meteo is requested
+    with timezone=auto (the hive's local tz), so the keys line up.
     """
     if not buckets:
         return {}
