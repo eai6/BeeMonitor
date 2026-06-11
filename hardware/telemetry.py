@@ -101,6 +101,9 @@ USB_STATUS_FILE = STATE_DIR / "usb-status.json"
 # Device's dashboard location, cached from the heartbeat so usb-transfer.sh can
 # name the USB folder after the hive (one stick, several hives, clear folders).
 LOCATION_FILE = STATE_DIR / "location"
+# Dashboard motion-tuning overrides; the recorder applies these on top of
+# calibration.json (main_motion.py). Lives beside calibration.json.
+MOTION_TUNING_FILE = RECORD_DIR.parent / "motion_tuning.json"
 
 # Storage cleanup: delete local clips a human cleared for deletion on the
 # dashboard (GET/POST /api/v1/devices/cleanup). Cheap JSON, runs over cellular.
@@ -677,6 +680,22 @@ def _start_update(params: dict) -> None:
         log.warning("command: update — failed to spawn updater: %s", e)
 
 
+def _apply_motion_tuning(tuning) -> None:
+    """Persist dashboard motion-tuning overrides to motion_tuning.json (only when
+    they change). The recorder hot-reloads it on top of calibration."""
+    if not isinstance(tuning, dict):
+        return
+    try:
+        new = json.dumps(tuning, sort_keys=True)
+        cur = MOTION_TUNING_FILE.read_text().strip() if MOTION_TUNING_FILE.exists() else ""
+        if new != cur:
+            MOTION_TUNING_FILE.parent.mkdir(parents=True, exist_ok=True)
+            MOTION_TUNING_FILE.write_text(new)
+            log.info("motion tuning updated: %s", tuning or "(cleared)")
+    except OSError as e:
+        log.warning("could not write motion tuning: %s", e)
+
+
 def _cache_location(value) -> None:
     """Persist the device's dashboard location so usb-transfer.sh can name the
     USB folder after the hive. Written only when it changes (cheap, idempotent),
@@ -875,6 +894,8 @@ def main() -> int:
                     _handle_command(resp["command"], resp.get("params") or {})
                 # ...and the dashboard-set beat interval.
                 _apply_interval(resp.get("telemetry_interval"))
+                # ...and any dashboard motion-tuning overrides.
+                _apply_motion_tuning(resp.get("motion_tuning"))
             # Free SD space: delete clips a human cleared on the dashboard.
             if CLEANUP_INTERVAL > 0 and time.time() - last_cleanup >= CLEANUP_INTERVAL:
                 _run_cleanup()

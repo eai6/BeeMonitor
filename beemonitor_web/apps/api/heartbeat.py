@@ -173,6 +173,8 @@ class DeviceHeartbeatView(APIView):
                 "location": device.location or "",
                 # The device adopts this as its beat cadence (dashboard-set).
                 "telemetry_interval": device.telemetry_interval_seconds,
+                # Manual motion-tuning overrides (empty = use auto-calibration).
+                "motion_tuning": device.motion_tuning_dict(),
             },
             status=201,
         )

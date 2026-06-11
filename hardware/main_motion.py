@@ -654,6 +654,7 @@ def record() -> None:
 
     # Hot-reload of calibration.json written by the scheduled --calibrate job.
     calib_mtime = CALIB_FILE.stat().st_mtime if CALIB_FILE.exists() else 0.0
+    tuning_mtime = TUNING_FILE.stat().st_mtime if TUNING_FILE.exists() else 0.0
     last_calib_check = time.monotonic()
 
     # First telemetry still shortly after warmup, then every interval.
@@ -727,18 +728,25 @@ def record() -> None:
                 log.info("background model rebuilt (every %.0fs); re-warming %.1fs",
                          BG_RESET_INTERVAL, WARMUP_SECONDS)
 
-            # Pick up a freshly-written calibration without restarting.
+            # Pick up freshly-written calibration OR dashboard tuning without a
+            # restart. Tuning is applied on top of calibration so it always wins.
             if now_mono - last_calib_check >= CALIB_RELOAD_SECONDS:
                 last_calib_check = now_mono
                 try:
-                    m = CALIB_FILE.stat().st_mtime if CALIB_FILE.exists() else 0.0
+                    cm = CALIB_FILE.stat().st_mtime if CALIB_FILE.exists() else 0.0
                 except OSError:
-                    m = calib_mtime
-                if m != calib_mtime:
-                    if _apply_calibration(gate, load_calibration()):
-                        log.info("reloaded calibration: area=[%.0f, %.0f]",
-                                 gate.min_area, gate.max_area)
-                    calib_mtime = m
+                    cm = calib_mtime
+                try:
+                    tm = TUNING_FILE.stat().st_mtime if TUNING_FILE.exists() else 0.0
+                except OSError:
+                    tm = tuning_mtime
+                if cm != calib_mtime or tm != tuning_mtime:
+                    _apply_calibration(gate, load_calibration())
+                    _apply_tuning(gate, load_tuning())
+                    log.info("reloaded motion params: var=%.0f area=[%.0f, %.0f] "
+                             "min_blobs=%d", gate.var_threshold, gate.min_area,
+                             gate.max_area, gate.min_blobs)
+                    calib_mtime, tuning_mtime = cm, tm
 
             # On-demand still requested by telemetry (picture / live view): the
             # telemetry service drops capture.request; if its content is "roi" we
@@ -827,8 +835,41 @@ def _apply_calibration(gate, calib) -> bool:
     return True
 
 
+# Manual motion-tuning overrides from the dashboard (telemetry writes this).
+# Applied ON TOP of calibration.json so the nightly auto-calibrate can't clobber
+# a value the user set by hand. Only keys present override; others fall through.
+TUNING_FILE = CALIB_FILE.parent / "motion_tuning.json"
+
+
+def load_tuning():
+    """Return the dashboard motion-tuning overrides, or None if absent/bad."""
+    if not TUNING_FILE.exists():
+        return None
+    try:
+        return json.loads(TUNING_FILE.read_text())
+    except (OSError, ValueError) as e:
+        log.warning("ignoring unreadable %s: %s", TUNING_FILE, e)
+        return None
+
+
+def _apply_tuning(gate, tuning) -> bool:
+    """Override gate params with any dashboard-set values. Returns True if any."""
+    if not isinstance(tuning, dict) or not tuning:
+        return False
+    applied = False
+    if tuning.get("min_area") is not None:
+        gate.min_area = float(tuning["min_area"]); applied = True
+    if tuning.get("max_area") is not None:
+        gate.max_area = float(tuning["max_area"]); applied = True
+    if tuning.get("min_blobs") is not None:
+        gate.min_blobs = int(tuning["min_blobs"]); applied = True
+    if tuning.get("var_threshold") is not None:
+        gate.set_var_threshold(float(tuning["var_threshold"])); applied = True
+    return applied
+
+
 def _build_gate(roi):
-    """Construct the MotionGate, applying calibration.json if present."""
+    """Construct the MotionGate, applying calibration.json + manual overrides."""
     gate = MotionGate(roi=roi)
     calib = load_calibration()
     if _apply_calibration(gate, calib):
@@ -839,6 +880,10 @@ def _build_gate(roi):
         log.warning("no calibration.json — using permissive defaults "
                     "(area=[%.0f, %.0f]); a scheduled --calibrate will tighten "
                     "these from recorded snippets", gate.min_area, gate.max_area)
+    if _apply_tuning(gate, load_tuning()):
+        log.info("applied dashboard motion tuning: var=%.0f area=[%.0f, %.0f] "
+                 "min_blobs=%d", gate.var_threshold, gate.min_area,
+                 gate.max_area, gate.min_blobs)
     return gate
 
 

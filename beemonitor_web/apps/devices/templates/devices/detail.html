@@ -197,6 +197,69 @@
   {% endif %}
 </div>
 
+<!-- Motion tuning (debug sensitivity) -->
+<div class="mt-6 bg-white shadow rounded-lg p-4">
+  <h2 class="text-sm font-semibold text-gray-700 mb-1">Motion tuning</h2>
+  <p class="text-xs text-gray-400 mb-3">
+    Leave a field blank to use the device's auto-calibration. To make it
+    <em>less</em> sensitive: raise <strong>Sensitivity threshold</strong> or
+    <strong>Min blobs</strong>, or tighten the blob-area window. Use the camera's
+    <strong>ROI</strong> photo to see what's being detected. Applies within a few
+    minutes (the device's calibration reload).
+  </p>
+  {% if can_manage %}
+  <form id="motion-form" method="post" action="{% url 'devices:motion_tuning' device.pk %}"
+        class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+    {% csrf_token %}
+    <label class="text-xs text-gray-600">Sensitivity threshold
+      <input name="var_threshold" type="number" min="4" max="255" step="1" placeholder="auto"
+             value="{{ device.motion_var_threshold|default_if_none:'' }}"
+             class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+    </label>
+    <label class="text-xs text-gray-600">Min blob area
+      <input name="min_area" type="number" min="0" step="1" placeholder="auto"
+             value="{{ device.motion_min_area|default_if_none:'' }}"
+             class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+    </label>
+    <label class="text-xs text-gray-600">Max blob area
+      <input name="max_area" type="number" min="0" step="1" placeholder="auto"
+             value="{{ device.motion_max_area|default_if_none:'' }}"
+             class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+    </label>
+    <label class="text-xs text-gray-600">Min blobs
+      <input name="min_blobs" type="number" min="1" max="100" step="1" placeholder="auto"
+             value="{{ device.motion_min_blobs|default_if_none:'' }}"
+             class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+    </label>
+    <div class="col-span-2 sm:col-span-4 flex items-center gap-2">
+      <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Save tuning</button>
+      <span id="motion-saved" class="text-xs text-green-700 hidden">Saved ✓</span>
+    </div>
+  </form>
+  <script>
+    (function () {
+      var f = document.getElementById('motion-form');
+      if (!f) return;
+      f.addEventListener('submit', function (e) {
+        e.preventDefault();
+        fetch(f.action, {
+          method: 'POST',
+          headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': f.querySelector('[name=csrfmiddlewaretoken]').value},
+          body: new FormData(f),
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          if (d && d.ok) {
+            var s = document.getElementById('motion-saved');
+            if (s) { s.classList.remove('hidden'); setTimeout(function () { s.classList.add('hidden'); }, 2500); }
+          } else { alert((d && d.error) || 'Could not save motion tuning.'); }
+        }).catch(function () { alert('Could not save motion tuning.'); });
+      });
+    })();
+  </script>
+  {% else %}
+  <p class="text-xs text-gray-400 italic">Read-only — motion tuning requires manager access.</p>
+  {% endif %}
+</div>
+
 <!-- WiFi control -->
 <div class="mt-6 bg-white shadow rounded-lg p-4">
   <div class="flex flex-wrap items-center justify-between gap-2 mb-1">

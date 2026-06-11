@@ -709,6 +709,53 @@ class DeviceStatusView(LoginRequiredMixin, View):
         })
 
 
+class DeviceMotionTuningView(LoginRequiredMixin, View):
+    """Set manual motion-tuning overrides (blank = auto-calibration).
+
+    The device applies them on top of its calibration within a few minutes
+    (hot-reload). Higher var_threshold / min_blobs or a tighter area window =
+    less sensitive.
+    """
+
+    def post(self, request, pk):
+        device = _device_or_403(request.user, pk, "manager")
+        is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+        def num(name, cast, lo, hi):
+            raw = (request.POST.get(name) or "").strip()
+            if raw == "":
+                return None, True  # blank -> clear the override (use auto)
+            try:
+                v = cast(raw)
+            except (TypeError, ValueError):
+                return None, False
+            return (v, lo <= v <= hi)
+
+        var, ok1 = num("var_threshold", int, 4, 255)
+        mn, ok2 = num("min_area", float, 0, 1_000_000)
+        mx, ok3 = num("max_area", float, 0, 1_000_000_000)
+        blobs, ok4 = num("min_blobs", int, 1, 100)
+        if not (ok1 and ok2 and ok3 and ok4):
+            err = "Invalid motion-tuning value (check the ranges)."
+            if is_ajax:
+                return JsonResponse({"error": err}, status=400)
+            messages.error(request, err)
+            return redirect("devices:detail", pk=pk)
+
+        device.motion_var_threshold = var
+        device.motion_min_area = mn
+        device.motion_max_area = mx
+        device.motion_min_blobs = blobs
+        device.save(update_fields=["motion_var_threshold", "motion_min_area",
+                                   "motion_max_area", "motion_min_blobs"])
+        if is_ajax:
+            return JsonResponse({"ok": True, "tuning": device.motion_tuning_dict()})
+        messages.success(
+            request, "Motion tuning saved — the device applies it within a few "
+            "minutes (its next calibration reload).")
+        return redirect("devices:detail", pk=pk)
+
+
 class DeviceLatestImageView(LoginRequiredMixin, View):
     """Latest on-demand image (presigned URL) — polled after a photo request."""
 

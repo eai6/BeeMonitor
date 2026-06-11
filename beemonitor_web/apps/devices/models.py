@@ -71,6 +71,14 @@ class Device(models.Model):
     tz_name = models.CharField(max_length=64, blank=True, default="")
     tz_offset_min = models.IntegerField(null=True, blank=True)
 
+    # Manual motion-tuning overrides (null = use the device's auto-calibration).
+    # Applied by the recorder on top of calibration.json. Higher var_threshold or
+    # min_blobs, or a tighter area window, = less sensitive.
+    motion_var_threshold = models.PositiveIntegerField(null=True, blank=True)
+    motion_min_area = models.FloatField(null=True, blank=True)
+    motion_max_area = models.FloatField(null=True, blank=True)
+    motion_min_blobs = models.PositiveIntegerField(null=True, blank=True)
+
     # Pending command for the device, returned in the next heartbeat response and
     # then cleared. "" | "capture_image" | "stream" | "wifi_stream".
     pending_command = models.CharField(max_length=32, blank=True, default="")
@@ -119,6 +127,19 @@ class Device(models.Model):
         """Human label for the current beat interval (e.g. '1 minute')."""
         return dict(TELEMETRY_INTERVAL_CHOICES).get(
             self.telemetry_interval_seconds, f"{self.telemetry_interval_seconds}s")
+
+    def motion_tuning_dict(self) -> dict:
+        """Non-null motion overrides, in the keys the recorder expects."""
+        d = {}
+        if self.motion_var_threshold is not None:
+            d["var_threshold"] = self.motion_var_threshold
+        if self.motion_min_area is not None:
+            d["min_area"] = self.motion_min_area
+        if self.motion_max_area is not None:
+            d["max_area"] = self.motion_max_area
+        if self.motion_min_blobs is not None:
+            d["min_blobs"] = self.motion_min_blobs
+        return d
 
     @property
     def map_url(self) -> str:
