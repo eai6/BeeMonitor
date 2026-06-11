@@ -1,6 +1,35 @@
 from django.contrib import admin
+from django.contrib.auth import get_user_model
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
+from .dedupe import dedupe_all
 from .models import APIKey, Coupon, CouponRedemption, UserProfile
+
+User = get_user_model()
+admin.site.unregister(User)
+
+
+@admin.register(User)
+class UserAdmin(BaseUserAdmin):
+    """Default user admin + a duplicate-email consolidation action."""
+
+    actions = ["merge_duplicate_emails"]
+
+    @admin.action(description="Merge duplicate-email accounts (keep most active)")
+    def merge_duplicate_emails(self, request, queryset):
+        emails = {u.email.lower() for u in queryset if u.email}
+        if not emails:
+            self.message_user(request, "Selected users have no email to dedupe.")
+            return
+        deleted, groups = 0, 0
+        for em in emails:
+            for grp in dedupe_all(apply=True, merge=True, email=em):
+                groups += 1
+                deleted += sum(1 for a, _u, _n in grp["actions"] if a == "deleted")
+        self.message_user(
+            request,
+            f"Consolidated {groups} duplicate group(s); removed {deleted} duplicate "
+            "account(s) after merging their data into the kept account.")
 
 
 @admin.register(UserProfile)
