@@ -375,7 +375,7 @@
       {% if can_manage %}
       <select id="tz-select" title="Timezone to display this device's activity in"
               class="border border-gray-300 rounded px-2 py-1 text-xs">
-        <option value="" {% if not device.display_tz %}selected{% endif %}>Auto{% if device.tz_name %} ({{ device.tz_name }}){% endif %}</option>
+        <option value="" {% if not device.display_tz %}selected{% endif %}>Auto — from GPS{% if not device.display_tz %} ({{ display_tz }}){% endif %}</option>
         {% for tz in common_tzs %}
         <option value="{{ tz }}" {% if device.display_tz == tz %}selected{% endif %}>{{ tz }}</option>
         {% endfor %}

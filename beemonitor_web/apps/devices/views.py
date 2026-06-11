@@ -255,10 +255,38 @@ _ACTIVITY_RANGES = {
 }
 
 
+def _tz_from_coords(lat, lon):
+    """IANA timezone for a lat/lon, via Open-Meteo (which returns it for any
+    point). Cached 30 days — a location's timezone doesn't change. None on fail."""
+    key = f"tzname:{lat:.3f}:{lon:.3f}"
+    cached = cache.get(key)
+    if cached is not None:
+        return cached or None
+    tz = ""
+    try:
+        url = "https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode({
+            "latitude": f"{lat:.4f}", "longitude": f"{lon:.4f}",
+            "timezone": "auto", "forecast_days": 1, "current": "temperature_2m",
+        })
+        with urllib.request.urlopen(url, timeout=8) as resp:
+            tz = json.loads(resp.read().decode("utf-8")).get("timezone") or ""
+    except Exception as e:  # pragma: no cover - network hiccup must not 500
+        logger.warning("tz-from-coords failed for (%.3f,%.3f): %s", lat, lon, e)
+        tz = ""
+    cache.set(key, tz, 60 * 60 * 24 * 30)
+    return tz or None
+
+
 def _display_zone(device):
-    """The timezone to render this device's activity in: the user's display_tz,
-    else the device-reported tz_name, else UTC. Returns (ZoneInfo, name)."""
-    name = (device.display_tz or device.tz_name or "UTC").strip() or "UTC"
+    """The timezone to render this device's activity in. Priority: the user's
+    explicit display_tz > the device's GPS location > the Pi-reported tz_name >
+    UTC. (GPS beats the Pi clock — a field unit's clock is often misconfigured.)
+    Returns (ZoneInfo, name)."""
+    name = (device.display_tz or "").strip()
+    if not name and device.lat is not None and device.lon is not None:
+        name = _tz_from_coords(device.lat, device.lon) or ""
+    if not name:
+        name = (device.tz_name or "UTC").strip() or "UTC"
     try:
         return ZoneInfo(name), name
     except (ZoneInfoNotFoundError, ValueError):
