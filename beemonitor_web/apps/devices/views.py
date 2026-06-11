@@ -66,6 +66,14 @@ _USB_ERRORS = {
 }
 
 
+def _activity_this_hour(device) -> int:
+    """Snippets recorded in the CURRENT clock hour (top-of-hour → now), counted
+    from each clip's recorded_at — not the device's rolling 1-hour window."""
+    from apps.videos.models import Video
+    start = timezone.now().replace(minute=0, second=0, microsecond=0)
+    return Video.objects.filter(device=device, recorded_at__gte=start).count()
+
+
 def _usb_text(usb) -> "dict | None":
     """Turn the device's raw usb-status dict into {ok, text} for display."""
     if not usb:
@@ -293,6 +301,7 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         ctx["telemetry_interval_choices"] = TELEMETRY_INTERVAL_CHOICES
         ctx["active_transport"] = metrics.get("active_transport")
         ctx["usb_status"] = _usb_text(metrics.get("usb"))  # last USB result (or None)
+        ctx["activity_hour"] = _activity_this_hour(device)  # clips in this clock hour
 
 
         # Videos uploaded by this device (device-scoped slice of /videos/).
@@ -590,6 +599,7 @@ class DeviceStatusView(LoginRequiredMixin, View):
             "videos_recorded": metrics.get("videos_recorded"),
             "usb_transferred": metrics.get("usb_transferred"),
             "snippets_last_period": metrics.get("snippets_last_period"),
+            "activity_hour": _activity_this_hour(device),
             "telemetry_period_human": metrics.get("telemetry_period_human"),
             "uptime_human": metrics.get("uptime_human"),
             "cpu_temp_c": metrics.get("cpu_temp_c"),

@@ -115,8 +115,8 @@
       <!-- Activity (snippets are recorded only on motion → activity proxy) -->
       <div class="bg-white shadow rounded-lg p-4">
         <div class="text-xs text-gray-500 uppercase tracking-wide">Activity</div>
-        <div class="mt-2 text-2xl font-semibold text-gray-900" id="m-activity">{{ metrics.snippets_last_period|default:"—" }}</div>
-        <div class="mt-1 text-xs text-gray-400" id="m-activity-sub">activity / {{ metrics.telemetry_period_human|default:"period" }}</div>
+        <div class="mt-2 text-2xl font-semibold text-gray-900" id="m-activity">{{ activity_hour|default:"0" }}</div>
+        <div class="mt-1 text-xs text-gray-400" id="m-activity-sub">clips this hour</div>
       </div>
       <!-- Videos -->
       <div class="bg-white shadow rounded-lg p-4">
@@ -438,8 +438,8 @@
         setText('m-storage-free', d.storage_free_human ? d.storage_free_human + ' free (whole card)' : '');
         setText('m-uptime', d.uptime_human || '—');
         setText('m-cputemp', d.cpu_temp_c != null ? Math.round(d.cpu_temp_c) + '°C' : '—');
-        setText('m-activity', d.snippets_last_period != null ? d.snippets_last_period : '—');
-        setText('m-activity-sub', 'activity / ' + (d.telemetry_period_human || 'period'));
+        setText('m-activity', d.activity_hour != null ? d.activity_hour : '0');
+        setText('m-activity-sub', 'clips this hour');
         setText('m-videocount', d.video_count != null ? d.video_count : '—');
         setText('m-pending', (d.pending_uploads != null ? d.pending_uploads : '—') + ' pending');
         setText('m-schedule', d.schedule_window || '');
