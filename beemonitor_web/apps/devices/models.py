@@ -83,6 +83,12 @@ class Device(models.Model):
     # so the camera card isn't blank. Set once it's been requested.
     first_image_requested = models.BooleanField(default=False)
 
+    # ROI editor (normalized 0..1 coords, resolution-independent):
+    #   roi_override = [x1, y1, x2, y2]  — the hotel/motion region, or None (auto)
+    #   nest_layout  = [{"id": int, "box": [x1, y1, x2, y2]}, ...] — manual holes
+    roi_override = models.JSONField(null=True, blank=True)
+    nest_layout = models.JSONField(default=list, blank=True)
+
     # Pending command for the device, returned in the next heartbeat response and
     # then cleared. "" | "capture_image" | "stream" | "wifi_stream".
     pending_command = models.CharField(max_length=32, blank=True, default="")

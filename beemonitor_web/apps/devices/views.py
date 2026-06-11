@@ -764,6 +764,71 @@ class DeviceMotionTuningView(LoginRequiredMixin, View):
         return redirect("devices:detail", pk=pk)
 
 
+def _clamp01(v):
+    return max(0.0, min(1.0, float(v)))
+
+
+def _norm_box(b):
+    """Validate a normalized [x1,y1,x2,y2]; return it ordered+clamped or None."""
+    try:
+        x1, y1, x2, y2 = (_clamp01(v) for v in b)
+    except (TypeError, ValueError):
+        return None
+    lo_x, hi_x = sorted((x1, x2))
+    lo_y, hi_y = sorted((y1, y2))
+    if hi_x - lo_x < 0.01 or hi_y - lo_y < 0.01:  # too small to be real
+        return None
+    return [round(lo_x, 5), round(lo_y, 5), round(hi_x, 5), round(hi_y, 5)]
+
+
+class DeviceRoiEditorView(LoginRequiredMixin, View):
+    """Edit the hotel ROI + nest boxes/IDs over the device's latest picture.
+
+    Coordinates are stored NORMALIZED (0..1) so they're resolution-independent;
+    the device converts them to its lores (motion ROI) and main (overlay) coords.
+    """
+
+    template_name = "devices/roi_editor.html"
+
+    def get(self, request, pk):
+        device = _device_or_403(request.user, pk, "manager")
+        img_hb = device.heartbeats.exclude(image_storage_key="").first()
+        ctx = {
+            "device": device,
+            "image_url": _presign_image(img_hb.image_storage_key) if img_hb else None,
+            "roi_json": json.dumps(device.roi_override),
+            "nests_json": json.dumps(device.nest_layout or []),
+        }
+        from django.shortcuts import render
+        return render(request, self.template_name, ctx)
+
+    def post(self, request, pk):
+        device = _device_or_403(request.user, pk, "manager")
+        try:
+            body = json.loads(request.body or "{}")
+        except ValueError:
+            return JsonResponse({"error": "Invalid JSON."}, status=400)
+
+        roi = body.get("roi")
+        roi_override = _norm_box(roi) if roi else None
+
+        nests = []
+        for n in (body.get("nests") or [])[:200]:
+            box = _norm_box(n.get("box"))
+            if box is None:
+                continue
+            try:
+                nid = int(n.get("id"))
+            except (TypeError, ValueError):
+                nid = len(nests) + 1
+            nests.append({"id": nid, "box": box})
+
+        device.roi_override = roi_override
+        device.nest_layout = nests
+        device.save(update_fields=["roi_override", "nest_layout"])
+        return JsonResponse({"ok": True, "roi": roi_override, "nests": nests})
+
+
 class DeviceLatestImageView(LoginRequiredMixin, View):
     """Latest on-demand image (presigned URL) — polled after a photo request."""
 

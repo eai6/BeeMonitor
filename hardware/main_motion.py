@@ -523,6 +523,10 @@ def _resolve_record_roi(cam):
     whole frame. Mirrors cloud BeeMonitor, which detects the hotel first and
     confines downstream detection to it.
     """
+    override = load_roi_override_lores()
+    if override is not None:
+        log.info("using dashboard ROI override (lores coords): %s", override)
+        return override
     env_roi = _parse_roi()
     if env_roi is not None:
         log.info("using explicit BEEMONITOR_ROI=%s (lores coords)", env_roi)
@@ -565,9 +569,15 @@ def _save_telemetry_still(cam, roi=None, draw_roi=False) -> None:
         h, w = bgr.shape[:2]
         if draw_roi:
             th = max(2, w // 400)
-            # Nest-hole detections (red boxes + IDs), in main-frame coords. IDs
-            # follow the nest_detector scheme: top→bottom, left→right, row*10+col.
-            nest_boxes = _order_nest_boxes(detect_nest_boxes(bgr))
+            # Nest boxes: a dashboard-edited layout wins (normalized -> main
+            # coords); otherwise fresh detections, ordered top→bottom/left→right.
+            layout = load_nest_layout()
+            if layout:
+                nest_boxes = [(nid, (int(b[0] * w), int(b[1] * h),
+                                     int(b[2] * w), int(b[3] * h)))
+                              for nid, b in layout]
+            else:
+                nest_boxes = _order_nest_boxes(detect_nest_boxes(bgr))
             for nid, (nx1, ny1, nx2, ny2) in nest_boxes:
                 cv2.rectangle(bgr, (nx1, ny1), (nx2, ny2), (0, 0, 255), max(1, th // 2))
                 ty = ny1 - 6 if ny1 > 20 else ny2 + 22
@@ -684,6 +694,7 @@ def record() -> None:
     # Hot-reload of calibration.json written by the scheduled --calibrate job.
     calib_mtime = CALIB_FILE.stat().st_mtime if CALIB_FILE.exists() else 0.0
     tuning_mtime = TUNING_FILE.stat().st_mtime if TUNING_FILE.exists() else 0.0
+    roi_ov_mtime = ROI_OVERRIDE_FILE.stat().st_mtime if ROI_OVERRIDE_FILE.exists() else 0.0
     last_calib_check = time.monotonic()
 
     # First telemetry still shortly after warmup, then every interval.
@@ -776,6 +787,21 @@ def record() -> None:
                              "min_blobs=%d", gate.var_threshold, gate.min_area,
                              gate.max_area, gate.min_blobs)
                     calib_mtime, tuning_mtime = cm, tm
+                # Live hotel-ROI override edits: re-gate without a restart. A new
+                # crop size needs a fresh background, so reset + re-warm.
+                try:
+                    rm = ROI_OVERRIDE_FILE.stat().st_mtime if ROI_OVERRIDE_FILE.exists() else 0.0
+                except OSError:
+                    rm = roi_ov_mtime
+                if rm != roi_ov_mtime:
+                    new_roi = load_roi_override_lores()
+                    if new_roi is not None:
+                        gate.roi = new_roi
+                        gate.reset()
+                        warmup_deadline = now_mono + WARMUP_SECONDS
+                        log.info("applied ROI override %s — re-warming %.1fs",
+                                 new_roi, WARMUP_SECONDS)
+                    roi_ov_mtime = rm
 
             # On-demand still requested by telemetry (picture / live view): the
             # telemetry service drops capture.request; if its content is "roi" we
@@ -868,6 +894,49 @@ def _apply_calibration(gate, calib) -> bool:
 # Applied ON TOP of calibration.json so the nightly auto-calibrate can't clobber
 # a value the user set by hand. Only keys present override; others fall through.
 TUNING_FILE = CALIB_FILE.parent / "motion_tuning.json"
+# Dashboard ROI editor: hotel ROI override (normalized [x1,y1,x2,y2], 0..1) and
+# nest layout ([{id, box:[x1,y1,x2,y2] normalized}, ...]). telemetry writes them.
+ROI_OVERRIDE_FILE = CALIB_FILE.parent / "roi_override.json"
+NEST_LAYOUT_FILE = CALIB_FILE.parent / "nest_layout.json"
+
+
+def _load_json_file(path):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def load_roi_override_lores():
+    """Dashboard hotel-ROI override (normalized) -> lores box, or None."""
+    d = _load_json_file(ROI_OVERRIDE_FILE)
+    if not (isinstance(d, list) and len(d) == 4):
+        return None
+    try:
+        x1, y1, x2, y2 = (float(v) for v in d)
+    except (TypeError, ValueError):
+        return None
+    box = (int(max(0.0, min(x1, x2)) * LORES_W), int(max(0.0, min(y1, y2)) * LORES_H),
+           int(min(1.0, max(x1, x2)) * LORES_W), int(min(1.0, max(y1, y2)) * LORES_H))
+    if box[2] - box[0] < 4 or box[3] - box[1] < 4:
+        return None
+    return box
+
+
+def load_nest_layout():
+    """Dashboard nest layout: list of (id:int, [x1,y1,x2,y2] normalized)."""
+    d = _load_json_file(NEST_LAYOUT_FILE)
+    if not isinstance(d, list):
+        return []
+    out = []
+    for it in d:
+        try:
+            b = it["box"]
+            out.append((int(it.get("id", 0)),
+                        [float(b[0]), float(b[1]), float(b[2]), float(b[3])]))
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+    return out
 
 
 def load_tuning():

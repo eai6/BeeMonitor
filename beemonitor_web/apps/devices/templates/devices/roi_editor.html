@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}Edit ROI — {{ device.name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+  <div class="mb-3">
+    <a href="{% url 'devices:detail' device.pk %}" class="text-sm text-amber-700 hover:underline">&larr; {{ device.name }}</a>
+    <h1 class="text-2xl font-bold text-gray-900">Edit hotel ROI &amp; nest holes</h1>
+    <p class="text-sm text-gray-500">
+      Draw the <span class="text-green-700 font-medium">hotel ROI</span> (the motion region) and the
+      <span class="text-red-600 font-medium">nest holes</span> over the latest picture. Tighter ROI / fewer
+      stray boxes = less false motion. Saved to the device; it applies within a few minutes.
+    </p>
+  </div>
+
+  {% if not image_url %}
+  <div class="bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-4 text-sm">
+    No picture yet. Open the device page and use <strong>Take photo</strong> first, then come back here.
+  </div>
+  {% else %}
+
+  <div class="flex flex-wrap items-center gap-2 mb-3 text-sm">
+    <div class="inline-flex rounded-md overflow-hidden border border-gray-300">
+      <button data-mode="roi"  class="mode-btn px-3 py-1.5 bg-amber-600 text-white">Hotel ROI</button>
+      <button data-mode="nest" class="mode-btn px-3 py-1.5 bg-white text-gray-700">Add nest</button>
+      <button data-mode="move" class="mode-btn px-3 py-1.5 bg-white text-gray-700">Move / delete</button>
+    </div>
+    <button id="autonum" class="px-3 py-1.5 bg-white border border-gray-300 rounded text-gray-700 hover:bg-gray-50">Auto-number</button>
+    <button id="del" class="px-3 py-1.5 bg-white border border-gray-300 rounded text-gray-700 hover:bg-gray-50">Delete selected</button>
+    <button id="clear-roi" class="px-3 py-1.5 bg-white border border-gray-300 rounded text-gray-700 hover:bg-gray-50">Clear ROI</button>
+    <button id="clear-nests" class="px-3 py-1.5 bg-white border border-gray-300 rounded text-gray-700 hover:bg-gray-50">Clear nests</button>
+    <button id="save" class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded">Save</button>
+    <span id="saved" class="text-xs text-green-700 hidden">Saved ✓</span>
+  </div>
+  <p id="hint" class="text-xs text-gray-500 mb-2">Drag to draw the hotel ROI.</p>
+
+  <div id="stage" class="relative inline-block select-none" style="touch-action:none;">
+    <img id="bgimg" src="{{ image_url }}" alt="" class="block max-w-full h-auto rounded">
+    <canvas id="cv" class="absolute top-0 left-0"></canvas>
+  </div>
+  {% endif %}
+</div>
+
+{% if image_url %}
+<script>
+(function () {
+  var CSRF = "{{ csrf_token }}";
+  var SAVE_URL = "{% url 'devices:roi_editor' device.pk %}";
+  var img = document.getElementById('bgimg'), cv = document.getElementById('cv');
+  var ctx = cv.getContext('2d');
+  var mode = 'roi', selected = null;            // selected: {type:'nest',i} | {type:'roi'}
+  var roi = {{ roi_json|safe }} || null;        // [x1,y1,x2,y2] normalized
+  var nests = {{ nests_json|safe }} || [];      // [{id, box:[..norm]}]
+
+  function size() {
+    cv.width = img.clientWidth; cv.height = img.clientHeight;
+    cv.style.width = img.clientWidth + 'px'; cv.style.height = img.clientHeight + 'px';
+    draw();
+  }
+  function N2P(b) { return [b[0]*cv.width, b[1]*cv.height, b[2]*cv.width, b[3]*cv.height]; }
+  function rectOf(p1, p2) { return [Math.min(p1[0],p2[0])/cv.width, Math.min(p1[1],p2[1])/cv.height,
+                                    Math.max(p1[0],p2[0])/cv.width, Math.max(p1[1],p2[1])/cv.height]; }
+  function pos(e) { var r = cv.getBoundingClientRect(); var t = e.touches ? e.touches[0] : e;
+                    return [t.clientX - r.left, t.clientY - r.top]; }
+
+  function draw(temp) {
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (roi) {
+      var r = N2P(roi);
+      ctx.lineWidth = (selected && selected.type==='roi') ? 4 : 2;
+      ctx.strokeStyle = '#16a34a';
+      ctx.strokeRect(r[0], r[1], r[2]-r[0], r[3]-r[1]);
+      ctx.fillStyle = 'rgba(22,163,74,0.08)'; ctx.fillRect(r[0], r[1], r[2]-r[0], r[3]-r[1]);
+    }
+    nests.forEach(function (n, i) {
+      var b = N2P(n.box);
+      ctx.lineWidth = (selected && selected.type==='nest' && selected.i===i) ? 4 : 2;
+      ctx.strokeStyle = '#dc2626';
+      ctx.strokeRect(b[0], b[1], b[2]-b[0], b[3]-b[1]);
+      ctx.fillStyle = '#dc2626'; ctx.font = 'bold 14px sans-serif';
+      ctx.fillText(String(n.id), b[0]+3, Math.max(b[1]-3, 12));
+    });
+    if (temp) { ctx.lineWidth = 2; ctx.setLineDash([5,4]);
+      ctx.strokeStyle = mode==='nest' ? '#dc2626' : '#16a34a';
+      var t = N2P(temp); ctx.strokeRect(t[0], t[1], t[2]-t[0], t[3]-t[1]); ctx.setLineDash([]); }
+  }
+
+  function hit(p) {  // topmost nest then roi
+    for (var i = nests.length-1; i >= 0; i--) { var b = N2P(nests[i].box);
+      if (p[0]>=b[0] && p[0]<=b[2] && p[1]>=b[1] && p[1]<=b[3]) return {type:'nest', i:i}; }
+    if (roi) { var r = N2P(roi);
+      if (p[0]>=r[0] && p[0]<=r[2] && p[1]>=r[1] && p[1]<=r[3]) return {type:'roi'}; }
+    return null;
+  }
+
+  var drag = null;  // {start, moving, last}
+  function down(e) { e.preventDefault(); var p = pos(e);
+    if (mode === 'move') {
+      selected = hit(p);
+      drag = selected ? {moving:true, last:p} : null;
+    } else { drag = {start:p, last:p}; }
+    draw();
+  }
+  function move(e) {
+    if (!drag) return; e.preventDefault(); var p = pos(e);
+    if (mode === 'move' && drag.moving && selected) {
+      var dx = (p[0]-drag.last[0])/cv.width, dy = (p[1]-drag.last[1])/cv.height;
+      var box = selected.type==='roi' ? roi : nests[selected.i].box;
+      box[0]+=dx; box[1]+=dy; box[2]+=dx; box[3]+=dy; drag.last = p; draw();
+    } else if (mode !== 'move') { draw(rectOf(drag.start, p)); }
+  }
+  function up(e) {
+    if (!drag) return; var p = pos(e);
+    if (mode === 'roi') { roi = rectOf(drag.start, p); selected = {type:'roi'}; }
+    else if (mode === 'nest') {
+      var box;
+      if (Math.abs(p[0]-drag.start[0]) < 5 && Math.abs(p[1]-drag.start[1]) < 5) {
+        var s = 0.03; var cx = p[0]/cv.width, cy = p[1]/cv.height;  // click -> default box
+        box = [cx-s, cy-s, cx+s, cy+s];
+      } else { box = rectOf(drag.start, p); }
+      nests.push({id: nextId(), box: box}); selected = {type:'nest', i: nests.length-1};
+    }
+    drag = null; draw();
+  }
+  function nextId() { var m = 0; nests.forEach(function (n){ if (n.id>m) m=n.id; }); return m+1; }
+
+  function autonumber() {
+    var items = nests.map(function (n){ var b=n.box; return {n:n, cy:(b[1]+b[3])/2, cx:(b[0]+b[2])/2, h:b[3]-b[1]}; });
+    if (!items.length) return;
+    var hs = items.map(function(t){return t.h;}).sort(function(a,b){return a-b;});
+    var gap = Math.max(0.02, hs[hs.length>>1]*0.6);
+    items.sort(function(a,b){return a.cy-b.cy;});
+    var rows=[], cur=[items[0]], sum=items[0].cy;
+    for (var k=1;k<items.length;k++){ if (items[k].cy - sum/cur.length > gap){ rows.push(cur); cur=[items[k]]; sum=items[k].cy; } else { cur.push(items[k]); sum+=items[k].cy; } }
+    rows.push(cur);
+    rows.forEach(function (row, ri){ row.sort(function(a,b){return a.cx-b.cx;});
+      row.forEach(function (t, ci){ t.n.id = (ci+1) + ri*10; }); });
+    draw();
+  }
+
+  document.querySelectorAll('.mode-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      mode = btn.dataset.mode; selected = null;
+      document.querySelectorAll('.mode-btn').forEach(function (b){ b.className = 'mode-btn px-3 py-1.5 bg-white text-gray-700'; });
+      btn.className = 'mode-btn px-3 py-1.5 bg-amber-600 text-white';
+      document.getElementById('hint').textContent = mode==='roi' ? 'Drag to draw the hotel ROI (replaces the current one).'
+        : mode==='nest' ? 'Drag (or click) to add a nest hole. Then Auto-number.'
+        : 'Click a box to select; drag to move; Delete selected to remove.';
+      draw();
+    });
+  });
+  document.getElementById('autonum').addEventListener('click', autonumber);
+  document.getElementById('del').addEventListener('click', function () {
+    if (!selected) return;
+    if (selected.type==='roi') roi = null; else nests.splice(selected.i, 1);
+    selected = null; draw();
+  });
+  document.getElementById('clear-roi').addEventListener('click', function(){ roi=null; selected=null; draw(); });
+  document.getElementById('clear-nests').addEventListener('click', function(){ nests=[]; selected=null; draw(); });
+  document.getElementById('save').addEventListener('click', function () {
+    fetch(SAVE_URL, { method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':CSRF},
+      body: JSON.stringify({roi: roi, nests: nests}) })
+      .then(function(r){ return r.json(); }).then(function (d) {
+        if (d && d.ok) { var s=document.getElementById('saved'); s.classList.remove('hidden'); setTimeout(function(){ s.classList.add('hidden'); }, 2500); }
+        else { alert((d && d.error) || 'Could not save.'); }
+      }).catch(function(){ alert('Could not save.'); });
+  });
+
+  cv.addEventListener('mousedown', down); cv.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', up);
+  cv.addEventListener('touchstart', down); cv.addEventListener('touchmove', move);
+  window.addEventListener('touchend', up);
+  window.addEventListener('resize', size);
+  if (img.complete) size(); else img.addEventListener('load', size);
+})();
+</script>
+{% endif %}
+{% endblock %}

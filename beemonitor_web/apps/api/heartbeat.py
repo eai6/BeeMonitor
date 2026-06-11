@@ -185,6 +185,9 @@ class DeviceHeartbeatView(APIView):
                 "telemetry_interval": device.telemetry_interval_seconds,
                 # Manual motion-tuning overrides (empty = use auto-calibration).
                 "motion_tuning": device.motion_tuning_dict(),
+                # ROI editor outputs (normalized): hotel ROI + nest layout.
+                "roi_override": device.roi_override or None,
+                "nest_layout": device.nest_layout or [],
             },
             status=201,
         )

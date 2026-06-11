@@ -200,7 +200,10 @@
 
 <!-- Motion tuning (debug sensitivity) -->
 <div class="mt-6 bg-white shadow rounded-lg p-4">
-  <h2 class="text-sm font-semibold text-gray-700 mb-1">Motion tuning</h2>
+  <div class="flex items-center justify-between mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Motion tuning</h2>
+    {% if can_manage %}<a href="{% url 'devices:roi_editor' device.pk %}" class="text-xs text-amber-700 hover:underline">Edit hotel ROI &amp; nest holes →</a>{% endif %}
+  </div>
   <p class="text-xs text-gray-400 mb-3">
     Leave a field blank to use the device's auto-calibration. To make it
     <em>less</em> sensitive: raise <strong>Sensitivity threshold</strong> or
