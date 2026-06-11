@@ -321,7 +321,7 @@
       {% if weather_enabled %}
         Activity with temperature &amp; precipitation overlaid — weather via
         <a href="https://open-meteo.com/" target="_blank" rel="noopener" class="hover:underline">Open-Meteo</a>
-        for this device's coordinates. Times shown in your local timezone.
+        for this device's coordinates. Times shown in the device's local time{% if tz_name %} ({{ tz_name }}){% endif %}.
       {% elif can_manage %}
         <a href="{% url 'devices:edit' device.pk %}" class="text-amber-600 hover:underline">Set the device location</a>
         to overlay temperature &amp; precipitation.
@@ -376,14 +376,10 @@
     canvas.classList.remove('hidden'); if (empty) empty.classList.add('hidden');
     var hasTemp = weatherEnabled && rows.some(function (d) { return d.temp != null; });
     var hasPrecip = weatherEnabled && rows.some(function (d) { return d.precip != null; });
-    function lbl(d) {
-      if (!d.iso) return d.t;
-      var dt = new Date(d.iso);
-      if (isNaN(dt)) return d.t;
-      return gran === 'day'
-        ? dt.toLocaleDateString([], { month: 'short', day: 'numeric' })
-        : dt.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    }
+    // Use the SERVER label (the bucket's wall-clock = the device's local time);
+    // do NOT reformat to the viewer's timezone, or a device in another zone
+    // would read shifted.
+    function lbl(d) { return d.t || d.iso || ''; }
     var datasets = [];
     if (hasPrecip) datasets.push({ type: 'bar', label: 'Precipitation (mm)',
       data: rows.map(function (d) { return d.precip; }),

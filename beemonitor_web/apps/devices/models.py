@@ -65,6 +65,12 @@ class Device(models.Model):
     # dashboard; the device adopts it via the heartbeat/command response.
     telemetry_interval_seconds = models.PositiveIntegerField(default=60)
 
+    # The device's local timezone, reported via telemetry. Activity is bucketed
+    # by the hive's local clock-hour (e.g. 8-9am where the device is), so a fleet
+    # spread across timezones reads correctly no matter where it's viewed from.
+    tz_name = models.CharField(max_length=64, blank=True, default="")
+    tz_offset_min = models.IntegerField(null=True, blank=True)
+
     # Pending command for the device, returned in the next heartbeat response and
     # then cleared. "" | "capture_image" | "stream" | "wifi_stream".
     pending_command = models.CharField(max_length=32, blank=True, default="")

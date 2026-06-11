@@ -312,6 +312,24 @@ def _usb_status() -> dict | None:
         return None
 
 
+def _timezone_info() -> dict:
+    """The device's local timezone (IANA name + current UTC offset). Lets the
+    dashboard bucket activity by the hive's local clock-hour wherever it's
+    deployed. Best-effort — both fields are optional."""
+    out: dict = {}
+    try:
+        out["tz"] = Path("/etc/timezone").read_text().strip()
+    except OSError:
+        pass
+    try:
+        off = datetime.now().astimezone().utcoffset()
+        if off is not None:
+            out["tz_offset_min"] = int(off.total_seconds() // 60)
+    except (OSError, ValueError):
+        pass
+    return out
+
+
 def collect_metrics() -> dict:
     m: dict = {}
 
@@ -378,6 +396,7 @@ def collect_metrics() -> dict:
     usb = _usb_status()
     if usb:
         m["usb"] = usb
+    m.update(_timezone_info())
 
     return m
 

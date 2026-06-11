@@ -67,10 +67,16 @@ _USB_ERRORS = {
 
 
 def _activity_this_hour(device) -> int:
-    """Snippets recorded in the CURRENT clock hour (top-of-hour → now), counted
-    from each clip's recorded_at — not the device's rolling 1-hour window."""
+    """Snippets recorded in the device's CURRENT local clock hour.
+
+    recorded_at carries the hive's wall-clock time (from the clip filename), so
+    we shift "now" by the device's reported UTC offset to find the top of the
+    hive's current hour and count from there — correct wherever the device sits.
+    """
     from apps.videos.models import Video
-    start = timezone.now().replace(minute=0, second=0, microsecond=0)
+    offset = timedelta(minutes=device.tz_offset_min or 0)
+    hive_now = timezone.now() + offset
+    start = hive_now.replace(minute=0, second=0, microsecond=0)
     return Video.objects.filter(device=device, recorded_at__gte=start).count()
 
 
@@ -302,6 +308,7 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         ctx["active_transport"] = metrics.get("active_transport")
         ctx["usb_status"] = _usb_text(metrics.get("usb"))  # last USB result (or None)
         ctx["activity_hour"] = _activity_this_hour(device)  # clips in this clock hour
+        ctx["tz_name"] = device.tz_name
 
 
         # Videos uploaded by this device (device-scoped slice of /videos/).

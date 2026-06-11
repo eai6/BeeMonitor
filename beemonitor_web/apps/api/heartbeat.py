@@ -126,6 +126,20 @@ class DeviceHeartbeatView(APIView):
             lon=lon if settings.DEVICE_STORE_GPS_PER_HEARTBEAT else None,
         )
 
+        # Device's local timezone — used to bucket activity by the hive's local
+        # clock-hour. Persisted when it changes.
+        tz_updates = []
+        tz_name = (metrics.get("tz") or "")[:64]
+        if tz_name and tz_name != device.tz_name:
+            device.tz_name = tz_name
+            tz_updates.append("tz_name")
+        tz_off = metrics.get("tz_offset_min")
+        if isinstance(tz_off, (int, float)) and int(tz_off) != device.tz_offset_min:
+            device.tz_offset_min = int(tz_off)
+            tz_updates.append("tz_offset_min")
+        if tz_updates:
+            device.save(update_fields=tz_updates)
+
         # 5c: device advertises a live LAN MJPEG stream while one is active.
         stream_url = (metrics.get("stream_url") or "").strip()
         stream_until = _as_float(metrics.get("stream_until"))
