@@ -107,17 +107,22 @@ sudo chmod 600 /etc/beemonitor/uploader.env
 
 ### Install the services  (~5 min)
 
-Copy the systemd unit files and grant the telemetry user passwordless nmcli + USB-transfer so the dashboard can control WiFi and copy to USB.
+Copy the systemd units (incl. the remote-update + USB units) and grant the non-root telemetry user passwordless rights to exactly what the dashboard drives: WiFi (nmcli), remote update, and USB copy.
 
 ```bash
 cd ~/BeeMonitor/hardware
-sudo cp systemd/beemonitor-recorder.service systemd/beemonitor-telemetry.service systemd/beemonitor-uploader.service systemd/beemonitor-calibrate.service systemd/beemonitor-calibrate.timer /etc/systemd/system/
-echo 'beemonitor ALL=(root) NOPASSWD: /usr/bin/nmcli' | sudo tee /etc/sudoers.d/beemonitor-nmcli >/dev/null
-sudo chmod 440 /etc/sudoers.d/beemonitor-nmcli
-sudo systemctl daemon-reload
+sudo cp systemd/beemonitor-recorder.service systemd/beemonitor-telemetry.service systemd/beemonitor-uploader.service systemd/beemonitor-calibrate.service systemd/beemonitor-calibrate.timer systemd/beemonitor-update.service systemd/beemonitor-usb-transfer@.service /etc/systemd/system/
+sudo cp cellular/99-beemonitor-usb.rules /etc/udev/rules.d/
+chmod +x usb-transfer.sh
+printf 'beemonitor ALL=(root) NOPASSWD: /usr/bin/nmcli\nbeemonitor ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block beemonitor-update.service\nbeemonitor ALL=(root) NOPASSWD: /home/beemonitor/BeeMonitor/hardware/usb-transfer.sh\n' | sudo tee /etc/sudoers.d/beemonitor >/dev/null
+sudo chmod 440 /etc/sudoers.d/beemonitor
+sudo visudo -cf /etc/sudoers.d/beemonitor
+sudo udevadm control --reload && sudo systemctl daemon-reload
 ```
 
-**What you should see:** daemon-reload returns cleanly; visudo -cf reports no syntax errors on the drop-in.
+**What you should see:** daemon-reload returns cleanly and visudo -cf prints '/etc/sudoers.d/beemonitor: parsed OK'.
+
+> ⚠️ **remote update fails: 'cannot start beemonitor-update.service (sudoers rule missing?)'** — This step's sudoers drop-in wasn't applied. Re-run the printf…/etc/sudoers.d/beemonitor block above, then retry Software → Update.
 
 ### Start & enable on boot  (~3 min)
 

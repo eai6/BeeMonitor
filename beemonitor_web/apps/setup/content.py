@@ -175,22 +175,37 @@ STEPS: list[dict] = [
     # ------------------------------------------------------------- services
     {
         "id": "install_units", "phase": "services", "title": "Install the services",
-        "concept": "Copy the systemd unit files and grant the telemetry user "
-                   "passwordless nmcli + USB-transfer so the dashboard can "
-                   "control WiFi and copy to USB.",
+        "concept": "Copy the systemd units (incl. the remote-update + USB units) "
+                   "and grant the non-root telemetry user passwordless rights to "
+                   "exactly what the dashboard drives: WiFi (nmcli), remote "
+                   "update, and USB copy.",
         "command": "cd ~/BeeMonitor/hardware\n"
                    "sudo cp systemd/beemonitor-recorder.service systemd/"
                    "beemonitor-telemetry.service systemd/beemonitor-uploader.service "
                    "systemd/beemonitor-calibrate.service systemd/"
-                   "beemonitor-calibrate.timer /etc/systemd/system/\n"
-                   "echo 'beemonitor ALL=(root) NOPASSWD: /usr/bin/nmcli' | "
-                   "sudo tee /etc/sudoers.d/beemonitor-nmcli >/dev/null\n"
-                   "sudo chmod 440 /etc/sudoers.d/beemonitor-nmcli\n"
-                   "sudo systemctl daemon-reload",
-        "expected": "daemon-reload returns cleanly; visudo -cf reports no syntax "
-                    "errors on the drop-in.",
+                   "beemonitor-calibrate.timer systemd/beemonitor-update.service "
+                   "systemd/beemonitor-usb-transfer@.service /etc/systemd/system/\n"
+                   "sudo cp cellular/99-beemonitor-usb.rules /etc/udev/rules.d/\n"
+                   "chmod +x usb-transfer.sh\n"
+                   "printf 'beemonitor ALL=(root) NOPASSWD: /usr/bin/nmcli\\n"
+                   "beemonitor ALL=(root) NOPASSWD: /usr/bin/systemctl start "
+                   "--no-block beemonitor-update.service\\n"
+                   "beemonitor ALL=(root) NOPASSWD: "
+                   "/home/beemonitor/BeeMonitor/hardware/usb-transfer.sh\\n' | "
+                   "sudo tee /etc/sudoers.d/beemonitor >/dev/null\n"
+                   "sudo chmod 440 /etc/sudoers.d/beemonitor\n"
+                   "sudo visudo -cf /etc/sudoers.d/beemonitor\n"
+                   "sudo udevadm control --reload && sudo systemctl daemon-reload",
+        "expected": "daemon-reload returns cleanly and visudo -cf prints "
+                    "'/etc/sudoers.d/beemonitor: parsed OK'.",
         "verify": None,
-        "common_errors": [],
+        "common_errors": [
+            {"symptom": "remote update fails: 'cannot start "
+                        "beemonitor-update.service (sudoers rule missing?)'",
+             "fix": "This step's sudoers drop-in wasn't applied. Re-run the "
+                    "printf…/etc/sudoers.d/beemonitor block above, then retry "
+                    "Software → Update."},
+        ],
         "minutes": 5, "difficulty": "medium", "optional": False, "applies_to": "both",
     },
     {
