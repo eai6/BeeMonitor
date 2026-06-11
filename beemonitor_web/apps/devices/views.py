@@ -16,7 +16,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
-from django.db.models import Max, Q
+from django.db.models import Q
 from django.db.models.functions import TruncDay, TruncHour
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
@@ -232,12 +232,19 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         since = timezone.now() - timedelta(days=days)
         trunc = TruncHour if gran == "hour" else TruncDay
 
+        # Count the snippets actually recorded in each real clock-hour (or day),
+        # keyed off each clip's recorded_at — so an 8-9am bucket is the activity
+        # that happened 8-9am, not a rolling "last hour" window tied to beat
+        # timing. (Buckets are UTC; the browser relabels them in local time, so
+        # whole-hour-offset zones land on the right local hour.)
+        from django.db.models import Count
+        from apps.videos.models import Video
         rows = list(
-            device.heartbeats
-            .filter(created_at__gte=since, snippets_last_period__isnull=False)
-            .annotate(bucket=trunc("created_at"))
+            Video.objects
+            .filter(device=device, recorded_at__isnull=False, recorded_at__gte=since)
+            .annotate(bucket=trunc("recorded_at"))
             .values("bucket")
-            .annotate(v=Max("snippets_last_period"))
+            .annotate(v=Count("id"))
             .order_by("bucket")
         )
 
