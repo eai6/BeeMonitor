@@ -262,6 +262,13 @@ def _video_stats(window_seconds: int) -> dict:
     recordings_bytes = 0
     usb_transferred = 0
     newest = 0.0
+    # Per-LOCAL-hour histogram of clips on the card, so the dashboard can show
+    # activity the moment a clip is RECORDED — no waiting for the (WiFi-gated)
+    # cloud upload. Keyed by the hive's local wall-clock hour. Bounded to ~8 days
+    # to cover the dashboard's 7d view without a huge payload.
+    by_hour: dict = {}
+    hist_cutoff = now - 8 * 86400
+    cur_key = time.strftime("%Y-%m-%dT%H", time.localtime(now))
     if RECORD_DIR.is_dir():
         for mp4 in RECORD_DIR.rglob("*.mp4"):
             total += 1
@@ -274,6 +281,9 @@ def _video_stats(window_seconds: int) -> dict:
                 newest = st.st_mtime
             if st.st_mtime >= now - window_seconds:
                 recent += 1
+            if st.st_mtime >= hist_cutoff:
+                key = time.strftime("%Y-%m-%dT%H", time.localtime(st.st_mtime))
+                by_hour[key] = by_hour.get(key, 0) + 1
             if not mp4.with_suffix(mp4.suffix + ".uploaded").exists():
                 pending += 1
                 pending_bytes += st.st_size
@@ -287,6 +297,8 @@ def _video_stats(window_seconds: int) -> dict:
         "usb_transferred": usb_transferred,
         "snippets_last_period": recent,
         "newest_mtime": newest,
+        "activity_by_hour": by_hour,
+        "clips_this_hour": by_hour.get(cur_key, 0),
     }
 
 
@@ -365,6 +377,10 @@ def collect_metrics() -> dict:
     # Activity proxy: snippets recorded in the trailing ACTIVITY_PERIOD window
     # (decoupled from the 60s beat — 1h by default).
     m["snippets_last_period"] = vs["snippets_last_period"]
+    # Creation-based activity — clips ON THE CARD per local hour, so the dashboard
+    # updates the moment a clip is recorded, not when it's uploaded.
+    m["clips_this_hour"] = vs["clips_this_hour"]
+    m["activity_by_hour"] = vs["activity_by_hour"]
     m["telemetry_period_seconds"] = ACTIVITY_PERIOD
     m["telemetry_period_human"] = _human_duration(ACTIVITY_PERIOD)
     if vs["newest_mtime"]:

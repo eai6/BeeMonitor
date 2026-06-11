@@ -338,6 +338,7 @@
     <h2 class="text-lg font-semibold text-gray-900">Videos from this device</h2>
     <a href="{% url 'videos:list' %}" class="text-sm text-amber-600 hover:underline">All videos &rarr;</a>
   </div>
+  <div id="m-videos">
   {% if videos %}
   <div class="bg-white shadow rounded-lg divide-y divide-gray-100">
     {% for v in videos %}
@@ -355,6 +356,7 @@
     No videos uploaded by this device yet (they arrive over WiFi).
   </div>
   {% endif %}
+  </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
@@ -419,6 +421,8 @@
   // Live poll: refresh telemetry tiles + chart in place — no manual refresh.
   function setText(id, v) { var e = document.getElementById(id); if (e && v != null) e.textContent = v; }
   function dot(ok) { return '<span class="w-1.5 h-1.5 rounded-full ' + (ok ? 'bg-green-500' : 'bg-gray-300') + '"></span>'; }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function poll() {
     fetch("{% url 'devices:status' device.pk %}?range=" + encodeURIComponent(RANGE), { cache: 'no-store' })
       .then(function (r) { return r.json(); })
@@ -471,6 +475,20 @@
           else tr.innerHTML = '';
         }
         setText('tele-label', d.telemetry_interval_label);
+        // Live videos list
+        var vids = document.getElementById('m-videos');
+        if (vids && d.videos) {
+          if (d.videos.length) {
+            vids.innerHTML = '<div class="bg-white shadow rounded-lg divide-y divide-gray-100">' +
+              d.videos.map(function (v) {
+                return '<a href="' + v.url + '" class="flex items-center justify-between px-4 py-3 hover:bg-gray-50">' +
+                  '<span class="text-sm text-gray-900">' + esc(v.title) + '</span>' +
+                  '<span class="text-xs text-gray-400">' + esc(v.when) + ' · ' + esc(v.status) + '</span></a>';
+              }).join('') + '</div>';
+          } else {
+            vids.innerHTML = '<div class="bg-white shadow rounded-lg p-8 text-center text-sm text-gray-500">No videos uploaded by this device yet (they arrive over WiFi).</div>';
+          }
+        }
         var usb = document.getElementById('m-usb-status');
         if (usb) {
           if (d.usb_status) {

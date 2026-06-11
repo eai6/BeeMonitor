@@ -20,7 +20,7 @@ from django.db.models import Q
 from django.db.models.functions import TruncDay, TruncHour
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.views import View
 from django.views.generic import DetailView, FormView, ListView, TemplateView, UpdateView
@@ -77,7 +77,30 @@ def _activity_this_hour(device) -> int:
     offset = timedelta(minutes=device.tz_offset_min or 0)
     hive_now = timezone.now() + offset
     start = hive_now.replace(minute=0, second=0, microsecond=0)
-    return Video.objects.filter(device=device, recorded_at__gte=start).count()
+    cloud = Video.objects.filter(device=device, recorded_at__gte=start).count()
+    # Prefer the device's creation-based count (clips on the card this hour) so
+    # it updates immediately, not after upload. max() so we never under-report.
+    latest = device.heartbeats.first()
+    dev_hour = ((latest.metrics or {}) if latest else {}).get("clips_this_hour")
+    if isinstance(dev_hour, (int, float)):
+        return max(cloud, int(dev_hour))
+    return cloud
+
+
+def _videos_payload(device, limit: int = 12) -> list:
+    """Recent videos for live-refreshing the device page's video list."""
+    from django.template.defaultfilters import date as _date
+    out = []
+    for v in device.videos.all()[:limit]:
+        when = (_date(v.recorded_at, "M j, Y H:i") if v.recorded_at
+                else _date(v.uploaded_at, "M j, Y"))
+        out.append({
+            "url": reverse("videos:detail", args=[v.pk]),
+            "title": v.title,
+            "when": when,
+            "status": v.get_status_display(),
+        })
+    return out
 
 
 def _usb_text(usb) -> "dict | None":
@@ -245,16 +268,43 @@ def _build_activity_series(device, range_key: str) -> dict:
         wx = _weather_lookup([r["bucket"] for r in rows], gran, device.lat, device.lon)
 
     wkey = "%Y-%m-%dT%H" if gran == "hour" else "%Y-%m-%d"
-    series = []
+    counts = {}     # bucket key -> clip count
+    key_dt = {}     # bucket key -> aware datetime (wall-clock, for label/iso)
     for r in rows:
-        b = r["bucket"]
-        bu = b.astimezone(dt_timezone.utc)
+        bu = r["bucket"].astimezone(dt_timezone.utc)
+        k = bu.strftime(wkey)
+        counts[k] = r["v"]
+        key_dt[k] = bu
+
+    # Overlay the device's creation-based per-hour histogram (clips on the card),
+    # so recent hours show activity the moment a clip is recorded — before it
+    # uploads. Hour-granularity ranges only; older day-ranges are fully uploaded.
+    if gran == "hour":
+        latest = device.heartbeats.first()
+        hist = ((latest.metrics or {}) if latest else {}).get("activity_by_hour")
+        if isinstance(hist, dict):
+            from datetime import datetime as _dt
+            floor = since - timedelta(hours=24)  # generous (tz offset slack)
+            for k, c in hist.items():
+                try:
+                    dt = _dt.strptime(k, "%Y-%m-%dT%H").replace(tzinfo=dt_timezone.utc)
+                except (ValueError, TypeError):
+                    continue
+                if dt < floor:
+                    continue
+                counts[k] = max(counts.get(k, 0), int(c))  # device ≥ cloud while on card
+                key_dt.setdefault(k, dt)
+
+    series = []
+    for k in sorted(counts, key=lambda kk: key_dt[kk]):
+        bu = key_dt[k]
         w = wx.get(bu.strftime(wkey), {})
         series.append({
-            # iso is UTC; the browser formats the x-axis label in local time.
+            # iso is the bucket's wall-clock (device-local); the browser shows
+            # the server label `t` as-is (see chart JS), so it isn't re-shifted.
             "iso": bu.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "t": b.strftime(fmt),
-            "v": r["v"],
+            "t": bu.strftime(fmt),
+            "v": counts[k],
             "temp": w.get("temp"),
             "precip": w.get("precip"),
         })
@@ -611,6 +661,7 @@ class DeviceStatusView(LoginRequiredMixin, View):
             "uptime_human": metrics.get("uptime_human"),
             "cpu_temp_c": metrics.get("cpu_temp_c"),
             "video_count": device.videos.count(),
+            "videos": _videos_payload(device),
             "pending_uploads": metrics.get("pending_uploads"),
             "schedule_window": metrics.get("schedule_window"),
             "code_commit": metrics.get("code_commit"),
