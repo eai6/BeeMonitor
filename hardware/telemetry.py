@@ -78,8 +78,10 @@ CELL_IFACE = os.environ.get("BEEMONITOR_CELL_IFACE", "wwan0")
 # uses 700) so ALL traffic — incl. telemetry — rides WiFi, with cellular as the
 # fallback. Saves metered mobile data whenever WiFi is connected.
 WIFI_ROUTE_METRIC = int(os.environ.get("BEEMONITOR_WIFI_ROUTE_METRIC", "100"))
-# Lowest beat interval the dashboard may set (seconds).
-MIN_INTERVAL = int(os.environ.get("BEEMONITOR_MIN_INTERVAL", "1"))
+# Lowest beat interval the dashboard may set (seconds). Floored at 10s — faster
+# is dominated by per-beat work (nmcli/systemctl + the POST) and hammers the
+# server/radio for no real gain.
+MIN_INTERVAL = int(os.environ.get("BEEMONITOR_MIN_INTERVAL", "10"))
 # How often (s) to poll for an on-demand command between beats — keeps the
 # "Take photo" latency low without raising the health-beat cadence.
 COMMAND_POLL_SECONDS = int(os.environ.get("BEEMONITOR_COMMAND_POLL_SECONDS", "8"))
