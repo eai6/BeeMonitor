@@ -8,19 +8,6 @@
           <span class="text-white text-xl font-bold tracking-tight">BeeMonitor</span>
         </a>
         <div class="hidden md:flex md:ml-10 md:space-x-4 md:items-center">
-          <!-- Fine-tuning dropdown: annotate + training -->
-          <div class="relative" x-data="{ ft: false }" @click.away="ft = false">
-            <button @click="ft = !ft"
-                    class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium inline-flex items-center gap-1">
-              Fine-tuning
-              <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-            </button>
-            <div x-show="ft" x-cloak x-transition
-                 class="absolute left-0 mt-1 w-44 bg-white rounded-md shadow-lg py-1 z-50">
-              <a href="{% url 'annotations:list' %}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-amber-50">Annotate</a>
-              <a href="{% url 'training:list' %}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-amber-50">Training</a>
-            </div>
-          </div>
           <a href="{% url 'devices:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Devices</a>
           <a href="{% url 'monitor:activity_list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Activity</a>
           <a href="{% url 'setup:index' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Set up</a>
@@ -50,9 +37,6 @@
   <div x-show="open" class="md:hidden bg-amber-700">
     <div class="px-2 pt-2 pb-3 space-y-1">
       <a href="{% url 'analysis:analytics' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Home</a>
-      <div class="px-3 pt-2 text-xs uppercase tracking-wide text-amber-200">Fine-tuning</div>
-      <a href="{% url 'annotations:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Annotate</a>
-      <a href="{% url 'training:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Training</a>
       <a href="{% url 'devices:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Devices</a>
       <a href="{% url 'monitor:activity_list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Activity</a>
       <a href="{% url 'setup:index' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Set up a device</a>
