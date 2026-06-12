@@ -228,9 +228,11 @@ pending" to ranked taxa + an aggregate Observation.
   - *In-process on App Runner was rejected on cost:* the instance is only 1 vCPU /
     2 GB (`infra/aws/__main__.py`); a resident torch+CLIP model (~1.5–2 GB) would
     force a bigger always-on instance or OOM the web tier.
-  - *Do NOT copy the video endpoint:* that's an always-on `ml.g4dn.xlarge` GPU
-    (min 1 instance) — the expensive pattern to avoid. BioCLIP stays CPU +
-    scale-to-zero.
+  - *Follow the video endpoint's pattern:* it's an **async endpoint with
+    autoscaling `min_capacity=0`** — it already scales to zero after ~10 min idle
+    (`infra/aws-sagemaker/__main__.py`), so it costs $0 when idle and only bills
+    while processing. BioCLIP does the same (scale-to-zero) but on **CPU, not the
+    g4dn GPU** — a single crop doesn't need a GPU.
   - *Even cheaper levers if needed:* (a) **container Lambda** (ECR/OIDC path already
     exists) — pay-per-ms, scale-to-zero, possibly < Serverless at this volume, with
     a ~15–30 s cold start; (b) **nightly batch** (one short CPU run/day over the
