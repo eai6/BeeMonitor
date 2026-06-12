@@ -1133,3 +1133,53 @@ class WittyPiScheduleDeviceTests(TestCase):
         # never reaches the WittyPi). Default is off.
         self.assertFalse(self.t.WAKE_SCHEDULE_APPLY)
         self.t._apply_schedule({"mode": "always_on"})  # should just log + return
+
+
+# ── Cellular debug-access firewall toggle ────────────────────────────
+
+
+class DeviceCellularViewTests(TestCase):
+    """Open/close the cellular egress gate for remote debugging (rpi-connect)."""
+
+    def setUp(self):
+        from apps.devices.models import Device
+        self.owner = create_user(username="alice")
+        self.stranger = create_user(username="bob")
+        self.client, _ = logged_in_client(self.owner)
+        self.device, _ = Device.create_with_key(self.owner, "alice-pi")
+        self.other, _ = Device.create_with_key(self.stranger, "bob-pi")
+
+    def test_open_queues_command_with_clamped_minutes(self):
+        r = self.client.post(reverse("devices:cellular", args=[self.device.pk]),
+                             {"action": "open", "minutes": "999"})
+        self.assertEqual(r.status_code, 302)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.pending_command, "cellular_open")
+        self.assertEqual(self.device.command_params, {"minutes": 240})  # clamped
+
+    def test_gate_queues_command(self):
+        r = self.client.post(reverse("devices:cellular", args=[self.device.pk]),
+                             {"action": "gate"})
+        self.assertEqual(r.status_code, 302)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.pending_command, "cellular_gate")
+
+    def test_unknown_action_rejected(self):
+        r = self.client.post(reverse("devices:cellular", args=[self.device.pk]),
+                             {"action": "nope"})
+        self.assertEqual(r.status_code, 302)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.pending_command, "")
+
+    def test_cannot_toggle_someone_elses_device(self):
+        r = self.client.post(reverse("devices:cellular", args=[self.other.pk]),
+                             {"action": "open"})
+        self.assertIn(r.status_code, (403, 404))
+        self.other.refresh_from_db()
+        self.assertEqual(self.other.pending_command, "")
+
+    def test_status_surfaces_cell_firewall(self):
+        from apps.devices.models import DeviceHeartbeat
+        DeviceHeartbeat.objects.create(device=self.device, metrics={"cell_firewall": "open"})
+        r = self.client.get(reverse("devices:status", args=[self.device.pk]))
+        self.assertEqual(r.json()["cell_firewall"], "open")

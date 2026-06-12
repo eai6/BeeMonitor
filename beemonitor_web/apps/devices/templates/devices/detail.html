@@ -110,12 +110,6 @@
         <div class="text-xs text-gray-500 uppercase tracking-wide">CPU temp</div>
         <div class="mt-2 text-2xl font-semibold text-gray-900" id="m-cputemp">{% if metrics.cpu_temp_c %}{{ metrics.cpu_temp_c|floatformat:0 }}°C{% else %}—{% endif %}</div>
       </div>
-      <!-- Power (WittyPi battery / input voltage) -->
-      <div class="bg-white shadow rounded-lg p-4">
-        <div class="text-xs text-gray-500 uppercase tracking-wide">Power</div>
-        <div class="mt-2 text-2xl font-semibold {% if battery_voltage is None %}text-gray-300{% else %}text-gray-900{% endif %}" id="m-battery">{% if battery_voltage is not None %}{{ battery_voltage|floatformat:2 }}V{% else %}—{% endif %}</div>
-        <div class="mt-1 text-xs text-gray-400" id="m-power-sub">{% if output_current is not None %}{{ output_current|floatformat:2 }}A load{% endif %}{% if power_source %} · {{ power_source }}{% endif %}</div>
-      </div>
       <!-- Activity (snippets are recorded only on motion → activity proxy) -->
       <div class="bg-white shadow rounded-lg p-4">
         <div class="text-xs text-gray-500 uppercase tracking-wide">Activity</div>
@@ -224,7 +218,12 @@
     it across power cycles). The device keeps its low-voltage protection and a
     guaranteed wake floor in every mode, so a schedule can't strand it.
   </p>
-  <div class="flex flex-wrap gap-x-6 gap-y-1 text-xs text-gray-600 mb-3">
+  <div class="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-xs text-gray-600 mb-3">
+    <div class="flex items-baseline gap-1.5">
+      <span class="text-gray-500 uppercase tracking-wide">Power</span>
+      <span class="text-base font-semibold {% if battery_voltage is None %}text-gray-300{% else %}text-gray-900{% endif %}" id="m-battery">{% if battery_voltage is not None %}{{ battery_voltage|floatformat:2 }}V{% else %}—{% endif %}</span>
+      <span class="text-gray-400" id="m-power-sub">{% if output_current is not None %}{{ output_current|floatformat:2 }}A load{% endif %}{% if power_source %} · {{ power_source }}{% endif %}</span>
+    </div>
     <div>Next boot: <span id="sched-next-boot" class="font-medium text-gray-800">{{ next_boot|default:"—" }}</span></div>
     <div>Next shutdown: <span id="sched-next-shutdown" class="font-medium text-gray-800">{{ next_shutdown|default:"—" }}</span></div>
   </div>
@@ -414,6 +413,53 @@
   </div>
   {% else %}
   <p class="text-xs text-gray-400 italic">Read-only — WiFi control requires manager access.</p>
+  {% endif %}
+</div>
+
+<!-- Cellular access (debug firewall toggle) -->
+<div class="mt-6 bg-white shadow rounded-lg p-4">
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Cellular access</h2>
+    <div class="text-xs text-gray-500" id="m-cellfw">
+      {% if cell_firewall == 'open' %}
+        <span class="inline-flex items-center gap-1 text-amber-700"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>Open — debug access on</span>
+      {% elif cell_firewall == 'gated' %}
+        <span class="inline-flex items-center gap-1 text-green-700"><span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>Gated — telemetry only</span>
+      {% else %}
+        <span class="text-gray-400">state unknown (waiting for a beat)</span>
+      {% endif %}
+    </div>
+  </div>
+  <p class="text-xs text-gray-400 mb-3">
+    Cellular egress is normally gated to telemetry only, to protect your metered SIM.
+    Open it briefly to reach the unit over <strong>rpi-connect</strong> for debugging;
+    it auto-re-gates after the timeout (a reboot also re-gates). While open the OS can
+    use mobile data, so keep it short.
+  </p>
+  {% if can_manage %}
+  <div class="flex flex-wrap items-end gap-2">
+    <form method="post" action="{% url 'devices:cellular' device.pk %}" class="flex items-end gap-2"
+          onsubmit="return confirm('Open cellular egress for remote debugging? This lets the OS use metered mobile data until it auto-re-gates.')">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="open">
+      <label class="text-xs text-gray-600">For
+        <select name="minutes" class="mt-1 block border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="15">15 min</option>
+          <option value="30" selected>30 min</option>
+          <option value="60">60 min</option>
+          <option value="120">2 hours</option>
+        </select>
+      </label>
+      <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Open for debug</button>
+    </form>
+    <form method="post" action="{% url 'devices:cellular' device.pk %}">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="gate">
+      <button class="px-3 py-1.5 bg-gray-50 border border-gray-200 rounded text-sm text-gray-700 hover:bg-gray-100">Re-gate now</button>
+    </form>
+  </div>
+  {% else %}
+  <p class="text-xs text-gray-400 italic">Read-only — cellular access requires manager access.</p>
   {% endif %}
 </div>
 
@@ -668,6 +714,12 @@
           if (d.wifi_enabled == null) wf.innerHTML = '<span class="text-gray-400">state unknown (waiting for a beat)</span>';
           else if (d.wifi_enabled) wf.innerHTML = '<span class="inline-flex items-center gap-1">' + dot(true) + 'Radio on</span> ' + (d.wifi_ssid ? '· joined <span class="font-medium text-gray-700">' + d.wifi_ssid + '</span>' : '· not connected');
           else wf.innerHTML = '<span class="inline-flex items-center gap-1">' + dot(false) + 'Radio off</span>';
+        }
+        var cf = document.getElementById('m-cellfw');
+        if (cf) {
+          if (d.cell_firewall === 'open') cf.innerHTML = '<span class="inline-flex items-center gap-1 text-amber-700"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>Open — debug access on</span>';
+          else if (d.cell_firewall === 'gated') cf.innerHTML = '<span class="inline-flex items-center gap-1 text-green-700">' + dot(true) + 'Gated — telemetry only</span>';
+          else cf.innerHTML = '<span class="text-gray-400">state unknown (waiting for a beat)</span>';
         }
         var tr = document.getElementById('m-transport');
         if (tr) {

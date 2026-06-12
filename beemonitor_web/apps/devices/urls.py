@@ -16,6 +16,7 @@ urlpatterns = [
     path("<int:pk>/reactivate/", views.DeviceReactivateView.as_view(), name="reactivate"),
     path("<int:pk>/delete/", views.DeviceDeleteView.as_view(), name="delete"),
     path("<int:pk>/wifi/", views.DeviceWifiView.as_view(), name="wifi"),
+    path("<int:pk>/cellular/", views.DeviceCellularView.as_view(), name="cellular"),
     path("<int:pk>/update/", views.DeviceUpdateView.as_view(), name="update"),
     path("<int:pk>/usb-transfer/", views.DeviceUsbTransferView.as_view(), name="usb_transfer"),
     path("<int:pk>/usb-eject/", views.DeviceUsbEjectView.as_view(), name="usb_eject"),

@@ -94,6 +94,14 @@ COMMAND_POLL_SECONDS = int(os.environ.get("BEEMONITOR_COMMAND_POLL_SECONDS", "8"
 REPO_DIR = Path(__file__).resolve().parent.parent
 UPDATE_SCRIPT = REPO_DIR / "hardware" / "update.sh"
 USB_SCRIPT = REPO_DIR / "hardware" / "usb-transfer.sh"
+# Cellular egress firewall. Normally gates wwan0 to telemetry-only; the dashboard
+# can open it briefly for remote debugging (rpi-connect), which auto-reverts.
+FIREWALL_SCRIPT = REPO_DIR / "hardware" / "cellular" / "cellular-firewall.sh"
+# State marker the firewall script writes ("gated"/"open"), reported in the beat.
+CELL_FIREWALL_STATE = Path(os.environ.get(
+    "BEEMONITOR_CELL_STATE", "/run/beemonitor-cell-firewall"))
+# Default auto-revert window when cellular is opened for debugging (minutes).
+CELL_DEBUG_DEFAULT_MIN = int(os.environ.get("BEEMONITOR_CELL_DEBUG_MINUTES", "30"))
 STATE_DIR = Path(os.environ.get("BEEMONITOR_STATE_DIR", "/home/beemonitor/.beemonitor"))
 UPDATE_STATUS_FILE = STATE_DIR / "update-status.json"
 # Last USB-transfer result (written by usb-transfer.sh), reported in the beat so
@@ -632,6 +640,15 @@ def collect_metrics() -> dict:
     if SCHEDULE_WINDOW:
         m["schedule_window"] = SCHEDULE_WINDOW
 
+    # Cellular egress gate state ("gated"/"open") so the dashboard shows whether
+    # debug access is currently open. Absent file = gated (the default at boot).
+    try:
+        state = CELL_FIREWALL_STATE.read_text().strip()
+        if state:
+            m["cell_firewall"] = state
+    except OSError:
+        pass
+
     # Deployed code version + last remote-update result, for the dashboard.
     commit = _git_commit()
     if commit:
@@ -1066,6 +1083,36 @@ def _capture_and_upload(params: dict | None = None) -> bool:
     return send_beat(image=img) is not None
 
 
+def _open_cellular(params: dict) -> None:
+    """DEBUG: drop the cellular egress gate so rpi-connect (and anything else) can
+    use mobile data for remote shell access — then AUTO-REVERT to gated after a
+    timeout so an open metered link can't quietly burn the SIM. The revert is a
+    one-shot systemd timer; a reboot also re-gates (cellular-firewall.service)."""
+    try:
+        minutes = int(params.get("minutes") or CELL_DEBUG_DEFAULT_MIN)
+    except (TypeError, ValueError):
+        minutes = CELL_DEBUG_DEFAULT_MIN
+    minutes = max(1, min(minutes, 240))  # clamp 1..240 min
+    # The script (run as root) drops the gate AND schedules its own auto-revert,
+    # so telemetry needs only one tightly-scoped sudoers entry for this script.
+    r = _run(["sudo", "-n", str(FIREWALL_SCRIPT), "open", str(minutes)], timeout=30)
+    if r is None or r.returncode != 0:
+        log.warning("cellular_open: could not drop the gate: %s",
+                    (r.stderr or "").strip()[:160] if r else "no result")
+    else:
+        log.info("cellular_open: wwan0 ungated for %d min (debug)", minutes)
+
+
+def _gate_cellular() -> None:
+    """Re-gate cellular egress to telemetry-only now (and cancel any auto-revert)."""
+    r = _run(["sudo", "-n", str(FIREWALL_SCRIPT), "telemetry"], timeout=30)
+    if r is None or r.returncode != 0:
+        log.warning("cellular_gate: could not re-gate: %s",
+                    (r.stderr or "").strip()[:160] if r else "no result")
+    else:
+        log.info("cellular_gate: wwan0 re-gated to telemetry-only")
+
+
 def _wifi_connect(params: dict) -> None:
     """Join a network and persist it (autoconnect) via NetworkManager."""
     ssid = (params.get("ssid") or "").strip()
@@ -1220,6 +1267,12 @@ def _handle_command(cmd: str, params: dict) -> None:
         log.info("command: wifi_forget ssid=%s", ssid)
         if ssid:
             _nmcli(["connection", "delete", ssid])
+    elif cmd == "cellular_open":
+        log.info("command: cellular_open minutes=%s", params.get("minutes"))
+        _open_cellular(params)
+    elif cmd == "cellular_gate":
+        log.info("command: cellular_gate")
+        _gate_cellular()
     else:
         log.warning("ignoring unknown command: %s", cmd)
 

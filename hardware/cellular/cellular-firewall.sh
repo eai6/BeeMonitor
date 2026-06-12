@@ -36,6 +36,11 @@ IFACE="${BEEMONITOR_CELL_IFACE:-wwan0}"
 TABLE="beemon_cell"
 # systemd service whose traffic is allowed on cellular (the telemetry beat).
 TELEMETRY_UNIT="${BEEMONITOR_TELEMETRY_UNIT:-beemonitor-telemetry.service}"
+# Tiny marker telemetry.py reads to report the gate state on the dashboard. In
+# /run so it resets on reboot (the boot-time 'base' load rewrites it).
+STATE_FILE="${BEEMONITOR_CELL_STATE:-/run/beemonitor-cell-firewall}"
+
+_write_state() { echo "$1" > "$STATE_FILE" 2>/dev/null || true; }
 
 if ! command -v nft >/dev/null 2>&1; then
     echo "cellular-firewall: nft not found — install with 'sudo apt install nftables'" >&2
@@ -53,8 +58,26 @@ case "$MODE" in
         # already exist (i.e. beemonitor-telemetry.service has started).
         TELEMETRY_RULE="socket cgroupv2 level 2 \"system.slice/${TELEMETRY_UNIT}\" accept"
         ;;
+    open)
+        # DEBUG: drop the gate entirely so ANYTHING (rpi-connect, apt, …) can use
+        # mobile data — for remote shell access in the field. Costs metered data,
+        # so we AUTO-REVERT to gated after N minutes (default 30) via a one-shot
+        # systemd timer. A reboot also re-gates (cellular-firewall.service). We do
+        # the scheduling here (already root) so telemetry needs only ONE tightly
+        # scoped sudoers entry for this script.
+        nft list table inet "$TABLE" >/dev/null 2>&1 && nft delete table inet "$TABLE"
+        _write_state open
+        REVERT_MIN="${2:-30}"
+        if command -v systemd-run >/dev/null 2>&1; then
+            systemctl stop beemon-cell-regate.timer 2>/dev/null || true
+            systemd-run --unit=beemon-cell-regate --on-active="${REVERT_MIN}min" \
+                "$(readlink -f "$0")" telemetry >/dev/null 2>&1 || true
+        fi
+        echo "cellular-firewall: OPEN — ${IFACE} egress UNGATED for ${REVERT_MIN}min (debug)."
+        exit 0
+        ;;
     *)
-        echo "cellular-firewall: unknown mode '$MODE' (use 'base' or 'telemetry')" >&2
+        echo "cellular-firewall: unknown mode '$MODE' (use 'base', 'telemetry', or 'open')" >&2
         exit 2
         ;;
 esac
@@ -92,6 +115,9 @@ then
     exit 1
 fi
 
+# Now gated — cancel any pending debug auto-revert (a manual re-gate supersedes it).
+systemctl stop beemon-cell-regate.timer 2>/dev/null || true
+_write_state gated
 if [ "$MODE" = "telemetry" ]; then
     echo "cellular-firewall: egress on ${IFACE} gated to ${TELEMETRY_UNIT} (+DNS/DHCP/NTP/ICMP)"
 else

@@ -452,6 +452,7 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         ctx["battery_voltage"] = metrics.get("battery_voltage")
         ctx["output_current"] = metrics.get("output_current")
         ctx["power_source"] = metrics.get("power_source")
+        ctx["cell_firewall"] = metrics.get("cell_firewall")
 
 
         # Videos uploaded by this device (device-scoped slice of /videos/).
@@ -682,6 +683,40 @@ class DeviceWifiView(LoginRequiredMixin, View):
         return redirect("devices:detail", pk=pk)
 
 
+class DeviceCellularView(LoginRequiredMixin, View):
+    """Open the cellular egress firewall for remote debugging (rpi-connect), or
+    re-gate it. Rides the telemetry command channel (the one thing always allowed
+    on cellular), so it reaches the unit even while the gate is closed. Opening
+    auto-reverts on the device after a timeout so an open metered link can't burn
+    the data cap.
+    """
+
+    def post(self, request, pk):
+        device = _device_or_403(request.user, pk, "manager")
+        action = request.POST.get("action", "")
+        if action == "open":
+            try:
+                minutes = int(request.POST.get("minutes") or 30)
+            except (TypeError, ValueError):
+                minutes = 30
+            minutes = max(1, min(minutes, 240))
+            device.pending_command = "cellular_open"
+            device.command_params = {"minutes": minutes}
+            msg = (f"Opening cellular for {minutes} min on the next check-in — "
+                   "rpi-connect should then reach the unit, and it auto-re-gates "
+                   "after. Watch the gate state below.")
+        elif action == "gate":
+            device.pending_command = "cellular_gate"
+            device.command_params = {}
+            msg = "Re-gating cellular to telemetry-only on the next check-in."
+        else:
+            messages.error(request, "Unknown cellular action.")
+            return redirect("devices:detail", pk=pk)
+        device.save(update_fields=["pending_command", "command_params"])
+        messages.success(request, msg)
+        return redirect("devices:detail", pk=pk)
+
+
 class DeviceUpdateView(LoginRequiredMixin, View):
     """Queue a remote software-update command.
 
@@ -871,6 +906,7 @@ class DeviceStatusView(LoginRequiredMixin, View):
             },
             "wifi_enabled": metrics.get("wifi_enabled"),
             "wifi_ssid": metrics.get("wifi_ssid"),
+            "cell_firewall": metrics.get("cell_firewall"),
             "active_transport": metrics.get("active_transport"),
             "usb_status": _usb_text(metrics.get("usb")),
             "usb_present": metrics.get("usb_present"),

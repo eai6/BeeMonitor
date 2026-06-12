@@ -956,8 +956,28 @@ sudo nft list table inet beemon_cell        # the drop counter has climbed
 > sudo systemctl mask apt-daily.timer apt-daily-upgrade.timer
 > sudo systemctl disable --now unattended-upgrades 2>/dev/null || true
 > ```
-> `rpi-connect` keeps working over WiFi; it's just blocked over cellular. To allow
-> remote access over cellular too, add its cgroup to `cellular-firewall.sh`.
+> `rpi-connect` keeps working over WiFi; it's just blocked over cellular (to
+> protect the metered SIM).
+
+**Remote debugging over cellular (open the gate on demand).** When the unit is
+field-deployed on cellular and you need `rpi-connect` shell access, open the gate
+from the dashboard instead of leaving it open permanently. On the device page →
+**Cellular access** → **Open for debug** (15 min – 2 h) queues a command that rides
+the always-allowed telemetry channel; the device drops the `wwan0` gate so
+`rpi-connect` (and the OS) can use mobile data, then **auto-re-gates** when the
+timer expires (a reboot also re-gates). **Re-gate now** closes it early. The gate
+state ("Open" / "Gated") shows live on the card.
+
+This needs one tightly-scoped sudoers rule so telemetry (running as `beemonitor`)
+can flip the root-owned firewall:
+```bash
+echo 'beemonitor ALL=(root) NOPASSWD: /home/beemonitor/BeeMonitor/hardware/cellular/cellular-firewall.sh' \
+  | sudo tee /etc/sudoers.d/beemonitor-cellular >/dev/null
+sudo chmod 440 /etc/sudoers.d/beemonitor-cellular
+sudo visudo -cf /etc/sudoers.d/beemonitor-cellular   # must print "parsed OK"
+```
+Manually from a shell you can also run `sudo cellular/cellular-firewall.sh open 30`
+(open 30 min) and `sudo cellular/cellular-firewall.sh telemetry` (re-gate).
 
 **Enable network time (NTP) — required for uploads.** The Pi has no RTC, so on
 every cold boot / WittyPi wake it starts with a stale clock restored from
