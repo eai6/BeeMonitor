@@ -1183,3 +1183,22 @@ class DeviceCellularViewTests(TestCase):
         DeviceHeartbeat.objects.create(device=self.device, metrics={"cell_firewall": "open"})
         r = self.client.get(reverse("devices:status", args=[self.device.pk]))
         self.assertEqual(r.json()["cell_firewall"], "open")
+
+
+class ActivityTableRenderTests(TestCase):
+    """The device detail page renders the CSV-exportable activity table."""
+
+    def setUp(self):
+        from apps.devices.models import Device
+        self.owner = create_user(username="alice")
+        self.client, _ = logged_in_client(self.owner)
+        self.device, _ = Device.create_with_key(self.owner, "alice-pi")
+
+    def test_detail_has_activity_table_and_csv(self):
+        r = self.client.get(reverse("devices:detail", args=[self.device.pk]))
+        self.assertEqual(r.status_code, 200)
+        body = r.content.decode()
+        self.assertIn('id="act-table-body"', body)
+        self.assertIn('id="act-csv-btn"', body)
+        self.assertIn("buildActivityTable", body)
+        self.assertIn("Activity per", body)

@@ -570,6 +570,34 @@
   </div>
 </div>
 
+<!-- Activity data table (CSV-exportable) -->
+<div class="mt-4">
+  <div class="bg-white shadow rounded-lg p-4">
+    <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+      <h3 class="text-sm font-semibold text-gray-700">
+        Activity per <span id="act-gran-label">hour</span>
+        <span class="text-xs font-normal text-gray-400">· {{ display_tz|default:"UTC" }} · {{ activity_range }}</span>
+      </h3>
+      <button id="act-csv-btn" class="px-3 py-1.5 text-xs rounded bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100">Download CSV</button>
+    </div>
+    <div class="overflow-auto max-h-80 border border-gray-100 rounded">
+      <table class="min-w-full text-sm">
+        <thead class="bg-gray-50 sticky top-0 text-xs text-gray-500 uppercase tracking-wide">
+          <tr>
+            <th class="text-left px-3 py-2 font-medium">Period</th>
+            <th class="text-right px-3 py-2 font-medium">Activity</th>
+            <th id="act-th-temp" class="text-right px-3 py-2 font-medium hidden">Temp (°C)</th>
+            <th id="act-th-precip" class="text-right px-3 py-2 font-medium hidden">Precip (mm)</th>
+          </tr>
+        </thead>
+        <tbody id="act-table-body" class="divide-y divide-gray-100"></tbody>
+      </table>
+    </div>
+    <p id="act-table-empty" class="text-sm text-gray-500 text-center py-6 hidden">No activity data yet for this range.</p>
+    <p class="text-xs text-gray-400 mt-2">Counts per period (newest first). Use the range buttons above to switch between hourly (24h/7d) and daily (30d/90d) buckets. Download CSV exports the rows shown.</p>
+  </div>
+</div>
+
 <!-- Videos from this device -->
 <div class="mt-8">
   <div class="flex items-center justify-between mb-3">
@@ -651,10 +679,64 @@
     });
   };
 
+  // (Re)build the activity data table from the SAME rows that drive the chart —
+  // used on load AND on each live poll, so it tracks the range selector.
+  function esc2(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  window.buildActivityTable = function (rows, weatherEnabled, gran) {
+    var body = document.getElementById('act-table-body');
+    var empty = document.getElementById('act-table-empty');
+    var lab = document.getElementById('act-gran-label');
+    if (lab) lab.textContent = (gran === 'day') ? 'day' : 'hour';
+    if (!body) return;
+    var hasTemp = weatherEnabled && rows && rows.some(function (d) { return d.temp != null; });
+    var hasPrecip = weatherEnabled && rows && rows.some(function (d) { return d.precip != null; });
+    var thT = document.getElementById('act-th-temp'), thP = document.getElementById('act-th-precip');
+    if (thT) thT.classList.toggle('hidden', !hasTemp);
+    if (thP) thP.classList.toggle('hidden', !hasPrecip);
+    // Stash for the CSV export.
+    window._actRows = rows || []; window._actHasTemp = hasTemp;
+    window._actHasPrecip = hasPrecip; window._actGran = gran || 'hour';
+    if (!rows || !rows.length) {
+      body.innerHTML = ''; if (empty) empty.classList.remove('hidden'); return;
+    }
+    if (empty) empty.classList.add('hidden');
+    body.innerHTML = rows.slice().reverse().map(function (d) {  // newest first
+      var c = '<td class="px-3 py-1.5 text-gray-700">' + esc2(d.t || d.iso || '') + '</td>'
+        + '<td class="px-3 py-1.5 text-right font-medium text-gray-900">' + (d.v != null ? d.v : 0) + '</td>';
+      if (hasTemp) c += '<td class="px-3 py-1.5 text-right text-gray-500">' + (d.temp != null ? (Math.round(d.temp * 10) / 10) : '') + '</td>';
+      if (hasPrecip) c += '<td class="px-3 py-1.5 text-right text-gray-500">' + (d.precip != null ? d.precip : '') + '</td>';
+      return '<tr>' + c + '</tr>';
+    }).join('');
+  };
+
+  function csvCell(s) { s = String(s == null ? '' : s); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
+  var csvBtn = document.getElementById('act-csv-btn');
+  if (csvBtn) csvBtn.addEventListener('click', function () {
+    var rows = window._actRows || [];
+    var cols = ['period_utc', 'period_local', 'activity'];
+    if (window._actHasTemp) cols.push('temp_c');
+    if (window._actHasPrecip) cols.push('precip_mm');
+    var lines = [cols.join(',')];
+    rows.forEach(function (d) {  // chronological in the file
+      var rec = [csvCell(d.iso || ''), csvCell(d.t || ''), (d.v != null ? d.v : 0)];
+      if (window._actHasTemp) rec.push(d.temp != null ? d.temp : '');
+      if (window._actHasPrecip) rec.push(d.precip != null ? d.precip : '');
+      lines.push(rec.join(','));
+    });
+    var blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'activity_device{{ device.pk }}_' + (window._actGran || 'hour') + '_' + RANGE + '.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  });
+
   // Initial render from server-embedded data.
   var el = document.getElementById('activity-data');
-  buildActivityChart(el ? JSON.parse(el.textContent) : [],
-                     {{ weather_enabled|yesno:"true,false" }}, "{{ activity_gran }}");
+  var _rows0 = el ? JSON.parse(el.textContent) : [];
+  buildActivityChart(_rows0, {{ weather_enabled|yesno:"true,false" }}, "{{ activity_gran }}");
+  buildActivityTable(_rows0, {{ weather_enabled|yesno:"true,false" }}, "{{ activity_gran }}");
 
   // Live poll: refresh telemetry tiles + chart in place — no manual refresh.
   function setText(id, v) { var e = document.getElementById(id); if (e && v != null) e.textContent = v; }
@@ -757,6 +839,7 @@
           }
         }
         buildActivityChart(d.activity_series, d.weather_enabled, d.activity_gran);
+        buildActivityTable(d.activity_series, d.weather_enabled, d.activity_gran);
       }).catch(function () {});
   }
   setInterval(poll, 5000);  // matches the 5s minimum beat rate
