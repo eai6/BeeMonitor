@@ -219,8 +219,14 @@ CALIB_YOLO_EVERY = max(1, _env_int("BEEMONITOR_CALIB_YOLO_EVERY", 3))
 # Skip re-calibrating if calibration.json is younger than this (days). --force overrides.
 CALIB_MAX_AGE_DAYS = _env_float("BEEMONITOR_CALIB_MAX_AGE_DAYS", 7.0)
 # Recorder re-reads calibration.json this often (s) so a scheduled calibration
-# is picked up without a restart.
+# is picked up without a restart. Calibration is a slow background job, so this
+# can be lazy.
 CALIB_RELOAD_SECONDS = _env_float("BEEMONITOR_CALIB_RELOAD_SECONDS", 300.0)
+# Interactive dashboard edits — the hotel-ROI override and motion tuning — are
+# re-read MUCH faster than calibration, since a human makes them and expects to
+# see the result quickly (in the live ROI photo). The check only does work when a
+# file's mtime actually changes, so a short interval is cheap.
+OVERRIDE_RELOAD_SECONDS = _env_float("BEEMONITOR_OVERRIDE_RELOAD_SECONDS", 15.0)
 
 # Burn a timestamp into the recorded (main) frames like main.py does.
 TIMESTAMP_OVERLAY = _env_bool("BEEMONITOR_TIMESTAMP", True)
@@ -805,6 +811,7 @@ def record() -> None:
     tuning_mtime = TUNING_FILE.stat().st_mtime if TUNING_FILE.exists() else 0.0
     roi_ov_mtime = ROI_OVERRIDE_FILE.stat().st_mtime if ROI_OVERRIDE_FILE.exists() else 0.0
     last_calib_check = time.monotonic()
+    last_override_check = time.monotonic()
 
     # First telemetry still shortly after warmup, then every interval.
     next_telemetry_image = (
@@ -914,25 +921,40 @@ def record() -> None:
                 log.info("background model rebuilt (every %.0fs); re-warming %.1fs",
                          BG_RESET_INTERVAL, WARMUP_SECONDS)
 
-            # Pick up freshly-written calibration OR dashboard tuning without a
-            # restart. Tuning is applied on top of calibration so it always wins.
+            # Background calibration.json (the scheduled --calibrate job) — slow
+            # reload; tuning is re-applied on top so it always wins.
             if now_mono - last_calib_check >= CALIB_RELOAD_SECONDS:
                 last_calib_check = now_mono
                 try:
                     cm = CALIB_FILE.stat().st_mtime if CALIB_FILE.exists() else 0.0
                 except OSError:
                     cm = calib_mtime
+                if cm != calib_mtime:
+                    _apply_calibration(gate, load_calibration())
+                    _apply_tuning(gate, load_tuning())
+                    log.info("reloaded calibration: var=%.0f area=[%.0f, %.0f] "
+                             "min_blobs=%d", gate.var_threshold, gate.min_area,
+                             gate.max_area, gate.min_blobs)
+                    calib_mtime = cm
+
+            # Interactive dashboard edits — motion tuning + hotel-ROI override.
+            # Fast reload so a change made on the dashboard shows within seconds,
+            # not minutes (these only do work when the file's mtime changes).
+            if now_mono - last_override_check >= OVERRIDE_RELOAD_SECONDS:
+                last_override_check = now_mono
                 try:
                     tm = TUNING_FILE.stat().st_mtime if TUNING_FILE.exists() else 0.0
                 except OSError:
                     tm = tuning_mtime
-                if cm != calib_mtime or tm != tuning_mtime:
+                if tm != tuning_mtime:
+                    # Re-establish the calibration base, then overlay tuning so a
+                    # field cleared back to "auto" falls back to the calibrated value.
                     _apply_calibration(gate, load_calibration())
                     _apply_tuning(gate, load_tuning())
-                    log.info("reloaded motion params: var=%.0f area=[%.0f, %.0f] "
+                    log.info("reloaded motion tuning: var=%.0f area=[%.0f, %.0f] "
                              "min_blobs=%d", gate.var_threshold, gate.min_area,
                              gate.max_area, gate.min_blobs)
-                    calib_mtime, tuning_mtime = cm, tm
+                    tuning_mtime = tm
                 # Live hotel-ROI override edits: re-gate without a restart. A new
                 # crop size needs a fresh background, so reset + re-warm.
                 try:
