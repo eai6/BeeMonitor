@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -978,16 +979,45 @@ def _disable_schedule_file(d: Path) -> None:
         pass
 
 
+def _write_schedule_file(d: Path, wpi_text: str) -> bool:
+    """Write our generated schedule.wpi into the WittyPi dir. Falls back to a
+    sudo'd write if the dir is root-owned (telemetry runs as beemonitor)."""
+    target = d / "schedule.wpi"
+    try:
+        target.write_text(wpi_text)
+        return True
+    except OSError as e:
+        log.info("wake_schedule: direct write of %s failed (%s); trying sudo", target, e)
+    cmd = f"printf '%s' {shlex.quote(wpi_text)} > {shlex.quote(str(target))}"
+    r = _run(["sudo", "-n", "bash", "-c", cmd], timeout=10)
+    if r is not None and r.returncode == 0:
+        return True
+    log.warning("wake_schedule: could not write %s (perms?): %s", target,
+                (r.stderr or "").strip()[:160] if r else "no result")
+    return False
+
+
 def _write_and_run_wpi(d: Path, wpi_text: str) -> bool:
     """Install our generated schedule where runScript.sh expects it and apply it
     (runScript.sh parses schedule.wpi and programs the next startup/shutdown)."""
-    try:
-        (d / "schedule.wpi").write_text(wpi_text)
-    except OSError as e:
-        log.warning("wake_schedule: could not write schedule.wpi: %s", e)
+    if not _write_schedule_file(d, wpi_text):
         return False
-    r = _wittypi_sh("./runScript.sh >/dev/null 2>&1 && echo ok", timeout=20)
-    return r is not None and r.returncode == 0 and "ok" in (r.stdout or "")
+    # Run runScript.sh DIRECTLY — do NOT pre-source utilities.sh here: runScript.sh
+    # sources it itself, and utilities.sh declares `readonly` constants, so a second
+    # source errors and aborts the script. Capture output so a failure is visible in
+    # the journal (the old version swallowed it with >/dev/null).
+    cmd = f"cd {shlex.quote(str(d))} && ./runScript.sh"
+    r = _run(["bash", "-c", cmd], timeout=25)
+    if (r is None or r.returncode != 0) and os.geteuid() != 0:
+        r = _run(["sudo", "-n", "bash", "-c", cmd], timeout=25)
+    if r is not None and r.returncode == 0:
+        log.info("wake_schedule: runScript.sh applied schedule.wpi")
+        return True
+    log.warning("wake_schedule: runScript.sh failed rc=%s err=%r out=%r",
+                (r.returncode if r else None),
+                ((r.stderr or "").strip()[:200] if r else None),
+                ((r.stdout or "").strip()[:200] if r else None))
+    return False
 
 
 def _do_apply(spec: dict) -> bool:
