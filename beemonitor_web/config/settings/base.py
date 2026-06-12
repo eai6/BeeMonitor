@@ -192,6 +192,18 @@ MONITOR_BIOCLIP_MIN_CONFIDENCE = float(os.environ.get("MONITOR_BIOCLIP_MIN_CONFI
 # Bounded worker pool for off-request-path classification (mirrors the analysis
 # spawn pool so a frame burst can't exhaust DB connections).
 MONITOR_CLASSIFY_MAX_WORKERS = int(os.environ.get("MONITOR_CLASSIFY_MAX_WORKERS", "3"))
+# Phase 2 location priors: constrain BioCLIP to taxa that occur near the device
+# (iNaturalist, GBIF fallback) instead of the whole Tree of Life. False =
+# unconstrained ToL (Phase 1 behaviour).
+MONITOR_USE_LOCATION_PRIORS = os.environ.get(
+    "MONITOR_USE_LOCATION_PRIORS", "true").strip().lower() in {"1", "true", "yes", "on"}
+MONITOR_PRIOR_RADIUS_KM = int(os.environ.get("MONITOR_PRIOR_RADIUS_KM", "50"))
+MONITOR_PRIOR_MAX_TAXA = int(os.environ.get("MONITOR_PRIOR_MAX_TAXA", "300"))
+MONITOR_PRIOR_TTL_SECONDS = int(os.environ.get("MONITOR_PRIOR_TTL_SECONDS", str(60 * 60 * 24 * 30)))
+# Below this constrained top score, retry unconstrained ToL and keep whichever is
+# more confident (so a locally-unrecorded true species isn't forced into a wrong
+# neighbour). The precision/recall dial for the location constraint.
+MONITOR_BIOCLIP_GENUS_FALLBACK = float(os.environ.get("MONITOR_BIOCLIP_GENUS_FALLBACK", "0.15"))
 
 # --- AI setup assistant (Claude) -------------------------------------------
 # Set ANTHROPIC_API_KEY in the environment to enable the in-dashboard tutor.

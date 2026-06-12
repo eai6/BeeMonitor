@@ -31,6 +31,7 @@ from django.conf import settings
 from django.db import connection
 
 from .models import Activity, ActivityFrame, Detection, Observation, Taxon
+from .priors import region_taxa
 
 logger = logging.getLogger(__name__)
 
@@ -90,14 +91,25 @@ def _read_crop_bytes(storage_key: str) -> bytes:
     return buf.getvalue()
 
 
-def _invoke_bioclip(jpeg: bytes) -> list:
-    """Send one crop to the endpoint; return its ranked predictions (a list)."""
+def _invoke_bioclip(jpeg: bytes, candidate_taxa=None) -> list:
+    """Send one crop to the endpoint; return its ranked predictions (a list).
+
+    With ``candidate_taxa`` the request constrains BioCLIP to those labels (the
+    location prior); without it, classification is unconstrained Tree-of-Life.
+    The body is JSON so the candidate list rides alongside the base64 image (the
+    container also still accepts a bare image/jpeg body for the unconstrained case).
+    """
+    import base64
     endpoint = settings.SAGEMAKER_BIOCLIP_ENDPOINT_NAME
+    body = {"image_b64": base64.b64encode(jpeg).decode("ascii")}
+    if candidate_taxa:
+        body["candidate_taxa"] = list(candidate_taxa)
+        body["rank"] = "species"
     resp = _sagemaker_runtime().invoke_endpoint(
         EndpointName=endpoint,
-        ContentType="image/jpeg",
+        ContentType="application/json",
         Accept="application/json",
-        Body=jpeg,
+        Body=json.dumps(body).encode("utf-8"),
     )
     data = json.loads(resp["Body"].read().decode("utf-8"))
     # Accept either a bare list or {"predictions": [...]}.
@@ -144,7 +156,10 @@ def classify_frame(frame_id: int) -> None:
         frame = (ActivityFrame.objects
                  .select_related("activity").get(pk=frame_id))
         storage_key = frame.storage_key
-        activity_id = frame.activity_id
+        activity = frame.activity
+        activity_id = activity.id
+        lat, lon = activity.lat, activity.lon
+        month = activity.started_at.month if activity.started_at else None
     except ActivityFrame.DoesNotExist:
         connection.close()
         return
@@ -156,7 +171,22 @@ def classify_frame(frame_id: int) -> None:
     try:
         jpeg = _read_crop_bytes(storage_key)
         topk = int(getattr(settings, "MONITOR_BIOCLIP_TOPK", 5))
-        preds = _invoke_bioclip(jpeg)[:topk]
+        candidates = []
+        if getattr(settings, "MONITOR_USE_LOCATION_PRIORS", True):
+            candidates = region_taxa(lat, lon, month)
+        preds = _invoke_bioclip(jpeg, candidates)
+        # If the location-constrained answer is weak, fall back to an unconstrained
+        # Tree-of-Life pass and keep whichever is more confident — so a true species
+        # not yet recorded near this site isn't forced into a wrong local neighbour.
+        if candidates:
+            floor = float(getattr(settings, "MONITOR_BIOCLIP_GENUS_FALLBACK", 0.15))
+            top_score = _score(preds[0]) if preds else None
+            if top_score is None or top_score < floor:
+                unconstrained = _invoke_bioclip(jpeg, None)
+                if unconstrained and (top_score is None
+                                      or (_score(unconstrained[0]) or 0.0) > top_score):
+                    preds = unconstrained
+        preds = preds[:topk]
     except Exception as e:  # noqa: BLE001 - any failure must not crash the worker
         logger.exception("bioclip: frame %s classify failed", frame_id)
         err = str(e)

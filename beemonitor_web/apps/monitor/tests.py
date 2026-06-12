@@ -3,16 +3,18 @@
 All network/S3 is stubbed — these run with no AWS access.
 """
 
+import json
 from unittest import mock
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
 from apps.devices.models import Device
 
-from . import pipeline
+from . import pipeline, priors
 from .models import Activity, ActivityFrame, Detection, Observation, Taxon
 
 
@@ -178,3 +180,71 @@ class PipelineTests(TestCase):
         self.assertEqual(Detection.objects.count(), 2)  # one per frame, not 4
         self.assertEqual(
             Observation.objects.filter(activity=self.activity).count(), 1)
+
+    def test_location_prior_candidates_passed_to_endpoint(self):
+        captured = []
+
+        def fake_invoke(jpeg, candidate_taxa=None):
+            captured.append(candidate_taxa)
+            return [_BUMBLEBEE]
+
+        with mock.patch.object(pipeline, "_read_crop_bytes", return_value=b"jpeg"), \
+                mock.patch.object(pipeline, "region_taxa",
+                                  return_value=["Bombus impatiens", "Apis mellifera"]), \
+                mock.patch.object(pipeline, "_invoke_bioclip", side_effect=fake_invoke), \
+                mock.patch.object(pipeline, "connection"):
+            pipeline.classify_frame(self.frames[0].id)
+        self.assertEqual(captured[0], ["Bombus impatiens", "Apis mellifera"])
+
+    def test_weak_constrained_falls_back_to_unconstrained(self):
+        def fake_invoke(jpeg, candidate_taxa=None):
+            if candidate_taxa:                       # constrained -> weak
+                return [{**_BUMBLEBEE, "score": 0.05}]
+            return [_BUMBLEBEE]                       # unconstrained -> strong
+
+        with mock.patch.object(pipeline, "_read_crop_bytes", return_value=b"jpeg"), \
+                mock.patch.object(pipeline, "region_taxa", return_value=["Bombus impatiens"]), \
+                mock.patch.object(pipeline, "_invoke_bioclip", side_effect=fake_invoke), \
+                mock.patch.object(pipeline, "connection"):
+            for fr in self.frames:
+                pipeline.classify_frame(fr.id)
+        self.activity.refresh_from_db()
+        self.assertEqual(self.activity.status, Activity.Status.ANALYZED)
+        self.assertAlmostEqual(self.activity.best_confidence, 0.9)  # fallback won
+
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._b = json.dumps(payload).encode()
+
+    def read(self):
+        return self._b
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class PriorsTests(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def test_inat_parsed_and_cached(self):
+        payload = {"results": [{"taxon": {"name": "Bombus impatiens"}},
+                               {"taxon": {"name": "Apis mellifera"}}]}
+        with mock.patch("apps.monitor.priors.urllib.request.urlopen",
+                        return_value=_FakeResp(payload)) as m:
+            taxa = priors.region_taxa(40.80, -77.86, month=6)
+            self.assertEqual(taxa, ["Bombus impatiens", "Apis mellifera"])
+            priors.region_taxa(40.80, -77.86, month=6)  # served from cache
+        self.assertEqual(m.call_count, 1)
+
+    def test_no_coords_returns_empty(self):
+        self.assertEqual(priors.region_taxa(None, None), [])
+
+    def test_both_sources_fail_returns_empty(self):
+        with mock.patch("apps.monitor.priors.urllib.request.urlopen",
+                        side_effect=OSError("net")):
+            self.assertEqual(priors.region_taxa(1.0, 2.0), [])
