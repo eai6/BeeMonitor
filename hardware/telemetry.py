@@ -435,14 +435,24 @@ def _wittypi_dir() -> "Path | None":
 
 def _wittypi_sh(snippet: str, timeout: int = 8):
     """Run a shell snippet with WittyPi's utilities.sh sourced (its functions talk
-    to the board over i2c). Root via ``sudo -n`` when not already root — the
-    install adds a NOPASSWD rule, same pattern as nmcli. None on any failure."""
+    to the board over i2c).
+
+    The i2c reads/writes work as any user in the ``i2c`` group — no root needed —
+    so we try the call DIRECTLY first. Only if that fails do we retry under
+    ``sudo -n`` (for setups that gate i2c or the scripts behind root, which needs
+    a NOPASSWD rule). None if there's no WittyPi or both attempts fail."""
     d = _wittypi_dir()
     if d is None:
         return None
     cmd = f"cd '{d}' && . ./utilities.sh >/dev/null 2>&1; {snippet}"
-    base = ["bash", "-c", cmd] if os.geteuid() == 0 else ["sudo", "-n", "bash", "-c", cmd]
-    return _run(base, timeout=timeout)
+    r = _run(["bash", "-c", cmd], timeout=timeout)
+    if r is not None and r.returncode == 0:
+        return r
+    if os.geteuid() != 0:
+        r2 = _run(["sudo", "-n", "bash", "-c", cmd], timeout=timeout)
+        if r2 is not None and r2.returncode == 0:
+            return r2
+    return r  # surface the direct attempt's result (incl. failures) for logging
 
 
 def _wittypi_value(snippet: str) -> "str | None":
@@ -518,6 +528,30 @@ def _schedule_metrics() -> dict:
     if applied:
         out["active_schedule"] = applied
     return out
+
+
+_wpi_diag_done = False
+
+
+def _wittypi_diag_once() -> None:
+    """Log, once, why WittyPi power telemetry is or isn't working — so a blank
+    Power card is diagnosable from `journalctl -u beemonitor-telemetry | grep WittyPi`
+    without guessing (dir not found vs. read failed vs. function missing)."""
+    global _wpi_diag_done
+    if _wpi_diag_done:
+        return
+    _wpi_diag_done = True
+    d = _wittypi_dir()
+    if d is None:
+        log.warning("WittyPi: no software dir in %s — power telemetry off; set "
+                    "BEEMONITOR_WITTYPI_DIR to the install path",
+                    [str(x) for x in WITTYPI_DIRS])
+        return
+    r = _wittypi_sh("get_input_voltage")
+    log.info("WittyPi diag: dir=%s get_input_voltage rc=%s out=%r err=%r", d,
+             (r.returncode if r else None),
+             (r.stdout.strip() if r else None),
+             ((r.stderr or "").strip()[:160] if r else None))
 
 
 def _timezone_info() -> dict:
@@ -615,6 +649,7 @@ def collect_metrics() -> dict:
     m["usb_present"] = _usb_present()
     m.update(_timezone_info())
     # WittyPi battery/input voltage + load (best-effort; omitted if no WittyPi).
+    _wittypi_diag_once()  # one-time log of why power telemetry is/ isn't working
     m.update(_wittypi_power())
     # WittyPi next boot/shutdown + the schedule the device last applied, for the
     # dashboard's power-schedule reconcile (read-only).
