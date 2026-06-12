@@ -1063,3 +1063,73 @@ class HeartbeatScheduleTests(TestCase):
         c, _ = logged_in_client(self.user)
         r = c.get(reverse("devices:status", args=[self.device.pk]))
         self.assertFalse(r.json()["schedule_confirmed"])
+
+
+# ── Device-side WittyPi schedule logic (hardware/telemetry.py) ───────
+
+
+def _load_hw_telemetry():
+    """Load hardware/telemetry.py by path (it lives outside the Django app)."""
+    import importlib.util
+    from pathlib import Path
+    p = Path(__file__).resolve().parents[1] / "hardware" / "telemetry.py"
+    spec = importlib.util.spec_from_file_location("hw_telemetry", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class WittyPiScheduleDeviceTests(TestCase):
+    """Pure device-side scheduling logic: validation + wake-floor clamp + .wpi
+    translation + the report-only safety gate (no hardware required)."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            cls.t = _load_hw_telemetry()
+        except Exception as e:  # pragma: no cover - env without telemetry deps
+            raise cls.skipTest(cls, f"hardware/telemetry.py not importable: {e}")
+
+    def test_clean_schedule_valid(self):
+        self.assertEqual(self.t._clean_schedule({"mode": "daylight"}), {"mode": "daylight"})
+        self.assertEqual(self.t._clean_schedule({"mode": "always_on"}), {"mode": "always_on"})
+        self.assertEqual(
+            self.t._clean_schedule({"mode": "window", "on": "6:0", "off": "20:00"}),
+            {"mode": "window", "on": "06:00", "off": "20:00"})
+        self.assertEqual(
+            self.t._clean_schedule({"mode": "interval", "wake_every_min": 60, "on_minutes": 10}),
+            {"mode": "interval", "wake_every_min": 60, "on_minutes": 10})
+
+    def test_clean_schedule_rejects_garbage(self):
+        for bad in ({"mode": "nope"}, "x", {"mode": "window", "on": "6:0", "off": "6:0"},
+                    {"mode": "interval", "wake_every_min": 3, "on_minutes": 1},
+                    {"mode": "interval", "wake_every_min": 60, "on_minutes": 60}):
+            self.assertIsNone(self.t._clean_schedule(bad), bad)
+
+    def test_wake_floor_rejects_long_off_stretch(self):
+        orig = self.t.WAKE_FLOOR_HOURS
+        try:
+            self.t.WAKE_FLOOR_HOURS = 2.0
+            # off stretch 10h > 2h floor -> rejected (can't strand the unit).
+            self.assertIsNone(
+                self.t._clean_schedule({"mode": "window", "on": "06:00", "off": "20:00"}))
+            # 50-min off interval is within the floor -> allowed.
+            self.assertIsNotNone(
+                self.t._clean_schedule({"mode": "interval", "wake_every_min": 60, "on_minutes": 10}))
+        finally:
+            self.t.WAKE_FLOOR_HOURS = orig
+
+    def test_schedule_to_wpi_durations(self):
+        w = self.t._schedule_to_wpi({"mode": "window", "on": "07:50", "off": "18:45"})
+        self.assertIn("ON    H10 M55", w)   # 10h55m on
+        self.assertIn("OFF   H13 M5", w)    # 13h05m off
+        iv = self.t._schedule_to_wpi({"mode": "interval", "wake_every_min": 60, "on_minutes": 10})
+        self.assertIn("ON    M10", iv)
+        self.assertIn("OFF   M50", iv)
+
+    def test_report_only_gate_does_not_apply(self):
+        # With apply gated off, _apply_schedule must be a safe no-op (never raises,
+        # never reaches the WittyPi). Default is off.
+        self.assertFalse(self.t.WAKE_SCHEDULE_APPLY)
+        self.t._apply_schedule({"mode": "always_on"})  # should just log + return

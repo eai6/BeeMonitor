@@ -123,18 +123,29 @@ enforced **on the device**, not trusted from the server:
 
 ## 6. Phased plan
 
-- **Phase 1 — server (safe, testable now).** `Device.wake_schedule` + migration;
-  `DeviceScheduleView` + dashboard schedule editor (mode presets); include
+- **Phase 1 — server (DONE, commit 195b46b).** `Device.wake_schedule` + migration
+  0015; `DeviceScheduleView` + dashboard schedule editor (mode presets); include
   `wake_schedule` in the heartbeat/command response; desired-vs-active reconcile UI
-  (device reports `active_schedule`). The device ignores the unknown field for now,
-  so this ships with zero field risk. Tests.
-- **Phase 2 — device (needs on-Pi validation).** `telemetry.py` `_apply_schedule`:
-  translate the spec → WittyPi `.wpi`/alarms, apply via `wittyPi.sh`, with all of
-  §5's guardrails; report `active_schedule`. This is the part that genuinely needs
-  hardware testing (WittyPi schedule format, the wake-floor logic).
+  (device reports `active_schedule`). Also added WittyPi **battery telemetry**
+  (the missing outage diagnostic). 10 tests.
+- **Phase 2 — device (BUILT, apply-gated; needs on-Pi validation).** `telemetry.py`:
+  - **Read side (live, zero-risk):** `_wittypi_power()` (battery/Vin, load, source)
+    + `_wittypi_alarms()` (real next boot/shutdown) + `active_schedule` (last applied)
+    via the WittyPi **utilities.sh** functions (not raw I2C — version-robust). Beat
+    reports them → the dashboard reconcile + power card are real.
+  - **Apply side (GATED OFF by `BEEMONITOR_WAKE_SCHEDULE_APPLY`):** `_apply_schedule`
+    validates + clamps (wake floor = `BEEMONITOR_WAKE_FLOOR_HOURS`, default 24), is
+    idempotent, and translates window/interval → a `.wpi` applied via `runScript.sh`;
+    `always_on` clears the shutdown alarm + disables the `.wpi`; `daylight` leaves the
+    operator's installed schedule untouched. Records the applied spec to
+    `~/.beemonitor/wake-schedule.json`. **Report-only by default so it can't strand a
+    unit while unproven.** 5 device-side tests (validation/floor/.wpi/gate).
+  - **To go live on a unit:** verify the read path on real hardware (rpi-connect
+    shell), add a NOPASSWD sudoers rule for the wittypi scripts, then set
+    `BEEMONITOR_WAKE_SCHEDULE_APPLY=1`.
 - **Phase 3 — polish.** `one_shot` wake, `night_checkins` pulses, the
-  confirm-or-revert watchdog, and the `always_on` mode wired end-to-end (for the
-  solar+battery / mains future).
+  confirm-or-revert watchdog, GPS sun-tracking for `daylight`, and validating the
+  utilities.sh function names / `.wpi` apply on real WittyPi 4 hardware.
 
 Build Phase 1 first — it's safe, fully testable in Django, and lets the dashboard
 drive a schedule the moment the Pi side lands.

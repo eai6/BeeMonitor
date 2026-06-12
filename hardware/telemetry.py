@@ -38,6 +38,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -127,6 +128,27 @@ FRAME_SENT_FILE = STATE_DIR / "frames-sent.json"  # {"date": "YYYY-MM-DD", "coun
 # dashboard (GET/POST /api/v1/devices/cleanup). Cheap JSON, runs over cellular.
 # Seconds between cleanup passes; 0 disables.
 CLEANUP_INTERVAL = int(os.environ.get("BEEMONITOR_CLEANUP_INTERVAL", "600"))
+
+# --- Remote WittyPi power schedule (Phase 2) ---------------------------------
+# Where the UUGear WittyPi software lives (utilities.sh / runScript.sh / schedules).
+# First existing path wins. See memory/16_remote_scheduling_design.md.
+WITTYPI_DIRS = [Path(p) for p in os.environ.get(
+    "BEEMONITOR_WITTYPI_DIR",
+    "/home/beemonitor/wittypi:/home/beemonitor/Desktop/wittypi:/home/pi/wittypi"
+).split(":") if p]
+# Where we record the schedule we last successfully applied, so the beat can
+# report active_schedule for the dashboard's desired-vs-active reconcile.
+WAKE_SCHEDULE_STATE = STATE_DIR / "wake-schedule.json"
+# SAFETY FLOOR: the device never lets a schedule keep the unit OFF longer than
+# this (hours). A spec whose off-stretch exceeds it is rejected, so a fat-fingered
+# schedule can't strand a unit for a whole day+. (memory/16 §5.)
+WAKE_FLOOR_HOURS = float(os.environ.get("BEEMONITOR_WAKE_FLOOR_HOURS", "24"))
+# Phase 2 is APPLY-GATED. Default OFF: the device only READS the WittyPi and
+# reports next boot/shutdown (real dashboard reconcile, zero stranding risk). It
+# does NOT change the WittyPi schedule until this is set, after the read path is
+# verified on real hardware. Enable with BEEMONITOR_WAKE_SCHEDULE_APPLY=1.
+WAKE_SCHEDULE_APPLY = os.environ.get(
+    "BEEMONITOR_WAKE_SCHEDULE_APPLY", "0") in ("1", "true", "True")
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s telemetry %(message)s", level=logging.INFO,
@@ -387,58 +409,114 @@ def _usb_present() -> bool:
     return False
 
 
-# --- WittyPi battery / input telemetry ---------------------------------------
-# The WittyPi 4 exposes input(battery)/output voltage + load current over I2C
-# (device 0x08 on bus 1). Per UUGear's utilities.sh a voltage is read as two
-# bytes: value = <integer reg> + <decimal reg> / 100. This is the missing
-# diagnostic for "did the WittyPi fail or did the battery die" — battery_voltage
-# trending down before an outage points at power, not the board.
+# --- WittyPi power: battery telemetry + schedule (read side) -----------------
+# All of this goes through the WittyPi's own utilities.sh functions rather than
+# raw I2C registers, so it stays correct across WittyPi firmware/board variants
+# (the register map differs between WittyPi 3/4/L3V7). Every call is best-effort:
+# no WittyPi, no software, or a missing sudo rule -> the value is simply omitted
+# from the beat. Reads are safe to run every beat; nothing here changes state.
 #
-# NOTE: these registers are for the WittyPi 4; VERIFY them on the actual board
-# before trusting the numbers (WittyPi 3 / L3V7 variants differ). The read is
-# best-effort: no WittyPi, no i2c-tools, or a permission error -> {} and the beat
-# simply omits power telemetry. Disable entirely with BEEMONITOR_WITTYPI_BATTERY=0.
-_WPI_BUS = os.environ.get("BEEMONITOR_WITTYPI_I2C_BUS", "1")
-_WPI_ADDR = os.environ.get("BEEMONITOR_WITTYPI_I2C_ADDR", "0x08")
-_WPI_VIN = (1, 2)       # input / battery voltage (int reg, decimal reg)
-_WPI_IOUT = (5, 6)      # output (load) current
-_WPI_POWER_MODE = 7     # 1 = running on Vin (battery/DC in), 0 = on USB 5V
+# NOTE: the utilities.sh function NAMES (get_input_voltage / get_output_current /
+# get_power_mode / get_startup_time / get_shutdown_time) are the UUGear standard
+# but should be confirmed once on the real unit (rpi-connect shell).
 
 
-def _i2c_byte(reg: int) -> "int | None":
-    """Read one byte from the WittyPi via i2cget; None on any failure."""
-    r = _run(["i2cget", "-y", _WPI_BUS, _WPI_ADDR, str(reg)], timeout=4)
+@lru_cache(maxsize=1)
+def _wittypi_dir() -> "Path | None":
+    """The installed WittyPi software directory (has utilities.sh), or None."""
+    for d in WITTYPI_DIRS:
+        try:
+            if (d / "utilities.sh").is_file():
+                return d
+        except OSError:
+            continue
+    return None
+
+
+def _wittypi_sh(snippet: str, timeout: int = 8):
+    """Run a shell snippet with WittyPi's utilities.sh sourced (its functions talk
+    to the board over i2c). Root via ``sudo -n`` when not already root — the
+    install adds a NOPASSWD rule, same pattern as nmcli. None on any failure."""
+    d = _wittypi_dir()
+    if d is None:
+        return None
+    cmd = f"cd '{d}' && . ./utilities.sh >/dev/null 2>&1; {snippet}"
+    base = ["bash", "-c", cmd] if os.geteuid() == 0 else ["sudo", "-n", "bash", "-c", cmd]
+    return _run(base, timeout=timeout)
+
+
+def _wittypi_value(snippet: str) -> "str | None":
+    """stdout of a WittyPi utilities call, stripped; None unless it succeeded."""
+    r = _wittypi_sh(snippet)
     if r is None or r.returncode != 0:
         return None
+    return r.stdout.strip()
+
+
+def _to_float(s) -> "float | None":
     try:
-        return int(r.stdout.strip(), 16)
+        return float(str(s).strip())
     except (TypeError, ValueError):
         return None
 
 
-def _i2c_decimal(pair) -> "float | None":
-    """A WittyPi two-byte reading: <int> + <decimal>/100. None on failure."""
-    hi = _i2c_byte(pair[0])
-    lo = _i2c_byte(pair[1])
-    if hi is None or lo is None:
-        return None
-    return round(hi + lo / 100.0, 2)
-
-
 def _wittypi_power() -> dict:
-    """Best-effort WittyPi battery/input voltage + load. {} if unavailable."""
+    """Battery/input voltage + load current + power source for the beat. {} if no
+    WittyPi. This is the missing outage diagnostic — battery_voltage trending down
+    before a no-wake points at power, not a board fault. Disable with
+    BEEMONITOR_WITTYPI_BATTERY=0."""
     if os.environ.get("BEEMONITOR_WITTYPI_BATTERY", "1") not in ("1", "true", "True"):
         return {}
-    vin = _i2c_decimal(_WPI_VIN)
-    if vin is None:
-        return {}  # no WittyPi / i2c on this unit -> omit power telemetry
-    out: dict = {"battery_voltage": vin}
-    iout = _i2c_decimal(_WPI_IOUT)
+    vin = _to_float(_wittypi_value("get_input_voltage"))
+    if vin is None or vin <= 0:
+        return {}  # no WittyPi / unreadable -> omit power telemetry entirely
+    out: dict = {"battery_voltage": round(vin, 2)}
+    iout = _to_float(_wittypi_value("get_output_current"))
     if iout is not None:
-        out["output_current"] = iout
-    mode = _i2c_byte(_WPI_POWER_MODE)
+        out["output_current"] = round(iout, 2)
+    mode = _wittypi_value("get_power_mode")
     if mode is not None:
-        out["power_source"] = "DC input" if mode == 1 else "USB 5V"
+        out["power_source"] = "DC input" if mode.strip() == "1" else "USB 5V"
+    return out
+
+
+def _alarm_is_set(s: str) -> bool:
+    """A WittyPi alarm string with any non-zero digit is a real alarm; the unset
+    sentinel is all zeros (e.g. '0 00:00:00')."""
+    return bool(s) and any(c in "123456789" for c in s)
+
+
+def _wittypi_alarms() -> dict:
+    """The WittyPi's currently-programmed next startup/shutdown, as display
+    strings — the 'when is this unit next on/off?' the dashboard was missing.
+    Read-only."""
+    out: dict = {}
+    boot = _wittypi_value("get_startup_time")
+    if boot and _alarm_is_set(boot):
+        out["next_boot"] = boot
+    shut = _wittypi_value("get_shutdown_time")
+    if shut and _alarm_is_set(shut):
+        out["next_shutdown"] = shut
+    return out
+
+
+def _read_applied_spec() -> "dict | None":
+    """The wake-schedule spec the device last successfully applied, or None."""
+    try:
+        spec = json.loads(WAKE_SCHEDULE_STATE.read_text())
+        return spec if isinstance(spec, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _schedule_metrics() -> dict:
+    """Power-schedule telemetry for the beat: the WittyPi's real next boot/shutdown
+    plus active_schedule (what the device last applied) for the dashboard's
+    desired-vs-active reconcile. All read-only."""
+    out = _wittypi_alarms()
+    applied = _read_applied_spec()
+    if applied:
+        out["active_schedule"] = applied
     return out
 
 
@@ -538,6 +616,9 @@ def collect_metrics() -> dict:
     m.update(_timezone_info())
     # WittyPi battery/input voltage + load (best-effort; omitted if no WittyPi).
     m.update(_wittypi_power())
+    # WittyPi next boot/shutdown + the schedule the device last applied, for the
+    # dashboard's power-schedule reconcile (read-only).
+    m.update(_schedule_metrics())
 
     return m
 
@@ -751,6 +832,156 @@ def _apply_interval(value) -> None:
     if v != _interval:
         log.info("telemetry interval changed %ds -> %ds (from dashboard)", _interval, v)
         _interval = v
+
+
+# --- Remote WittyPi power schedule: apply side (gated) -----------------------
+# The desired schedule rides the heartbeat response (resp["wake_schedule"]). We
+# validate + clamp it locally (the SERVER is never trusted for safety), and only
+# when WAKE_SCHEDULE_APPLY do we write it to the WittyPi. Safety (memory/16 §5):
+#   * reject any spec whose off-stretch exceeds the wake floor — can't strand it;
+#   * keep the WittyPi low-voltage recovery in every mode (we never disable it);
+#   * 'daylight' leaves the operator's installed schedule untouched (no regression).
+# The whole apply path is unproven on hardware -> gated off by default.
+
+
+def _parse_hhmm(s) -> "int | None":
+    try:
+        h, m = str(s).split(":")
+        h, m = int(h), int(m)
+    except (TypeError, ValueError):
+        return None
+    return h * 60 + m if (0 <= h <= 23 and 0 <= m <= 59) else None
+
+
+def _fmt_hhmm(mins: int) -> str:
+    return f"{mins // 60:02d}:{mins % 60:02d}"
+
+
+def _clean_schedule(spec) -> "dict | None":
+    """Validate a desired spec and enforce the wake floor; None if unusable."""
+    if not isinstance(spec, dict):
+        return None
+    mode = spec.get("mode")
+    floor_min = WAKE_FLOOR_HOURS * 60
+    if mode in ("daylight", "always_on"):
+        return {"mode": mode}
+    if mode == "window":
+        on, off = _parse_hhmm(spec.get("on")), _parse_hhmm(spec.get("off"))
+        if on is None or off is None or on == off:
+            return None
+        on_dur = (off - on) % 1440           # minutes ON
+        off_dur = 1440 - on_dur              # minutes OFF (overnight stretch)
+        if on_dur <= 0 or off_dur > floor_min:   # off stretch must respect the floor
+            return None
+        return {"mode": "window", "on": _fmt_hhmm(on), "off": _fmt_hhmm(off)}
+    if mode == "interval":
+        try:
+            every, on_min = int(spec.get("wake_every_min")), int(spec.get("on_minutes"))
+        except (TypeError, ValueError):
+            return None
+        if not (5 <= every <= 1440) or not (1 <= on_min < every):
+            return None
+        if (every - on_min) > floor_min:
+            return None
+        return {"mode": "interval", "wake_every_min": every, "on_minutes": on_min}
+    return None
+
+
+def _schedule_to_wpi(spec: dict) -> "str | None":
+    """Translate a window/interval spec into a WittyPi .wpi script (BEGIN/END +
+    repeating ON/OFF durations). None for modes that don't use a .wpi."""
+    end = "END   2099-12-31 23:59:59"
+    if spec["mode"] == "interval":
+        on_min = spec["on_minutes"]
+        off_min = spec["wake_every_min"] - on_min
+        begin = datetime.now().strftime("BEGIN %Y-%m-%d 00:00:00")
+        return f"{begin}\n{end}\nON    M{on_min}\nOFF   M{off_min}\n"
+    if spec["mode"] == "window":
+        on = _parse_hhmm(spec["on"])
+        on_dur = (_parse_hhmm(spec["off"]) - on) % 1440
+        off_dur = 1440 - on_dur
+        begin = datetime.now().strftime("BEGIN %Y-%m-%d ") + f"{spec['on']}:00"
+        return (f"{begin}\n{end}\n"
+                f"ON    H{on_dur // 60} M{on_dur % 60}\n"
+                f"OFF   H{off_dur // 60} M{off_dur % 60}\n")
+    return None
+
+
+def _write_applied_spec(spec: dict) -> None:
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        WAKE_SCHEDULE_STATE.write_text(json.dumps(spec))
+    except OSError as e:
+        log.warning("could not record applied wake_schedule: %s", e)
+
+
+def _disable_schedule_file(d: Path) -> None:
+    """Move the recurring .wpi aside so the daemon stops re-arming a shutdown
+    (used by always_on). Best-effort."""
+    sched = d / "schedule.wpi"
+    try:
+        if sched.exists():
+            sched.rename(d / "schedule.wpi.disabled")
+    except OSError:
+        pass
+
+
+def _write_and_run_wpi(d: Path, wpi_text: str) -> bool:
+    """Install our generated schedule where runScript.sh expects it and apply it
+    (runScript.sh parses schedule.wpi and programs the next startup/shutdown)."""
+    try:
+        (d / "schedule.wpi").write_text(wpi_text)
+    except OSError as e:
+        log.warning("wake_schedule: could not write schedule.wpi: %s", e)
+        return False
+    r = _wittypi_sh("./runScript.sh >/dev/null 2>&1 && echo ok", timeout=20)
+    return r is not None and r.returncode == 0 and "ok" in (r.stdout or "")
+
+
+def _do_apply(spec: dict) -> bool:
+    """Reconcile the WittyPi to a cleaned spec. Returns True on success."""
+    d = _wittypi_dir()
+    if d is None:
+        return False
+    mode = spec["mode"]
+    if mode == "daylight":
+        return True  # keep the operator's installed schedule untouched
+    if mode == "always_on":
+        # Never power off on schedule: drop the recurring .wpi and clear the
+        # pending shutdown alarm. The low-voltage cutoff stays active.
+        _disable_schedule_file(d)
+        r = _wittypi_sh("clear_shutdown_time")
+        return r is not None and r.returncode == 0
+    wpi = _schedule_to_wpi(spec)
+    return bool(wpi) and _write_and_run_wpi(d, wpi)
+
+
+def _apply_schedule(spec) -> None:
+    """Adopt the dashboard's desired WittyPi schedule from the heartbeat response.
+
+    Validates + clamps (wake floor) locally; idempotent; and — only when
+    WAKE_SCHEDULE_APPLY is enabled — writes it to the WittyPi. Gated off by
+    default: until then it's report-only (the beat still reports the WittyPi's
+    real next boot/shutdown), so this can't strand a unit while unproven.
+    """
+    if spec is None:
+        return
+    cleaned = _clean_schedule(spec)
+    if cleaned is None:
+        log.warning("wake_schedule rejected (invalid or off-stretch > %sh floor): %s",
+                    WAKE_FLOOR_HOURS, spec)
+        return
+    if _read_applied_spec() == cleaned:
+        return  # already applied — nothing to do
+    if not WAKE_SCHEDULE_APPLY:
+        log.info("wake_schedule '%s' received — apply gated off (report-only); set "
+                 "BEEMONITOR_WAKE_SCHEDULE_APPLY=1 once verified", cleaned.get("mode"))
+        return
+    if _do_apply(cleaned):
+        _write_applied_spec(cleaned)
+        log.info("wake_schedule applied to WittyPi: %s", cleaned)
+    else:
+        log.warning("wake_schedule apply failed (leaving previous schedule): %s", cleaned)
 
 
 def _safe_mtime(p) -> float:
@@ -1097,6 +1328,9 @@ def main() -> int:
                 # ...and the ROI-editor outputs (hotel ROI + nest layout).
                 _apply_override_file(ROI_OVERRIDE_FILE, resp.get("roi_override"))
                 _apply_override_file(NEST_LAYOUT_FILE, resp.get("nest_layout"))
+                # ...and the desired WittyPi power schedule (validated + clamped
+                # locally; only written to the WittyPi when apply is enabled).
+                _apply_schedule(resp.get("wake_schedule"))
                 # The link is up (the beat landed) — ship a batch of queued
                 # activity-frame crops for taxonomic ID, under the daily cap.
                 _drain_activity_frames()
