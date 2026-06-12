@@ -269,3 +269,43 @@ class PriorsTests(TestCase):
         with mock.patch("apps.monitor.priors.urllib.request.urlopen",
                         side_effect=OSError("net")):
             self.assertEqual(priors.region_taxa(1.0, 2.0), [])
+
+
+class EvalHarnessTests(TestCase):
+    def test_genus_of(self):
+        from apps.monitor.management.commands.eval_priors import genus_of
+        self.assertEqual(genus_of("Bombus impatiens"), "Bombus")
+        self.assertEqual(genus_of("  Apis mellifera "), "Apis")
+        self.assertEqual(genus_of(""), "")
+        self.assertEqual(genus_of(None), "")
+
+    def test_top_species_genus(self):
+        from apps.monitor.management.commands.eval_priors import top_species_genus
+        self.assertEqual(
+            top_species_genus([{"ranks": {"species": "Bombus impatiens", "genus": "Bombus"}}]),
+            ("Bombus impatiens", "Bombus"))
+        self.assertEqual(top_species_genus([]), ("", ""))
+        self.assertEqual(top_species_genus([{"ranks": {}}]), ("", ""))
+
+    def test_read_manifest(self):
+        import os
+        import tempfile
+        from apps.monitor.management.commands.eval_priors import read_manifest
+        csv_text = ("frame_id,image,truth,lat,lon,month\n"
+                    "1,,Bombus impatiens,40.8,-77.8,6\n"
+                    ",/x.jpg,Apis mellifera,,,\n"
+                    ",,,99,99,9\n")  # blank truth -> dropped
+        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as f:
+            f.write(csv_text)
+            path = f.name
+        try:
+            rows = read_manifest(path)
+        finally:
+            os.unlink(path)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["frame_id"], "1")
+        self.assertEqual(rows[0]["lat"], 40.8)
+        self.assertEqual(rows[0]["month"], 6)
+        self.assertEqual(rows[1]["image"], "/x.jpg")
+        self.assertIsNone(rows[1]["lat"])
+        self.assertIsNone(rows[1]["month"])
