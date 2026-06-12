@@ -211,3 +211,87 @@ Consumes telemetry/GPS from [[10_cellular_telemetry_design]] /
 [[13_guided_setup_and_ai_tutor_design]]; independent of provisioning
 ([[14_golden_image_provisioning_design]]). The agent's read-only,
 proposes-never-acts stance matches the setup assistant's safety model.
+
+---
+
+## 10. Phase 1 — BioCLIP perception pipeline: implementation scope
+
+**Status:** scoped 2026-06-11 (Phase 0 shipped in commit 8857594). Outcome: each
+ActivityFrame gets a BioCLIP insect ID; the activity page flips from "analysis
+pending" to ranked taxa + an aggregate Observation.
+
+### 10.1 Decisions (recommended defaults — Edward to confirm the ML ones)
+- **Endpoint type → SageMaker Serverless Inference (CPU).** Frame traffic is
+  bursty and low-volume; serverless scales to zero (no idle bill) and BioCLIP on
+  a single small crop is fine on CPU. Cold starts (~tens of s) are irrelevant
+  because classification is background/async. (Real-time always-on is wasteful
+  here; the existing *async* video endpoint stays separate.)
+- **Model packaging → `pybioclip` TreeOfLifeClassifier (zero-shot, full ToL).**
+  Returns ranked predictions across the whole Tree-of-Life taxonomy with
+  per-rank names + scores — no candidate label set needed for Phase 1. Phase 2
+  swaps in `CustomLabelsClassifier` constrained to the GBIF region list.
+- **Trigger → bounded `ThreadPoolExecutor`, mirroring `spawn_gpu_job_async`.**
+  Matches the deployed reality (App Runner has no Celery worker running); fire
+  from the `/devices/frames` ingest after the ActivityFrame is created. Close the
+  DB connection across the SageMaker round-trip (same as `_spawn_gpu_job`).
+
+### 10.2 Components
+1. **Inference container** (`infra/aws-sagemaker/bioclip/`): `inference.py` with
+   `model_fn` (load `pybioclip` ToL classifier), `input_fn` (decode JPEG bytes /
+   read s3), `predict_fn` (top-k ranked taxa), `output_fn` (JSON:
+   `[{rank, name, common_name?, score, ranks:{kingdom..species}}]`). Base =
+   SageMaker PyTorch inference image + `pybioclip`/`open_clip_torch`. Weights pulled
+   at container build or first load.
+2. **Endpoint deploy** (Pulumi in `infra/aws-sagemaker/`): a serverless inference
+   endpoint. New setting `SAGEMAKER_BIOCLIP_ENDPOINT_NAME` (+ memory size, max
+   concurrency). Follows the existing aws-sagemaker stack/OIDC pattern.
+3. **Pipeline** (`apps/monitor/pipeline.py`):
+   - `classify_frame_async(frame_id)` → submit to a module-level bounded pool.
+   - worker: presign/read the crop, `invoke_endpoint`
+     (`sagemaker-runtime.invoke_endpoint`, sync), parse top-k.
+   - `_resolve_taxon(pred)`: `get_or_create` Taxon rows up the rank chain
+     (kingdom→…→species) wiring `parent`, returning the most specific node.
+   - write `Detection(frame, model="bioclip", taxon, confidence, raw=full)`.
+   - `maybe_aggregate(activity)`: once all of the activity's frames are
+     classified, pick the consensus taxon (highest mean score across frames; back
+     off to genus/family if species disagree), create one `Observation`
+     (individual_count=1 for now), set `Activity.best_taxon/best_confidence/
+     status` (`analyzed`, or `no_detection` if below threshold).
+4. **Trigger hook** in `apps/api/frames.py`: after `ActivityFrame.objects.create`,
+   call `classify_frame_async(frame.id)` (guarded by endpoint-configured check;
+   no-op if `SAGEMAKER_BIOCLIP_ENDPOINT_NAME` is unset, so Phase 0 still works).
+5. **Backfill command** `manage.py classify_activities [--device] [--status pending]`
+   to (re)run over existing activities.
+6. **Settings**: `SAGEMAKER_BIOCLIP_ENDPOINT_NAME`, `MONITOR_BIOCLIP_TOPK` (default
+   5), `MONITOR_BIOCLIP_MIN_CONFIDENCE` (e.g. 0.2 → below = no_detection /
+   flagged), `MONITOR_CLASSIFY_MAX_WORKERS`.
+7. **Activity page**: already renders `Detection`/`Observation`; add the rank
+   chain + a confidence bar. `Activity.status` drives the badge automatically.
+
+### 10.3 Aggregation & confidence
+One mover per activity (heuristic) → one Observation. Consensus = the taxon with
+the highest mean per-frame score; if species-level frames disagree, fall back to
+the lowest rank they share. Gate on `MIN_CONFIDENCE`: below it, mark
+`no_detection` and surface for human/agent review rather than asserting a wrong ID.
+Expect genus/family to be more reliable than species on field crops.
+
+### 10.4 Validation
+Unit-test `_resolve_taxon` + `maybe_aggregate` with canned endpoint JSON (no
+network). Deploy the endpoint to staging, run the backfill over a handful of real
+Phase-0 crops, eyeball accuracy. Confirm the thread pool never exhausts DB
+connections under a frame burst (mirror the analysis incident fix: connection
+close across the call).
+
+### 10.5 Open questions (Edward / ML)
+- `pybioclip` ToL zero-shot accuracy on our crops vs a fine-tuned head on local
+  taxa — measure before committing to species-level claims.
+- BioCLIP vs BioCLIP-2 weights.
+- Serverless memory size / max concurrency tuning vs cost.
+- Whether to also store the top-k (not just top-1) on the Observation for the
+  agent (Phase 3) to reason over — leaning yes (it's in `Detection.raw`).
+
+### 10.6 Risks
+Field-image quality (blur/occlusion/tiny crops) caps accuracy → confidence gating
++ Phase-2 location priors are the mitigations. Endpoint packaging (container +
+~GBs of weights) is the bulk of the work; everything Django-side is small and
+reuses Phase 0 + the analysis spawn pattern.
