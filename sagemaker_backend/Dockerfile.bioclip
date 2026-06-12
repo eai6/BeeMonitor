@@ -18,10 +18,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/opt/program:$PATH \
     # Cache HuggingFace/BioCLIP weights inside the image so cold starts are fast.
     HF_HOME=/opt/program/.hf \
-    # Read weights from the baked cache only — no runtime HF Hub round-trips
-    # (latency + a hang risk that contributed to the 180s serverless timeout).
-    HF_HUB_OFFLINE=1 \
-    TRANSFORMERS_OFFLINE=1 \
     BIOCLIP_TOPK=5
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -41,7 +37,13 @@ COPY sagemaker_backend/bioclip/ /opt/program/
 RUN chmod +x /opt/program/serve
 
 # Bake the Tree-of-Life weights into the image so a serverless cold start serves
-# the first request without a multi-GB download.
+# the first request without a multi-GB download. (Must run ONLINE — hence the
+# offline flags are set only AFTER this step.)
 RUN python -c "from bioclip import TreeOfLifeClassifier; TreeOfLifeClassifier()"
+
+# Runtime: read the baked weights from cache only — no HF Hub round-trips (latency
+# + hang risk that contributed to the 180s serverless cold-start timeout).
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
 
 EXPOSE 8080
