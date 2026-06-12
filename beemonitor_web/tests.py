@@ -1003,6 +1003,21 @@ class DeviceScheduleViewTests(TestCase):
         self.assertEqual(self.device.wake_schedule,
                          {"mode": "window", "on": "07:00", "off": "19:30"})
 
+    def test_apply_checkbox_toggles_wake_schedule_apply(self):
+        # default (no apply) -> report-only.
+        self._post(self.device.pk, {"mode": "always_on"})
+        self.device.refresh_from_db()
+        self.assertFalse(self.device.wake_schedule_apply)
+        # apply=1 -> device may program the WittyPi.
+        r = self._post(self.device.pk, {"mode": "always_on", "apply": "1"})
+        self.assertEqual(r.json()["wake_schedule_apply"], True)
+        self.device.refresh_from_db()
+        self.assertTrue(self.device.wake_schedule_apply)
+        # unchecking again clears it.
+        self._post(self.device.pk, {"mode": "always_on"})
+        self.device.refresh_from_db()
+        self.assertFalse(self.device.wake_schedule_apply)
+
     def test_invalid_rejected(self):
         r = self._post(self.device.pk, {"mode": "window", "on": "bad", "off": "19:00"})
         self.assertEqual(r.status_code, 400)
@@ -1039,6 +1054,9 @@ class HeartbeatScheduleTests(TestCase):
 
     def test_status_json_surfaces_battery_and_schedule(self):
         from apps.devices.models import DeviceHeartbeat
+        # apply ON + device reports the desired mode -> "active".
+        self.device.wake_schedule_apply = True
+        self.device.save(update_fields=["wake_schedule_apply"])
         DeviceHeartbeat.objects.create(device=self.device, metrics={
             "battery_voltage": 12.4, "output_current": 0.35, "power_source": "DC input",
             "active_schedule": {"mode": "daylight"},
@@ -1051,18 +1069,27 @@ class HeartbeatScheduleTests(TestCase):
         self.assertEqual(d["battery_voltage"], 12.4)
         self.assertEqual(d["output_current"], 0.35)
         self.assertEqual(d["power_source"], "DC input")
-        # device reports daylight, desired is daylight -> confirmed.
-        self.assertTrue(d["schedule_confirmed"])
+        self.assertEqual(d["schedule_state"], "active")
         self.assertEqual(d["next_boot"], "06:00")
 
-    def test_schedule_pending_when_device_silent(self):
+    def test_schedule_report_only_when_apply_off(self):
+        from apps.devices.models import DeviceHeartbeat
+        # apply OFF (default) -> report-only, even if the device echoes the schedule.
+        DeviceHeartbeat.objects.create(
+            device=self.device, metrics={"active_schedule": {"mode": "daylight"}})
+        c, _ = logged_in_client(self.user)
+        r = c.get(reverse("devices:status", args=[self.device.pk]))
+        self.assertEqual(r.json()["schedule_state"], "report_only")
+
+    def test_schedule_pending_when_apply_on_but_device_silent(self):
         from apps.devices.models import DeviceHeartbeat
         self.device.wake_schedule = {"mode": "always_on"}
-        self.device.save(update_fields=["wake_schedule"])
+        self.device.wake_schedule_apply = True
+        self.device.save(update_fields=["wake_schedule", "wake_schedule_apply"])
         DeviceHeartbeat.objects.create(device=self.device, metrics={})  # no active_schedule
         c, _ = logged_in_client(self.user)
         r = c.get(reverse("devices:status", args=[self.device.pk]))
-        self.assertFalse(r.json()["schedule_confirmed"])
+        self.assertEqual(r.json()["schedule_state"], "pending")
 
 
 # ── Device-side WittyPi schedule logic (hardware/telemetry.py) ───────

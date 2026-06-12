@@ -56,18 +56,23 @@ def _is_online(device) -> bool:
     return age <= settings.DEVICE_ONLINE_GRACE_SECONDS
 
 
-def _schedule_confirmed(device, metrics) -> bool:
-    """Has the device confirmed it's running the desired power schedule?
+def _schedule_state(device, metrics) -> str:
+    """Reconcile state for the dashboard schedule badge:
 
-    The device reports ``active_schedule`` (what's actually programmed on the
-    WittyPi) in its metrics; we call the schedule "confirmed" when its mode
-    matches the desired one. Until the device-side handler ships (Phase 2) no
-    device reports this, so it reads as pending — which is correct.
+      'report_only' — apply is OFF: the device reports the schedule but won't
+                      program the WittyPi (so it never "confirms" — by design).
+      'active'      — apply ON and the device confirms it's running the desired
+                      mode (active_schedule matches).
+      'pending'     — apply ON but the device hasn't confirmed yet.
+
+    The device reports ``active_schedule`` (what it actually applied) in metrics.
     """
+    if not device.wake_schedule_apply:
+        return "report_only"
     active = metrics.get("active_schedule")
-    if not isinstance(active, dict):
-        return False
-    return active.get("mode") == device.wake_schedule_dict().get("mode")
+    if isinstance(active, dict) and active.get("mode") == device.wake_schedule_dict().get("mode"):
+        return "active"
+    return "pending"
 
 
 # Friendly text for the last USB-transfer result the device reported.
@@ -446,7 +451,8 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         ctx["wake_schedule"] = device.wake_schedule_dict()
         ctx["wake_modes"] = WAKE_MODES
         ctx["active_schedule"] = metrics.get("active_schedule")
-        ctx["schedule_confirmed"] = _schedule_confirmed(device, metrics)
+        ctx["schedule_state"] = _schedule_state(device, metrics)
+        ctx["wake_schedule_apply"] = device.wake_schedule_apply
         ctx["next_boot"] = metrics.get("next_boot")
         ctx["next_shutdown"] = metrics.get("next_shutdown")
         ctx["battery_voltage"] = metrics.get("battery_voltage")
@@ -846,12 +852,18 @@ class DeviceScheduleView(LoginRequiredMixin, View):
             messages.error(request, err)
             return redirect("devices:detail", pk=pk)
 
+        # Whether the device may actually write this to the WittyPi (else it just
+        # reports it). The device still enforces the wake floor, so this is safe.
+        apply = request.POST.get("apply") in ("1", "true", "on")
         device.wake_schedule = cleaned
-        device.save(update_fields=["wake_schedule"])
+        device.wake_schedule_apply = apply
+        device.save(update_fields=["wake_schedule", "wake_schedule_apply"])
         if is_ajax:
             return JsonResponse({
                 "ok": True,
                 "wake_schedule": cleaned,
+                "wake_schedule_apply": apply,
+                "schedule_state": _schedule_state(device, {}),
                 "label": device.wake_schedule_label,
             })
         messages.success(
@@ -913,7 +925,8 @@ class DeviceStatusView(LoginRequiredMixin, View):
             # Power schedule (desired) + what the device reports it's running, plus
             # the WittyPi battery/input voltage telemetry.
             "wake_schedule_label": device.wake_schedule_label,
-            "schedule_confirmed": _schedule_confirmed(device, metrics),
+            "schedule_state": _schedule_state(device, metrics),
+            "wake_schedule_apply": device.wake_schedule_apply,
             "next_boot": metrics.get("next_boot"),
             "next_shutdown": metrics.get("next_shutdown"),
             "battery_voltage": metrics.get("battery_voltage"),

@@ -189,9 +189,11 @@ class DeviceHeartbeatView(APIView):
                 "roi_override": device.roi_override or None,
                 "nest_layout": device.nest_layout or [],
                 # Desired WittyPi power schedule. The device reconciles to it and
-                # enforces its own safety floor (see telemetry.py _apply_schedule,
-                # Phase 2). Until that lands the device ignores this — zero risk.
+                # enforces its own safety floor (see telemetry.py _apply_schedule).
                 "wake_schedule": device.wake_schedule_dict(),
+                # Whether the device may actually program the WittyPi (off = the
+                # device reports the schedule but doesn't write it).
+                "wake_schedule_apply": device.wake_schedule_apply,
             },
             status=201,
         )
@@ -228,4 +230,5 @@ class DeviceCommandView(APIView):
             "telemetry_interval": device.telemetry_interval_seconds,
             # Desired WittyPi power schedule (reconciled device-side).
             "wake_schedule": device.wake_schedule_dict(),
+            "wake_schedule_apply": device.wake_schedule_apply,
         })

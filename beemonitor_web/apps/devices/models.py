@@ -188,6 +188,11 @@ class Device(models.Model):
     # reconciles to it via the heartbeat response and enforces the safety floor on
     # its side. Default {"mode": "daylight"} = current sun-window behaviour.
     wake_schedule = models.JSONField(default=default_wake_schedule, blank=True)
+    # Whether the device may actually WRITE the schedule to the WittyPi. Off by
+    # default: the device reports the schedule (report-only) but doesn't program
+    # the WittyPi until this is turned on — a deliberate gate so a schedule can't
+    # strand a unit before it's been watched on hardware. Pushed in the heartbeat.
+    wake_schedule_apply = models.BooleanField(default=False)
 
     # 5c: live MJPEG stream the device serves on its LAN (WiFi) while active.
     # The URL is a private LAN address — reachable on the same network or via

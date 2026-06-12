@@ -1008,13 +1008,15 @@ def _do_apply(spec: dict) -> bool:
     return bool(wpi) and _write_and_run_wpi(d, wpi)
 
 
-def _apply_schedule(spec) -> None:
+def _apply_schedule(spec, apply_flag=None) -> None:
     """Adopt the dashboard's desired WittyPi schedule from the heartbeat response.
 
-    Validates + clamps (wake floor) locally; idempotent; and — only when
-    WAKE_SCHEDULE_APPLY is enabled — writes it to the WittyPi. Gated off by
-    default: until then it's report-only (the beat still reports the WittyPi's
-    real next boot/shutdown), so this can't strand a unit while unproven.
+    Validates + clamps (wake floor) locally; idempotent; and writes it to the
+    WittyPi only when apply is enabled — either per-device from the dashboard
+    (``apply_flag``, the wake_schedule_apply field) OR the global
+    BEEMONITOR_WAKE_SCHEDULE_APPLY env override. Off by default: report-only, so it
+    can't strand a unit while unproven. The wake floor still bounds any applied
+    schedule's off-stretch, so even with apply on a bad spec can't strand it.
     """
     if spec is None:
         return
@@ -1023,11 +1025,13 @@ def _apply_schedule(spec) -> None:
         log.warning("wake_schedule rejected (invalid or off-stretch > %sh floor): %s",
                     WAKE_FLOOR_HOURS, spec)
         return
+    apply_on = WAKE_SCHEDULE_APPLY or bool(apply_flag)
     if _read_applied_spec() == cleaned:
         return  # already applied — nothing to do
-    if not WAKE_SCHEDULE_APPLY:
-        log.info("wake_schedule '%s' received — apply gated off (report-only); set "
-                 "BEEMONITOR_WAKE_SCHEDULE_APPLY=1 once verified", cleaned.get("mode"))
+    if not apply_on:
+        log.info("wake_schedule '%s' received — apply disabled (report-only); enable "
+                 "it on the device page (or BEEMONITOR_WAKE_SCHEDULE_APPLY=1)",
+                 cleaned.get("mode"))
         return
     if _do_apply(cleaned):
         _write_applied_spec(cleaned)
@@ -1417,8 +1421,9 @@ def main() -> int:
                 _apply_override_file(ROI_OVERRIDE_FILE, resp.get("roi_override"))
                 _apply_override_file(NEST_LAYOUT_FILE, resp.get("nest_layout"))
                 # ...and the desired WittyPi power schedule (validated + clamped
-                # locally; only written to the WittyPi when apply is enabled).
-                _apply_schedule(resp.get("wake_schedule"))
+                # locally; only written to the WittyPi when apply is enabled,
+                # per-device via wake_schedule_apply from the dashboard).
+                _apply_schedule(resp.get("wake_schedule"), resp.get("wake_schedule_apply"))
                 # The link is up (the beat landed) — ship a batch of queued
                 # activity-frame crops for taxonomic ID, under the daily cap.
                 _drain_activity_frames()

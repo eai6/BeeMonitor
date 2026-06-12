@@ -205,10 +205,12 @@
     <div class="text-xs" id="sched-status">
       <span class="text-gray-500">Set to</span>
       <span class="font-medium text-gray-700" id="sched-label">{{ device.wake_schedule_label }}</span>
-      {% if schedule_confirmed %}
+      {% if schedule_state == 'active' %}
       <span id="sched-badge" class="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 text-green-800"><span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>active on device</span>
-      {% else %}
+      {% elif schedule_state == 'pending' %}
       <span id="sched-badge" class="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>pending device confirm</span>
+      {% else %}
+      <span id="sched-badge" class="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-600"><span class="w-1.5 h-1.5 rounded-full bg-gray-400"></span>report-only (apply off)</span>
       {% endif %}
     </div>
   </div>
@@ -254,9 +256,19 @@
         <input name="on_minutes" type="number" min="1" step="1" value="{{ wake_schedule.on_minutes|default:'10' }}" class="mt-1 block w-24 border border-gray-300 rounded px-2 py-1.5 text-sm">
       </label>
     </div>
+    <label class="text-xs text-gray-600 inline-flex items-center gap-1.5 self-center"
+           title="On: the device programs the WittyPi to follow this schedule. Off: it only reports the schedule and leaves the WittyPi unchanged.">
+      <input type="checkbox" name="apply" value="1" {% if wake_schedule_apply %}checked{% endif %} class="rounded border-gray-300">
+      Apply to the WittyPi
+    </label>
     <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Set schedule</button>
     <span id="sched-saved" class="text-xs text-green-700 hidden">Saved ✓</span>
   </form>
+  <p class="mt-2 text-xs text-gray-400">
+    Leave <strong>Apply</strong> off to preview a schedule without touching the WittyPi
+    (badge shows “report-only”). Turn it on to let the device program the WittyPi —
+    the device still enforces a guaranteed wake floor, so a schedule can’t strand the unit.
+  </p>
   <p id="sched-always-warn" class="mt-2 text-xs text-amber-700 {% if wake_schedule.mode != 'always_on' %}hidden{% endif %}">
     ⚠ 24/7 keeps the Pi powered continuously — only choose this if the battery/solar
     budget supports it. The WittyPi low-voltage cutoff still protects the battery.
@@ -771,9 +783,11 @@
         setText('sched-next-boot', d.next_boot || '—');
         setText('sched-next-shutdown', d.next_shutdown || '—');
         var sb = document.getElementById('sched-badge');
-        if (sb) sb.outerHTML = d.schedule_confirmed
-          ? '<span id="sched-badge" class="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 text-green-800">' + dot(true) + 'active on device</span>'
-          : '<span id="sched-badge" class="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>pending device confirm</span>';
+        if (sb) {
+          if (d.schedule_state === 'active') sb.outerHTML = '<span id="sched-badge" class="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 text-green-800">' + dot(true) + 'active on device</span>';
+          else if (d.schedule_state === 'pending') sb.outerHTML = '<span id="sched-badge" class="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>pending device confirm</span>';
+          else sb.outerHTML = '<span id="sched-badge" class="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-600"><span class="w-1.5 h-1.5 rounded-full bg-gray-400"></span>report-only (apply off)</span>';
+        }
         var ver = document.getElementById('m-version');
         if (ver) ver.innerHTML = d.code_commit
           ? 'version <span class="font-mono font-medium text-gray-700">' + d.code_commit + '</span>'
