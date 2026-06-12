@@ -1,0 +1,3 @@
+# Dashboard "Copy to USB" — telemetry runs the transfer script as root (mounting
+# the USB needs root). Installed by hardware/provision.sh.
+beemonitor ALL=(root) NOPASSWD: /home/beemonitor/BeeMonitor/hardware/usb-transfer.sh

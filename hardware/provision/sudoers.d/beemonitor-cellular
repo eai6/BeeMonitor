@@ -1,0 +1,4 @@
+# Lets telemetry (runs as 'beemonitor') flip the root-owned cellular egress
+# firewall for the dashboard's remote debug-access toggle. Installed by
+# hardware/provision.sh on update. See hardware/cellular/cellular-firewall.sh.
+beemonitor ALL=(root) NOPASSWD: /home/beemonitor/BeeMonitor/hardware/cellular/cellular-firewall.sh

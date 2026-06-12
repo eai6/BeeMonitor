@@ -969,8 +969,13 @@ timer expires (a reboot also re-gates). **Re-gate now** closes it early. The gat
 state ("Open" / "Gated") shows live on the card.
 
 This needs one tightly-scoped sudoers rule so telemetry (running as `beemonitor`)
-can flip the root-owned firewall:
+can flip the root-owned firewall. **On any already-deployed unit you don't need to
+do this by hand** — it's version-controlled and applied automatically on the next
+**Update to latest** (see *Self-provisioning* below). For a fresh build you can also
+install it directly:
 ```bash
+sudo hardware/provision.sh   # installs ALL managed sudoers rules from the repo
+# …or just this one by hand:
 echo 'beemonitor ALL=(root) NOPASSWD: /home/beemonitor/BeeMonitor/hardware/cellular/cellular-firewall.sh' \
   | sudo tee /etc/sudoers.d/beemonitor-cellular >/dev/null
 sudo chmod 440 /etc/sudoers.d/beemonitor-cellular
@@ -978,6 +983,29 @@ sudo visudo -cf /etc/sudoers.d/beemonitor-cellular   # must print "parsed OK"
 ```
 Manually from a shell you can also run `sudo cellular/cellular-firewall.sh open 30`
 (open 30 min) and `sudo cellular/cellular-firewall.sh telemetry` (re-gate).
+
+### Self-provisioning (config-as-code for unreachable units)
+
+A field unit on cellular has no shell access, so root-owned config *outside* the
+git repo — sudoers rules (`/etc/sudoers.d`), systemd unit files
+(`/etc/systemd/system`) — normally can't be changed remotely. `hardware/provision.sh`
+fixes that: it syncs the repo's desired state onto the system, and the remote
+updater runs it (as root, phase B) on **every** *Update to latest*. So the workflow
+for changing system config on a unit you **can't** reach is just:
+
+> commit the change to the repo → trigger **Update to latest** from the dashboard.
+
+The managed config lives in the repo:
+- **sudoers** — `hardware/provision/sudoers.d/*` (e.g. `beemonitor-cellular`,
+  `-nmcli`, `-usb`, `-update`). Each is validated with `visudo -c` **before**
+  install, so a malformed rule is never written (it can't lock you out of sudo).
+- **systemd units** — only units **already installed** on the host are refreshed
+  when their file changes (provisioning never enables, masks, or adds units, so it
+  can't silently start/stop things), followed by `daemon-reload`.
+
+Everything is idempotent (content-compared) and best-effort: a provisioning hiccup
+is logged but never blocks the update or its health-check/rollback. This is how the
+cellular-firewall sudoers rule reaches a unit you can't SSH into.
 
 **Enable network time (NTP) — required for uploads.** The Pi has no RTC, so on
 every cold boot / WittyPi wake it starts with a stale clock restored from

@@ -118,6 +118,15 @@ cmd_apply() {  # phase B — beemonitor-update.service (root, offline)
     rm -f "$REQUEST_FILE"
     [ -n "${prev:-}" ] && [ -n "${target:-}" ] || { log B "bad request file"; write_status error apply_failed "bad request"; exit 1; }
 
+    # Sync root-owned system config (sudoers rules, unit files) from the repo
+    # BEFORE the restart, so a config change committed alongside the code lands on
+    # units we can't shell into. Best-effort: validated + idempotent, and a hiccup
+    # is logged but never blocks the update. (See hardware/provision.sh.)
+    if [ -f "$REPO_DIR/hardware/provision.sh" ]; then
+        log B "provisioning system config from repo"
+        bash "$REPO_DIR/hardware/provision.sh" || log B "provision reported issues (continuing)"
+    fi
+
     log B "restart for ${target:0:7} (rollback point ${prev:0:7})"
     systemctl restart "${RESTART_UNITS[@]}" 2>/dev/null || true
     sleep "$HEALTH_WAIT"

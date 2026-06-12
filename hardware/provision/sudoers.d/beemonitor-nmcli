@@ -1,0 +1,3 @@
+# Dashboard WiFi on/off/connect — telemetry's `sudo -n nmcli`. Radio state changes
+# need root. Installed by hardware/provision.sh.
+beemonitor ALL=(root) NOPASSWD: /usr/bin/nmcli

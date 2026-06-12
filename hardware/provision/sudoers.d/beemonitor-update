@@ -1,0 +1,3 @@
+# Remote update hand-off — telemetry's fetch phase starts the (root) apply unit.
+# REQUIRED for remote updates to work at all. Installed by hardware/provision.sh.
+beemonitor ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block beemonitor-update.service
