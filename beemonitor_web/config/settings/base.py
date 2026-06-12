@@ -179,6 +179,19 @@ BEEMONITOR_DEVICE_API_BASE = os.environ.get(
 # Max sampled frames accepted per activity (server-side guard; the device also
 # self-limits with its own daily cap). Beyond this, extra frames are ignored.
 MONITOR_MAX_FRAMES_PER_ACTIVITY = int(os.environ.get("MONITOR_MAX_FRAMES_PER_ACTIVITY", "3"))
+# BioCLIP insect-ID endpoint (SageMaker Serverless, CPU). Empty = perception
+# disabled: frames still ingest + display, just no taxonomic classification, so
+# Phase 0 keeps working until the endpoint is deployed.
+SAGEMAKER_BIOCLIP_ENDPOINT_NAME = os.environ.get("SAGEMAKER_BIOCLIP_ENDPOINT_NAME", "")
+# Keep this many ranked predictions per frame (top-1 drives the Detection; the
+# rest live in Detection.raw for the reasoning agent later).
+MONITOR_BIOCLIP_TOPK = int(os.environ.get("MONITOR_BIOCLIP_TOPK", "5"))
+# Below this top-1 score, an activity is marked no_detection rather than asserting
+# a likely-wrong ID (field crops are blurry/partial; better to flag than guess).
+MONITOR_BIOCLIP_MIN_CONFIDENCE = float(os.environ.get("MONITOR_BIOCLIP_MIN_CONFIDENCE", "0.2"))
+# Bounded worker pool for off-request-path classification (mirrors the analysis
+# spawn pool so a frame burst can't exhaust DB connections).
+MONITOR_CLASSIFY_MAX_WORKERS = int(os.environ.get("MONITOR_CLASSIFY_MAX_WORKERS", "3"))
 
 # --- AI setup assistant (Claude) -------------------------------------------
 # Set ANTHROPIC_API_KEY in the environment to enable the in-dashboard tutor.

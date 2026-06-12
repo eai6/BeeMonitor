@@ -31,6 +31,7 @@ from rest_framework.views import APIView
 
 from apps.devices.models import Device
 from apps.monitor.models import Activity, ActivityFrame
+from apps.monitor.pipeline import classify_frame_async
 from config.storage import get_s3_client
 
 from .authentication import DeviceKeyAuthentication
@@ -150,6 +151,10 @@ class DeviceFrameView(APIView):
             height=_as_int(meta.get("height")),
             captured_at=_epoch_to_dt(meta.get("captured_at")),
         )
+
+        # Kick off BioCLIP classification off the request path (no-op until the
+        # endpoint is configured), so the device POST returns immediately.
+        classify_frame_async(frame.id)
 
         logger.info("frame: device=%s activity=%s frame=%s uid=%s",
                     device.id, activity.id, frame.id, activity_uid)

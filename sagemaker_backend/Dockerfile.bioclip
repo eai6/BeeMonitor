@@ -1,0 +1,43 @@
+# BeeMonitor BioCLIP insect-ID inference image (BYOC, CPU).
+#
+# Built and pushed to ECR by CI (.github/workflows/build-sagemaker-image.yml),
+# NEVER locally. Runs on a SageMaker Serverless endpoint (scale-to-zero, CPU) —
+# a single mover crop doesn't need a GPU, and serverless means no idle bill.
+#
+# Build context is the repo root:
+#   DOCKER_BUILDKIT=1 docker build -f sagemaker_backend/Dockerfile.bioclip \
+#     --platform linux/amd64 -t beemonitor-bioclip-dev .
+
+FROM python:3.11-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/opt/program \
+    PATH=/opt/program:$PATH \
+    # Cache HuggingFace/BioCLIP weights inside the image so cold starts are fast.
+    HF_HOME=/opt/program/.hf \
+    BIOCLIP_TOPK=5
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgl1 libglib2.0-0 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# CPU torch in its own layer (kept off the default CUDA index → much smaller).
+RUN python -m pip install --upgrade pip \
+    && python -m pip install --index-url https://download.pytorch.org/whl/cpu \
+        torch torchvision
+
+COPY sagemaker_backend/requirements.bioclip.txt /tmp/req.txt
+RUN python -m pip install -r /tmp/req.txt
+
+WORKDIR /opt/program
+COPY sagemaker_backend/bioclip/ /opt/program/
+RUN chmod +x /opt/program/serve
+
+# Bake the Tree-of-Life weights into the image so a serverless cold start serves
+# the first request without a multi-GB download.
+RUN python -c "from bioclip import TreeOfLifeClassifier; TreeOfLifeClassifier()"
+
+EXPOSE 8080

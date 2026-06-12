@@ -1,0 +1,4 @@
+#!/bin/sh
+# SageMaker starts the container as `docker run <image> serve`. Boot gunicorn on
+# 8080 with a single worker (the model is loaded once at import in serve.py).
+exec gunicorn --bind 0.0.0.0:8080 --workers 1 --timeout 120 serve:app

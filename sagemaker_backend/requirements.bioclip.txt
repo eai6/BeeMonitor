@@ -1,0 +1,7 @@
+# BioCLIP CPU inference image deps. torch/torchvision are installed separately
+# from the CPU wheel index in Dockerfile.bioclip (kept out of here so they don't
+# pull the default CUDA build).
+pybioclip
+pillow
+flask
+gunicorn
