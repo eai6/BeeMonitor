@@ -14,6 +14,7 @@ tables exist so the activity page and the next phase have a stable schema.
 
 from __future__ import annotations
 
+from django.conf import settings
 from django.db import models
 
 from apps.devices.models import Device
@@ -184,3 +185,41 @@ class Observation(models.Model):
 
     def __str__(self) -> str:
         return f"observation {self.taxon} x{self.individual_count}"
+
+
+class AgentConversation(models.Model):
+    """A chat thread with the taxonomic monitoring agent (Phase 3)."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="monitor_conversations",
+    )
+    device = models.ForeignKey(
+        Device, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+        help_text="Device the conversation is scoped to, if any.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"agent convo {self.pk} ({self.user})"
+
+
+class AgentMessage(models.Model):
+    """One turn in an AgentConversation. Content is secret-redacted before save."""
+
+    conversation = models.ForeignKey(
+        AgentConversation, on_delete=models.CASCADE, related_name="messages",
+    )
+    role = models.CharField(max_length=12)  # "user" | "assistant"
+    content = models.TextField()
+    meta = models.JSONField(default=dict, blank=True)  # e.g. {"tools": [...]}
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.role} @ {self.created_at:%Y-%m-%d %H:%M}"

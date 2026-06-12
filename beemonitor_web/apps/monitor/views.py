@@ -9,15 +9,32 @@ user can see, reusing ``Device.accessible``.
 import logging
 
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.views.generic import DetailView, ListView
+from django.views.generic import DetailView, ListView, TemplateView
 
 from apps.devices.models import Device
 from apps.devices.views import _display_zone  # device timezone resolver (reuse)
 from config.storage import presigned_get as _presign
 
+from .agent import client as agent_client
 from .models import Activity
 
 logger = logging.getLogger(__name__)
+
+
+class AgentChatView(LoginRequiredMixin, TemplateView):
+    """Chat page for the taxonomic monitoring agent."""
+
+    template_name = "monitor/agent_chat.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["devices"] = Device.accessible(self.request.user).order_by("name")
+        ctx["agent_enabled"] = agent_client.is_enabled()
+        try:
+            ctx["preselect_device"] = int(self.request.GET.get("device", ""))
+        except (TypeError, ValueError):
+            ctx["preselect_device"] = None
+        return ctx
 
 
 class ActivityListView(LoginRequiredMixin, ListView):

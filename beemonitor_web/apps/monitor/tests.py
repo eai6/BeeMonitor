@@ -15,7 +15,9 @@ from django.utils import timezone
 from apps.devices.models import Device
 
 from . import pipeline, priors
-from .models import Activity, ActivityFrame, Detection, Observation, Taxon
+from .agent import tools as agent_tools
+from .models import (Activity, ActivityFrame, AgentMessage, Detection,
+                     Observation, Taxon)
 
 
 class ActivityPageTests(TestCase):
@@ -309,3 +311,72 @@ class EvalHarnessTests(TestCase):
         self.assertEqual(rows[1]["image"], "/x.jpg")
         self.assertIsNone(rows[1]["lat"])
         self.assertIsNone(rows[1]["month"])
+
+
+class AgentToolTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        User = get_user_model()
+        cls.user = User.objects.create_user(username="ed", password="pw12345!")
+        cls.other = User.objects.create_user(username="ann", password="pw12345!")
+        cls.device, _ = Device.create_with_key(owner=cls.user, name="hive-A",
+                                               lat=40.8, lon=-77.8)
+        cls.taxon = Taxon.objects.create(rank="species", name="Bombus impatiens",
+                                         common_name="common eastern bumble bee")
+        cls.activity = Activity.objects.create(
+            device=cls.device, activity_uid="evt-A", started_at=timezone.now(),
+            status=Activity.Status.ANALYZED, best_taxon=cls.taxon, best_confidence=0.9)
+        Observation.objects.create(activity=cls.activity, taxon=cls.taxon,
+                                   individual_count=1, confidence=0.9)
+
+    def test_list_devices_scoped(self):
+        out = agent_tools.run_tool("list_devices", {}, self.user)
+        self.assertEqual([d["name"] for d in out["devices"]], ["hive-A"])
+        # Other user sees none of ed's devices.
+        self.assertEqual(agent_tools.run_tool("list_devices", {}, self.other)["devices"], [])
+
+    def test_species_summary(self):
+        out = agent_tools.run_tool(
+            "species_summary", {"device_id": self.device.pk, "days": 7}, self.user)
+        self.assertEqual(out["taxa"][0]["taxon"], "Bombus impatiens")
+        self.assertEqual(out["taxa"][0]["activities"], 1)
+
+    def test_get_activity_access_scoped(self):
+        ok = agent_tools.run_tool("get_activity", {"activity_id": self.activity.pk}, self.user)
+        self.assertEqual(ok["observations"][0]["taxon"], "Bombus impatiens")
+        denied = agent_tools.run_tool("get_activity", {"activity_id": self.activity.pk}, self.other)
+        self.assertIn("error", denied)
+
+    def test_region_species_uses_prior(self):
+        with mock.patch("apps.monitor.agent.tools.region_taxa",
+                        return_value=["Bombus impatiens", "Apis mellifera"]):
+            out = agent_tools.run_tool("region_species", {"device_id": self.device.pk}, self.user)
+        self.assertEqual(out["count"], 2)
+        self.assertIn("Apis mellifera", out["expected_species"])
+
+    def test_unknown_device_errors(self):
+        self.assertIn("error", agent_tools.run_tool(
+            "device_context", {"device_id": 99999}, self.user))
+
+
+class AgentEndpointTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(username="ed2", password="pw12345!")
+
+    def test_requires_login(self):
+        self.assertEqual(self.client.post("/activity/agent/send").status_code, 302)
+
+    @override_settings(ANTHROPIC_API_KEY="")
+    def test_disabled_without_key(self):
+        self.client.force_login(self.user)
+        resp = self.client.post("/activity/agent/send",
+                                data='{"message":"hi"}', content_type="application/json")
+        self.assertEqual(resp.status_code, 503)
+
+    @override_settings(ANTHROPIC_API_KEY="test-key")
+    def test_empty_message_is_400(self):
+        self.client.force_login(self.user)
+        resp = self.client.post("/activity/agent/send",
+                                data='{"message":"  "}', content_type="application/json")
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(AgentMessage.objects.exists())

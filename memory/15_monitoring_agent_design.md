@@ -388,3 +388,49 @@ recomputing text embeddings; serverless endpoint unchanged).
 - Radius + month granularity (too tight → misses; too wide → no prior).
 - iNat rate limits / attribution + caching policy.
 - Whether to also fold GBIF range polygons (not just point occurrences) later.
+
+---
+
+## 12. Phase 3 — reasoning agent
+
+**Status:** building 2026-06-11 (Phases 0–2 in PR #2). A Claude agent that turns
+the structured Observations + telemetry/GPS into natural-language insight and
+answers on-demand questions ("what visited site X this week?", "is species Y
+plausible here?", "summarize activity #N").
+
+### 12.1 Decisions
+- **Surface → Claude API + tool use** (not Managed Agents). The agent reads our
+  own DB through a handful of read-only tools and produces text; no sandbox, no
+  server-managed loop. Per the claude-api skill this is the right tier.
+- **Mirror `apps/setup/assistant`** exactly — the repo's battle-tested
+  read-only streaming tool-loop (cached system prefix, `MAX_TOOL_ROUNDS`, SSE
+  events, secret redaction, daily message cap, proposes-never-acts). New module
+  `apps/monitor/agent/` is a near-copy with taxonomy tools instead of setup tools.
+- **Read-only, access-scoped, proposes-never-acts.** Tools only read, scoped via
+  `Device.accessible`; the agent never changes device or data state.
+- **Model/cost:** reuse `ANTHROPIC_API_KEY` + `ASSISTANT_MODEL`
+  (claude-sonnet-4-6) + `ASSISTANT_MAX_TOKENS` + `ASSISTANT_DAILY_MESSAGE_LIMIT`
+  — shared LLM config, cost-conscious ([[feedback_cloud_cost_conscious]]). No-op
+  (graceful "not configured") when the key is unset, like the setup assistant.
+
+### 12.2 Components
+1. `apps/monitor/agent/client.py` — `stream_reply` tool loop + the monitoring
+   system prompt (taxonomy/method rules, ground answers in the data, flag low
+   confidence, never assert species it can't support).
+2. `apps/monitor/agent/tools.py` — read-only tools: `list_devices`,
+   `species_summary(device, days)` (taxa + counts over a window),
+   `recent_activities(device, limit)`, `get_activity(id)` (observations + frame
+   facts), `device_context(device)` (telemetry/GPS/site), `region_species(device)`
+   (the Phase-2 location prior — what *could* occur here).
+3. `apps/monitor/models.py` — `AgentConversation` / `AgentMessage` (mirror the
+   setup assistant's models) + migration.
+4. `apps/monitor/agent/views.py` — `AgentSendView` SSE endpoint (mirror setup);
+   reuse `apps.setup.assistant.safety.redact_secrets`.
+5. Minimal chat UI on the activity page; tests for the tools + the endpoint guard.
+
+### 12.3 Deferred
+- **Daily digest** — a scheduled per-device summary (species seen, new-for-site
+  taxa, anomalies vs telemetry). Same tools, a cron/`schedule` trigger, written
+  to a `DailyDigest` model. Build after the on-demand chat lands.
+- Cross-device / multi-site synthesis; agent-confirmed Observations
+  (`status=agent_reviewed`) writing back.
