@@ -174,11 +174,12 @@ class Observation(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
-        # One observation per activity: makes update_or_create(activity=…)
-        # race-safe (concurrent final frames can't create duplicates).
+        # One observation per (activity, taxon): an activity can record more than
+        # one taxon (co-occurrence), but not duplicate the same one — makes
+        # update_or_create(activity, taxon) race-safe.
         constraints = [
-            models.UniqueConstraint(fields=["activity"],
-                                    name="uniq_observation_per_activity"),
+            models.UniqueConstraint(fields=["activity", "taxon"],
+                                    name="uniq_observation_per_activity_taxon"),
         ]
 
     def __str__(self) -> str:

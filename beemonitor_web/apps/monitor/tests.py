@@ -196,6 +196,27 @@ class PipelineTests(TestCase):
             pipeline.classify_frame(self.frames[0].id)
         self.assertEqual(captured[0], ["Bombus impatiens", "Apis mellifera"])
 
+    def test_two_confident_taxa_yield_two_observations(self):
+        # Frames that confidently disagree -> one Observation per taxon.
+        apis = {"score": 0.85, "common_name": "honey bee",
+                "ranks": {"kingdom": "Animalia", "class": "Insecta",
+                          "order": "Hymenoptera", "family": "Apidae",
+                          "genus": "Apis", "species": "Apis mellifera"}}
+        with mock.patch.object(pipeline, "_read_crop_bytes", return_value=b"jpeg"), \
+                mock.patch.object(pipeline, "region_taxa", return_value=[]), \
+                mock.patch.object(pipeline, "_invoke_bioclip",
+                                  side_effect=[[_BUMBLEBEE], [apis]]), \
+                mock.patch.object(pipeline, "connection"):
+            pipeline.classify_frame(self.frames[0].id)
+            pipeline.classify_frame(self.frames[1].id)
+        self.activity.refresh_from_db()
+        self.assertEqual(self.activity.status, Activity.Status.ANALYZED)
+        obs = Observation.objects.filter(activity=self.activity)
+        self.assertEqual(obs.count(), 2)
+        self.assertEqual(set(obs.values_list("taxon__name", flat=True)),
+                         {"Bombus impatiens", "Apis mellifera"})
+        self.assertEqual(self.activity.best_taxon.name, "Bombus impatiens")  # 0.9 > 0.85
+
     def test_weak_constrained_falls_back_to_unconstrained(self):
         def fake_invoke(jpeg, candidate_taxa=None):
             if candidate_taxa:                       # constrained -> weak

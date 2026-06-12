@@ -257,35 +257,39 @@ def _maybe_aggregate(activity_id: int) -> None:
         activity.save(update_fields=["status"])
         return
 
-    # Mean score per taxon; best taxon wins, representative = its strongest frame.
+    # Mean score per taxon across the activity's frames.
     by_taxon: dict = {}
     for d in scored:
         by_taxon.setdefault(d.taxon_id, []).append(d)
-    best_taxon_id, best_dets = max(
-        by_taxon.items(), key=lambda kv: sum(d.confidence for d in kv[1]) / len(kv[1]))
-    mean_conf = sum(d.confidence for d in best_dets) / len(best_dets)
-    rep = max(best_dets, key=lambda d: d.confidence)
+    stats = {tid: (sum(d.confidence for d in ds) / len(ds), ds)
+             for tid, ds in by_taxon.items()}
+    best_taxon_id = max(stats, key=lambda tid: stats[tid][0])
 
-    if mean_conf < floor:
+    # Taxa clearing the floor each become an Observation (co-occurrence). If none
+    # clear it, record the best as the headline but mark the activity NO_DETECTION.
+    confident = {tid: s for tid, s in stats.items() if s[0] >= floor}
+    if not confident:
         activity.status = Activity.Status.NO_DETECTION
         activity.best_taxon_id = best_taxon_id
-        activity.best_confidence = mean_conf
+        activity.best_confidence = stats[best_taxon_id][0]
         activity.save(update_fields=["status", "best_taxon", "best_confidence"])
         return
 
-    Observation.objects.update_or_create(
-        activity=activity,
-        defaults={
-            "taxon_id": best_taxon_id,
-            "confidence": mean_conf,
-            "individual_count": 1,
-            "representative_frame_id": rep.frame_id,
-            "status": Observation.Status.AUTO,
-        },
-    )
+    # Prune observations from a prior run whose taxon is no longer confident.
+    activity.observations.exclude(taxon_id__in=confident.keys()).delete()
+    for tid, (mean_conf, ds) in confident.items():
+        rep = max(ds, key=lambda d: d.confidence)
+        Observation.objects.update_or_create(
+            activity=activity, taxon_id=tid,
+            defaults={"confidence": mean_conf, "individual_count": 1,
+                      "representative_frame_id": rep.frame_id,
+                      "status": Observation.Status.AUTO},
+        )
+
+    best_taxon_id = max(confident, key=lambda tid: confident[tid][0])
     activity.best_taxon_id = best_taxon_id
-    activity.best_confidence = mean_conf
-    activity.individual_count = 1
+    activity.best_confidence = confident[best_taxon_id][0]
+    activity.individual_count = 1  # per-taxon headline count (true counting deferred)
     activity.status = Activity.Status.ANALYZED
     activity.save(update_fields=["best_taxon", "best_confidence",
                                  "individual_count", "status"])
