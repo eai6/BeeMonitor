@@ -2,9 +2,19 @@
 
 **Status:** Proposal for review (not yet implemented)
 **Author:** Drafted with Claude Code, 2026-06-12
-**Goal:** Set a field unit's **WittyPi wake schedule from the dashboard** — including
-an **"always-on"** mode for solar+battery/mains units — applied on the device's next
-check-in. Safe by construction: a bad schedule can never permanently strand a unit.
+**Goal:** **Review and edit each field unit's WittyPi power schedule from the
+dashboard** — see the next boot + next shutdown, set them, and create/remove
+recurring schedules — applied on the device's next check-in. **Per-unit and
+flexible:** a fleet is mixed (some run a daylight window, some hourly, some 24/7).
+**"Always-on" is one option** this same mechanism produces, for units whose
+battery/solar supports it. Safe by construction: a bad schedule can never
+permanently strand a unit.
+
+**Driver (real incident, 2026-06-12):** a unit shut down on schedule but didn't
+wake the next morning — likely a flat battery that didn't recover, or an RTC/schedule
+issue. With no remote visibility into the WittyPi's next-boot/next-shutdown and no
+way to change it, a single missed wake cost a full day of data. Hence: per-unit
+visibility + control, plus a guaranteed wake floor so one miss can't lose a day.
 
 ---
 
@@ -50,6 +60,17 @@ command channel + reconcile patterns).
 ---
 
 ## 3. Schedule modes (the dashboard menu)
+
+Two layers of control, both per-unit:
+
+1. **Review + edit the next transitions (concrete alarms).** The WittyPi tracks a
+   *next startup* and *next shutdown* time. The dashboard reads them (reported in
+   telemetry) and can set/clear them directly — "boot at 06:00 tomorrow", "shut
+   down at 20:00", "cancel the next shutdown (stay on)". This is the immediate,
+   one-off control and the at-a-glance "when will this unit next be on?".
+2. **Recurring schedule (`mode` below).** The repeating pattern the device re-arms
+   each boot. The next-transition view above is derived from whichever recurring
+   schedule is active (plus any one-off override).
 
 A single `wake_schedule` JSON: `{mode, ...params}`. Times are in the device's local
 tz (it knows tz from GPS).
