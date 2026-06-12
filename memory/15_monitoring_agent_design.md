@@ -308,3 +308,83 @@ Field-image quality (blur/occlusion/tiny crops) caps accuracy → confidence gat
 + Phase-2 location priors are the mitigations. Endpoint packaging (container +
 ~GBs of weights) is the bulk of the work; everything Django-side is small and
 reuses Phase 0 + the analysis spawn pattern.
+
+---
+
+## 11. Phase 2 — location priors + per-activity individual handling
+
+**Status:** scoped 2026-06-11 (Phase 0 + Phase 1 shipped in PR #2). Outcome: BioCLIP
+zero-shot is constrained to taxa that actually occur at the device's lat/lon — the
+single biggest accuracy lever. Plus the Observation model evolves to allow more
+than one taxon per activity (co-occurrence).
+
+### 11.1 The core idea
+Phase 1 runs BioCLIP `TreeOfLifeClassifier` (the *whole* Tree of Life ~ unbounded
+candidates) → it will happily return a plausible-looking species that doesn't live
+within 1000 km. Constraining the candidate label set to the region's known insect
+fauna removes the impossible answers and sharply improves species-level precision.
+BioCLIP supports this directly via `CustomLabelsClassifier(labels=[...])` — same
+weights, a bounded label set.
+
+### 11.2 Decisions (recommended defaults — ML calls are Edward's)
+- **Region source → iNaturalist `species_counts`, GBIF fallback.** iNat
+  `/v1/observations/species_counts?lat&lng&radius&taxon_id=47158(Insecta)` returns
+  research-grade species *ranked by local observation frequency* — exactly the
+  prior we want. GBIF occurrence facets are the fallback (broader, noisier). Both
+  free; cache hard.
+- **Constrain at species level, keep a genus/family safety net.** Send the region
+  species list as candidates; if the top score is weak, fall back to a
+  genus-level (or unconstrained ToL) pass so a true-but-locally-unrecorded species
+  isn't forced into a wrong neighbor. This is the precision/recall dial.
+- **Add a temporal (month) prior.** iNat `species_counts` accepts `month=` —
+  filtering to the activity's month encodes phenology (a species flying in June vs
+  October), sharpening the list further. Optional, cheap.
+- **Pass candidates in the request, not baked in the container.** Django owns the
+  iNat/GBIF lookup + caching (it already does this pattern for Open-Meteo). The
+  endpoint receives `{image_b64, candidate_taxa, rank}` — the Phase-1 container
+  already accepts `image_b64` JSON, so this is an additive change. The container
+  LRU-caches a `CustomLabelsClassifier` keyed by the label-set hash (text
+  embeddings computed once per region, reused across that device's requests).
+- **Graceful fallback to Phase-1 behavior** when there's no GPS, an empty/sparse
+  region list, or the iNat/GBIF call fails → unconstrained ToL (never block an ID).
+
+### 11.3 Components
+1. **`apps/monitor/priors.py`** — `region_taxa(lat, lon, month=None) -> list[str]`
+   via iNat (GBIF fallback), cached in the Django cache keyed by rounded lat/lon
+   (+ month), long TTL (fauna lists drift slowly). Mirrors `devices/views._fetch_weather`.
+2. **`apps/monitor/pipeline.py`** — before invoking, resolve `region_taxa` for the
+   activity's lat/lon (already on `Activity`); pass candidates to `_invoke_bioclip`
+   as JSON `{image_b64, candidate_taxa, rank}`. Confidence-gated genus/ToL fallback.
+3. **`sagemaker_backend/bioclip/inference.py`** — `input_fn` parses
+   `candidate_taxa`; `predict_fn` uses a cached `CustomLabelsClassifier(candidate_taxa)`
+   when present, else the ToL classifier. LRU cache keyed by `hash(tuple(labels))`.
+4. **Observation model change** — relax the Phase-1 `UniqueConstraint(activity)` to
+   `UniqueConstraint(activity, taxon)`, and key `update_or_create` on (activity,
+   taxon). This lets `_maybe_aggregate` emit one Observation per confidently-distinct
+   taxon (co-occurrence) instead of forcing a single consensus. Migration required.
+
+### 11.4 Per-activity individuals (scoped conservatively)
+True same-species individual counting from 1–3 mover crops is unreliable — the
+crops are usually the same bee at different moments. Phase 2 scope:
+- Frames agree on a taxon → **one** Observation, count 1.
+- Frames confidently split across taxa → **one Observation per taxon** (co-occurrence),
+  each count 1. (Enabled by the (activity, taxon) constraint above.)
+- **Defer** real multi-individual-of-one-species counting: it needs the recorder to
+  send *multiple* blob crops per frame (it currently crops only the largest mover),
+  which is a device-side change for a later phase.
+
+### 11.5 Validation (the point of Phase 2 is a *measurable* lift)
+Build a small labeled eval set from real Phase-0 crops (a few dozen, hand-IDed) and
+a harness that scores constrained vs unconstrained accuracy at order/family/genus/
+species. Ship Phase 2 only if the lift is real; tune the genus-fallback threshold
+on it. No always-on cost (iNat/GBIF free + cached; container caching avoids
+recomputing text embeddings; serverless endpoint unchanged).
+
+### 11.6 Risks / open questions (Edward / ML)
+- iNat vs GBIF coverage in *your* deployment regions; sparse-data areas → the list
+  is too short → lean on the genus/ToL fallback.
+- Precision/recall of the constraint: a true species absent from nearby records gets
+  excluded — the genus-level safety net is the mitigation; tune its threshold.
+- Radius + month granularity (too tight → misses; too wide → no prior).
+- iNat rate limits / attribution + caching policy.
+- Whether to also fold GBIF range polygons (not just point occurrences) later.
