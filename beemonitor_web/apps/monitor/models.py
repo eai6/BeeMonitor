@@ -223,3 +223,27 @@ class AgentMessage(models.Model):
 
     def __str__(self) -> str:
         return f"{self.role} @ {self.created_at:%Y-%m-%d %H:%M}"
+
+
+class DailyDigest(models.Model):
+    """A per-device, per-day summary written by the monitoring agent (Phase 3).
+
+    ``stats`` holds the structured data the summary was written from (taxa seen,
+    new-for-site taxa, activity count, telemetry anomalies); ``summary`` is the
+    narrated prose. One row per (device, date) — regenerating updates in place.
+    """
+
+    device = models.ForeignKey(Device, on_delete=models.CASCADE, related_name="digests")
+    date = models.DateField(help_text="The UTC day summarized.")
+    summary = models.TextField()
+    stats = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "device__name"]
+        constraints = [
+            models.UniqueConstraint(fields=["device", "date"], name="uniq_digest_per_device_day"),
+        ]
+
+    def __str__(self) -> str:
+        return f"digest {self.device.name} {self.date}"

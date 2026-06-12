@@ -16,9 +16,34 @@ from apps.devices.views import _display_zone  # device timezone resolver (reuse)
 from config.storage import presigned_get as _presign
 
 from .agent import client as agent_client
-from .models import Activity
+from .models import Activity, DailyDigest
 
 logger = logging.getLogger(__name__)
+
+
+class DigestListView(LoginRequiredMixin, ListView):
+    """Recent daily digests across the user's devices (optionally one device)."""
+
+    template_name = "monitor/digests.html"
+    context_object_name = "digests"
+    paginate_by = 30
+
+    def get_queryset(self):
+        qs = (DailyDigest.objects
+              .filter(device__in=Device.accessible(self.request.user))
+              .select_related("device"))
+        device_id = self.request.GET.get("device")
+        if device_id and device_id.isdigit():
+            qs = qs.filter(device_id=int(device_id))
+        return qs
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        device_id = self.request.GET.get("device")
+        if device_id and device_id.isdigit():
+            ctx["filter_device"] = (Device.accessible(self.request.user)
+                                    .filter(pk=int(device_id)).first())
+        return ctx
 
 
 class AgentChatView(LoginRequiredMixin, TemplateView):

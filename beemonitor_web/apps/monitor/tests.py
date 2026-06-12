@@ -380,3 +380,53 @@ class AgentEndpointTests(TestCase):
                                 data='{"message":"  "}', content_type="application/json")
         self.assertEqual(resp.status_code, 400)
         self.assertFalse(AgentMessage.objects.exists())
+
+
+@override_settings(ANTHROPIC_API_KEY="")  # use the deterministic fallback narration
+class DigestTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        from datetime import date, datetime, timezone as tz
+        cls.day = date(2026, 6, 10)
+        cls._noon = datetime(2026, 6, 10, 12, 0, tzinfo=tz.utc)
+        cls._prior = datetime(2026, 6, 1, 12, 0, tzinfo=tz.utc)
+        User = get_user_model()
+        cls.user = User.objects.create_user(username="dg", password="pw12345!")
+        cls.device, _ = Device.create_with_key(owner=cls.user, name="hive-D")
+        cls.bombus = Taxon.objects.create(rank="species", name="Bombus impatiens")
+        cls.apis = Taxon.objects.create(rank="species", name="Apis mellifera")
+        # Apis seen before the window (so it's NOT new-for-site); Bombus only today.
+        prior_act = Activity.objects.create(device=cls.device, activity_uid="old",
+                                            started_at=cls._prior, status="analyzed")
+        Observation.objects.create(activity=prior_act, taxon=cls.apis)
+        for i, tx in enumerate((cls.bombus, cls.apis)):
+            a = Activity.objects.create(device=cls.device, activity_uid=f"d{i}",
+                                        started_at=cls._noon, status="analyzed")
+            Observation.objects.create(activity=a, taxon=tx)
+
+    def test_compute_digest_data(self):
+        from apps.monitor.agent.digest import compute_digest_data
+        data = compute_digest_data(self.device, self.day)
+        self.assertEqual(data["activity_count"], 2)
+        names = {t["taxon"] for t in data["taxa"]}
+        self.assertEqual(names, {"Bombus impatiens", "Apis mellifera"})
+        self.assertEqual(data["new_for_site"], ["Bombus impatiens"])  # Apis predates window
+
+    def test_generate_digest_idempotent(self):
+        from apps.monitor.agent.digest import generate_digest
+        from apps.monitor.models import DailyDigest
+        d1 = generate_digest(self.device, self.day)
+        d2 = generate_digest(self.device, self.day)  # re-run -> update, not duplicate
+        self.assertEqual(d1.pk, d2.pk)
+        self.assertEqual(DailyDigest.objects.filter(device=self.device).count(), 1)
+        self.assertIn("hive-D", d1.summary)
+        self.assertIn("Bombus impatiens", d1.summary)  # new-for-site surfaced
+
+    def test_command_skips_quiet_day(self):
+        from django.core.management import call_command
+        from io import StringIO
+        from apps.monitor.models import DailyDigest
+        out = StringIO()
+        call_command("generate_digests", "--date", "2026-01-01", stdout=out)
+        # No activity/heartbeat on that day -> no digest written.
+        self.assertFalse(DailyDigest.objects.filter(date="2026-01-01").exists())

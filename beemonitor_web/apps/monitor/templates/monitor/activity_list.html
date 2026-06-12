@@ -9,7 +9,8 @@
     {% endif %}
     <div class="flex items-baseline gap-3">
       <h1 class="text-2xl font-bold text-gray-900">Activity</h1>
-      <a href="{% url 'monitor:agent_chat' %}{% if filter_device %}?device={{ filter_device.pk }}{% endif %}" class="text-sm text-amber-700 hover:underline">Ask the monitoring agent &rarr;</a>
+      <a href="{% url 'monitor:agent_chat' %}{% if filter_device %}?device={{ filter_device.pk }}{% endif %}" class="text-sm text-amber-700 hover:underline">Ask the agent &rarr;</a>
+      <a href="{% url 'monitor:digests' %}{% if filter_device %}?device={{ filter_device.pk }}{% endif %}" class="text-sm text-amber-700 hover:underline">Daily digests &rarr;</a>
     </div>
     <p class="text-sm text-gray-500">
       Each card is one motion event. Open it to see the sampled frames and the
