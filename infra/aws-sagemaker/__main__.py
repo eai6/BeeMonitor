@@ -528,6 +528,54 @@ if deploy_endpoint:
             ),
     )
 
+    # Scale-FROM-zero. The target-tracking policy above can scale toward min=0,
+    # but an async endpoint only actually reaches 0 when there's a registered way
+    # back UP — otherwise AWS pins it at the initial instance count forever (this
+    # is exactly why beemonitor-sm-dev sat at 1 g4dn.xlarge 24/7 ≈ $530/mo with
+    # zero traffic, while the otherwise-identical ecomorph endpoint cycles 1↔0).
+    # A step policy adds 1 instance the moment a request is queued with no
+    # capacity, driven by the HasBacklogWithoutCapacity alarm below. Mirrors the
+    # working ecomorph endpoint exactly.
+    scale_from_zero = aws.appautoscaling.Policy(
+        "scale-from-zero",
+        name=f"{prefix}-scale-from-zero",
+        policy_type="StepScaling",
+        resource_id=autoscaling_target.resource_id,
+        scalable_dimension=autoscaling_target.scalable_dimension,
+        service_namespace=autoscaling_target.service_namespace,
+        step_scaling_policy_configuration=aws.appautoscaling
+            .PolicyStepScalingPolicyConfigurationArgs(
+                adjustment_type="ChangeInCapacity",
+                cooldown=300,
+                metric_aggregation_type="Maximum",
+                step_adjustments=[
+                    aws.appautoscaling
+                    .PolicyStepScalingPolicyConfigurationStepAdjustmentArgs(
+                        metric_interval_lower_bound="0",
+                        scaling_adjustment=1,
+                    ),
+                ],
+            ),
+    )
+
+    # Fires when the endpoint has a queued request but 0 instances to serve it.
+    # TreatMissingData="missing" is essential: when idle the metric reports no
+    # data, which must NOT be read as "has backlog" (that would wake it forever).
+    aws.cloudwatch.MetricAlarm(
+        "has-backlog-without-capacity",
+        name=f"{prefix}-has-backlog-without-capacity",
+        namespace="AWS/SageMaker",
+        metric_name="HasBacklogWithoutCapacity",
+        dimensions={"EndpointName": endpoint.name},
+        statistic="Maximum",
+        period=60,
+        evaluation_periods=1,
+        threshold=1,
+        comparison_operator="GreaterThanOrEqualToThreshold",
+        treat_missing_data="missing",
+        alarm_actions=[scale_from_zero.arn],
+    )
+
     pulumi.export("endpoint_name", endpoint.name)
     pulumi.export("endpoint_arn", endpoint.arn)
 
