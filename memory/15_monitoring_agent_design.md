@@ -221,11 +221,22 @@ ActivityFrame gets a BioCLIP insect ID; the activity page flips from "analysis
 pending" to ranked taxa + an aggregate Observation.
 
 ### 10.1 Decisions (recommended defaults — Edward to confirm the ML ones)
-- **Endpoint type → SageMaker Serverless Inference (CPU).** Frame traffic is
-  bursty and low-volume; serverless scales to zero (no idle bill) and BioCLIP on
-  a single small crop is fine on CPU. Cold starts (~tens of s) are irrelevant
-  because classification is background/async. (Real-time always-on is wasteful
-  here; the existing *async* video endpoint stays separate.)
+- **Endpoint type → SageMaker Serverless Inference (CPU). [COST-DRIVEN]** Frame
+  traffic is bursty and low-volume (capped ~60/device/day, 1 crop/activity), so
+  serverless **scales to zero — no idle bill** — and BioCLIP on one small crop is
+  fine on CPU. Cold starts (~tens of s) don't matter (background/async).
+  - *In-process on App Runner was rejected on cost:* the instance is only 1 vCPU /
+    2 GB (`infra/aws/__main__.py`); a resident torch+CLIP model (~1.5–2 GB) would
+    force a bigger always-on instance or OOM the web tier.
+  - *Do NOT copy the video endpoint:* that's an always-on `ml.g4dn.xlarge` GPU
+    (min 1 instance) — the expensive pattern to avoid. BioCLIP stays CPU +
+    scale-to-zero.
+  - *Even cheaper levers if needed:* (a) **container Lambda** (ECR/OIDC path already
+    exists) — pay-per-ms, scale-to-zero, possibly < Serverless at this volume, with
+    a ~15–30 s cold start; (b) **nightly batch** (one short CPU run/day over the
+    day's frames) — lowest compute cost, daily latency. Serverless is the
+    balance; revisit if the monthly bill warrants. Control cost at the source too:
+    the device frame cap + classify-once (never re-run a frame) keep volume down.
 - **Model packaging → `pybioclip` TreeOfLifeClassifier (zero-shot, full ToL).**
   Returns ranked predictions across the whole Tree-of-Life taxonomy with
   per-rank names + scores — no candidate label set needed for Phase 1. Phase 2
