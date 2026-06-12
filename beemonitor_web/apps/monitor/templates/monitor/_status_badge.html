@@ -1,0 +1,5 @@
+{% if status == "analyzed" %}<span class="text-[10px] uppercase bg-green-100 text-green-700 px-1.5 py-0.5 rounded">{{ label }}</span>
+{% elif status == "analyzing" %}<span class="text-[10px] uppercase bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">{{ label }}</span>
+{% elif status == "failed" %}<span class="text-[10px] uppercase bg-red-100 text-red-700 px-1.5 py-0.5 rounded">{{ label }}</span>
+{% elif status == "no_detection" %}<span class="text-[10px] uppercase bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{{ label }}</span>
+{% else %}<span class="text-[10px] uppercase bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">{{ label }}</span>{% endif %}

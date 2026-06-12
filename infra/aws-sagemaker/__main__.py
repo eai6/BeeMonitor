@@ -49,6 +49,7 @@ env = config.get("environment") or "dev"
 instance_type = config.get("instance-type") or "ml.g4dn.xlarge"
 image_tag = config.get("image-tag") or "latest"
 deploy_endpoint = config.get_bool("deploy-endpoint") or False
+deploy_bioclip = config.get_bool("deploy-bioclip") or False
 max_capacity = config.get_int("max-capacity") or 2
 
 prefix = f"beemonitor-sm-{env}"
@@ -89,6 +90,19 @@ aws.ecr.LifecyclePolicy(
             "action": {"type": "expire"},
         }],
     }),
+)
+
+# ECR for the BioCLIP insect-ID image (CPU, CI-built). Separate repo from the
+# video image so the two build/deploy independently.
+BIOCLIP_ECR_REPO_NAME = f"{prefix}-bioclip"  # must match the CI workflow
+bioclip_ecr_repo = aws.ecr.Repository(
+    "bioclip-repo",
+    name=BIOCLIP_ECR_REPO_NAME,
+    image_tag_mutability="MUTABLE",
+    image_scanning_configuration=aws.ecr.RepositoryImageScanningConfigurationArgs(
+        scan_on_push=True,
+    ),
+    force_delete=False,
 )
 
 
@@ -257,6 +271,14 @@ django_invoke_policy = aws.iam.Policy(
                 "Action": "sagemaker:InvokeEndpointAsync",
                 "Resource": (
                     f"arn:aws:sagemaker:{region}:{account_id}:endpoint/{prefix}"
+                ),
+            },
+            {
+                "Sid": "InvokeBioclipEndpoint",
+                "Effect": "Allow",
+                "Action": "sagemaker:InvokeEndpoint",
+                "Resource": (
+                    f"arn:aws:sagemaker:{region}:{account_id}:endpoint/{prefix}-bioclip"
                 ),
             },
             {
@@ -528,8 +550,107 @@ if deploy_endpoint:
             ),
     )
 
+    # Scale-FROM-zero. The target-tracking policy above can scale toward min=0,
+    # but an async endpoint only actually reaches 0 when there's a registered way
+    # back UP — otherwise AWS pins it at the initial instance count forever (this
+    # is exactly why beemonitor-sm-dev sat at 1 g4dn.xlarge 24/7 ≈ $530/mo with
+    # zero traffic, while the otherwise-identical ecomorph endpoint cycles 1↔0).
+    # A step policy adds 1 instance the moment a request is queued with no
+    # capacity, driven by the HasBacklogWithoutCapacity alarm below. Mirrors the
+    # working ecomorph endpoint exactly.
+    scale_from_zero = aws.appautoscaling.Policy(
+        "scale-from-zero",
+        name=f"{prefix}-scale-from-zero",
+        policy_type="StepScaling",
+        resource_id=autoscaling_target.resource_id,
+        scalable_dimension=autoscaling_target.scalable_dimension,
+        service_namespace=autoscaling_target.service_namespace,
+        step_scaling_policy_configuration=aws.appautoscaling
+            .PolicyStepScalingPolicyConfigurationArgs(
+                adjustment_type="ChangeInCapacity",
+                cooldown=300,
+                metric_aggregation_type="Maximum",
+                step_adjustments=[
+                    aws.appautoscaling
+                    .PolicyStepScalingPolicyConfigurationStepAdjustmentArgs(
+                        metric_interval_lower_bound="0",
+                        scaling_adjustment=1,
+                    ),
+                ],
+            ),
+    )
+
+    # Fires when the endpoint has a queued request but 0 instances to serve it.
+    # TreatMissingData="missing" is essential: when idle the metric reports no
+    # data, which must NOT be read as "has backlog" (that would wake it forever).
+    aws.cloudwatch.MetricAlarm(
+        "has-backlog-without-capacity",
+        name=f"{prefix}-has-backlog-without-capacity",
+        namespace="AWS/SageMaker",
+        metric_name="HasBacklogWithoutCapacity",
+        dimensions={"EndpointName": endpoint.name},
+        statistic="Maximum",
+        period=60,
+        evaluation_periods=1,
+        threshold=1,
+        comparison_operator="GreaterThanOrEqualToThreshold",
+        treat_missing_data="missing",
+        alarm_actions=[scale_from_zero.arn],
+    )
+
     pulumi.export("endpoint_name", endpoint.name)
     pulumi.export("endpoint_arn", endpoint.arn)
+
+
+# ---------------------------------------------------------------------------
+# BioCLIP insect-ID endpoint — SageMaker Serverless (CPU, scale-to-zero)
+# ---------------------------------------------------------------------------
+# Separate from the video endpoint: each request is one tiny crop, so Serverless
+# Inference fits (sync, small payload) and scales to zero natively — no instance
+# to keep alive, no autoscaling plumbing, no idle bill (the failure mode we just
+# fixed on the GPU endpoint can't happen here). Gated on deploy-bioclip so the
+# ECR image is built first (same two-pass flow as the video endpoint).
+if deploy_bioclip:
+    bioclip_tag = config.get("bioclip-image-tag") or "latest"
+    bioclip_image = pulumi.Output.concat(
+        bioclip_ecr_repo.repository_url, ":", bioclip_tag)
+    bioclip_tag_slug = "".join(c for c in bioclip_tag if c.isalnum())[:12] or "latest"
+
+    bioclip_model = aws.sagemaker.Model(
+        "bioclip-model",
+        name=f"{prefix}-bioclip-model-{bioclip_tag_slug}",
+        execution_role_arn=sagemaker_role.arn,
+        primary_container=aws.sagemaker.ModelPrimaryContainerArgs(
+            image=bioclip_image,
+            mode="SingleModel",
+            environment={"BIOCLIP_TOPK": str(config.get_int("bioclip-topk") or 5)},
+        ),
+    )
+
+    bioclip_config = aws.sagemaker.EndpointConfiguration(
+        "bioclip-endpoint-config",
+        name=f"{prefix}-bioclip-config-{bioclip_tag_slug}",
+        production_variants=[
+            aws.sagemaker.EndpointConfigurationProductionVariantArgs(
+                variant_name=VARIANT_NAME,
+                model_name=bioclip_model.name,
+                serverless_config=aws.sagemaker
+                    .EndpointConfigurationProductionVariantServerlessConfigArgs(
+                        # BioCLIP (CLIP ViT-B + torch) resident ~1.5-2 GB.
+                        memory_size_in_mb=config.get_int("bioclip-memory") or 4096,
+                        max_concurrency=config.get_int("bioclip-max-concurrency") or 5,
+                    ),
+            ),
+        ],
+    )
+
+    bioclip_endpoint = aws.sagemaker.Endpoint(
+        "bioclip-endpoint",
+        name=f"{prefix}-bioclip",
+        endpoint_config_name=bioclip_config.name,
+    )
+
+    pulumi.export("bioclip_endpoint_name", bioclip_endpoint.name)
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Activity - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+  <div class="mb-5">
+    {% if filter_device %}
+      <a href="{% url 'devices:detail' filter_device.pk %}" class="text-sm text-amber-700 hover:underline">&larr; {{ filter_device.name }}</a>
+    {% endif %}
+    <div class="flex items-baseline gap-3">
+      <h1 class="text-2xl font-bold text-gray-900">Activity</h1>
+      <a href="{% url 'monitor:agent_chat' %}{% if filter_device %}?device={{ filter_device.pk }}{% endif %}" class="text-sm text-amber-700 hover:underline">Ask the agent &rarr;</a>
+      <a href="{% url 'monitor:digests' %}{% if filter_device %}?device={{ filter_device.pk }}{% endif %}" class="text-sm text-amber-700 hover:underline">Daily digests &rarr;</a>
+    </div>
+    <p class="text-sm text-gray-500">
+      Each card is one motion event. Open it to see the sampled frames and the
+      insect identification (BioCLIP) once analysis has run.
+      {% if filter_device %}<span class="text-gray-400">Filtered to {{ filter_device.name }}.</span>{% endif %}
+    </p>
+  </div>
+
+  {% if activities %}
+  <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+    {% for a in activities %}
+    <a href="{% url 'monitor:activity_detail' a.pk %}"
+       class="block bg-white shadow rounded-lg overflow-hidden hover:shadow-md transition">
+      <div class="aspect-square bg-gray-100 flex items-center justify-center">
+        {% if a.thumb_url %}
+          <img src="{{ a.thumb_url }}" alt="activity {{ a.pk }}" class="w-full h-full object-cover">
+        {% else %}
+          <span class="text-xs text-gray-400">no frame</span>
+        {% endif %}
+      </div>
+      <div class="p-3">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium text-gray-700 truncate">{{ a.device.name }}</span>
+          {% include "monitor/_status_badge.html" with status=a.status label=a.get_status_display %}
+        </div>
+        <div class="text-xs text-gray-400 mt-0.5">{{ a.local_started|date:"M j, Y H:i" }}</div>
+        {% if a.best_taxon %}
+          <div class="text-xs italic text-gray-800 mt-1 truncate">{{ a.best_taxon.name }}{% if a.individual_count %} &times;{{ a.individual_count }}{% endif %}</div>
+        {% else %}
+          <div class="text-xs text-gray-400 mt-1">{{ a.thumb_count }} frame{{ a.thumb_count|pluralize }}</div>
+        {% endif %}
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+
+  {% if is_paginated %}
+  <div class="flex items-center justify-center gap-3 mt-6 text-sm">
+    {% if page_obj.has_previous %}
+      <a href="?page={{ page_obj.previous_page_number }}{% if filter_device %}&device={{ filter_device.pk }}{% endif %}" class="text-amber-700 hover:underline">&larr; Newer</a>
+    {% endif %}
+    <span class="text-gray-500">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+    {% if page_obj.has_next %}
+      <a href="?page={{ page_obj.next_page_number }}{% if filter_device %}&device={{ filter_device.pk }}{% endif %}" class="text-amber-700 hover:underline">Older &rarr;</a>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% else %}
+  <div class="bg-white shadow rounded-lg p-10 text-center text-sm text-gray-500">
+    No activity yet. Once a device records motion, the sampled frames show up here
+    for identification.
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

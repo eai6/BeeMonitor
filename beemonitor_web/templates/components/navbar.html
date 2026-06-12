@@ -22,6 +22,7 @@
             </div>
           </div>
           <a href="{% url 'devices:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Devices</a>
+          <a href="{% url 'monitor:activity_list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Activity</a>
           <a href="{% url 'setup:index' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Set up</a>
         </div>
       </div>
@@ -53,6 +54,7 @@
       <a href="{% url 'annotations:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Annotate</a>
       <a href="{% url 'training:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Training</a>
       <a href="{% url 'devices:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Devices</a>
+      <a href="{% url 'monitor:activity_list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Activity</a>
       <a href="{% url 'setup:index' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Set up a device</a>
       {% if user.is_authenticated %}
       <a href="{% url 'accounts:usage' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Account &amp; settings</a>

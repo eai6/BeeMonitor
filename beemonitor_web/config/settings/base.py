@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     "apps.docs",
     "apps.devices",
     "apps.setup",
+    "apps.monitor",
 ]
 
 MIDDLEWARE = [
@@ -173,6 +174,36 @@ DEVICE_ONLINE_GRACE_SECONDS = int(os.environ.get("DEVICE_ONLINE_GRACE_SECONDS", 
 # guide's uploader.env block). The App Runner host in prod.
 BEEMONITOR_DEVICE_API_BASE = os.environ.get(
     "BEEMONITOR_DEVICE_API_BASE", "https://mqnafc3ejc.us-east-1.awsapprunner.com")
+
+# --- Taxonomic monitoring (activity frames + BioCLIP) ----------------------
+# Max sampled frames accepted per activity (server-side guard; the device also
+# self-limits with its own daily cap). Beyond this, extra frames are ignored.
+MONITOR_MAX_FRAMES_PER_ACTIVITY = int(os.environ.get("MONITOR_MAX_FRAMES_PER_ACTIVITY", "3"))
+# BioCLIP insect-ID endpoint (SageMaker Serverless, CPU). Empty = perception
+# disabled: frames still ingest + display, just no taxonomic classification, so
+# Phase 0 keeps working until the endpoint is deployed.
+SAGEMAKER_BIOCLIP_ENDPOINT_NAME = os.environ.get("SAGEMAKER_BIOCLIP_ENDPOINT_NAME", "")
+# Keep this many ranked predictions per frame (top-1 drives the Detection; the
+# rest live in Detection.raw for the reasoning agent later).
+MONITOR_BIOCLIP_TOPK = int(os.environ.get("MONITOR_BIOCLIP_TOPK", "5"))
+# Below this top-1 score, an activity is marked no_detection rather than asserting
+# a likely-wrong ID (field crops are blurry/partial; better to flag than guess).
+MONITOR_BIOCLIP_MIN_CONFIDENCE = float(os.environ.get("MONITOR_BIOCLIP_MIN_CONFIDENCE", "0.2"))
+# Bounded worker pool for off-request-path classification (mirrors the analysis
+# spawn pool so a frame burst can't exhaust DB connections).
+MONITOR_CLASSIFY_MAX_WORKERS = int(os.environ.get("MONITOR_CLASSIFY_MAX_WORKERS", "3"))
+# Phase 2 location priors: constrain BioCLIP to taxa that occur near the device
+# (iNaturalist, GBIF fallback) instead of the whole Tree of Life. False =
+# unconstrained ToL (Phase 1 behaviour).
+MONITOR_USE_LOCATION_PRIORS = os.environ.get(
+    "MONITOR_USE_LOCATION_PRIORS", "true").strip().lower() in {"1", "true", "yes", "on"}
+MONITOR_PRIOR_RADIUS_KM = int(os.environ.get("MONITOR_PRIOR_RADIUS_KM", "50"))
+MONITOR_PRIOR_MAX_TAXA = int(os.environ.get("MONITOR_PRIOR_MAX_TAXA", "300"))
+MONITOR_PRIOR_TTL_SECONDS = int(os.environ.get("MONITOR_PRIOR_TTL_SECONDS", str(60 * 60 * 24 * 30)))
+# Below this constrained top score, retry unconstrained ToL and keep whichever is
+# more confident (so a locally-unrecorded true species isn't forced into a wrong
+# neighbour). The precision/recall dial for the location constraint.
+MONITOR_BIOCLIP_GENUS_FALLBACK = float(os.environ.get("MONITOR_BIOCLIP_GENUS_FALLBACK", "0.15"))
 
 # --- AI setup assistant (Claude) -------------------------------------------
 # Set ANTHROPIC_API_KEY in the environment to enable the in-dashboard tutor.

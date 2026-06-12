@@ -211,17 +211,13 @@ def _weather_lookup(buckets, gran, lat, lon, tz="auto") -> dict:
 
 
 def _presign_image(storage_key: str):
-    """Short-lived presigned GET URL for a heartbeat image, or None."""
-    if not storage_key:
-        return None
-    try:
-        from config.storage import get_s3_client
-        return get_s3_client().generate_presigned_url(
-            "raw-videos", storage_key, expiry_hours=1,
-        )
-    except Exception as e:  # pragma: no cover - S3 hiccup shouldn't 500 the page
-        logger.warning("presign failed for %s: %s", storage_key, e)
-        return None
+    """Short-lived presigned GET URL for a heartbeat image, or None.
+
+    Thin alias for the shared helper so the presign contract lives in one place
+    (config.storage) — see also apps/monitor which presigns the same way.
+    """
+    from config.storage import presigned_get
+    return presigned_get(storage_key)
 
 
 class DeviceListView(LoginRequiredMixin, ListView):
