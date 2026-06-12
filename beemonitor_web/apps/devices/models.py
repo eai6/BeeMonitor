@@ -36,6 +36,88 @@ TELEMETRY_INTERVAL_CHOICES = [
 TELEMETRY_INTERVAL_VALUES = [v for v, _ in TELEMETRY_INTERVAL_CHOICES]
 
 
+# --- WittyPi power schedule (remote review/edit) -------------------------------
+# The *desired* power schedule the dashboard sets and the device reconciles to on
+# its next check-in (rides the heartbeat response, like motion_tuning). The device
+# is the safety authority — it validates, clamps to a guaranteed wake floor, and
+# keeps the WittyPi low-voltage cutoff in every mode (see
+# memory/16_remote_scheduling_design.md §5). Server validation here is shape-only.
+WAKE_MODES = ["daylight", "window", "interval", "always_on"]
+
+
+def default_wake_schedule() -> dict:
+    """Default desired schedule (callable so the JSONField default is per-row)."""
+    return {"mode": "daylight"}
+
+
+def _clean_hhmm(v) -> "str | None":
+    """Validate an "HH:MM" clock string; return it zero-padded, or None."""
+    if not isinstance(v, str):
+        return None
+    parts = v.strip().split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        h, m = int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+    if 0 <= h <= 23 and 0 <= m <= 59:
+        return f"{h:02d}:{m:02d}"
+    return None
+
+
+def clean_wake_schedule(spec) -> "tuple[dict | None, str]":
+    """Validate a desired wake-schedule spec from the dashboard.
+
+    Returns ``(cleaned, "")`` on success or ``(None, error)``. This is *shape*
+    validation only — the device enforces the real safety guardrails (wake floor,
+    clamp, confirm-or-revert); the server is never trusted for them.
+    """
+    if not isinstance(spec, dict):
+        return None, "Schedule must be an object."
+    mode = spec.get("mode")
+    if mode not in WAKE_MODES:
+        return None, "Unknown schedule mode."
+    out = {"mode": mode}
+    if mode == "window":
+        on = _clean_hhmm(spec.get("on"))
+        off = _clean_hhmm(spec.get("off"))
+        if on is None or off is None:
+            return None, "Window needs valid on and off times (HH:MM)."
+        if on == off:
+            return None, "Window on and off times must differ."
+        out["on"], out["off"] = on, off
+    elif mode == "interval":
+        try:
+            every = int(spec.get("wake_every_min"))
+            on_min = int(spec.get("on_minutes"))
+        except (TypeError, ValueError):
+            return None, "Interval needs whole minutes."
+        if not (5 <= every <= 1440):
+            return None, "Wake every must be 5–1440 minutes."
+        if not (1 <= on_min <= every):
+            return None, "On-minutes must be ≥1 and ≤ the wake interval."
+        out["wake_every_min"], out["on_minutes"] = every, on_min
+    # daylight / always_on carry no params.
+    return out, ""
+
+
+def wake_schedule_label(spec) -> str:
+    """Human one-liner for a schedule spec, for the dashboard."""
+    spec = spec or {}
+    mode = spec.get("mode", "daylight")
+    if mode == "daylight":
+        return "Daylight (sun-up to sun-down)"
+    if mode == "always_on":
+        return "Always on (24/7)"
+    if mode == "window":
+        return f"On {spec.get('on', '?')}–{spec.get('off', '?')} daily"
+    if mode == "interval":
+        return (f"Wake every {spec.get('wake_every_min', '?')} min "
+                f"for {spec.get('on_minutes', '?')} min")
+    return str(mode)
+
+
 class Device(models.Model):
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -102,6 +184,11 @@ class Device(models.Model):
     pending_command = models.CharField(max_length=32, blank=True, default="")
     command_params = models.JSONField(default=dict, blank=True)
 
+    # Desired WittyPi power schedule (review/edit from the dashboard). The device
+    # reconciles to it via the heartbeat response and enforces the safety floor on
+    # its side. Default {"mode": "daylight"} = current sun-window behaviour.
+    wake_schedule = models.JSONField(default=default_wake_schedule, blank=True)
+
     # 5c: live MJPEG stream the device serves on its LAN (WiFi) while active.
     # The URL is a private LAN address — reachable on the same network or via
     # Raspberry Pi Connect, not from the public dashboard directly.
@@ -145,6 +232,16 @@ class Device(models.Model):
         """Human label for the current beat interval (e.g. '1 minute')."""
         return dict(TELEMETRY_INTERVAL_CHOICES).get(
             self.telemetry_interval_seconds, f"{self.telemetry_interval_seconds}s")
+
+    def wake_schedule_dict(self) -> dict:
+        """The desired schedule spec, falling back to the daylight default."""
+        spec = self.wake_schedule if isinstance(self.wake_schedule, dict) else None
+        return spec or default_wake_schedule()
+
+    @property
+    def wake_schedule_label(self) -> str:
+        """Human one-liner for the desired schedule (e.g. 'Always on (24/7)')."""
+        return wake_schedule_label(self.wake_schedule_dict())
 
     def motion_tuning_dict(self) -> dict:
         """Non-null motion overrides, in the keys the recorder expects."""

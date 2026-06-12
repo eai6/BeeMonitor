@@ -387,6 +387,61 @@ def _usb_present() -> bool:
     return False
 
 
+# --- WittyPi battery / input telemetry ---------------------------------------
+# The WittyPi 4 exposes input(battery)/output voltage + load current over I2C
+# (device 0x08 on bus 1). Per UUGear's utilities.sh a voltage is read as two
+# bytes: value = <integer reg> + <decimal reg> / 100. This is the missing
+# diagnostic for "did the WittyPi fail or did the battery die" — battery_voltage
+# trending down before an outage points at power, not the board.
+#
+# NOTE: these registers are for the WittyPi 4; VERIFY them on the actual board
+# before trusting the numbers (WittyPi 3 / L3V7 variants differ). The read is
+# best-effort: no WittyPi, no i2c-tools, or a permission error -> {} and the beat
+# simply omits power telemetry. Disable entirely with BEEMONITOR_WITTYPI_BATTERY=0.
+_WPI_BUS = os.environ.get("BEEMONITOR_WITTYPI_I2C_BUS", "1")
+_WPI_ADDR = os.environ.get("BEEMONITOR_WITTYPI_I2C_ADDR", "0x08")
+_WPI_VIN = (1, 2)       # input / battery voltage (int reg, decimal reg)
+_WPI_IOUT = (5, 6)      # output (load) current
+_WPI_POWER_MODE = 7     # 1 = running on Vin (battery/DC in), 0 = on USB 5V
+
+
+def _i2c_byte(reg: int) -> "int | None":
+    """Read one byte from the WittyPi via i2cget; None on any failure."""
+    r = _run(["i2cget", "-y", _WPI_BUS, _WPI_ADDR, str(reg)], timeout=4)
+    if r is None or r.returncode != 0:
+        return None
+    try:
+        return int(r.stdout.strip(), 16)
+    except (TypeError, ValueError):
+        return None
+
+
+def _i2c_decimal(pair) -> "float | None":
+    """A WittyPi two-byte reading: <int> + <decimal>/100. None on failure."""
+    hi = _i2c_byte(pair[0])
+    lo = _i2c_byte(pair[1])
+    if hi is None or lo is None:
+        return None
+    return round(hi + lo / 100.0, 2)
+
+
+def _wittypi_power() -> dict:
+    """Best-effort WittyPi battery/input voltage + load. {} if unavailable."""
+    if os.environ.get("BEEMONITOR_WITTYPI_BATTERY", "1") not in ("1", "true", "True"):
+        return {}
+    vin = _i2c_decimal(_WPI_VIN)
+    if vin is None:
+        return {}  # no WittyPi / i2c on this unit -> omit power telemetry
+    out: dict = {"battery_voltage": vin}
+    iout = _i2c_decimal(_WPI_IOUT)
+    if iout is not None:
+        out["output_current"] = iout
+    mode = _i2c_byte(_WPI_POWER_MODE)
+    if mode is not None:
+        out["power_source"] = "DC input" if mode == 1 else "USB 5V"
+    return out
+
+
 def _timezone_info() -> dict:
     """The device's local timezone (IANA name + current UTC offset). Lets the
     dashboard bucket activity by the hive's local clock-hour wherever it's
@@ -481,6 +536,8 @@ def collect_metrics() -> dict:
         _usb_proc.poll()
     m["usb_present"] = _usb_present()
     m.update(_timezone_info())
+    # WittyPi battery/input voltage + load (best-effort; omitted if no WittyPi).
+    m.update(_wittypi_power())
 
     return m
 

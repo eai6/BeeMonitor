@@ -930,3 +930,136 @@ class WebUploadEndpointTests(TestCase):
                 content_type="application/json",
             )
         self.assertEqual(r.status_code, 404)
+
+
+# ── Remote power scheduling + battery telemetry ──────────────────────
+
+
+class WakeScheduleValidatorTests(TestCase):
+    """Shape-validation of the desired WittyPi schedule (the device enforces the
+    real safety floor — this is just rejecting malformed specs server-side)."""
+
+    def test_default_is_daylight(self):
+        from apps.devices.models import Device
+        user = create_user(username="alice")
+        dev, _ = Device.create_with_key(user, "pi-1")
+        self.assertEqual(dev.wake_schedule_dict(), {"mode": "daylight"})
+
+    def test_valid_modes(self):
+        from apps.devices.models import clean_wake_schedule
+        ok, err = clean_wake_schedule({"mode": "daylight"})
+        self.assertEqual((ok, err), ({"mode": "daylight"}, ""))
+        ok, err = clean_wake_schedule({"mode": "always_on"})
+        self.assertEqual(ok, {"mode": "always_on"})
+        ok, err = clean_wake_schedule({"mode": "window", "on": "6:5", "off": "20:00"})
+        self.assertEqual(ok, {"mode": "window", "on": "06:05", "off": "20:00"})
+        ok, err = clean_wake_schedule(
+            {"mode": "interval", "wake_every_min": "60", "on_minutes": "10"})
+        self.assertEqual(ok, {"mode": "interval", "wake_every_min": 60, "on_minutes": 10})
+
+    def test_rejects_bad_specs(self):
+        from apps.devices.models import clean_wake_schedule
+        for bad in (
+            {"mode": "nope"},
+            "notadict",
+            {"mode": "window", "on": "25:00", "off": "20:00"},
+            {"mode": "window", "on": "06:00", "off": "06:00"},   # equal
+            {"mode": "interval", "wake_every_min": "2", "on_minutes": "1"},  # < 5
+            {"mode": "interval", "wake_every_min": "60", "on_minutes": "90"},  # on > every
+            {"mode": "interval", "wake_every_min": "x", "on_minutes": "10"},
+        ):
+            ok, err = clean_wake_schedule(bad)
+            self.assertIsNone(ok, bad)
+            self.assertTrue(err)
+
+
+class DeviceScheduleViewTests(TestCase):
+    """The dashboard schedule editor (manager+); ajax + ownership scoping."""
+
+    def setUp(self):
+        from apps.devices.models import Device
+        self.owner = create_user(username="alice")
+        self.stranger = create_user(username="bob")
+        self.client, _ = logged_in_client(self.owner)
+        self.device, _ = Device.create_with_key(self.owner, "alice-pi")
+        self.other, _ = Device.create_with_key(self.stranger, "bob-pi")
+
+    def _post(self, pk, data, ajax=True):
+        extra = {"HTTP_X_REQUESTED_WITH": "XMLHttpRequest"} if ajax else {}
+        return self.client.post(reverse("devices:schedule", args=[pk]), data=data, **extra)
+
+    def test_set_always_on(self):
+        r = self._post(self.device.pk, {"mode": "always_on"})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertTrue(r.json()["ok"])
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.wake_schedule, {"mode": "always_on"})
+        self.assertIn("24/7", r.json()["label"])
+
+    def test_set_window(self):
+        r = self._post(self.device.pk, {"mode": "window", "on": "07:00", "off": "19:30"})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.wake_schedule,
+                         {"mode": "window", "on": "07:00", "off": "19:30"})
+
+    def test_invalid_rejected(self):
+        r = self._post(self.device.pk, {"mode": "window", "on": "bad", "off": "19:00"})
+        self.assertEqual(r.status_code, 400)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.wake_schedule, {"mode": "daylight"})  # unchanged
+
+    def test_cannot_set_someone_elses_device(self):
+        r = self._post(self.other.pk, {"mode": "always_on"})
+        self.assertIn(r.status_code, (403, 404))  # blocked either way
+        self.other.refresh_from_db()
+        self.assertEqual(self.other.wake_schedule, {"mode": "daylight"})
+
+
+class HeartbeatScheduleTests(TestCase):
+    """The heartbeat response carries the desired schedule (device reconciles to
+    it), and the status poll surfaces schedule + battery telemetry."""
+
+    def setUp(self):
+        from apps.devices.models import Device
+        self.user = create_user(username="owner")
+        self.device, self.raw_key = Device.create_with_key(self.user, "pi-1")
+        self.api = Client()
+
+    def test_heartbeat_response_includes_wake_schedule(self):
+        self.device.wake_schedule = {"mode": "always_on"}
+        self.device.save(update_fields=["wake_schedule"])
+        r = self.api.post(
+            "/api/v1/devices/heartbeat",
+            data={"metrics": json.dumps({"storage_pct": 12.0})},
+            HTTP_AUTHORIZATION=f"Bearer {self.raw_key}",
+        )
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual(r.json()["wake_schedule"], {"mode": "always_on"})
+
+    def test_status_json_surfaces_battery_and_schedule(self):
+        from apps.devices.models import DeviceHeartbeat
+        DeviceHeartbeat.objects.create(device=self.device, metrics={
+            "battery_voltage": 12.4, "output_current": 0.35, "power_source": "DC input",
+            "active_schedule": {"mode": "daylight"},
+            "next_boot": "06:00", "next_shutdown": "20:00",
+        })
+        c, _ = logged_in_client(self.user)
+        r = c.get(reverse("devices:status", args=[self.device.pk]))
+        self.assertEqual(r.status_code, 200)
+        d = r.json()
+        self.assertEqual(d["battery_voltage"], 12.4)
+        self.assertEqual(d["output_current"], 0.35)
+        self.assertEqual(d["power_source"], "DC input")
+        # device reports daylight, desired is daylight -> confirmed.
+        self.assertTrue(d["schedule_confirmed"])
+        self.assertEqual(d["next_boot"], "06:00")
+
+    def test_schedule_pending_when_device_silent(self):
+        from apps.devices.models import DeviceHeartbeat
+        self.device.wake_schedule = {"mode": "always_on"}
+        self.device.save(update_fields=["wake_schedule"])
+        DeviceHeartbeat.objects.create(device=self.device, metrics={})  # no active_schedule
+        c, _ = logged_in_client(self.user)
+        r = c.get(reverse("devices:status", args=[self.device.pk]))
+        self.assertFalse(r.json()["schedule_confirmed"])

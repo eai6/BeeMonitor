@@ -188,6 +188,10 @@ class DeviceHeartbeatView(APIView):
                 # ROI editor outputs (normalized): hotel ROI + nest layout.
                 "roi_override": device.roi_override or None,
                 "nest_layout": device.nest_layout or [],
+                # Desired WittyPi power schedule. The device reconciles to it and
+                # enforces its own safety floor (see telemetry.py _apply_schedule,
+                # Phase 2). Until that lands the device ignores this — zero risk.
+                "wake_schedule": device.wake_schedule_dict(),
             },
             status=201,
         )
@@ -222,4 +226,6 @@ class DeviceCommandView(APIView):
             # Carry the cadence here too so a rate change applies within seconds
             # even when the beat interval is long.
             "telemetry_interval": device.telemetry_interval_seconds,
+            # Desired WittyPi power schedule (reconciled device-side).
+            "wake_schedule": device.wake_schedule_dict(),
         })

@@ -56,6 +56,20 @@ def _is_online(device) -> bool:
     return age <= settings.DEVICE_ONLINE_GRACE_SECONDS
 
 
+def _schedule_confirmed(device, metrics) -> bool:
+    """Has the device confirmed it's running the desired power schedule?
+
+    The device reports ``active_schedule`` (what's actually programmed on the
+    WittyPi) in its metrics; we call the schedule "confirmed" when its mode
+    matches the desired one. Until the device-side handler ships (Phase 2) no
+    device reports this, so it reads as pending — which is correct.
+    """
+    active = metrics.get("active_schedule")
+    if not isinstance(active, dict):
+        return False
+    return active.get("mode") == device.wake_schedule_dict().get("mode")
+
+
 # Friendly text for the last USB-transfer result the device reported.
 _USB_ERRORS = {
     "no_usb": "No USB drive detected — plug one into the device and try again.",
@@ -427,6 +441,18 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         ctx["tz_name"] = device.tz_name
         ctx["common_tzs"] = COMMON_TIMEZONES
 
+        # Power schedule (review/edit) + WittyPi battery telemetry.
+        from .models import WAKE_MODES
+        ctx["wake_schedule"] = device.wake_schedule_dict()
+        ctx["wake_modes"] = WAKE_MODES
+        ctx["active_schedule"] = metrics.get("active_schedule")
+        ctx["schedule_confirmed"] = _schedule_confirmed(device, metrics)
+        ctx["next_boot"] = metrics.get("next_boot")
+        ctx["next_shutdown"] = metrics.get("next_shutdown")
+        ctx["battery_voltage"] = metrics.get("battery_voltage")
+        ctx["output_current"] = metrics.get("output_current")
+        ctx["power_source"] = metrics.get("power_source")
+
 
         # Videos uploaded by this device (device-scoped slice of /videos/).
         ctx["videos"] = device.videos.all()[:12]
@@ -755,6 +781,52 @@ class DeviceTelemetryRateView(LoginRequiredMixin, View):
         return redirect("devices:detail", pk=pk)
 
 
+class DeviceScheduleView(LoginRequiredMixin, View):
+    """Set the device's desired WittyPi power schedule (review/edit).
+
+    Builds a spec from the form, validates its *shape* (the device enforces the
+    real safety guardrails), and stores it on the device. The unit reconciles to
+    it on its next check-in via the heartbeat response. See
+    memory/16_remote_scheduling_design.md.
+    """
+
+    def post(self, request, pk):
+        from .models import clean_wake_schedule
+        device = _device_or_403(request.user, pk, "manager")
+        is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+        mode = (request.POST.get("mode") or "").strip()
+        spec: dict = {"mode": mode}
+        if mode == "window":
+            spec["on"] = (request.POST.get("on") or "").strip()
+            spec["off"] = (request.POST.get("off") or "").strip()
+        elif mode == "interval":
+            spec["wake_every_min"] = request.POST.get("wake_every_min")
+            spec["on_minutes"] = request.POST.get("on_minutes")
+
+        cleaned, err = clean_wake_schedule(spec)
+        if err:
+            if is_ajax:
+                return JsonResponse({"error": err}, status=400)
+            messages.error(request, err)
+            return redirect("devices:detail", pk=pk)
+
+        device.wake_schedule = cleaned
+        device.save(update_fields=["wake_schedule"])
+        if is_ajax:
+            return JsonResponse({
+                "ok": True,
+                "wake_schedule": cleaned,
+                "label": device.wake_schedule_label,
+            })
+        messages.success(
+            request,
+            f"Power schedule set to “{device.wake_schedule_label}”. The device "
+            "applies it on its next check-in (and enforces its own safety floor).",
+        )
+        return redirect("devices:detail", pk=pk)
+
+
 class DeviceStatusView(LoginRequiredMixin, View):
     """Live telemetry snapshot, polled by the device page so it refreshes in
     place (online, last seen, storage, services, WiFi, transport, activity) —
@@ -802,6 +874,15 @@ class DeviceStatusView(LoginRequiredMixin, View):
             "active_transport": metrics.get("active_transport"),
             "usb_status": _usb_text(metrics.get("usb")),
             "usb_present": metrics.get("usb_present"),
+            # Power schedule (desired) + what the device reports it's running, plus
+            # the WittyPi battery/input voltage telemetry.
+            "wake_schedule_label": device.wake_schedule_label,
+            "schedule_confirmed": _schedule_confirmed(device, metrics),
+            "next_boot": metrics.get("next_boot"),
+            "next_shutdown": metrics.get("next_shutdown"),
+            "battery_voltage": metrics.get("battery_voltage"),
+            "output_current": metrics.get("output_current"),
+            "power_source": metrics.get("power_source"),
             "image": image,
             "telemetry_interval_label": device.telemetry_interval_label,
             "activity_series": activity["activity_series"],
