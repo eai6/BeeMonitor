@@ -6,8 +6,15 @@ one mover crop into a Tree-of-Life taxon. Consumed by
 
 ## Contract
 - `GET /ping` → 200 when the classifier is loaded.
-- `POST /invocations`, `Content-Type: image/jpeg`, body = the crop JPEG →
+- `POST /invocations` →
   `{"predictions": [{"score", "common_name", "ranks": {kingdom…species}}, …]}`.
+  - **Unconstrained** (Phase 1): `Content-Type: image/jpeg`, body = the crop, OR
+    JSON `{"image_b64": …}`. Classifies over the whole Tree of Life.
+  - **Location-constrained** (Phase 2): JSON
+    `{"image_b64": …, "candidate_taxa": ["Bombus impatiens", …], "rank": "species"}`.
+    Restricts BioCLIP to those labels via a `CustomLabelsClassifier` that's
+    LRU-cached by label-set (text embeddings built once per region). For custom
+    labels `ranks` carries species + the genus parsed from the binomial.
 
 Files: `inference.py` (handlers), `serve.py` (Flask shim), `serve` (gunicorn
 launcher). Image: `../Dockerfile.bioclip` (CPU torch + `pybioclip`, weights baked
