@@ -24,6 +24,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from django.conf import settings
@@ -36,10 +37,23 @@ logger = logging.getLogger(__name__)
 # Most-general -> most-specific. Matches Taxon.Rank and the endpoint's `ranks`.
 RANK_ORDER = ["kingdom", "phylum", "class", "order", "family", "genus", "species"]
 
-_POOL = ThreadPoolExecutor(
-    max_workers=getattr(settings, "MONITOR_CLASSIFY_MAX_WORKERS", 3),
-    thread_name_prefix="bioclip",
-)
+# Built lazily on first use so processes that never classify (admin, migrate,
+# unrelated management commands, the no-endpoint Phase-0 case) don't spin up
+# idle worker threads at import.
+_POOL = None
+_POOL_LOCK = threading.Lock()
+
+
+def _pool() -> ThreadPoolExecutor:
+    global _POOL
+    if _POOL is None:
+        with _POOL_LOCK:
+            if _POOL is None:
+                _POOL = ThreadPoolExecutor(
+                    max_workers=getattr(settings, "MONITOR_CLASSIFY_MAX_WORKERS", 3),
+                    thread_name_prefix="bioclip",
+                )
+    return _POOL
 
 
 def enabled() -> bool:
@@ -51,7 +65,7 @@ def classify_frame_async(frame_id: int) -> None:
     """Queue classification of one frame on the bounded pool (non-blocking)."""
     if not enabled():
         return
-    _POOL.submit(classify_frame, frame_id)
+    _pool().submit(classify_frame, frame_id)
 
 
 # ---------------------------------------------------------------------------
@@ -137,28 +151,33 @@ def classify_frame(frame_id: int) -> None:
 
     connection.close()  # release before the slow S3 + SageMaker calls
 
+    err = None
+    preds = []
     try:
         jpeg = _read_crop_bytes(storage_key)
-        preds = _invoke_bioclip(jpeg)
+        topk = int(getattr(settings, "MONITOR_BIOCLIP_TOPK", 5))
+        preds = _invoke_bioclip(jpeg)[:topk]
     except Exception as e:  # noqa: BLE001 - any failure must not crash the worker
         logger.exception("bioclip: frame %s classify failed", frame_id)
-        Activity.objects.filter(pk=activity_id, status=Activity.Status.PENDING).update(
-            status=Activity.Status.FAILED)
-        connection.close()
-        return
+        err = str(e)
 
     try:
-        topk = int(getattr(settings, "MONITOR_BIOCLIP_TOPK", 5))
-        preds = preds[:topk]
-        top = preds[0] if preds else None
-        taxon = _resolve_taxon(top.get("ranks", {})) if top else None
-        Detection.objects.create(
-            frame_id=frame_id,
-            model=Detection.Model.BIOCLIP,
-            taxon=taxon,
-            confidence=_score(top),
-            raw={"predictions": preds},
-        )
+        if err is not None:
+            # Record the failure AS a detection (taxon=None) so the activity can
+            # still complete from its other frames — one transient error must not
+            # strand the whole activity. update_or_create keeps re-runs idempotent.
+            Detection.objects.update_or_create(
+                frame_id=frame_id, model=Detection.Model.BIOCLIP,
+                defaults={"taxon": None, "confidence": None, "raw": {"error": err}},
+            )
+        else:
+            top = preds[0] if preds else None
+            taxon = _resolve_taxon(top.get("ranks", {})) if top else None
+            Detection.objects.update_or_create(
+                frame_id=frame_id, model=Detection.Model.BIOCLIP,
+                defaults={"taxon": taxon, "confidence": _score(top),
+                          "raw": {"predictions": preds}},
+            )
         _maybe_aggregate(activity_id)
     finally:
         connection.close()
@@ -200,7 +219,11 @@ def _maybe_aggregate(activity_id: int) -> None:
     scored = [d for d in dets if d.taxon_id is not None and d.confidence is not None]
 
     if not scored:
-        activity.status = Activity.Status.NO_DETECTION
+        # No usable ID. Distinguish "the model ran but found nothing" from
+        # "every frame errored" so a transient outage isn't silently NO_DETECTION.
+        had_error = any((d.raw or {}).get("error") for d in dets)
+        activity.status = (Activity.Status.FAILED if had_error
+                           else Activity.Status.NO_DETECTION)
         activity.save(update_fields=["status"])
         return
 

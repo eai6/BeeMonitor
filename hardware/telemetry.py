@@ -117,6 +117,10 @@ ACTIVITY_FRAMES_QUEUE = Path(os.environ.get(
 FRAME_DAILY_CAP = int(os.environ.get("BEEMONITOR_FRAME_DAILY_CAP", "60"))
 # How many queued frames to ship per beat so a backlog drains gradually.
 FRAME_BATCH_PER_BEAT = int(os.environ.get("BEEMONITOR_FRAME_BATCH_PER_BEAT", "6"))
+# Hard cap on crops queued on disk. Frames merely over the daily cap wait for the
+# next UTC day's budget; only when the queue exceeds THIS do we drop the oldest
+# (a unit offline for days, or a hive far over cap) so disk can't fill.
+FRAME_QUEUE_MAX = int(os.environ.get("BEEMONITOR_FRAME_QUEUE_MAX", "1000"))
 FRAME_SENT_FILE = STATE_DIR / "frames-sent.json"  # {"date": "YYYY-MM-DD", "count": N}
 
 # Storage cleanup: delete local clips a human cleared for deletion on the
@@ -570,16 +574,26 @@ def _drain_activity_frames() -> None:
     metas = sorted(ACTIVITY_FRAMES_QUEUE.glob("*.json"), key=_safe_mtime)
     if not metas:
         return
+
+    # Disk safety: bound the on-disk queue. Only when it exceeds FRAME_QUEUE_MAX
+    # do we drop the OLDEST crops — so frames merely over today's cap wait for the
+    # next UTC day's budget instead of being deleted on the busiest days.
+    if FRAME_QUEUE_MAX > 0 and len(metas) > FRAME_QUEUE_MAX:
+        overflow = metas[: len(metas) - FRAME_QUEUE_MAX]
+        for meta_path in overflow:
+            _drop_frame(meta_path.with_suffix(".jpg"), meta_path)
+        log.warning("frames: queue over %d; dropped %d oldest crop(s) to bound disk",
+                    FRAME_QUEUE_MAX, len(overflow))
+        metas = metas[len(metas) - FRAME_QUEUE_MAX:]
+
     sent_today = _frames_sent_today()
-    sent_now = dropped = 0
+    sent_now = 0
     for meta_path in metas[:FRAME_BATCH_PER_BEAT]:
+        if sent_today + sent_now >= FRAME_DAILY_CAP:
+            break  # daily budget spent — keep the rest for the next UTC day
         jpg = meta_path.with_suffix(".jpg")
         if not jpg.exists():
             _drop_frame(jpg, meta_path)  # orphan sidecar from a crashed write
-            continue
-        if sent_today + sent_now >= FRAME_DAILY_CAP:
-            _drop_frame(jpg, meta_path)  # over budget — drop so disk stays bounded
-            dropped += 1
             continue
         try:
             meta_raw = meta_path.read_text()
@@ -594,11 +608,10 @@ def _drain_activity_frames() -> None:
             _drop_frame(jpg, meta_path)  # permanent reject
         else:
             break  # transient — leave the rest for the next beat
-    if sent_now or dropped:
-        log.info("frames: sent %d, dropped %d over-cap (%d/%d today)",
-                 sent_now, dropped, sent_today + sent_now, FRAME_DAILY_CAP)
     if sent_now:
         _bump_frames_sent(sent_now)
+        log.info("frames: sent %d (%d/%d today)", sent_now,
+                 sent_today + sent_now, FRAME_DAILY_CAP)
 
 
 # ---------------------------------------------------------------------------

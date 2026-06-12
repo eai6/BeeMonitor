@@ -32,7 +32,7 @@
           <span class="text-xs font-medium text-gray-700 truncate">{{ a.device.name }}</span>
           {% include "monitor/_status_badge.html" with status=a.status label=a.get_status_display %}
         </div>
-        <div class="text-xs text-gray-400 mt-0.5">{{ a.started_at|date:"M j, Y H:i" }}</div>
+        <div class="text-xs text-gray-400 mt-0.5">{{ a.local_started|date:"M j, Y H:i" }}</div>
         {% if a.best_taxon %}
           <div class="text-xs italic text-gray-800 mt-1 truncate">{{ a.best_taxon.name }}{% if a.individual_count %} &times;{{ a.individual_count }}{% endif %}</div>
         {% else %}

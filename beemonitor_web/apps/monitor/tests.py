@@ -146,3 +146,35 @@ class PipelineTests(TestCase):
         self.activity.refresh_from_db()
         self.assertEqual(self.activity.status, Activity.Status.PENDING)
         self.assertFalse(Observation.objects.filter(activity=self.activity).exists())
+
+    def test_one_frame_error_still_aggregates_from_the_other(self):
+        # A transient failure on one frame must NOT strand the whole activity.
+        with mock.patch.object(pipeline, "_read_crop_bytes", return_value=b"jpeg"), \
+                mock.patch.object(pipeline, "_invoke_bioclip",
+                                  side_effect=[RuntimeError("boom"), [_BUMBLEBEE]]), \
+                mock.patch.object(pipeline, "connection"):
+            pipeline.classify_frame(self.frames[0].id)  # errors
+            pipeline.classify_frame(self.frames[1].id)  # succeeds
+        self.activity.refresh_from_db()
+        self.assertEqual(self.activity.status, Activity.Status.ANALYZED)
+        self.assertEqual(self.activity.best_taxon.name, "Bombus impatiens")
+        # The errored frame still recorded a (failure) detection so the gate completes.
+        self.assertEqual(
+            Detection.objects.filter(frame=self.frames[0], taxon__isnull=True).count(), 1)
+
+    def test_all_frames_error_marks_failed(self):
+        with mock.patch.object(pipeline, "_read_crop_bytes", return_value=b"jpeg"), \
+                mock.patch.object(pipeline, "_invoke_bioclip", side_effect=RuntimeError("boom")), \
+                mock.patch.object(pipeline, "connection"):
+            for fr in self.frames:
+                pipeline.classify_frame(fr.id)
+        self.activity.refresh_from_db()
+        self.assertEqual(self.activity.status, Activity.Status.FAILED)
+
+    def test_reclassify_is_idempotent(self):
+        # Re-running must not duplicate Detections or Observations (unique constraints).
+        self._run_with_preds([_BUMBLEBEE])
+        self._run_with_preds([_BUMBLEBEE])
+        self.assertEqual(Detection.objects.count(), 2)  # one per frame, not 4
+        self.assertEqual(
+            Observation.objects.filter(activity=self.activity).count(), 1)

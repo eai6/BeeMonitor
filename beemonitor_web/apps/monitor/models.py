@@ -141,6 +141,12 @@ class Detection(models.Model):
 
     class Meta:
         ordering = ["-confidence"]
+        # One result per (frame, model): re-running classification updates the
+        # row in place instead of piling up duplicates that skew aggregation.
+        constraints = [
+            models.UniqueConstraint(fields=["frame", "model"],
+                                    name="uniq_detection_per_frame_model"),
+        ]
 
     def __str__(self) -> str:
         return f"{self.model} -> {self.taxon} ({self.confidence})"
@@ -168,6 +174,12 @@ class Observation(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        # One observation per activity: makes update_or_create(activity=…)
+        # race-safe (concurrent final frames can't create duplicates).
+        constraints = [
+            models.UniqueConstraint(fields=["activity"],
+                                    name="uniq_observation_per_activity"),
+        ]
 
     def __str__(self) -> str:
         return f"observation {self.taxon} x{self.individual_count}"

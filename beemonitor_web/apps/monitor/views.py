@@ -12,24 +12,12 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import DetailView, ListView
 
 from apps.devices.models import Device
+from apps.devices.views import _display_zone  # device timezone resolver (reuse)
+from config.storage import presigned_get as _presign
 
 from .models import Activity
 
 logger = logging.getLogger(__name__)
-
-
-def _presign(storage_key: str):
-    """Short-lived presigned GET URL for a frame crop, or None on failure."""
-    if not storage_key:
-        return None
-    try:
-        from config.storage import get_s3_client
-        return get_s3_client().generate_presigned_url(
-            "raw-videos", storage_key, expiry_hours=1,
-        )
-    except Exception as e:  # pragma: no cover - S3 hiccup shouldn't 500 the page
-        logger.warning("presign failed for %s: %s", storage_key, e)
-        return None
 
 
 class ActivityListView(LoginRequiredMixin, ListView):
@@ -40,9 +28,12 @@ class ActivityListView(LoginRequiredMixin, ListView):
     paginate_by = 24
 
     def get_queryset(self):
+        # prefetch frames so the per-row thumbnail + count come from one extra
+        # query for the whole page, not two queries per row (N+1).
         qs = (Activity.objects
               .filter(device__in=Device.accessible(self.request.user))
-              .select_related("device", "best_taxon"))
+              .select_related("device", "best_taxon")
+              .prefetch_related("frames"))
         device_id = self.request.GET.get("device")
         if device_id and device_id.isdigit():
             qs = qs.filter(device_id=int(device_id))
@@ -53,10 +44,15 @@ class ActivityListView(LoginRequiredMixin, ListView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
+        zones: dict = {}  # device id -> ZoneInfo, resolved once per device
         for a in ctx["activities"]:
-            first = a.frames.first()
+            frames = list(a.frames.all())  # prefetched — no extra query
+            first = frames[0] if frames else None
             a.thumb_url = _presign(first.storage_key) if first else None
-            a.thumb_count = a.frames.count()
+            a.thumb_count = len(frames)
+            if a.device_id not in zones:
+                zones[a.device_id] = _display_zone(a.device)[0]
+            a.local_started = a.started_at.astimezone(zones[a.device_id])
         device_id = self.request.GET.get("device")
         if device_id and device_id.isdigit():
             ctx["filter_device"] = (Device.accessible(self.request.user)
@@ -87,4 +83,7 @@ class ActivityDetailView(LoginRequiredMixin, DetailView):
             activity.observations.select_related("taxon", "representative_frame")
         )
         ctx["has_analysis"] = bool(ctx["observations"]) or any(f.detection_list for f in frames)
+        # Render the event time in the device's display timezone (same resolver
+        # the device pages use), not raw UTC.
+        ctx["local_started"] = activity.started_at.astimezone(_display_zone(activity.device)[0])
         return ctx
