@@ -1233,3 +1233,8 @@ class ActivityTableRenderTests(TestCase):
         self.assertIn("act-range-btn", body)
         self.assertIn("data-range=", body)
         self.assertIn('id="act-range-label"', body)
+        # Controls are tucked in a collapsed Advanced settings dropdown, and the
+        # activity table stays OUTSIDE it (after </details>) so a viewer sees it.
+        self.assertIn("Advanced settings", body)
+        self.assertIn("<details", body)
+        self.assertLess(body.index("</details>"), body.index('id="act-table-body"'))
