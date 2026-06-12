@@ -636,8 +636,9 @@ if deploy_bioclip:
                 model_name=bioclip_model.name,
                 serverless_config=aws.sagemaker
                     .EndpointConfigurationProductionVariantServerlessConfigArgs(
-                        # BioCLIP (CLIP ViT-B + torch) resident ~1.5-2 GB.
-                        memory_size_in_mb=config.get_int("bioclip-memory") or 4096,
+                        # BioCLIP (CLIP ViT-B + torch) resident ~1.5-2 GB; give
+                        # headroom (max serverless is 6144) for fast cold loads.
+                        memory_size_in_mb=config.get_int("bioclip-memory") or 6144,
                         max_concurrency=config.get_int("bioclip-max-concurrency") or 5,
                     ),
             ),

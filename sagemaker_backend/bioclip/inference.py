@@ -37,7 +37,17 @@ _RANKS = ["kingdom", "phylum", "class", "order", "family", "genus", "species"]
 
 
 def model_fn(model_dir=None):
-    """Load the unconstrained Tree-of-Life classifier once (at worker import)."""
+    """Return immediately so /ping passes within the serverless 180s health-check
+    window. Classifiers are built lazily on first use — loading the full
+    Tree-of-Life matrix at boot blew the timeout, and the production path is the
+    constrained CustomLabelsClassifier (which doesn't need the full ToL)."""
+    return {"ready": True}
+
+
+@lru_cache(maxsize=1)
+def _tol_classifier():
+    """The unconstrained Tree-of-Life classifier — lazily built + cached. Only the
+    fallback path needs it; its first call is slow, every call after is warm."""
     from bioclip import TreeOfLifeClassifier
     return TreeOfLifeClassifier()
 
@@ -66,8 +76,9 @@ def _custom_classifier(labels_key: tuple):
     return CustomLabelsClassifier(list(labels_key))
 
 
-def predict_fn(payload, classifier):
-    """Run BioCLIP; constrained to candidate_taxa when present, else full ToL."""
+def predict_fn(payload, _model=None):
+    """Run BioCLIP; constrained to candidate_taxa when present, else full ToL.
+    Classifiers are built lazily here (see model_fn) and cached by label-set."""
     image = payload["image"]
     cands = payload.get("candidate_taxa")
     if cands:
@@ -75,7 +86,7 @@ def predict_fn(payload, classifier):
         raw = clf.predict([image], k=min(TOPK, len(cands)))
         return _normalize(raw, constrained=True)
     from bioclip import Rank
-    raw = classifier.predict([image], rank=Rank.SPECIES, k=TOPK)
+    raw = _tol_classifier().predict([image], rank=Rank.SPECIES, k=TOPK)
     return _normalize(raw, constrained=False)
 
 

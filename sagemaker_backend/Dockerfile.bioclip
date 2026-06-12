@@ -18,6 +18,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/opt/program:$PATH \
     # Cache HuggingFace/BioCLIP weights inside the image so cold starts are fast.
     HF_HOME=/opt/program/.hf \
+    # Read weights from the baked cache only — no runtime HF Hub round-trips
+    # (latency + a hang risk that contributed to the 180s serverless timeout).
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
     BIOCLIP_TOPK=5
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
