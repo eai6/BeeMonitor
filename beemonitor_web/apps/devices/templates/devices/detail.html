@@ -370,7 +370,10 @@
 <!-- Activity over time -->
 <div class="mt-8">
   <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-    <h2 class="text-lg font-semibold text-gray-900">Activity over time</h2>
+    <div class="flex items-baseline gap-3">
+      <h2 class="text-lg font-semibold text-gray-900">Activity over time</h2>
+      <a href="{% url 'monitor:activity_list' %}?device={{ device.pk }}" class="text-sm text-amber-600 hover:underline">Browse activity &amp; species &rarr;</a>
+    </div>
     <div class="flex items-center gap-2 text-xs">
       {% if can_manage %}
       <select id="tz-select" title="Timezone to display this device's activity in"

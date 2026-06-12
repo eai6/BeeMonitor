@@ -108,6 +108,17 @@ MOTION_TUNING_FILE = RECORD_DIR.parent / "motion_tuning.json"
 ROI_OVERRIDE_FILE = RECORD_DIR.parent / "roi_override.json"
 NEST_LAYOUT_FILE = RECORD_DIR.parent / "nest_layout.json"
 
+# Activity-frame upload (taxonomic monitoring). The recorder queues mover crops
+# here; we ship them over cellular under a daily cap. See main_motion.py +
+# memory/15_monitoring_agent_design.md.
+ACTIVITY_FRAMES_QUEUE = Path(os.environ.get(
+    "BEEMONITOR_ACTIVITY_FRAMES_QUEUE", str(RECORD_DIR.parent / "activity_frames")))
+# Max frames to send per UTC day (cellular budget guard). 0 disables uploading.
+FRAME_DAILY_CAP = int(os.environ.get("BEEMONITOR_FRAME_DAILY_CAP", "60"))
+# How many queued frames to ship per beat so a backlog drains gradually.
+FRAME_BATCH_PER_BEAT = int(os.environ.get("BEEMONITOR_FRAME_BATCH_PER_BEAT", "6"))
+FRAME_SENT_FILE = STATE_DIR / "frames-sent.json"  # {"date": "YYYY-MM-DD", "count": N}
+
 # Storage cleanup: delete local clips a human cleared for deletion on the
 # dashboard (GET/POST /api/v1/devices/cleanup). Cheap JSON, runs over cellular.
 # Seconds between cleanup passes; 0 disables.
@@ -493,6 +504,101 @@ def _prune_queue(up_to: Path) -> None:
                 img.unlink()
         except OSError:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Activity-frame upload (mover crops -> /api/v1/devices/frames, daily-capped)
+# ---------------------------------------------------------------------------
+
+def _frames_sent_today() -> int:
+    """Frames already sent this UTC day (resets at midnight UTC)."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        d = json.loads(FRAME_SENT_FILE.read_text())
+        if d.get("date") == today:
+            return int(d.get("count") or 0)
+    except (OSError, ValueError, TypeError):
+        pass
+    return 0
+
+
+def _bump_frames_sent(n: int) -> None:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    count = _frames_sent_today() + n
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        FRAME_SENT_FILE.write_text(json.dumps({"date": today, "count": count}))
+    except OSError:
+        pass
+
+
+def _drop_frame(jpg: Path, meta_path: Path) -> None:
+    for p in (jpg, meta_path):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+
+def _send_one_frame(jpg: Path, meta_raw: str) -> "bool | None":
+    """POST one activity frame. True = accepted; False = transient (retry later);
+    None = permanent reject (drop it)."""
+    url = urljoin(API_BASE + "/", "api/v1/devices/frames")
+    headers = {"Authorization": f"Bearer {DEVICE_KEY}"}
+    try:
+        with open(jpg, "rb") as fh:
+            r = requests.post(
+                url, headers=headers, data={"meta": meta_raw},
+                files={"frame": (jpg.name, fh, "image/jpeg")},
+                timeout=POST_TIMEOUT,
+            )
+    except requests.RequestException as e:
+        log.warning("frame POST failed (%s): %s", jpg.name, e)
+        return False
+    if r.ok:
+        return True
+    log.warning("frame -> %s: %s", r.status_code, r.text[:200])
+    # 4xx is permanent (bad meta) -> drop; 5xx is transient -> keep + retry.
+    return None if 400 <= r.status_code < 500 else False
+
+
+def _drain_activity_frames() -> None:
+    """Ship queued mover crops over cellular, under the daily cap. Best-effort:
+    never raises, and stops on the first transient error to retry next beat."""
+    if FRAME_DAILY_CAP <= 0 or not ACTIVITY_FRAMES_QUEUE.is_dir():
+        return
+    metas = sorted(ACTIVITY_FRAMES_QUEUE.glob("*.json"), key=_safe_mtime)
+    if not metas:
+        return
+    sent_today = _frames_sent_today()
+    sent_now = dropped = 0
+    for meta_path in metas[:FRAME_BATCH_PER_BEAT]:
+        jpg = meta_path.with_suffix(".jpg")
+        if not jpg.exists():
+            _drop_frame(jpg, meta_path)  # orphan sidecar from a crashed write
+            continue
+        if sent_today + sent_now >= FRAME_DAILY_CAP:
+            _drop_frame(jpg, meta_path)  # over budget — drop so disk stays bounded
+            dropped += 1
+            continue
+        try:
+            meta_raw = meta_path.read_text()
+        except OSError:
+            _drop_frame(jpg, meta_path)
+            continue
+        result = _send_one_frame(jpg, meta_raw)
+        if result is True:
+            _drop_frame(jpg, meta_path)
+            sent_now += 1
+        elif result is None:
+            _drop_frame(jpg, meta_path)  # permanent reject
+        else:
+            break  # transient — leave the rest for the next beat
+    if sent_now or dropped:
+        log.info("frames: sent %d, dropped %d over-cap (%d/%d today)",
+                 sent_now, dropped, sent_today + sent_now, FRAME_DAILY_CAP)
+    if sent_now:
+        _bump_frames_sent(sent_now)
 
 
 # ---------------------------------------------------------------------------
@@ -921,6 +1027,9 @@ def main() -> int:
                 # ...and the ROI-editor outputs (hotel ROI + nest layout).
                 _apply_override_file(ROI_OVERRIDE_FILE, resp.get("roi_override"))
                 _apply_override_file(NEST_LAYOUT_FILE, resp.get("nest_layout"))
+                # The link is up (the beat landed) — ship a batch of queued
+                # activity-frame crops for taxonomic ID, under the daily cap.
+                _drain_activity_frames()
             # Free SD space: delete clips a human cleared on the dashboard.
             if CLEANUP_INTERVAL > 0 and time.time() - last_cleanup >= CLEANUP_INTERVAL:
                 _run_cleanup()

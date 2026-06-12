@@ -11,6 +11,7 @@ urlpatterns = [
     path("analysis/", include("apps.analysis.urls")),
     path("sources/", include("apps.sources.urls")),
     path("devices/", include("apps.devices.urls")),
+    path("activity/", include("apps.monitor.urls")),
     path("setup/", include("apps.setup.urls")),
     path("annotations/", include("apps.annotations.urls")),
     path("training/", include("apps.training.urls")),

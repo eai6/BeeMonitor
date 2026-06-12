@@ -61,6 +61,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -127,6 +128,25 @@ TELEMETRY_QUEUE = Path(os.environ.get(
     "BEEMONITOR_TELEMETRY_QUEUE", str(RECORD_DIR.parent / "telemetry")))
 TELEMETRY_IMAGE_INTERVAL = _env_float("BEEMONITOR_TELEMETRY_IMAGE_INTERVAL", 0.0)
 TELEMETRY_IMAGE_HEIGHT = _env_int("BEEMONITOR_TELEMETRY_IMAGE_HEIGHT", 720)
+
+# --- Activity-frame sampling (taxonomic monitoring) ------------------------
+# Per recorded activity (motion clip), sample a few crops of the *mover* and
+# queue them for the telemetry service to ship over cellular; BioCLIP identifies
+# the insect in the cloud. Crops only (tiny bytes). The WiFi-gated full video is
+# unaffected. See memory/15_monitoring_agent_design.md.
+ACTIVITY_FRAMES = _env_bool("BEEMONITOR_ACTIVITY_FRAMES", True)
+ACTIVITY_FRAMES_QUEUE = Path(os.environ.get(
+    "BEEMONITOR_ACTIVITY_FRAMES_QUEUE", str(RECORD_DIR.parent / "activity_frames")))
+# How many crops to keep + queue per activity (the strongest-motion ones).
+FRAMES_PER_ACTIVITY = max(1, _env_int("BEEMONITOR_FRAMES_PER_ACTIVITY", 1))
+# Capture at most one candidate this often (s) during a clip, capped in number,
+# so a long clip doesn't grab a main still on every frame.
+FRAME_CAPTURE_INTERVAL = _env_float("BEEMONITOR_FRAME_CAPTURE_INTERVAL", 1.0)
+FRAME_MAX_CANDIDATES = max(FRAMES_PER_ACTIVITY, _env_int("BEEMONITOR_FRAME_MAX_CANDIDATES", 4))
+# Fractional padding added around the mover bbox for context before cropping.
+FRAME_CROP_PAD = _env_float("BEEMONITOR_FRAME_CROP_PAD", 0.4)
+# Downscale a crop so its longest side is at most this many px (keeps bytes tiny).
+FRAME_MAX_SIDE = _env_int("BEEMONITOR_FRAME_MAX_SIDE", 384)
 
 # Detection cost knob: run MOG2 on 1 of every N lores frames (timing stays
 # wall-clock based, so this only trades latency for CPU).
@@ -619,6 +639,89 @@ def _save_telemetry_still(cam, roi=None, draw_roi=False) -> None:
         log.warning("telemetry still capture failed: %s", e)
 
 
+# ---------------------------------------------------------------------------
+# Activity-frame sampling: crop the mover for taxonomic ID (queued for cellular)
+# ---------------------------------------------------------------------------
+
+def _largest_blob(blobs):
+    """The (x, y, w, h, area) blob with the greatest area, or None."""
+    return max(blobs, key=lambda b: b[4]) if blobs else None
+
+
+def _mover_crop(main_bgr, blob, roi):
+    """Crop the mover out of the main BGR frame.
+
+    ``blob`` is (x, y, w, h, area) in *lores* pixels relative to the gate ROI;
+    we add the ROI origin, scale lores->main, pad for context, and crop. Returns
+    ``(jpg_bytes, bbox_norm, (w, h))`` or None — bbox_norm is the padded crop box
+    in main-frame normalized (0..1) coords.
+    """
+    h, w = main_bgr.shape[:2]
+    bx, by, bw, bh, _area = blob
+    ox, oy = (roi[0], roi[1]) if roi is not None else (0, 0)
+    x1, y1, x2, y2 = _scale_roi(
+        (ox + bx, oy + by, ox + bx + bw, oy + by + bh),
+        (LORES_W, LORES_H), (w, h))
+    pad_x = int((x2 - x1) * FRAME_CROP_PAD)
+    pad_y = int((y2 - y1) * FRAME_CROP_PAD)
+    x1, y1 = max(0, x1 - pad_x), max(0, y1 - pad_y)
+    x2, y2 = min(w, x2 + pad_x), min(h, y2 + pad_y)
+    if x2 - x1 < 8 or y2 - y1 < 8:
+        return None
+    crop = main_bgr[y1:y2, x1:x2]
+    ch, cw = crop.shape[:2]
+    longest = max(ch, cw)
+    if longest > FRAME_MAX_SIDE:
+        s = FRAME_MAX_SIDE / longest
+        crop = cv2.resize(crop, (max(1, int(cw * s)), max(1, int(ch * s))),
+                          interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", crop, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+    if not ok:
+        return None
+    bbox_norm = [round(x1 / w, 5), round(y1 / h, 5), round(x2 / w, 5), round(y2 / h, 5)]
+    return buf.tobytes(), bbox_norm, (crop.shape[1], crop.shape[0])
+
+
+def _flush_activity_frames(uid, started_epoch, candidates):
+    """Write the top FRAMES_PER_ACTIVITY candidate crops + sidecars to the queue.
+
+    Each frame is a ``<uid>_<i>.jpg`` plus a ``<uid>_<i>.json`` sidecar; the JSON
+    is written last so the telemetry drainer only sees a complete pair. Telemetry
+    enforces the daily cellular cap; we just queue the best of this activity.
+    """
+    if not candidates:
+        return
+    top = sorted(candidates, key=lambda c: c["area"], reverse=True)[:FRAMES_PER_ACTIVITY]
+    peak = top[0]["area"]
+    try:
+        ACTIVITY_FRAMES_QUEUE.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        log.warning("activity frames: cannot create queue dir: %s", e)
+        return
+    written = 0
+    for i, c in enumerate(top):
+        base = ACTIVITY_FRAMES_QUEUE / f"{uid}_{i}"
+        meta = {
+            "activity_uid": uid,
+            "started_at": started_epoch,
+            "captured_at": c["captured_at"],
+            "bbox": c["bbox"],
+            "motion_score": c["area"],
+            "peak_motion": peak,
+            "kind": "crop",
+            "width": c["wh"][0],
+            "height": c["wh"][1],
+        }
+        try:
+            base.with_suffix(".jpg").write_bytes(c["jpg"])
+            base.with_suffix(".json").write_text(json.dumps(meta))
+            written += 1
+        except OSError as e:
+            log.warning("activity frames: write failed for %s: %s", uid, e)
+    if written:
+        log.info("activity frames: queued %d crop(s) for %s", written, uid)
+
+
 def record() -> None:
     """Main capture loop. Blocks until SIGTERM/SIGINT."""
     if not HAVE_PICAMERA2:
@@ -679,6 +782,12 @@ def record() -> None:
     cur_h264: Path | None = None
     cur_mp4: Path | None = None
 
+    # Activity-frame sampling state — one activity == one open segment.
+    act_uid: "str | None" = None
+    act_started = 0.0
+    act_cands: list = []
+    act_last_cap = 0.0
+
     # Per-segment / rolling stats for tuning.
     triggers = 0
     total_clip_time = 0.0
@@ -703,16 +812,26 @@ def record() -> None:
 
     def _open_segment(now_mono: float, reason: str):
         nonlocal encoding, seg_start, cur_h264, cur_mp4, triggers
+        nonlocal act_uid, act_started, act_cands, act_last_cap
         cur_h264, cur_mp4 = _snippet_paths(datetime.now())
         circ.fileoutput = str(cur_h264)
         circ.start()
         encoding = True
         seg_start = now_mono
         triggers += 1
+        # Start a fresh activity for taxonomic sampling. The short random suffix
+        # keeps the uid unique even if two clips open in the same wall-clock
+        # second (e.g. a max-len rotation that immediately reopens).
+        if ACTIVITY_FRAMES:
+            act_uid = f"{cur_mp4.stem}-{uuid.uuid4().hex[:4]}"
+            act_started = time.time()
+            act_cands = []
+            act_last_cap = 0.0
         log.info("clip START (%s) -> %s", reason, cur_mp4.name)
 
     def _close_segment(now_mono: float, reason: str):
         nonlocal encoding, cur_h264, cur_mp4, total_clip_time
+        nonlocal act_uid, act_cands
         circ.stop()
         encoding = False
         dur = now_mono - seg_start
@@ -720,6 +839,11 @@ def record() -> None:
         log.info("clip STOP (%s) len=%.1fs -> remux %s", reason, dur, cur_mp4.name)
         _spawn_remux(cur_h264, cur_mp4)
         cur_h264 = cur_mp4 = None
+        # Queue the strongest mover crops for this activity (best-effort).
+        if ACTIVITY_FRAMES and act_uid:
+            _flush_activity_frames(act_uid, act_started, act_cands)
+            act_uid = None
+            act_cands = []
 
     try:
         while _running:
@@ -748,6 +872,28 @@ def record() -> None:
 
             if motion and not encoding:
                 _open_segment(now_mono, "motion")
+
+            # While a clip is open, sample a crop of the mover (the largest motion
+            # blob) at most once every FRAME_CAPTURE_INTERVAL — capped per clip.
+            # At STOP we keep the strongest of these for taxonomic ID. Grabbing a
+            # main still is the costly bit, so it's rate-limited and bounded.
+            if (ACTIVITY_FRAMES and encoding and motion and gate.last_blobs
+                    and len(act_cands) < FRAME_MAX_CANDIDATES
+                    and (now_mono - act_last_cap) >= FRAME_CAPTURE_INTERVAL):
+                blob = _largest_blob(gate.last_blobs)
+                if blob is not None:
+                    try:
+                        main_bgr = _main_array_to_bgr(cam.capture_array("main"))
+                        sample = _mover_crop(main_bgr, blob, gate.roi)
+                        if sample is not None:
+                            jpg, bbox, wh = sample
+                            act_cands.append({
+                                "jpg": jpg, "bbox": bbox, "wh": wh,
+                                "area": float(blob[4]), "captured_at": time.time(),
+                            })
+                            act_last_cap = now_mono
+                    except Exception as e:  # never crash recording over a sample
+                        log.warning("activity frame capture failed: %s", e)
 
             if encoding:
                 # Force-rotate over-long segments (stuck scene / wind in frame).

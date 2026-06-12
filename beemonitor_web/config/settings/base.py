@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     "apps.docs",
     "apps.devices",
     "apps.setup",
+    "apps.monitor",
 ]
 
 MIDDLEWARE = [
@@ -173,6 +174,11 @@ DEVICE_ONLINE_GRACE_SECONDS = int(os.environ.get("DEVICE_ONLINE_GRACE_SECONDS", 
 # guide's uploader.env block). The App Runner host in prod.
 BEEMONITOR_DEVICE_API_BASE = os.environ.get(
     "BEEMONITOR_DEVICE_API_BASE", "https://mqnafc3ejc.us-east-1.awsapprunner.com")
+
+# --- Taxonomic monitoring (activity frames + BioCLIP) ----------------------
+# Max sampled frames accepted per activity (server-side guard; the device also
+# self-limits with its own daily cap). Beyond this, extra frames are ignored.
+MONITOR_MAX_FRAMES_PER_ACTIVITY = int(os.environ.get("MONITOR_MAX_FRAMES_PER_ACTIVITY", "3"))
 
 # --- AI setup assistant (Claude) -------------------------------------------
 # Set ANTHROPIC_API_KEY in the environment to enable the in-dashboard tutor.
