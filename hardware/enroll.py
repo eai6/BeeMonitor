@@ -3,11 +3,14 @@
 
 A unit flashed from a pre-baked image carries an *enrollment token* but no device
 key. On first boot this script:
-  1. reads /etc/beemonitor/uploader.env,
+  1. reads the per-card provisioning values (BEEMONITOR_ENROLL_TOKEN,
+     BEEMONITOR_API_BASE) from the FAT *boot* partition if present
+     (/boot/firmware/beemonitor.conf — written by prepare-card.sh from any
+     laptop), else from /etc/beemonitor/uploader.env,
   2. if BEEMONITOR_DEVICE_KEY is already set -> nothing to do,
-  3. else if BEEMONITOR_ENROLL_TOKEN is set -> POST it (+ this Pi's hardware id,
-     hostname, timezone) to /api/v1/devices/enroll, get a fresh device key, and
-     write it back into uploader.env.
+  3. else if a token is present -> POST it (+ this Pi's hardware id, hostname,
+     timezone) to /api/v1/devices/enroll, get a fresh device key, write it into
+     uploader.env, and clear the reusable token from the boot partition.
 
 Stdlib only (urllib), so it runs under the system python3 as root without the
 venv. Idempotent: re-running once a key exists is a no-op; the server maps a
@@ -24,6 +27,15 @@ from datetime import datetime
 
 ENV_FILE = os.environ.get("BEEMONITOR_ENV", "/etc/beemonitor/uploader.env")
 
+# The per-card provisioning file lives on the FAT boot partition so it can be
+# written from any laptop (macOS/Windows/Linux) without ext4 tooling. Bookworm
+# mounts the boot partition at /boot/firmware; older images used /boot.
+BOOT_CONF_CANDIDATES = [
+    os.environ.get("BEEMONITOR_BOOT_CONF"),
+    "/boot/firmware/beemonitor.conf",
+    "/boot/beemonitor.conf",
+]
+
 
 def _parse_env(path):
     env = {}
@@ -38,6 +50,35 @@ def _parse_env(path):
     except OSError:
         pass
     return env
+
+
+def _boot_conf():
+    """Return (path, dict) for the first boot-partition provisioning file found.
+
+    ('', {}) if none exists — a manually set up unit just uses uploader.env.
+    """
+    for path in BOOT_CONF_CANDIDATES:
+        if path and os.path.exists(path):
+            return path, _parse_env(path)
+    return "", {}
+
+
+def _clear_boot_token(path):
+    """Drop the reusable enrollment token from the FAT boot partition once a
+    device key has been issued, so an enrolled card doesn't keep a live
+    credential sitting on an easily-read partition. Best-effort, never fatal."""
+    try:
+        with open(path) as fh:
+            lines = [ln for ln in fh
+                     if not ln.strip().startswith("BEEMONITOR_ENROLL_TOKEN=")]
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            fh.writelines(lines)
+        os.replace(tmp, path)
+        print("enroll: cleared enrollment token from boot partition")
+    except OSError as e:
+        print(f"enroll: could not clear boot token (non-fatal): {e}",
+              file=sys.stderr)
 
 
 def _hw_id():
@@ -102,11 +143,19 @@ def main():
     if env.get("BEEMONITOR_DEVICE_KEY"):
         print("enroll: device key already present — nothing to do")
         return 0
-    token = env.get("BEEMONITOR_ENROLL_TOKEN", "").strip()
+
+    # Per-card provisioning may live on the FAT boot partition (written by
+    # prepare-card.sh / the browser installer from any laptop) or in
+    # uploader.env. The boot partition wins — it's the freshly-baked per-card
+    # value.
+    boot_path, boot = _boot_conf()
+    token = (boot.get("BEEMONITOR_ENROLL_TOKEN")
+             or env.get("BEEMONITOR_ENROLL_TOKEN", "")).strip()
     if not token:
         print("enroll: no BEEMONITOR_ENROLL_TOKEN — skipping (manual setup)")
         return 0
-    api_base = env.get("BEEMONITOR_API_BASE", "").rstrip("/")
+    api_base = (boot.get("BEEMONITOR_API_BASE")
+                or env.get("BEEMONITOR_API_BASE", "")).rstrip("/")
     if not api_base:
         print("enroll: BEEMONITOR_API_BASE missing", file=sys.stderr)
         return 1
@@ -131,6 +180,8 @@ def main():
             key = data.get("device_key")
             if key:
                 _write_device_key(ENV_FILE, env, key)
+                if boot_path:
+                    _clear_boot_token(boot_path)
                 print(f"enroll: provisioned device '{data.get('name')}' "
                       f"(id={data.get('device_id')}) — key written")
                 return 0

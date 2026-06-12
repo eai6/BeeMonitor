@@ -174,6 +174,10 @@ DEVICE_ONLINE_GRACE_SECONDS = int(os.environ.get("DEVICE_ONLINE_GRACE_SECONDS", 
 # guide's uploader.env block). The App Runner host in prod.
 BEEMONITOR_DEVICE_API_BASE = os.environ.get(
     "BEEMONITOR_DEVICE_API_BASE", "https://mqnafc3ejc.us-east-1.awsapprunner.com")
+# Public download URL for the pre-built "golden" SD image (.img.xz) users flash
+# with Raspberry Pi Imager before browser-enrolling. Empty = no download link
+# shown (the enrollment page falls back to "build/flash your own" guidance).
+BEEMONITOR_GOLDEN_IMAGE_URL = os.environ.get("BEEMONITOR_GOLDEN_IMAGE_URL", "")
 
 # --- Taxonomic monitoring (activity frames + BioCLIP) ----------------------
 # Max sampled frames accepted per activity (server-side guard; the device also

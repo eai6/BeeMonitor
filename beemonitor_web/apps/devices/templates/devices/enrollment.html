@@ -14,6 +14,23 @@
     </p>
   </div>
 
+  <div class="bg-white shadow rounded-lg p-5 mb-6">
+    <h2 class="text-sm font-semibold text-gray-700 mb-3">How to set up a card</h2>
+    <ol class="text-sm text-gray-600 space-y-2 list-decimal ml-5">
+      <li>
+        <strong>Download the BeeMonitor image.</strong>
+        {% if image_url %}
+          <a href="{{ image_url }}" class="text-amber-700 hover:underline">Download .img.xz</a> —
+          then flash it with <a href="https://www.raspberrypi.com/software/" class="text-amber-700 hover:underline">Raspberry Pi Imager</a> (choose <em>Use custom image</em>).
+        {% else %}
+          <span class="text-gray-400">(no image published yet — see the build guide in <code>hardware/provision/</code>)</span>
+        {% endif %}
+      </li>
+      <li><strong>Generate a token</strong> below, then click <em>Choose SD card &amp; write</em> to drop it onto the flashed card (Chrome/Edge).</li>
+      <li><strong>Assemble the hardware, insert the card, power on.</strong> The unit enrolls itself and appears on your <a href="{% url 'devices:list' %}" class="text-amber-700 hover:underline">Devices</a> page.</li>
+    </ol>
+  </div>
+
   {% if new_token %}
   <div class="bg-yellow-50 border border-yellow-300 rounded-lg p-5 mb-6">
     <p class="text-sm font-medium text-yellow-900">Copy this token now — it won't be shown again.</p>
@@ -23,18 +40,37 @@
       <button type="button" onclick="copyTok()" id="tok-btn"
               class="bg-yellow-700 hover:bg-yellow-800 text-white px-3 py-2 rounded text-sm font-medium whitespace-nowrap">Copy</button>
     </div>
-    <div class="mt-4">
-      <p class="text-xs text-yellow-900 font-medium mb-1">Put it on the SD card's config (one line in <code>/etc/beemonitor/uploader.env</code>):</p>
-      <pre class="bg-gray-900 text-green-400 rounded p-3 text-xs overflow-x-auto"
+    <!-- Primary path: write the token straight onto the card's boot partition
+         from the browser (Chromium File System Access API). -->
+    <div class="mt-5" id="card-writer" hidden>
+      <p class="text-xs text-yellow-900 font-medium mb-1">
+        Write it straight to the SD card — no terminal needed
+        <span class="text-yellow-700 font-normal">(Chrome or Edge, desktop)</span>
+      </p>
+      <ol class="text-xs text-yellow-800 list-decimal ml-4 space-y-0.5 mb-3">
+        <li>Flash the BeeMonitor image to the card (Raspberry Pi Imager) and keep it plugged in.</li>
+        <li>Click below and pick the card's <code>bootfs</code> drive.</li>
+      </ol>
+      <button type="button" onclick="writeCard()" id="cw-btn"
+              class="bg-yellow-700 hover:bg-yellow-800 text-white px-3 py-2 rounded text-sm font-medium">
+        Choose SD card &amp; write
+      </button>
+      <p id="cw-status" class="text-xs mt-2"></p>
+    </div>
+
+    <!-- Fallback: paste the config by hand (any OS / Safari / Firefox). -->
+    <details class="mt-4 text-xs">
+      <summary class="text-yellow-900 font-medium cursor-pointer" id="manual-summary">Prefer to set it up by hand?</summary>
+      <p class="text-yellow-800 mt-2 mb-1">Drop a file named <code>beemonitor.conf</code> on the card's <code>bootfs</code> partition, or add these lines to <code>/etc/beemonitor/uploader.env</code> on the Pi:</p>
+      <pre class="bg-gray-900 text-green-400 rounded p-3 overflow-x-auto"
 >BEEMONITOR_API_BASE={{ api_base }}
-BEEMONITOR_ENROLL_TOKEN={{ new_token }}
-BEEMONITOR_RECORD_DIR=/home/beemonitor/Desktop/cameraOutput/beeHotel</pre>
-      <p class="text-xs text-yellow-800 mt-2">
+BEEMONITOR_ENROLL_TOKEN={{ new_token }}</pre>
+      <p class="text-yellow-800 mt-2">
         On first boot (no device key present), the unit enrolls itself, writes its
         own key, and starts recording. Re-flashing the same Pi re-binds to the
         same device.
       </p>
-    </div>
+    </details>
   </div>
   {% endif %}
 
@@ -79,6 +115,67 @@ BEEMONITOR_RECORD_DIR=/home/beemonitor/Desktop/cameraOutput/beeHotel</pre>
       var b = document.getElementById('tok-btn'); var o = b.textContent;
       b.textContent = 'Copied!'; setTimeout(function () { b.textContent = o; }, 1500);
     });
+  }
+
+  // --- Write the token straight onto the card's boot partition ---------------
+  // The boot partition is FAT32, so the File System Access API can write to it
+  // directly. Chromium-only (Chrome/Edge/Brave); Safari/Firefox fall back to the
+  // manual <details> block, which we auto-open when the API is missing.
+  var API_BASE = "{{ api_base|escapejs }}";
+  var ENROLL_TOKEN = "{{ new_token|escapejs }}";
+
+  (function () {
+    if ('showDirectoryPicker' in window) {
+      var w = document.getElementById('card-writer');
+      if (w) w.hidden = false;
+    } else {
+      var d = document.querySelector('details');           // open the manual fallback
+      if (d) d.open = true;
+      var s = document.getElementById('manual-summary');
+      if (s) s.textContent = 'Set it up by hand (your browser can’t write the card — use Chrome or Edge for that)';
+    }
+  })();
+
+  function cwStatus(msg, cls) {
+    var el = document.getElementById('cw-status');
+    el.textContent = msg;
+    el.className = 'text-xs mt-2 ' + (cls || 'text-yellow-800');
+  }
+
+  async function writeCard() {
+    var dir;
+    try {
+      dir = await window.showDirectoryPicker({ mode: 'readwrite' });
+    } catch (e) { return; }  // user cancelled the picker
+
+    // Sanity-check it's actually a Pi boot partition before writing.
+    var looksBoot = false;
+    try {
+      for await (var entry of dir.values()) {
+        if (entry.name === 'config.txt' || entry.name === 'cmdline.txt') { looksBoot = true; break; }
+      }
+    } catch (e) { /* can't enumerate -> just ask below */ }
+    if (!looksBoot && !confirm(
+        "This doesn't look like a Raspberry Pi boot drive (no config.txt found). " +
+        "Write beemonitor.conf here anyway?")) {
+      return;
+    }
+
+    var conf = 'BEEMONITOR_API_BASE=' + API_BASE + '\n' +
+               'BEEMONITOR_ENROLL_TOKEN=' + ENROLL_TOKEN + '\n';
+    try {
+      var fh = await dir.getFileHandle('beemonitor.conf', { create: true });
+      var ws = await fh.createWritable();
+      await ws.write(conf);
+      await ws.close();
+      cwStatus('✓ Wrote beemonitor.conf to "' + dir.name + '". Eject the card, ' +
+               'put it in the Pi, and power on — it appears here on first boot.',
+               'text-green-700 font-medium');
+      document.getElementById('cw-btn').textContent = 'Write to another card';
+    } catch (e) {
+      cwStatus('Could not write to the card: ' + e.message +
+               ' (is the drive read-only or full?)', 'text-red-600');
+    }
   }
 </script>
 {% endif %}

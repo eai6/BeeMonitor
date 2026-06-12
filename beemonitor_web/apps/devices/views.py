@@ -453,6 +453,7 @@ class DeviceEnrollmentView(LoginRequiredMixin, TemplateView):
         ctx["tokens"] = EnrollmentToken.objects.filter(user=self.request.user)
         ctx["new_token"] = self.request.session.pop("enroll_token_raw", None)
         ctx["api_base"] = settings.BEEMONITOR_DEVICE_API_BASE
+        ctx["image_url"] = settings.BEEMONITOR_GOLDEN_IMAGE_URL
         return ctx
 
     def post(self, request, *args, **kwargs):
