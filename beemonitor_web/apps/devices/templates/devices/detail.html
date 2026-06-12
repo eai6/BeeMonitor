@@ -530,7 +530,7 @@
       {% endif %}
       <div class="flex gap-1">
         {% for r in activity_ranges %}
-          <a href="?range={{ r.key }}" class="px-2 py-1 rounded {% if r.key == activity_range %}bg-amber-600 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-gray-200{% endif %}">{{ r.label }}</a>
+          <a href="?range={{ r.key }}" data-range="{{ r.key }}" class="act-range-btn px-2 py-1 rounded {% if r.key == activity_range %}bg-amber-600 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-gray-200{% endif %}">{{ r.label }}</a>
         {% endfor %}
       </div>
     </div>
@@ -576,7 +576,7 @@
     <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
       <h3 class="text-sm font-semibold text-gray-700">
         Activity per <span id="act-gran-label">hour</span>
-        <span class="text-xs font-normal text-gray-400">· {{ display_tz|default:"UTC" }} · {{ activity_range }}</span>
+        <span class="text-xs font-normal text-gray-400">· {{ display_tz|default:"UTC" }} · <span id="act-range-label">{{ activity_range }}</span></span>
       </h3>
       <button id="act-csv-btn" class="px-3 py-1.5 text-xs rounded bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100">Download CSV</button>
     </div>
@@ -842,6 +842,27 @@
         buildActivityTable(d.activity_series, d.weather_enabled, d.activity_gran);
       }).catch(function () {});
   }
+  // One range selector drives BOTH the chart and the table, in place (no reload),
+  // so they always show the same period and stay visually connected.
+  document.querySelectorAll('.act-range-btn').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      RANGE = btn.getAttribute('data-range');
+      document.querySelectorAll('.act-range-btn').forEach(function (b) {
+        var on = b === btn;
+        b.classList.toggle('bg-amber-600', on);
+        b.classList.toggle('text-white', on);
+        b.classList.toggle('bg-gray-100', !on);
+        b.classList.toggle('text-gray-600', !on);
+        b.classList.toggle('hover:bg-gray-200', !on);
+      });
+      var rl = document.getElementById('act-range-label');
+      if (rl) rl.textContent = RANGE;
+      try { history.replaceState(null, '', '?range=' + RANGE); } catch (_) {}
+      poll();  // refetch this range -> rebuilds the chart AND the table at once
+    });
+  });
+
   setInterval(poll, 5000);  // matches the 5s minimum beat rate
 })();
 </script>

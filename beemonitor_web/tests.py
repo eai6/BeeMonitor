@@ -1202,3 +1202,7 @@ class ActivityTableRenderTests(TestCase):
         self.assertIn('id="act-csv-btn"', body)
         self.assertIn("buildActivityTable", body)
         self.assertIn("Activity per", body)
+        # One range selector drives both chart + table (shared, in-place switch).
+        self.assertIn("act-range-btn", body)
+        self.assertIn("data-range=", body)
+        self.assertIn('id="act-range-label"', body)
