@@ -98,6 +98,10 @@ def predict_fn(payload, pipeline):
             two_mode_tracking=bool(payload.get("two_mode_tracking", True)),
             custom_nest_model_path=payload.get("custom_nest_model_path", "") or "",
             custom_bee_model_path=payload.get("custom_bee_model_path", "") or "",
+            # Device-supplied hotel ROI + nest tubes (normalized); when both are
+            # present the run uses them and the nest model is the backup.
+            hotel_roi=payload.get("hotel_roi"),
+            nest_layout=payload.get("nest_layout"),
         )
     except Exception as exc:
         logger.exception("predict_fn: pipeline failed for job %s", job_id)

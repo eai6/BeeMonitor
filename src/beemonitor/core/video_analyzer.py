@@ -92,23 +92,31 @@ class BeeMonitor:
         config = Config.from_yaml(config_path)
         return cls(config=config)
     
-    def analyze_video(self, video_path, nest_video_path=None, output_folder=None, visualize=None, detection_mode='yolo'):
+    def analyze_video(self, video_path, nest_video_path=None, output_folder=None, visualize=None, detection_mode='yolo', manual_nests=None):
         video_file = Path(video_path)
         if not video_file.exists():
             raise FileNotFoundError(f"Video file not found: {video_path}")
-        
+
         if visualize is None:
             visualize = self.config.output.save_visualizations
         if output_folder is None:
             output_folder = self.config.output.base_folder
-        
+
         Path(output_folder).mkdir(parents=True, exist_ok=True)
         logger.info(f"Starting analysis of {video_path}")
-        
-        if nest_video_path is None:
-            nest_video_path = video_path
-        logger.info("Step 1/3: Detecting nests...")
-        nests = self.get_nest_detections(nest_video_path)
+
+        # manual_nests = a pre-supplied {'hotel': (x1,y1,x2,y2), 'nests': {id: bbox}}
+        # in pixel coords (e.g. a device's configured hotel ROI + nest tubes). When
+        # given, skip nest detection — the nest-detection model is the BACKUP used
+        # only when no manual layout is provided.
+        if manual_nests is not None:
+            logger.info("Step 1/3: Using provided hotel ROI + nest tubes (skipping nest detection).")
+            nests = manual_nests
+        else:
+            if nest_video_path is None:
+                nest_video_path = video_path
+            logger.info("Step 1/3: Detecting nests...")
+            nests = self.get_nest_detections(nest_video_path)
         if nests is None:
             logger.warning("No nests detected, skipping video analysis")
             return None

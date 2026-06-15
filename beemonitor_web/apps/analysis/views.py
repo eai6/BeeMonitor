@@ -198,6 +198,12 @@ def _spawn_gpu_job(job_pk: int) -> None:
             payload["custom_nest_model_path"] = job.config["custom_nest_model_path"]
         if job.config.get("custom_bee_model_path"):
             payload["custom_bee_model_path"] = job.config["custom_bee_model_path"]
+        # Device hotel ROI + nest tubes (set via "use device ROI") → worker uses
+        # them; the nest model is the backup.
+        if job.config.get("hotel_roi"):
+            payload["hotel_roi"] = job.config["hotel_roi"]
+        if job.config.get("nest_layout"):
+            payload["nest_layout"] = job.config["nest_layout"]
 
         input_uri = _put_inference_payload(job.modal_job_id, payload)
         output_uri = _invoke_endpoint_async(job.modal_job_id, input_uri)
@@ -255,6 +261,12 @@ def _spawn_gpu_batch(jobs_data: list, detection_mode: str, confidence: float,
                     payload["custom_nest_model_path"] = custom_nest_model_path
                 if custom_bee_model_path:
                     payload["custom_bee_model_path"] = custom_bee_model_path
+                # Per-video device hotel ROI + nest tubes (model is the backup).
+                vcfg = jd.get("config") or {}
+                if vcfg.get("hotel_roi"):
+                    payload["hotel_roi"] = vcfg["hotel_roi"]
+                if vcfg.get("nest_layout"):
+                    payload["nest_layout"] = vcfg["nest_layout"]
 
                 input_uri = _put_inference_payload(jd["job_id"], payload)
                 output_uri = _invoke_endpoint_async(jd["job_id"], input_uri)
@@ -805,6 +817,7 @@ class BatchJobView(LoginRequiredMixin, View):
                 "job_id": modal_job_id,
                 "user_id": str(request.user.pk),
                 "video": video,
+                "config": video_configs[video.pk],  # carries hotel_roi/nest_layout
             })
 
         # Spawn all jobs on Modal

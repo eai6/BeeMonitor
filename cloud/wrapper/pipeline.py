@@ -81,6 +81,8 @@ class CloudPipeline:
         two_mode_tracking: bool = True,
         custom_nest_model_path: str = "",
         custom_bee_model_path: str = "",
+        hotel_roi=None,
+        nest_layout=None,
     ) -> PipelineResult:
         """Run the full BeeMonitor pipeline on a video stored in S3.
 
@@ -134,6 +136,8 @@ class CloudPipeline:
             two_mode_tracking=two_mode_tracking,
             custom_nest_local=custom_nest_local,
             custom_bee_local=custom_bee_local,
+            hotel_roi=hotel_roi,
+            nest_layout=nest_layout,
         )
 
         # Step 4 — Post-processing: foraging trips + interactions
@@ -295,6 +299,8 @@ class CloudPipeline:
         two_mode_tracking: bool = True,
         custom_nest_local: str = "",
         custom_bee_local: str = "",
+        hotel_roi=None,
+        nest_layout=None,
     ):
         """Build a BeeMonitor Config, instantiate, and run."""
         from beemonitor.core.config import Config, ModelConfig
@@ -319,6 +325,11 @@ class CloudPipeline:
         config.tracking.enable_two_mode_tracking = two_mode_tracking
         config.output.save_visualizations = visualize
 
+        # Device-supplied hotel ROI + nest tubes (normalized 0..1) → pixel-space
+        # manual_nests so the run uses the human-set layout (model is the backup).
+        # Requires BOTH the ROI and the tubes; otherwise fall back to detection.
+        manual_nests = self._build_manual_nests(video_local, hotel_roi, nest_layout)
+
         from beemonitor import BeeMonitor
 
         monitor = BeeMonitor(config=config)
@@ -327,8 +338,41 @@ class CloudPipeline:
             output_folder=output_dir,
             visualize=visualize,
             detection_mode=detection_mode,
+            manual_nests=manual_nests,
         )
         return result
+
+    @staticmethod
+    def _build_manual_nests(video_local: str, hotel_roi, nest_layout):
+        """Turn a device's normalized hotel ROI + nest layout into the pixel-space
+        ``{'hotel': (x1,y1,x2,y2), 'nests': {id: (x1,y1,x2,y2)}}`` the analyzer
+        consumes. Returns None (→ model detection) unless BOTH are present + valid."""
+        if not hotel_roi or not nest_layout:
+            return None
+        try:
+            import cv2
+            cap = cv2.VideoCapture(video_local)
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            cap.release()
+            if not (w and h):
+                return None
+
+            def to_px(box):
+                return (int(box[0] * w), int(box[1] * h), int(box[2] * w), int(box[3] * h))
+
+            nests = {}
+            for item in nest_layout:
+                box = item.get("box")
+                if box and len(box) == 4:
+                    nests[item.get("id")] = to_px(box)
+            if not nests:
+                return None
+            logger.info("Using device hotel ROI + %d nest tubes (manual layout)", len(nests))
+            return {"hotel": to_px(hotel_roi), "nests": nests}
+        except Exception as e:  # never let layout parsing break the run — fall back
+            logger.warning("manual_nests build failed (%s) — falling back to detection", e)
+            return None
 
     def _upload_results(
         self, job_id: str, user_id: str, output_dir: Path, video_local: str
