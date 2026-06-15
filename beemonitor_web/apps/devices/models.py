@@ -175,6 +175,24 @@ class Device(models.Model):
     roi_override = models.JSONField(null=True, blank=True)
     nest_layout = models.JSONField(default=list, blank=True)
 
+    # Daily cap on mover-crop uploads over cellular (BioCLIP feed). Pushed in the
+    # heartbeat; the device honours it over its env default. None = use the device
+    # default; 0 = stop crop upload entirely (cellular-budget kill-switch).
+    frame_daily_cap = models.PositiveIntegerField(null=True, blank=True)
+
+    # On-device YOLO bee-confirmation mode, pushed in the heartbeat (the recorder
+    # hot-reloads it over its env default). "" = device default; off = no
+    # confirmation; tag = observe/label without suppressing; gate = filter
+    # (unconfirmed clips aren't counted as activity + crops not sent).
+    BEE_CONFIRM_MODES = [
+        ("", "Device default"),
+        ("off", "Off"),
+        ("tag", "Tag (observe only)"),
+        ("gate", "Gate (filter)"),
+    ]
+    bee_confirm_mode = models.CharField(
+        max_length=8, blank=True, default="", choices=BEE_CONFIRM_MODES)
+
     # Hardware id (Pi serial), set during zero-touch enrollment so re-enrolling
     # the same physical unit maps back to the same Device instead of duplicating.
     hw_id = models.CharField(max_length=64, blank=True, default="", db_index=True)

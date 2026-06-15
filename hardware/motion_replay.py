@@ -182,6 +182,68 @@ def _segments_for(video: Path, roi, warmup_s: float, detect_every: int,
     return fps, i + 1, segments, stats
 
 
+def _confirm_scan(video: Path, roi, detect_every: int) -> None:
+    """Offline bee-confirmation scan — runs the SAME logic the field unit would
+    (full-frame YOLO + mover-overlap gate), sampling ~1 frame/sec on motion, and
+    reports whether this clip would be CONFIRMED. Validate accuracy + read real
+    per-inference latency here (no Pi) before trusting `gate` mode in the field.
+    """
+    from motion.confirm import BeeConfirmer  # local: pulls in ultralytics/torch
+
+    c = BeeConfirmer(mode="off")          # no worker thread; we drive _infer sync
+    if not c._load():
+        print("confirm: model unavailable (need ultralytics + CPU torch) — skipped")
+        return
+    cap = cv2.VideoCapture(str(video))
+    if not cap.isOpened():
+        print("confirm: cannot open video"); return
+    fps = cap.get(cv2.CAP_PROP_FPS) or mm.FPS
+    warmup_frames = int(1.0 * fps)
+    sample_every = max(1, int(fps))       # ~1/sec, like FRAME_CAPTURE_INTERVAL
+    gate = mm.MotionGate(roi=roi)
+    i = -1
+    runs = hits = 0
+    best = 0.0
+    taxa: dict = {}
+    last_sample = -10 ** 9
+    import time as _t
+    t_infer = 0.0
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        i += 1
+        gray = cv2.cvtColor(cv2.resize(frame, (mm.LORES_W, mm.LORES_H)),
+                            cv2.COLOR_BGR2GRAY)
+        if i < warmup_frames:
+            gate.warm(gray); continue
+        motion, _, _ = gate.update(gray)
+        if not (motion and gate.last_blobs) or (i - last_sample) < sample_every:
+            continue
+        last_sample = i
+        t0 = _t.monotonic()
+        conf, taxon = c._infer(frame, gate.last_blobs, roi)
+        t_infer += _t.monotonic() - t0
+        runs += 1
+        if conf is not None:
+            hits += 1
+            best = max(best, conf)
+            taxa[taxon] = taxa.get(taxon, 0) + 1
+    cap.release()
+    verdict = "CONFIRMED" if hits >= c.min_confirmations else "UNCONFIRMED"
+    print("confirm:")
+    print(f"  scanned {runs} motion frame(s); {hits} had a bee over the mover; "
+          f"max conf {best:.2f}")
+    if taxa:
+        print(f"  taxa: {taxa}")
+    if runs:
+        print(f"  mean inference: {1000 * t_infer / runs:.0f} ms/frame "
+              f"(imgsz={c.imgsz}; the Pi 4 CPU will be slower)")
+    print(f"  => clip would be {verdict}  (>= {c.min_confirmations} overlapping "
+          f"bee detection(s) confirms; field unit coasts/stops at max_runs="
+          f"{c.max_runs})")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -209,6 +271,10 @@ def main() -> int:
                     help="qualifying blobs needed to call it motion (production=%d)" % mm.MIN_MOTION_BLOBS)
     ap.add_argument("--var", type=float, default=mm.MOG2_VAR_THRESHOLD,
                     help="MOG2 var threshold; higher = less sensitive (production=%.0f)" % mm.MOG2_VAR_THRESHOLD)
+    ap.add_argument("--confirm", action="store_true",
+                    help="run the offline bee-confirmation scan (YOLO + mover "
+                         "overlap) and report CONFIRMED/UNCONFIRMED + latency, "
+                         "then exit — validates 'gate' mode before field rollout")
     ap.add_argument("--no-cut", action="store_true",
                     help="don't write snippet files (fast sensitivity sweeps)")
     args = ap.parse_args()
@@ -228,6 +294,10 @@ def main() -> int:
           f"max={args.max_seg}s")
 
     roi = _resolve_roi(args.video, args.roi, args.full_frame)
+
+    if args.confirm:
+        _confirm_scan(args.video, roi, args.detect_every)
+        return 0
 
     fps, n_frames, segments, stats = _segments_for(
         args.video, roi, args.warmup, args.detect_every,

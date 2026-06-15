@@ -195,6 +195,22 @@ class UploadCompleteView(APIView):
         )
         final_recorded_at = recorded_at or parsed_recorded_at or timezone.now()
 
+        metadata = {"device_id": device.id, "device_name": device.name}
+        # On-device YOLO bee-confirmation verdict (hardware `motion/confirm.py`).
+        # ALL clips upload; this tag lets the dashboard flag clips the device
+        # couldn't confirm as a bee and gate the expensive automated video
+        # analysis (g4dn) on them. `bee_confirmed` is a flat bool for easy filters.
+        bee_tag = request.data.get("bee")
+        if isinstance(bee_tag, dict):
+            metadata["bee_confirmed"] = bee_tag.get("confirm_status") == "confirmed"
+            metadata["bee"] = {
+                "status": bee_tag.get("confirm_status"),
+                "confidence": bee_tag.get("bee_confidence"),
+                "taxon": bee_tag.get("taxon"),
+                "runs": bee_tag.get("confirm_runs"),
+                "mode": bee_tag.get("mode"),
+            }
+
         video = Video.objects.create(
             user=device.owner,
             device=device,
@@ -204,7 +220,7 @@ class UploadCompleteView(APIView):
             status=Video.Status.READY,
             recorded_at=final_recorded_at,
             site_name=parsed_site or device.location or "",
-            metadata={"device_id": device.id, "device_name": device.name},
+            metadata=metadata,
         )
 
         logger.info(

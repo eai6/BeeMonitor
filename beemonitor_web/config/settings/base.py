@@ -187,6 +187,13 @@ MONITOR_MAX_FRAMES_PER_ACTIVITY = int(os.environ.get("MONITOR_MAX_FRAMES_PER_ACT
 # disabled: frames still ingest + display, just no taxonomic classification, so
 # Phase 0 keeps working until the endpoint is deployed.
 SAGEMAKER_BIOCLIP_ENDPOINT_NAME = os.environ.get("SAGEMAKER_BIOCLIP_ENDPOINT_NAME", "")
+# Kill-switch for automatic per-frame BioCLIP classification on ingest. Set
+# MONITOR_BIOCLIP_AUTOPROCESS=false to stop spending SageMaker compute on incoming
+# frames (e.g. while field sites have no insects yet) WITHOUT unconfiguring the
+# endpoint — frames still ingest + display, and manual/backfill classification
+# (manage.py classify_activities) still works. Off => the ingest hook no-ops.
+MONITOR_BIOCLIP_AUTOPROCESS = os.environ.get(
+    "MONITOR_BIOCLIP_AUTOPROCESS", "true").strip().lower() in {"1", "true", "yes", "on"}
 # Keep this many ranked predictions per frame (top-1 drives the Detection; the
 # rest live in Detection.raw for the reasoning agent later).
 MONITOR_BIOCLIP_TOPK = int(os.environ.get("MONITOR_BIOCLIP_TOPK", "5"))

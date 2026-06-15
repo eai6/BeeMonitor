@@ -62,9 +62,17 @@ def enabled() -> bool:
     return bool(getattr(settings, "SAGEMAKER_BIOCLIP_ENDPOINT_NAME", ""))
 
 
+def autoprocess_enabled() -> bool:
+    """True when automatic per-frame classification on ingest is allowed. The
+    MONITOR_BIOCLIP_AUTOPROCESS kill-switch stops auto-runs (saving SageMaker
+    compute) while still permitting manual/backfill classification."""
+    return bool(getattr(settings, "MONITOR_BIOCLIP_AUTOPROCESS", True))
+
+
 def classify_frame_async(frame_id: int) -> None:
-    """Queue classification of one frame on the bounded pool (non-blocking)."""
-    if not enabled():
+    """Queue classification of one frame on the bounded pool (non-blocking).
+    No-ops when the endpoint is unconfigured OR auto-processing is switched off."""
+    if not enabled() or not autoprocess_enabled():
         return
     _pool().submit(classify_frame, frame_id)
 

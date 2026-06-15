@@ -117,6 +117,10 @@ MOTION_TUNING_FILE = RECORD_DIR.parent / "motion_tuning.json"
 # Dashboard ROI editor outputs (normalized): hotel ROI override + nest layout.
 ROI_OVERRIDE_FILE = RECORD_DIR.parent / "roi_override.json"
 NEST_LAYOUT_FILE = RECORD_DIR.parent / "nest_layout.json"
+# Dashboard-pushed bee-confirmation mode (off|tag|gate); the recorder hot-reloads
+# it over its env default. Lets a no-shell unit be switched between observe (tag)
+# and filter (gate) remotely.
+BEE_CONFIRM_MODE_FILE = RECORD_DIR.parent / "bee_confirm_mode.json"
 
 # Activity-frame upload (taxonomic monitoring). The recorder queues mover crops
 # here; we ship them over cellular under a daily cap. See main_motion.py +
@@ -132,6 +136,10 @@ FRAME_BATCH_PER_BEAT = int(os.environ.get("BEEMONITOR_FRAME_BATCH_PER_BEAT", "6"
 # (a unit offline for days, or a hive far over cap) so disk can't fill.
 FRAME_QUEUE_MAX = int(os.environ.get("BEEMONITOR_FRAME_QUEUE_MAX", "1000"))
 FRAME_SENT_FILE = STATE_DIR / "frames-sent.json"  # {"date": "YYYY-MM-DD", "count": N}
+# Dashboard-pushed override of the daily cap (so a no-shell unit can be throttled
+# — or set to 0 to stop crop upload entirely — without editing uploader.env). The
+# heartbeat may carry ``frame_daily_cap``; when present it wins over the env value.
+FRAME_CAP_FILE = STATE_DIR / "frame-cap.json"  # {"cap": N}
 
 # Storage cleanup: delete local clips a human cleared for deletion on the
 # dashboard (GET/POST /api/v1/devices/cleanup). Cheap JSON, runs over cellular.
@@ -352,9 +360,15 @@ def _video_stats(window_seconds: int) -> dict:
             recordings_bytes += st.st_size  # footprint of ALL clips on the card
             if st.st_mtime > newest:
                 newest = st.st_mtime
-            if st.st_mtime >= now - window_seconds:
+            # Bee confirmation (gate mode): a clip the on-device YOLO couldn't
+            # confirm is marked `<clip>.mp4.unconfirmed`. It still records +
+            # uploads (counted in total/pending/bytes), but is NOT counted as a
+            # bee ACTIVITY — so the dashboard/telemetry activity proxy isn't
+            # inflated by shadows. Untagged clips (off mode / confirmed) count.
+            is_activity = not mp4.with_suffix(mp4.suffix + ".unconfirmed").exists()
+            if is_activity and st.st_mtime >= now - window_seconds:
                 recent += 1
-            if st.st_mtime >= hist_cutoff:
+            if is_activity and st.st_mtime >= hist_cutoff:
                 key = _clip_hour_key(mp4.name, st.st_mtime)
                 by_hour[key] = by_hour.get(key, 0) + 1
             if not mp4.with_suffix(mp4.suffix + ".uploaded").exists():
@@ -757,10 +771,61 @@ def _send_one_frame(jpg: Path, meta_raw: str) -> "bool | None":
     return None if 400 <= r.status_code < 500 else False
 
 
+def _effective_frame_cap() -> int:
+    """Daily crop-upload cap in force: a dashboard-pushed value wins over the env
+    default. Lets the fleet be throttled (or stopped, cap=0) without shell access."""
+    try:
+        d = json.loads(FRAME_CAP_FILE.read_text())
+        cap = d.get("cap")
+        if isinstance(cap, int) and not isinstance(cap, bool) and cap >= 0:
+            return cap
+    except (OSError, ValueError, AttributeError):
+        pass
+    return FRAME_DAILY_CAP
+
+
+def _apply_frame_cap(value) -> None:
+    """Persist a dashboard-pushed daily crop cap (only when changed). Ignores
+    absent/invalid values so a cloud that doesn't send the field never clobbers a
+    locally-set cap. Set 0 to stop crop upload over cellular entirely."""
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        return
+    try:
+        cur = _effective_frame_cap()
+        if value != cur:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            FRAME_CAP_FILE.write_text(json.dumps({"cap": value}))
+            log.info("frame daily cap set to %d (was %d)", value, cur)
+    except OSError as e:
+        log.warning("could not write frame cap: %s", e)
+
+
+def _apply_bee_mode(value) -> None:
+    """Persist a dashboard-pushed bee-confirmation mode (off|tag|gate) to the file
+    the recorder hot-reloads. Ignores absent/invalid values so a cloud that
+    doesn't send the field never clobbers a locally-set mode."""
+    if not isinstance(value, str):
+        return
+    mode = value.strip().lower()
+    if mode not in ("off", "tag", "gate"):
+        return
+    try:
+        new = json.dumps({"mode": mode}, sort_keys=True)
+        cur = (BEE_CONFIRM_MODE_FILE.read_text().strip()
+               if BEE_CONFIRM_MODE_FILE.exists() else "")
+        if new != cur:
+            BEE_CONFIRM_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            BEE_CONFIRM_MODE_FILE.write_text(new)
+            log.info("bee confirm mode set to %s", mode)
+    except OSError as e:
+        log.warning("could not write bee confirm mode: %s", e)
+
+
 def _drain_activity_frames() -> None:
     """Ship queued mover crops over cellular, under the daily cap. Best-effort:
     never raises, and stops on the first transient error to retry next beat."""
-    if FRAME_DAILY_CAP <= 0 or not ACTIVITY_FRAMES_QUEUE.is_dir():
+    cap = _effective_frame_cap()
+    if cap <= 0 or not ACTIVITY_FRAMES_QUEUE.is_dir():
         return
     metas = sorted(ACTIVITY_FRAMES_QUEUE.glob("*.json"), key=_safe_mtime)
     if not metas:
@@ -780,7 +845,7 @@ def _drain_activity_frames() -> None:
     sent_today = _frames_sent_today()
     sent_now = 0
     for meta_path in metas[:FRAME_BATCH_PER_BEAT]:
-        if sent_today + sent_now >= FRAME_DAILY_CAP:
+        if sent_today + sent_now >= cap:
             break  # daily budget spent — keep the rest for the next UTC day
         jpg = meta_path.with_suffix(".jpg")
         if not jpg.exists():
@@ -802,7 +867,7 @@ def _drain_activity_frames() -> None:
     if sent_now:
         _bump_frames_sent(sent_now)
         log.info("frames: sent %d (%d/%d today)", sent_now,
-                 sent_today + sent_now, FRAME_DAILY_CAP)
+                 sent_today + sent_now, cap)
 
 
 # ---------------------------------------------------------------------------
@@ -1447,6 +1512,10 @@ def main() -> int:
                 _apply_interval(resp.get("telemetry_interval"))
                 # ...and any dashboard motion-tuning overrides.
                 _apply_motion_tuning(resp.get("motion_tuning"))
+                # ...and a dashboard-pushed crop daily cap (0 = stop crop upload).
+                _apply_frame_cap(resp.get("frame_daily_cap"))
+                # ...and the bee-confirmation mode (off|tag|gate).
+                _apply_bee_mode(resp.get("bee_confirm_mode"))
                 # ...and the ROI-editor outputs (hotel ROI + nest layout).
                 _apply_override_file(ROI_OVERRIDE_FILE, resp.get("roi_override"))
                 _apply_override_file(NEST_LAYOUT_FILE, resp.get("nest_layout"))

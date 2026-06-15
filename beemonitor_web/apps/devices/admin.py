@@ -23,6 +23,11 @@ class DeviceAdmin(admin.ModelAdmin):
         "name",
         "location",
         "is_active",
+        # Daily mover-crop upload cap pushed to the device (blank = device
+        # default; 0 = stop crop upload over cellular — the budget kill-switch).
+        "frame_daily_cap",
+        # On-device bee-confirmation mode (blank = device default).
+        "bee_confirm_mode",
         "prefix",
         "key_hash",
         "last_seen_at",

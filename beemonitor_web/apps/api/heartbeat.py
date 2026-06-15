@@ -188,6 +188,12 @@ class DeviceHeartbeatView(APIView):
                 # ROI editor outputs (normalized): hotel ROI + nest layout.
                 "roi_override": device.roi_override or None,
                 "nest_layout": device.nest_layout or [],
+                # Daily mover-crop upload cap (None = device default; 0 = stop
+                # crop upload over cellular). The device honours it over its env.
+                "frame_daily_cap": device.frame_daily_cap,
+                # On-device bee-confirmation mode (off|tag|gate; None = device
+                # default). The recorder hot-reloads it without a restart.
+                "bee_confirm_mode": device.bee_confirm_mode or None,
                 # Desired WittyPi power schedule. The device reconciles to it and
                 # enforces its own safety floor (see telemetry.py _apply_schedule).
                 "wake_schedule": device.wake_schedule_dict(),
@@ -228,6 +234,10 @@ class DeviceCommandView(APIView):
             # Carry the cadence here too so a rate change applies within seconds
             # even when the beat interval is long.
             "telemetry_interval": device.telemetry_interval_seconds,
+            # Crop cap here too so "stop crops" (0) applies within seconds.
+            "frame_daily_cap": device.frame_daily_cap,
+            # Bee-confirmation mode here too so a switch applies within seconds.
+            "bee_confirm_mode": device.bee_confirm_mode or None,
             # Desired WittyPi power schedule (reconciled device-side).
             "wake_schedule": device.wake_schedule_dict(),
             "wake_schedule_apply": device.wake_schedule_apply,
