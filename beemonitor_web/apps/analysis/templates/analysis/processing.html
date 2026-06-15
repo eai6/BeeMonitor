@@ -16,42 +16,62 @@
   <div class="bg-white shadow rounded-lg p-4 mb-5">
     <h2 class="text-sm font-semibold text-gray-900">Extracted ecological data</h2>
     <p class="text-xs text-gray-500 mt-1 mb-3">
-      Two kinds of analysis run on your videos{% if f_device %}
-      <span class="text-amber-700">(filtered to the selected bee hotel)</span>{% endif %}. Download as CSV:
+      Two kinds of analysis run on your videos{% if has_filter %}
+      <span class="text-amber-700">(matching your filter)</span>{% endif %}. Download as CSV:
     </p>
-    {% with q=f_device|yesno:"?device=,"|add:f_device %}
     <div class="mb-3">
       <div class="text-xs font-medium text-gray-600 mb-1.5">Tracking <span class="text-gray-400">— whole clip</span></div>
       <div class="flex flex-wrap gap-2">
-        <a href="{% url 'analysis:download_trips' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🌼 Foraging trips</a>
-        <a href="{% url 'analysis:download_interactions' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🔗 Interactions</a>
-        <a href="{% url 'analysis:download_events' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">📋 Events (entries/exits)</a>
-        <a href="{% url 'analysis:download_tracking' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">📈 Tracking</a>
-        <a href="{% url 'analysis:download_nest_data' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🏠 Nest data</a>
+        <a href="{% url 'analysis:download_trips' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🌼 Foraging trips</a>
+        <a href="{% url 'analysis:download_interactions' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🔗 Interactions</a>
+        <a href="{% url 'analysis:download_events' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">📋 Events (entries/exits)</a>
+        <a href="{% url 'analysis:download_tracking' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">📈 Tracking</a>
+        <a href="{% url 'analysis:download_nest_data' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🏠 Nest data</a>
       </div>
     </div>
     <div>
       <div class="text-xs font-medium text-gray-600 mb-1.5">Species taxonomy <span class="text-gray-400">— a few crops (BioCLIP)</span></div>
       <div class="flex flex-wrap gap-2">
-        <a href="{% url 'analysis:download_species' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🔬 Species (taxon, count, confidence)</a>
+        <a href="{% url 'analysis:download_species' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🔬 Species (taxon, count, confidence)</a>
       </div>
     </div>
-    {% endwith %}
-    <p class="text-xs text-gray-400 mt-3">Per-video results are on each <span class="text-gray-500">job</span> below.</p>
+    <p class="text-xs text-gray-400 mt-3">Downloads respect the filter below. Per-video results are on each <span class="text-gray-500">job</span>.</p>
   </div>
 
-  <!-- Filter -->
+  <!-- Filter: device · site · year · month · day · hour · title -->
   <form method="get" class="flex flex-wrap items-center gap-2 mb-3">
     <select name="device" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
       <option value="">All bee hotels</option>
       {% for d in devices %}
-      <option value="{{ d.pk }}" {% if f_device == d.pk|stringformat:"s" %}selected{% endif %}>{{ d.name }}</option>
+      <option value="{{ d.pk }}" {% if f.device == d.pk|stringformat:"s" %}selected{% endif %}>{{ d.name }}</option>
       {% endfor %}
     </select>
-    <input name="q" value="{{ f_search }}" placeholder="Search title…"
+    {% if opts.sites %}
+    <select name="site" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      <option value="">All sites</option>
+      {% for s in opts.sites %}<option value="{{ s }}" {% if f.site == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+    </select>
+    {% endif %}
+    <select name="year" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      <option value="">Year</option>
+      {% for y in opts.years %}<option value="{{ y }}" {% if f.year == y|stringformat:"s" %}selected{% endif %}>{{ y }}</option>{% endfor %}
+    </select>
+    <select name="month" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      <option value="">Month</option>
+      {% for m in opts.months %}<option value="{{ m }}" {% if f.month == m|stringformat:"s" %}selected{% endif %}>{{ m }}</option>{% endfor %}
+    </select>
+    <select name="day" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      <option value="">Day</option>
+      {% for d in opts.days %}<option value="{{ d }}" {% if f.day == d|stringformat:"s" %}selected{% endif %}>{{ d }}</option>{% endfor %}
+    </select>
+    <select name="hour" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      <option value="">Hour</option>
+      {% for h in opts.hours %}<option value="{{ h }}" {% if f.hour == h|stringformat:"s" %}selected{% endif %}>{{ h }}:00</option>{% endfor %}
+    </select>
+    <input name="q" value="{{ f.q }}" placeholder="Search title…"
            class="border border-gray-300 rounded px-3 py-1.5 text-sm">
-    <button class="bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 px-3 py-1.5 rounded text-sm">Filter</button>
-    {% if f_device or f_search %}<a href="{% url 'analysis:processing' %}" class="text-sm text-amber-700 hover:underline">Clear</a>{% endif %}
+    <button class="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded text-sm font-medium">Filter</button>
+    {% if has_filter %}<a href="{% url 'analysis:processing' %}" class="text-sm text-amber-700 hover:underline">Clear</a>{% endif %}
   </form>
 
   {% if videos %}
@@ -143,7 +163,7 @@
   </form>
   {% else %}
   <div class="bg-white shadow rounded-lg p-6 text-center">
-    <p class="text-sm text-gray-500 mb-3">No videos{% if f_device or f_search %} match this filter{% else %} yet{% endif %}. Upload footage or let a bee hotel push activity clips.</p>
+    <p class="text-sm text-gray-500 mb-3">No videos{% if has_filter %} match this filter{% else %} yet{% endif %}. Upload footage or let a bee hotel push activity clips.</p>
     <a href="{% url 'videos:upload' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Upload a video</a>
   </div>
   {% endif %}

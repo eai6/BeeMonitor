@@ -342,18 +342,30 @@ class ProcessingHubView(LoginRequiredMixin, View):
     MODES = {"detect_and_track", "detect_only", "count_only"}
 
     def get(self, request):
+        from urllib.parse import urlencode
         from django.db.models import OuterRef, Subquery
         from apps.devices.models import Device
         from apps.training.models import CustomModel
 
-        qs = Video.objects.filter(user=request.user)
-        # Filters (merged from the video library): device + free-text search.
-        f_device = request.GET.get("device", "")
-        f_search = (request.GET.get("q", "") or "").strip()
-        if f_device:
-            qs = qs.filter(device_id=f_device)
-        if f_search:
-            qs = qs.filter(title__icontains=f_search)
+        user_videos = Video.objects.filter(user=request.user)
+        qs = user_videos
+
+        # Comprehensive filter: device · site · year · month · day · hour · title.
+        # The same params (minus the title search) drive the CSV download links.
+        f = {k: request.GET.get(k, "") for k in
+             ("device", "site", "year", "month", "day", "hour", "q")}
+        if f["q"]:
+            qs = qs.filter(title__icontains=f["q"].strip())
+        if f["device"]:
+            qs = qs.filter(device_id=f["device"])
+        if f["site"]:
+            qs = qs.filter(site_name=_unsanitize_site(f["site"]))
+        for field in ("year", "month", "day", "hour"):
+            if f[field]:
+                try:
+                    qs = qs.filter(**{field: int(f[field])})
+                except (ValueError, TypeError):
+                    pass
 
         latest = (Job.objects.filter(video=OuterRef("pk"))
                   .order_by("-id").values("status")[:1])
@@ -368,13 +380,28 @@ class ProcessingHubView(LoginRequiredMixin, View):
         devices = list(Device.accessible(request.user).order_by("name"))
         roi_devices = [d.name for d in devices if d.roi_override and d.nest_layout]
         models = CustomModel.objects.filter(user=request.user, is_active=True)
+
+        # Dropdown options from the user's actual videos.
+        opts = {
+            "sites": sorted({_sanitize_site(s) for s in
+                             user_videos.exclude(site_name="").values_list("site_name", flat=True)}),
+            "years": sorted(set(user_videos.exclude(year=None).values_list("year", flat=True))),
+            "months": sorted(set(user_videos.exclude(month=None).values_list("month", flat=True))),
+            "days": sorted(set(user_videos.exclude(day=None).values_list("day", flat=True))),
+            "hours": sorted(set(user_videos.exclude(hour=None).values_list("hour", flat=True))),
+        }
+        # Query string for the CSV downloads — the download views filter on these.
+        dl = {k: f[k] for k in ("device", "site", "year", "month", "day", "hour") if f[k]}
+        download_qs = ("?" + urlencode(dl)) if dl else ""
+
         return render(request, self.template_name, {
             "videos": videos,
             "recent_jobs": recent_jobs,
             "video_count": qs.count(),
             "devices": devices,
             "roi_devices": roi_devices,
-            "f_device": f_device, "f_search": f_search,
+            "f": f, "opts": opts, "download_qs": download_qs,
+            "has_filter": any(f.values()),
             "custom_nest_models": models.filter(model_type__in=["nest_detection", "custom"]),
             "custom_bee_models": models.filter(model_type__in=["bee_tracking", "custom"]),
             "est_credits_per_video": 349,
