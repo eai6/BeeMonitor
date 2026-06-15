@@ -703,8 +703,19 @@ class BatchJobView(LoginRequiredMixin, View):
 
     def post(self, request):
         import threading
+        from django.http import JsonResponse
         from django.utils import timezone as tz
         from .models import compute_config_hash
+
+        is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+        def _fail(msg, status=400, level="error"):
+            """Uniform error: JSON for AJAX (stay on the Processing page), else
+            the classic message + redirect."""
+            if is_ajax:
+                return JsonResponse({"error": msg}, status=status)
+            getattr(messages, level)(request, msg)
+            return redirect("analysis:processing")
 
         video_ids = request.POST.getlist("video_ids")
 
@@ -751,8 +762,7 @@ class BatchJobView(LoginRequiredMixin, View):
         if video_ids:
             videos = Video.objects.filter(user=request.user, pk__in=video_ids, status=Video.Status.READY)
         else:
-            messages.warning(request, "No videos selected.")
-            return redirect("videos:list")
+            return _fail("No videos selected.", level="warning")
 
         # Deduplication: check which videos already have completed jobs with same config
         skipped = 0
@@ -778,30 +788,28 @@ class BatchJobView(LoginRequiredMixin, View):
 
         if not videos_to_process:
             msg = f"All {skipped} video(s) already analyzed with this configuration."
+            if is_ajax:
+                return JsonResponse({"ok": True, "submitted": 0, "skipped": skipped,
+                                     "message": msg, "video_ids": []})
             messages.info(request, msg)
-            return redirect("analysis:list")
+            return redirect("analysis:processing")
 
         # Budget check
         total_est_credits = est_credits_per_video * len(videos_to_process)
         if not profile.has_budget(total_est_credits):
-            messages.error(
-                request,
-                f"Insufficient credits. Need ~{total_est_credits:,} credits for {len(videos_to_process)} videos "
-                f"but only {profile.remaining_credits:,} remaining this month."
-            )
-            return redirect("videos:list")
+            return _fail(
+                f"Insufficient credits. Need ~{total_est_credits:,} credits for "
+                f"{len(videos_to_process)} videos but only {profile.remaining_credits:,} "
+                "remaining this month.", status=402)
 
         # Concurrent job check — only block if already at GPU capacity
         active_count = Job.objects.filter(
             user=request.user, status=Job.Status.PROCESSING,
         ).count()
         if active_count >= profile.max_concurrent_jobs:
-            messages.error(
-                request,
-                f"All {profile.max_concurrent_jobs} GPU slots are in use. "
-                f"Wait for some to complete before submitting more."
-            )
-            return redirect("videos:list")
+            return _fail(
+                f"All {profile.max_concurrent_jobs} GPU slots are in use. Wait for "
+                "some to complete before submitting more.", status=429)
 
         # Create Job records
         jobs_data = []
@@ -838,8 +846,14 @@ class BatchJobView(LoginRequiredMixin, View):
             msg += f" Skipped {skipped} already analyzed."
         est_total_credits = len(jobs_data) * est_credits_per_video
         msg += f" Estimated: ~{est_total_credits:,} credits"
+        if is_ajax:
+            return JsonResponse({
+                "ok": True, "submitted": len(jobs_data), "skipped": skipped,
+                "message": msg,
+                "video_ids": [v.pk for v in videos_to_process],  # mark these processing
+            })
         messages.success(request, msg)
-        return redirect("analysis:list")
+        return redirect("analysis:processing")
 
 
 class JobResultsView(LoginRequiredMixin, TemplateView):

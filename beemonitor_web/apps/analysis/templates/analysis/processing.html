@@ -101,7 +101,7 @@
           <div class="text-sm text-gray-900 truncate">{{ v.title|default:"(untitled)" }}</div>
           <div class="text-xs text-gray-400">{% if v.device %}{{ v.device.name }} · {% endif %}{{ v.recorded_at|default:v.uploaded_at|date:"Y-m-d H:i" }}</div>
         </label>
-        <div class="flex items-center gap-2 shrink-0">
+        <div id="status-{{ v.pk }}" class="flex items-center gap-2 shrink-0">
           {% if v.job_status == "completed" %}
             <span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">analyzed</span>
             {% if v.job_id %}<a href="{% url 'analysis:detail' v.job_id %}" class="text-xs text-amber-700 hover:underline">results →</a>{% endif %}
@@ -167,10 +167,49 @@
       if (credLine) credLine.textContent = n ? (n + ' selected → ~' + (n * PER).toLocaleString() + ' credits') : 'Select videos to run';
       if (all) all.checked = n > 0 && n === boxes().length;
     }
-    if (all) all.addEventListener('change', function () { boxes().forEach(function (b) { b.checked = all.checked; }); refresh(); });
+    if (all) all.addEventListener('change', function () {
+      boxes().forEach(function (b) { if (!b.disabled) b.checked = all.checked; }); refresh();
+    });
     boxes().forEach(function (b) { b.addEventListener('change', refresh); });
-    if (form) form.addEventListener('submit', function () {
-      if (btn) { btn.disabled = true; btn.textContent = 'Submitting…'; }
+
+    function toast(text, ok) {
+      var t = document.createElement('div');
+      t.className = 'fixed bottom-4 right-4 z-50 max-w-sm px-4 py-2.5 rounded-lg shadow-lg text-sm ' +
+                    (ok ? 'bg-green-600 text-white' : 'bg-red-600 text-white');
+      t.textContent = text;
+      document.body.appendChild(t);
+      setTimeout(function () { t.style.transition = 'opacity .4s'; t.style.opacity = '0';
+        setTimeout(function () { t.remove(); }, 400); }, 4500);
+    }
+
+    // AJAX run: submit the batch without leaving the page; mark submitted videos
+    // "processing…" in place and toast the result.
+    if (form) form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      if (!btn || btn.disabled) return;
+      var token = form.querySelector('[name=csrfmiddlewaretoken]').value;
+      btn.disabled = true;
+      if (credLine) credLine.textContent = 'Submitting…';
+      fetch(form.action, {
+        method: 'POST',
+        headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': token},
+        body: new FormData(form),
+      }).then(function (r) { return r.json().then(function (d) { return {ok: r.ok, d: d}; }); })
+        .then(function (res) {
+          var d = res.d || {};
+          if (res.ok && d.ok) {
+            toast(d.message || 'Submitted.', true);
+            (d.video_ids || []).forEach(function (id) {
+              var cb = document.getElementById('cb-' + id);
+              if (cb) { cb.checked = false; cb.disabled = true; }
+              var st = document.getElementById('status-' + id);
+              if (st) st.innerHTML = '<span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">processing…</span>';
+            });
+          } else {
+            toast((d && d.error) || 'Could not start analysis.', false);
+          }
+        }).catch(function () { toast('Could not start analysis.', false); })
+        .then(function () { refresh(); });   // recompute count + button state
     });
     refresh();
   })();
