@@ -10,7 +10,7 @@
         <div class="hidden md:flex md:ml-10 md:space-x-4 md:items-center">
           <a href="{% url 'devices:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Devices</a>
           <a href="{% url 'monitor:activity_list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Activity</a>
-          <a href="{% url 'analysis:analytics' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Processing</a>
+          <a href="{% url 'analysis:processing' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Processing</a>
         </div>
       </div>
       <div class="hidden md:flex md:items-center md:space-x-3">
@@ -38,7 +38,7 @@
     <div class="px-2 pt-2 pb-3 space-y-1">
       <a href="{% url 'devices:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Devices</a>
       <a href="{% url 'monitor:activity_list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Activity</a>
-      <a href="{% url 'analysis:analytics' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Processing</a>
+      <a href="{% url 'analysis:processing' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Processing</a>
       {% if user.is_authenticated %}
       <a href="{% url 'accounts:usage' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Account &amp; settings</a>
       <form method="post" action="{% url 'accounts:logout' %}">{% csrf_token %}<button type="submit" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium w-full text-left">Logout</button></form>

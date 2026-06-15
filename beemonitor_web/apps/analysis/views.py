@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.shortcuts import get_object_or_404, redirect
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
 from django.views import View
 from django.views.generic import DetailView, FormView, ListView, TemplateView
@@ -310,6 +310,55 @@ def _invoke_endpoint_async(job_id: str, input_uri: str) -> str:
     )
     # OutputLocation = s3://<output-bucket>/<inference-id>.out  (typical layout)
     return response["OutputLocation"]
+
+
+class ProcessingHubView(LoginRequiredMixin, View):
+    """Phase 0 'Processing' hub — the home of video processing.
+
+    Pick a video and run analysis with one click, then jump to the ecological
+    outputs it produces (tracking, foraging trips, interactions, species ID).
+    Wraps the existing Job pipeline + analytics; the visual workflow builder
+    grows from here (see memory/19_processing_workflow_builder_design).
+    """
+
+    template_name = "analysis/processing.html"
+    MODES = {"detect_and_track", "detect_only", "count_only"}
+
+    def get(self, request):
+        from django.db.models import OuterRef, Subquery
+        latest = (Job.objects.filter(video=OuterRef("pk"))
+                  .order_by("-id").values("status")[:1])
+        videos = (Video.objects.filter(user=request.user)
+                  .annotate(job_status=Subquery(latest))
+                  .order_by("-recorded_at", "-uploaded_at")[:50])
+        recent_jobs = (Job.objects.filter(user=request.user)
+                       .select_related("video").order_by("-id")[:8])
+        return render(request, self.template_name, {
+            "videos": videos,
+            "recent_jobs": recent_jobs,
+            "video_count": Video.objects.filter(user=request.user).count(),
+        })
+
+    def post(self, request):
+        """One-click: run analysis on a video (creates a Job + spawns it)."""
+        from django.utils import timezone
+        video = get_object_or_404(
+            Video, pk=request.POST.get("video"), user=request.user)
+        mode = request.POST.get("mode", "detect_and_track")
+        if mode not in self.MODES:
+            mode = "detect_and_track"
+        job = Job.objects.create(
+            user=request.user, video=video,
+            config={"detection_mode": mode, "confidence_threshold": 0.25},
+            status=Job.Status.PROCESSING, started_at=timezone.now(),
+            modal_job_id=f"modal_{uuid.uuid4().hex[:12]}",
+        )
+        spawn_gpu_job_async(job.pk)
+        messages.info(
+            request,
+            f"Analysis #{job.pk} started on “{video.title}”. It runs on the GPU; "
+            "the job page auto-refreshes with results.")
+        return redirect("analysis:detail", pk=job.pk)
 
 
 class JobListView(LoginRequiredMixin, ListView):

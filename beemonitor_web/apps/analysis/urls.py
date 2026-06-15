@@ -8,6 +8,7 @@ app_name = "analysis"
 
 urlpatterns = [
     path("", RedirectView.as_view(pattern_name="analysis:analytics", permanent=False), name="list"),
+    path("processing/", views.ProcessingHubView.as_view(), name="processing"),
     path("analytics/", views.AnalyticsDashboardView.as_view(), name="analytics"),
     path("analytics/download-events/", views.DownloadEventsCSVView.as_view(), name="download_events"),
     path("analytics/download-tracking/", views.DownloadTrackingCSVView.as_view(), name="download_tracking"),

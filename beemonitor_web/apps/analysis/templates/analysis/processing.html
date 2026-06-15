@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Processing - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+  <div class="flex items-end justify-between flex-wrap gap-2 mb-1">
+    <h1 class="text-2xl font-bold text-gray-900">Processing</h1>
+    <a href="{% url 'analysis:analytics' %}" class="text-sm text-amber-700 hover:underline">Open analytics dashboard →</a>
+  </div>
+  <p class="text-sm text-gray-500 mb-6">
+    Run AI analysis on your videos to extract ecological data. Pick a video below
+    and run it — tracking produces the trajectories that foraging trips and
+    interactions are derived from.
+  </p>
+
+  <!-- Capabilities ("recipes") -->
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+    <div class="bg-white shadow rounded-lg p-4 flex flex-col">
+      <div class="text-2xl mb-1">🐝</div>
+      <h2 class="text-sm font-semibold text-gray-900">Detect &amp; track</h2>
+      <p class="text-xs text-gray-500 mt-1 flex-1">Find and track bees across the video (YOLO + multi-object tracking) — the basis for everything else.</p>
+      <a href="{% url 'analysis:analytics' %}" class="text-xs text-amber-700 hover:underline mt-2">View tracking →</a>
+    </div>
+    <div class="bg-white shadow rounded-lg p-4 flex flex-col">
+      <div class="text-2xl mb-1">🌼</div>
+      <h2 class="text-sm font-semibold text-gray-900">Foraging trips</h2>
+      <p class="text-xs text-gray-500 mt-1 flex-1">Departures and returns at the nest, trip durations and rates — derived from tracking.</p>
+      <a href="{% url 'analysis:download_trips' %}" class="text-xs text-amber-700 hover:underline mt-2">Download trips CSV →</a>
+    </div>
+    <div class="bg-white shadow rounded-lg p-4 flex flex-col">
+      <div class="text-2xl mb-1">🔗</div>
+      <h2 class="text-sm font-semibold text-gray-900">Interactions</h2>
+      <p class="text-xs text-gray-500 mt-1 flex-1">Encounters between tracked targets (target↔target) — co-occurrence and contact events.</p>
+      <a href="{% url 'analysis:download_interactions' %}" class="text-xs text-amber-700 hover:underline mt-2">Download interactions CSV →</a>
+    </div>
+    <div class="bg-white shadow rounded-lg p-4 flex flex-col">
+      <div class="text-2xl mb-1">🔬</div>
+      <h2 class="text-sm font-semibold text-gray-900">Species ID</h2>
+      <p class="text-xs text-gray-500 mt-1 flex-1">Taxonomic identification of the insect in each activity (BioCLIP) from device activity frames.</p>
+      <a href="{% url 'monitor:activity_list' %}" class="text-xs text-amber-700 hover:underline mt-2">View activity &amp; species →</a>
+    </div>
+  </div>
+
+  <!-- Run analysis on a video -->
+  <div class="flex items-end justify-between mb-2">
+    <h2 class="text-lg font-semibold text-gray-900">Run analysis on a video</h2>
+    <a href="{% url 'videos:list' %}" class="text-sm text-amber-700 hover:underline">All videos →</a>
+  </div>
+  {% if videos %}
+  <div class="bg-white shadow rounded-lg divide-y">
+    {% for v in videos %}
+    <div class="flex items-center justify-between gap-3 px-4 py-3">
+      <div class="min-w-0">
+        <a href="{% url 'videos:detail' v.pk %}" class="text-sm font-medium text-gray-900 hover:underline truncate block">{{ v.title|default:"(untitled)" }}</a>
+        <div class="text-xs text-gray-400">
+          {% if v.site_name %}{{ v.site_name }} · {% endif %}{{ v.recorded_at|default:v.uploaded_at|date:"Y-m-d H:i" }}
+        </div>
+      </div>
+      <div class="flex items-center gap-3 shrink-0">
+        {% if v.job_status == "completed" %}
+          <span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">analyzed</span>
+        {% elif v.job_status == "processing" %}
+          <span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">processing…</span>
+        {% elif v.job_status == "failed" %}
+          <span class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">failed</span>
+        {% endif %}
+        <form method="post" action="{% url 'analysis:processing' %}">
+          {% csrf_token %}
+          <input type="hidden" name="video" value="{{ v.pk }}">
+          <input type="hidden" name="mode" value="detect_and_track">
+          <button class="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded text-sm font-medium whitespace-nowrap">
+            {% if v.job_status %}Re-run{% else %}Run analysis{% endif %}
+          </button>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% if video_count > 50 %}
+  <p class="text-xs text-gray-400 mt-2">Showing the 50 most recent of {{ video_count }} videos. <a href="{% url 'videos:list' %}" class="text-amber-700 hover:underline">See all →</a></p>
+  {% endif %}
+  {% else %}
+  <div class="bg-white shadow rounded-lg p-6 text-center">
+    <p class="text-sm text-gray-500 mb-3">No videos yet. Upload footage or let a device push activity clips, then run analysis here.</p>
+    <a href="{% url 'videos:upload' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Upload a video</a>
+  </div>
+  {% endif %}
+
+  <!-- Recent jobs -->
+  {% if recent_jobs %}
+  <h2 class="text-lg font-semibold text-gray-900 mt-8 mb-2">Recent jobs</h2>
+  <div class="bg-white shadow rounded-lg divide-y">
+    {% for job in recent_jobs %}
+    <a href="{% url 'analysis:detail' job.pk %}" class="flex items-center justify-between gap-3 px-4 py-3 hover:bg-gray-50">
+      <div class="min-w-0">
+        <div class="text-sm text-gray-900 truncate">#{{ job.pk }} · {{ job.video.title|default:"(video)" }}</div>
+        <div class="text-xs text-gray-400">{{ job.config.detection_mode|default:"detect_and_track" }} · {{ job.started_at|date:"Y-m-d H:i" }}</div>
+      </div>
+      <span class="text-xs px-2 py-0.5 rounded-full shrink-0
+        {% if job.status == 'completed' %}bg-green-100 text-green-700
+        {% elif job.status == 'processing' %}bg-amber-100 text-amber-700
+        {% elif job.status == 'failed' %}bg-red-100 text-red-700
+        {% else %}bg-gray-100 text-gray-600{% endif %}">{{ job.get_status_display }}</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
