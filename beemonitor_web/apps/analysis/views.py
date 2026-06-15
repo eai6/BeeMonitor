@@ -353,7 +353,7 @@ class ProcessingHubView(LoginRequiredMixin, View):
         # Comprehensive filter: device · site · year · month · day · hour · title.
         # The same params (minus the title search) drive the CSV download links.
         f = {k: request.GET.get(k, "") for k in
-             ("device", "site", "year", "month", "day", "hour", "q")}
+             ("device", "site", "year", "month", "day", "hour", "q", "confirmed")}
         if f["q"]:
             qs = qs.filter(title__icontains=f["q"].strip())
         if f["device"]:
@@ -366,6 +366,11 @@ class ProcessingHubView(LoginRequiredMixin, View):
                     qs = qs.filter(**{field: int(f[field])})
                 except (ValueError, TypeError):
                     pass
+        # On-device bee-confirmation verdict (Video.metadata.bee_confirmed).
+        if f["confirmed"] == "yes":
+            qs = qs.filter(metadata__bee_confirmed=True)
+        elif f["confirmed"] == "no":
+            qs = qs.filter(metadata__bee_confirmed=False)
 
         latest = (Job.objects.filter(video=OuterRef("pk"))
                   .order_by("-id").values("status")[:1])
@@ -391,7 +396,7 @@ class ProcessingHubView(LoginRequiredMixin, View):
             "hours": sorted(set(user_videos.exclude(hour=None).values_list("hour", flat=True))),
         }
         # Query string for the CSV downloads — the download views filter on these.
-        dl = {k: f[k] for k in ("device", "site", "year", "month", "day", "hour") if f[k]}
+        dl = {k: f[k] for k in ("device", "site", "year", "month", "day", "hour", "confirmed") if f[k]}
         download_qs = ("?" + urlencode(dl)) if dl else ""
 
         return render(request, self.template_name, {
@@ -923,6 +928,11 @@ class DownloadSpeciesCSVView(LoginRequiredMixin, View):
         device = request.GET.get("device", "")
         if device:
             qs = qs.filter(device_id=device)
+        confirmed = request.GET.get("confirmed", "")
+        if confirmed == "yes":
+            qs = qs.filter(video__metadata__bee_confirmed=True)
+        elif confirmed == "no":
+            qs = qs.filter(video__metadata__bee_confirmed=False)
 
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = 'attachment; filename="beemonitor_species.csv"'
@@ -1000,6 +1010,7 @@ class _FilteredJobsMixin:
         day = request.GET.get("day", "")
         hour = request.GET.get("hour", "")
         device = request.GET.get("device", "")
+        confirmed = request.GET.get("confirmed", "")
 
         qs = JobResult.objects.filter(
             job__user=request.user,
@@ -1008,6 +1019,10 @@ class _FilteredJobsMixin:
 
         if device:
             qs = qs.filter(job__video__device_id=device)
+        if confirmed == "yes":
+            qs = qs.filter(job__video__metadata__bee_confirmed=True)
+        elif confirmed == "no":
+            qs = qs.filter(job__video__metadata__bee_confirmed=False)
         if site:
             qs = qs.filter(job__video__site_name=_unsanitize_site(site))
         if year:

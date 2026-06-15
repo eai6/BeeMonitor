@@ -12,39 +12,18 @@
     the trajectories that foraging trips and interactions are derived from.
   </p>
 
-  <!-- Extracted ecological data + downloads -->
-  <div class="bg-white shadow rounded-lg p-4 mb-5">
-    <h2 class="text-sm font-semibold text-gray-900">Extracted ecological data</h2>
-    <p class="text-xs text-gray-500 mt-1 mb-3">
-      Two kinds of analysis run on your videos{% if has_filter %}
-      <span class="text-amber-700">(matching your filter)</span>{% endif %}. Download as CSV:
-    </p>
-    <div class="mb-3">
-      <div class="text-xs font-medium text-gray-600 mb-1.5">Tracking <span class="text-gray-400">— whole clip</span></div>
-      <div class="flex flex-wrap gap-2">
-        <a href="{% url 'analysis:download_trips' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🌼 Foraging trips</a>
-        <a href="{% url 'analysis:download_interactions' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🔗 Interactions</a>
-        <a href="{% url 'analysis:download_events' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">📋 Events (entries/exits)</a>
-        <a href="{% url 'analysis:download_tracking' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">📈 Tracking</a>
-        <a href="{% url 'analysis:download_nest_data' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🏠 Nest data</a>
-      </div>
-    </div>
-    <div>
-      <div class="text-xs font-medium text-gray-600 mb-1.5">Species taxonomy <span class="text-gray-400">— a few crops (BioCLIP)</span></div>
-      <div class="flex flex-wrap gap-2">
-        <a href="{% url 'analysis:download_species' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🔬 Species (taxon, count, confidence)</a>
-      </div>
-    </div>
-    <p class="text-xs text-gray-400 mt-3">Downloads respect the filter below. Per-video results are on each <span class="text-gray-500">job</span>.</p>
-  </div>
-
-  <!-- Filter: device · site · year · month · day · hour · title -->
-  <form method="get" class="flex flex-wrap items-center gap-2 mb-3">
+  <!-- Filter (flows into the actions below: download or process) -->
+  <form method="get" class="flex flex-wrap items-center gap-2 mb-4">
     <select name="device" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
       <option value="">All bee hotels</option>
       {% for d in devices %}
       <option value="{{ d.pk }}" {% if f.device == d.pk|stringformat:"s" %}selected{% endif %}>{{ d.name }}</option>
       {% endfor %}
+    </select>
+    <select name="confirmed" class="border border-gray-300 rounded px-2 py-1.5 text-sm" title="On-device bee confirmation">
+      <option value="">Any confirmation</option>
+      <option value="yes" {% if f.confirmed == "yes" %}selected{% endif %}>✓ Confirmed bee</option>
+      <option value="no" {% if f.confirmed == "no" %}selected{% endif %}>Unconfirmed</option>
     </select>
     {% if opts.sites %}
     <select name="site" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
@@ -73,6 +52,32 @@
     <button class="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded text-sm font-medium">Filter</button>
     {% if has_filter %}<a href="{% url 'analysis:processing' %}" class="text-sm text-amber-700 hover:underline">Clear</a>{% endif %}
   </form>
+
+  <!-- Extracted ecological data + downloads -->
+  <div class="bg-white shadow rounded-lg p-4 mb-5">
+    <h2 class="text-sm font-semibold text-gray-900">Extracted ecological data</h2>
+    <p class="text-xs text-gray-500 mt-1 mb-3">
+      Two kinds of analysis run on your videos{% if has_filter %}
+      <span class="text-amber-700">(matching your filter)</span>{% endif %}. Download as CSV:
+    </p>
+    <div class="mb-3">
+      <div class="text-xs font-medium text-gray-600 mb-1.5">Tracking <span class="text-gray-400">— whole clip</span></div>
+      <div class="flex flex-wrap gap-2">
+        <a href="{% url 'analysis:download_trips' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🌼 Foraging trips</a>
+        <a href="{% url 'analysis:download_interactions' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🔗 Interactions</a>
+        <a href="{% url 'analysis:download_events' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">📋 Events (entries/exits)</a>
+        <a href="{% url 'analysis:download_tracking' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">📈 Tracking</a>
+        <a href="{% url 'analysis:download_nest_data' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🏠 Nest data</a>
+      </div>
+    </div>
+    <div>
+      <div class="text-xs font-medium text-gray-600 mb-1.5">Species taxonomy <span class="text-gray-400">— a few crops (BioCLIP)</span></div>
+      <div class="flex flex-wrap gap-2">
+        <a href="{% url 'analysis:download_species' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🔬 Species (taxon, count, confidence)</a>
+      </div>
+    </div>
+    <p class="text-xs text-gray-400 mt-3">Downloads respect the filter above. Per-video results are on each <span class="text-gray-500">job</span>.</p>
+  </div>
 
   {% if videos %}
   <form method="post" action="{% url 'analysis:batch' %}" id="run-form">
