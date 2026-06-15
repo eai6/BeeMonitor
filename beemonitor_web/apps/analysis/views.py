@@ -204,6 +204,9 @@ def _spawn_gpu_job(job_pk: int) -> None:
             payload["hotel_roi"] = job.config["hotel_roi"]
         if job.config.get("nest_layout"):
             payload["nest_layout"] = job.config["nest_layout"]
+        # Which analyses to run (tracking and/or species taxonomy).
+        payload["run_tracking"] = bool(job.config.get("run_tracking", True))
+        payload["run_species"] = bool(job.config.get("run_species", False))
 
         input_uri = _put_inference_payload(job.modal_job_id, payload)
         output_uri = _invoke_endpoint_async(job.modal_job_id, input_uri)
@@ -267,6 +270,8 @@ def _spawn_gpu_batch(jobs_data: list, detection_mode: str, confidence: float,
                     payload["hotel_roi"] = vcfg["hotel_roi"]
                 if vcfg.get("nest_layout"):
                     payload["nest_layout"] = vcfg["nest_layout"]
+                payload["run_tracking"] = bool(vcfg.get("run_tracking", True))
+                payload["run_species"] = bool(vcfg.get("run_species", False))
 
                 input_uri = _put_inference_payload(jd["job_id"], payload)
                 output_uri = _invoke_endpoint_async(jd["job_id"], input_uri)
@@ -732,11 +737,24 @@ class BatchJobView(LoginRequiredMixin, View):
         gpu_tier = request.POST.get("gpu_tier", "A10G")
         use_device_roi = request.POST.get("use_device_roi") in ("on", "true", "1")
 
+        # Which analyses to run — tracking (whole clip) and/or species taxonomy
+        # (BioCLIP on a few crops). The new Processing form marks itself with
+        # analyses_form so unchecked = off; older callers default to tracking only.
+        if request.POST.get("analyses_form"):
+            run_tracking = request.POST.get("run_tracking") in ("on", "true", "1")
+            run_species = request.POST.get("run_species") in ("on", "true", "1")
+        else:
+            run_tracking, run_species = True, False
+        if not (run_tracking or run_species):
+            return _fail("Choose at least one analysis — tracking or species.", level="warning")
+
         config = {
             "detection_mode": detection_mode,
             "confidence_threshold": confidence,
             "two_mode_tracking": two_mode,
             "visualize": visualize,
+            "run_tracking": run_tracking,
+            "run_species": run_species,
         }
 
         # Resolve custom model paths (separate for nest and bee)
@@ -859,6 +877,41 @@ class BatchJobView(LoginRequiredMixin, View):
             })
         messages.success(request, msg)
         return redirect("analysis:processing")
+
+
+class DownloadSpeciesCSVView(LoginRequiredMixin, View):
+    """Export species/taxonomy observations (BioCLIP) as CSV — the second kind of
+    processing output. One row per activity that has a best taxon. Optional
+    ?device= filter (matches the Processing-hub filter)."""
+
+    def get(self, request):
+        import csv
+        from django.http import HttpResponse
+        from apps.devices.models import Device
+        from apps.monitor.models import Activity
+
+        qs = (Activity.objects
+              .filter(device__in=Device.accessible(request.user), best_taxon__isnull=False)
+              .select_related("device", "best_taxon", "video").order_by("-started_at"))
+        device = request.GET.get("device", "")
+        if device:
+            qs = qs.filter(device_id=device)
+
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = 'attachment; filename="beemonitor_species.csv"'
+        w = csv.writer(response)
+        w.writerow(["bee_hotel", "started_at", "taxon", "common_name", "rank",
+                    "confidence", "individuals", "video"])
+        for a in qs[:10000]:
+            t = a.best_taxon
+            w.writerow([
+                a.device.name if a.device else "",
+                a.started_at.isoformat() if a.started_at else "",
+                t.name, t.common_name, t.rank,
+                a.best_confidence, a.individual_count,
+                a.video.title if a.video_id else "",
+            ])
+        return response
 
 
 class JobResultsView(LoginRequiredMixin, TemplateView):

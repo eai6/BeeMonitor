@@ -16,23 +16,28 @@
   <div class="bg-white shadow rounded-lg p-4 mb-5">
     <h2 class="text-sm font-semibold text-gray-900">Extracted ecological data</h2>
     <p class="text-xs text-gray-500 mt-1 mb-3">
-      From bee detection &amp; tracking across your analyzed videos{% if f_device %}
+      Two kinds of analysis run on your videos{% if f_device %}
       <span class="text-amber-700">(filtered to the selected bee hotel)</span>{% endif %}. Download as CSV:
     </p>
-    <div class="flex flex-wrap gap-2">
-      {% with q=f_device|yesno:"?device=,"|add:f_device %}
-      <a href="{% url 'analysis:download_trips' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🌼 Foraging trips</a>
-      <a href="{% url 'analysis:download_interactions' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🔗 Interactions</a>
-      <a href="{% url 'analysis:download_events' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">📋 Events (entries/exits)</a>
-      <a href="{% url 'analysis:download_tracking' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">📈 Tracking</a>
-      <a href="{% url 'analysis:download_nest_data' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🏠 Nest data</a>
-      {% endwith %}
+    {% with q=f_device|yesno:"?device=,"|add:f_device %}
+    <div class="mb-3">
+      <div class="text-xs font-medium text-gray-600 mb-1.5">Tracking <span class="text-gray-400">— whole clip</span></div>
+      <div class="flex flex-wrap gap-2">
+        <a href="{% url 'analysis:download_trips' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🌼 Foraging trips</a>
+        <a href="{% url 'analysis:download_interactions' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🔗 Interactions</a>
+        <a href="{% url 'analysis:download_events' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">📋 Events (entries/exits)</a>
+        <a href="{% url 'analysis:download_tracking' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">📈 Tracking</a>
+        <a href="{% url 'analysis:download_nest_data' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🏠 Nest data</a>
+      </div>
     </div>
-    <p class="text-xs text-gray-400 mt-3">
-      🔬 Species ID runs on device activity frames — explore it via the
-      <a href="{% url 'monitor:agent_chat' %}" class="text-amber-700 hover:underline">monitoring agent</a>.
-      Per-video results are on each <span class="text-gray-500">job</span> below.
-    </p>
+    <div>
+      <div class="text-xs font-medium text-gray-600 mb-1.5">Species taxonomy <span class="text-gray-400">— a few crops (BioCLIP)</span></div>
+      <div class="flex flex-wrap gap-2">
+        <a href="{% url 'analysis:download_species' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🔬 Species (taxon, count, confidence)</a>
+      </div>
+    </div>
+    {% endwith %}
+    <p class="text-xs text-gray-400 mt-3">Per-video results are on each <span class="text-gray-500">job</span> below.</p>
   </div>
 
   <!-- Filter -->
@@ -59,9 +64,21 @@
     <input type="hidden" name="gpu_tier" value="A10G">
     <input type="hidden" name="visualize" value="false">
 
-    <!-- Configuration (only the model config is exposed) -->
+    <input type="hidden" name="analyses_form" value="1">
+    <!-- Configuration -->
     <div class="bg-white shadow rounded-lg p-4 mb-4">
-      <h2 class="text-sm font-semibold text-gray-900 mb-3">Configuration</h2>
+      <h2 class="text-sm font-semibold text-gray-900 mb-2">What to run</h2>
+      <div class="space-y-2 mb-4">
+        <label class="flex items-start gap-2 text-sm text-gray-700">
+          <input type="checkbox" name="run_tracking" value="on" checked class="mt-0.5 rounded border-gray-300">
+          <span><b>Tracking</b> — detect &amp; track bees across the whole clip → foraging trips, interactions, entries/exits, nest data.</span>
+        </label>
+        <label class="flex items-start gap-2 text-sm text-gray-700">
+          <input type="checkbox" name="run_species" value="on" checked class="mt-0.5 rounded border-gray-300">
+          <span><b>Species ID (taxonomy)</b> — BioCLIP on a few crops from a few frames → which insect was present.</span>
+        </label>
+      </div>
+      <h3 class="text-xs font-semibold text-gray-600 mb-2 pt-1 border-t border-gray-100">Models <span class="font-normal text-gray-400">(tracking)</span></h3>
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label class="block text-xs font-medium text-gray-600 mb-1">Bee tracking model</label>
