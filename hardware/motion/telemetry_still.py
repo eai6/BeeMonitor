@@ -1,4 +1,10 @@
-"""On-demand telemetry still capture (picture / live view / ROI debug overlay)."""
+"""On-demand telemetry still capture (picture / live view / ROI editor).
+
+A CLEAN frame — no overlays burned in. The dashboard's ROI editor draws the hotel
+ROI + nest tubes as editable boxes over this image from the device's stored layout
+(roi_override / nest_layout), so the user can drag/edit them. Burned-in boxes can't
+be edited, so the device no longer draws anything. See devices/roi_editor.html.
+"""
 
 from __future__ import annotations
 
@@ -6,62 +12,20 @@ from datetime import datetime
 
 import cv2
 
-from motion.config import (
-    log, TELEMETRY_QUEUE, TELEMETRY_IMAGE_HEIGHT, LORES_W, LORES_H,
-)
-from motion.frames import _main_array_to_bgr, _scale_roi
-from motion.overrides import load_nest_layout
+from motion.config import log, TELEMETRY_QUEUE, TELEMETRY_IMAGE_HEIGHT
+from motion.frames import _main_array_to_bgr
 
 
-def _save_telemetry_still(cam, roi=None, draw_roi=False) -> None:
-    """Capture one downscaled JPEG into the telemetry queue (best-effort).
+def _save_telemetry_still(cam) -> None:
+    """Capture one downscaled, CLEAN JPEG into the telemetry queue (best-effort).
 
-    The telemetry service ships the latest queued image over cellular. We grab
-    the main (recorded) stream so the still reflects the real framing, then
-    downscale to keep it small. Never let a capture error stop recording.
-
-    ``draw_roi`` overlays the active motion ROI (the hotel region, in lores
-    coords) — a debugging aid so the dashboard can show exactly where motion is
-    gated. If ``roi`` is None the gate runs on the whole frame (more sensitive),
-    which we mark explicitly.
+    Grabs the main (recorded) stream so the still reflects the real framing, then
+    downscales to keep it small. No ROI/nest overlay is burned in — the dashboard
+    overlays those interactively. Never let a capture error stop recording.
     """
     try:
         bgr = _main_array_to_bgr(cam.capture_array("main"))
-
         h, w = bgr.shape[:2]
-        if draw_roi:
-            th = max(2, w // 400)
-            # Nest boxes: a dashboard-edited layout wins (normalized -> main
-            # coords); otherwise fresh detections, ordered top→bottom/left→right.
-            layout = load_nest_layout()
-            if layout:
-                nest_boxes = [(nid, (int(b[0] * w), int(b[1] * h),
-                                     int(b[2] * w), int(b[3] * h)))
-                              for nid, b in layout]
-            else:
-                # No on-device detection — just take the picture and overlay the
-                # device's configured nest tubes (the dashboard layout). If none is
-                # set yet, draw none. (Nest detection only runs in the cloud.)
-                nest_boxes = []
-            for nid, (nx1, ny1, nx2, ny2) in nest_boxes:
-                cv2.rectangle(bgr, (nx1, ny1), (nx2, ny2), (0, 0, 255), max(1, th // 2))
-                ty = ny1 - 6 if ny1 > 20 else ny2 + 22
-                cv2.putText(bgr, str(nid), (nx1, ty), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.7, (0, 0, 255), max(1, th // 2), cv2.LINE_AA)
-            # Active motion ROI (green hotel box) or full-frame (orange).
-            if roi is not None:
-                rx = _scale_roi(roi, (LORES_W, LORES_H), (w, h))
-                cv2.rectangle(bgr, (rx[0], rx[1]), (rx[2], rx[3]), (0, 255, 0), th)
-                _label = "motion ROI · %d nests" % len(nest_boxes)
-                _color = (0, 255, 0)
-            else:
-                cv2.rectangle(bgr, (0, 0), (w - 1, h - 1), (0, 165, 255), th)
-                _label = "ROI: full frame · %d nests" % len(nest_boxes)
-                _color = (0, 165, 255)
-            cv2.putText(bgr, _label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.9, (0, 0, 0), th + 2, cv2.LINE_AA)
-            cv2.putText(bgr, _label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.9, _color, th, cv2.LINE_AA)
         if h > TELEMETRY_IMAGE_HEIGHT:
             scale = TELEMETRY_IMAGE_HEIGHT / h
             bgr = cv2.resize(

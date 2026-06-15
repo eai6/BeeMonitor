@@ -409,18 +409,13 @@ def record() -> None:
                     confirmer.set_mode(load_bee_confirm_mode())
                     bee_mode_mtime = bm
 
-            # On-demand still requested by telemetry (picture / live view): the
-            # telemetry service drops capture.request; if its content is "roi" we
-            # overlay the motion ROI + nest-hole detections (a debug aid).
+            # On-demand still requested by telemetry (picture / live view / ROI
+            # editor): the telemetry service drops capture.request. We send a CLEAN
+            # frame — the dashboard ROI editor overlays the hotel ROI + nest tubes
+            # as editable boxes from the device's stored layout.
             req_file = TELEMETRY_QUEUE / "capture.request"
             if req_file.exists():
-                try:
-                    want_roi = req_file.read_text().strip() == "roi"
-                except OSError:
-                    want_roi = False
-                # Draw the LIVE gate ROI (it may have been hot-reloaded from a
-                # dashboard edit), not the stale startup value.
-                _save_telemetry_still(cam, roi=gate.roi, draw_roi=want_roi)
+                _save_telemetry_still(cam)
                 try:
                     req_file.unlink()
                 except OSError:
