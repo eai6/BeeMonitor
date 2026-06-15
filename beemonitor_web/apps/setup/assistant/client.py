@@ -86,6 +86,17 @@ def _system_blocks(current_step: str, device_state: dict | None):
         if st:
             ctx_lines.append(f"User's current step: \"{st['title']}\" "
                              f"(phase: {st['phase']}).")
+    else:
+        # Support mode (no setup step): the device is already deployed from the
+        # golden image. Act as an ongoing support/debug copilot — diagnose live
+        # issues with your tools and help fix them, and explain the dashboard
+        # controls (telemetry rate, power schedule, motion tuning, WiFi/cellular,
+        # software update, bee confirmation, crop-upload cap). The setup guide
+        # below is background on how the system works, not a script to walk.
+        ctx_lines.append(
+            "Mode: SUPPORT for an already-deployed (golden-image) unit — not a "
+            "fresh build. Investigate the live device first, then help the user "
+            "diagnose, fix, or understand it (including the dashboard controls).")
     if device_state:
         ctx_lines.append("Live device snapshot: " + json.dumps(device_state))
     if ctx_lines:

@@ -440,6 +440,9 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         from .models import TELEMETRY_INTERVAL_CHOICES
         ctx["telemetry_interval_choices"] = TELEMETRY_INTERVAL_CHOICES
         ctx["bee_confirm_modes"] = device.BEE_CONFIRM_MODES  # on-device species filter
+        # Floating support-assistant widget (read-only AI; shows only if a key is set).
+        from apps.setup.assistant import client as _assistant_client
+        ctx["assistant_enabled"] = _assistant_client.is_enabled()
         ctx["active_transport"] = metrics.get("active_transport")
         ctx["usb_status"] = _usb_text(metrics.get("usb"))  # last USB result (or None)
         ctx["usb_present"] = metrics.get("usb_present")     # USB plugged in now?

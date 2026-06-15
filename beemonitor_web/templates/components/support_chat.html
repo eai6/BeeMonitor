@@ -1,0 +1,147 @@
+{% comment %}
+Floating, expandable support-assistant widget. Include at the end of a device
+page's content block with `device` in context (and `assistant_enabled`).
+Reuses the read-only AI assistant (apps/setup/assistant) in SUPPORT mode — it
+sees this device's live status and helps diagnose/fix/explain. No setup step.
+{% endcomment %}
+{% if assistant_enabled %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked-highlight/lib/index.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+<style>
+  [x-cloak] { display: none !important; }
+  .md > *:first-child { margin-top: 0; } .md > *:last-child { margin-bottom: 0; }
+  .md p { margin: 0.4rem 0; }
+  .md ul, .md ol { margin: 0.4rem 0; padding-left: 1.25rem; }
+  .md ul { list-style: disc; } .md ol { list-style: decimal; }
+  .md li { margin: 0.15rem 0; }
+  .md h1, .md h2, .md h3 { font-weight: 600; margin: 0.6rem 0 0.3rem; }
+  .md code { background:#e5e7eb; padding:0.05rem 0.3rem; border-radius:0.25rem; font-size:0.85em; }
+  .md pre { background:#0b1020; border-radius:0.4rem; padding:0.6rem 0.75rem; overflow-x:auto; margin:0.5rem 0; }
+  .md pre code { background:transparent; padding:0; font-size:0.8rem; line-height:1.45; }
+  .md a { color:#15803d; text-decoration: underline; } .md strong { font-weight:600; }
+  .md blockquote { border-left:3px solid #d1d5db; padding-left:0.6rem; color:#4b5563; margin:0.4rem 0; }
+  .md table { border-collapse: collapse; margin:0.5rem 0; font-size:0.85em; }
+  .md th, .md td { border:1px solid #d1d5db; padding:0.2rem 0.4rem; }
+</style>
+
+<div x-data="supportChat({deviceId: {{ device.pk }}})" x-cloak
+     class="fixed bottom-4 right-4 z-50 flex flex-col items-end print:hidden">
+  <!-- Expanded chat panel -->
+  <div x-show="open" x-transition.opacity
+       class="mb-3 w-[23rem] max-w-[calc(100vw-2rem)] bg-white shadow-2xl rounded-xl flex flex-col border border-gray-200"
+       :style="`height: ${big ? 'calc(100vh - 7rem)' : '32rem'}; max-height: calc(100vh - 6rem)`">
+    <div class="px-4 py-3 border-b flex items-start justify-between gap-2">
+      <div>
+        <div class="font-semibold text-gray-900 text-sm">🐝 Support assistant</div>
+        <div class="text-xs text-gray-500">Sees <span class="font-medium">{{ device.name }}</span>'s live status. Diagnoses + suggests fixes.</div>
+      </div>
+      <div class="flex items-center gap-1 shrink-0">
+        <button @click="big=!big" :title="big ? 'Shrink' : 'Expand'"
+                class="text-gray-400 hover:text-gray-600 text-sm leading-none px-1">⤢</button>
+        <button @click="open=false" title="Close"
+                class="text-gray-400 hover:text-gray-600 text-xl leading-none px-1">&times;</button>
+      </div>
+    </div>
+    <div class="flex-1 overflow-y-auto p-3 space-y-3 text-sm" x-ref="log" aria-live="polite">
+      <template x-for="(m, i) in messages" :key="i">
+        <div :class="m.role === 'user' ? 'text-right' : ''">
+          <template x-if="m.role === 'assistant'">
+            <div class="md inline-block bg-gray-100 text-gray-800 rounded-lg px-3 py-2 text-left max-w-[95%]" x-html="window.renderMd(m.text)"></div>
+          </template>
+          <template x-if="m.role === 'user'">
+            <div class="inline-block bg-amber-100 text-gray-800 rounded-lg px-3 py-2 whitespace-pre-wrap text-left max-w-[95%]" x-text="m.text"></div>
+          </template>
+        </div>
+      </template>
+      <div x-show="tool" class="text-xs text-gray-400 italic" x-text="tool"></div>
+    </div>
+    <form class="border-t p-3 flex gap-2" @submit.prevent="send()">
+      <input x-model="draft" type="text" :disabled="busy"
+             placeholder="Describe the problem, or paste an error…"
+             class="flex-1 border border-gray-300 rounded px-3 py-2 text-sm">
+      <button type="submit" :disabled="busy || !draft.trim()"
+              class="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white px-3 py-2 rounded text-sm">Send</button>
+    </form>
+  </div>
+  <!-- Collapsed bubble -->
+  <button @click="open = !open"
+          class="bg-amber-600 hover:bg-amber-700 text-white rounded-full shadow-lg w-14 h-14 flex items-center justify-center text-2xl transition"
+          :title="open ? 'Hide support assistant' : 'Ask the support assistant'">
+    <span x-show="!open">🐝</span>
+    <span x-show="open" class="text-xl">▾</span>
+  </button>
+</div>
+
+<script>
+  // Markdown renderer (sanitised) — global so x-html can call it.
+  (function () {
+    if (window.marked && window.markedHighlight && window.hljs) {
+      marked.use(markedHighlight.markedHighlight({
+        langPrefix: 'hljs language-',
+        highlight: function (code, lang) {
+          var l = (window.hljs && hljs.getLanguage(lang)) ? lang : 'plaintext';
+          try { return hljs.highlight(code, { language: l }).value; } catch (e) { return code; }
+        },
+      }));
+    }
+    window.renderMd = window.renderMd || function (text) {
+      if (!text) return '';
+      try {
+        var html = window.marked ? marked.parse(text) : text;
+        return window.DOMPurify ? DOMPurify.sanitize(html) : html;
+      } catch (e) { return text; }
+    };
+  })();
+
+  function supportChat({deviceId}) {
+    return {
+      deviceId, open: false, big: false, conversationId: null,
+      messages: [{role: 'assistant', text: "Hi! I can see this device's live status. Tell me what's wrong — or paste an error / log line — and I'll help you diagnose and fix it. I can also explain any of the controls on this page."}],
+      draft: '', busy: false, tool: '',
+      send() {
+        const text = this.draft.trim();
+        if (!text || this.busy) return;
+        this.messages.push({role: 'user', text});
+        this.draft = ''; this.busy = true; this.tool = '';
+        const idx = this.messages.push({role: 'assistant', text: ''}) - 1;
+        this.scroll();
+        fetch('{% url "setup:assistant_send" %}', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token }}'},
+          body: JSON.stringify({
+            device_id: this.deviceId, step_id: '',
+            conversation_id: this.conversationId, message: text,
+          }),
+        }).then(resp => {
+          if (!resp.ok) { return resp.json().then(e => { throw new Error(e.error || 'error'); }); }
+          const reader = resp.body.getReader();
+          const dec = new TextDecoder();
+          let buf = '';
+          const pump = () => reader.read().then(({done, value}) => {
+            if (done) { this.busy = false; this.tool = ''; return; }
+            buf += dec.decode(value, {stream: true});
+            const parts = buf.split('\n\n'); buf = parts.pop();
+            for (const p of parts) {
+              const line = p.replace(/^data: /, '').trim();
+              if (!line) continue;
+              let ev; try { ev = JSON.parse(line); } catch (e) { continue; }
+              if (ev.type === 'meta') this.conversationId = ev.conversation_id;
+              else if (ev.type === 'text') { this.messages[idx].text += ev.text; this.scroll(); }
+              else if (ev.type === 'tool') this.tool = '…checking ' + ev.name.replace(/_/g, ' ');
+              else if (ev.type === 'error') { this.messages[idx].text += '\n[' + ev.text + ']'; }
+            }
+            return pump();
+          });
+          return pump();
+        }).catch(err => {
+          this.messages[idx].text = '[' + err.message + ']'; this.busy = false; this.tool = '';
+        });
+      },
+      scroll() { this.$nextTick(() => { const l = this.$refs.log; if (l) l.scrollTop = l.scrollHeight; }); },
+    };
+  }
+</script>
+{% endif %}
