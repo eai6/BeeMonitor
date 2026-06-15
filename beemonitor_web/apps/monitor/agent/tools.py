@@ -6,7 +6,7 @@ telemetry/GPS, it never changes state. Mirrors ``apps/setup/assistant/tools.py``
 """
 
 from django.conf import settings
-from django.db.models import Count, Max, Sum
+from django.db.models import Avg, Count, Max, Sum
 from django.utils import timezone
 
 from apps.devices.models import Device
@@ -67,6 +67,34 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {"device_id": {"type": "integer"}},
+            "required": ["device_id"],
+        },
+    },
+    {
+        "name": "tracking_summary",
+        "description": "Processed TRACKING results for a device — foraging trips, "
+                       "interactions, unique tracks, entries/exits — aggregated "
+                       "across its analyzed videos. NOTE: this data only exists "
+                       "after analysis is run on the videos (the Processing page); "
+                       "the tool says so if nothing has been analyzed yet.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"device_id": {"type": "integer"}},
+            "required": ["device_id"],
+        },
+    },
+    {
+        "name": "weather",
+        "description": "Recent weather at a device's GPS location (daily highs/lows "
+                       "+ precipitation, and the last 24h hourly) — to correlate "
+                       "activity/foraging with conditions. Needs the device to have "
+                       "a location set.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "device_id": {"type": "integer"},
+                "days": {"type": "integer", "description": "Look-back days (1-14)."},
+            },
             "required": ["device_id"],
         },
     },
@@ -166,6 +194,48 @@ def run_tool(name: str, tool_input: dict, user) -> dict:
                  "confidence": a.best_confidence, "status": a.status}
                 for a in acts
             ]}
+
+        if name == "tracking_summary":
+            from apps.analysis.models import JobResult
+            from apps.videos.models import Video
+            results = JobResult.objects.filter(
+                job__video__device=device, job__status="completed")
+            analyzed = (Video.objects.filter(device=device, jobs__status="completed")
+                        .distinct().count())
+            total_videos = Video.objects.filter(device=device).count()
+            if analyzed == 0:
+                return {"device_id": device.pk, "analyzed_videos": 0,
+                        "total_videos": total_videos,
+                        "note": "No processed tracking data yet for this device. "
+                                "Tracking, foraging trips and interactions are "
+                                "produced by running analysis on the device's "
+                                "videos (the Processing page) — not from the device "
+                                f"itself. {total_videos} video(s) uploaded, 0 analyzed."}
+            agg = results.aggregate(
+                foraging_trips=Sum("foraging_trip_count"),
+                interactions=Sum("interaction_count"),
+                events=Sum("total_events"), entries=Sum("entry_count"),
+                exits=Sum("exit_count"), unique_tracks=Sum("unique_tracks"),
+                nests=Sum("nest_count"), avg_trip_duration_sec=Avg("avg_trip_duration_sec"))
+            totals = {k: (round(v, 1) if isinstance(v, float) else v)
+                      for k, v in agg.items()}
+            return {"device_id": device.pk, "analyzed_videos": analyzed,
+                    "total_videos": total_videos, "totals": totals}
+
+        if name == "weather":
+            if device.lat is None or device.lon is None:
+                return {"device_id": device.pk,
+                        "error": "No GPS set for this device, so weather isn't "
+                                 "available. Set its location to enable weather."}
+            from apps.analysis.views import _fetch_weather_data
+            days = max(1, min(int(tool_input.get("days", 3)), 14))
+            end = timezone.now().date()
+            start = end - timezone.timedelta(days=days)
+            wx = _fetch_weather_data(start.isoformat(), end.isoformat(),
+                                     device.lat, device.lon)
+            return {"device_id": device.pk, "lat": device.lat, "lon": device.lon,
+                    "days": days, "daily": wx.get("daily", []),
+                    "recent_hourly": (wx.get("hourly") or [])[-24:]}
 
         if name == "region_species":
             taxa = region_taxa(device.lat, device.lon)
