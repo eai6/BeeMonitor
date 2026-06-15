@@ -209,6 +209,61 @@
   {% endif %}
 </div>
 
+<!-- Bee confirmation (on-device species filter) -->
+<div class="mt-6 bg-white shadow rounded-lg p-4">
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Bee confirmation</h2>
+    <div class="text-xs text-gray-500">
+      <span id="bee-label" class="font-medium text-gray-700">{{ device.get_bee_confirm_mode_display }}</span>
+    </div>
+  </div>
+  <p class="text-xs text-gray-400 mb-3">
+    On-device check (YOLO) that a tracked activity is actually a bee.
+    <b>Off</b> tracks all activity, no model needed.
+    <b>Observe</b> labels clips without changing counts.
+    <b>Filter</b> keeps unconfirmed clips out of the activity count + skips their
+    cellular crops. The clip is always recorded + uploaded either way — nothing is lost.
+  </p>
+  {% if can_manage %}
+  <form id="bee-form" method="post" action="{% url 'devices:bee_confirm' device.pk %}" class="flex flex-wrap items-center gap-2">
+    {% csrf_token %}
+    <select name="mode" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      {% for val, label in bee_confirm_modes %}
+      <option value="{{ val }}" {% if val == device.bee_confirm_mode %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Set</button>
+    <span id="bee-saved" class="text-xs text-green-700 hidden">Saved ✓</span>
+  </form>
+  <script>
+    (function () {
+      var f = document.getElementById('bee-form');
+      if (!f) return;
+      f.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var token = f.querySelector('[name=csrfmiddlewaretoken]').value;
+        fetch(f.action, {
+          method: 'POST',
+          headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': token},
+          body: new FormData(f),
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          if (d && d.ok) {
+            var lbl = document.getElementById('bee-label');
+            if (lbl) lbl.textContent = d.label;
+            var s = document.getElementById('bee-saved');
+            if (s) { s.classList.remove('hidden'); setTimeout(function () { s.classList.add('hidden'); }, 2500); }
+          } else {
+            alert((d && d.error) || 'Could not set bee confirmation.');
+          }
+        }).catch(function () { alert('Could not set bee confirmation.'); });
+      });
+    })();
+  </script>
+  {% else %}
+  <p class="text-xs text-gray-400 italic">Read-only — changing bee confirmation requires manager access.</p>
+  {% endif %}
+</div>
+
 <!-- Power schedule (WittyPi wake/sleep) -->
 <div class="mt-6 bg-white shadow rounded-lg p-4">
   <div class="flex flex-wrap items-center justify-between gap-2 mb-1">

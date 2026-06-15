@@ -439,6 +439,7 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         # Telemetry rate control (manager+) + which link the last beat rode.
         from .models import TELEMETRY_INTERVAL_CHOICES
         ctx["telemetry_interval_choices"] = TELEMETRY_INTERVAL_CHOICES
+        ctx["bee_confirm_modes"] = device.BEE_CONFIRM_MODES  # on-device species filter
         ctx["active_transport"] = metrics.get("active_transport")
         ctx["usb_status"] = _usb_text(metrics.get("usb"))  # last USB result (or None)
         ctx["usb_present"] = metrics.get("usb_present")     # USB plugged in now?
@@ -818,6 +819,40 @@ class DeviceTelemetryRateView(LoginRequiredMixin, View):
             request,
             f"Telemetry rate set to {device.telemetry_interval_label}. The device "
             "will adopt it on its next check-in.",
+        )
+        return redirect("devices:detail", pk=pk)
+
+
+class DeviceBeeConfirmView(LoginRequiredMixin, View):
+    """Turn on-device bee confirmation on/off (or observe-only) from the dashboard.
+
+    off  = track all activity (no model loaded);
+    tag  = run the model + label clips, but still count + send everything;
+    gate = filter — unconfirmed clips aren't counted and their crops aren't sent
+           (the clip is still recorded + uploaded either way, so nothing is lost).
+    "" = use the unit's env default. The device adopts the change within seconds.
+    """
+
+    VALID = {"", "off", "tag", "gate"}
+
+    def post(self, request, pk):
+        device = _device_or_403(request.user, pk, "manager")
+        is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        mode = (request.POST.get("mode") or "").strip().lower()
+        if mode not in self.VALID:
+            if is_ajax:
+                return JsonResponse({"error": "Invalid bee-confirmation mode."}, status=400)
+            messages.error(request, "Invalid bee-confirmation mode.")
+            return redirect("devices:detail", pk=pk)
+        device.bee_confirm_mode = mode
+        device.save(update_fields=["bee_confirm_mode"])
+        label = dict(device.BEE_CONFIRM_MODES).get(mode, mode)
+        if is_ajax:
+            return JsonResponse({"ok": True, "mode": mode, "label": label})
+        messages.success(
+            request,
+            f"Bee confirmation set to “{label}”. The device will adopt it on its "
+            "next check-in.",
         )
         return redirect("devices:detail", pk=pk)
 

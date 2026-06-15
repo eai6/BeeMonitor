@@ -185,10 +185,10 @@ class Device(models.Model):
     # confirmation; tag = observe/label without suppressing; gate = filter
     # (unconfirmed clips aren't counted as activity + crops not sent).
     BEE_CONFIRM_MODES = [
-        ("", "Device default"),
-        ("off", "Off"),
-        ("tag", "Tag (observe only)"),
-        ("gate", "Gate (filter)"),
+        ("", "Default (unit's env setting)"),
+        ("off", "Off — track all activity"),
+        ("tag", "Observe — label only"),
+        ("gate", "Filter — drop unconfirmed"),
     ]
     bee_confirm_mode = models.CharField(
         max_length=8, blank=True, default="", choices=BEE_CONFIRM_MODES)
