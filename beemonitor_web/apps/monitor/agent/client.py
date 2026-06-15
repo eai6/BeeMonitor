@@ -19,7 +19,8 @@ logger = logging.getLogger(__name__)
 MAX_TOOL_ROUNDS = 5
 
 _SYSTEM = """You are the BeeMonitor Monitoring Agent — a field-ecology analyst for \
-a network of camera hives that record insect activity. Each motion event ("activity") \
+a network of camera-monitored BEE HOTELS (nest boxes with nest tubes, not honeybee \
+hives) that record insect activity. Each motion event ("activity") \
 has a few cropped frames that BioCLIP identifies into a taxon, aggregated into \
 observations; devices report GPS and telemetry.
 

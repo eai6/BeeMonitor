@@ -2,11 +2,31 @@
 {% block title %}Monitoring agent - BeeMonitor{% endblock %}
 
 {% block content %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked-highlight/lib/index.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+<style>
+  .md > *:first-child { margin-top: 0; } .md > *:last-child { margin-bottom: 0; }
+  .md p { margin: 0.4rem 0; }
+  .md ul, .md ol { margin: 0.4rem 0; padding-left: 1.25rem; }
+  .md ul { list-style: disc; } .md ol { list-style: decimal; }
+  .md li { margin: 0.15rem 0; }
+  .md h1, .md h2, .md h3 { font-weight: 600; margin: 0.6rem 0 0.3rem; }
+  .md code { background:#e5e7eb; padding:0.05rem 0.3rem; border-radius:0.25rem; font-size:0.85em; }
+  .md pre { background:#0b1020; border-radius:0.4rem; padding:0.6rem 0.75rem; overflow-x:auto; margin:0.5rem 0; }
+  .md pre code { background:transparent; padding:0; font-size:0.8rem; line-height:1.45; }
+  .md a { color:#15803d; text-decoration: underline; } .md strong { font-weight:600; }
+  .md blockquote { border-left:3px solid #d1d5db; padding-left:0.6rem; color:#4b5563; margin:0.4rem 0; }
+  .md table { border-collapse: collapse; margin:0.5rem 0; font-size:0.85em; }
+  .md th, .md td { border:1px solid #d1d5db; padding:0.2rem 0.4rem; }
+</style>
 <div class="max-w-3xl mx-auto">
   <div class="mb-4">
     <a href="{% url 'monitor:activity_list' %}" class="text-sm text-amber-700 hover:underline">&larr; Activity</a>
     <h1 class="text-2xl font-bold text-gray-900">Monitoring agent</h1>
-    <p class="text-sm text-gray-500">Ask about what's been visiting your hives — species seen, plausibility for the site, or a specific activity. The agent reads your real observations; it can look, not change anything.</p>
+    <p class="text-sm text-gray-500">Ask about what's been visiting your bee hotels — species seen, plausibility for the site, or a specific activity. The agent reads your real observations; it can look, not change anything.</p>
   </div>
 
   {% if not agent_enabled %}
@@ -17,7 +37,7 @@
 
   <div class="bg-white shadow rounded-lg flex flex-col" style="height: 60vh">
     <div class="px-4 py-2 border-b border-gray-100 flex items-center gap-2 text-sm">
-      <label class="text-gray-500">Hive:</label>
+      <label class="text-gray-500">Bee hotel:</label>
       <select id="device" class="border border-gray-300 rounded px-2 py-1 text-sm">
         <option value="">— all —</option>
         {% for d in devices %}
@@ -40,11 +60,32 @@
   const msgEl = document.getElementById('msg');
   let conversationId = null;
 
-  function bubble(who, cls) {
+  // Sanitised markdown renderer (global so it can be reused).
+  (function () {
+    if (window.marked && window.markedHighlight && window.hljs) {
+      marked.use(markedHighlight.markedHighlight({
+        langPrefix: 'hljs language-',
+        highlight: function (code, lang) {
+          var l = (window.hljs && hljs.getLanguage(lang)) ? lang : 'plaintext';
+          try { return hljs.highlight(code, { language: l }).value; } catch (e) { return code; }
+        },
+      }));
+    }
+    window.renderMd = window.renderMd || function (text) {
+      if (!text) return '';
+      try {
+        var html = window.marked ? marked.parse(text) : text;
+        return window.DOMPurify ? DOMPurify.sanitize(html) : html;
+      } catch (e) { return text; }
+    };
+  })();
+
+  function bubble(who, cls, md) {
     const wrap = document.createElement('div');
     wrap.className = who === 'you' ? 'text-right' : '';
     const b = document.createElement('div');
-    b.className = 'inline-block rounded-lg px-3 py-2 ' + cls + ' whitespace-pre-wrap text-left max-w-[90%]';
+    b.className = 'inline-block rounded-lg px-3 py-2 ' + cls + ' text-left max-w-[90%] '
+                + (md ? 'md' : 'whitespace-pre-wrap');
     wrap.appendChild(b); log.appendChild(wrap); log.scrollTop = log.scrollHeight;
     return b;
   }
@@ -55,7 +96,7 @@
     if (!text) return;
     msgEl.value = '';
     bubble('you', 'bg-amber-600 text-white').textContent = text;
-    const out = bubble('agent', 'bg-gray-100 text-gray-900');
+    const out = bubble('agent', 'bg-gray-100 text-gray-900', true);
     out.textContent = '…';
     let answer = '';
 
@@ -80,7 +121,7 @@
         if (!line) continue;
         let ev; try { ev = JSON.parse(line); } catch (_) { continue; }
         if (ev.type === 'meta') conversationId = ev.conversation_id;
-        else if (ev.type === 'text') { answer += ev.text; out.textContent = answer; }
+        else if (ev.type === 'text') { answer += ev.text; out.innerHTML = window.renderMd(answer); }
         else if (ev.type === 'tool') { if (!answer) out.textContent = '🔍 ' + ev.name + '…'; }
         else if (ev.type === 'error') { out.textContent = ev.text; }
         log.scrollTop = log.scrollHeight;

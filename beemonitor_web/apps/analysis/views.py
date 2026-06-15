@@ -906,7 +906,7 @@ class DownloadEventsCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
         if not results.exists():
             from django.contrib import messages as msg
             msg.warning(request, "No completed jobs matching this filter.")
-            return redirect("analysis:analytics")
+            return redirect("analysis:processing")
 
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = f'attachment; filename="beemonitor_events_{label}.csv"'
@@ -968,7 +968,7 @@ class DownloadTrackingCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
         if not results.exists():
             from django.contrib import messages as msg
             msg.warning(request, "No completed jobs matching this filter.")
-            return redirect("analysis:analytics")
+            return redirect("analysis:processing")
 
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = f'attachment; filename="beemonitor_tracking_{label}.csv"'
@@ -1029,7 +1029,7 @@ class DownloadTripsCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
         if not results.exists():
             from django.contrib import messages as msg
             msg.warning(request, "No completed jobs matching this filter.")
-            return redirect("analysis:analytics")
+            return redirect("analysis:processing")
 
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = f'attachment; filename="beemonitor_foraging_trips_{label}.csv"'
@@ -1090,7 +1090,7 @@ class DownloadInteractionsCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
         if not results.exists():
             from django.contrib import messages as msg
             msg.warning(request, "No completed jobs matching this filter.")
-            return redirect("analysis:analytics")
+            return redirect("analysis:processing")
 
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = f'attachment; filename="beemonitor_interactions_{label}.csv"'
@@ -1152,7 +1152,7 @@ class DownloadNestDataCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
             from django.contrib import messages as msg
 
             msg.warning(request, "No completed jobs matching this filter.")
-            return redirect("analysis:analytics")
+            return redirect("analysis:processing")
 
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = (
