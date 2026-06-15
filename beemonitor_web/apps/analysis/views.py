@@ -352,18 +352,23 @@ class ProcessingHubView(LoginRequiredMixin, View):
 
         latest = (Job.objects.filter(video=OuterRef("pk"))
                   .order_by("-id").values("status")[:1])
-        videos = (qs.annotate(job_status=Subquery(latest))
+        latest_id = (Job.objects.filter(video=OuterRef("pk"))
+                     .order_by("-id").values("id")[:1])
+        videos = (qs.annotate(job_status=Subquery(latest), job_id=Subquery(latest_id))
                   .select_related("device")
                   .order_by("-recorded_at", "-uploaded_at")[:200])
         recent_jobs = (Job.objects.filter(user=request.user)
                        .select_related("video").order_by("-id")[:8])
 
+        devices = list(Device.accessible(request.user).order_by("name"))
+        roi_devices = [d.name for d in devices if d.roi_override and d.nest_layout]
         models = CustomModel.objects.filter(user=request.user, is_active=True)
         return render(request, self.template_name, {
             "videos": videos,
             "recent_jobs": recent_jobs,
             "video_count": qs.count(),
-            "devices": Device.accessible(request.user).order_by("name"),
+            "devices": devices,
+            "roi_devices": roi_devices,
             "f_device": f_device, "f_search": f_search,
             "custom_nest_models": models.filter(model_type__in=["nest_detection", "custom"]),
             "custom_bee_models": models.filter(model_type__in=["bee_tracking", "custom"]),

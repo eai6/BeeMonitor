@@ -7,17 +7,32 @@
     <h1 class="text-2xl font-bold text-gray-900">Processing</h1>
     <a href="{% url 'videos:upload' %}" class="text-sm text-amber-700 hover:underline">Upload video →</a>
   </div>
-  <p class="text-sm text-gray-500 mb-4">
-    Select videos, then run analysis to extract ecological data. Tracking produces
-    the trajectories that everything else is derived from.
+  <p class="text-sm text-gray-500 mb-5">
+    Select videos and run analysis to extract ecological data. Tracking produces
+    the trajectories that foraging trips and interactions are derived from.
   </p>
 
-  <!-- What you get (preselected ecological outputs) -->
-  <div class="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 mb-5 text-sm text-amber-900">
-    <span class="font-medium">Extracts:</span>
-    🌼 Foraging trips · 🔗 Interactions · 🔬 Species presence
-    <span class="text-amber-700">— derived from bee detection &amp; tracking. (Species ID also runs on device activity frames; see the
-      <a href="{% url 'monitor:agent_chat' %}" class="underline">monitoring agent</a>.)</span>
+  <!-- Extracted ecological data + downloads -->
+  <div class="bg-white shadow rounded-lg p-4 mb-5">
+    <h2 class="text-sm font-semibold text-gray-900">Extracted ecological data</h2>
+    <p class="text-xs text-gray-500 mt-1 mb-3">
+      From bee detection &amp; tracking across your analyzed videos{% if f_device %}
+      <span class="text-amber-700">(filtered to the selected bee hotel)</span>{% endif %}. Download as CSV:
+    </p>
+    <div class="flex flex-wrap gap-2">
+      {% with q=f_device|yesno:"?device=,"|add:f_device %}
+      <a href="{% url 'analysis:download_trips' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🌼 Foraging trips</a>
+      <a href="{% url 'analysis:download_interactions' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🔗 Interactions</a>
+      <a href="{% url 'analysis:download_events' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">📋 Events (entries/exits)</a>
+      <a href="{% url 'analysis:download_tracking' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">📈 Tracking</a>
+      <a href="{% url 'analysis:download_nest_data' %}{{ q }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🏠 Nest data</a>
+      {% endwith %}
+    </div>
+    <p class="text-xs text-gray-400 mt-3">
+      🔬 Species ID runs on device activity frames — explore it via the
+      <a href="{% url 'monitor:agent_chat' %}" class="text-amber-700 hover:underline">monitoring agent</a>.
+      Per-video results are on each <span class="text-gray-500">job</span> below.
+    </p>
   </div>
 
   <!-- Filter -->
@@ -65,8 +80,9 @@
       </div>
       <label class="flex items-start gap-2 mt-3 text-sm text-gray-700">
         <input type="checkbox" name="use_device_roi" value="on" class="mt-0.5 rounded border-gray-300">
-        <span>Use each bee hotel's configured <b>ROI + nest tubes</b> (set on the device). The nest
-          model is the backup for videos whose device has none set.</span>
+        <span>Use each bee hotel's configured <b>ROI + nest tubes</b> instead of detecting them (the nest model is the backup).
+          {% if roi_devices %}<span class="text-gray-400">Saved for: {{ roi_devices|join:", " }}.</span>
+          {% else %}<span class="text-gray-400">No bee hotel has a saved ROI yet — set one on the device page.</span>{% endif %}</span>
       </label>
     </div>
 
@@ -75,29 +91,38 @@
       <label class="flex items-center gap-2 text-sm text-gray-700">
         <input type="checkbox" id="select-all" class="rounded border-gray-300"> Select all ({{ video_count }})
       </label>
-      <button type="submit" id="run-btn" disabled
-              class="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white px-4 py-1.5 rounded text-sm font-medium">
-        Run analysis (<span id="sel-count">0</span>)
-      </button>
+      <span class="text-xs text-gray-400">{% if video_count > 200 %}Showing 200 most recent — narrow with the filter.{% endif %}</span>
     </div>
     <div class="bg-white shadow rounded-lg divide-y">
       {% for v in videos %}
-      <label class="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 cursor-pointer">
-        <input type="checkbox" name="video_ids" value="{{ v.pk }}" class="vid-cb rounded border-gray-300">
-        <div class="flex-1 min-w-0">
+      <div class="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50">
+        <input type="checkbox" name="video_ids" value="{{ v.pk }}" id="cb-{{ v.pk }}" class="vid-cb rounded border-gray-300">
+        <label for="cb-{{ v.pk }}" class="flex-1 min-w-0 cursor-pointer">
           <div class="text-sm text-gray-900 truncate">{{ v.title|default:"(untitled)" }}</div>
           <div class="text-xs text-gray-400">{% if v.device %}{{ v.device.name }} · {% endif %}{{ v.recorded_at|default:v.uploaded_at|date:"Y-m-d H:i" }}</div>
+        </label>
+        <div class="flex items-center gap-2 shrink-0">
+          {% if v.job_status == "completed" %}
+            <span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">analyzed</span>
+            {% if v.job_id %}<a href="{% url 'analysis:detail' v.job_id %}" class="text-xs text-amber-700 hover:underline">results →</a>{% endif %}
+          {% elif v.job_status == "processing" %}
+            <a href="{% if v.job_id %}{% url 'analysis:detail' v.job_id %}{% else %}#{% endif %}" class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">processing…</a>
+          {% elif v.job_status == "failed" %}
+            <a href="{% if v.job_id %}{% url 'analysis:detail' v.job_id %}{% else %}#{% endif %}" class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">failed</a>
+          {% endif %}
         </div>
-        {% if v.job_status == "completed" %}<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 shrink-0">analyzed</span>
-        {% elif v.job_status == "processing" %}<span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 shrink-0">processing…</span>
-        {% elif v.job_status == "failed" %}<span class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 shrink-0">failed</span>{% endif %}
-      </label>
+      </div>
       {% endfor %}
     </div>
-    <p class="text-xs text-gray-400 mt-2">
-      ~{{ est_credits_per_video }} credits/video on A10G · <span id="cred-line">select videos to see the total</span>.
-      {% if video_count > 200 %}Showing the 200 most recent — narrow with the filter.{% endif %}
-    </p>
+
+    <!-- Sticky run bar -->
+    <div class="sticky bottom-0 mt-3 bg-white/95 backdrop-blur border border-gray-200 rounded-lg shadow-lg px-4 py-2.5 flex items-center justify-between gap-3">
+      <p class="text-xs text-gray-500"><span id="cred-line">Select videos to run</span><span class="text-gray-400"> · ~{{ est_credits_per_video }} credits/video (A10G)</span></p>
+      <button type="submit" id="run-btn" disabled
+              class="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white px-4 py-1.5 rounded text-sm font-medium whitespace-nowrap">
+        Run analysis (<span id="sel-count">0</span>)
+      </button>
+    </div>
   </form>
   {% else %}
   <div class="bg-white shadow rounded-lg p-6 text-center">
@@ -133,16 +158,20 @@
     var btn = document.getElementById('run-btn');
     var cnt = document.getElementById('sel-count');
     var credLine = document.getElementById('cred-line');
+    var form = document.getElementById('run-form');
     function boxes() { return Array.prototype.slice.call(document.querySelectorAll('.vid-cb')); }
     function refresh() {
       var n = boxes().filter(function (b) { return b.checked; }).length;
       if (cnt) cnt.textContent = n;
       if (btn) btn.disabled = n === 0;
-      if (credLine) credLine.textContent = n ? (n + ' selected → ~' + (n * PER).toLocaleString() + ' credits') : 'select videos to see the total';
-      if (all) { all.checked = n > 0 && n === boxes().length; }
+      if (credLine) credLine.textContent = n ? (n + ' selected → ~' + (n * PER).toLocaleString() + ' credits') : 'Select videos to run';
+      if (all) all.checked = n > 0 && n === boxes().length;
     }
     if (all) all.addEventListener('change', function () { boxes().forEach(function (b) { b.checked = all.checked; }); refresh(); });
     boxes().forEach(function (b) { b.addEventListener('change', refresh); });
+    if (form) form.addEventListener('submit', function () {
+      if (btn) { btn.disabled = true; btn.textContent = 'Submitting…'; }
+    });
     refresh();
   })();
 </script>
