@@ -369,6 +369,20 @@ def _build_activity_series(device, range_key: str) -> dict:
                 counts[k] = max(counts.get(k, 0), int(c))
                 key_dt.setdefault(k, b)
 
+    # Densify: emit EVERY bucket in the range, filling 0 where there were no
+    # clips. An empty hour is real data (no activity), so it belongs in the chart,
+    # the data table, and the CSV export — previously zero-count buckets were
+    # silently dropped, leaving gaps in all three.
+    step = timedelta(hours=1) if gran == "hour" else timedelta(days=1)
+    _, cur = bucket(start_loc)
+    while True:
+        bk, bdt = bucket(cur)
+        if bdt > now_loc:
+            break
+        counts.setdefault(bk, 0)
+        key_dt.setdefault(bk, bdt)
+        cur = bdt + step
+
     # Weather (Open-Meteo, cached) in the SAME display tz so it lines up.
     weather_enabled = device.lat is not None and device.lon is not None
     wkey = "%Y-%m-%dT%H" if gran == "hour" else "%Y-%m-%d"
