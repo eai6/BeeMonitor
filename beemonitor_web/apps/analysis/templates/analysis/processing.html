@@ -101,7 +101,7 @@
           <div class="text-sm text-gray-900 truncate">{{ v.title|default:"(untitled)" }}</div>
           <div class="text-xs text-gray-400">{% if v.device %}{{ v.device.name }} · {% endif %}{{ v.recorded_at|default:v.uploaded_at|date:"Y-m-d H:i" }}</div>
         </label>
-        <div id="status-{{ v.pk }}" class="flex items-center gap-2 shrink-0">
+        <div id="status-{{ v.pk }}" data-vid="{{ v.pk }}" data-status="{{ v.job_status|default:'' }}" class="flex items-center gap-2 shrink-0">
           {% if v.job_status == "completed" %}
             <span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">analyzed</span>
             {% if v.job_id %}<a href="{% url 'analysis:detail' v.job_id %}" class="text-xs text-amber-700 hover:underline">results →</a>{% endif %}
@@ -182,6 +182,26 @@
         setTimeout(function () { t.remove(); }, 400); }, 4500);
     }
 
+    // Video ids currently processing — polled until they resolve.
+    var active = new Set();
+    document.querySelectorAll('[data-status="processing"]').forEach(function (el) {
+      if (el.dataset.vid) active.add(el.dataset.vid);
+    });
+    function setStatus(vid, status, jobId) {
+      var el = document.getElementById('status-' + vid);
+      if (!el) return;
+      el.dataset.status = status;
+      if (status === 'completed') {
+        el.innerHTML = '<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">analyzed</span>' +
+          (jobId ? ' <a href="/analysis/' + jobId + '/" class="text-xs text-amber-700 hover:underline">results →</a>' : '');
+      } else if (status === 'failed') {
+        el.innerHTML = '<a href="' + (jobId ? '/analysis/' + jobId + '/' : '#') +
+          '" class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">failed</a>';
+      } else {
+        el.innerHTML = '<span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">processing…</span>';
+      }
+    }
+
     // AJAX run: submit the batch without leaving the page; mark submitted videos
     // "processing…" in place and toast the result.
     if (form) form.addEventListener('submit', function (e) {
@@ -202,8 +222,8 @@
             (d.video_ids || []).forEach(function (id) {
               var cb = document.getElementById('cb-' + id);
               if (cb) { cb.checked = false; cb.disabled = true; }
-              var st = document.getElementById('status-' + id);
-              if (st) st.innerHTML = '<span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">processing…</span>';
+              setStatus(String(id), 'processing', null);
+              active.add(String(id));
             });
           } else {
             toast((d && d.error) || 'Could not start analysis.', false);
@@ -211,6 +231,25 @@
         }).catch(function () { toast('Could not start analysis.', false); })
         .then(function () { refresh(); });   // recompute count + button state
     });
+
+    // Live poll: while anything is processing, flip rows to analyzed/failed in
+    // place (the endpoint also advances the jobs by checking SageMaker output).
+    function poll() {
+      if (!active.size) return;
+      fetch("{% url 'analysis:poll' %}", {headers: {'X-Requested-With': 'XMLHttpRequest'}})
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          (d.jobs || []).forEach(function (j) {
+            var vid = String(j.video_id);
+            if (active.has(vid) && (j.status === 'completed' || j.status === 'failed')) {
+              setStatus(vid, j.status, j.job_id);
+              active.delete(vid);
+            }
+          });
+        }).catch(function () {});
+    }
+    setInterval(poll, 12000);
+
     refresh();
   })();
 </script>

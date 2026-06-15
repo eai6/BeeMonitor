@@ -558,12 +558,17 @@ class PollJobsView(LoginRequiredMixin, View):
         ).exclude(modal_call_id="")[:200])
 
         if not processing_jobs:
-            return JsonResponse({"checked": 0, "completed": 0})
+            return JsonResponse({"checked": 0, "completed": 0, "jobs": []})
 
         completed = _poll_sagemaker_results(processing_jobs)
+        # Post-poll status per video so a page can flip rows live (Processing hub).
+        pks = [j.pk for j in processing_jobs]
+        jobs = [{"job_id": s["pk"], "video_id": s["video_id"], "status": s["status"]}
+                for s in Job.objects.filter(pk__in=pks).values("pk", "video_id", "status")]
         return JsonResponse({
             "checked": len(processing_jobs),
             "completed": completed,
+            "jobs": jobs,
         })
 
 
