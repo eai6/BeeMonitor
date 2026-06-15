@@ -562,6 +562,8 @@ class DeviceCreatedView(LoginRequiredMixin, TemplateView):
         ctx["device"] = device
         ctx["raw_key"] = raw_key  # None on refresh — template handles that.
         ctx["api_base"] = settings.BEEMONITOR_DEVICE_API_BASE
+        ctx["image_url"] = settings.BEEMONITOR_GOLDEN_IMAGE_URL  # golden image (flash)
+        ctx["online"] = _is_online(device)  # so a returning page shows current state
         return ctx
 
 

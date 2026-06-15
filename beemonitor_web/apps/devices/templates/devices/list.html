@@ -8,8 +8,7 @@
     <p class="text-sm text-gray-500 mt-1">Raspberry Pis (and other clients) that upload videos to your account.</p>
   </div>
   <div class="flex items-center gap-3">
-    <a href="{% url 'devices:enrollment' %}" class="text-sm text-amber-700 hover:underline">Zero-touch enrollment</a>
-    <a href="{% url 'devices:add' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Add Device</a>
+    <a href="{% url 'devices:add' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Add a device</a>
   </div>
 </div>
 
@@ -85,7 +84,6 @@
   <p class="text-gray-500 mb-4">No devices yet. Each Raspberry Pi that uploads to BeeMonitor needs a device key.</p>
   <div class="flex items-center justify-center gap-3">
     <a href="{% url 'devices:add' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Add your first device</a>
-    <a href="{% url 'devices:enrollment' %}" class="text-amber-600 hover:underline font-medium text-sm">or enroll a golden-image card →</a>
   </div>
 </div>
 {% endif %}
