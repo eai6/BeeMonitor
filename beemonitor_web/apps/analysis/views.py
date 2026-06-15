@@ -326,17 +326,36 @@ class ProcessingHubView(LoginRequiredMixin, View):
 
     def get(self, request):
         from django.db.models import OuterRef, Subquery
+        from apps.devices.models import Device
+        from apps.training.models import CustomModel
+
+        qs = Video.objects.filter(user=request.user)
+        # Filters (merged from the video library): device + free-text search.
+        f_device = request.GET.get("device", "")
+        f_search = (request.GET.get("q", "") or "").strip()
+        if f_device:
+            qs = qs.filter(device_id=f_device)
+        if f_search:
+            qs = qs.filter(title__icontains=f_search)
+
         latest = (Job.objects.filter(video=OuterRef("pk"))
                   .order_by("-id").values("status")[:1])
-        videos = (Video.objects.filter(user=request.user)
-                  .annotate(job_status=Subquery(latest))
-                  .order_by("-recorded_at", "-uploaded_at")[:50])
+        videos = (qs.annotate(job_status=Subquery(latest))
+                  .select_related("device")
+                  .order_by("-recorded_at", "-uploaded_at")[:200])
         recent_jobs = (Job.objects.filter(user=request.user)
                        .select_related("video").order_by("-id")[:8])
+
+        models = CustomModel.objects.filter(user=request.user, is_active=True)
         return render(request, self.template_name, {
             "videos": videos,
             "recent_jobs": recent_jobs,
-            "video_count": Video.objects.filter(user=request.user).count(),
+            "video_count": qs.count(),
+            "devices": Device.accessible(request.user).order_by("name"),
+            "f_device": f_device, "f_search": f_search,
+            "custom_nest_models": models.filter(model_type__in=["nest_detection", "custom"]),
+            "custom_bee_models": models.filter(model_type__in=["bee_tracking", "custom"]),
+            "est_credits_per_video": 349,
         })
 
     def post(self, request):
@@ -642,6 +661,22 @@ def _apply_result_to_job(job, result: dict) -> None:
                 job.pk, result.get("total_events", 0), exec_secs, cost_usd)
 
 
+def _video_job_config(base: dict, video, use_device_roi: bool) -> dict:
+    """Per-video job config. When use_device_roi is on and the video's DEVICE has a
+    configured hotel ROI / nest tubes, inject them so the run uses the human-set
+    layout (the nest-detection model becomes a backup for videos/devices without
+    one). No-op when the device has nothing set. The SageMaker worker honours
+    ``hotel_roi`` / ``nest_layout`` when present."""
+    cfg = dict(base)
+    dev = getattr(video, "device", None)
+    if use_device_roi and dev is not None:
+        if dev.roi_override:
+            cfg["hotel_roi"] = dev.roi_override     # normalized [x1,y1,x2,y2]
+        if dev.nest_layout:
+            cfg["nest_layout"] = dev.nest_layout    # [{id, box:[x1,y1,x2,y2]}, ...]
+    return cfg
+
+
 class BatchJobView(LoginRequiredMixin, View):
     """Submit analysis jobs for multiple videos via Modal parallel processing.
 
@@ -662,6 +697,7 @@ class BatchJobView(LoginRequiredMixin, View):
         two_mode = request.POST.get("two_mode_tracking", "true") == "true"
         visualize = request.POST.get("visualize", "true") == "true"
         gpu_tier = request.POST.get("gpu_tier", "A10G")
+        use_device_roi = request.POST.get("use_device_roi") in ("on", "true", "1")
 
         config = {
             "detection_mode": detection_mode,
@@ -704,8 +740,11 @@ class BatchJobView(LoginRequiredMixin, View):
         # Deduplication: check which videos already have completed jobs with same config
         skipped = 0
         videos_to_process = []
-        for video in videos.select_related("source"):
-            config_hash = compute_config_hash(video.pk, config)
+        video_configs = {}  # per-video config (may carry the device's ROI/nest tubes)
+        for video in videos.select_related("source", "device"):
+            vcfg = _video_job_config(config, video, use_device_roi)
+            video_configs[video.pk] = vcfg
+            config_hash = compute_config_hash(video.pk, vcfg)
 
             # Check for existing completed or processing job with same hash
             existing = Job.objects.filter(
@@ -754,8 +793,8 @@ class BatchJobView(LoginRequiredMixin, View):
             job = Job.objects.create(
                 user=request.user,
                 video=video,
-                config=config,
-                config_hash=compute_config_hash(video.pk, config),
+                config=video_configs[video.pk],
+                config_hash=compute_config_hash(video.pk, video_configs[video.pk]),
                 gpu_tier=gpu_tier,
                 status=Job.Status.PROCESSING,
                 started_at=tz.now(),

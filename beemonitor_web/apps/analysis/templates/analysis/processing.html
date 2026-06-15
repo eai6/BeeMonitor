@@ -5,86 +5,107 @@
 <div class="max-w-6xl mx-auto">
   <div class="flex items-end justify-between flex-wrap gap-2 mb-1">
     <h1 class="text-2xl font-bold text-gray-900">Processing</h1>
+    <a href="{% url 'videos:upload' %}" class="text-sm text-amber-700 hover:underline">Upload video →</a>
   </div>
-  <p class="text-sm text-gray-500 mb-6">
-    Run AI analysis on your videos to extract ecological data. Pick a video below
-    and run it — tracking produces the trajectories that foraging trips and
-    interactions are derived from.
+  <p class="text-sm text-gray-500 mb-4">
+    Select videos, then run analysis to extract ecological data. Tracking produces
+    the trajectories that everything else is derived from.
   </p>
 
-  <!-- Capabilities ("recipes") -->
-  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-    <div class="bg-white shadow rounded-lg p-4 flex flex-col">
-      <div class="text-2xl mb-1">🐝</div>
-      <h2 class="text-sm font-semibold text-gray-900">Detect &amp; track</h2>
-      <p class="text-xs text-gray-500 mt-1 flex-1">Find and track bees across the video (YOLO + multi-object tracking) — the basis for everything else.</p>
-    </div>
-    <div class="bg-white shadow rounded-lg p-4 flex flex-col">
-      <div class="text-2xl mb-1">🌼</div>
-      <h2 class="text-sm font-semibold text-gray-900">Foraging trips</h2>
-      <p class="text-xs text-gray-500 mt-1 flex-1">Departures and returns at the nest, trip durations and rates — derived from tracking.</p>
-      <a href="{% url 'analysis:download_trips' %}" class="text-xs text-amber-700 hover:underline mt-2">Download trips CSV →</a>
-    </div>
-    <div class="bg-white shadow rounded-lg p-4 flex flex-col">
-      <div class="text-2xl mb-1">🔗</div>
-      <h2 class="text-sm font-semibold text-gray-900">Interactions</h2>
-      <p class="text-xs text-gray-500 mt-1 flex-1">Encounters between tracked targets (target↔target) — co-occurrence and contact events.</p>
-      <a href="{% url 'analysis:download_interactions' %}" class="text-xs text-amber-700 hover:underline mt-2">Download interactions CSV →</a>
-    </div>
-    <div class="bg-white shadow rounded-lg p-4 flex flex-col">
-      <div class="text-2xl mb-1">🔬</div>
-      <h2 class="text-sm font-semibold text-gray-900">Species ID</h2>
-      <p class="text-xs text-gray-500 mt-1 flex-1">Taxonomic identification of the insect in each activity (BioCLIP) from device activity frames.</p>
-      <a href="{% url 'monitor:activity_list' %}" class="text-xs text-amber-700 hover:underline mt-2">View activity &amp; species →</a>
-    </div>
+  <!-- What you get (preselected ecological outputs) -->
+  <div class="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 mb-5 text-sm text-amber-900">
+    <span class="font-medium">Extracts:</span>
+    🌼 Foraging trips · 🔗 Interactions · 🔬 Species presence
+    <span class="text-amber-700">— derived from bee detection &amp; tracking. (Species ID also runs on device activity frames; see the
+      <a href="{% url 'monitor:agent_chat' %}" class="underline">monitoring agent</a>.)</span>
   </div>
 
-  <!-- Run analysis on a video -->
-  <div class="flex items-end justify-between mb-2">
-    <h2 class="text-lg font-semibold text-gray-900">Run analysis on a video</h2>
-    <a href="{% url 'videos:list' %}" class="text-sm text-amber-700 hover:underline">All videos →</a>
-  </div>
+  <!-- Filter -->
+  <form method="get" class="flex flex-wrap items-center gap-2 mb-3">
+    <select name="device" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      <option value="">All bee hotels</option>
+      {% for d in devices %}
+      <option value="{{ d.pk }}" {% if f_device == d.pk|stringformat:"s" %}selected{% endif %}>{{ d.name }}</option>
+      {% endfor %}
+    </select>
+    <input name="q" value="{{ f_search }}" placeholder="Search title…"
+           class="border border-gray-300 rounded px-3 py-1.5 text-sm">
+    <button class="bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 px-3 py-1.5 rounded text-sm">Filter</button>
+    {% if f_device or f_search %}<a href="{% url 'analysis:processing' %}" class="text-sm text-amber-700 hover:underline">Clear</a>{% endif %}
+  </form>
+
   {% if videos %}
-  <div class="bg-white shadow rounded-lg divide-y">
-    {% for v in videos %}
-    <div class="flex items-center justify-between gap-3 px-4 py-3">
-      <div class="min-w-0">
-        <a href="{% url 'videos:detail' v.pk %}" class="text-sm font-medium text-gray-900 hover:underline truncate block">{{ v.title|default:"(untitled)" }}</a>
-        <div class="text-xs text-gray-400">
-          {% if v.site_name %}{{ v.site_name }} · {% endif %}{{ v.recorded_at|default:v.uploaded_at|date:"Y-m-d H:i" }}
+  <form method="post" action="{% url 'analysis:batch' %}" id="run-form">
+    {% csrf_token %}
+    <!-- Preselected pipeline (abstract outputs): detect & track -->
+    <input type="hidden" name="detection_mode" value="detect_and_track">
+    <input type="hidden" name="confidence_threshold" value="0.25">
+    <input type="hidden" name="two_mode_tracking" value="true">
+    <input type="hidden" name="gpu_tier" value="A10G">
+    <input type="hidden" name="visualize" value="false">
+
+    <!-- Configuration (only the model config is exposed) -->
+    <div class="bg-white shadow rounded-lg p-4 mb-4">
+      <h2 class="text-sm font-semibold text-gray-900 mb-3">Configuration</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1">Bee tracking model</label>
+          <select name="custom_bee_model" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="">Default (bee_tracking.pt)</option>
+            {% for m in custom_bee_models %}<option value="{{ m.pk }}">{{ m.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1">Nest detection model</label>
+          <select name="custom_nest_model" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="">Default (nest_detection.pt)</option>
+            {% for m in custom_nest_models %}<option value="{{ m.pk }}">{{ m.name }}</option>{% endfor %}
+          </select>
         </div>
       </div>
-      <div class="flex items-center gap-3 shrink-0">
-        {% if v.job_status == "completed" %}
-          <span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">analyzed</span>
-        {% elif v.job_status == "processing" %}
-          <span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">processing…</span>
-        {% elif v.job_status == "failed" %}
-          <span class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">failed</span>
-        {% endif %}
-        <form method="post" action="{% url 'analysis:processing' %}">
-          {% csrf_token %}
-          <input type="hidden" name="video" value="{{ v.pk }}">
-          <input type="hidden" name="mode" value="detect_and_track">
-          <button class="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded text-sm font-medium whitespace-nowrap">
-            {% if v.job_status %}Re-run{% else %}Run analysis{% endif %}
-          </button>
-        </form>
-      </div>
+      <label class="flex items-start gap-2 mt-3 text-sm text-gray-700">
+        <input type="checkbox" name="use_device_roi" value="on" class="mt-0.5 rounded border-gray-300">
+        <span>Use each bee hotel's configured <b>ROI + nest tubes</b> (set on the device). The nest
+          model is the backup for videos whose device has none set.</span>
+      </label>
     </div>
-    {% endfor %}
-  </div>
-  {% if video_count > 50 %}
-  <p class="text-xs text-gray-400 mt-2">Showing the 50 most recent of {{ video_count }} videos. <a href="{% url 'videos:list' %}" class="text-amber-700 hover:underline">See all →</a></p>
-  {% endif %}
+
+    <!-- Select videos -->
+    <div class="flex items-center justify-between mb-2">
+      <label class="flex items-center gap-2 text-sm text-gray-700">
+        <input type="checkbox" id="select-all" class="rounded border-gray-300"> Select all ({{ video_count }})
+      </label>
+      <button type="submit" id="run-btn" disabled
+              class="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white px-4 py-1.5 rounded text-sm font-medium">
+        Run analysis (<span id="sel-count">0</span>)
+      </button>
+    </div>
+    <div class="bg-white shadow rounded-lg divide-y">
+      {% for v in videos %}
+      <label class="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 cursor-pointer">
+        <input type="checkbox" name="video_ids" value="{{ v.pk }}" class="vid-cb rounded border-gray-300">
+        <div class="flex-1 min-w-0">
+          <div class="text-sm text-gray-900 truncate">{{ v.title|default:"(untitled)" }}</div>
+          <div class="text-xs text-gray-400">{% if v.device %}{{ v.device.name }} · {% endif %}{{ v.recorded_at|default:v.uploaded_at|date:"Y-m-d H:i" }}</div>
+        </div>
+        {% if v.job_status == "completed" %}<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 shrink-0">analyzed</span>
+        {% elif v.job_status == "processing" %}<span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 shrink-0">processing…</span>
+        {% elif v.job_status == "failed" %}<span class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 shrink-0">failed</span>{% endif %}
+      </label>
+      {% endfor %}
+    </div>
+    <p class="text-xs text-gray-400 mt-2">
+      ~{{ est_credits_per_video }} credits/video on A10G · <span id="cred-line">select videos to see the total</span>.
+      {% if video_count > 200 %}Showing the 200 most recent — narrow with the filter.{% endif %}
+    </p>
+  </form>
   {% else %}
   <div class="bg-white shadow rounded-lg p-6 text-center">
-    <p class="text-sm text-gray-500 mb-3">No videos yet. Upload footage or let a device push activity clips, then run analysis here.</p>
+    <p class="text-sm text-gray-500 mb-3">No videos{% if f_device or f_search %} match this filter{% else %} yet{% endif %}. Upload footage or let a bee hotel push activity clips.</p>
     <a href="{% url 'videos:upload' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Upload a video</a>
   </div>
   {% endif %}
 
-  <!-- Recent jobs -->
   {% if recent_jobs %}
   <h2 class="text-lg font-semibold text-gray-900 mt-8 mb-2">Recent jobs</h2>
   <div class="bg-white shadow rounded-lg divide-y">
@@ -104,4 +125,25 @@
   </div>
   {% endif %}
 </div>
+
+<script>
+  (function () {
+    var PER = {{ est_credits_per_video }};
+    var all = document.getElementById('select-all');
+    var btn = document.getElementById('run-btn');
+    var cnt = document.getElementById('sel-count');
+    var credLine = document.getElementById('cred-line');
+    function boxes() { return Array.prototype.slice.call(document.querySelectorAll('.vid-cb')); }
+    function refresh() {
+      var n = boxes().filter(function (b) { return b.checked; }).length;
+      if (cnt) cnt.textContent = n;
+      if (btn) btn.disabled = n === 0;
+      if (credLine) credLine.textContent = n ? (n + ' selected → ~' + (n * PER).toLocaleString() + ' credits') : 'select videos to see the total';
+      if (all) { all.checked = n > 0 && n === boxes().length; }
+    }
+    if (all) all.addEventListener('change', function () { boxes().forEach(function (b) { b.checked = all.checked; }); refresh(); });
+    boxes().forEach(function (b) { b.addEventListener('change', refresh); });
+    refresh();
+  })();
+</script>
 {% endblock %}
