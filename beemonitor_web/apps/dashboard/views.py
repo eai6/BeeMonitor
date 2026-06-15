@@ -3,4 +3,6 @@ from django.views.generic import RedirectView
 
 
 class DashboardView(LoginRequiredMixin, RedirectView):
-    pattern_name = "analysis:analytics"
+    # Landing page is the device list — the operational home of the platform.
+    # Video processing / analysis lives under the "Processing" menu.
+    pattern_name = "devices:list"
