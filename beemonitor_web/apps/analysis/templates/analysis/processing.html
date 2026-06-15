@@ -140,7 +140,16 @@
       <div class="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50">
         <input type="checkbox" name="video_ids" value="{{ v.pk }}" id="cb-{{ v.pk }}" class="vid-cb rounded border-gray-300">
         <label for="cb-{{ v.pk }}" class="flex-1 min-w-0 cursor-pointer">
-          <div class="text-sm text-gray-900 truncate">{{ v.title|default:"(untitled)" }}</div>
+          <div class="text-sm text-gray-900 flex items-center gap-1.5 min-w-0">
+            <span class="truncate">{{ v.title|default:"(untitled)" }}</span>
+            {% if v.metadata.bee.status == "confirmed" %}
+            <span class="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700"
+                  title="On-device: confirmed bee{% if v.metadata.bee.confidence %} · conf {{ v.metadata.bee.confidence }}{% endif %}{% if v.metadata.bee.taxon %} · {{ v.metadata.bee.taxon }}{% endif %}">✓ bee</span>
+            {% elif v.metadata.bee.status == "unconfirmed" %}
+            <span class="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500"
+                  title="On-device: not confirmed as a bee — recorded + uploaded, but not counted as activity">unconfirmed</span>
+            {% endif %}
+          </div>
           <div class="text-xs text-gray-400">{% if v.device %}{{ v.device.name }} · {% endif %}{{ v.recorded_at|default:v.uploaded_at|date:"Y-m-d H:i" }}</div>
         </label>
         <div id="status-{{ v.pk }}" data-vid="{{ v.pk }}" data-status="{{ v.job_status|default:'' }}" class="flex items-center gap-2 shrink-0">
