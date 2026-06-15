@@ -99,7 +99,11 @@ def _activity_this_hour(device) -> int:
     start_loc = now_loc.replace(minute=0, second=0, microsecond=0)
     # clip true_utc >= start  <=>  recorded_at - pi_off >= start  <=>  recorded_at >= start + pi_off
     thresh = start_loc.astimezone(dt_timezone.utc) + pi_off
-    cloud = Video.objects.filter(device=device, recorded_at__gte=thresh).count()
+    # Bee ACTIVITY excludes clips the on-device confirmation marked NOT a bee
+    # (metadata.bee_confirmed=False). They still upload + count for storage, but
+    # not as activity. Untagged clips (off-mode / pre-confirmation) still count.
+    cloud = (Video.objects.filter(device=device, recorded_at__gte=thresh)
+             .exclude(metadata__bee_confirmed=False).count())
     # The device's on-card count is for the Pi's clock hour; only use it when the
     # display tz currently matches the Pi's offset (else it's a different hour).
     latest = device.heartbeats.first()
@@ -341,8 +345,11 @@ def _build_activity_series(device, range_key: str) -> dict:
         return b.strftime("%Y-%m-%d"), b
 
     counts, key_dt = {}, {}
+    # Exclude clips the device marked NOT a bee (metadata.bee_confirmed=False) —
+    # they upload but don't count as activity. Confirmed + untagged clips count.
     for ra in (Video.objects.filter(device=device, recorded_at__isnull=False,
                                     recorded_at__gte=since)
+               .exclude(metadata__bee_confirmed=False)
                .values_list("recorded_at", flat=True)):
         loc = _true_utc(ra, pi_off).astimezone(zone)
         if loc < start_loc:
