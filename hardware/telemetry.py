@@ -1532,17 +1532,21 @@ def main() -> int:
                 last_cleanup = time.time()
         except Exception as e:  # pragma: no cover - never let the loop die
             log.exception("beat raised: %s", e)
-        # Between beats, poll for on-demand commands every COMMAND_POLL_SECONDS so
-        # a requested photo lands in seconds, not up to a full interval. The poll
-        # also carries telemetry_interval, so a rate change (even from 1d to 1s)
-        # takes effect within ~COMMAND_POLL_SECONDS. ``_interval`` is read live so
-        # lowering it breaks the wait early.
+        # Between beats, fast-poll for on-demand commands every
+        # COMMAND_POLL_SECONDS — but ONLY over WiFi, where it's free. On metered
+        # cellular this poll is a TLS round trip every few seconds (~10k/day) that
+        # ignores the dashboard rate, so we stay silent and let the next beat carry
+        # any command + rate change. That makes the dashboard telemetry rate the
+        # true cellular ceiling (on-demand photos wait for the next beat on
+        # cellular). The transport check is a local `ip route get` (no traffic), so
+        # the moment WiFi returns the fast poll resumes. ``_interval`` is read live
+        # so lowering it breaks the wait early.
         slept = 0
         while _running and slept < _interval:
             step = min(COMMAND_POLL_SECONDS, _interval - slept)
             time.sleep(step)
             slept += step
-            if _running and slept < _interval:
+            if _running and slept < _interval and _active_transport() == "wifi":
                 _apply_interval((_poll_command() or {}).get("telemetry_interval"))
     log.info("telemetry stopped")
     return 0
