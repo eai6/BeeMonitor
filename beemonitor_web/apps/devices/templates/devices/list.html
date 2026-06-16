@@ -20,6 +20,50 @@
   {% endfor %}
 {% endif %}
 
+{% if has_map %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<div class="bg-white shadow rounded-lg overflow-hidden mb-6">
+  <div id="device-map" class="w-full h-72 sm:h-80 z-0"></div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+  (function () {
+    var points = {{ map_points|safe }};
+    if (!points.length || typeof L === 'undefined') return;
+    var map = L.map('device-map', { scrollWheelZoom: false });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+    }).addTo(map);
+
+    var bounds = [];
+    points.forEach(function (p) {
+      var color = !p.active ? '#9ca3af' : (p.online ? '#22c55e' : '#ef4444');
+      var marker = L.circleMarker([p.lat, p.lon], {
+        radius: 8, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1
+      }).addTo(map);
+      var statusLabel = !p.active ? 'Revoked' : (p.online ? 'Online' : 'Offline');
+      marker.bindPopup(
+        '<div style="min-width:140px">' +
+        '<a href="' + p.url + '" style="font-weight:600;color:#111827">' + p.name + '</a>' +
+        (p.location ? '<div style="color:#6b7280;font-size:12px">' + p.location + '</div>' : '') +
+        '<div style="font-size:12px;margin-top:4px"><span style="color:' + color + '">&#9679;</span> ' +
+        statusLabel + ' &middot; ' + p.last_seen + '</div></div>'
+      );
+      bounds.push([p.lat, p.lon]);
+    });
+
+    if (bounds.length === 1) {
+      map.setView(bounds[0], 13);
+    } else {
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+    }
+  })();
+</script>
+{% endif %}
+
 {% if devices %}
 <div class="bg-white shadow rounded-lg overflow-hidden">
   <table class="min-w-full divide-y divide-gray-200">

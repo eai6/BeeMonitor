@@ -255,6 +255,10 @@ class DeviceListView(LoginRequiredMixin, ListView):
         ctx = super().get_context_data(**kwargs)
         # Enrich each device with derived status + latest-beat summary for the
         # list table. Device counts are small, so per-row lookups are fine.
+        # Also collect map points (deployment coords, or the latest GPS beat as a
+        # fallback) so the page can plot the fleet on a map.
+        from django.utils.timesince import timesince
+        points = []
         for device in ctx["devices"]:
             latest = device.heartbeats.first()
             device.online = _is_online(device)
@@ -262,6 +266,23 @@ class DeviceListView(LoginRequiredMixin, ListView):
             device.storage_pct = latest.storage_pct if latest else None
             device.video_count = device.videos.count()
             device.my_role = device.role_for(self.request.user)
+
+            lat = device.lat if device.lat is not None else (latest.lat if latest else None)
+            lon = device.lon if device.lon is not None else (latest.lon if latest else None)
+            if lat is not None and lon is not None:
+                points.append({
+                    "name": device.name,
+                    "lat": lat,
+                    "lon": lon,
+                    "online": bool(device.is_active and device.online),
+                    "active": bool(device.is_active),
+                    "location": device.location or "",
+                    "last_seen": (f"{timesince(device.last_seen_at)} ago"
+                                  if device.last_seen_at else "never"),
+                    "url": reverse("devices:detail", args=[device.pk]),
+                })
+        ctx["map_points"] = json.dumps(points)
+        ctx["has_map"] = bool(points)
         return ctx
 
 
