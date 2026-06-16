@@ -1,7 +1,9 @@
 # BeeMonitor — Golden-Image Fleet Provisioning Design
 
-**Status:** Phase 1 implemented (commit `bcfb914`, branch
-`devices/golden-image-provisioning`); golden image not yet built/published.
+**Status:** Phase 1 implemented + **merged to `main`** (PR #3, commit `bcfb914`).
+Generalize step now scripted (`hardware/provision/generalize.sh`). **Remaining work
+is purely operational** — build/generalize/shrink/publish the image on hardware and
+set `BEEMONITOR_GOLDEN_IMAGE_URL`; the golden image is not yet built/published.
 **Author:** Drafted with Claude Code, 2026-06-11
 **Goal:** Make standing up a field unit "flash → drop a token in the browser →
 assemble hardware → insert card → power on → it appears" — so a non-expert only
@@ -103,15 +105,17 @@ Safari/Firefox use the CLI or manual snippet.
 1. **Build the golden image** on a reference Pi: full install per
    `hardware/README.md` 0–10, all services `enable`d (incl. `beemonitor-enroll`),
    only `BEEMONITOR_API_BASE` in `uploader.env` (no key, no token).
-2. **Generalize:** strip device key/token, blank `/etc/machine-id`, remove SSH host
-   keys (regen on boot), clear logs/history/test clips.
+2. **Generalize:** run `sudo bash hardware/provision/generalize.sh` on the reference
+   Pi — strips device key/token, blanks `/etc/machine-id`, removes SSH host keys
+   (regen on boot), clears logs/history/test clips, and VERIFIES no credential
+   survives before powering off.
 3. **Capture + shrink** on a Linux box: `dd` the card → `pishrink.sh -aZ` →
    `beemonitor-golden.img.xz` (~1.5–3 GB). (macOS can `dd`-read but not shrink ext4.)
 4. **Publish:** `aws s3 cp` to the bucket; set `BEEMONITOR_GOLDEN_IMAGE_URL` in App
    Runner prod env (+ local `.env`). It's a non-secret, public artifact.
 5. **Hardware verify:** flash a clone, browser-enroll, confirm it appears and the
    token is cleared from `bootfs` after first boot.
-6. **Merge** `devices/golden-image-provisioning`.
+6. ~~**Merge** `devices/golden-image-provisioning`.~~ Done (PR #3, on `main`).
 
 Detailed commands live in `hardware/provision/README.md` (don't duplicate here).
 

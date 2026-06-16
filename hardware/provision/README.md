@@ -39,8 +39,22 @@ skipping" for enroll, which is correct). Then **shut down**.
 
 ### 1.2 Generalize before capture
 
-Clones must not share per-unit identity/state. SSH back in (or do this on the
-reference Pi before the final shutdown) and strip it down:
+Clones must not share per-unit identity/state, and **no credential may ship in the
+image**. Run the provided script on the reference Pi — it does every step below,
+**verifies** that no device key / enrollment token survives, and refuses to power
+off if one does:
+
+```bash
+sudo bash hardware/provision/generalize.sh      # confirm, then powers off
+# flags: --yes (no prompt)   --no-poweroff
+```
+
+It removes the key/token from `uploader.env`, deletes any dropped boot-partition
+token, blanks `machine-id` + SSH host keys (regenerated per clone on first boot),
+vacuums logs, clears test recordings and shell history, then asserts the card is
+credential-free before shutdown.
+
+<details><summary>What it runs (manual equivalent, for reference)</summary>
 
 ```bash
 # 1. No credentials in the image
@@ -58,6 +72,8 @@ sudo rm -rf /home/beemonitor/Desktop/cameraOutput/*  # no test clips
 rm -f /home/beemonitor/.bash_history
 sudo poweroff
 ```
+
+</details>
 
 > The device's stable `hw_id` is the **Pi CPU serial** (unique per board), so clones
 > self-enroll as distinct devices even though the image is identical — that's why
