@@ -92,6 +92,21 @@ TOOL_DEFS = [
         },
     },
     {
+        "name": "wake_window_status",
+        "description": "Whether a device is, RIGHT NOW, inside its configured wake "
+                       "window — resolves the unit's local time and today's window "
+                       "(daylight sunrise/sunset, fixed on/off, etc.). Use this to "
+                       "tell whether an OFFLINE unit is simply ASLEEP as scheduled "
+                       "(expected, no action) versus genuinely down (a fault). "
+                       "Returns true/false/'unknown' (unknown = no GPS for a daylight "
+                       "schedule, or a cyclic interval whose phase isn't tracked).",
+        "input_schema": {
+            "type": "object",
+            "properties": {"device_id": {"type": "integer"}},
+            "required": ["device_id"],
+        },
+    },
+    {
         "name": "tracking_summary",
         "description": "Processed TRACKING results for a device — foraging trips, "
                        "interactions, unique tracks, entries/exits — aggregated "
@@ -207,6 +222,10 @@ def run_tool(name: str, tool_input: dict, user) -> dict:
             return {"device_id": device.pk, "name": device.name,
                     "location": device.location, "lat": device.lat, "lon": device.lon,
                     "tz": device.tz_name, **_online(device)}
+
+        if name == "wake_window_status":
+            from apps.devices.wake_status import wake_window_status
+            return {**wake_window_status(device), **_online(device)}
 
         if name == "species_summary":
             days = max(1, min(int(tool_input.get("days", 7)), 90))

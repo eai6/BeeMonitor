@@ -101,7 +101,10 @@ def _system_blocks(current_step: str, device_state: dict | None):
             "unit (telemetry rate, bee-confirmation mode, crop cap, motion tuning, "
             "ROI/nest tubes, wake schedule, timezone) — it explains why a unit may "
             "be sending little/no data (e.g. crop cap 0, gate mode, slow beat). "
-            "Omit device_id for the whole fleet's config at once.")
+            "Omit device_id for the whole fleet's config at once. When a unit is "
+            "OFFLINE, call wake_window_status before calling it a fault — if it's "
+            "currently outside its wake window it's just asleep as scheduled "
+            "(expected), not broken. Don't guess the wake window; use the tool.")
     if device_state:
         ctx_lines.append("Live device snapshot: " + json.dumps(device_state))
     if ctx_lines:

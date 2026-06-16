@@ -64,6 +64,20 @@ TOOL_DEFS = [
         },
     },
     {
+        "name": "wake_window_status",
+        "description": "Whether a device is, RIGHT NOW, inside its configured wake "
+                       "window — resolves the unit's local time and today's window "
+                       "(daylight sunrise/sunset, fixed on/off, etc.). Use this when "
+                       "a unit is OFFLINE to tell whether it's simply ASLEEP as "
+                       "scheduled (expected — not a fault) versus genuinely down. "
+                       "Returns true/false/'unknown'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"device_id": {"type": "integer"}},
+            "required": ["device_id"],
+        },
+    },
+    {
         "name": "lookup_troubleshooting",
         "description": "Search the BeeMonitor setup guide for steps and known "
                        "error fixes matching a symptom or keyword. Use to ground "
@@ -132,6 +146,13 @@ def run_tool(name: str, tool_input: dict, user) -> dict:
             return {"devices": [
                 _config_payload(d) for d in Device.accessible(user).order_by("name")
             ]}
+
+        if name == "wake_window_status":
+            device = _device_for(user, tool_input.get("device_id"))
+            if device is None:
+                return {"error": "No such device, or you don't have access to it."}
+            from apps.devices.wake_status import wake_window_status
+            return wake_window_status(device)
 
         if name in ("get_device_status", "get_recent_heartbeats"):
             device = _device_for(user, tool_input.get("device_id"))
