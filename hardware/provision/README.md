@@ -79,45 +79,52 @@ sudo poweroff
 > self-enroll as distinct devices even though the image is identical — that's why
 > blanking `machine-id` is safe.
 
-### 1.3 Capture + shrink + compress
+### 1.3–1.4 Capture + shrink + publish
 
-Move the card to a **Linux** machine (a cheap EC2, a second Pi, or a Linux VM —
-the shrink step needs ext4 tools that macOS doesn't have). Identify the card with
-`lsblk`, then:
+Move the card to a **Linux** machine (a cheap EC2, a second Pi, or a Linux VM — the
+shrink step needs ext4 tools that macOS doesn't have). The script does the whole
+capture → shrink → upload, and **refuses to `dd` anything that isn't a whole,
+removable, non-system disk** (it shows you the target and makes you confirm):
+
+```bash
+# Find the card first:
+lsblk
+
+# Capture → shrink → publish in one go (read-only on the card):
+sudo bash hardware/provision/capture-publish.sh --device /dev/sdX --bucket <your-bucket>
+#   omit --bucket to produce the local .img.xz only
+#   flags: --key-prefix images/  --name beemonitor-golden  --out DIR  --no-shrink  --yes
+```
+
+It prints the exact `BEEMONITOR_GOLDEN_IMAGE_URL` to set afterward. A fresh install
+typically lands around **1.5–3 GB** compressed.
+
+<details><summary>What it runs (manual equivalent, for reference)</summary>
 
 ```bash
 # Raw read of the whole card (replace sdX with your card; NOT a partition)
 sudo dd if=/dev/sdX of=beemonitor-golden.img bs=4M status=progress conv=fsync
 
-# Shrink the rootfs to its minimum, re-expand on first boot, and xz-compress.
+# Shrink the rootfs (-a: first-boot resize back to full card; -Z: xz-compress).
 # PiShrink: https://github.com/Drewsif/PiShrink
 sudo pishrink.sh -aZ beemonitor-golden.img           # -> beemonitor-golden.img.xz
-```
 
-`-a` adds a first-boot resize so the rootfs grows back to fill whatever card it's
-flashed to; `-Z` xz-compresses. A fresh install typically lands around **1.5–3 GB**
-compressed.
-
-> **On macOS only?** `dd` can *read* the card (`/dev/rdiskN`) but can't shrink ext4.
-> Either capture+shrink on a Linux box as above, or capture raw on the Mac and
-> accept a full-card-sized download (not recommended).
-
-### 1.4 Publish + wire up the download link
-
-```bash
+# Publish (public-read / CDN / long-lived presigned — it's a non-secret artifact):
 aws s3 cp beemonitor-golden.img.xz s3://<your-bucket>/images/beemonitor-golden.img.xz
 ```
 
-Then point the web app at it (the enrollment page shows a **Download** button when
-this is set):
+Then point the web app at it (the enrollment page shows a **Download** button when set):
 
 ```bash
 # App Runner env (and local .env)
 BEEMONITOR_GOLDEN_IMAGE_URL=https://<your-bucket-or-cdn>/images/beemonitor-golden.img.xz
 ```
 
-Use a CDN/public-read object or a long-lived presigned URL — it's a public,
-non-secret artifact (it has no keys in it).
+</details>
+
+> **On macOS only?** `dd` can *read* the card but can't shrink ext4. Run the script
+> on a Linux box, or capture raw on the Mac and accept a full-card download (not
+> recommended).
 
 ### 1.5 When to rebuild
 
