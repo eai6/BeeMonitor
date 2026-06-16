@@ -71,6 +71,27 @@ TOOL_DEFS = [
         },
     },
     {
+        "name": "device_config",
+        "description": "The REMOTE CONFIG the dashboard has pushed to a device — "
+                       "telemetry beat rate, bee-confirmation mode, cellular crop "
+                       "daily cap, motion-tuning overrides, hotel ROI + nest-tube "
+                       "layout, WittyPi wake schedule (and whether it's actually "
+                       "applied), and display timezone. Use to explain how a unit is "
+                       "currently set up, why it might be sending little/no data "
+                       "(e.g. crop cap 0, gate mode, slow beat), or what a setting "
+                       "does. Read-only — it reports settings, it can't change them. "
+                       "Omit device_id to get the current config of EVERY accessible "
+                       "device at once (the whole fleet's state); pass one to scope "
+                       "to a single device.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "device_id": {"type": "integer",
+                              "description": "Optional — omit for all devices."},
+            },
+        },
+    },
+    {
         "name": "tracking_summary",
         "description": "Processed TRACKING results for a device — foraging trips, "
                        "interactions, unique tracks, entries/exits — aggregated "
@@ -117,6 +138,54 @@ def _device_for(user, device_id):
     return Device.accessible(user).filter(pk=device_id).first()
 
 
+def _device_config(device) -> dict:
+    """The remote config the dashboard has pushed to one device, human-readable.
+
+    Mirrors the fields the heartbeat sends to the unit, with the meaning of the
+    'default/off' sentinels spelled out so the agent can explain a unit's state
+    (e.g. why it's sending little data) without guessing.
+    """
+    cap = device.frame_daily_cap
+    if cap is None:
+        crop = "device default (unit's env setting)"
+    elif cap == 0:
+        crop = "0 — crop upload OFF (cellular kill-switch; no BioCLIP crops sent)"
+    else:
+        crop = f"{cap} crops/day"
+
+    bee_mode = device.bee_confirm_mode or ""
+    bee_label = dict(Device.BEE_CONFIRM_MODES).get(bee_mode, bee_mode)
+
+    tuning = device.motion_tuning_dict()
+    nests = device.nest_layout if isinstance(device.nest_layout, list) else []
+
+    return {
+        "device_id": device.pk,
+        "name": device.name,
+        "active": device.is_active,
+        "telemetry_beat": {
+            "seconds": device.telemetry_interval_seconds,
+            "label": device.telemetry_interval_label,
+        },
+        "bee_confirmation_mode": {"value": bee_mode or "(default)", "meaning": bee_label},
+        "cellular_crop_daily_cap": crop,
+        "motion_tuning": tuning or "auto-calibration (no manual overrides)",
+        "hotel_roi": device.roi_override or "auto (no manual ROI set)",
+        "nest_tubes": {"count": len(nests), "layout": nests},
+        "wake_schedule": {
+            "spec": device.wake_schedule_dict(),
+            "label": device.wake_schedule_label,
+            "applied_to_hardware": device.wake_schedule_apply,
+            "note": ("report-only — the device reports this schedule but does NOT "
+                     "program the WittyPi until apply is enabled"
+                     if not device.wake_schedule_apply else
+                     "the device programs the WittyPi to this schedule"),
+        },
+        "display_timezone": device.display_tz or device.tz_name or "(UTC / unset)",
+        **_online(device),
+    }
+
+
 def _online(device) -> "dict":
     age = None
     online = False
@@ -155,6 +224,18 @@ def run_tool(name: str, tool_input: dict, user) -> dict:
                 "lat": act.lat, "lon": act.lon, "frame_count": act.frames.count(),
                 "observations": obs,
             }
+
+        if name == "device_config":
+            # Optional device_id: scope to one device, or report the whole fleet.
+            did = tool_input.get("device_id")
+            if did is not None:
+                device = _device_for(user, did)
+                if device is None:
+                    return {"error": "No such device, or you don't have access to it."}
+                return _device_config(device)
+            return {"devices": [
+                _device_config(d) for d in Device.accessible(user).order_by("name")
+            ]}
 
         # Everything below is device-scoped.
         device = _device_for(user, tool_input.get("device_id"))
