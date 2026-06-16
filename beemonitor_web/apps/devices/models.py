@@ -279,6 +279,52 @@ class Device(models.Model):
             d["min_blobs"] = self.motion_min_blobs
         return d
 
+    def remote_config_summary(self) -> dict:
+        """Human-readable snapshot of the remote config pushed to this device.
+
+        Mirrors the fields the heartbeat sends to the unit, with the meaning of the
+        'default/off' sentinels spelled out (crop cap 0 = off, report-only schedule,
+        etc.) so the AI assistants can explain a unit's state without guessing.
+        Single source of truth — both the monitoring agent and the device support
+        assistant read this. Read-only.
+        """
+        cap = self.frame_daily_cap
+        if cap is None:
+            crop = "device default (unit's env setting)"
+        elif cap == 0:
+            crop = "0 — crop upload OFF (cellular kill-switch; no BioCLIP crops sent)"
+        else:
+            crop = f"{cap} crops/day"
+
+        bee_mode = self.bee_confirm_mode or ""
+        bee_label = dict(self.BEE_CONFIRM_MODES).get(bee_mode, bee_mode)
+        nests = self.nest_layout if isinstance(self.nest_layout, list) else []
+
+        return {
+            "device_id": self.pk,
+            "name": self.name,
+            "active": self.is_active,
+            "telemetry_beat": {
+                "seconds": self.telemetry_interval_seconds,
+                "label": self.telemetry_interval_label,
+            },
+            "bee_confirmation_mode": {"value": bee_mode or "(default)", "meaning": bee_label},
+            "cellular_crop_daily_cap": crop,
+            "motion_tuning": self.motion_tuning_dict() or "auto-calibration (no manual overrides)",
+            "hotel_roi": self.roi_override or "auto (no manual ROI set)",
+            "nest_tubes": {"count": len(nests), "layout": nests},
+            "wake_schedule": {
+                "spec": self.wake_schedule_dict(),
+                "label": self.wake_schedule_label,
+                "applied_to_hardware": self.wake_schedule_apply,
+                "note": ("report-only — the device reports this schedule but does NOT "
+                         "program the WittyPi until apply is enabled"
+                         if not self.wake_schedule_apply else
+                         "the device programs the WittyPi to this schedule"),
+            },
+            "display_timezone": self.display_tz or self.tz_name or "(UTC / unset)",
+        }
+
     @property
     def map_url(self) -> str:
         """OpenStreetMap link for the set coordinates, or '' if none."""

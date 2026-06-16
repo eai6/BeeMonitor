@@ -44,6 +44,26 @@ TOOL_DEFS = [
         },
     },
     {
+        "name": "get_device_config",
+        "description": "The REMOTE CONFIG the dashboard has pushed to a device — "
+                       "telemetry beat rate, bee-confirmation mode, cellular crop "
+                       "daily cap, motion-tuning overrides, hotel ROI + nest-tube "
+                       "layout, WittyPi wake schedule (and whether it's actually "
+                       "applied to hardware), and display timezone. Use to explain "
+                       "how a unit is set up or to debug why it's sending little/no "
+                       "data (e.g. crop cap 0, gate mode, a slow beat, report-only "
+                       "schedule). Omit device_id to get EVERY accessible device's "
+                       "config at once; pass one to scope to a single device. "
+                       "Read-only — it reports settings, it can't change them.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "device_id": {"type": "integer",
+                              "description": "Optional — omit for all devices."},
+            },
+        },
+    },
+    {
         "name": "lookup_troubleshooting",
         "description": "Search the BeeMonitor setup guide for steps and known "
                        "error fixes matching a symptom or keyword. Use to ground "
@@ -87,9 +107,32 @@ def _status_payload(device) -> dict:
     }
 
 
+def _config_payload(device) -> dict:
+    """Remote config for one device + live online status."""
+    online = False
+    age = None
+    if device.last_seen_at:
+        age = int((timezone.now() - device.last_seen_at).total_seconds())
+        online = age <= settings.DEVICE_ONLINE_GRACE_SECONDS
+    return {**device.remote_config_summary(),
+            "online": online, "seconds_since_last_seen": age}
+
+
 def run_tool(name: str, tool_input: dict, user) -> dict:
     """Execute a tool by name; returns a JSON-serialisable dict."""
     try:
+        if name == "get_device_config":
+            # Optional device_id: scope to one device, or report the whole fleet.
+            did = tool_input.get("device_id")
+            if did is not None:
+                device = _device_for(user, did)
+                if device is None:
+                    return {"error": "No such device, or you don't have access to it."}
+                return _config_payload(device)
+            return {"devices": [
+                _config_payload(d) for d in Device.accessible(user).order_by("name")
+            ]}
+
         if name in ("get_device_status", "get_recent_heartbeats"):
             device = _device_for(user, tool_input.get("device_id"))
             if device is None:

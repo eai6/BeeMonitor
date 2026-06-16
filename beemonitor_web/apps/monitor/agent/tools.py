@@ -139,51 +139,12 @@ def _device_for(user, device_id):
 
 
 def _device_config(device) -> dict:
-    """The remote config the dashboard has pushed to one device, human-readable.
+    """The remote config the dashboard has pushed to one device (+ online status).
 
-    Mirrors the fields the heartbeat sends to the unit, with the meaning of the
-    'default/off' sentinels spelled out so the agent can explain a unit's state
-    (e.g. why it's sending little data) without guessing.
+    Delegates to ``Device.remote_config_summary`` (the single source of truth,
+    shared with the device support assistant) and adds live online status.
     """
-    cap = device.frame_daily_cap
-    if cap is None:
-        crop = "device default (unit's env setting)"
-    elif cap == 0:
-        crop = "0 — crop upload OFF (cellular kill-switch; no BioCLIP crops sent)"
-    else:
-        crop = f"{cap} crops/day"
-
-    bee_mode = device.bee_confirm_mode or ""
-    bee_label = dict(Device.BEE_CONFIRM_MODES).get(bee_mode, bee_mode)
-
-    tuning = device.motion_tuning_dict()
-    nests = device.nest_layout if isinstance(device.nest_layout, list) else []
-
-    return {
-        "device_id": device.pk,
-        "name": device.name,
-        "active": device.is_active,
-        "telemetry_beat": {
-            "seconds": device.telemetry_interval_seconds,
-            "label": device.telemetry_interval_label,
-        },
-        "bee_confirmation_mode": {"value": bee_mode or "(default)", "meaning": bee_label},
-        "cellular_crop_daily_cap": crop,
-        "motion_tuning": tuning or "auto-calibration (no manual overrides)",
-        "hotel_roi": device.roi_override or "auto (no manual ROI set)",
-        "nest_tubes": {"count": len(nests), "layout": nests},
-        "wake_schedule": {
-            "spec": device.wake_schedule_dict(),
-            "label": device.wake_schedule_label,
-            "applied_to_hardware": device.wake_schedule_apply,
-            "note": ("report-only — the device reports this schedule but does NOT "
-                     "program the WittyPi until apply is enabled"
-                     if not device.wake_schedule_apply else
-                     "the device programs the WittyPi to this schedule"),
-        },
-        "display_timezone": device.display_tz or device.tz_name or "(UTC / unset)",
-        **_online(device),
-    }
+    return {**device.remote_config_summary(), **_online(device)}
 
 
 def _online(device) -> "dict":

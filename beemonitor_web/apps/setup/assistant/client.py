@@ -96,7 +96,12 @@ def _system_blocks(current_step: str, device_state: dict | None):
         ctx_lines.append(
             "Mode: SUPPORT for an already-deployed (golden-image) unit — not a "
             "fresh build. Investigate the live device first, then help the user "
-            "diagnose, fix, or understand it (including the dashboard controls).")
+            "diagnose, fix, or understand it (including the dashboard controls). "
+            "Use get_device_config to read the REMOTE CONFIG actually pushed to a "
+            "unit (telemetry rate, bee-confirmation mode, crop cap, motion tuning, "
+            "ROI/nest tubes, wake schedule, timezone) — it explains why a unit may "
+            "be sending little/no data (e.g. crop cap 0, gate mode, slow beat). "
+            "Omit device_id for the whole fleet's config at once.")
     if device_state:
         ctx_lines.append("Live device snapshot: " + json.dumps(device_state))
     if ctx_lines:
