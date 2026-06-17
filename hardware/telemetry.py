@@ -89,6 +89,11 @@ MIN_INTERVAL = int(os.environ.get("BEEMONITOR_MIN_INTERVAL", "5"))
 # How often (s) to poll for an on-demand command between beats — keeps the
 # "Take photo" latency low without raising the health-beat cadence.
 COMMAND_POLL_SECONDS = int(os.environ.get("BEEMONITOR_COMMAND_POLL_SECONDS", "8"))
+# Slow command-poll floor for CELLULAR (the WiFi poll runs at COMMAND_POLL_SECONDS).
+# 0 = beat-only on cellular. A small value (default 120s) makes dashboard commands
+# land within ~2 min on cellular — and keeps last_seen fresh so the unit stays
+# "online" — without cranking the heavier full beat. ~720 lightweight GETs/day.
+CELL_COMMAND_POLL_SECONDS = int(os.environ.get("BEEMONITOR_CELL_COMMAND_POLL_SECONDS", "120"))
 
 # Remote software update (the "update" command). REPO_DIR is the git checkout this
 # file lives in; the updater and the status file it writes live there/below.
@@ -1660,21 +1665,28 @@ def main() -> int:
                 last_cleanup = time.time()
         except Exception as e:  # pragma: no cover - never let the loop die
             log.exception("beat raised: %s", e)
-        # Between beats, fast-poll for on-demand commands every
-        # COMMAND_POLL_SECONDS — but ONLY over WiFi, where it's free. On metered
-        # cellular this poll is a TLS round trip every few seconds (~10k/day) that
-        # ignores the dashboard rate, so we stay silent and let the next beat carry
-        # any command + rate change. That makes the dashboard telemetry rate the
-        # true cellular ceiling (on-demand photos wait for the next beat on
-        # cellular). The transport check is a local `ip route get` (no traffic), so
-        # the moment WiFi returns the fast poll resumes. ``_interval`` is read live
+        # Between beats, poll for on-demand commands. On WiFi: every
+        # COMMAND_POLL_SECONDS (free). On metered cellular: at a slow floor every
+        # CELL_COMMAND_POLL_SECONDS (a lightweight GET — no metrics/image — that
+        # rides the firewall-allowed telemetry cgroup), so dashboard commands land
+        # within ~2 min and last_seen stays fresh, WITHOUT cranking the heavy beat.
+        # Set CELL_COMMAND_POLL_SECONDS=0 for beat-only on cellular. The transport
+        # check is a local `ip route get` (no traffic); ``_interval`` is read live
         # so lowering it breaks the wait early.
         slept = 0
+        last_cell_poll = 0  # seconds-into-window of the last cellular poll
         while _running and slept < _interval:
             step = min(COMMAND_POLL_SECONDS, _interval - slept)
             time.sleep(step)
             slept += step
-            if _running and slept < _interval and _active_transport() == "wifi":
+            if not (_running and slept < _interval):
+                break
+            transport = _active_transport()
+            if transport == "wifi":
+                _apply_interval((_poll_command() or {}).get("telemetry_interval"))
+            elif (transport == "cellular" and CELL_COMMAND_POLL_SECONDS > 0
+                    and slept - last_cell_poll >= CELL_COMMAND_POLL_SECONDS):
+                last_cell_poll = slept
                 _apply_interval((_poll_command() or {}).get("telemetry_interval"))
     log.info("telemetry stopped")
     return 0
