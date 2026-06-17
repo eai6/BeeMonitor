@@ -1,6 +1,11 @@
 # BeeMonitor — Edge Artifact Delivery (keep cloud code off field devices)
 
-**Status:** **Phase 0 implemented (2026-06-17)** — `hardware/provision/build-edge-artifact.sh`
+**Status:** **Phase 0 LIVE + verified end-to-end (2026-06-17, tag `v0.1.0`)** — CI
+built + minisigned + published the bundle/manifest/`latest.json` to
+`s3://beemonitor-dev-models-…/edge/`; signature verifies against the committed
+`hardware/provision/minisign.pub`, sha256 matches. Keypair + GH secret + IAM
+(`pulumi up --target` the RolePolicy only — left the unrelated App Runner
+`SAGEMAKER_ENDPOINT_NAME=""` drift alone) all done. Earlier Phase 0 build — `hardware/provision/build-edge-artifact.sh`
 (hardware-only tar + no-path-outside-hardware/ guardrail + sha256/manifest + optional
 minisign), `.github/workflows/edge-artifact.yml` (build+guardrail on push; sign+S3
 publish on `v*` tags), and a CI S3 `edge-publish` IAM policy in `infra/aws/__main__.py`.
