@@ -79,52 +79,67 @@ sudo poweroff
 > self-enroll as distinct devices even though the image is identical — that's why
 > blanking `machine-id` is safe.
 
-### 1.3–1.4 Capture + shrink + publish
+### 1.3 Capture + shrink (on a Linux box)
 
-Move the card to a **Linux** machine (a cheap EC2, a second Pi, or a Linux VM — the
-shrink step needs ext4 tools that macOS doesn't have). The script does the whole
-capture → shrink → upload, and **refuses to `dd` anything that isn't a whole,
-removable, non-system disk** (it shows you the target and makes you confirm):
+The shrink needs ext4 tools macOS doesn't have, so do this on a Linux box. We used
+a second Pi with the golden card in a **USB SD reader** (the reader is `/dev/sda`;
+the Pi's own card stays `/dev/mmcblk0` — never touch it).
 
-```bash
-# Find the card first:
-lsblk
-
-# Capture → shrink → publish in one go (read-only on the card):
-sudo bash hardware/provision/capture-publish.sh --device /dev/sdX --bucket <your-bucket>
-#   omit --bucket to produce the local .img.xz only
-#   flags: --key-prefix images/  --name beemonitor-golden  --out DIR  --no-shrink  --yes
-```
-
-It prints the exact `BEEMONITOR_GOLDEN_IMAGE_URL` to set afterward. A fresh install
-typically lands around **1.5–3 GB** compressed.
-
-<details><summary>What it runs (manual equivalent, for reference)</summary>
+Install the tools once:
 
 ```bash
-# Raw read of the whole card (replace sdX with your card; NOT a partition)
-sudo dd if=/dev/sdX of=beemonitor-golden.img bs=4M status=progress conv=fsync
-
-# Shrink the rootfs (-a: first-boot resize back to full card; -Z: xz-compress).
-# PiShrink: https://github.com/Drewsif/PiShrink
-sudo pishrink.sh -aZ beemonitor-golden.img           # -> beemonitor-golden.img.xz
-
-# Publish (public-read / CDN / long-lived presigned — it's a non-secret artifact):
-aws s3 cp beemonitor-golden.img.xz s3://<your-bucket>/images/beemonitor-golden.img.xz
+sudo apt-get install -y parted e2fsprogs xz-utils
+wget https://raw.githubusercontent.com/Drewsif/PiShrink/master/pishrink.sh
+chmod +x pishrink.sh && sudo mv pishrink.sh /usr/local/bin/pishrink.sh
 ```
 
-Then point the web app at it (the enrollment page shows a **Download** button when set):
+Identify the card with `lsblk`, then shrink it in place and capture only the used
+part (a raw `dd` of the whole card would be the card's full size — pishrink's `-a`
+auto-expands on flash, so the source card size doesn't matter):
 
 ```bash
-# App Runner env (and local .env)
-BEEMONITOR_GOLDEN_IMAGE_URL=https://<your-bucket-or-cdn>/images/beemonitor-golden.img.xz
+DEV=/dev/sda; P2=/dev/sda2; mkdir -p ~/golden     # confirm DEV with lsblk first
+
+# unmount the card
+for p in ${DEV}*[0-9]; do sudo umount "$p" 2>/dev/null; done
+
+# shrink the rootfs filesystem to its minimum (data preserved)
+sudo e2fsck -fy "$P2"
+sudo resize2fs -M "$P2"
+
+# shrink the partition to fs size + 300 MB slack (parted -s answers the shrink
+# warning "No", so force a "Yes" through a pseudo-tty)
+BS=$(sudo dumpe2fs -h "$P2" 2>/dev/null | awk -F: '/Block size/{gsub(/ /,"",$2);print $2}')
+BC=$(sudo dumpe2fs -h "$P2" 2>/dev/null | awk -F: '/Block count/{gsub(/ /,"",$2);print $2}')
+START=$(sudo parted -ms "$DEV" unit B print | awk -F: '$1==2{gsub(/B/,"",$2);print $2}')
+NEWEND=$(( START + BS*BC + 314572800 ))
+echo Yes | sudo parted ---pretend-input-tty "$DEV" unit B resizepart 2 ${NEWEND}B
+
+# capture up to the new partition end (not the whole card)
+END=$(sudo parted -ms "$DEV" unit B print | awk -F: '$1==2{gsub(/B/,"",$3);print $3}')
+sudo dd if="$DEV" of=~/golden/beemonitor-golden.img bs=1M count=$(( END/1048576 + 16 )) status=progress conv=fsync
+
+# shrink + compress, adding the first-boot auto-expand (xz is slow on a Pi, ~45 min)
+sudo pishrink.sh -aZ ~/golden/beemonitor-golden.img   # -> ~/golden/beemonitor-golden.img.xz
 ```
 
-</details>
+A 238 GB card shrank to ~12 GB captured → **2.4 GB** `beemonitor-golden.img.xz`.
 
-> **On macOS only?** `dd` can *read* the card but can't shrink ext4. Run the script
-> on a Linux box, or capture raw on the Mac and accept a full-card download (not
-> recommended).
+### 1.4 Copy it to your laptop (+ optionally publish)
+
+```bash
+# on the Mac:
+scp beemonitor@<pi-ip>:~/golden/beemonitor-golden.img.xz ~/Downloads/
+```
+
+To publish so the enrollment page shows a **Download** button (optional — you can
+flash the local file directly):
+
+```bash
+aws s3 cp ~/Downloads/beemonitor-golden.img.xz s3://<your-bucket>/images/beemonitor-golden.img.xz
+# then set in App Runner env (+ local .env):
+BEEMONITOR_GOLDEN_IMAGE_URL=https://<bucket-or-cdn>/images/beemonitor-golden.img.xz
+```
 
 ### 1.5 When to rebuild
 
@@ -143,7 +158,7 @@ This is all in the browser + Raspberry Pi Imager — no terminal.
 2. **Flash** it with [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
    → *Choose OS* → **Use custom image** → pick the `.img.xz`. Set the hostname,
    WiFi, and locale in Imager's gear menu as usual. Write, keep the card inserted.
-3. **Enroll** in the browser: **Devices → Zero-touch enrollment → Generate token →
+3. **Enroll** in the browser: **Devices → Add a device → Generate token →
    "Choose SD card & write."** Pick the card's `bootfs` drive; it writes
    `beemonitor.conf` (the API base + token) onto the boot partition.
    - *Chrome or Edge only* (the File System Access API). On Safari/Firefox, use the
