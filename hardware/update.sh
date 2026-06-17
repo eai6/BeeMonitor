@@ -42,7 +42,9 @@ HEALTH_WAIT="${BEEMONITOR_UPDATE_HEALTH_WAIT:-15}"
 BEEMON_HOME="${BEEMONITOR_HOME:-/home/beemonitor}"
 SYMLINK="${BEEMONITOR_SYMLINK:-$BEEMON_HOME/BeeMonitor}"      # the path systemd/sudoers reference
 RELEASES_DIR="${BEEMONITOR_RELEASES_DIR:-$BEEMON_HOME/releases}"
-STABLE_VENV_PIP="${BEEMONITOR_VENV:-$BEEMON_HOME/beemonitor-venv}/bin/pip"
+STABLE_VENV="${BEEMONITOR_VENV:-$BEEMON_HOME/beemonitor-venv}"
+STABLE_VENV_PIP="$STABLE_VENV/bin/pip"
+STABLE_MODELS="${BEEMONITOR_MODELS:-$BEEMON_HOME/models}"
 KEEP_RELEASES="${BEEMONITOR_KEEP_RELEASES:-3}"
 ACTIVE_MANIFEST="$REPO_DIR/.edge-manifest.json"              # written into each release dir on install
 # Public verify key — must live OUTSIDE the updatable bundle (baked into the
@@ -195,8 +197,14 @@ cmd_fetch_artifact() {  # phase A (artifact) — download + verify + unpack a re
     if ! tar -C "$release" -xzf "$tmp/b.tar.gz"; then
         write_status error apply_failed "unpack failed"; rm -rf "$release"; return 1
     fi
+    # The bundle is hardware/-only, so point the repo's hardcoded venv/models paths
+    # at the stable shared dirs — systemd ExecStart's .../hardware/venv and
+    # config.py's parents[2]/models then resolve on a release layout with no
+    # per-release copy and no unit-file edits.
+    ln -sfn "$STABLE_VENV" "$release/hardware/venv"
+    ln -sfn "$STABLE_MODELS" "$release/models"
     cp "$DESCRIPTOR_FILE" "$release/.edge-manifest.json"
-    chown -R "$REPO_USER":"$REPO_USER" "$release" 2>/dev/null || true
+    chown -h -R "$REPO_USER":"$REPO_USER" "$release" 2>/dev/null || true
 
     # pip into the STABLE shared venv only when requirements changed.
     local reqs_now reqs_active
