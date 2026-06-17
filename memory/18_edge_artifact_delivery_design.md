@@ -19,9 +19,14 @@ git-ref vs descriptor) + version reporting from the manifest, cloud
 edge/latest.json + manifest, presigns the bundle), and a dashboard "Update via
 signed artifact" button. Verify path tested locally vs the real v0.1.0 bundle.
 **NOT yet validated on a Pi** (symlink swap + rollback + tamper-reject over
-cellular) — needs a unit in the release-layout (≈ Phase 2 setup). **Phase 2
-(golden-image cutover: releases/symlink layout + stable venv/models + baked
-minisign+pubkey) is next.**
+cellular) — needs a unit in the release-layout. **Phase 2 mechanism IMPLEMENTED
+(2026-06-17):** `migrate-to-releases.sh` converts a git-clone unit to the
+release/symlink layout (stable venv/models symlinked into each release; update.sh
+recreates the symlinks per release, so unit files / config.py paths are unchanged)
++ installs minisign + pubkey; `generalize.sh` drops the leftover git clone so the
+image is git/cloud-free; README §1.1b documents the artifact-native build. **All
+code for Phases 0–2 is on `main`; only hands-on remains: run migrate + the
+artifact update on a test Pi, then rebuild the golden image with §1.1b.**
 **Author:** Drafted with Claude Code, 2026-06-14
 
 > **Locked decisions (2026-06-17):**
