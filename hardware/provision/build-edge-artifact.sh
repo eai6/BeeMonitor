@@ -47,27 +47,27 @@ fi
 BUNDLE_SHA="$(_sha256 "$TAR")"
 REQS_HASH="$(_sha256 "$REPO_ROOT/hardware/requirements.txt")"
 
-# 4. Sign (minisign) when a key is provided (CI). Detached signature.
-SIG=""
+# 4. Sign (minisign) when a key is provided (CI). Detached signature → .minisig.
 if [ -n "${MINISIGN_SECRET_KEY_FILE:-}" ]; then
     command -v minisign >/dev/null 2>&1 || { echo "edge-artifact: minisign not installed" >&2; exit 1; }
     minisign -S -s "$MINISIGN_SECRET_KEY_FILE" -m "$TAR" -x "$TAR.minisig" >/dev/null
-    SIG="$(grep -vE '^untrusted comment:' "$TAR.minisig" | head -1)"  # the base64 signature line
 fi
 
-# 5. Manifest + the channel pointer the cloud reads.
-cat > "$OUT/${NAME}.json" <<JSON
-{
-  "version": "${VERSION}",
-  "src_commit": "${SRC_COMMIT}",
-  "sha256": "${BUNDLE_SHA}",
-  "sig": "${SIG}",
-  "reqs_hash": "${REQS_HASH}"
-}
-JSON
+# 5. Manifest + the channel pointer the cloud reads. `sig` embeds the FULL
+#    .minisig (all 4 lines) so the device can write it back to a file and run
+#    `minisign -V` straight from the heartbeat descriptor — no second fetch.
+#    Written via python so the multi-line signature is correctly JSON-escaped.
+python3 - "$OUT/${NAME}.json" "$VERSION" "$SRC_COMMIT" "$BUNDLE_SHA" "$REQS_HASH" "${TAR}.minisig" <<'PY'
+import json, os, sys
+path, version, src, sha, reqs, sigfile = sys.argv[1:7]
+sig = open(sigfile).read() if os.path.exists(sigfile) else ""
+json.dump({"version": version, "src_commit": src, "sha256": sha,
+           "reqs_hash": reqs, "sig": sig}, open(path, "w"), indent=2)
+PY
 printf '{"version": "%s"}\n' "$VERSION" > "$OUT/latest.json"
 
+SIGNED=no; [ -f "${TAR}.minisig" ] && SIGNED=yes
 echo "edge-artifact: built ${NAME}"
 echo "  bundle : $TAR ($(du -h "$TAR" | cut -f1))"
 echo "  sha256 : $BUNDLE_SHA"
-echo "  signed : $([ -n "$SIG" ] && echo yes || echo 'no (set MINISIGN_SECRET_KEY_FILE to sign)')"
+echo "  signed : ${SIGNED}$([ "$SIGNED" = no ] && echo ' (set MINISIGN_SECRET_KEY_FILE to sign)')"
