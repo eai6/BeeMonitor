@@ -6,7 +6,6 @@ surfaced to the user as text for explicit confirmation (see safety.classify_comm
 never executed here.
 """
 
-from django.conf import settings
 from django.utils import timezone
 
 from apps.devices.models import Device
@@ -100,15 +99,13 @@ def _device_for(user, device_id):
 def _status_payload(device) -> dict:
     hb = device.heartbeats.first()
     m = (hb.metrics or {}) if hb else {}
-    online = False
     age = None
     if device.last_seen_at:
         age = int((timezone.now() - device.last_seen_at).total_seconds())
-        online = age <= settings.DEVICE_ONLINE_GRACE_SECONDS
     return {
         "device_id": device.pk,
         "name": device.name,
-        "online": online,
+        "online": device.is_online(),  # window scales to the device's beat cadence
         "seconds_since_last_seen": age,
         "recorder_active": m.get("recorder_active"),
         "uploader_active": m.get("uploader_active"),
@@ -123,13 +120,11 @@ def _status_payload(device) -> dict:
 
 def _config_payload(device) -> dict:
     """Remote config for one device + live online status."""
-    online = False
     age = None
     if device.last_seen_at:
         age = int((timezone.now() - device.last_seen_at).total_seconds())
-        online = age <= settings.DEVICE_ONLINE_GRACE_SECONDS
     return {**device.remote_config_summary(),
-            "online": online, "seconds_since_last_seen": age}
+            "online": device.is_online(), "seconds_since_last_seen": age}
 
 
 def run_tool(name: str, tool_input: dict, user) -> dict:

@@ -17,6 +17,7 @@ import secrets
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
 
 # Access levels, lowest -> highest. "owner" is implicit (Device.owner).
 _ROLE_RANK = {"viewer": 1, "manager": 2, "owner": 3}
@@ -261,6 +262,31 @@ class Device(models.Model):
         """Human label for the current beat interval (e.g. '1 minute')."""
         return dict(TELEMETRY_INTERVAL_CHOICES).get(
             self.telemetry_interval_seconds, f"{self.telemetry_interval_seconds}s")
+
+    def online_window_seconds(self) -> int:
+        """How long since the last check-in before this unit is 'offline'.
+
+        Scales to the device's OWN beat cadence rather than a flat window: on
+        cellular a unit only contacts the server at its beat (the between-beat poll
+        is WiFi-only), so a slow-beat unit would otherwise read offline just for
+        being between beats. = max(grace floor, MISSED_BEATS × its beat interval),
+        so it flips offline only after missing ~MISSED_BEATS of its own beats.
+        """
+        interval = self.telemetry_interval_seconds or 60
+        return max(settings.DEVICE_ONLINE_GRACE_SECONDS,
+                   interval * settings.DEVICE_ONLINE_MISSED_BEATS)
+
+    def is_online(self) -> bool:
+        """True if the device checked in within its expected beat cadence.
+
+        Single source of truth for online/offline — shared by the device pages and
+        both AI agents so the verdict can't drift between them. Independent of
+        ``is_active`` (a revoked unit can still be 'online' until it stops beating).
+        """
+        if not self.last_seen_at:
+            return False
+        age = (timezone.now() - self.last_seen_at).total_seconds()
+        return age <= self.online_window_seconds()
 
     def wake_schedule_dict(self) -> dict:
         """The desired schedule spec, falling back to the daylight default."""

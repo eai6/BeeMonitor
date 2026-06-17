@@ -13,7 +13,6 @@ from datetime import datetime, time, timedelta, timezone as dt_timezone
 
 from django.conf import settings
 from django.db.models import Count, Sum
-from django.utils import timezone
 
 from ..models import Activity, DailyDigest, Observation
 from .client import is_enabled
@@ -36,9 +35,7 @@ def _anomalies(device, activity_count) -> list:
     out = []
     hb = device.heartbeats.first()
     m = (hb.metrics or {}) if hb else {}
-    age = ((timezone.now() - device.last_seen_at).total_seconds()
-           if device.last_seen_at else None)
-    if age is None or age > settings.DEVICE_ONLINE_GRACE_SECONDS:
+    if not device.is_online():  # window scales to the device's beat cadence
         out.append("device offline (no recent check-in)")
     if hb and m.get("recorder_active") is False:
         out.append("recorder not running")

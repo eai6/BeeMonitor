@@ -43,17 +43,14 @@ def _device_or_403(user, pk, level="viewer") -> Device:
     return device
 
 def _is_online(device) -> bool:
-    """Derived (not stored): has the device beaten recently enough to be 'online'?
+    """Online iff the device checked in within its expected beat cadence.
 
-    Telemetry beats every ~60s, so a unit that hasn't checked in within
-    ``settings.DEVICE_ONLINE_GRACE_SECONDS`` (default 180 = ~3 missed beats) is
-    considered offline — regardless of ``is_active``. ``last_seen_at`` is bumped
-    by DeviceKeyAuthentication on every beat.
+    Thin wrapper over ``Device.is_online()`` (the single source of truth): the
+    window scales to the unit's own telemetry interval, so a slow-beat cellular
+    unit isn't shown offline just for being between beats. ``last_seen_at`` is
+    bumped by DeviceKeyAuthentication on every beat.
     """
-    if not device.last_seen_at:
-        return False
-    age = (timezone.now() - device.last_seen_at).total_seconds()
-    return age <= settings.DEVICE_ONLINE_GRACE_SECONDS
+    return device.is_online()
 
 
 def _schedule_state(device, metrics) -> str:

@@ -5,7 +5,6 @@ Every tool is read-only and scoped to devices the requesting user can access
 telemetry/GPS, it never changes state. Mirrors ``apps/setup/assistant/tools.py``.
 """
 
-from django.conf import settings
 from django.db.models import Avg, Count, Max, Sum
 from django.utils import timezone
 
@@ -164,11 +163,10 @@ def _device_config(device) -> dict:
 
 def _online(device) -> "dict":
     age = None
-    online = False
     if device.last_seen_at:
         age = int((timezone.now() - device.last_seen_at).total_seconds())
-        online = age <= settings.DEVICE_ONLINE_GRACE_SECONDS
-    return {"online": online, "seconds_since_last_seen": age}
+    # Online window scales to the device's own beat cadence (Device.is_online).
+    return {"online": device.is_online(), "seconds_since_last_seen": age}
 
 
 def run_tool(name: str, tool_input: dict, user) -> dict:

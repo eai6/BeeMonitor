@@ -9,7 +9,6 @@ the latest heartbeat metrics.
 A check returns: {"ok": bool, "status": "pass"|"fail"|"waiting", "detail": str}
 """
 
-from django.conf import settings
 from django.utils import timezone
 
 
@@ -19,10 +18,8 @@ def _latest_metrics(device):
 
 
 def _is_online(device) -> bool:
-    if not device or not device.last_seen_at:
-        return False
-    age = (timezone.now() - device.last_seen_at).total_seconds()
-    return age <= settings.DEVICE_ONLINE_GRACE_SECONDS
+    # Online window scales to the device's beat cadence (Device.is_online).
+    return bool(device) and device.is_online()
 
 
 def _waiting(detail):

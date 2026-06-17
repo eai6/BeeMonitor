@@ -167,9 +167,14 @@ PREANNOTATE_CONFIDENCE = float(os.environ.get("BEEMONITOR_PREANNOTATE_CONFIDENCE
 MODAL_TOKEN_ID = os.environ.get("MODAL_TOKEN_ID", "")
 MODAL_TOKEN_SECRET = os.environ.get("MODAL_TOKEN_SECRET", "")
 
-# Devices — a unit is "online" only if its last telemetry beat arrived within
-# this many seconds. Telemetry beats every 60s, so ~3 missed beats = offline.
+# Devices — a unit is "online" if its last check-in is within its EXPECTED beat
+# cadence, not a flat window: online if last_seen <= max(GRACE, MISSED_BEATS ×
+# telemetry_interval). So a slow-beat cellular unit (which only contacts the
+# server at its beat) isn't shown offline just for being between beats — it flips
+# offline only after missing ~MISSED_BEATS of its own beats. GRACE is the floor
+# for fast beats. (See Device.is_online / Device.online_window_seconds.)
 DEVICE_ONLINE_GRACE_SECONDS = int(os.environ.get("DEVICE_ONLINE_GRACE_SECONDS", "180"))
+DEVICE_ONLINE_MISSED_BEATS = int(os.environ.get("DEVICE_ONLINE_MISSED_BEATS", "3"))
 # Base URL a field device's telemetry/uploader points at (baked into the setup
 # guide's uploader.env block). The App Runner host in prod.
 BEEMONITOR_DEVICE_API_BASE = os.environ.get(
