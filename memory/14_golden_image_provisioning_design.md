@@ -6,6 +6,12 @@ Build is fully scripted: `generalize.sh` (on the Pi) + `capture-publish.sh` (cap
 → pishrink → S3, on a Linux box). "Add a device" now routes to the browser
 **enrollment (token)** flow that works with the golden image from any laptop
 (commit `0b27ccb`); the per-device key page remains as the hand-install fallback.
+**Published + wired (commit `1169b4c`):** the 2.4 GB `.img.xz` lives in the
+(private) models bucket at `golden/beemonitor-golden.img.xz`; the enrollment
+page's Download button serves it via a **presigned-redirect** view
+(`/devices/golden-image/`, `GoldenImageDownloadView`) — buckets stay fully private
+(no public-read), no CloudFront, no Pulumi/env change (the S3 key is defaulted and
+the App Runner instance role already reads the models bucket). Verified end-to-end.
 **Author:** Drafted with Claude Code, 2026-06-11
 **Goal:** Make standing up a field unit "flash → drop a token in the browser →
 assemble hardware → insert card → power on → it appears" — so a non-expert only
@@ -121,10 +127,17 @@ Safari/Firefox use the CLI or manual snippet.
    survives before powering off.
 3. **Capture + shrink** on a Linux box: `dd` the card → `pishrink.sh -aZ` →
    `beemonitor-golden.img.xz` (~1.5–3 GB). (macOS can `dd`-read but not shrink ext4.)
-4. **Publish:** `aws s3 cp` to the bucket; set `BEEMONITOR_GOLDEN_IMAGE_URL` in App
-   Runner prod env (+ local `.env`). It's a non-secret, public artifact.
-5. **Hardware verify:** flash a clone, browser-enroll, confirm it appears and the
-   token is cleared from `bootfs` after first boot.
+4. **Publish (DONE, commit `1169b4c`):** `aws s3 cp` to
+   `s3://beemonitor-dev-models-…/golden/beemonitor-golden.img.xz`. The buckets all
+   have full public-access-block, so instead of a public URL the Download button
+   hits `GoldenImageDownloadView` (`/devices/golden-image/`) which presigns a fresh
+   1-hour GET and 302-redirects. `BEEMONITOR_GOLDEN_IMAGE_S3_KEY` is defaulted, so
+   no env/Pulumi change — went live via the normal CI → ECR → App Runner auto-deploy.
+   (`BEEMONITOR_GOLDEN_IMAGE_URL` is still honored as a direct-CDN override.)
+   Gotcha: macOS **TCC** blocks the agent from reading `~/Downloads` — the file had
+   to be moved into the repo tree before `aws s3 cp` could read it.
+5. ✅ **Hardware verify (DONE):** flashed a clone, browser-enrolled, device appeared
+   and the token cleared from `bootfs` after first boot.
 6. ~~**Merge** `devices/golden-image-provisioning`.~~ Done (PR #3, on `main`).
 
 Detailed commands live in `hardware/provision/README.md` (don't duplicate here).
