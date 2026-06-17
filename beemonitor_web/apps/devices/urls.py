@@ -8,6 +8,7 @@ urlpatterns = [
     path("", views.DeviceListView.as_view(), name="list"),
     path("add/", views.DeviceCreateView.as_view(), name="add"),
     path("enrollment/", views.DeviceEnrollmentView.as_view(), name="enrollment"),
+    path("golden-image/", views.GoldenImageDownloadView.as_view(), name="golden_image"),
     path("enrollment/<int:pk>/revoke/", views.EnrollmentTokenRevokeView.as_view(), name="enrollment_revoke"),
     path("<int:pk>/", views.DeviceDetailView.as_view(), name="detail"),
     path("<int:pk>/created/", views.DeviceCreatedView.as_view(), name="created"),

@@ -178,6 +178,12 @@ BEEMONITOR_DEVICE_API_BASE = os.environ.get(
 # with Raspberry Pi Imager before browser-enrolling. Empty = no download link
 # shown (the enrollment page falls back to "build/flash your own" guidance).
 BEEMONITOR_GOLDEN_IMAGE_URL = os.environ.get("BEEMONITOR_GOLDEN_IMAGE_URL", "")
+# Preferred: keep the (private) golden image in the models bucket and serve it via
+# a short-lived presigned redirect (devices:golden_image), so the buckets stay
+# locked down (no public-read). This is the S3 key within AWS_S3_BUCKET_MODELS;
+# empty = disabled. A direct BEEMONITOR_GOLDEN_IMAGE_URL above still wins if set.
+BEEMONITOR_GOLDEN_IMAGE_S3_KEY = os.environ.get(
+    "BEEMONITOR_GOLDEN_IMAGE_S3_KEY", "golden/beemonitor-golden.img.xz")
 
 # --- Taxonomic monitoring (activity frames + BioCLIP) ----------------------
 # Max sampled frames accepted per activity (server-side guard; the device also

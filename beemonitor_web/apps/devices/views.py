@@ -18,7 +18,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
 from django.db.models import Q
-from django.http import JsonResponse
+from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
@@ -517,6 +517,48 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         return ctx
 
 
+def _golden_image_url() -> str:
+    """URL the enrollment page links to for the golden image download.
+
+    A direct ``BEEMONITOR_GOLDEN_IMAGE_URL`` wins (e.g. a CDN). Otherwise, if a
+    key is configured and the object exists in the (private) models bucket, return
+    the presigned-redirect endpoint. '' = no download button. The blob_exists check
+    is cached so it doesn't hit S3 on every page load.
+    """
+    if settings.BEEMONITOR_GOLDEN_IMAGE_URL:
+        return settings.BEEMONITOR_GOLDEN_IMAGE_URL
+    key = settings.BEEMONITOR_GOLDEN_IMAGE_S3_KEY
+    if not key:
+        return ""
+    cache_key = f"golden_image_present:{key}"
+    present = cache.get(cache_key)
+    if present is None:
+        from config.storage import get_s3_client
+        try:
+            present = get_s3_client().blob_exists("models", key)
+        except Exception as e:  # pragma: no cover - S3 hiccup must not 500 the page
+            logger.warning("golden image blob_exists failed: %s", e)
+            present = False
+        cache.set(cache_key, present, 300)  # 5 min
+    return reverse("devices:golden_image") if present else ""
+
+
+class GoldenImageDownloadView(LoginRequiredMixin, View):
+    """Redirect to a short-lived presigned URL for the golden image in S3.
+
+    Keeps the models bucket private (no public-read): each click signs a fresh
+    GET URL the browser follows straight to S3. 404 if no image is configured.
+    """
+
+    def get(self, request):
+        from config.storage import presigned_get
+        key = settings.BEEMONITOR_GOLDEN_IMAGE_S3_KEY
+        url = presigned_get(key, container="models", expiry_hours=1) if key else None
+        if not url:
+            raise Http404("Golden image not available.")
+        return redirect(url)
+
+
 class DeviceEnrollmentView(LoginRequiredMixin, TemplateView):
     """Manage enrollment tokens for zero-touch device setup.
 
@@ -532,7 +574,7 @@ class DeviceEnrollmentView(LoginRequiredMixin, TemplateView):
         ctx["tokens"] = EnrollmentToken.objects.filter(user=self.request.user)
         ctx["new_token"] = self.request.session.pop("enroll_token_raw", None)
         ctx["api_base"] = settings.BEEMONITOR_DEVICE_API_BASE
-        ctx["image_url"] = settings.BEEMONITOR_GOLDEN_IMAGE_URL
+        ctx["image_url"] = _golden_image_url()
         return ctx
 
     def post(self, request, *args, **kwargs):
@@ -604,7 +646,7 @@ class DeviceCreatedView(LoginRequiredMixin, TemplateView):
         ctx["device"] = device
         ctx["raw_key"] = raw_key  # None on refresh — template handles that.
         ctx["api_base"] = settings.BEEMONITOR_DEVICE_API_BASE
-        ctx["image_url"] = settings.BEEMONITOR_GOLDEN_IMAGE_URL  # golden image (flash)
+        ctx["image_url"] = _golden_image_url()  # golden image (flash)
         ctx["online"] = _is_online(device)  # so a returning page shows current state
         return ctx
 
