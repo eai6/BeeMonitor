@@ -4,9 +4,15 @@
 {% block content %}
 <div class="max-w-2xl mx-auto">
   <h1 class="text-2xl font-bold text-gray-900 mb-1">Add a device — {{ device.name }}</h1>
-  <p class="text-sm text-gray-500 mb-6">
-    Three steps: copy the key, flash the card with the golden image, then power it
-    on. This page waits for the unit's first heartbeat and updates live.
+  <p class="text-sm text-gray-500 mb-2">
+    For a Pi you're setting up <strong>by hand</strong>. Copy the key, put it in the
+    unit's config on the device, and power it on — this page waits for its first
+    heartbeat and updates live.
+  </p>
+  <p class="text-xs text-gray-400 mb-6">
+    Using the <strong>golden image</strong>? Don't copy a key —
+    <a href="{% url 'devices:enrollment' %}" class="text-amber-700 hover:underline">enroll it from your browser instead →</a>
+    (works from any laptop; the unit self-registers on first boot).
   </p>
 
   <!-- Step 1 — device key -->
@@ -33,29 +39,23 @@
     {% endif %}
   </div>
 
-  <!-- Step 2 — flash the golden image -->
+  <!-- Step 2 — put the key in the device config (manual install) -->
   <div class="bg-white shadow rounded-lg p-5 mb-5">
-    <h2 class="text-sm font-semibold text-gray-900 mb-1">2 · Flash the SD card</h2>
-    <p class="text-xs text-gray-500 mt-1 mb-3">
-      {% if image_url %}
-      Download the BeeMonitor golden image and flash it to the card (Raspberry Pi
-      Imager or balenaEtcher):
-      {% else %}
-      Flash the BeeMonitor golden image to the card with Raspberry Pi Imager or
-      balenaEtcher.
-      {% endif %}
-    </p>
-    {% if image_url %}
-    <a href="{{ image_url }}" class="inline-block bg-amber-600 hover:bg-amber-700 text-white px-3 py-2 rounded text-sm font-medium mb-3">Download golden image</a>
-    {% endif %}
-    <p class="text-xs text-gray-500 mb-2">
-      Then drop this device's config onto the card's boot partition at
-      <code class="bg-gray-100 px-1 rounded">/etc/beemonitor/uploader.env</code>
-      {% if not raw_key %}(use the key you copied above for <code class="bg-gray-100 px-1 rounded">BEEMONITOR_DEVICE_KEY</code>){% endif %}:
+    <h2 class="text-sm font-semibold text-gray-900 mb-1">2 · Add the key to the device</h2>
+    <p class="text-xs text-gray-500 mt-1 mb-2">
+      On the Pi (after the manual install in <code class="bg-gray-100 px-1 rounded">hardware/README.md</code>),
+      set these in <code class="bg-gray-100 px-1 rounded">/etc/beemonitor/uploader.env</code>
+      {% if not raw_key %}(use the key you copied above for <code class="bg-gray-100 px-1 rounded">BEEMONITOR_DEVICE_KEY</code>){% endif %},
+      then restart the services (or reboot):
     </p>
     <pre class="bg-gray-900 text-green-400 rounded p-3 text-xs overflow-x-auto"
 >BEEMONITOR_API_BASE={{ api_base }}
 BEEMONITOR_DEVICE_KEY={{ raw_key|default:"<your-device-key>" }}</pre>
+    <p class="text-xs text-gray-400 mt-2">
+      This file is on the Pi's Linux partition, so it's edited on the device — not
+      from a laptop. That's why the golden image uses
+      <a href="{% url 'devices:enrollment' %}" class="text-amber-700 hover:underline">browser enrollment</a> instead.
+    </p>
   </div>
 
   <!-- Step 3 — first boot / first heartbeat (live) -->

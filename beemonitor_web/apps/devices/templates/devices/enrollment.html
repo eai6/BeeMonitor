@@ -5,12 +5,17 @@
 <div class="max-w-3xl mx-auto">
   <div class="mb-4">
     <a href="{% url 'devices:list' %}" class="text-sm text-amber-700 hover:underline">&larr; Devices</a>
-    <h1 class="text-2xl font-bold text-gray-900">Zero-touch enrollment</h1>
+    <h1 class="text-2xl font-bold text-gray-900">Add a device</h1>
     <p class="text-sm text-gray-500">
-      Bake an enrollment token into your SD image once, then every unit you flash
-      <strong>self-registers on first boot</strong> — no per-device key to copy.
-      The device appears here automatically; you just set its name, location, and
-      coordinates.
+      Flash the BeeMonitor golden image, drop an enrollment token onto the card
+      from your browser, and every unit <strong>self-registers on first boot</strong>
+      — no per-device key to copy, and it works from any laptop. The device appears
+      on your <a href="{% url 'devices:list' %}" class="text-amber-700 hover:underline">Devices</a>
+      page automatically; you just set its name and location.
+    </p>
+    <p class="text-xs text-gray-400 mt-2">
+      Setting up a Pi by hand (not from the golden image)?
+      <a href="{% url 'devices:add' %}" class="text-amber-700 hover:underline">Create a device key instead →</a>
     </p>
   </div>
 
