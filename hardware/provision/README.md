@@ -37,6 +37,29 @@ On a spare Pi 4 + card, do a **normal full install** following
 Boot it once and confirm the services come up (it'll just sit in "no token —
 skipping" for enroll, which is correct). Then **shut down**.
 
+### 1.1b Make it artifact-native (recommended — feature 18)
+
+Convert the reference unit from the git-clone layout to the **release/symlink
+layout** so clones update via **signed artifacts** instead of `git pull` — no git
+remote, no `.git`, no cloud/web/src code on a field device, signed + rollback-safe
+updates. Run on the reference Pi:
+
+```bash
+sudo bash hardware/provision/migrate-to-releases.sh
+```
+
+This sets up `~/BeeMonitor -> releases/<v0>/` (hardware/ only), the stable
+`~/beemonitor-venv` + `~/models` (symlinked into the release), installs `minisign`,
+and copies the verify key to `~/minisign.pub`. Confirm services still come up
+(`systemctl is-active beemonitor-recorder beemonitor-telemetry`), then shut down.
+`generalize.sh` (next) drops the leftover git clone so the image carries no git or
+cloud code. After flashing, a unit self-updates from the dashboard's **"Update via
+signed artifact"** button.
+
+> Skip this step to keep the older **git-update** image (still works — units `git
+> pull` from the repo). The artifact path needs the repo's `minisign.pub`
+> (committed) + a published, signed bundle (the `edge-artifact` CI on a `v*` tag).
+
 ### 1.2 Generalize before capture
 
 Clones must not share per-unit identity/state, and **no credential may ship in the

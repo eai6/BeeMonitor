@@ -83,6 +83,14 @@ for d in "${RECORD_DIRS[@]}"; do
     [ -d "$d" ] && { rm -rf "${d:?}/"* 2>/dev/null || true; echo "    cleared recordings: $d"; }
 done
 rm -f /home/beemonitor/.bash_history /root/.bash_history 2>/dev/null || true
+# Artifact-native images (feature 18): drop the git clone that
+# migrate-to-releases.sh sets aside, so the image ships NO git remote / .git /
+# cloud-web-src code — only the hardware/-only release tree. No-op on git-layout
+# images (nothing to remove).
+if [ -e /home/beemonitor/BeeMonitor.git-clone.bak ]; then
+    rm -rf /home/beemonitor/BeeMonitor.git-clone.bak
+    echo "    removed git clone backup (artifact-native image — no git/cloud code)"
+fi
 
 echo "==> 4/5 Verifying the image carries NO credential"
 fail=0
