@@ -1,7 +1,13 @@
 # BeeMonitor — Edge Artifact Delivery (keep cloud code off field devices)
 
-**Status:** Reviewed — **decisions locked 2026-06-17**, build plan ready; not yet
-implemented.
+**Status:** **Phase 0 implemented (2026-06-17)** — `hardware/provision/build-edge-artifact.sh`
+(hardware-only tar + no-path-outside-hardware/ guardrail + sha256/manifest + optional
+minisign), `.github/workflows/edge-artifact.yml` (build+guardrail on push; sign+S3
+publish on `v*` tags), and a CI S3 `edge-publish` IAM policy in `infra/aws/__main__.py`.
+**To activate:** generate the minisign keypair (`minisign -G -W`; private → GH secret
+`MINISIGN_SECRET_KEY`, public → `hardware/provision/minisign.pub`), `pulumi up` the IAM
+change, then tag a release. **Phase 1 (device update rewrite) NOT started** — gated on
+a test Pi; see the §10/Phase-1 caveat below.
 **Author:** Drafted with Claude Code, 2026-06-14
 
 > **Locked decisions (2026-06-17):**
@@ -248,6 +254,14 @@ push tag vX ─▶ GitHub Actions (OIDC→AWS)         heartbeat ─▶ cloud
   add the verify key. Cloud emits the artifact descriptor in the update cmd.
   *Validate on one Pi over real cellular:* update, rollback-on-failure, signature
   rejection of a tampered bundle.
+  > **⚠ Don't push the rewritten `update.sh` to `main` while the live fleet still
+  > updates by `git pull` from `main`** — the next pull would swap in an update path
+  > that expects an artifact descriptor (not a git ref) on a git-clone layout (not
+  > releases/symlink), breaking self-update fleet-wide. Do Phase 1 EITHER (a)
+  > backward-compatible — new `update.sh` detects git-ref vs descriptor AND
+  > git-clone vs symlink layout and handles both, so it can land on `main` safely;
+  > OR (b) on a branch, tested on one Pi, merged only at the Phase-2 golden-image
+  > cutover. Decide before starting Phase 1.
 - **Phase 2 — golden image cutover.** Bake artifact v0 + verify key + `releases/`/
   symlink layout into the golden image ([[14_golden_image_provisioning_design]]).
   New devices have **no git, no remote, no cloud code** from first boot.
