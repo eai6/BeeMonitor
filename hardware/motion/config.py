@@ -170,6 +170,11 @@ NEST_LAYOUT_FILE = CALIB_FILE.parent / "nest_layout.json"
 # from the heartbeat; the recorder hot-reloads it over the env default, so a
 # no-shell unit can be switched between observe (tag) and filter (gate) remotely.
 BEE_CONFIRM_MODE_FILE = CALIB_FILE.parent / "bee_confirm_mode.json"
+# Dashboard-pushed toggle for sampling/sending BioCLIP review crops over cellular.
+# telemetry.py writes it from the heartbeat; the recorder hot-reloads it over the
+# env ACTIVITY_FRAMES default, so a no-shell unit can stop the 1-few crops/activity
+# remotely (e.g. once on-device bee confirmation is trusted to guard activity).
+ACTIVITY_FRAMES_FILE = CALIB_FILE.parent / "activity_frames.json"
 
 
 # --- Bee confirmation (low-DL YOLO filter) --------------------------------

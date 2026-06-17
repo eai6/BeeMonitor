@@ -904,6 +904,32 @@ class DeviceBeeConfirmView(LoginRequiredMixin, View):
         return redirect("devices:detail", pk=pk)
 
 
+class DeviceActivityCropsView(LoginRequiredMixin, View):
+    """Toggle whether the device sends BioCLIP "review" crops over cellular.
+
+    On = sample 1-few mover crops per activity and upload them for taxonomic ID.
+    Off = stop sampling entirely on the recorder (no SD/CPU/cellular spend) — handy
+    once on-device bee confirmation is trusted to guard activity. The device adopts
+    the change on its next check-in.
+    """
+
+    def post(self, request, pk):
+        device = _device_or_403(request.user, pk, "manager")
+        is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        enabled = (request.POST.get("enabled") or "").strip().lower() in ("1", "true", "on", "yes")
+        device.send_activity_crops = enabled
+        device.save(update_fields=["send_activity_crops"])
+        label = "on" if enabled else "off"
+        if is_ajax:
+            return JsonResponse({"ok": True, "enabled": enabled, "label": label})
+        messages.success(
+            request,
+            f"Review-crop upload turned {label}. The device will adopt it on its "
+            "next check-in.",
+        )
+        return redirect("devices:detail", pk=pk)
+
+
 class DeviceScheduleView(LoginRequiredMixin, View):
     """Set the device's desired WittyPi power schedule (review/edit).
 

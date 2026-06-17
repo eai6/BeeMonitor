@@ -121,6 +121,10 @@ NEST_LAYOUT_FILE = RECORD_DIR.parent / "nest_layout.json"
 # it over its env default. Lets a no-shell unit be switched between observe (tag)
 # and filter (gate) remotely.
 BEE_CONFIRM_MODE_FILE = RECORD_DIR.parent / "bee_confirm_mode.json"
+# Dashboard-pushed crop-upload toggle the recorder hot-reloads ({"enabled": bool}).
+# Off = stop sampling/sending BioCLIP review crops over cellular (the recorder
+# stops sampling, so no SD/CPU/cellular spend). Same dir as the mode file above.
+ACTIVITY_FRAMES_FILE = RECORD_DIR.parent / "activity_frames.json"
 
 # Activity-frame upload (taxonomic monitoring). The recorder queues mover crops
 # here; we ship them over cellular under a daily cap. See main_motion.py +
@@ -821,19 +825,38 @@ def _apply_bee_mode(value) -> None:
         log.warning("could not write bee confirm mode: %s", e)
 
 
+def _apply_activity_frames(value) -> None:
+    """Persist the dashboard's crop-upload toggle to the file the recorder hot-
+    reloads. value is a bool (send BioCLIP review crops or not). Ignores
+    absent/non-bool values so a cloud that doesn't send the field never clobbers a
+    locally-set toggle."""
+    if not isinstance(value, bool):
+        return
+    try:
+        new = json.dumps({"enabled": value}, sort_keys=True)
+        cur = (ACTIVITY_FRAMES_FILE.read_text().strip()
+               if ACTIVITY_FRAMES_FILE.exists() else "")
+        if new != cur:
+            ACTIVITY_FRAMES_FILE.parent.mkdir(parents=True, exist_ok=True)
+            ACTIVITY_FRAMES_FILE.write_text(new)
+            log.info("activity-frame crop upload set to %s", "on" if value else "off")
+    except OSError as e:
+        log.warning("could not write activity-frame toggle: %s", e)
+
+
 def _drain_activity_frames() -> None:
     """Ship queued mover crops over cellular, under the daily cap. Best-effort:
     never raises, and stops on the first transient error to retry next beat."""
-    cap = _effective_frame_cap()
-    if cap <= 0 or not ACTIVITY_FRAMES_QUEUE.is_dir():
+    if not ACTIVITY_FRAMES_QUEUE.is_dir():
         return
     metas = sorted(ACTIVITY_FRAMES_QUEUE.glob("*.json"), key=_safe_mtime)
     if not metas:
         return
 
-    # Disk safety: bound the on-disk queue. Only when it exceeds FRAME_QUEUE_MAX
-    # do we drop the OLDEST crops — so frames merely over today's cap wait for the
-    # next UTC day's budget instead of being deleted on the busiest days.
+    # Disk safety: bound the on-disk queue FIRST — before the cap check — so even
+    # when the cap is 0 (crop upload off) a still-sampling recorder can't grow the
+    # queue without bound. Only when it exceeds FRAME_QUEUE_MAX do we drop the
+    # OLDEST crops, so frames merely over today's cap wait for tomorrow's budget.
     if FRAME_QUEUE_MAX > 0 and len(metas) > FRAME_QUEUE_MAX:
         overflow = metas[: len(metas) - FRAME_QUEUE_MAX]
         for meta_path in overflow:
@@ -841,6 +864,10 @@ def _drain_activity_frames() -> None:
         log.warning("frames: queue over %d; dropped %d oldest crop(s) to bound disk",
                     FRAME_QUEUE_MAX, len(overflow))
         metas = metas[len(metas) - FRAME_QUEUE_MAX:]
+
+    cap = _effective_frame_cap()
+    if cap <= 0:
+        return  # crop upload off — queue already bounded above
 
     sent_today = _frames_sent_today()
     sent_now = 0
@@ -1571,6 +1598,8 @@ def main() -> int:
                 _apply_frame_cap(resp.get("frame_daily_cap"))
                 # ...and the bee-confirmation mode (off|tag|gate).
                 _apply_bee_mode(resp.get("bee_confirm_mode"))
+                # ...and the crop-upload toggle (send BioCLIP review crops or not).
+                _apply_activity_frames(resp.get("activity_frames"))
                 # ...and the GPS-derived clock timezone (keeps the local-time wake
                 # window correct). Applied before the schedule so a tz change
                 # re-arms the .wpi in the corrected local time this same beat.

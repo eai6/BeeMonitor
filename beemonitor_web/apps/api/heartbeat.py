@@ -205,6 +205,9 @@ class DeviceHeartbeatView(APIView):
                 # On-device bee-confirmation mode (off|tag|gate; None = device
                 # default). The recorder hot-reloads it without a restart.
                 "bee_confirm_mode": device.bee_confirm_mode or None,
+                # Whether to sample/send BioCLIP review crops over cellular. The
+                # recorder hot-reloads it; off = stop sampling entirely.
+                "activity_frames": device.send_activity_crops,
                 # The device's clock timezone (IANA), from its GPS location. The
                 # device applies it via timedatectl so its local-time wake window
                 # is correct. None = nothing to push (no GPS / no display tz).

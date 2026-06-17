@@ -13,7 +13,8 @@ import json
 
 from motion.config import (
     log, CALIB_FILE, TUNING_FILE, ROI_OVERRIDE_FILE, NEST_LAYOUT_FILE,
-    BEE_CONFIRM_MODE_FILE, BEE_CONFIRM_MODE, LORES_W, LORES_H,
+    BEE_CONFIRM_MODE_FILE, BEE_CONFIRM_MODE, ACTIVITY_FRAMES_FILE, ACTIVITY_FRAMES,
+    LORES_W, LORES_H,
 )
 from motion.gate import MotionGate
 
@@ -89,6 +90,16 @@ def load_bee_confirm_mode() -> str:
         if m in ("off", "tag", "gate"):
             return m
     return BEE_CONFIRM_MODE
+
+
+def load_activity_frames_enabled() -> bool:
+    """Whether to sample/send BioCLIP review crops. A dashboard-pushed value
+    (activity_frames.json) wins over the env ACTIVITY_FRAMES default, so the
+    per-activity crop upload can be turned off remotely on a no-shell unit."""
+    d = _load_json_file(ACTIVITY_FRAMES_FILE)
+    if isinstance(d, dict) and "enabled" in d:
+        return bool(d["enabled"])
+    return ACTIVITY_FRAMES
 
 
 def load_tuning():

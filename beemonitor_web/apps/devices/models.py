@@ -180,6 +180,12 @@ class Device(models.Model):
     # default; 0 = stop crop upload entirely (cellular-budget kill-switch).
     frame_daily_cap = models.PositiveIntegerField(null=True, blank=True)
 
+    # Whether the device samples + sends BioCLIP "review" crops (1-few per
+    # activity) over cellular. Pushed in the heartbeat; the recorder hot-reloads
+    # it. Off = stop sampling entirely (no SD/CPU/cellular spend) — useful once
+    # on-device bee confirmation is trusted to guard activity. Default on.
+    send_activity_crops = models.BooleanField(default=True)
+
     # On-device YOLO bee-confirmation mode, pushed in the heartbeat (the recorder
     # hot-reloads it over its env default). "" = device default; off = no
     # confirmation; tag = observe/label without suppressing; gate = filter
@@ -309,6 +315,9 @@ class Device(models.Model):
                 "label": self.telemetry_interval_label,
             },
             "bee_confirmation_mode": {"value": bee_mode or "(default)", "meaning": bee_label},
+            "review_crops_over_cellular": (
+                "on" if self.send_activity_crops else
+                "off — not sampling/sending BioCLIP review crops"),
             "cellular_crop_daily_cap": crop,
             "motion_tuning": self.motion_tuning_dict() or "auto-calibration (no manual overrides)",
             "hotel_roi": self.roi_override or "auto (no manual ROI set)",

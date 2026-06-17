@@ -264,6 +264,59 @@
   {% endif %}
 </div>
 
+<!-- Review crops over cellular (BioCLIP taxonomic ID) -->
+<div class="mt-6 bg-white shadow rounded-lg p-4">
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Review crops over cellular</h2>
+    <div class="text-xs text-gray-500">
+      <span id="crops-label" class="font-medium text-gray-700">{% if device.send_activity_crops %}On{% else %}Off{% endif %}</span>
+    </div>
+  </div>
+  <p class="text-xs text-gray-400 mb-3">
+    Send a few cropped frames per detected activity over cellular for cloud
+    species ID (BioCLIP). <b>Off</b> stops the recorder sampling them entirely —
+    no SD/CPU/cellular spend. Useful once on-device bee confirmation is trusted to
+    guard activity. Video clips and the activity count are unaffected.
+  </p>
+  {% if can_manage %}
+  <form id="crops-form" method="post" action="{% url 'devices:review_crops' device.pk %}" class="flex flex-wrap items-center gap-2">
+    {% csrf_token %}
+    <select name="enabled" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      <option value="1" {% if device.send_activity_crops %}selected{% endif %}>On — send review crops</option>
+      <option value="0" {% if not device.send_activity_crops %}selected{% endif %}>Off — don't send crops</option>
+    </select>
+    <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Set</button>
+    <span id="crops-saved" class="text-xs text-green-700 hidden">Saved ✓</span>
+  </form>
+  <script>
+    (function () {
+      var f = document.getElementById('crops-form');
+      if (!f) return;
+      f.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var token = f.querySelector('[name=csrfmiddlewaretoken]').value;
+        fetch(f.action, {
+          method: 'POST',
+          headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': token},
+          body: new FormData(f),
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          if (d && d.ok) {
+            var lbl = document.getElementById('crops-label');
+            if (lbl) lbl.textContent = d.enabled ? 'On' : 'Off';
+            var s = document.getElementById('crops-saved');
+            if (s) { s.classList.remove('hidden'); setTimeout(function () { s.classList.add('hidden'); }, 2500); }
+          } else {
+            alert((d && d.error) || 'Could not update review-crop setting.');
+          }
+        }).catch(function () { alert('Could not update review-crop setting.'); });
+      });
+    })();
+  </script>
+  {% else %}
+  <p class="text-xs text-gray-400 italic">Read-only — changing this requires manager access.</p>
+  {% endif %}
+</div>
+
 <!-- Power schedule (WittyPi wake/sleep) -->
 <div class="mt-6 bg-white shadow rounded-lg p-4">
   <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
