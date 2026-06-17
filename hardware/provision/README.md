@@ -182,3 +182,30 @@ same `beemonitor.conf` onto a flashed card's boot partition from macOS or Linux:
 It auto-detects the mounted `bootfs`/`boot` volume (override with `--boot PATH`) and
 refuses to write unless the volume looks like a Pi boot partition. See
 [`beemonitor.conf.example`](beemonitor.conf.example) for the file it produces.
+
+---
+
+## Remote access — Tailscale SSH (replaces Pi Connect, no device cap)
+
+Remote-shell a unit through CGNAT with **no inbound port and no public exposure**,
+and without Pi Connect's free-tier device limit (Tailscale free ≈ 100 devices). Same
+gate model as the rest of the unit: reachable over **WiFi always**, and over
+**cellular only when you drop the gate** (the dashboard's Cellular-access toggle /
+`cellular-firewall.sh open`) — `tailscaled` isn't in the telemetry allowlist, so the
+gated firewall keeps it off metered data until you open it, then it reconnects.
+
+1. In the Tailscale admin console → **Settings → Keys**, make a **reusable,
+   ephemeral, tagged** pre-auth key (tag e.g. `tag:beemonitor`) and add an ACL that
+   scopes that tag, so a leaked key/unit can't roam your tailnet.
+2. Put it in the unit's `/etc/beemonitor/uploader.env`: `TAILSCALE_AUTHKEY=tskey-auth-…`
+3. Pre-install tailscale in the golden image (`curl -fsSL https://tailscale.com/install.sh | sh`)
+   and `systemctl enable beemonitor-tailscale.service` during the build, so every
+   clone joins on first boot. (`provision.sh` only refreshes units already present,
+   so a brand-new unit type must be enabled in the image, not pushed via an update.)
+4. **First join must reach the Tailscale control plane** — do it on WiFi or with the
+   cellular gate open. After that `tailscaled` persists the session and reconnects on
+   its own on whatever link the firewall currently permits.
+
+Then `tailscale ssh beemonitor@<hostname>` (or the unit's tailnet IP). Tailscale SSH
+authenticates via your tailnet identity, so the system `sshd` never has to be opened.
+[`tailscale-up.sh`](tailscale-up.sh) does the join (idempotent, fails soft).

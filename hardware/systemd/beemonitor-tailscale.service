@@ -1,0 +1,21 @@
+[Unit]
+Description=BeeMonitor — join Tailscale tailnet (remote SSH; gated like rpi-connect)
+Documentation=https://github.com/eai6/BeeMonitor
+# Needs a route + the tailscale daemon. tailscaled.service ships with the
+# tailscale package; the `-` makes the dependency soft so we still run (and the
+# script installs tailscale) if it isn't there yet.
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Brings the unit onto the tailnet with Tailscale SSH if TAILSCALE_AUTHKEY is set
+# in uploader.env (the script sources it). Idempotent + fails soft, so a unit with
+# no key / no WiFi / a closed cellular gate just no-ops and retries on next boot.
+ExecStart=/home/beemonitor/BeeMonitor/hardware/provision/tailscale-up.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
