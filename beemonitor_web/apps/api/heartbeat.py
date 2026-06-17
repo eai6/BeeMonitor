@@ -167,6 +167,17 @@ class DeviceHeartbeatView(APIView):
             device.command_params = {}
             device.save(update_fields=["pending_command", "command_params"])
 
+        # The timezone the device's CLOCK should run in — derived from its GPS
+        # location, so the WittyPi wake window (stamped in LOCAL time on the Pi)
+        # fires at the right real-world hours. GPS wins; fall back to the user's
+        # display tz; else don't push (leave the device's own tz alone).
+        device_tz = None
+        if device.lat is not None and device.lon is not None:
+            from apps.devices.views import _tz_from_coords
+            device_tz = _tz_from_coords(device.lat, device.lon)
+        if not device_tz:
+            device_tz = (device.display_tz or "").strip() or None
+
         logger.info(
             "heartbeat: device=%s user=%s hb=%s image=%s gps=%s cmd=%s",
             device.id, device.owner_id, hb.id, bool(image_key),
@@ -194,6 +205,10 @@ class DeviceHeartbeatView(APIView):
                 # On-device bee-confirmation mode (off|tag|gate; None = device
                 # default). The recorder hot-reloads it without a restart.
                 "bee_confirm_mode": device.bee_confirm_mode or None,
+                # The device's clock timezone (IANA), from its GPS location. The
+                # device applies it via timedatectl so its local-time wake window
+                # is correct. None = nothing to push (no GPS / no display tz).
+                "device_tz": device_tz,
                 # Desired WittyPi power schedule. The device reconciles to it and
                 # enforces its own safety floor (see telemetry.py _apply_schedule).
                 "wake_schedule": device.wake_schedule_dict(),

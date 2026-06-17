@@ -1103,6 +1103,61 @@ def _do_apply(spec: dict) -> bool:
     return bool(wpi) and _write_and_run_wpi(d, wpi)
 
 
+_TZ_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._+-]*(?:/[A-Za-z0-9._+-]+)*$")
+
+
+def _current_tz() -> str:
+    """The Pi's current system timezone (IANA name), best-effort."""
+    try:
+        return Path("/etc/timezone").read_text().strip()
+    except OSError:
+        try:  # /etc/localtime -> .../zoneinfo/<Area>/<City>
+            return os.path.realpath("/etc/localtime").split("zoneinfo/", 1)[1]
+        except (OSError, IndexError):
+            return ""
+
+
+def _apply_device_tz(tz) -> None:
+    """Set the Pi's clock timezone to the dashboard's location-derived value.
+
+    Why it matters: the WittyPi wake window is stamped in LOCAL time
+    (``_schedule_to_wpi``), so a wrong system tz fires the window hours off. We keep
+    the Pi's tz matching its GPS location. Idempotent; strictly validated; needs the
+    ``beemonitor-timedatectl`` sudoers entry. On a real change we re-arm the wake
+    schedule so its .wpi is re-stamped in the corrected local time. The actual UTC
+    clock (NTP) is untouched — this only relabels local time, so TLS/cellular are
+    unaffected."""
+    if not tz or not isinstance(tz, str):
+        return
+    tz = tz.strip()
+    if ".." in tz or not _TZ_RE.match(tz):
+        log.warning("ignoring invalid device_tz from dashboard: %r", tz)
+        return
+    if not Path("/usr/share/zoneinfo", tz).exists():
+        log.warning("device_tz %r not in /usr/share/zoneinfo — ignoring", tz)
+        return
+    if _current_tz() == tz:
+        return  # already correct
+    r = _run(["sudo", "-n", "timedatectl", "set-timezone", tz])
+    if not r or r.returncode != 0:
+        log.warning("timedatectl set-timezone %s failed: %s", tz,
+                    (r.stderr.strip() if r and r.stderr else "no result"))
+        return
+    log.info("device timezone -> %s (from dashboard/GPS)", tz)
+    try:
+        time.tzset()  # make THIS process pick up the new localtime immediately
+    except Exception:  # pragma: no cover
+        pass
+    # Force the wake schedule to re-arm in the new tz (its .wpi BEGIN was stamped
+    # in the old one). Dropping the applied-spec cache makes the next
+    # _apply_schedule re-write it; harmless when apply is off (we manage no .wpi).
+    try:
+        if WAKE_SCHEDULE_STATE.exists():
+            WAKE_SCHEDULE_STATE.unlink()
+    except OSError:
+        pass
+
+
 def _apply_schedule(spec, apply_flag=None) -> None:
     """Adopt the dashboard's desired WittyPi schedule from the heartbeat response.
 
@@ -1516,6 +1571,10 @@ def main() -> int:
                 _apply_frame_cap(resp.get("frame_daily_cap"))
                 # ...and the bee-confirmation mode (off|tag|gate).
                 _apply_bee_mode(resp.get("bee_confirm_mode"))
+                # ...and the GPS-derived clock timezone (keeps the local-time wake
+                # window correct). Applied before the schedule so a tz change
+                # re-arms the .wpi in the corrected local time this same beat.
+                _apply_device_tz(resp.get("device_tz"))
                 # ...and the ROI-editor outputs (hotel ROI + nest layout).
                 _apply_override_file(ROI_OVERRIDE_FILE, resp.get("roi_override"))
                 _apply_override_file(NEST_LAYOUT_FILE, resp.get("nest_layout"))

@@ -1,0 +1,6 @@
+# Let the telemetry service set ONLY the system timezone (not the clock/NTP).
+# The dashboard pushes the unit's GPS-derived timezone in the heartbeat and the
+# device applies it so its local-time WittyPi wake window is correct. timedatectl
+# set-timezone validates the zone itself and can't strand the unit; the device
+# also validates the value before calling. Installed by hardware/provision.sh.
+beemonitor ALL=(root) NOPASSWD: /usr/bin/timedatectl set-timezone *
