@@ -1,9 +1,11 @@
 # BeeMonitor — Golden-Image Fleet Provisioning Design
 
-**Status:** Phase 1 implemented + **merged to `main`** (PR #3, commit `bcfb914`).
-Generalize step now scripted (`hardware/provision/generalize.sh`). **Remaining work
-is purely operational** — build/generalize/shrink/publish the image on hardware and
-set `BEEMONITOR_GOLDEN_IMAGE_URL`; the golden image is not yet built/published.
+**Status:** ✅ **DONE / working (2026-06).** Phase 1 implemented + merged (PR #3,
+`bcfb914`). Golden image **built, flashed, and enrolled successfully** end-to-end.
+Build is fully scripted: `generalize.sh` (on the Pi) + `capture-publish.sh` (capture
+→ pishrink → S3, on a Linux box). "Add a device" now routes to the browser
+**enrollment (token)** flow that works with the golden image from any laptop
+(commit `0b27ccb`); the per-device key page remains as the hand-install fallback.
 **Author:** Drafted with Claude Code, 2026-06-11
 **Goal:** Make standing up a field unit "flash → drop a token in the browser →
 assemble hardware → insert card → power on → it appears" — so a non-expert only
@@ -100,7 +102,15 @@ Safari/Firefox use the CLI or manual snippet.
 
 ---
 
-## 5. Execution plan — remaining steps (Phase 1 completion)
+## 5. Execution plan — ✅ all steps done (golden image working)
+
+> **Field note (2026-06):** the first reference card was a **238 GB** SD. A raw `dd`
+> would be 238 GB — too big to store and pointless (pishrink's `-a` auto-expands on
+> flash, so source-card size doesn't matter). Use a small card, OR shrink in place
+> first: `resize2fs -M` the rootfs → `parted resizepart` the partition down
+> (force the shrink prompt with `echo Yes | parted ---pretend-input-tty …`) →
+> truncated `dd` up to the partition end → `pishrink -aZ`. Captured ~12 GB → 2.4 GB
+> `.img.xz`. Then flash → browser-enroll → device appeared. Works.
 
 1. **Build the golden image** on a reference Pi: full install per
    `hardware/README.md` 0–10, all services `enable`d (incl. `beemonitor-enroll`),
