@@ -11,8 +11,17 @@ minisign), `.github/workflows/edge-artifact.yml` (build+guardrail on push; sign+
 publish on `v*` tags), and a CI S3 `edge-publish` IAM policy in `infra/aws/__main__.py`.
 **To activate:** generate the minisign keypair (`minisign -G -W`; private → GH secret
 `MINISIGN_SECRET_KEY`, public → `hardware/provision/minisign.pub`), `pulumi up` the IAM
-change, then tag a release. **Phase 1 (device update rewrite) NOT started** — gated on
-a test Pi; see the §10/Phase-1 caveat below.
+change, then tag a release. **Phase 1 (A) plumbing IMPLEMENTED on `main` (backward-compatible, 2026-06-17)** —
+`update.sh` `fetch-artifact` (download→sha256→minisign→unpack→symlink-swap; dual-mode
+phase B rollback; git path byte-identical), telemetry routing (`_start_update`
+git-ref vs descriptor) + version reporting from the manifest, cloud
+`DeviceUpdateView` `mode=artifact` (`_resolve_edge_descriptor` reads
+edge/latest.json + manifest, presigns the bundle), and a dashboard "Update via
+signed artifact" button. Verify path tested locally vs the real v0.1.0 bundle.
+**NOT yet validated on a Pi** (symlink swap + rollback + tamper-reject over
+cellular) — needs a unit in the release-layout (≈ Phase 2 setup). **Phase 2
+(golden-image cutover: releases/symlink layout + stable venv/models + baked
+minisign+pubkey) is next.**
 **Author:** Drafted with Claude Code, 2026-06-14
 
 > **Locked decisions (2026-06-17):**
