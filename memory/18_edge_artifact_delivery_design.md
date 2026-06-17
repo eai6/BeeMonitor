@@ -1,7 +1,35 @@
 # BeeMonitor — Edge Artifact Delivery (keep cloud code off field devices)
 
-**Status:** Proposal for review (not yet implemented)
+**Status:** Reviewed — **decisions locked 2026-06-17**, build plan ready; not yet
+implemented.
 **Author:** Drafted with Claude Code, 2026-06-14
+
+> **Locked decisions (2026-06-17):**
+> - **Go straight to artifact delivery — no interim git-creds bridge.** The
+>   generalized golden image has no git auth and the repo is private, so current
+>   field units can't `git fetch` to self-update; the accepted answer is to
+>   **re-flash to push changes** until the artifact update path (Phase 1) ships,
+>   rather than baking a deploy key. (Confirmed: nothing under `hardware/` imports
+>   cloud/web/src; only cross-tree dep is the 2 `.pt` models.)
+> - **Sign the artifact with minisign.** Private key in CI secrets; public verify
+>   key committed at `hardware/provision/minisign.pub` and baked into the golden
+>   image. Device rejects any unsigned/tampered bundle (resolves §2 ⚙).
+> - **Delivery channel = presigned S3 in the heartbeat update command** (resolves
+>   §2 ⚙), reusing `presigned_get(container="models")` + the `DeviceKeyAuth` path.
+> - **Stable paths out of the release tree:** venv → `/home/beemonitor/beemonitor-venv/`
+>   (update the 4 `ExecStart` interpreter paths in
+>   `beemonitor-{telemetry,recorder,uploader,calibrate}.service`); models →
+>   `/home/beemonitor/models/` via `BEEMONITOR_MODELS_DIR` (the bundle is
+>   `hardware/`-only, so `config.py`'s `parents[2]/models` won't find them in a
+>   release dir). `REPO_DIR` resolution in both `update.sh` and `telemetry.py` is
+>   symlink-transparent — verified — so all other hardcoded paths stay valid.
+> - **Cloud seam:** `DeviceUpdateView` (`apps/devices/views.py`) emits
+>   `command_params={version,url,sha256,sig}` instead of `{"ref": …}`; `code_commit`
+>   metric → `version`.
+> - **Sequencing:** Part A (Zero 2 W lite profile, [[20_pi_zero2w_lite_profile]])
+>   and **Phase 0** (CI build+sign+publish, zero device risk) first; **Phase 1**
+>   (the on-device lifeline rewrite) only with a Pi to test over real cellular,
+>   then Phase 2/3.
 **Goal:** Stop shipping the **whole monorepo** to field devices. Keep one repo for
 development, but deliver only a **signed, hardware-only artifact** to the Pi — so a
 field unit never holds `cloud/`, `beemonitor_web/`, `src/`, `sagemaker_backend/`,
