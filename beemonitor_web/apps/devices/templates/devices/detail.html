@@ -638,12 +638,20 @@
     torch and model weights are not updated remotely (do those over WiFi). Acts on
     the device's next check-in; can take a few minutes.
   </p>
-  <form method="post" action="{% url 'devices:update' device.pk %}"
-        onsubmit="return confirm('Update this device to the latest code (origin/main)? It will restart services and auto-roll-back if unhealthy.')">
-    {% csrf_token %}
-    <input type="hidden" name="ref" value="origin/main">
-    <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Update to latest</button>
-  </form>
+  <div class="flex flex-wrap items-center gap-2">
+    <form method="post" action="{% url 'devices:update' device.pk %}"
+          onsubmit="return confirm('Update this device to the latest code (origin/main)? It will restart services and auto-roll-back if unhealthy.')">
+      {% csrf_token %}
+      <input type="hidden" name="ref" value="origin/main">
+      <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Update to latest (git)</button>
+    </form>
+    <form method="post" action="{% url 'devices:update' device.pk %}"
+          onsubmit="return confirm('Update via the SIGNED edge artifact? The device verifies the signature, swaps the release, and auto-rolls-back if unhealthy. (For units on the release/symlink layout.)')">
+      {% csrf_token %}
+      <input type="hidden" name="mode" value="artifact">
+      <button class="px-3 py-1.5 bg-white border border-amber-300 text-amber-700 hover:bg-amber-50 rounded text-sm" title="Download + minisign-verify the published hardware-only bundle (feature 18)">Update via signed artifact</button>
+    </form>
+  </div>
   {% endif %}
 </div>
 
