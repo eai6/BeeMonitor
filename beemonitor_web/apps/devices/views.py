@@ -810,6 +810,33 @@ class DeviceCellularView(LoginRequiredMixin, View):
         return redirect("devices:detail", pk=pk)
 
 
+def _resolve_edge_descriptor() -> "dict | None":
+    """Artifact-update descriptor from S3 (feature 18): read edge/latest.json + that
+    version's manifest from the models bucket, presign the bundle, and return
+    {version, url, sha256, sig, reqs_hash} for the heartbeat update command. None if
+    nothing's published or S3 is unreachable."""
+    from config.storage import presigned_get
+    try:
+        import boto3
+        s3 = boto3.client("s3", region_name=getattr(settings, "AWS_REGION", "us-east-1"))
+        bucket = settings.AWS_S3_BUCKET_MODELS
+
+        def _obj(key):
+            return json.loads(s3.get_object(Bucket=bucket, Key=key)["Body"].read())
+
+        version = _obj("edge/latest.json")["version"]
+        manifest = _obj(f"edge/beemonitor-edge-{version}.json")
+        url = presigned_get(f"edge/beemonitor-edge-{version}.tar.gz",
+                            container="models", expiry_hours=2)
+        if not url:
+            return None
+        return {"version": version, "url": url, "sha256": manifest["sha256"],
+                "sig": manifest.get("sig", ""), "reqs_hash": manifest.get("reqs_hash", "")}
+    except Exception as e:  # pragma: no cover - S3/network hiccup must not 500
+        logger.warning("resolve edge descriptor failed: %s", e)
+        return None
+
+
 class DeviceUpdateView(LoginRequiredMixin, View):
     """Queue a remote software-update command.
 
@@ -823,6 +850,25 @@ class DeviceUpdateView(LoginRequiredMixin, View):
 
     def post(self, request, pk):
         device = _device_or_403(request.user, pk, "manager")
+        # Artifact update (feature 18): resolve the signed bundle descriptor from
+        # S3. Falls back to the git ref flow (the default) for git-layout units.
+        if (request.POST.get("mode") or "").strip() == "artifact":
+            params = _resolve_edge_descriptor()
+            if not params:
+                messages.error(request, "No signed edge artifact is published yet "
+                               "(tag a release / check the edge-artifact CI).")
+                return redirect("devices:detail", pk=pk)
+            device.pending_command = "update"
+            device.command_params = params
+            device.save(update_fields=["pending_command", "command_params"])
+            messages.success(
+                request,
+                f"Artifact update to {params['version']} queued — the device will "
+                "download, verify the signature, swap the release, and auto-roll-back "
+                "if unhealthy. Watch the version below.",
+            )
+            return redirect("devices:detail", pk=pk)
+
         ref = (request.POST.get("ref") or "origin/main").strip() or "origin/main"
         device.pending_command = "update"
         device.command_params = {"ref": ref}

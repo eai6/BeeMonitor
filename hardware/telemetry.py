@@ -410,7 +410,14 @@ def _video_stats(window_seconds: int) -> dict:
 
 
 def _git_commit() -> str:
-    """Short SHA of the deployed code, so the dashboard can show the version."""
+    """Deployed-code version for the dashboard: the edge-artifact manifest version
+    on a release (symlink) layout, else the short git SHA on a git-clone layout."""
+    try:
+        v = json.loads((REPO_DIR / ".edge-manifest.json").read_text()).get("version")
+        if v:
+            return str(v)
+    except (OSError, ValueError):
+        pass
     r = _run(["git", "-C", str(REPO_DIR), "rev-parse", "--short", "HEAD"])
     return r.stdout.strip() if r and r.returncode == 0 else ""
 
@@ -1356,15 +1363,30 @@ def _start_update(params: dict) -> None:
     loop while it fetches); the updater hands off to beemonitor-update.service to
     restart + health-check + roll back. See hardware/update.sh.
     """
-    ref = (params.get("ref") or "origin/main").strip() or "origin/main"
     if not UPDATE_SCRIPT.exists():
         log.warning("command: update — %s missing, ignoring", UPDATE_SCRIPT)
         return
-    log.info("command: update ref=%s — spawning fetch phase", ref)
+    # Artifact update (feature 18): the cloud sent a signed-bundle descriptor
+    # {version,url,sha256,sig,reqs_hash}. Write it where update.sh reads it and run
+    # the artifact fetch path. Otherwise fall back to the git fetch (params.ref).
+    if params.get("url") and params.get("version") and params.get("sha256"):
+        try:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            desc = {k: params.get(k) for k in
+                    ("version", "url", "sha256", "sig", "reqs_hash")}
+            (STATE_DIR / "update-descriptor.json").write_text(json.dumps(desc))
+        except OSError as e:
+            log.warning("command: update — cannot write descriptor: %s", e)
+            return
+        log.info("command: update version=%s — spawning artifact fetch", params.get("version"))
+        cmd = ["bash", str(UPDATE_SCRIPT), "fetch-artifact"]
+    else:
+        ref = (params.get("ref") or "origin/main").strip() or "origin/main"
+        log.info("command: update ref=%s — spawning git fetch", ref)
+        cmd = ["bash", str(UPDATE_SCRIPT), "fetch", ref]
     try:
         subprocess.Popen(
-            ["bash", str(UPDATE_SCRIPT), "fetch", ref],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True, cwd=str(REPO_DIR),
         )
     except OSError as e:
