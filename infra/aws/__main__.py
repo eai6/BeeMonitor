@@ -252,6 +252,25 @@ aws.iam.RolePolicy(
     policy=ecr_push_policy_doc,
 )
 
+# CI also publishes the hardware-only edge update artifacts (feature 18) to the
+# edge/ prefix of the models bucket. Scoped to that prefix ONLY — CI can't touch
+# raw videos, model weights, the golden image, or anything else in the bucket.
+edge_publish_policy_doc = models_bucket.arn.apply(lambda b: json.dumps({
+    "Version": "2012-10-17",
+    "Statement": [{
+        "Sid": "EdgeArtifactPublish",
+        "Effect": "Allow",
+        "Action": ["s3:PutObject", "s3:GetObject"],
+        "Resource": f"{b}/edge/*",
+    }],
+}))
+aws.iam.RolePolicy(
+    "github-actions-edge-publish",
+    role=gh_role.id,
+    name="edge-publish",
+    policy=edge_publish_policy_doc,
+)
+
 
 # ---------------------------------------------------------------------------
 # IAM — ECS task role (Django runtime)

@@ -1,0 +1,82 @@
+name: Edge artifact (build · sign · publish)
+
+# Builds the hardware-only field-update bundle (feature 18, Phase 0).
+#   * every push / PR : build + run the "no path outside hardware/" guardrail
+#                       (validation only; uploads the bundle as a workflow artifact).
+#   * v* tag          : ALSO sign (minisign, when the secret is set) and publish
+#                       the bundle + manifest + latest.json to S3 via OIDC.
+#                       The field update path (Phase 1) consumes these. Inert until
+#                       Phase 1 ships — nothing on a device reads them yet.
+#
+# Auth: assumes the same OIDC role as deploy.yml (no long-lived AWS keys).
+#
+# REQUIRES (admin, once):
+#   * GitHub Actions secret MINISIGN_SECRET_KEY = a NO-password minisign key
+#     (`minisign -G -W`); without it the tag build publishes UNSIGNED (warns).
+#   * The OIDC role beemonitor-dev-github-actions needs s3:PutObject on the edge/
+#     prefix of the models bucket — add it in infra/aws/__main__.py if absent.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  # Same role as deploy.yml; the OIDC trust policy scopes it to this repo.
+  AWS_ROLE_ARN: arn:aws:iam::495331821764:role/beemonitor-dev-github-actions
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build bundle + run the hardware-only guardrail
+        run: OUT="$PWD/dist" bash hardware/provision/build-edge-artifact.sh
+      - name: Upload bundle as a workflow artifact (inspection)
+        uses: actions/upload-artifact@v4
+        with:
+          name: edge-artifact
+          path: dist/
+          retention-days: 14
+
+  publish:
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # OIDC federation to AWS
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install minisign
+        run: sudo apt-get update && sudo apt-get install -y minisign
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Build + sign
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "${MINISIGN_KEY:-}" ]; then
+            umask 077; printf '%s' "$MINISIGN_KEY" > /tmp/minisign.key
+            export MINISIGN_SECRET_KEY_FILE=/tmp/minisign.key
+          else
+            echo "::warning::MINISIGN_SECRET_KEY not set — publishing an UNSIGNED bundle"
+          fi
+          OUT="$PWD/dist" bash hardware/provision/build-edge-artifact.sh
+          rm -f /tmp/minisign.key
+      - name: Publish to S3
+        run: |
+          set -euo pipefail
+          ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          BUCKET="beemonitor-dev-models-${ACCOUNT}"   # derived, no hardcoded account
+          aws s3 cp dist/ "s3://${BUCKET}/edge/" --recursive \
+            --exclude "*" --include "beemonitor-edge-*" --include "latest.json"
+          echo "Published edge artifacts to s3://${BUCKET}/edge/"
