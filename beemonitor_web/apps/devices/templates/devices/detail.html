@@ -509,6 +509,11 @@
       {% endif %}
     </div>
   </div>
+  {% if metrics.mac %}
+  <p class="text-xs text-gray-400 mb-1">
+    MAC <span class="font-mono text-gray-600 select-all">{{ metrics.mac }}</span>{% if metrics.mac_iface %} <span class="text-gray-300">· {{ metrics.mac_iface }}</span>{% endif %}{% if metrics.wifi_ip %} · IP <span class="font-mono text-gray-600 select-all">{{ metrics.wifi_ip }}</span>{% endif %}
+  </p>
+  {% endif %}
   <p class="text-xs text-gray-400 mb-3">
     Video uploads only flow over WiFi. Telemetry rides WiFi whenever it's
     connected (falling back to cellular when it isn't), so these commands reach

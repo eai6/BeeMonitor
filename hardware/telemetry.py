@@ -266,6 +266,22 @@ def _wifi_state() -> dict:
     return out
 
 
+def _mac_address() -> dict:
+    """The unit's primary network MAC (stable per board) for identification on the
+    dashboard — wlan0's, falling back to eth0's. Read straight from sysfs, so it
+    needs no root and no extra tools, and works whether or not WiFi is connected."""
+    out: dict = {}
+    for iface in (WIFI_IFACE, "eth0"):
+        try:
+            mac = Path("/sys/class/net", iface, "address").read_text().strip()
+        except OSError:
+            continue
+        if mac and mac != "00:00:00:00:00:00":
+            out["mac"], out["mac_iface"] = mac, iface
+            break
+    return out
+
+
 def _active_transport() -> str:
     """Which interface telemetry is actually leaving on right now.
 
@@ -650,6 +666,8 @@ def collect_metrics() -> dict:
 
     # Current WiFi state so the dashboard can show on/off + connected network.
     m.update(_wifi_state())
+    # Primary network MAC (stable per board) for identification on the dashboard.
+    m.update(_mac_address())
     # Which link this beat is actually leaving on (wifi when connected, else
     # cellular) — lets the dashboard confirm telemetry rode WiFi.
     transport = _active_transport()
