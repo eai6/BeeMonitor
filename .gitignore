@@ -51,3 +51,5 @@ beemonitor-mobile/android/
 *.log
 # motion_replay.py generated snippets
 short_videos/replay_snippets/
+
+images/ 
