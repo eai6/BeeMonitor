@@ -57,7 +57,7 @@ from motion.roi import _resolve_record_roi
 from motion.overrides import (
     _build_gate, load_calibration, _apply_calibration,
     load_tuning, _apply_tuning, load_roi_override_lores, load_bee_confirm_mode,
-    load_activity_frames_enabled,
+    load_activity_crops_mode,
 )
 from motion.remux import _remux, _snippet_paths
 from motion.telemetry_still import _save_telemetry_still
@@ -83,6 +83,21 @@ def _handle_signal(signum, frame):  # noqa: ARG001
     global _running
     log.info("signal %s received, finalising current segment then exiting", signum)
     _running = False
+
+
+def _should_send_crops(crops_mode, status) -> bool:
+    """Whether to ship a finished activity's crops, given the dashboard crop mode
+    and the bee-confirmation verdict:
+      all       — every activity
+      confirmed — only confirmed bees; DISABLED means no confirmer ran (nothing to
+                  reject), so send. UNCONFIRMED/PENDING are dropped.
+      off       — never (and sampling is already gated off upstream)
+    """
+    if crops_mode == "off":
+        return False
+    if crops_mode == "all":
+        return True
+    return status == CONFIRMED or status == DISABLED  # "confirmed"
 
 
 def _write_clip_tag(mp4_path, status, confidence, taxon, runs, mode) -> None:
@@ -209,8 +224,11 @@ def record() -> None:
     tuning_mtime = TUNING_FILE.stat().st_mtime if TUNING_FILE.exists() else 0.0
     roi_ov_mtime = ROI_OVERRIDE_FILE.stat().st_mtime if ROI_OVERRIDE_FILE.exists() else 0.0
     bee_mode_mtime = BEE_CONFIRM_MODE_FILE.stat().st_mtime if BEE_CONFIRM_MODE_FILE.exists() else 0.0
-    # Dashboard-pushed crop-upload toggle (env ACTIVITY_FRAMES is the fallback).
-    act_frames_on = load_activity_frames_enabled()
+    # Dashboard-pushed crop mode: all|confirmed|off (env ACTIVITY_CROPS_MODE is the
+    # fallback). act_frames_on gates sampling (mode != off); crops_mode also decides,
+    # per verdict, whether a finished activity's crops are sent (see _should_send_crops).
+    crops_mode = load_activity_crops_mode()
+    act_frames_on = crops_mode != "off"
     act_frames_mtime = ACTIVITY_FRAMES_FILE.stat().st_mtime if ACTIVITY_FRAMES_FILE.exists() else 0.0
     last_calib_check = time.monotonic()
     last_override_check = time.monotonic()
@@ -339,11 +357,9 @@ def record() -> None:
                     p = r["payload"] or {}
                     _write_clip_tag(p.get("mp4"), r["status"], r["confidence"],
                                     r["taxon"], r["runs"], confirmer.mode)
-                    # tag mode (annotate only) + inert(DISABLED) -> send all crops;
-                    # gate -> send only confirmed activities' crops.
-                    send = (r["status"] == DISABLED or confirmer.mode == "tag"
-                            or r["status"] == CONFIRMED)
-                    if act_frames_on and send and p.get("crops"):
+                    # The dashboard crop mode decides which verdicts get their crops
+                    # shipped (all | confirmed | off) — independent of the bee gate.
+                    if _should_send_crops(crops_mode, r["status"]) and p.get("crops"):
                         _flush_activity_frames(r["uid"], p.get("started", 0.0), p["crops"])
 
             # Periodic background-model rebuild. Deferred while a clip is open so
@@ -413,18 +429,18 @@ def record() -> None:
                 if bm != bee_mode_mtime:
                     confirmer.set_mode(load_bee_confirm_mode())
                     bee_mode_mtime = bm
-                # Live crop-upload toggle (BioCLIP review crops) from the dashboard.
+                # Live crop mode (all|confirmed|off) from the dashboard.
                 try:
                     am = (ACTIVITY_FRAMES_FILE.stat().st_mtime
                           if ACTIVITY_FRAMES_FILE.exists() else 0.0)
                 except OSError:
                     am = act_frames_mtime
                 if am != act_frames_mtime:
-                    new_on = load_activity_frames_enabled()
-                    if new_on != act_frames_on:
-                        act_frames_on = new_on
-                        log.info("activity-frame crop upload %s (dashboard)",
-                                 "ON" if new_on else "OFF")
+                    new_mode = load_activity_crops_mode()
+                    if new_mode != crops_mode:
+                        crops_mode = new_mode
+                        act_frames_on = new_mode != "off"
+                        log.info("activity-crop mode %s (dashboard)", new_mode)
                     act_frames_mtime = am
 
             # On-demand still requested by telemetry (picture / live view / ROI
@@ -470,9 +486,7 @@ def record() -> None:
                 p = r["payload"] or {}
                 _write_clip_tag(p.get("mp4"), r["status"], r["confidence"],
                                 r["taxon"], r["runs"], confirmer.mode)
-                send = (r["status"] == DISABLED or confirmer.mode == "tag"
-                        or r["status"] == CONFIRMED)
-                if act_frames_on and send and p.get("crops"):
+                if _should_send_crops(crops_mode, r["status"]) and p.get("crops"):
                     _flush_activity_frames(r["uid"], p.get("started", 0.0), p["crops"])
         confirmer.stop()
         try:

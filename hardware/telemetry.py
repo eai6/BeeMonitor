@@ -373,6 +373,10 @@ def _video_stats(window_seconds: int) -> dict:
     # of the files on disk — unaffected by mtime changes or service restarts.
     # Bounded to ~8 days to cover the dashboard's 7d view without a huge payload.
     by_hour: dict = {}
+    # Complement of by_hour: clips the on-device YOLO marked NOT a bee
+    # (`<clip>.mp4.unconfirmed`, gate mode only). Lets the dashboard show
+    # unconfirmed (shadow/non-bee) activity before it uploads over WiFi.
+    unconfirmed_by_hour: dict = {}
     hist_cutoff = now - 8 * 86400
     cur_key = time.strftime("%Y-%m-%dT%H", time.localtime(now))
     if RECORD_DIR.is_dir():
@@ -393,9 +397,12 @@ def _video_stats(window_seconds: int) -> dict:
             is_activity = not mp4.with_suffix(mp4.suffix + ".unconfirmed").exists()
             if is_activity and st.st_mtime >= now - window_seconds:
                 recent += 1
-            if is_activity and st.st_mtime >= hist_cutoff:
+            if st.st_mtime >= hist_cutoff:
                 key = _clip_hour_key(mp4.name, st.st_mtime)
-                by_hour[key] = by_hour.get(key, 0) + 1
+                if is_activity:
+                    by_hour[key] = by_hour.get(key, 0) + 1
+                else:
+                    unconfirmed_by_hour[key] = unconfirmed_by_hour.get(key, 0) + 1
             if not mp4.with_suffix(mp4.suffix + ".uploaded").exists():
                 pending += 1
                 pending_bytes += st.st_size
@@ -410,6 +417,7 @@ def _video_stats(window_seconds: int) -> dict:
         "snippets_last_period": recent,
         "newest_mtime": newest,
         "activity_by_hour": by_hour,
+        "unconfirmed_by_hour": unconfirmed_by_hour,
         "clips_this_hour": by_hour.get(cur_key, 0),
     }
 
@@ -666,6 +674,7 @@ def collect_metrics() -> dict:
     # updates the moment a clip is recorded, not when it's uploaded.
     m["clips_this_hour"] = vs["clips_this_hour"]
     m["activity_by_hour"] = vs["activity_by_hour"]
+    m["unconfirmed_by_hour"] = vs["unconfirmed_by_hour"]
     m["telemetry_period_seconds"] = ACTIVITY_PERIOD
     m["telemetry_period_human"] = _human_duration(ACTIVITY_PERIOD)
     if vs["newest_mtime"]:
@@ -855,23 +864,34 @@ def _apply_bee_mode(value) -> None:
         log.warning("could not write bee confirm mode: %s", e)
 
 
-def _apply_activity_frames(value) -> None:
-    """Persist the dashboard's crop-upload toggle to the file the recorder hot-
-    reloads. value is a bool (send BioCLIP review crops or not). Ignores
-    absent/non-bool values so a cloud that doesn't send the field never clobbers a
-    locally-set toggle."""
-    if not isinstance(value, bool):
+def _apply_activity_crops(value) -> None:
+    """Persist the dashboard's 3-way crop mode (all|confirmed|off) to the file the
+    recorder hot-reloads. Ignores absent/invalid values so a cloud that doesn't send
+    the field never clobbers a locally-set mode."""
+    if not isinstance(value, str):
+        return
+    mode = value.strip().lower()
+    if mode not in ("all", "confirmed", "off"):
         return
     try:
-        new = json.dumps({"enabled": value}, sort_keys=True)
+        new = json.dumps({"mode": mode}, sort_keys=True)
         cur = (ACTIVITY_FRAMES_FILE.read_text().strip()
                if ACTIVITY_FRAMES_FILE.exists() else "")
         if new != cur:
             ACTIVITY_FRAMES_FILE.parent.mkdir(parents=True, exist_ok=True)
             ACTIVITY_FRAMES_FILE.write_text(new)
-            log.info("activity-frame crop upload set to %s", "on" if value else "off")
+            log.info("activity-crop mode set to %s", mode)
     except OSError as e:
-        log.warning("could not write activity-frame toggle: %s", e)
+        log.warning("could not write activity-crop mode: %s", e)
+
+
+def _apply_activity_frames(value) -> None:
+    """Legacy back-compat: an old cloud that sends only the `activity_frames` bool.
+    Translate it into the new mode file (True -> confirmed, False -> off). Ignores
+    absent/non-bool values so it never clobbers a mode set via _apply_activity_crops."""
+    if not isinstance(value, bool):
+        return
+    _apply_activity_crops("confirmed" if value else "off")
 
 
 def _drain_activity_frames() -> None:
@@ -1643,8 +1663,12 @@ def main() -> int:
                 _apply_frame_cap(resp.get("frame_daily_cap"))
                 # ...and the bee-confirmation mode (off|tag|gate).
                 _apply_bee_mode(resp.get("bee_confirm_mode"))
-                # ...and the crop-upload toggle (send BioCLIP review crops or not).
-                _apply_activity_frames(resp.get("activity_frames"))
+                # ...and the crop mode (all|confirmed|off). Prefer the new 3-way
+                # string; fall back to the legacy bool for older clouds.
+                if "activity_crops" in resp:
+                    _apply_activity_crops(resp.get("activity_crops"))
+                else:
+                    _apply_activity_frames(resp.get("activity_frames"))
                 # ...and the GPS-derived clock timezone (keeps the local-time wake
                 # window correct). Applied before the schedule so a tz change
                 # re-arms the .wpi in the corrected local time this same beat.

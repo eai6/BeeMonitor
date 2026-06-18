@@ -58,6 +58,19 @@ TELEMETRY_IMAGE_HEIGHT = _env_int("BEEMONITOR_TELEMETRY_IMAGE_HEIGHT", 720)
 # the insect in the cloud. Crops only (tiny bytes). The WiFi-gated full video is
 # unaffected. See memory/15_monitoring_agent_design.md.
 ACTIVITY_FRAMES = _env_bool("BEEMONITOR_ACTIVITY_FRAMES", True)
+# Which activities to sample/send crops for (BioCLIP review):
+#   all       — every activity, confirmed or not (max data for cloud tagging)
+#   confirmed — only activities the on-device bee-confirmer accepted (default;
+#               with confirmation off, nothing is rejected so it sends all)
+#   off       — sample/send nothing (no SD/CPU/cellular spend)
+# A dashboard-pushed value wins over this env default (see overrides.py). The env
+# default tracks ACTIVITY_FRAMES so the lite profile's BEEMONITOR_ACTIVITY_FRAMES=
+# false still means "off" out of the box.
+ACTIVITY_CROPS_MODE = os.environ.get(
+    "BEEMONITOR_ACTIVITY_CROPS_MODE",
+    "confirmed" if ACTIVITY_FRAMES else "off").strip().lower()
+if ACTIVITY_CROPS_MODE not in ("all", "confirmed", "off"):
+    ACTIVITY_CROPS_MODE = "confirmed"
 ACTIVITY_FRAMES_QUEUE = Path(os.environ.get(
     "BEEMONITOR_ACTIVITY_FRAMES_QUEUE", str(RECORD_DIR.parent / "activity_frames")))
 # How many crops to keep + queue per activity (the strongest-motion ones).

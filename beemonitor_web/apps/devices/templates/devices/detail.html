@@ -272,21 +272,24 @@
   <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
     <h2 class="text-sm font-semibold text-gray-700">Review crops over cellular</h2>
     <div class="text-xs text-gray-500">
-      <span id="crops-label" class="font-medium text-gray-700">{% if device.send_activity_crops %}On{% else %}Off{% endif %}</span>
+      <span id="crops-label" class="font-medium text-gray-700">{{ device.get_activity_crops_mode_display }}</span>
     </div>
   </div>
   <p class="text-xs text-gray-400 mb-3">
     Send a few cropped frames per detected activity over cellular for cloud
-    species ID (BioCLIP). <b>Off</b> stops the recorder sampling them entirely —
-    no SD/CPU/cellular spend. Useful once on-device bee confirmation is trusted to
-    guard activity. Video clips and the activity count are unaffected.
+    species ID (BioCLIP). <b>All</b> sends a crop for every activity — including
+    unconfirmed/shadow motion — so everything reaches the dashboard to be tagged.
+    <b>Confirmed only</b> sends just the on-device-confirmed bees (lowest cellular +
+    compute). <b>Off</b> stops the recorder sampling them entirely (no SD/CPU/cellular
+    spend). Video clips and the activity count are unaffected.
   </p>
   {% if can_manage %}
   <form id="crops-form" method="post" action="{% url 'devices:review_crops' device.pk %}" class="flex flex-wrap items-center gap-2">
     {% csrf_token %}
-    <select name="enabled" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-      <option value="1" {% if device.send_activity_crops %}selected{% endif %}>On — send review crops</option>
-      <option value="0" {% if not device.send_activity_crops %}selected{% endif %}>Off — don't send crops</option>
+    <select name="mode" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      {% for val, label in device.ACTIVITY_CROP_MODES %}
+      <option value="{{ val }}" {% if device.activity_crops_mode == val %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
     </select>
     <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Set</button>
     <span id="crops-saved" class="text-xs text-green-700 hidden">Saved ✓</span>
@@ -305,7 +308,7 @@
         }).then(function (r) { return r.json(); }).then(function (d) {
           if (d && d.ok) {
             var lbl = document.getElementById('crops-label');
-            if (lbl) lbl.textContent = d.enabled ? 'On' : 'Off';
+            if (lbl) lbl.textContent = d.label;
             var s = document.getElementById('crops-saved');
             if (s) { s.classList.remove('hidden'); setTimeout(function () { s.classList.add('hidden'); }, 2500); }
           } else {
@@ -678,6 +681,11 @@
         {% endfor %}
       </select>
       {% endif %}
+      <div class="flex gap-1" title="Filter by the on-device bee-confirmation verdict">
+        {% for f in activity_confirm_filters %}
+          <button type="button" data-confirmed="{{ f.key }}" class="act-confirm-btn px-2 py-1 rounded {% if f.key == activity_confirmed %}bg-amber-600 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-gray-200{% endif %}">{{ f.label }}</button>
+        {% endfor %}
+      </div>
       <div class="flex gap-1">
         {% for r in activity_ranges %}
           <a href="?range={{ r.key }}" data-range="{{ r.key }}" class="act-range-btn px-2 py-1 rounded {% if r.key == activity_range %}bg-amber-600 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-gray-200{% endif %}">{{ r.label }}</a>
@@ -779,7 +787,14 @@
 <script>
 (function () {
   var RANGE = "{{ activity_range }}";
+  var CONFIRMED = "{{ activity_confirmed }}";  // all | confirmed | unconfirmed
   var IS_ACTIVE = {{ device.is_active|yesno:"true,false" }};
+
+  // Keep the URL reflecting both the range and the confirmation filter so a
+  // refresh / shared link restores the same view.
+  function syncActivityUrl() {
+    try { history.replaceState(null, '', '?range=' + RANGE + '&confirmed=' + CONFIRMED); } catch (_) {}
+  }
 
   // (Re)build the activity chart in place — used on load AND on each live poll.
   window.buildActivityChart = function (rows, weatherEnabled, gran) {
@@ -877,7 +892,7 @@
     var blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'activity_device{{ device.pk }}_' + (window._actGran || 'hour') + '_' + RANGE + '.csv';
+    a.download = 'activity_device{{ device.pk }}_' + (window._actGran || 'hour') + '_' + RANGE + '_' + CONFIRMED + '.csv';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(a.href);
   });
@@ -894,7 +909,7 @@
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function poll() {
-    fetch("{% url 'devices:status' device.pk %}?range=" + encodeURIComponent(RANGE), { cache: 'no-store' })
+    fetch("{% url 'devices:status' device.pk %}?range=" + encodeURIComponent(RANGE) + "&confirmed=" + encodeURIComponent(CONFIRMED), { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (IS_ACTIVE) {
@@ -1010,8 +1025,27 @@
       });
       var rl = document.getElementById('act-range-label');
       if (rl) rl.textContent = RANGE;
-      try { history.replaceState(null, '', '?range=' + RANGE); } catch (_) {}
+      syncActivityUrl();
       poll();  // refetch this range -> rebuilds the chart AND the table at once
+    });
+  });
+
+  // All / Confirmed / Unconfirmed filter — same in-place refresh as the range
+  // buttons, threaded through the poll as ?confirmed=.
+  document.querySelectorAll('.act-confirm-btn').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      CONFIRMED = btn.getAttribute('data-confirmed');
+      document.querySelectorAll('.act-confirm-btn').forEach(function (b) {
+        var on = b === btn;
+        b.classList.toggle('bg-amber-600', on);
+        b.classList.toggle('text-white', on);
+        b.classList.toggle('bg-gray-100', !on);
+        b.classList.toggle('text-gray-600', !on);
+        b.classList.toggle('hover:bg-gray-200', !on);
+      });
+      syncActivityUrl();
+      poll();  // refetch with the new filter -> rebuilds chart AND table
     });
   });
 

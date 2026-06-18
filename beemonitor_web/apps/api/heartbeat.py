@@ -205,9 +205,12 @@ class DeviceHeartbeatView(APIView):
                 # On-device bee-confirmation mode (off|tag|gate; None = device
                 # default). The recorder hot-reloads it without a restart.
                 "bee_confirm_mode": device.bee_confirm_mode or None,
-                # Whether to sample/send BioCLIP review crops over cellular. The
-                # recorder hot-reloads it; off = stop sampling entirely.
-                "activity_frames": device.send_activity_crops,
+                # Which activities to sample/send BioCLIP review crops for, over
+                # cellular: all|confirmed|off. The recorder hot-reloads it. Also send
+                # the legacy `activity_frames` bool so units on older code still get
+                # an on/off signal (off only when crops are fully disabled).
+                "activity_crops": device.activity_crops_mode,
+                "activity_frames": device.activity_crops_mode != "off",
                 # The device's clock timezone (IANA), from its GPS location. The
                 # device applies it via timedatectl so its local-time wake window
                 # is correct. None = nothing to push (no GPS / no display tz).
@@ -256,6 +259,9 @@ class DeviceCommandView(APIView):
             "frame_daily_cap": device.frame_daily_cap,
             # Bee-confirmation mode here too so a switch applies within seconds.
             "bee_confirm_mode": device.bee_confirm_mode or None,
+            # Crop mode here too (all|confirmed|off) for parity with the beat.
+            "activity_crops": device.activity_crops_mode,
+            "activity_frames": device.activity_crops_mode != "off",
             # Desired WittyPi power schedule (reconciled device-side).
             "wake_schedule": device.wake_schedule_dict(),
             "wake_schedule_apply": device.wake_schedule_apply,

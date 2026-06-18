@@ -14,7 +14,7 @@ import json
 from motion.config import (
     log, CALIB_FILE, TUNING_FILE, ROI_OVERRIDE_FILE, NEST_LAYOUT_FILE,
     BEE_CONFIRM_MODE_FILE, BEE_CONFIRM_MODE, ACTIVITY_FRAMES_FILE, ACTIVITY_FRAMES,
-    LORES_W, LORES_H,
+    ACTIVITY_CROPS_MODE, LORES_W, LORES_H,
 )
 from motion.gate import MotionGate
 
@@ -92,14 +92,24 @@ def load_bee_confirm_mode() -> str:
     return BEE_CONFIRM_MODE
 
 
-def load_activity_frames_enabled() -> bool:
-    """Whether to sample/send BioCLIP review crops. A dashboard-pushed value
-    (activity_frames.json) wins over the env ACTIVITY_FRAMES default, so the
-    per-activity crop upload can be turned off remotely on a no-shell unit."""
+def load_activity_crops_mode() -> str:
+    """Which activities to sample/send crops for: 'all' | 'confirmed' | 'off'.
+    A dashboard-pushed value (activity_frames.json {"mode": ...}) wins over the env
+    ACTIVITY_CROPS_MODE default, so a no-shell unit can switch remotely. Falls back
+    to the legacy {"enabled": bool} key (old clouds) then the env default."""
     d = _load_json_file(ACTIVITY_FRAMES_FILE)
-    if isinstance(d, dict) and "enabled" in d:
-        return bool(d["enabled"])
-    return ACTIVITY_FRAMES
+    if isinstance(d, dict):
+        m = str(d.get("mode", "")).strip().lower()
+        if m in ("all", "confirmed", "off"):
+            return m
+        if "enabled" in d:  # legacy bool toggle
+            return "confirmed" if bool(d["enabled"]) else "off"
+    return ACTIVITY_CROPS_MODE
+
+
+def load_activity_frames_enabled() -> bool:
+    """Back-compat shim: crops sampled at all (mode != off)."""
+    return load_activity_crops_mode() != "off"
 
 
 def load_tuning():

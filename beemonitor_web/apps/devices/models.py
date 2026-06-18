@@ -181,11 +181,18 @@ class Device(models.Model):
     # default; 0 = stop crop upload entirely (cellular-budget kill-switch).
     frame_daily_cap = models.PositiveIntegerField(null=True, blank=True)
 
-    # Whether the device samples + sends BioCLIP "review" crops (1-few per
-    # activity) over cellular. Pushed in the heartbeat; the recorder hot-reloads
-    # it. Off = stop sampling entirely (no SD/CPU/cellular spend) — useful once
-    # on-device bee confirmation is trusted to guard activity. Default on.
-    send_activity_crops = models.BooleanField(default=True)
+    # Which activities the device samples + sends BioCLIP "review" crops for (1-few
+    # per activity) over cellular. Pushed in the heartbeat; the recorder hot-reloads
+    # it. "all" = every activity (max data for cloud tagging, incl. unconfirmed/
+    # shadow motion); "confirmed" = only on-device-confirmed bees (default, lowest
+    # cellular/compute); "off" = stop sampling entirely (no SD/CPU/cellular spend).
+    ACTIVITY_CROP_MODES = [
+        ("all", "All activity — send every crop"),
+        ("confirmed", "Confirmed only — send confirmed-bee crops"),
+        ("off", "Off — don't send crops"),
+    ]
+    activity_crops_mode = models.CharField(
+        max_length=10, default="confirmed", choices=ACTIVITY_CROP_MODES)
 
     # On-device YOLO bee-confirmation mode, pushed in the heartbeat (the recorder
     # hot-reloads it over its env default). "" = device default; off = no
@@ -341,9 +348,11 @@ class Device(models.Model):
                 "label": self.telemetry_interval_label,
             },
             "bee_confirmation_mode": {"value": bee_mode or "(default)", "meaning": bee_label},
-            "review_crops_over_cellular": (
-                "on" if self.send_activity_crops else
-                "off — not sampling/sending BioCLIP review crops"),
+            "review_crops_over_cellular": {
+                "all": "all activity (every crop sent, incl. unconfirmed)",
+                "confirmed": "confirmed bees only",
+                "off": "off — not sampling/sending BioCLIP review crops",
+            }.get(self.activity_crops_mode, self.activity_crops_mode),
             "cellular_crop_daily_cap": crop,
             "motion_tuning": self.motion_tuning_dict() or "auto-calibration (no manual overrides)",
             "hotel_roi": self.roi_override or "auto (no manual ROI set)",

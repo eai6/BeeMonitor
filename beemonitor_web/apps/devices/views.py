@@ -340,12 +340,20 @@ def _true_utc(device_recorded_at_or_naive, pi_off):
     return device_recorded_at_or_naive - pi_off
 
 
-def _build_activity_series(device, range_key: str) -> dict:
+def _build_activity_series(device, range_key: str, confirmed: str = "all") -> dict:
     """Snippets per clock-hour/day in the device's DISPLAY timezone. Combines
     uploaded clips (recorded_at) with the device's on-card histogram, converting
-    each to its true instant then to the display tz. Shared by page + poll."""
+    each to its true instant then to the display tz. Shared by page + poll.
+
+    `confirmed` filters by the on-device bee-confirmation verdict:
+      - "all"         every clip (confirmed + unconfirmed + untagged)
+      - "confirmed"   exclude clips marked NOT a bee (True + untagged) — old default
+      - "unconfirmed" only clips the device marked NOT a bee (bee_confirmed=False)
+    """
     from apps.videos.models import Video
 
+    if confirmed not in ("all", "confirmed", "unconfirmed"):
+        confirmed = "all"
     if range_key not in _ACTIVITY_RANGES:
         range_key = "7d"
     days, gran, fmt = _ACTIVITY_RANGES[range_key]
@@ -363,12 +371,16 @@ def _build_activity_series(device, range_key: str) -> dict:
         return b.strftime("%Y-%m-%d"), b
 
     counts, key_dt = {}, {}
-    # Exclude clips the device marked NOT a bee (metadata.bee_confirmed=False) —
-    # they upload but don't count as activity. Confirmed + untagged clips count.
-    for ra in (Video.objects.filter(device=device, recorded_at__isnull=False,
-                                    recorded_at__gte=since)
-               .exclude(metadata__bee_confirmed=False)
-               .values_list("recorded_at", flat=True)):
+    # Filter uploaded clips by the device's bee-confirmation verdict. "confirmed"
+    # excludes clips the device marked NOT a bee (keeping True + untagged, the old
+    # default); "unconfirmed" keeps only those; "all" counts everything.
+    qs = Video.objects.filter(device=device, recorded_at__isnull=False,
+                              recorded_at__gte=since)
+    if confirmed == "confirmed":
+        qs = qs.exclude(metadata__bee_confirmed=False)
+    elif confirmed == "unconfirmed":
+        qs = qs.filter(metadata__bee_confirmed=False)
+    for ra in qs.values_list("recorded_at", flat=True):
         loc = _true_utc(ra, pi_off).astimezone(zone)
         if loc < start_loc:
             continue
@@ -377,22 +389,38 @@ def _build_activity_series(device, range_key: str) -> dict:
         key_dt[k] = b
 
     # Device on-card histogram (creation-based) for hour ranges — clips on the
-    # card show before they upload. Keys are the Pi's wall-clock hour.
+    # card show before they upload. Keys are the Pi's wall-clock hour. The Pi
+    # reports confirmed (`activity_by_hour`) and unconfirmed (`unconfirmed_by_hour`)
+    # side by side; merge whichever the filter asks for ("all" = their per-hour sum).
     if gran == "hour":
         latest = device.heartbeats.first()
-        hist = ((latest.metrics or {}) if latest else {}).get("activity_by_hour")
-        if isinstance(hist, dict):
-            for hk, c in hist.items():
+        metrics = (latest.metrics or {}) if latest else {}
+        conf_hist = metrics.get("activity_by_hour")
+        unconf_hist = metrics.get("unconfirmed_by_hour")
+        hist = {}
+        if confirmed in ("all", "confirmed") and isinstance(conf_hist, dict):
+            for hk, c in conf_hist.items():
                 try:
-                    naive = datetime.strptime(hk, "%Y-%m-%dT%H").replace(tzinfo=dt_timezone.utc)
+                    hist[hk] = hist.get(hk, 0) + int(c)
                 except (ValueError, TypeError):
                     continue
-                loc = _true_utc(naive, pi_off).astimezone(zone)
-                if loc < start_loc:
+        if confirmed in ("all", "unconfirmed") and isinstance(unconf_hist, dict):
+            for hk, c in unconf_hist.items():
+                try:
+                    hist[hk] = hist.get(hk, 0) + int(c)
+                except (ValueError, TypeError):
                     continue
-                k, b = bucket(loc)
-                counts[k] = max(counts.get(k, 0), int(c))
-                key_dt.setdefault(k, b)
+        for hk, c in hist.items():
+            try:
+                naive = datetime.strptime(hk, "%Y-%m-%dT%H").replace(tzinfo=dt_timezone.utc)
+            except (ValueError, TypeError):
+                continue
+            loc = _true_utc(naive, pi_off).astimezone(zone)
+            if loc < start_loc:
+                continue
+            k, b = bucket(loc)
+            counts[k] = max(counts.get(k, 0), int(c))
+            key_dt.setdefault(k, b)
 
     # Densify: emit EVERY bucket in the range, filling 0 where there were no
     # clips. An empty hour is real data (no activity), so it belongs in the chart,
@@ -431,6 +459,12 @@ def _build_activity_series(device, range_key: str) -> dict:
         "activity_range": range_key,
         "activity_ranges": [{"key": k, "label": k} for k in _ACTIVITY_RANGES],
         "activity_gran": gran,
+        "activity_confirmed": confirmed,
+        "activity_confirm_filters": [
+            {"key": "all", "label": "All"},
+            {"key": "confirmed", "label": "Confirmed"},
+            {"key": "unconfirmed", "label": "Unconfirmed"},
+        ],
         "weather_enabled": weather_enabled,
         "display_tz": zone_name,
     }
@@ -514,7 +548,8 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
 
         # Activity-over-time series for the chart (actual snippets per bucket).
         ctx.update(_build_activity_series(
-            device, self.request.GET.get("range", "7d")))
+            device, self.request.GET.get("range", "7d"),
+            self.request.GET.get("confirmed", "all")))
         return ctx
 
 
@@ -994,26 +1029,35 @@ class DeviceBeeConfirmView(LoginRequiredMixin, View):
 
 
 class DeviceActivityCropsView(LoginRequiredMixin, View):
-    """Toggle whether the device sends BioCLIP "review" crops over cellular.
+    """Set which activities the device sends BioCLIP "review" crops for, over cellular.
 
-    On = sample 1-few mover crops per activity and upload them for taxonomic ID.
-    Off = stop sampling entirely on the recorder (no SD/CPU/cellular spend) — handy
-    once on-device bee confirmation is trusted to guard activity. The device adopts
-    the change on its next check-in.
+    all       = sample + upload a crop for every activity (incl. unconfirmed/shadow
+                motion) — max data for cloud taxonomic tagging.
+    confirmed = only activities the on-device bee-confirmer accepted (default; lowest
+                cellular + compute).
+    off       = stop sampling entirely on the recorder (no SD/CPU/cellular spend).
+    The device adopts the change on its next check-in.
     """
+
+    VALID = {"all", "confirmed", "off"}
 
     def post(self, request, pk):
         device = _device_or_403(request.user, pk, "manager")
         is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
-        enabled = (request.POST.get("enabled") or "").strip().lower() in ("1", "true", "on", "yes")
-        device.send_activity_crops = enabled
-        device.save(update_fields=["send_activity_crops"])
-        label = "on" if enabled else "off"
+        mode = (request.POST.get("mode") or "").strip().lower()
+        if mode not in self.VALID:
+            if is_ajax:
+                return JsonResponse({"ok": False, "error": "invalid mode"}, status=400)
+            messages.error(request, "Invalid crop mode.")
+            return redirect("devices:detail", pk=pk)
+        device.activity_crops_mode = mode
+        device.save(update_fields=["activity_crops_mode"])
+        label = dict(Device.ACTIVITY_CROP_MODES).get(mode, mode)
         if is_ajax:
-            return JsonResponse({"ok": True, "enabled": enabled, "label": label})
+            return JsonResponse({"ok": True, "mode": mode, "label": label})
         messages.success(
             request,
-            f"Review-crop upload turned {label}. The device will adopt it on its "
+            f"Review-crop mode set to “{label}”. The device will adopt it on its "
             "next check-in.",
         )
         return redirect("devices:detail", pk=pk)
@@ -1089,7 +1133,8 @@ class DeviceStatusView(LoginRequiredMixin, View):
         img_hb = device.heartbeats.exclude(image_storage_key="").first()
         image = ({"url": _presign_image(img_hb.image_storage_key),
                   "ts": img_hb.created_at.isoformat()} if img_hb else None)
-        activity = _build_activity_series(device, request.GET.get("range", "7d"))
+        activity = _build_activity_series(device, request.GET.get("range", "7d"),
+                                          request.GET.get("confirmed", "all"))
         return JsonResponse({
             "online": _is_online(device),
             "last_seen": last_seen,
@@ -1133,6 +1178,7 @@ class DeviceStatusView(LoginRequiredMixin, View):
             "telemetry_interval_label": device.telemetry_interval_label,
             "activity_series": activity["activity_series"],
             "activity_gran": activity["activity_gran"],
+            "activity_confirmed": activity["activity_confirmed"],
             "weather_enabled": activity["weather_enabled"],
         })
 
