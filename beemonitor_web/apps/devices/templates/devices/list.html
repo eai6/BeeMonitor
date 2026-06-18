@@ -65,9 +65,11 @@
 {% endif %}
 
 {% if devices %}
+{% if can_fleet_update %}
 {% csrf_token %}
-<!-- Fleet toolbar: filter the table + push the signed-artifact update to many
-     devices at once (no going unit by unit). -->
+<!-- Fleet toolbar — managers only (viewers don't get update controls, same as the
+     per-device Advanced settings): filter the table + push the signed-artifact
+     update to many devices at once (no going unit by unit). -->
 <div class="bg-white shadow rounded-lg p-3 mb-4">
   <div class="flex flex-wrap items-center gap-2">
     <input id="dev-search" type="text" placeholder="Search name / location"
@@ -87,7 +89,6 @@
       {% if latest_artifact_version %}Latest artifact: <span class="font-mono text-gray-600">{{ latest_artifact_version }}</span>{% else %}No signed artifact published yet{% endif %}
     </span>
   </div>
-  {% if can_fleet_update %}
   <div class="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-gray-100">
     <button type="button" id="select-needs" class="text-xs text-amber-700 hover:underline">Select all that need updating</button>
     <span class="text-xs text-gray-300">·</span>
@@ -98,8 +99,8 @@
       Update selected{% if latest_artifact_version %} to {{ latest_artifact_version }}{% endif %}
     </button>
   </div>
-  {% endif %}
 </div>
+{% endif %}
 <div class="bg-white shadow rounded-lg overflow-hidden">
   <table class="min-w-full divide-y divide-gray-200">
     <thead class="bg-gray-50">
@@ -109,7 +110,7 @@
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Location</th>
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last seen</th>
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Version</th>
+        {% if can_fleet_update %}<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Version</th>{% endif %}
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Storage</th>
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Videos</th>
         <th class="px-6 py-3"></th>
@@ -149,12 +150,14 @@
             <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-red-100 text-red-800"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>Offline</span>
           {% endif %}
         </td>
+        {% if can_fleet_update %}
         <td class="px-6 py-4 text-sm text-gray-500">
           {% if d.code_commit %}
             <span class="font-mono text-xs" title="{{ d.code_commit }}">{{ d.code_commit|truncatechars:14 }}</span>
             {% if d.needs_update %}<span class="ml-1 inline-flex px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-amber-100 text-amber-800" title="A newer signed artifact is published">update</span>{% endif %}
           {% else %}<span class="text-gray-400">—</span>{% endif %}
         </td>
+        {% endif %}
         <td class="px-6 py-4 text-sm text-gray-500">
           {% if d.storage_pct is not None %}
             <div class="flex items-center gap-2">
@@ -185,7 +188,7 @@
 </div>
 {% endif %}
 
-{% if devices %}
+{% if devices and can_fleet_update %}
 <script>
   (function () {
     var rows = Array.prototype.slice.call(document.querySelectorAll('.dev-row'));
