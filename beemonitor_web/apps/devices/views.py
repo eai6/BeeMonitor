@@ -533,6 +533,7 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         from apps.setup.assistant import client as _assistant_client
         ctx["assistant_enabled"] = _assistant_client.is_enabled()
         ctx["active_transport"] = metrics.get("active_transport")
+        ctx["wifi_scan"] = metrics.get("wifi_scan") or []  # in-range networks (last scan)
         ctx["usb_status"] = _usb_text(metrics.get("usb"))  # last USB result (or None)
         ctx["usb_present"] = metrics.get("usb_present")     # USB plugged in now?
         ctx["activity_hour"] = _activity_this_hour(device)  # clips in this clock hour
@@ -825,6 +826,19 @@ class DeviceWifiView(LoginRequiredMixin, View):
             f"{label} queued — the device will act on its next check-in (within ~1 min).",
         )
         return redirect("devices:detail", pk=pk)
+
+
+class DeviceWifiScanView(LoginRequiredMixin, View):
+    """Queue a scan of in-range WiFi networks. The device runs nmcli on its next
+    command poll and reports the networks in its heartbeat (metrics.wifi_scan),
+    which the device page surfaces so a network can be picked to connect."""
+
+    def post(self, request, pk):
+        device = _device_or_403(request.user, pk, "manager")
+        device.pending_command = "wifi_scan"
+        device.command_params = {}
+        device.save(update_fields=["pending_command", "command_params"])
+        return JsonResponse({"ok": True})
 
 
 class DeviceCellularView(LoginRequiredMixin, View):
@@ -1237,6 +1251,7 @@ class DeviceStatusView(LoginRequiredMixin, View):
             },
             "wifi_enabled": metrics.get("wifi_enabled"),
             "wifi_ssid": metrics.get("wifi_ssid"),
+            "wifi_scan": metrics.get("wifi_scan") or [],
             "cell_firewall": metrics.get("cell_firewall"),
             "active_transport": metrics.get("active_transport"),
             "usb_status": _usb_text(metrics.get("usb")),

@@ -113,6 +113,11 @@ UPDATE_STATUS_FILE = STATE_DIR / "update-status.json"
 # Last USB-transfer result (written by usb-transfer.sh), reported in the beat so
 # the dashboard can show "copied N" / "no USB detected".
 USB_STATUS_FILE = STATE_DIR / "usb-status.json"
+# In-range WiFi scan (written by the `wifi_scan` command), reported in the beat
+# for a short TTL so the dashboard can list networks to pick from — without
+# carrying a stale scan on every (metered) cellular beat forever.
+WIFI_SCAN_FILE = STATE_DIR / "wifi-scan.json"
+WIFI_SCAN_TTL = int(os.environ.get("BEEMONITOR_WIFI_SCAN_TTL", "600"))  # seconds
 # Device's dashboard location, cached from the heartbeat so usb-transfer.sh can
 # name the USB folder after the hive (one stick, several hives, clear folders).
 LOCATION_FILE = STATE_DIR / "location"
@@ -687,6 +692,15 @@ def collect_metrics() -> dict:
 
     # Current WiFi state so the dashboard can show on/off + connected network.
     m.update(_wifi_state())
+    # In-range WiFi scan (fresh ones only) so the dashboard can list networks to
+    # pick from. TTL-bounded so a stale scan doesn't ride every metered beat.
+    try:
+        scan = json.loads(WIFI_SCAN_FILE.read_text())
+        if isinstance(scan, dict) and time.time() - (scan.get("at") or 0) < WIFI_SCAN_TTL:
+            m["wifi_scan"] = scan.get("networks", [])
+            m["wifi_scan_at"] = scan.get("at")
+    except (OSError, ValueError):
+        pass
     # Primary network MAC (stable per board) for identification on the dashboard.
     m.update(_mac_address())
     # Which link this beat is actually leaving on (wifi when connected, else
@@ -1344,6 +1358,47 @@ def _gate_cellular() -> None:
         log.info("cellular_gate: wwan0 re-gated to telemetry-only")
 
 
+def _wifi_scan() -> None:
+    """Scan for in-range WiFi networks and stash the list for the next beat(s).
+
+    Strongest signal kept per SSID; hidden (blank) SSIDs dropped. Best-effort —
+    never raises. The result rides the heartbeat (TTL-bounded) so the dashboard
+    can show networks to pick from for a connect.
+    """
+    r = _nmcli(["-t", "-f", "SIGNAL,SECURITY,IN-USE,SSID",
+                "device", "wifi", "list", "--rescan", "yes"], timeout=25)
+    if r is None or r.returncode != 0:
+        log.warning("wifi_scan: nmcli list failed (rc=%s)", getattr(r, "returncode", None))
+        return
+    nets: dict = {}
+    for line in r.stdout.splitlines():
+        # -t output is colon-separated: SIGNAL:SECURITY:IN-USE:SSID. A ':' inside
+        # the SSID is escaped as '\:', so split off only the first 3 fields.
+        parts = line.split(":", 3)
+        if len(parts) < 4:
+            continue
+        sig_s, security, in_use, ssid = parts
+        ssid = ssid.replace("\\:", ":").strip()
+        if not ssid:
+            continue  # hidden network — nothing to click
+        try:
+            signal = int(sig_s)
+        except ValueError:
+            signal = 0
+        cur = nets.get(ssid)
+        if cur is None or signal > cur["signal"]:
+            nets[ssid] = {"ssid": ssid, "signal": signal,
+                          "security": security.strip() or "open",
+                          "in_use": in_use.strip() == "*"}
+    networks = sorted(nets.values(), key=lambda n: n["signal"], reverse=True)
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        WIFI_SCAN_FILE.write_text(json.dumps({"at": time.time(), "networks": networks}))
+        log.info("wifi_scan: found %d network(s)", len(networks))
+    except OSError as e:
+        log.warning("wifi_scan: write failed: %s", e)
+
+
 def _wifi_connect(params: dict) -> None:
     """Join a network and persist it (autoconnect) via NetworkManager."""
     ssid = (params.get("ssid") or "").strip()
@@ -1513,6 +1568,9 @@ def _handle_command(cmd: str, params: dict) -> None:
         log.info("command: wifi_forget ssid=%s", ssid)
         if ssid:
             _nmcli(["connection", "delete", ssid])
+    elif cmd == "wifi_scan":
+        log.info("command: wifi_scan")
+        _wifi_scan()
     elif cmd == "cellular_open":
         log.info("command: cellular_open minutes=%s", params.get("minutes"))
         _open_cellular(params)

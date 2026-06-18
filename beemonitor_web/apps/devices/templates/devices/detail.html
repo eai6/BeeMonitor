@@ -526,6 +526,16 @@
     the device either way. It acts on its next check-in.
   </p>
   {% if can_manage %}
+  <!-- In-range networks (from a device scan); click one to fill the SSID below. -->
+  <div class="mb-3">
+    <div class="flex items-center gap-2 mb-1.5">
+      <button type="button" id="wifi-scan-btn" data-url="{% url 'devices:wifi_scan' device.pk %}"
+              class="px-3 py-1.5 bg-blue-50 border border-blue-200 rounded text-sm text-blue-700 hover:bg-blue-100">Scan for networks</button>
+      <span id="wifi-scan-status" class="text-xs text-gray-400"></span>
+    </div>
+    <div id="wifi-scan-list" class="flex flex-wrap gap-1.5"></div>
+    {{ wifi_scan|json_script:"wifi-scan-data" }}
+  </div>
   <div class="flex flex-wrap items-end gap-x-3 gap-y-2">
     <form method="post" action="{% url 'devices:wifi' device.pk %}">
       {% csrf_token %}
@@ -557,6 +567,79 @@
   <p class="text-xs text-gray-400 italic">Read-only — WiFi control requires manager access.</p>
   {% endif %}
 </div>
+
+{% if can_manage %}
+<script>
+  (function () {
+    var listEl = document.getElementById('wifi-scan-list');
+    var ssidEl = document.getElementById('wifi-ssid');
+    var pwEl = document.getElementById('wifi-pw');
+    if (!listEl) return;
+
+    function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+
+    // Render the device-reported network list; click a chip to fill the SSID.
+    window.renderWifiScan = function (networks) {
+      if (!Array.isArray(networks)) return;  // null/absent poll -> keep what's shown
+      if (!networks.length) {
+        listEl.innerHTML = '<span class="text-xs text-gray-400">No scan yet — click “Scan for networks”.</span>';
+        return;
+      }
+      listEl.innerHTML = networks.map(function (n) {
+        var open = !n.security || n.security === 'open' || n.security === '--';
+        var bars = n.signal >= 70 ? '▂▄▆█' : n.signal >= 45 ? '▂▄▆' : n.signal >= 20 ? '▂▄' : '▂';
+        return '<button type="button" class="wifi-net inline-flex items-center gap-1.5 px-2.5 py-1 ' +
+          'rounded border text-xs ' + (n.in_use ? 'border-green-300 bg-green-50 text-green-800' :
+            'border-gray-300 bg-white text-gray-700 hover:bg-gray-50') +
+          '" data-ssid="' + esc(n.ssid) + '" data-open="' + (open ? '1' : '0') + '" title="signal ' +
+          (n.signal || 0) + '% · ' + esc(n.security || 'open') + '">' +
+          (open ? '' : '<span class="text-gray-400">🔒</span>') +
+          '<span class="font-medium">' + esc(n.ssid) + '</span>' +
+          '<span class="text-gray-400">' + bars + '</span>' +
+          (n.in_use ? '<span class="text-[10px] text-green-700">connected</span>' : '') +
+          '</button>';
+      }).join('');
+      Array.prototype.forEach.call(listEl.querySelectorAll('.wifi-net'), function (b) {
+        b.addEventListener('click', function () {
+          if (ssidEl) ssidEl.value = b.getAttribute('data-ssid');
+          // Open networks need no password — jump to Connect; secured -> password.
+          if (b.getAttribute('data-open') === '1') { if (pwEl) pwEl.value = ''; }
+          else if (pwEl) pwEl.focus();
+        });
+      });
+    };
+
+    // Seed from the server-rendered last scan.
+    try {
+      var el = document.getElementById('wifi-scan-data');
+      window.renderWifiScan(el ? JSON.parse(el.textContent) : []);
+    } catch (e) { window.renderWifiScan([]); }
+
+    // Queue a fresh scan; results ride the next beat (the live poll redraws them).
+    var btn = document.getElementById('wifi-scan-btn');
+    var status = document.getElementById('wifi-scan-status');
+    if (btn) btn.addEventListener('click', function () {
+      btn.disabled = true;
+      if (status) { status.textContent = 'Scanning…'; status.className = 'text-xs text-gray-500'; }
+      var token = document.querySelector('[name=csrfmiddlewaretoken]').value;
+      fetch(btn.dataset.url, {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': token },
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        if (status) {
+          if (d && d.ok) { status.textContent = 'Scan queued — networks appear on the next check-in (~1 min).'; status.className = 'text-xs text-gray-500'; }
+          else { status.textContent = 'Could not queue scan.'; status.className = 'text-xs text-red-600'; }
+        }
+        setTimeout(function () { btn.disabled = false; }, 8000);
+      }).catch(function () {
+        if (status) { status.textContent = 'Network error.'; status.className = 'text-xs text-red-600'; }
+        btn.disabled = false;
+      });
+    });
+  })();
+</script>
+{% endif %}
 
 <!-- Cellular access (debug firewall toggle) -->
 <div class="mt-6 bg-white shadow rounded-lg p-4">
@@ -964,6 +1047,7 @@
           else if (d.wifi_enabled) wf.innerHTML = '<span class="inline-flex items-center gap-1">' + dot(true) + 'Radio on</span> ' + (d.wifi_ssid ? '· joined <span class="font-medium text-gray-700">' + d.wifi_ssid + '</span>' : '· not connected');
           else wf.innerHTML = '<span class="inline-flex items-center gap-1">' + dot(false) + 'Radio off</span>';
         }
+        if (typeof window.renderWifiScan === 'function') window.renderWifiScan(d.wifi_scan);
         var cf = document.getElementById('m-cellfw');
         if (cf) {
           if (d.cell_firewall === 'open') cf.innerHTML = '<span class="inline-flex items-center gap-1 text-amber-700"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>Open — debug access on</span>';
