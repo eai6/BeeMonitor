@@ -33,6 +33,23 @@ if [ "$(id -u)" != "0" ]; then
     exit 0
 fi
 
+# --- minisign (signed-artifact update verify) -------------------------------
+# The artifact update path verifies the bundle with `minisign` BEFORE unpacking;
+# legacy git-layout units never had it installed (only the golden image / the
+# migrate-to-releases.sh script do). Installing it here — root, on every update's
+# apply phase — means a plain GIT update is enough to make a unit artifact-ready,
+# with no per-unit SSH. The verify KEY already ships in the repo (update.sh falls
+# back to hardware/provision/minisign.pub), so only the binary is needed.
+ensure_minisign() {
+    command -v minisign >/dev/null 2>&1 && return 0
+    log "minisign missing — installing (needed for signed-artifact updates)"
+    if apt-get install -y minisign >/dev/null 2>&1; then
+        log "minisign installed"
+    else
+        log "WARN: minisign install failed (needs WiFi/apt; will retry next update)"
+    fi
+}
+
 # --- sudoers rules ----------------------------------------------------------
 sync_sudoers() {
     [ -d "$SUDOERS_SRC" ] || return 0
@@ -80,6 +97,7 @@ sync_units() {
     fi
 }
 
+ensure_minisign
 sync_sudoers
 sync_units
 log "done"

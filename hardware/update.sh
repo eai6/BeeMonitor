@@ -169,7 +169,7 @@ cmd_fetch_artifact() {  # phase A (artifact) — download + verify + unpack a re
     if [ "$version" = "$active" ]; then
         log A "already up to date at $version"; write_status idle uptodate "already at $version"; exit 0
     fi
-    command -v minisign >/dev/null 2>&1 || { write_status error verify_failed "minisign not installed"; exit 1; }
+    command -v minisign >/dev/null 2>&1 || { write_status error verify_failed "minisign not installed — run a git update (installs it via provision.sh) or migrate-to-releases.sh, then retry"; exit 1; }
     [ -f "$PUBKEY" ] || { write_status error verify_failed "verify key missing at $PUBKEY"; exit 1; }
 
     local tmp; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
