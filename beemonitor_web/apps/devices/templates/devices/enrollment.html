@@ -67,7 +67,7 @@
                  class="mt-0.5 w-full border border-yellow-300 rounded px-2 py-1 text-sm bg-white">
         </label>
       </div>
-      <p class="text-[11px] text-yellow-700 mb-3">So the unit joins your network on first boot. Skip if you set WiFi in Raspberry Pi Imager, or the unit is cellular-only.</p>
+      <p class="text-[11px] text-yellow-700 mb-3"><b>The unit must be able to reach the server to register.</b> Set WiFi here, or the unit needs a working cellular modem — with neither, the token can't be used. Skip only if you set WiFi in Raspberry Pi Imager, or it's a cellular unit.</p>
       <button type="button" onclick="writeCard()" id="cw-btn"
               class="bg-yellow-700 hover:bg-yellow-800 text-white px-3 py-2 rounded text-sm font-medium">
         Choose SD card &amp; write
@@ -183,6 +183,16 @@ BEEMONITOR_ENROLL_TOKEN={{ new_token }}
 
     var ssid = (document.getElementById('cw-ssid').value || '').trim();
     var pass = document.getElementById('cw-pass').value || '';
+    // A unit can only enroll if it can REACH the server. With no WiFi here, that
+    // means it must have a working cellular modem — otherwise the token is useless.
+    if (!ssid && !confirm(
+        "No WiFi entered.\n\n" +
+        "The unit can only register if it can reach the server, so it must have a " +
+        "working CELLULAR modem. If this is a WiFi-only unit, click Cancel and enter " +
+        "the WiFi above — otherwise the token won't work, because the unit can't connect.\n\n" +
+        "Continue without WiFi (cellular unit)?")) {
+      return;
+    }
     var conf = 'BEEMONITOR_API_BASE=' + API_BASE + '\n' +
                'BEEMONITOR_ENROLL_TOKEN=' + ENROLL_TOKEN + '\n';
     if (ssid) {
