@@ -255,7 +255,9 @@ class DeviceListView(LoginRequiredMixin, ListView):
         # Also collect map points (deployment coords, or the latest GPS beat as a
         # fallback) so the page can plot the fleet on a map.
         from django.utils.timesince import timesince
+        latest_version = _latest_artifact_version()
         points = []
+        any_manage = False
         for device in ctx["devices"]:
             latest = device.heartbeats.first()
             device.online = _is_online(device)
@@ -263,6 +265,14 @@ class DeviceListView(LoginRequiredMixin, ListView):
             device.storage_pct = latest.storage_pct if latest else None
             device.video_count = device.videos.count()
             device.my_role = device.role_for(self.request.user)
+            device.can_manage = device.my_role in ("owner", "manager")
+            any_manage = any_manage or device.can_manage
+            # Reported software version (artifact units report their version here)
+            # + whether it's behind the latest published artifact, for the fleet
+            # update filter/indicator.
+            device.code_commit = (latest.metrics or {}).get("code_commit") if latest else None
+            device.needs_update = bool(
+                latest_version and device.code_commit and device.code_commit != latest_version)
 
             lat = device.lat if device.lat is not None else (latest.lat if latest else None)
             lon = device.lon if device.lon is not None else (latest.lon if latest else None)
@@ -280,6 +290,8 @@ class DeviceListView(LoginRequiredMixin, ListView):
                 })
         ctx["map_points"] = json.dumps(points)
         ctx["has_map"] = bool(points)
+        ctx["latest_artifact_version"] = latest_version
+        ctx["can_fleet_update"] = any_manage
         return ctx
 
 
@@ -874,6 +886,71 @@ def _resolve_edge_descriptor() -> "dict | None":
     except Exception as e:  # pragma: no cover - S3/network hiccup must not 500
         logger.warning("resolve edge descriptor failed: %s", e)
         return None
+
+
+def _latest_artifact_version() -> "str | None":
+    """The currently-published edge artifact version (edge/latest.json), cached
+    briefly so the devices list can flag out-of-date units without an S3 read per
+    request. None if nothing's published / S3 is unreachable."""
+    from django.core.cache import cache
+    cached = cache.get("edge_latest_version")
+    if cached is not None:
+        return cached or None
+    version = ""
+    try:
+        import boto3
+        s3 = boto3.client("s3", region_name=getattr(settings, "AWS_REGION", "us-east-1"))
+        obj = s3.get_object(Bucket=settings.AWS_S3_BUCKET_MODELS, Key="edge/latest.json")
+        version = json.loads(obj["Body"].read()).get("version", "") or ""
+    except Exception as e:  # pragma: no cover - S3/network hiccup must not 500
+        logger.warning("latest artifact version lookup failed: %s", e)
+    cache.set("edge_latest_version", version, 60)
+    return version or None
+
+
+class DeviceFleetUpdateView(LoginRequiredMixin, View):
+    """Queue the signed-artifact update on many devices at once.
+
+    Resolve the published bundle descriptor ONCE, then set the same update command
+    on every selected device the caller manages. Each device downloads + verifies +
+    swaps (and auto-rolls-back) on its next check-in, exactly like the per-device
+    update — this just fans it out so you don't go unit by unit.
+    """
+
+    def post(self, request):
+        ids = request.POST.getlist("device_ids")
+        if not ids and request.body:
+            try:
+                ids = json.loads(request.body).get("device_ids", [])
+            except (ValueError, AttributeError):
+                ids = []
+        try:
+            ids = {int(i) for i in ids}
+        except (TypeError, ValueError):
+            return JsonResponse({"ok": False, "error": "Invalid device selection."}, status=400)
+        if not ids:
+            return JsonResponse({"ok": False, "error": "No devices selected."}, status=400)
+
+        params = _resolve_edge_descriptor()
+        if not params:
+            return JsonResponse(
+                {"ok": False, "error": "No signed edge artifact is published yet "
+                 "(tag a release / check the edge-artifact CI)."}, status=409)
+
+        # Only act on devices the caller manages (manager+) and that are active.
+        targets = [d for d in Device.accessible(request.user).filter(pk__in=ids)
+                   if d.is_active and d.can(request.user, "manager")]
+        for d in targets:
+            d.pending_command = "update"
+            d.command_params = params
+        if targets:
+            Device.objects.bulk_update(targets, ["pending_command", "command_params"])
+        return JsonResponse({
+            "ok": True,
+            "version": params["version"],
+            "queued": len(targets),
+            "skipped": len(ids) - len(targets),
+        })
 
 
 class DeviceUpdateView(LoginRequiredMixin, View):
