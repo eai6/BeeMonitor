@@ -50,7 +50,7 @@ from motion.config import (
     CALIB_RELOAD_SECONDS, OVERRIDE_RELOAD_SECONDS,
     TELEMETRY_IMAGE_INTERVAL, TELEMETRY_QUEUE,
     FRAME_MAX_CANDIDATES, FRAME_CAPTURE_INTERVAL, BEE_CONFIRM_MODE_FILE,
-    ACTIVITY_FRAMES_FILE,
+    ACTIVITY_FRAMES_FILE, SAVE_ACTIVITY_FRAMES,
 )
 from motion.frames import _main_array_to_bgr
 from motion.roi import _resolve_record_roi
@@ -61,7 +61,10 @@ from motion.overrides import (
 )
 from motion.remux import _remux, _snippet_paths
 from motion.telemetry_still import _save_telemetry_still
-from motion.activity_frames import _largest_blob, _mover_crop, _flush_activity_frames
+from motion.activity_frames import (
+    _largest_blob, _mover_crop, _flush_activity_frames,
+    _encode_source, _save_activity_archive,
+)
 from motion.confirm import BeeConfirmer, CONFIRMED, UNCONFIRMED, DISABLED
 
 # picamera2 only exists on the Pi. Keep the import soft so the module can be
@@ -275,7 +278,9 @@ def record() -> None:
                 act_uid, {"mp4": mp4, "started": act_started, "crops": act_cands},
                 now_mono)
         elif act_frames_on and act_uid:
-            # No confirmation (mode=off or inert) — behave as before: send all crops.
+            # No confirmation (mode=off or inert). Archive durably (crop + source
+            # frame, WiFi-uploaded) and send all crops over cellular.
+            _save_activity_archive(mp4, act_uid, act_started, act_cands)
             _flush_activity_frames(act_uid, act_started, act_cands)
         act_uid = None
         act_cands = []
@@ -331,10 +336,17 @@ def record() -> None:
                             sample = _mover_crop(main_bgr, blob, gate.roi)
                             if sample is not None:
                                 jpg, bbox, wh = sample
-                                act_cands.append({
+                                cand = {
                                     "jpg": jpg, "bbox": bbox, "wh": wh,
                                     "area": float(blob[4]), "captured_at": time.time(),
-                                })
+                                }
+                                # Keep the full source frame the crop came from, so
+                                # the durable archive can save it (uploaded over WiFi).
+                                if SAVE_ACTIVITY_FRAMES:
+                                    src = _encode_source(main_bgr)
+                                    if src is not None:
+                                        cand["src_jpg"], cand["src_wh"] = src
+                                act_cands.append(cand)
                     act_last_cap = now_mono
                 except Exception as e:  # never crash recording over a sample
                     log.warning("activity frame capture failed: %s", e)
@@ -357,8 +369,13 @@ def record() -> None:
                     p = r["payload"] or {}
                     _write_clip_tag(p.get("mp4"), r["status"], r["confidence"],
                                     r["taxon"], r["runs"], confirmer.mode)
+                    # Durable archive for EVERY sampled activity (crop + source
+                    # frame, WiFi-uploaded) so nothing is lost regardless of the
+                    # cellular send decision below.
+                    _save_activity_archive(p.get("mp4"), r["uid"],
+                                           p.get("started", 0.0), p.get("crops"))
                     # The dashboard crop mode decides which verdicts get their crops
-                    # shipped (all | confirmed | off) — independent of the bee gate.
+                    # shipped over cellular (all | confirmed | off).
                     if _should_send_crops(crops_mode, r["status"]) and p.get("crops"):
                         _flush_activity_frames(r["uid"], p.get("started", 0.0), p["crops"])
 
@@ -486,6 +503,8 @@ def record() -> None:
                 p = r["payload"] or {}
                 _write_clip_tag(p.get("mp4"), r["status"], r["confidence"],
                                 r["taxon"], r["runs"], confirmer.mode)
+                _save_activity_archive(p.get("mp4"), r["uid"],
+                                       p.get("started", 0.0), p.get("crops"))
                 if _should_send_crops(crops_mode, r["status"]) and p.get("crops"):
                     _flush_activity_frames(r["uid"], p.get("started", 0.0), p["crops"])
         confirmer.stop()

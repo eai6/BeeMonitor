@@ -143,6 +143,22 @@ def _wifi_connected() -> bool:
     return False
 
 
+def _list_pending_frames(record_dir: Path) -> list[Path]:
+    """Find durable activity-frame groups awaiting upload: ``<day>/frames/*.json``
+    (the JSON is written last, so its presence means the crop+source are complete).
+    Skip very-fresh files in case a write is still in flight."""
+    out: list[Path] = []
+    for meta in record_dir.glob("*/frames/*.json"):
+        try:
+            if time.time() - meta.stat().st_mtime < 30:
+                continue
+        except OSError:
+            continue
+        out.append(meta)
+    out.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0.0)
+    return out
+
+
 def _list_pending(record_dir: Path) -> list[Path]:
     """Find .mp4 files that don't yet have a .uploaded sidecar."""
     pending: list[Path] = []
@@ -259,6 +275,48 @@ def _upload_one(file_path: Path) -> None:
     )
 
 
+def _post_frame(jpg_path: Path, meta: dict) -> None:
+    """Multipart-POST one activity frame (crop or source) to the frames endpoint."""
+    url = urljoin(API_BASE + "/", "api/v1/devices/frames")
+    with open(jpg_path, "rb") as fh:
+        r = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {DEVICE_KEY}"},
+            data={"meta": json.dumps(meta)},
+            files={"frame": (jpg_path.name, fh, "image/jpeg")},
+            timeout=120,
+        )
+    if not r.ok:
+        raise RuntimeError(f"POST frames -> {r.status_code}: {r.text[:200]}")
+
+
+def _upload_frame_group(meta_path: Path) -> None:
+    """Upload a durable frame group over WiFi: the crop (kind 'crop') + the full
+    source frame (kind 'wide'). The cloud dedups by frame_uid (a crop also sent
+    over cellular collapses to one row). Delete the local copies once both are in.
+    """
+    base = str(meta_path)[:-5]  # strip ".json"
+    crop_p, src_p = Path(base + ".crop.jpg"), Path(base + ".src.jpg")
+    meta = json.loads(meta_path.read_text())
+    uid, idx = meta.get("activity_uid"), meta.get("index", 0)
+    shared = {k: meta.get(k) for k in
+              ("activity_uid", "started_at", "captured_at", "bbox",
+               "motion_score", "peak_motion")}
+    if crop_p.exists():
+        _post_frame(crop_p, dict(shared, kind="crop", frame_uid=f"{uid}_{idx}_crop",
+                                 width=meta.get("crop_width"), height=meta.get("crop_height")))
+    if src_p.exists():
+        _post_frame(src_p, dict(shared, kind="wide", frame_uid=f"{uid}_{idx}_src",
+                                width=meta.get("src_width"), height=meta.get("src_height")))
+    # Both are in the cloud (system of record) — drop the local archive copies.
+    for p in (crop_p, src_p, meta_path):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+    log.info("uploaded activity frame group %s_%s (crop+source)", uid, idx)
+
+
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
@@ -285,27 +343,30 @@ def main() -> int:
     while _running:
         try:
             pending = _list_pending(RECORD_DIR)
+            pending_frames = _list_pending_frames(RECORD_DIR)
         except OSError as e:
             log.error("listing recording dir failed: %s", e)
             time.sleep(POLL_SECONDS)
             continue
 
-        if not pending:
+        if not pending and not pending_frames:
             time.sleep(POLL_SECONDS)
             backoff = INITIAL_BACKOFF
             continue
 
-        # Hold video off cellular — only drain the backlog when WiFi is up.
+        # Hold bulk uploads (video + the durable crop/source-frame archive) off
+        # cellular — only drain the backlog when WiFi is up.
         if WIFI_ONLY_VIDEO and not _wifi_connected():
             if not holding_logged:
-                log.info("no WiFi — holding %d video(s) on disk until WiFi returns",
-                         len(pending))
+                log.info("no WiFi — holding %d video(s) + %d frame group(s) until WiFi",
+                         len(pending), len(pending_frames))
                 holding_logged = True
             time.sleep(POLL_SECONDS)
             continue
         holding_logged = False
 
-        log.info("found %d pending file(s)", len(pending))
+        if pending:
+            log.info("found %d pending video(s)", len(pending))
         for mp4 in pending:
             if not _running:
                 break
@@ -319,6 +380,20 @@ def main() -> int:
                 time.sleep(backoff)
                 backoff = min(backoff * 2, MAX_BACKOFF)
                 # Move to next file rather than spin on the failing one.
+
+        # Drain the durable activity-frame archive (crop + source frame) over WiFi.
+        # Idempotent: a failed group is retried next loop (the cloud dedups), so we
+        # just move on rather than spin on it.
+        for meta_path in pending_frames:
+            if not _running:
+                break
+            try:
+                _upload_frame_group(meta_path)
+                backoff = INITIAL_BACKOFF
+            except Exception as e:
+                log.exception("frame upload failed for %s: %s", meta_path.name, e)
+                time.sleep(backoff)
+                backoff = min(backoff * 2, MAX_BACKOFF)
 
     log.info("uploader stopped")
     return 0

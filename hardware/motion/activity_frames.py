@@ -9,12 +9,14 @@ See memory/15_monitoring_agent_design.md.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import cv2
 
 from motion.config import (
     log, ACTIVITY_FRAMES_QUEUE, FRAMES_PER_ACTIVITY,
     FRAME_CROP_PAD, FRAME_MAX_SIDE, LORES_W, LORES_H,
+    SAVE_ACTIVITY_FRAMES, FRAME_SRC_MAX_SIDE, ACTIVITY_ARCHIVE_DIRNAME,
 )
 from motion.frames import _scale_roi
 
@@ -58,6 +60,22 @@ def _mover_crop(main_bgr, blob, roi):
     return buf.tobytes(), bbox_norm, (crop.shape[1], crop.shape[0])
 
 
+def _encode_source(main_bgr):
+    """JPEG-encode the full SOURCE frame the crop was cut from, downscaled to
+    FRAME_SRC_MAX_SIDE. Returns ``(jpg_bytes, (w, h))`` or None."""
+    h, w = main_bgr.shape[:2]
+    longest = max(h, w)
+    img = main_bgr
+    if longest > FRAME_SRC_MAX_SIDE:
+        s = FRAME_SRC_MAX_SIDE / longest
+        img = cv2.resize(main_bgr, (max(1, int(w * s)), max(1, int(h * s))),
+                         interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+    if not ok:
+        return None
+    return buf.tobytes(), (img.shape[1], img.shape[0])
+
+
 def _flush_activity_frames(uid, started_epoch, candidates):
     """Write the top FRAMES_PER_ACTIVITY candidate crops + sidecars to the queue.
 
@@ -85,6 +103,9 @@ def _flush_activity_frames(uid, started_epoch, candidates):
             "motion_score": c["area"],
             "peak_motion": peak,
             "kind": "crop",
+            # Stable id so a crop sent over cellular AND uploaded over WiFi (from the
+            # durable archive) dedups to one ActivityFrame in the cloud.
+            "frame_uid": f"{uid}_{i}_crop",
             "width": c["wh"][0],
             "height": c["wh"][1],
         }
@@ -96,3 +117,49 @@ def _flush_activity_frames(uid, started_epoch, candidates):
             log.warning("activity frames: write failed for %s: %s", uid, e)
     if written:
         log.info("activity frames: queued %d crop(s) for %s", written, uid)
+
+
+def _save_activity_archive(clip_mp4, uid, started_epoch, candidates):
+    """Durably save the top crops + the full SOURCE frame each came from, in
+    ``<day>/frames/`` next to the clip — saved for EVERY sampled activity (not just
+    the ones whose crops ship over cellular), so nothing is lost. The uploader
+    ships them over WiFi (crop -> kind 'crop', source -> kind 'wide') and deletes
+    them once they're in the cloud. JSON is written last (a complete-group marker).
+    """
+    if not (SAVE_ACTIVITY_FRAMES and candidates and clip_mp4):
+        return
+    top = sorted(candidates, key=lambda c: c["area"], reverse=True)[:FRAMES_PER_ACTIVITY]
+    peak = top[0]["area"]
+    out_dir = Path(clip_mp4).parent / ACTIVITY_ARCHIVE_DIRNAME
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        log.warning("activity archive: cannot create dir: %s", e)
+        return
+    saved = 0
+    for i, c in enumerate(top):
+        stem = str(out_dir / f"{uid}_{i}")
+        meta = {
+            "activity_uid": uid,
+            "started_at": started_epoch,
+            "captured_at": c["captured_at"],
+            "bbox": c["bbox"],
+            "motion_score": c["area"],
+            "peak_motion": peak,
+            "crop_width": c["wh"][0],
+            "crop_height": c["wh"][1],
+            "index": i,
+        }
+        src = c.get("src_jpg")
+        if src and c.get("src_wh"):
+            meta["src_width"], meta["src_height"] = c["src_wh"]
+        try:
+            Path(stem + ".crop.jpg").write_bytes(c["jpg"])
+            if src:
+                Path(stem + ".src.jpg").write_bytes(src)
+            Path(stem + ".json").write_text(json.dumps(meta))  # last = complete
+            saved += 1
+        except OSError as e:
+            log.warning("activity archive: write failed for %s: %s", uid, e)
+    if saved:
+        log.info("activity archive: saved %d frame(s)+source for %s", saved, uid)

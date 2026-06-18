@@ -119,6 +119,16 @@ class DeviceFrameView(APIView):
                       "peak_motion": peak_motion},
         )
 
+        # Dedup: a crop can arrive over BOTH cellular (fast) and WiFi (durable
+        # archive). If we've already stored this exact frame_uid, return it without
+        # re-storing or re-counting against the cap.
+        frame_uid = str(meta.get("frame_uid") or "").strip()[:80]
+        if frame_uid:
+            existing = activity.frames.filter(frame_uid=frame_uid).first()
+            if existing is not None:
+                return Response({"activity_id": activity.id, "frame_id": existing.id,
+                                 "capped": False, "deduped": True}, status=200)
+
         # Server-side guard so a misbehaving device can't pile unbounded frames
         # onto one activity. The device also self-limits with its daily cap.
         if activity.frames.count() >= settings.MONITOR_MAX_FRAMES_PER_ACTIVITY:
@@ -144,6 +154,7 @@ class DeviceFrameView(APIView):
         frame = ActivityFrame.objects.create(
             activity=activity,
             kind=kind,
+            frame_uid=frame_uid,
             storage_key=key,
             bbox=meta.get("bbox") if isinstance(meta.get("bbox"), list) else None,
             motion_score=_as_float(meta.get("motion_score")),
@@ -153,8 +164,12 @@ class DeviceFrameView(APIView):
         )
 
         # Kick off BioCLIP classification off the request path (no-op until the
-        # endpoint is configured), so the device POST returns immediately.
-        classify_frame_async(frame.id)
+        # endpoint is configured), so the device POST returns immediately. Only
+        # CROP frames are classified — 'wide' source frames are stored for human
+        # review (and a future plant-ID phase), and must not enter the insect
+        # consensus or the per-activity "all frames classified" aggregation gate.
+        if frame.kind == ActivityFrame.Kind.CROP:
+            classify_frame_async(frame.id)
 
         logger.info("frame: device=%s activity=%s frame=%s uid=%s",
                     device.id, activity.id, frame.id, activity_uid)

@@ -109,6 +109,9 @@ class ActivityFrame(models.Model):
     activity = models.ForeignKey(Activity, on_delete=models.CASCADE, related_name="frames")
     kind = models.CharField(max_length=8, choices=Kind.choices, default=Kind.CROP)
     storage_key = models.CharField(max_length=500, help_text="S3 key in the raw-videos bucket.")
+    # Device-generated stable id for this exact frame, so the same crop sent over
+    # cellular AND uploaded over WiFi (from the durable archive) dedups to one row.
+    frame_uid = models.CharField(max_length=80, blank=True, default="", db_index=True)
     # [x1, y1, x2, y2] normalized (0..1) in the source frame the crop came from.
     bbox = models.JSONField(null=True, blank=True)
     motion_score = models.FloatField(null=True, blank=True)

@@ -193,7 +193,9 @@ BEEMONITOR_GOLDEN_IMAGE_S3_KEY = os.environ.get(
 # --- Taxonomic monitoring (activity frames + BioCLIP) ----------------------
 # Max sampled frames accepted per activity (server-side guard; the device also
 # self-limits with its own daily cap). Beyond this, extra frames are ignored.
-MONITOR_MAX_FRAMES_PER_ACTIVITY = int(os.environ.get("MONITOR_MAX_FRAMES_PER_ACTIVITY", "3"))
+# Counts crops AND the 'wide' source frames now archived alongside them, so the
+# default allows a few of each per activity.
+MONITOR_MAX_FRAMES_PER_ACTIVITY = int(os.environ.get("MONITOR_MAX_FRAMES_PER_ACTIVITY", "8"))
 # BioCLIP insect-ID endpoint (SageMaker Serverless, CPU). Empty = perception
 # disabled: frames still ingest + display, just no taxonomic classification, so
 # Phase 0 keeps working until the endpoint is deployed.

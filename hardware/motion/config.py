@@ -84,6 +84,18 @@ FRAME_CROP_PAD = _env_float("BEEMONITOR_FRAME_CROP_PAD", 0.4)
 # Downscale a crop so its longest side is at most this many px (keeps bytes tiny).
 FRAME_MAX_SIDE = _env_int("BEEMONITOR_FRAME_MAX_SIDE", 384)
 
+# Durable on-disk archive of activity crops + the full SOURCE FRAME each crop was
+# cut from, saved under <day>/frames/ next to the clip (like the videos) and
+# uploaded over WiFi by the uploader — so no activity data is lost even when crops
+# aren't sent over cellular (unconfirmed, cap hit, link down). On whenever sampling
+# is on (crop mode != off).
+SAVE_ACTIVITY_FRAMES = _env_bool("BEEMONITOR_SAVE_ACTIVITY_FRAMES", True)
+# The source frame is downscaled to this longest side before JPEG — full scene
+# context for review/training, but not the raw sensor res (keeps SD + WiFi sane).
+FRAME_SRC_MAX_SIDE = _env_int("BEEMONITOR_FRAME_SRC_MAX_SIDE", 1280)
+# Sub-dir (inside each day dir) the durable crop+source archive is written to.
+ACTIVITY_ARCHIVE_DIRNAME = os.environ.get("BEEMONITOR_ACTIVITY_ARCHIVE_DIRNAME", "frames")
+
 # Detection cost knob: run MOG2 on 1 of every N lores frames (timing stays
 # wall-clock based, so this only trades latency for CPU).
 DETECT_EVERY_N = max(1, _env_int("BEEMONITOR_DETECT_EVERY_N", 2))

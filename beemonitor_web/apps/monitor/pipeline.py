@@ -244,11 +244,14 @@ def _maybe_aggregate(activity_id: int) -> None:
     activity = Activity.objects.filter(pk=activity_id).first()
     if activity is None:
         return
-    frames = list(activity.frames.all())
+    # Only CROP frames are classified + aggregated. 'wide' source frames are stored
+    # for human review (and future plant ID), so they must not gate this rollup.
+    frames = list(activity.frames.filter(kind=ActivityFrame.Kind.CROP))
     if not frames:
         return
     dets = list(Detection.objects.filter(
-        frame__activity_id=activity_id, model=Detection.Model.BIOCLIP))
+        frame__activity_id=activity_id, frame__kind=ActivityFrame.Kind.CROP,
+        model=Detection.Model.BIOCLIP))
     # Wait until every frame has been classified.
     if len({d.frame_id for d in dets}) < len(frames):
         return

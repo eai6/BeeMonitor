@@ -120,7 +120,10 @@ class ActivityDetailView(LoginRequiredMixin, DetailView):
         for fr in frames:
             fr.url = _presign(fr.storage_key)
             fr.detection_list = list(fr.detections.all())
-        ctx["frames"] = frames
+        # Mover crops (BioCLIP-classified) vs the full source frames they were cut
+        # from (kept for context/review; not classified).
+        ctx["frames"] = [f for f in frames if f.kind != "wide"]
+        ctx["source_frames"] = [f for f in frames if f.kind == "wide"]
         ctx["observations"] = list(
             activity.observations.select_related("taxon", "representative_frame")
         )
