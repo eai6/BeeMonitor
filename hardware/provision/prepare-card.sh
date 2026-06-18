@@ -16,6 +16,8 @@ set -euo pipefail
 API_BASE="https://mqnafc3ejc.us-east-1.awsapprunner.com"
 TOKEN=""
 BOOT=""
+WIFI_SSID=""
+WIFI_PASS=""
 
 usage() {
   cat <<'EOF'
@@ -24,10 +26,13 @@ self-registers on first boot. Writes beemonitor.conf to the card's FAT boot
 partition (works on macOS and Linux, no root needed).
 
 Usage:
-  ./prepare-card.sh --token bmk_enroll_xxx [--api-base https://host] [--boot PATH]
+  ./prepare-card.sh --token bmk_enroll_xxx [--api-base https://host] \
+                    [--wifi-ssid NAME --wifi-pass PASS] [--boot PATH]
 
-  --token      enrollment token from Devices -> Zero-touch enrollment (required)
+  --token      enrollment token from Devices -> Add a device (required)
   --api-base   backend URL (default: the production App Runner host)
+  --wifi-ssid  WiFi network the unit joins on first boot (optional)
+  --wifi-pass  WiFi password (optional; omit for an open network)
   --boot       path to the card's boot partition (default: auto-detect bootfs/boot)
 
 The card must already be flashed with the BeeMonitor golden image and inserted.
@@ -37,9 +42,11 @@ EOF
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --token)    TOKEN="${2:-}"; shift 2 ;;
-    --api-base) API_BASE="${2:-}"; shift 2 ;;
-    --boot)     BOOT="${2:-}"; shift 2 ;;
+    --token)     TOKEN="${2:-}"; shift 2 ;;
+    --api-base)  API_BASE="${2:-}"; shift 2 ;;
+    --wifi-ssid) WIFI_SSID="${2:-}"; shift 2 ;;
+    --wifi-pass) WIFI_PASS="${2:-}"; shift 2 ;;
+    --boot)      BOOT="${2:-}"; shift 2 ;;
     -h|--help)  usage 0 ;;
     *) echo "Unknown argument: $1" >&2; usage 1 ;;
   esac
@@ -78,10 +85,15 @@ fi
 
 CONF="$BOOT/beemonitor.conf"
 printf 'BEEMONITOR_API_BASE=%s\nBEEMONITOR_ENROLL_TOKEN=%s\n' "$API_BASE" "$TOKEN" > "$CONF"
+if [ -n "$WIFI_SSID" ]; then
+  printf 'BEEMONITOR_WIFI_SSID=%s\n' "$WIFI_SSID" >> "$CONF"
+  [ -n "$WIFI_PASS" ] && printf 'BEEMONITOR_WIFI_PASSWORD=%s\n' "$WIFI_PASS" >> "$CONF"
+fi
 sync
 
 echo "Wrote $CONF"
 echo "  API base: $API_BASE"
 echo "  token:    bmk_enroll_…${TOKEN: -4}   (last 4 shown)"
+[ -n "$WIFI_SSID" ] && echo "  wifi:     $WIFI_SSID"
 echo "Eject the card, assemble the hardware, insert it, and power on."
 echo "The unit enrolls itself on first boot and appears on your Devices page."

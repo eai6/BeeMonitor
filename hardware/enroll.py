@@ -20,6 +20,7 @@ re-flashed Pi (same hardware id) back to the same Device.
 import json
 import os
 import socket
+import subprocess
 import sys
 import time
 import urllib.request
@@ -63,22 +64,55 @@ def _boot_conf():
     return "", {}
 
 
-def _clear_boot_token(path):
-    """Drop the reusable enrollment token from the FAT boot partition once a
-    device key has been issued, so an enrolled card doesn't keep a live
-    credential sitting on an easily-read partition. Best-effort, never fatal."""
+def _clear_boot_lines(path, prefixes):
+    """Remove lines starting with any of ``prefixes`` from the boot-partition conf,
+    so secrets (the enrollment token, the WiFi password) don't linger on an
+    easily-read FAT partition once they've been consumed. Best-effort, never fatal."""
     try:
         with open(path) as fh:
             lines = [ln for ln in fh
-                     if not ln.strip().startswith("BEEMONITOR_ENROLL_TOKEN=")]
+                     if not any(ln.strip().startswith(p) for p in prefixes)]
         tmp = path + ".tmp"
         with open(tmp, "w") as fh:
             fh.writelines(lines)
         os.replace(tmp, path)
-        print("enroll: cleared enrollment token from boot partition")
     except OSError as e:
-        print(f"enroll: could not clear boot token (non-fatal): {e}",
-              file=sys.stderr)
+        print(f"enroll: could not scrub boot conf (non-fatal): {e}", file=sys.stderr)
+
+
+def _configure_wifi(boot, boot_path):
+    """Join WiFi from the boot conf (BEEMONITOR_WIFI_SSID / _PASSWORD) on first
+    boot, so a freshly-flashed unit gets online BEFORE enrollment (which needs a
+    network). Creates a persistent autoconnect NetworkManager profile, brings it
+    up, then scrubs the password from the boot partition. Best-effort — cellular
+    still carries enrollment if this fails. Runs as root, so nmcli needs no sudo."""
+    ssid = (boot.get("BEEMONITOR_WIFI_SSID") or "").strip()
+    if not ssid:
+        return
+    psk = (boot.get("BEEMONITOR_WIFI_PASSWORD") or "").strip()
+    try:
+        shown = subprocess.run(["nmcli", "-t", "-f", "NAME", "connection", "show"],
+                               capture_output=True, text=True, timeout=15)
+        if shown.returncode == 0 and ssid in shown.stdout.split("\n"):
+            print(f"enroll: wifi '{ssid}' already configured")
+        else:
+            print(f"enroll: configuring wifi '{ssid}'")
+            subprocess.run(["nmcli", "radio", "wifi", "on"],
+                           capture_output=True, timeout=15)
+            cmd = ["nmcli", "connection", "add", "type", "wifi", "con-name", ssid,
+                   "ssid", ssid, "connection.autoconnect", "yes"]
+            if psk:
+                cmd += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", psk]
+            add = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if add.returncode != 0:
+                print(f"enroll: wifi add failed: {add.stderr.strip()}", file=sys.stderr)
+        # Try to bring it up now; enrollment's own retries cover a slow join.
+        subprocess.run(["nmcli", "connection", "up", ssid],
+                       capture_output=True, timeout=45)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"enroll: wifi setup error (non-fatal): {e}", file=sys.stderr)
+    if boot_path:
+        _clear_boot_lines(boot_path, ["BEEMONITOR_WIFI_PASSWORD="])
 
 
 def _hw_id():
@@ -139,16 +173,18 @@ def _write_device_key(path, env, key):
 
 
 def main():
+    # Per-card provisioning lives on the FAT boot partition (written by
+    # prepare-card.sh / the browser installer from any laptop) or in uploader.env;
+    # the boot partition wins. Read it FIRST and bring up WiFi from it before
+    # anything else — enrollment (and a WiFi-only unit) needs a network up.
+    boot_path, boot = _boot_conf()
+    _configure_wifi(boot, boot_path)
+
     env = _parse_env(ENV_FILE)
     if env.get("BEEMONITOR_DEVICE_KEY"):
         print("enroll: device key already present — nothing to do")
         return 0
 
-    # Per-card provisioning may live on the FAT boot partition (written by
-    # prepare-card.sh / the browser installer from any laptop) or in
-    # uploader.env. The boot partition wins — it's the freshly-baked per-card
-    # value.
-    boot_path, boot = _boot_conf()
     token = (boot.get("BEEMONITOR_ENROLL_TOKEN")
              or env.get("BEEMONITOR_ENROLL_TOKEN", "")).strip()
     if not token:
@@ -181,7 +217,8 @@ def main():
             if key:
                 _write_device_key(ENV_FILE, env, key)
                 if boot_path:
-                    _clear_boot_token(boot_path)
+                    _clear_boot_lines(boot_path, ["BEEMONITOR_ENROLL_TOKEN="])
+                    print("enroll: cleared enrollment token from boot partition")
                 print(f"enroll: provisioned device '{data.get('name')}' "
                       f"(id={data.get('device_id')}) — key written")
                 return 0

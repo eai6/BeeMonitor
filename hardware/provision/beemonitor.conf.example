@@ -1,9 +1,14 @@
 # beemonitor.conf — per-card provisioning, dropped on the FAT *boot* partition
 # (/boot/firmware/beemonitor.conf on Bookworm). Written by the browser installer
-# on the enrollment page, or by prepare-card.sh. enroll.py reads it on first boot,
-# registers the device, then clears the token line from this file.
+# on the enrollment page, or by prepare-card.sh. On first boot enroll.py reads it,
+# joins WiFi (if set), registers the device, then clears the token + WiFi password
+# lines from this file (they're secrets on an easily-read partition).
 #
-# Only these two keys are used here; everything else lives in
-# /etc/beemonitor/uploader.env on the running Pi.
+# Everything else lives in /etc/beemonitor/uploader.env on the running Pi.
 BEEMONITOR_API_BASE=https://mqnafc3ejc.us-east-1.awsapprunner.com
 BEEMONITOR_ENROLL_TOKEN=bmk_enroll_replace_me
+
+# Optional — join WiFi on first boot (so a WiFi-only unit can reach the server to
+# enroll). Omit for a cellular unit, or if you set WiFi in Raspberry Pi Imager.
+# BEEMONITOR_WIFI_SSID=YourNetwork
+# BEEMONITOR_WIFI_PASSWORD=YourPassword

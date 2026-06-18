@@ -54,8 +54,20 @@
       </p>
       <ol class="text-xs text-yellow-800 list-decimal ml-4 space-y-0.5 mb-3">
         <li>Flash the BeeMonitor image to the card (Raspberry Pi Imager) and keep it plugged in.</li>
+        <li>(Optional) enter the WiFi the unit should join on first boot.</li>
         <li>Click below and pick the card's <code>bootfs</code> drive.</li>
       </ol>
+      <div class="grid grid-cols-2 gap-2 mb-1">
+        <label class="text-xs text-yellow-900">WiFi network <span class="text-yellow-700 font-normal">(optional)</span>
+          <input id="cw-ssid" type="text" autocomplete="off" placeholder="SSID"
+                 class="mt-0.5 w-full border border-yellow-300 rounded px-2 py-1 text-sm bg-white">
+        </label>
+        <label class="text-xs text-yellow-900">WiFi password
+          <input id="cw-pass" type="password" autocomplete="new-password" placeholder="blank if open"
+                 class="mt-0.5 w-full border border-yellow-300 rounded px-2 py-1 text-sm bg-white">
+        </label>
+      </div>
+      <p class="text-[11px] text-yellow-700 mb-3">So the unit joins your network on first boot. Skip if you set WiFi in Raspberry Pi Imager, or the unit is cellular-only.</p>
       <button type="button" onclick="writeCard()" id="cw-btn"
               class="bg-yellow-700 hover:bg-yellow-800 text-white px-3 py-2 rounded text-sm font-medium">
         Choose SD card &amp; write
@@ -69,7 +81,10 @@
       <p class="text-yellow-800 mt-2 mb-1">Drop a file named <code>beemonitor.conf</code> on the card's <code>bootfs</code> partition, or add these lines to <code>/etc/beemonitor/uploader.env</code> on the Pi:</p>
       <pre class="bg-gray-900 text-green-400 rounded p-3 overflow-x-auto"
 >BEEMONITOR_API_BASE={{ api_base }}
-BEEMONITOR_ENROLL_TOKEN={{ new_token }}</pre>
+BEEMONITOR_ENROLL_TOKEN={{ new_token }}
+# optional — join WiFi on first boot:
+# BEEMONITOR_WIFI_SSID=YourNetwork
+# BEEMONITOR_WIFI_PASSWORD=YourPassword</pre>
       <p class="text-yellow-800 mt-2">
         On first boot (no device key present), the unit enrolls itself, writes its
         own key, and starts recording. Re-flashing the same Pi re-binds to the
@@ -166,8 +181,14 @@ BEEMONITOR_ENROLL_TOKEN={{ new_token }}</pre>
       return;
     }
 
+    var ssid = (document.getElementById('cw-ssid').value || '').trim();
+    var pass = document.getElementById('cw-pass').value || '';
     var conf = 'BEEMONITOR_API_BASE=' + API_BASE + '\n' +
                'BEEMONITOR_ENROLL_TOKEN=' + ENROLL_TOKEN + '\n';
+    if (ssid) {
+      conf += 'BEEMONITOR_WIFI_SSID=' + ssid + '\n';
+      if (pass) conf += 'BEEMONITOR_WIFI_PASSWORD=' + pass + '\n';
+    }
     try {
       var fh = await dir.getFileHandle('beemonitor.conf', { create: true });
       var ws = await fh.createWritable();
