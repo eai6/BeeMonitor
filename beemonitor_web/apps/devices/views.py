@@ -466,6 +466,10 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         image_hb = device.heartbeats.exclude(image_storage_key="").first()
         ctx["image_hb"] = image_hb
         ctx["latest_image_url"] = _presign_image(image_hb.image_storage_key) if image_hb else None
+        # The saved hotel ROI + nest layout, drawn (read-only) over the camera image
+        # client-side — the device now sends a CLEAN frame, so the dashboard overlays.
+        ctx["roi_json"] = json.dumps(device.roi_override)
+        ctx["nests_json"] = json.dumps(device.nest_layout or [])
         sp = metrics.get("storage_pct")
         if sp is None and latest is not None:
             sp = latest.storage_pct

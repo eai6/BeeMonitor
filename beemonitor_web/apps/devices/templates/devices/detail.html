@@ -70,10 +70,13 @@
          data-request-image-url="{% url 'devices:request_image' device.pk %}"
          data-latest-image-url="{% url 'devices:latest_image' device.pk %}">
       <div class="px-4 py-3 border-b border-gray-100 text-sm font-medium text-gray-700">Camera</div>
-      <div class="bg-gray-100 aspect-video flex items-center justify-center">
-        <img id="cam-image" src="{{ latest_image_url|default:'' }}" alt="" title="Click to view full screen"
-             data-ts="{% if image_hb %}{{ image_hb.created_at.isoformat }}{% endif %}"
-             class="w-full h-full object-cover cursor-zoom-in {% if not latest_image_url %}hidden{% endif %}">
+      <div class="bg-gray-100 flex items-center justify-center min-h-[8rem]">
+        <div id="cam-wrap" class="relative leading-none {% if not latest_image_url %}hidden{% endif %}">
+          <img id="cam-image" src="{{ latest_image_url|default:'' }}" alt="" title="Click to view full screen"
+               data-ts="{% if image_hb %}{{ image_hb.created_at.isoformat }}{% endif %}"
+               class="block max-w-full h-auto cursor-zoom-in">
+          <canvas id="cam-overlay" class="absolute top-0 left-0 pointer-events-none"></canvas>
+        </div>
         <span id="cam-placeholder" class="text-gray-300 text-sm {% if latest_image_url %}hidden{% endif %}">No image yet</span>
       </div>
       <div class="px-4 py-2 flex items-center justify-between">
@@ -81,8 +84,8 @@
           {% if image_hb and latest_image_url %}{{ image_hb.created_at|timesince }} ago{% endif %}
         </span>
         <div class="flex items-center gap-2">
-          <label class="text-xs text-gray-500 inline-flex items-center gap-1" title="Overlay the motion ROI (hotel region) + nest-hole detections on the photo — for debugging motion sensitivity">
-            <input id="cam-roi" type="checkbox" class="rounded border-gray-300"> ROI
+          <label class="text-xs text-gray-500 inline-flex items-center gap-1" title="Show the configured hotel ROI + nest holes drawn over the picture">
+            <input id="cam-roi" type="checkbox" class="rounded border-gray-300" checked> ROI
           </label>
           <button id="cam-photo" class="px-2.5 py-1 text-xs rounded bg-amber-600 hover:bg-amber-700 text-white">Take photo</button>
         </div>
@@ -979,7 +982,7 @@
           var im = document.getElementById('cam-image');
           if (im && im.dataset.ts !== d.image.ts) {
             im.dataset.ts = d.image.ts; im.src = d.image.url;
-            im.classList.remove('hidden');
+            var cw = document.getElementById('cam-wrap'); if (cw) cw.classList.remove('hidden');
             var ph = document.getElementById('cam-placeholder'); if (ph) ph.classList.add('hidden');
             var cs = document.getElementById('cam-status');
             if (cs && cs.textContent.indexOf('Requested') !== 0 && cs.textContent.indexOf('capturing') < 0) {
@@ -1023,26 +1026,54 @@
   if (!card) return;
   var CSRF = "{{ csrf_token }}";
   var img = document.getElementById('cam-image');
+  var wrap = document.getElementById('cam-wrap');
   var ph = document.getElementById('cam-placeholder');
   var status = document.getElementById('cam-status');
+  var ov = document.getElementById('cam-overlay');
+  var roi = {{ roi_json|safe }} || null;     // [x1,y1,x2,y2] normalized
+  var nests = {{ nests_json|safe }} || [];   // [{id, box:[..norm]}]
+
+  // Draw the SAVED hotel ROI (green) + nest holes (red, numbered) over a canvas at
+  // size w×h. Shared with the fullscreen viewer. The device now sends a clean
+  // frame, so this client-side overlay replaces the old burned-in one.
+  window.BMHasRoi = function () { return !!roi || (nests && nests.length); };
+  window.BMDrawRoi = function (canvas, w, h) {
+    var c = canvas.getContext('2d');
+    canvas.width = w; canvas.height = h; canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+    c.clearRect(0, 0, w, h);
+    if (roi) { var r = [roi[0]*w, roi[1]*h, roi[2]*w, roi[3]*h];
+      c.lineWidth = 2; c.strokeStyle = '#16a34a'; c.strokeRect(r[0], r[1], r[2]-r[0], r[3]-r[1]);
+      c.fillStyle = 'rgba(22,163,74,0.10)'; c.fillRect(r[0], r[1], r[2]-r[0], r[3]-r[1]); }
+    nests.forEach(function (n) { var b = n.box, p = [b[0]*w, b[1]*h, b[2]*w, b[3]*h];
+      c.lineWidth = 2; c.strokeStyle = '#dc2626'; c.strokeRect(p[0], p[1], p[2]-p[0], p[3]-p[1]);
+      c.fillStyle = '#dc2626'; c.font = 'bold 12px sans-serif'; c.fillText(String(n.id), p[0]+2, Math.max(p[1]-2, 11)); });
+  };
+
+  function drawCardOverlay() {
+    if (!img || !ov) return;
+    var show = document.getElementById('cam-roi');
+    if (!img.clientWidth || (show && !show.checked) || !window.BMHasRoi()) {
+      ov.width = 0; ov.style.width = '0'; return;
+    }
+    window.BMDrawRoi(ov, img.clientWidth, img.clientHeight);
+  }
 
   function getJSON(url) { return fetch(url, { cache: 'no-store' }).then(function (r) { return r.json(); }); }
 
+  function reveal() { if (wrap) wrap.classList.remove('hidden'); if (ph) ph.classList.add('hidden'); }
   function showImage(d) {
-    img.src = d.url; img.classList.remove('hidden'); ph.classList.add('hidden');
+    img.src = d.url; reveal();
     status.textContent = 'Live • ' + new Date(d.ts).toLocaleTimeString();
   }
 
-  function takePhoto() {
+  function takePhoto() {  // clean capture; the ROI overlay is drawn client-side
     var baseTs = null;
     getJSON(card.dataset.latestImageUrl).then(function (b) { baseTs = b.ts || null; }).finally(function () {
-      var roiEl = document.getElementById('cam-roi');
-      var wantRoi = roiEl && roiEl.checked;
-      status.textContent = wantRoi ? 'Requested — capturing + detecting…' : 'Requested — capturing…';
+      status.textContent = 'Requested — capturing…';
       fetch(card.dataset.requestImageUrl, {
         method: 'POST',
         headers: { 'X-CSRFToken': CSRF, 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: wantRoi ? 'roi=1' : '',
+        body: '',
       });
       var end = Date.now() + 90000;
       (function tick() {
@@ -1061,10 +1092,16 @@
   var photo = document.getElementById('cam-photo');
   if (photo) photo.addEventListener('click', takePhoto);
 
-  // Open the full-screen viewer when the camera image is clicked.
-  if (img) img.addEventListener('click', function () {
-    if (img.src) window.BMViewer && window.BMViewer.open(img.src);
-  });
+  if (img) {
+    img.addEventListener('load', drawCardOverlay);          // redraw whenever the frame changes
+    if (img.complete && img.clientWidth) drawCardOverlay();
+    img.addEventListener('click', function () {
+      if (img.src) window.BMViewer && window.BMViewer.open(img.src);
+    });
+  }
+  window.addEventListener('resize', drawCardOverlay);
+  var roiToggle = document.getElementById('cam-roi');
+  if (roiToggle) roiToggle.addEventListener('change', drawCardOverlay);
 })();
 </script>
 
@@ -1079,14 +1116,20 @@
   <img id="iv-img" alt="" draggable="false"
        class="absolute top-0 left-0 select-none max-w-none cursor-grab"
        style="transform-origin:0 0;">
+  <canvas id="iv-overlay" class="absolute top-0 left-0 pointer-events-none" style="transform-origin:0 0;"></canvas>
 </div>
 <script>
 window.BMViewer = (function () {
   var ov = document.getElementById('img-viewer');
   var im = document.getElementById('iv-img');
+  var ovc = document.getElementById('iv-overlay');
   var scale = 1, tx = 0, ty = 0, drag = null, pinch = null;
 
-  function apply() { im.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')'; }
+  function apply() {
+    var t = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
+    im.style.transform = t;
+    if (ovc) ovc.style.transform = t;   // overlay tracks the same zoom/pan
+  }
   function clamp(s) { return Math.max(0.1, Math.min(s, 12)); }
 
   function fit() {
@@ -1095,6 +1138,13 @@ window.BMViewer = (function () {
     scale = Math.min(vw / iw, vh / ih);
     tx = (vw - iw * scale) / 2;
     ty = (vh - ih * scale) / 2;
+    // ROI/nest overlay at NATURAL image size; the shared transform scales it to fit.
+    if (ovc) {
+      var show = document.getElementById('cam-roi');
+      if (window.BMHasRoi && window.BMHasRoi() && (!show || show.checked)) {
+        window.BMDrawRoi(ovc, iw, ih); ovc.style.display = '';
+      } else { ovc.style.display = 'none'; }
+    }
     apply();
   }
   function zoomAt(cx, cy, factor) {
