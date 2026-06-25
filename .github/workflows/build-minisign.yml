@@ -1,0 +1,70 @@
+name: build-minisign
+
+# Build a fully-static Linux aarch64 `minisign` binary and commit it to the repo
+# at hardware/provision/minisign-aarch64. Field units verify signed artifact
+# updates with minisign, but cellular-only units can't `apt install` it (the
+# cellular firewall blocks the apt mirrors). Vendoring the static binary lets it
+# reach them via the cellular-allowlisted git update; provision.sh then installs
+# it. Static = no libsodium runtime dependency, so it runs on a bare Pi.
+#
+# Run manually (Actions -> build-minisign -> Run workflow). Re-run to bump
+# versions; it commits only if the binary changed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      minisign_version:
+        description: "minisign tag to build"
+        default: "0.11"
+      libsodium_version:
+        description: "libsodium release to static-link"
+        default: "1.0.20"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm   # native arm64 -> produces a Linux aarch64 ELF
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build static minisign (aarch64)
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential wget file
+          work="$(mktemp -d)"; cd "$work"
+
+          # 1) static libsodium (no shared dep in the final binary)
+          wget -q "https://download.libsodium.org/libsodium/releases/libsodium-${{ inputs.libsodium_version }}.tar.gz"
+          tar xzf libsodium-*.tar.gz
+          ( cd libsodium-*/ && ./configure --enable-static --disable-shared --prefix="$work/sodium" >/dev/null \
+              && make -j"$(nproc)" >/dev/null && make install >/dev/null )
+
+          # 2) minisign, fully static
+          wget -q "https://github.com/jedisct1/minisign/archive/refs/tags/${{ inputs.minisign_version }}.tar.gz" -O minisign.tar.gz
+          tar xzf minisign.tar.gz
+          cd minisign-*/
+          cc -O2 -static -I"$work/sodium/include" src/*.c "$work/sodium/lib/libsodium.a" -o minisign
+          file minisign
+          ldd minisign 2>&1 | grep -qi "not a dynamic executable" || { echo "ERROR: not static"; exit 1; }
+          ./minisign -v
+
+          # 3) drop it into the repo
+          dst="$GITHUB_WORKSPACE/hardware/provision/minisign-aarch64"
+          install -m 0755 minisign "$dst"
+          sha256sum "$dst" | awk '{print $1}' > "$dst.sha256"
+
+      - name: Commit if changed
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add hardware/provision/minisign-aarch64 hardware/provision/minisign-aarch64.sha256
+          if git diff --cached --quiet; then
+            echo "minisign binary unchanged — nothing to commit"
+          else
+            git commit -m "ci: vendor static aarch64 minisign for cellular artifact-update verify"
+            git push
+          fi

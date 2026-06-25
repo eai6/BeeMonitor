@@ -33,6 +33,7 @@ TAR="$OUT/${NAME}.tar.gz"
 tar -C "$REPO_ROOT" \
     --exclude='hardware/**/__pycache__' --exclude='hardware/**/*.pyc' \
     --exclude='hardware/venv' --exclude='hardware/dist' \
+    --exclude='hardware/provision/minisign-*' \
     -czf "$TAR" hardware
 
 # 2. GUARDRAIL — refuse if anything outside hardware/ slipped in.

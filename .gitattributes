@@ -1,0 +1,3 @@
+
+# Vendored static minisign binary (built by .github/workflows/build-minisign.yml)
+hardware/provision/minisign-* binary

@@ -42,12 +42,20 @@ fi
 # back to hardware/provision/minisign.pub), so only the binary is needed.
 ensure_minisign() {
     command -v minisign >/dev/null 2>&1 && return 0
-    log "minisign missing — installing (needed for signed-artifact updates)"
-    if apt-get install -y minisign >/dev/null 2>&1; then
-        log "minisign installed"
-    else
-        log "WARN: minisign install failed (needs WiFi/apt; will retry next update)"
+    # Prefer the static binary vendored in the repo for this arch: it arrives via
+    # the (cellular-allowlisted) git update, so installing it needs NO apt/WiFi.
+    local vb="$REPO_DIR/hardware/provision/minisign-$(uname -m)"
+    if [ -x "$vb" ]; then
+        if install -m 0755 "$vb" /usr/local/bin/minisign; then
+            log "minisign: installed the vendored static binary -> /usr/local/bin"
+            return 0
+        fi
+        log "WARN: could not install vendored minisign"
     fi
+    # Last resort: apt (needs WiFi — the cellular firewall blocks the apt mirrors).
+    log "minisign missing + no vendored binary for $(uname -m) — trying apt (WiFi only)"
+    apt-get install -y minisign >/dev/null 2>&1 && log "minisign installed (apt)" \
+        || log "WARN: minisign install failed (build+commit the $(uname -m) binary via the build-minisign workflow)"
 }
 
 # --- sudoers rules ----------------------------------------------------------

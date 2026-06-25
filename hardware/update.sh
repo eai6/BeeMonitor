@@ -52,6 +52,15 @@ ACTIVE_MANIFEST="$REPO_DIR/.edge-manifest.json"              # written into each
 PUBKEY="${BEEMONITOR_PUBKEY:-$BEEMON_HOME/minisign.pub}"
 [ -f "$PUBKEY" ] || PUBKEY="$REPO_DIR/hardware/provision/minisign.pub"
 
+# minisign verifier: the system binary if installed, else the static binary
+# vendored in the repo for this arch. The vendored binary reaches cellular-only
+# units via a git update (no apt/WiFi), so they can verify signed artifacts.
+MINISIGN="$(command -v minisign 2>/dev/null || true)"
+if [ -z "$MINISIGN" ]; then
+    _vendored="$REPO_DIR/hardware/provision/minisign-$(uname -m)"
+    [ -x "$_vendored" ] && MINISIGN="$_vendored"
+fi
+
 log() { echo "$(date -u +%FT%TZ) update[$1]: ${*:2}"; }
 
 # Run git/pip as the repo owner: avoids root "dubious ownership" in phase B and
@@ -169,7 +178,7 @@ cmd_fetch_artifact() {  # phase A (artifact) — download + verify + unpack a re
     if [ "$version" = "$active" ]; then
         log A "already up to date at $version"; write_status idle uptodate "already at $version"; exit 0
     fi
-    command -v minisign >/dev/null 2>&1 || { write_status error verify_failed "minisign not installed — run a git update (installs it via provision.sh) or migrate-to-releases.sh, then retry"; exit 1; }
+    [ -n "$MINISIGN" ] || { write_status error verify_failed "minisign unavailable — git-update this unit once (ships the static verifier for $(uname -m)), then retry"; exit 1; }
     [ -f "$PUBKEY" ] || { write_status error verify_failed "verify key missing at $PUBKEY"; exit 1; }
 
     local tmp; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
@@ -182,7 +191,7 @@ cmd_fetch_artifact() {  # phase A (artifact) — download + verify + unpack a re
     [ "$got" = "$sha" ] || { write_status error verify_failed "sha256 mismatch"; return 1; }
     python3 -c 'import json,sys; open(sys.argv[2],"w").write(json.load(open(sys.argv[1])).get("sig","") or "")' \
         "$DESCRIPTOR_FILE" "$tmp/b.tar.gz.minisig"
-    if ! minisign -Vm "$tmp/b.tar.gz" -p "$PUBKEY" >/dev/null 2>&1; then
+    if ! "$MINISIGN" -Vm "$tmp/b.tar.gz" -p "$PUBKEY" >/dev/null 2>&1; then
         write_status error verify_failed "signature rejected (key $(basename "$PUBKEY"))"; return 1
     fi
     log A "verified sha256 + signature for $version"
