@@ -4,7 +4,6 @@ import re
 
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.db.models import Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.views import View
@@ -37,7 +36,8 @@ class VideoListView(LoginRequiredMixin, ListView):
     paginate_by = 20
 
     def get_queryset(self):
-        qs = Video.objects.filter(user=self.request.user)
+        # Own videos + videos from devices shared with me (viewer or manager).
+        qs = Video.accessible(self.request.user)
 
         # Apply filters from query params
         search = self.request.GET.get("q", "").strip()
@@ -79,7 +79,10 @@ class VideoListView(LoginRequiredMixin, ListView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        user_videos = Video.objects.filter(user=self.request.user)
+        user_videos = Video.accessible(self.request.user)
+        # Pure viewers (no owned/manager videos) get a read-only list — hide the
+        # analyze/delete bulk actions. Server-side scoping enforces this too.
+        ctx["can_manage_any"] = Video.manageable(self.request.user).exists()
 
         # Build filter options from existing data (use set() to guarantee uniqueness)
         ctx["site_names"] = sorted(set(
@@ -188,16 +191,14 @@ class VideoDetailView(LoginRequiredMixin, DetailView):
 
     def get_queryset(self):
         # Own videos, plus videos from a device shared with me (view-only).
-        u = self.request.user
-        return Video.objects.filter(
-            Q(user=u) | Q(device__shares__user=u)
-        ).distinct()
+        return Video.accessible(self.request.user)
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         video = self.object
-        # Shared (non-owner) viewers see the video read-only — hide owner actions.
+        # Owners and device-managers can act (run/delete); viewers are read-only.
         ctx["is_owner"] = video.user_id == self.request.user.id
+        ctx["can_manage"] = video.managed_by(self.request.user)
         blob_path = video.storage_key
 
         # Presigned URL for playback (external-S3-ingested videos have no URL
@@ -251,7 +252,7 @@ class VideoExportCSVView(LoginRequiredMixin, View):
     """Export filtered video filenames as CSV."""
 
     def get(self, request):
-        qs = Video.objects.filter(user=request.user)
+        qs = Video.accessible(request.user)
 
         search = request.GET.get("q", "").strip()
         site = request.GET.get("site")
@@ -316,7 +317,7 @@ class VideoDeleteView(LoginRequiredMixin, View):
     """Delete a single video and its S3 objects."""
 
     def post(self, request, pk):
-        video = get_object_or_404(Video, pk=pk, user=request.user)
+        video = get_object_or_404(Video.manageable(request.user), pk=pk)
         title = video.title
 
         _delete_storage_objects_for_video(video)
@@ -336,7 +337,7 @@ class VideoBatchDeleteView(LoginRequiredMixin, View):
             messages.warning(request, "No videos selected.")
             return redirect("videos:list")
 
-        videos = Video.objects.filter(user=request.user, pk__in=video_ids)
+        videos = Video.manageable(request.user).filter(pk__in=video_ids)
         count = videos.count()
 
         for video in videos:
@@ -357,7 +358,7 @@ class VideoDeviceDeleteView(LoginRequiredMixin, View):
     """
 
     def post(self, request, pk):
-        video = get_object_or_404(Video, pk=pk, user=request.user)
+        video = get_object_or_404(Video.manageable(request.user), pk=pk)
         if request.POST.get("cancel"):
             if video.device_deleted_at is None and video.device_delete_requested:
                 video.device_delete_requested = False
@@ -390,7 +391,8 @@ class VideoBatchDeviceDeleteView(LoginRequiredMixin, View):
             messages.warning(request, "No videos selected.")
             return redirect("videos:list")
         n = (
-            Video.objects.filter(user=request.user, pk__in=video_ids, device__isnull=False)
+            Video.manageable(request.user)
+            .filter(pk__in=video_ids, device__isnull=False)
             .update(device_delete_requested=True)
         )
         if n:

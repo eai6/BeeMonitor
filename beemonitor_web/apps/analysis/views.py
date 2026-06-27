@@ -347,7 +347,8 @@ class ProcessingHubView(LoginRequiredMixin, View):
         from apps.devices.models import Device
         from apps.training.models import CustomModel
 
-        user_videos = Video.objects.filter(user=request.user)
+        # Own videos + videos from devices shared with me (viewer or manager).
+        user_videos = Video.accessible(request.user)
         qs = user_videos
 
         # Comprehensive filter: device · site · year · month · day · hour · title.
@@ -407,6 +408,8 @@ class ProcessingHubView(LoginRequiredMixin, View):
             "roi_devices": roi_devices,
             "f": f, "opts": opts, "download_qs": download_qs,
             "has_filter": any(f.values()),
+            # Pure viewers (manage no videos) see a read-only hub: no run controls.
+            "can_manage_any": Video.manageable(request.user).exists(),
             "custom_nest_models": models.filter(model_type__in=["nest_detection", "custom"]),
             "custom_bee_models": models.filter(model_type__in=["bee_tracking", "custom"]),
             "est_credits_per_video": 349,
@@ -415,8 +418,10 @@ class ProcessingHubView(LoginRequiredMixin, View):
     def post(self, request):
         """One-click: run analysis on a video (creates a Job + spawns it)."""
         from django.utils import timezone
+        # Owner or device-manager may run analysis; the Job is billed to the
+        # runner (request.user). Viewers are excluded by Video.manageable.
         video = get_object_or_404(
-            Video, pk=request.POST.get("video"), user=request.user)
+            Video.manageable(request.user), pk=request.POST.get("video"))
         mode = request.POST.get("mode", "detect_and_track")
         if mode not in self.MODES:
             mode = "detect_and_track"
@@ -813,9 +818,9 @@ class BatchJobView(LoginRequiredMixin, View):
         # Estimate credits (1 credit ≈ 1 GPU-second)
         est_credits_per_video = 349  # avg GPU-seconds per video
 
-        # Build queryset
+        # Build queryset — owner or device-manager (viewers excluded).
         if video_ids:
-            videos = Video.objects.filter(user=request.user, pk__in=video_ids, status=Video.Status.READY)
+            videos = Video.manageable(request.user).filter(pk__in=video_ids, status=Video.Status.READY)
         else:
             return _fail("No videos selected.", level="warning")
 
@@ -1012,8 +1017,10 @@ class _FilteredJobsMixin:
         device = request.GET.get("device", "")
         confirmed = request.GET.get("confirmed", "")
 
+        # Ecological data follows video access: results for any video the user
+        # owns OR can see via a device share (mirrors Video.accessible).
         qs = JobResult.objects.filter(
-            job__user=request.user,
+            job__video__in=Video.accessible(request.user),
             job__status=Job.Status.COMPLETED,
         ).select_related("job__video")
 
@@ -1405,7 +1412,7 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
                 pass
 
         # Filter options (use set() to guarantee uniqueness)
-        user_videos = Video.objects.filter(user=user)
+        user_videos = Video.accessible(user)
         ctx["devices"] = [
             {"id": r["device_id"], "name": r["device__name"]}
             for r in user_videos.exclude(device=None)
