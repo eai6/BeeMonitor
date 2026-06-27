@@ -7,6 +7,7 @@ bee_confirmed key) belong to "all" only, not "confirmed". Uses the 30d range
 uploaded-video filter is tested in isolation.
 """
 
+import json
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
@@ -154,3 +155,68 @@ class MotionCalibrationDisplayTests(TestCase):
         DeviceHeartbeat.objects.create(device=self.device, metrics={})
         html = self.client.get(reverse("devices:detail", args=[self.device.pk])).content.decode()
         self.assertIn("no learned window reported", html)
+
+
+class FleetUpdatePendingStateTests(TestCase):
+    """The 'Updating →' state must survive a refresh (the reported bug) and clear
+    once the device reports the target version (or the request goes stale)."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user("alice", password="x")
+        self.device, self.raw_key = Device.create_with_key(self.owner, "BeeMonitor9")
+
+    def test_fleet_update_persists_target(self):
+        from unittest.mock import patch
+        self.client.force_login(self.owner)
+        fake = {"version": "2026.06.27-abc1234", "url": "https://x", "sha256": "s",
+                "sig": "g", "reqs_hash": "r"}
+        with patch("apps.devices.views._resolve_edge_descriptor", return_value=fake):
+            resp = self.client.post(
+                reverse("devices:fleet_update"),
+                data=json.dumps({"device_ids": [self.device.pk]}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.update_target, "2026.06.27-abc1234")
+        self.assertIsNotNone(self.device.update_requested_at)
+
+    def test_list_shows_updating_badge(self):
+        self.device.update_target = "2026.06.27-abc1234"
+        self.device.update_requested_at = timezone.now()
+        self.device.save()
+        DeviceHeartbeat.objects.create(device=self.device, metrics={"code_commit": "old123"})
+        self.client.force_login(self.owner)
+        html = self.client.get(reverse("devices:list")).content.decode()
+        self.assertIn("Updating", html)
+        self.assertIn("2026.06.27-abc1234", html)
+
+    def _beat(self, metrics):
+        return self.client.post(
+            reverse("devices-heartbeat"), data={"metrics": json.dumps(metrics)},
+            HTTP_AUTHORIZATION=f"Bearer {self.raw_key}",
+        )
+
+    def test_heartbeat_clears_target_when_version_lands(self):
+        self.device.update_target = "v-new"
+        self.device.update_requested_at = timezone.now()
+        self.device.save()
+        self._beat({"code_commit": "v-new"})
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.update_target, "")  # cleared — update landed
+
+    def test_heartbeat_keeps_target_when_version_differs(self):
+        self.device.update_target = "v-new"
+        self.device.update_requested_at = timezone.now()
+        self.device.save()
+        self._beat({"code_commit": "v-old"})
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.update_target, "v-new")  # still updating
+
+    def test_heartbeat_clears_stale_target(self):
+        self.device.update_target = "v-new"
+        self.device.update_requested_at = timezone.now() - timedelta(hours=3)
+        self.device.save()
+        self._beat({"code_commit": "v-old"})  # still old, but request is stale
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.update_target, "")  # gave up showing "updating"

@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import timezone as dt_timezone
+from datetime import timedelta, timezone as dt_timezone
 
 from django.conf import settings
 from django.utils import timezone
@@ -30,6 +30,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.devices.models import Device, DeviceHeartbeat
+
+# After this long with no matching version reported, stop showing "Updating…" for a
+# queued artifact update (the device likely failed/rolled back or went offline).
+UPDATE_TARGET_TIMEOUT_HOURS = 2
 from config.storage import get_s3_client
 
 from .authentication import DeviceKeyAuthentication
@@ -125,6 +129,20 @@ class DeviceHeartbeatView(APIView):
             lat=lat if settings.DEVICE_STORE_GPS_PER_HEARTBEAT else None,
             lon=lon if settings.DEVICE_STORE_GPS_PER_HEARTBEAT else None,
         )
+
+        # Artifact-update tracking: clear the "updating" target once the device
+        # reports it's on that version (update landed), or if the request has gone
+        # stale (gave up / failed silently) so the list doesn't show "Updating…"
+        # forever. The device list derives its badge from update_target.
+        if device.update_target:
+            reported = (metrics.get("code_commit") or "").strip()
+            stale = (device.update_requested_at is not None
+                     and timezone.now() - device.update_requested_at
+                     > timedelta(hours=UPDATE_TARGET_TIMEOUT_HOURS))
+            if reported == device.update_target or stale:
+                device.update_target = ""
+                device.update_requested_at = None
+                device.save(update_fields=["update_target", "update_requested_at"])
 
         # Device's local timezone — used to bucket activity by the hive's local
         # clock-hour. Persisted when it changes.

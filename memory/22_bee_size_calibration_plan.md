@@ -1,8 +1,12 @@
 # Plan: Fix & harden on-device bee-size auto-calibration + add transparency
 
-> Status: IMPLEMENTED (commit ed186fc, 2026-06-27). Web half deployed via App Runner;
-> firmware half (config.py/calibrate.py/telemetry.py) needs a golden-image rebuild to
-> reach devices. Constants below are the as-shipped defaults (env-tunable).
+> Status: IMPLEMENTED (commit ed186fc, 2026-06-27). Web half deployed via App Runner.
+> Firmware half (config.py/calibrate.py/telemetry.py) reaches FIELDED devices via the
+> signed edge-artifact remote update — NOT a golden-image rebuild. The artifact bundles
+> the whole hardware/ tree (build-edge-artifact.sh:33) and update.sh restarts
+> recorder/uploader/telemetry with health-check + auto-rollback (update.sh:37,259,270).
+> Golden image is only for flashing NEW SD cards. Rollout: build+sign artifact (minisign
+> key), publish, trigger the fleet-update on the devices page. Constants are env-tunable.
 
 ## Context
 
