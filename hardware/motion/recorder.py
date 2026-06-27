@@ -127,15 +127,29 @@ def _write_clip_tag(mp4_path, status, confidence, taxon, runs, mode) -> None:
         os.replace(tmp, out)
     except OSError as e:  # pragma: no cover - disk hiccup mustn't crash recording
         log.warning("could not write clip tag for %s: %s", getattr(mp4_path, "name", "?"), e)
-    # Cheap marker for telemetry's activity-count gate: in `gate` mode an
-    # unconfirmed clip is still recorded + uploaded, but not counted as a bee
-    # activity. An O(1) stat for telemetry (no JSON read per clip every beat).
+    # Cheap O(1) markers for telemetry's per-hour histograms (no JSON read per
+    # clip every beat). In `gate` mode: a rejected clip gets `.unconfirmed` (still
+    # recorded + uploaded, not counted as bee activity); a positively-confirmed
+    # bee gets `.confirmed` (a strict subset, so the dashboard's "Confirmed" filter
+    # can show on-card bees before upload without counting untagged clips). Off/
+    # disabled clips get neither (untagged). Keep the two markers mutually exclusive.
     try:
-        marker = mp4_path.with_suffix(mp4_path.suffix + ".unconfirmed")
+        unconf = mp4_path.with_suffix(mp4_path.suffix + ".unconfirmed")
+        conf = mp4_path.with_suffix(mp4_path.suffix + ".confirmed")
         if mode == "gate" and status == UNCONFIRMED:
-            marker.touch()
-        elif marker.exists():
-            marker.unlink()  # confirmed (or a late confirm) — ensure it counts
+            unconf.touch()
+            if conf.exists():
+                conf.unlink()
+        elif mode == "gate" and status == CONFIRMED:
+            conf.touch()
+            if unconf.exists():
+                unconf.unlink()  # late confirm — promote it
+        else:
+            # off / disabled / pending → untagged: clear any stale markers.
+            if unconf.exists():
+                unconf.unlink()
+            if conf.exists():
+                conf.unlink()
     except OSError:
         pass
 

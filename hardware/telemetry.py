@@ -382,6 +382,13 @@ def _video_stats(window_seconds: int) -> dict:
     # (`<clip>.mp4.unconfirmed`, gate mode only). Lets the dashboard show
     # unconfirmed (shadow/non-bee) activity before it uploads over WiFi.
     unconfirmed_by_hour: dict = {}
+    # Strict-confirmed subset: clips the on-device YOLO POSITIVELY confirmed a bee
+    # (`<clip>.mp4.confirmed`, gate mode only). `by_hour` above is confirmed +
+    # untagged (it only excludes `.unconfirmed`), so it can't be made strict; this
+    # histogram lets the dashboard's "Confirmed" filter show on-card confirmed bees
+    # before upload without counting untagged clips. Older clips (pre-marker) are
+    # absent here — the cloud falls back to uploaded bee_confirmed=True for those.
+    confirmed_by_hour: dict = {}
     hist_cutoff = now - 8 * 86400
     cur_key = time.strftime("%Y-%m-%dT%H", time.localtime(now))
     if RECORD_DIR.is_dir():
@@ -400,6 +407,8 @@ def _video_stats(window_seconds: int) -> dict:
             # bee ACTIVITY — so the dashboard/telemetry activity proxy isn't
             # inflated by shadows. Untagged clips (off mode / confirmed) count.
             is_activity = not mp4.with_suffix(mp4.suffix + ".unconfirmed").exists()
+            # Positive confirm marker (gate mode only): a strict subset of activity.
+            is_confirmed = mp4.with_suffix(mp4.suffix + ".confirmed").exists()
             if is_activity and st.st_mtime >= now - window_seconds:
                 recent += 1
             if st.st_mtime >= hist_cutoff:
@@ -408,6 +417,8 @@ def _video_stats(window_seconds: int) -> dict:
                     by_hour[key] = by_hour.get(key, 0) + 1
                 else:
                     unconfirmed_by_hour[key] = unconfirmed_by_hour.get(key, 0) + 1
+                if is_confirmed:
+                    confirmed_by_hour[key] = confirmed_by_hour.get(key, 0) + 1
             if not mp4.with_suffix(mp4.suffix + ".uploaded").exists():
                 pending += 1
                 pending_bytes += st.st_size
@@ -423,6 +434,7 @@ def _video_stats(window_seconds: int) -> dict:
         "newest_mtime": newest,
         "activity_by_hour": by_hour,
         "unconfirmed_by_hour": unconfirmed_by_hour,
+        "confirmed_by_hour": confirmed_by_hour,
         "clips_this_hour": by_hour.get(cur_key, 0),
     }
 
@@ -680,6 +692,7 @@ def collect_metrics() -> dict:
     m["clips_this_hour"] = vs["clips_this_hour"]
     m["activity_by_hour"] = vs["activity_by_hour"]
     m["unconfirmed_by_hour"] = vs["unconfirmed_by_hour"]
+    m["confirmed_by_hour"] = vs["confirmed_by_hour"]
     m["telemetry_period_seconds"] = ACTIVITY_PERIOD
     m["telemetry_period_human"] = _human_duration(ACTIVITY_PERIOD)
     if vs["newest_mtime"]:
