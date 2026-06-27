@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     # Third-party
     "rest_framework",
     "corsheaders",
+    "anymail",
     # Project apps
     "apps.accounts",
     "apps.videos",
@@ -147,6 +148,21 @@ AWS_S3_BUCKET_RAW_VIDEOS = os.environ.get("AWS_S3_BUCKET_RAW_VIDEOS", "")
 AWS_S3_BUCKET_PROCESSED = os.environ.get("AWS_S3_BUCKET_PROCESSED", "")
 AWS_S3_BUCKET_MODELS = os.environ.get("AWS_S3_BUCKET_MODELS", "")
 AWS_S3_BUCKET_USER_CONFIGS = os.environ.get("AWS_S3_BUCKET_USER_CONFIGS", "")
+
+# Email — transactional mail (password reset) via AWS SES through django-anymail's
+# SES v2 backend, which reuses the same boto3 IAM credential chain as S3 (no SMTP
+# creds). Dev defaults to the console backend so no AWS/SES setup is needed locally;
+# production.py overrides EMAIL_BACKEND to SES. SES can only send FROM a verified
+# identity — DEFAULT_FROM_EMAIL must be an address on a domain verified in SES
+# (NOT the awsapprunner.com host). See memory/21_password_reset_ses_design.md.
+EMAIL_BACKEND = os.environ.get(
+    "EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+DEFAULT_FROM_EMAIL = os.environ.get(
+    "DEFAULT_FROM_EMAIL", "no-reply@beemonitor.edwardamoah.com")
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
+ANYMAIL = {"AMAZON_SES_CLIENT_PARAMS": {"region_name": AWS_REGION}}
+# How long a password-reset link stays valid (seconds); default 1 day.
+PASSWORD_RESET_TIMEOUT = int(os.environ.get("PASSWORD_RESET_TIMEOUT", 60 * 60 * 24))
 
 # SageMaker Async Inference (Phase 4 of memory/09_aws_migration_plan.md).
 # The endpoint + buckets are provisioned by infra/aws-sagemaker/.

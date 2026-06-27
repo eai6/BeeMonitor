@@ -21,6 +21,10 @@ DATABASES = {
     }
 }
 
+# Email — send real mail via AWS SES in production (django-anymail SES v2 backend).
+# Still env-overridable so it can be swapped without a code change.
+EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "anymail.backends.amazon_ses.EmailBackend")
+
 # Security
 SECURE_SSL_REDIRECT = False  # ALB / fronting load balancer handles HTTPS termination
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
