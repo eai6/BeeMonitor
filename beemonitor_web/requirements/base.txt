@@ -6,6 +6,7 @@ redis>=5.0
 psycopg2-binary>=2.9
 numpy>=1.26.0
 boto3>=1.28.0
+django-anymail[amazon-ses]>=11.0
 cryptography>=42.0.0
 whitenoise>=6.6
 gunicorn>=21.2
