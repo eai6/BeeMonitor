@@ -19,7 +19,8 @@ import numpy as np
 from motion.config import (
     log, CALIB_FILE, CALIB_MAX_AGE_DAYS, LORES_W, LORES_H, FPS,
     YOLO_CONF, CALIB_TARGET_SAMPLES, CALIB_MIN_SAMPLES, CALIB_YOLO_EVERY,
-    MOG2_VAR_THRESHOLD, MIN_MOTION_BLOBS, RECORD_DIR,
+    MOG2_VAR_THRESHOLD, MIN_MOTION_BLOBS, RECORD_DIR, MAX_BLOB_AREA,
+    CALIB_MIN_PAD, CALIB_MAX_PAD, CALIB_AREA_FLOOR, CALIB_MIN_SPAN,
 )
 from motion.gate import MotionGate
 from motion.roi import _parse_roi
@@ -141,13 +142,23 @@ def calibrate(video_paths, model_path: str, force: bool = False) -> int:
                   len(bee_areas), CALIB_MIN_SAMPLES)
         return 1
 
-    min_area = float(np.percentile(bee_areas, 5))
-    max_area = float(np.percentile(bee_areas, 95))
+    # Raw percentile window, then pad + clamp it (see config.py). MOG2 fragments a
+    # bee into small blobs, so p95 sits near fragment size; widen both ends and
+    # clamp to sane bounds so real bees (incl. close/merged blobs) aren't rejected.
+    p5 = float(np.percentile(bee_areas, 5))
+    p95 = float(np.percentile(bee_areas, 95))
+    min_area = max(CALIB_AREA_FLOOR, p5 * CALIB_MIN_PAD)
+    max_area = min(MAX_BLOB_AREA, p95 * CALIB_MAX_PAD)
+    # Never let the window collapse: keep at least MIN_SPAN× headroom above min.
+    max_area = max(max_area, min_area * CALIB_MIN_SPAN)
     calib = {
         "min_area": round(min_area, 1),
         "max_area": round(max_area, 1),
         "var_threshold": MOG2_VAR_THRESHOLD,
         "min_blobs": MIN_MOTION_BLOBS,
+        # Provenance for the dashboard: raw percentiles before pad/clamp.
+        "raw_p5": round(p5, 1),
+        "raw_p95": round(p95, 1),
         "n_samples": len(bee_areas),
         "n_clips": clips_used,
         "lores": [LORES_W, LORES_H],
@@ -158,6 +169,6 @@ def calibrate(video_paths, model_path: str, force: bool = False) -> int:
     tmp = CALIB_FILE.with_suffix(".json.part")
     tmp.write_text(json.dumps(calib, indent=2))
     tmp.replace(CALIB_FILE)
-    log.info("calibration saved -> %s  area=[%.0f, %.0f] from %d samples",
-             CALIB_FILE, min_area, max_area, len(bee_areas))
+    log.info("calibration saved -> %s  area=[%.0f, %.0f] (raw p5/p95 [%.0f, %.0f]) "
+             "from %d samples", CALIB_FILE, min_area, max_area, p5, p95, len(bee_areas))
     return 0

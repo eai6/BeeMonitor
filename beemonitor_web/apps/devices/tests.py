@@ -120,3 +120,37 @@ class ActivitySeriesConfirmedFilterTests(TestCase):
         confirmed_total = _total(_build_activity_series(self.device, "7d", "confirmed"))
         self.assertGreaterEqual(confirmed_total, 7)   # picks up the strict 7
         self.assertLess(confirmed_total, 50)          # ignores the loose 50
+
+
+class MotionCalibrationDisplayTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user("alice", password="x")
+        self.device = Device.objects.create(
+            owner=self.user, name="BeeMonitor3", key_hash="h3", prefix="bmk_3",
+        )
+        self.client.force_login(self.user)
+
+    def test_detail_shows_learned_calibration_window(self):
+        DeviceHeartbeat.objects.create(device=self.device, metrics={
+            "motion_calibration": {
+                "min_area": 24.0, "max_area": 480.0, "raw_p5": 40.0, "raw_p95": 300.0,
+                "n_samples": 42, "n_clips": 6, "age_days": 1.2,
+            },
+        })
+        html = self.client.get(reverse("devices:detail", args=[self.device.pk])).content.decode()
+        self.assertIn("Auto-calibration", html)
+        self.assertIn("24.0", html)
+        self.assertIn("480.0", html)
+        self.assertIn("42", html)
+
+    def test_detail_flags_few_samples(self):
+        DeviceHeartbeat.objects.create(device=self.device, metrics={
+            "motion_calibration": {"min_area": 10.0, "max_area": 90.0, "n_samples": 8, "age_days": 0.5},
+        })
+        html = self.client.get(reverse("devices:detail", args=[self.device.pk])).content.decode()
+        self.assertIn("few samples", html)
+
+    def test_detail_no_calibration_reported(self):
+        DeviceHeartbeat.objects.create(device=self.device, metrics={})
+        html = self.client.get(reverse("devices:detail", args=[self.device.pk])).content.decode()
+        self.assertIn("no learned window reported", html)

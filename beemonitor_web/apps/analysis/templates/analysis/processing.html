@@ -152,7 +152,7 @@
             <a href="{% url 'videos:detail' v.pk %}" class="truncate text-amber-700 hover:underline font-medium" title="View this video">{{ v.title|default:"(untitled)" }}</a>
             {% if v.metadata.bee.status == "confirmed" %}
             <span class="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700"
-                  title="On-device: confirmed bee{% if v.metadata.bee.confidence %} · conf {{ v.metadata.bee.confidence }}{% endif %}{% if v.metadata.bee.taxon %} · {{ v.metadata.bee.taxon }}{% endif %}">✓ bee</span>
+                  title="On-device: confirmed bee{% if v.metadata.bee.confidence %} · conf {{ v.metadata.bee.confidence }}{% endif %}{% if v.metadata.bee.taxon %} · {{ v.metadata.bee.taxon }}{% endif %}">✓ bee{% if v.metadata.bee.confidence %} {% widthratio v.metadata.bee.confidence 1 100 %}%{% endif %}</span>
             {% elif v.metadata.bee.status == "unconfirmed" %}
             <span class="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500"
                   title="On-device: not confirmed as a bee — recorded + uploaded, but not counted as activity">unconfirmed</span>
