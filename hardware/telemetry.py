@@ -124,6 +124,10 @@ LOCATION_FILE = STATE_DIR / "location"
 # Dashboard motion-tuning overrides; the recorder applies these on top of
 # calibration.json (main_motion.py). Lives beside calibration.json.
 MOTION_TUNING_FILE = RECORD_DIR.parent / "motion_tuning.json"
+# The auto-calibrate job's learned bee-blob-area window. Reported back in the
+# heartbeat (read-only) so the dashboard can show what each device actually
+# learned — otherwise the effective window is invisible without SSHing the Pi.
+CALIBRATION_FILE = RECORD_DIR.parent / "calibration.json"
 # Dashboard ROI editor outputs (normalized): hotel ROI override + nest layout.
 ROI_OVERRIDE_FILE = RECORD_DIR.parent / "roi_override.json"
 NEST_LAYOUT_FILE = RECORD_DIR.parent / "nest_layout.json"
@@ -693,6 +697,11 @@ def collect_metrics() -> dict:
     m["activity_by_hour"] = vs["activity_by_hour"]
     m["unconfirmed_by_hour"] = vs["unconfirmed_by_hour"]
     m["confirmed_by_hour"] = vs["confirmed_by_hour"]
+    # Learned bee-blob-area window (read-only) so the dashboard can show what the
+    # auto-calibrate job produced on this device — invisible otherwise.
+    cal = _read_motion_calibration()
+    if cal:
+        m["motion_calibration"] = cal
     m["telemetry_period_seconds"] = ACTIVITY_PERIOD
     m["telemetry_period_human"] = _human_duration(ACTIVITY_PERIOD)
     if vs["newest_mtime"]:
@@ -1484,6 +1493,31 @@ def _start_update(params: dict) -> None:
         )
     except OSError as e:
         log.warning("command: update — failed to spawn updater: %s", e)
+
+
+def _read_motion_calibration():
+    """Read the auto-calibrate job's learned blob window for the heartbeat.
+
+    Returns a compact, read-only summary of calibration.json (the learned
+    bee-blob-area window + how it was derived) plus its age in days, or None if
+    no calibration has been written yet (device still on permissive defaults).
+    Best-effort: never raises.
+    """
+    try:
+        if not CALIBRATION_FILE.exists():
+            return None
+        cal = json.loads(CALIBRATION_FILE.read_text())
+        if not isinstance(cal, dict):
+            return None
+        age_days = round((time.time() - CALIBRATION_FILE.stat().st_mtime) / 86400.0, 1)
+        out = {"age_days": age_days}
+        for k in ("min_area", "max_area", "var_threshold", "min_blobs",
+                  "n_samples", "n_clips"):
+            if k in cal:
+                out[k] = cal[k]
+        return out
+    except (OSError, ValueError):
+        return None
 
 
 def _apply_motion_tuning(tuning) -> None:

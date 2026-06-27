@@ -571,6 +571,9 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         ctx["latest_hb"] = latest
         metrics = (latest.metrics if latest else {}) or {}
         ctx["metrics"] = metrics
+        # The auto-calibrate job's learned bee-blob-area window, reported in the
+        # beat — shown read-only in the Motion tuning card for transparency.
+        ctx["motion_calibration"] = metrics.get("motion_calibration")
         # Always show the most RECENT image-bearing beat (regular beats carry no
         # image), so the camera card is never blank once any picture exists.
         image_hb = device.heartbeats.exclude(image_storage_key="").first()

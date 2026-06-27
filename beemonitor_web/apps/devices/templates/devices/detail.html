@@ -445,6 +445,20 @@
     <strong>ROI</strong> photo to see what's being detected. Applies within a few
     minutes (the device's calibration reload).
   </p>
+  <!-- Auto-calibration readout (read-only): what the device actually learned. -->
+  {% if motion_calibration %}
+  <div class="mb-3 rounded border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+    <span class="font-medium text-gray-700">Auto-calibration — learned bee-blob window:</span>
+    <strong>{{ motion_calibration.min_area }}–{{ motion_calibration.max_area }}</strong> px²
+    {% if motion_calibration.raw_p5 %}<span class="text-gray-400">(raw p5/p95 {{ motion_calibration.raw_p5 }}–{{ motion_calibration.raw_p95 }})</span>{% endif %}
+    · from <strong>{{ motion_calibration.n_samples }}</strong> bee samples{% if motion_calibration.n_clips %} across {{ motion_calibration.n_clips }} clips{% endif %}
+    {% if motion_calibration.age_days is not None %}· updated {{ motion_calibration.age_days }}d ago{% endif %}
+    {% if motion_calibration.n_samples < 30 %}<span class="text-amber-600 font-medium">· few samples, may be unreliable</span>{% endif %}
+    {% if motion_calibration.age_days > 7 %}<span class="text-amber-600 font-medium">· stale</span>{% endif %}
+  </div>
+  {% else %}
+  <div class="mb-3 text-xs text-gray-400">Auto-calibration: no learned window reported yet (device on permissive defaults, or firmware too old to report it).</div>
+  {% endif %}
   {% if can_manage %}
   <form id="motion-form" method="post" action="{% url 'devices:motion_tuning' device.pk %}"
         class="grid grid-cols-2 sm:grid-cols-4 gap-3">

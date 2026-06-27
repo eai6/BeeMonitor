@@ -160,13 +160,30 @@ HOTEL_SETTLE_SECONDS = _env_float("BEEMONITOR_HOTEL_SETTLE", 2.0)
 CALIB_FILE = Path(os.environ.get(
     "BEEMONITOR_CALIB_FILE", str(RECORD_DIR.parent / "calibration.json")))
 YOLO_MODEL = os.environ.get("BEEMONITOR_YOLO_MODEL", str(MODELS_DIR / "bee_tracking.pt"))
-YOLO_CONF = _env_float("BEEMONITOR_YOLO_CONF", 0.25)
+# Calibration-only YOLO confidence (used solely in calibrate.py, NOT the on-device
+# bee confirmer). Raised to 0.5 so low-confidence false positives (shadows, leaves,
+# debris) don't get measured as "bees" and skew the learned blob-area window.
+YOLO_CONF = _env_float("BEEMONITOR_YOLO_CONF", 0.5)
 # Stop once we've measured this many confirmed-bee blobs across snippets.
-# MIN_SAMPLES is the floor below which we refuse to overwrite a calibration.
-CALIB_TARGET_SAMPLES = _env_int("BEEMONITOR_CALIB_SAMPLES", 40)
-CALIB_MIN_SAMPLES = _env_int("BEEMONITOR_CALIB_MIN_SAMPLES", 12)
-# Auto mode scans the newest N snippets; run YOLO on 1 of every K frames.
-CALIB_MAX_CLIPS = _env_int("BEEMONITOR_CALIB_MAX_CLIPS", 20)
+# MIN_SAMPLES is the floor below which we refuse to overwrite a calibration —
+# raised to 30 so the 5th/95th-percentile window is computed from a stable sample,
+# not a handful of (possibly fragmented) blobs.
+CALIB_TARGET_SAMPLES = _env_int("BEEMONITOR_CALIB_SAMPLES", 100)
+CALIB_MIN_SAMPLES = _env_int("BEEMONITOR_CALIB_MIN_SAMPLES", 30)
+# Auto mode scans the newest N snippets; run YOLO on 1 of every K frames. Bumped
+# so the stricter conf + higher sample floor can still accumulate enough samples.
+CALIB_MAX_CLIPS = _env_int("BEEMONITOR_CALIB_MAX_CLIPS", 60)
+# Pad + clamp applied to the raw 5th/95th-percentile blob window before it's saved.
+# MOG2 fragments a bee into many small blobs, so the percentiles cluster near
+# fragment size; without padding, a close/fast bee whose blob merges into one large
+# region exceeds max_area and the clip stops while the bee is still moving. Widen
+# both ends, then clamp to sane bounds so a bad calibration can't break recording.
+#   min_area = max(CALIB_AREA_FLOOR, p5 * CALIB_MIN_PAD)
+#   max_area = min(MAX_BLOB_AREA,   p95 * CALIB_MAX_PAD), and >= min_area * CALIB_MIN_SPAN
+CALIB_MIN_PAD = _env_float("BEEMONITOR_CALIB_MIN_PAD", 0.6)
+CALIB_MAX_PAD = _env_float("BEEMONITOR_CALIB_MAX_PAD", 1.6)
+CALIB_AREA_FLOOR = _env_float("BEEMONITOR_CALIB_AREA_FLOOR", 8.0)
+CALIB_MIN_SPAN = _env_float("BEEMONITOR_CALIB_MIN_SPAN", 4.0)
 CALIB_YOLO_EVERY = max(1, _env_int("BEEMONITOR_CALIB_YOLO_EVERY", 3))
 # Skip re-calibrating if calibration.json is younger than this (days). --force overrides.
 CALIB_MAX_AGE_DAYS = _env_float("BEEMONITOR_CALIB_MAX_AGE_DAYS", 7.0)
@@ -214,8 +231,10 @@ ACTIVITY_FRAMES_FILE = CALIB_FILE.parent / "activity_frames.json"
 BEE_CONFIRM_MODE = os.environ.get("BEEMONITOR_BEE_CONFIRM_MODE", "gate").strip().lower()
 # Whole-frame bee detector — same weights as cloud/calibration (reuse YOLO_MODEL).
 BEE_CONFIRM_MODEL = os.environ.get("BEEMONITOR_BEE_CONFIRM_MODEL", YOLO_MODEL)
-# A notch above the 0.25 detect default, to bias against confirming noise as a bee.
-BEE_CONFIRM_CONF = _env_float("BEEMONITOR_BEE_CONFIRM_CONF", 0.30)
+# Raised to 0.5 so clips aren't tagged as containing a bee on weak/false detections
+# (shadows, debris). Higher = fewer false "confirmed" tags, at the cost of possibly
+# missing a faint real bee. Matches the calibration YOLO_CONF for consistency.
+BEE_CONFIRM_CONF = _env_float("BEEMONITOR_BEE_CONFIRM_CONF", 0.5)
 # Native whole-frame inference size; do NOT shrink — small bees need the resolution.
 BEE_CONFIRM_IMGSZ = _env_int("BEEMONITOR_BEE_CONFIRM_IMGSZ", 640)
 # Mover-overlapping bee detections needed to confirm an activity.

@@ -49,6 +49,22 @@
         </span>
       </p>
     </div>
+    {% if video.metadata.bee %}
+    <div>
+      <p class="text-gray-500">Bee detection</p>
+      <p class="font-medium">
+        {% if video.metadata.bee.status == "confirmed" %}
+          <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800">✓ bee</span>
+        {% elif video.metadata.bee.status == "unconfirmed" %}
+          <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">not a bee</span>
+        {% else %}
+          <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">{{ video.metadata.bee.status|default:"untagged" }}</span>
+        {% endif %}
+        {% if video.metadata.bee.confidence %}<span class="text-xs text-gray-500 ml-1">{% widthratio video.metadata.bee.confidence 1 100 %}% conf</span>{% endif %}
+      </p>
+      {% if video.metadata.bee.taxon %}<p class="text-xs text-gray-400">{{ video.metadata.bee.taxon }}</p>{% endif %}
+    </div>
+    {% endif %}
     <div>
       <p class="text-gray-500">Site</p>
       <p class="font-medium">{{ video.site_name|sanitize_name|default:"--" }}</p>

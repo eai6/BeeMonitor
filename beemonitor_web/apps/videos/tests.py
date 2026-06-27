@@ -109,6 +109,21 @@ class DeviceShareVideoAccessTests(TestCase):
         self.client.force_login(self.stranger)
         self.assertEqual(self.client.get(url).status_code, 404)
 
+    def test_detail_shows_bee_detection_confidence(self):
+        # metadata.bee (status + confidence) is shown on the video detail page.
+        v = Video.objects.create(
+            user=self.owner, device=self.device, title="bee-clip",
+            storage_key="alice/bee-clip.mp4", file_size_bytes=1,
+            status=Video.Status.READY,
+            metadata={"bee_confirmed": True, "bee": {"status": "confirmed",
+                      "confidence": 0.87, "taxon": "Apidae"}},
+        )
+        self.client.force_login(self.owner)
+        resp = self.client.get(reverse("videos:detail", args=[v.pk]))
+        self.assertContains(resp, "Bee detection")
+        self.assertContains(resp, "87% conf")
+        self.assertContains(resp, "Apidae")
+
     # ---- delete permission ---------------------------------------------
     def test_viewer_cannot_delete(self):
         self.client.force_login(self.viewer)
