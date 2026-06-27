@@ -1,7 +1,8 @@
 # Plan: Fix & harden on-device bee-size auto-calibration + add transparency
 
-> Status: PROPOSED — for review before implementation. Firmware changes need a
-> golden-image rebuild to reach devices; web changes auto-deploy.
+> Status: IMPLEMENTED (commit ed186fc, 2026-06-27). Web half deployed via App Runner;
+> firmware half (config.py/calibrate.py/telemetry.py) needs a golden-image rebuild to
+> reach devices. Constants below are the as-shipped defaults (env-tunable).
 
 ## Context
 
