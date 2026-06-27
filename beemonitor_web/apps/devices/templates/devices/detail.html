@@ -771,8 +771,17 @@
       </div>
       <div class="flex gap-1">
         {% for r in activity_ranges %}
-          <a href="?range={{ r.key }}" data-range="{{ r.key }}" class="act-range-btn px-2 py-1 rounded {% if r.key == activity_range %}bg-amber-600 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-gray-200{% endif %}">{{ r.label }}</a>
+          <a href="?range={{ r.key }}" data-range="{{ r.key }}" class="act-range-btn px-2 py-1 rounded {% if r.key == activity_range and not activity_custom %}bg-amber-600 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-gray-200{% endif %}">{{ r.label }}</a>
         {% endfor %}
+      </div>
+      <div class="flex items-center gap-1" title="Custom date range (overrides the preset)">
+        <input type="date" id="act-start" value="{{ activity_start }}"
+               class="border border-gray-300 rounded px-1.5 py-1 text-xs {% if activity_custom %}ring-1 ring-amber-400{% endif %}">
+        <span class="text-gray-400">–</span>
+        <input type="date" id="act-end" value="{{ activity_end }}"
+               class="border border-gray-300 rounded px-1.5 py-1 text-xs {% if activity_custom %}ring-1 ring-amber-400{% endif %}">
+        <button type="button" id="act-apply" class="px-2 py-1 rounded bg-gray-100 text-gray-600 hover:bg-gray-200">Apply</button>
+        <button type="button" id="act-clear" class="px-2 py-1 rounded text-gray-500 hover:text-gray-700 {% if not activity_custom %}hidden{% endif %}">Clear</button>
       </div>
     </div>
   </div>
@@ -817,7 +826,7 @@
     <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
       <h3 class="text-sm font-semibold text-gray-700">
         Activity per <span id="act-gran-label">hour</span>
-        <span class="text-xs font-normal text-gray-400">· {{ display_tz|default:"UTC" }} · <span id="act-range-label">{{ activity_range }}</span></span>
+        <span class="text-xs font-normal text-gray-400">· {{ display_tz|default:"UTC" }} · <span id="act-range-label">{% if activity_custom %}{{ activity_start }} – {{ activity_end }}{% else %}{{ activity_range }}{% endif %}</span></span>
       </h3>
       <button id="act-csv-btn" class="px-3 py-1.5 text-xs rounded bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100">Download CSV</button>
     </div>
@@ -869,14 +878,27 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script>
 (function () {
-  var RANGE = "{{ activity_range }}";
+  // When loaded in custom mode, keep a sane preset fallback so "Clear" works.
+  var RANGE = "{% if activity_custom %}7d{% else %}{{ activity_range }}{% endif %}";
   var CONFIRMED = "{{ activity_confirmed }}";  // all | confirmed | unconfirmed
   var IS_ACTIVE = {{ device.is_active|yesno:"true,false" }};
+  // Custom from–to window (overrides RANGE when both set).
+  var START = "{{ activity_start }}";
+  var END = "{{ activity_end }}";
+  var CUSTOM = {{ activity_custom|yesno:"true,false" }};
 
-  // Keep the URL reflecting both the range and the confirmation filter so a
-  // refresh / shared link restores the same view.
+  // The query the chart/table/poll all use: a custom window when active,
+  // otherwise the preset range. Confirmation filter rides along on both.
+  function activityQuery() {
+    var base = (CUSTOM && START && END)
+      ? 'start=' + encodeURIComponent(START) + '&end=' + encodeURIComponent(END)
+      : 'range=' + encodeURIComponent(RANGE);
+    return base + '&confirmed=' + encodeURIComponent(CONFIRMED);
+  }
+
+  // Keep the URL reflecting the active view so a refresh / shared link restores it.
   function syncActivityUrl() {
-    try { history.replaceState(null, '', '?range=' + RANGE + '&confirmed=' + CONFIRMED); } catch (_) {}
+    try { history.replaceState(null, '', '?' + activityQuery()); } catch (_) {}
   }
 
   // (Re)build the activity chart in place — used on load AND on each live poll.
@@ -975,7 +997,8 @@
     var blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'activity_device{{ device.pk }}_' + (window._actGran || 'hour') + '_' + RANGE + '_' + CONFIRMED + '.csv';
+    var spanLabel = (CUSTOM && START && END) ? (START + '_' + END) : RANGE;
+    a.download = 'activity_device{{ device.pk }}_' + (window._actGran || 'hour') + '_' + spanLabel + '_' + CONFIRMED + '.csv';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(a.href);
   });
@@ -992,7 +1015,7 @@
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function poll() {
-    fetch("{% url 'devices:status' device.pk %}?range=" + encodeURIComponent(RANGE) + "&confirmed=" + encodeURIComponent(CONFIRMED), { cache: 'no-store' })
+    fetch("{% url 'devices:status' device.pk %}?" + activityQuery(), { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (IS_ACTIVE) {
@@ -1095,23 +1118,74 @@
   }
   // One range selector drives BOTH the chart and the table, in place (no reload),
   // so they always show the same period and stay visually connected.
+  // Toggle the visual "custom window active" state (input rings + Clear button)
+  // and, when active, deselect every preset (a custom window overrides them).
+  function setCustomActive(on) {
+    CUSTOM = on;
+    var clr = document.getElementById('act-clear');
+    if (clr) clr.classList.toggle('hidden', !on);
+    ['act-start', 'act-end'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) { el.classList.toggle('ring-1', on); el.classList.toggle('ring-amber-400', on); }
+    });
+    if (on) {
+      document.querySelectorAll('.act-range-btn').forEach(function (b) {
+        b.classList.remove('bg-amber-600', 'text-white');
+        b.classList.add('bg-gray-100', 'text-gray-600', 'hover:bg-gray-200');
+      });
+    }
+  }
+  function highlightPreset() {
+    document.querySelectorAll('.act-range-btn').forEach(function (b) {
+      var on = !CUSTOM && b.getAttribute('data-range') === RANGE;
+      b.classList.toggle('bg-amber-600', on);
+      b.classList.toggle('text-white', on);
+      b.classList.toggle('bg-gray-100', !on);
+      b.classList.toggle('text-gray-600', !on);
+      b.classList.toggle('hover:bg-gray-200', !on);
+    });
+  }
+
   document.querySelectorAll('.act-range-btn').forEach(function (btn) {
     btn.addEventListener('click', function (e) {
       e.preventDefault();
       RANGE = btn.getAttribute('data-range');
-      document.querySelectorAll('.act-range-btn').forEach(function (b) {
-        var on = b === btn;
-        b.classList.toggle('bg-amber-600', on);
-        b.classList.toggle('text-white', on);
-        b.classList.toggle('bg-gray-100', !on);
-        b.classList.toggle('text-gray-600', !on);
-        b.classList.toggle('hover:bg-gray-200', !on);
-      });
+      START = ''; END = '';
+      setCustomActive(false);  // a preset clears any custom window
+      highlightPreset();
       var rl = document.getElementById('act-range-label');
       if (rl) rl.textContent = RANGE;
       syncActivityUrl();
       poll();  // refetch this range -> rebuilds the chart AND the table at once
     });
+  });
+
+  // Custom from–to window: Apply uses the two date inputs; Clear reverts to the
+  // active preset. Both refresh chart + table in place via poll().
+  var applyBtn = document.getElementById('act-apply');
+  if (applyBtn) applyBtn.addEventListener('click', function () {
+    var s = (document.getElementById('act-start') || {}).value;
+    var en = (document.getElementById('act-end') || {}).value;
+    if (!s || !en) { alert('Pick both a start and end date.'); return; }
+    if (s > en) { alert('The start date must be on or before the end date.'); return; }
+    START = s; END = en;
+    setCustomActive(true);
+    var rl = document.getElementById('act-range-label');
+    if (rl) rl.textContent = s + ' – ' + en;
+    syncActivityUrl();
+    poll();
+  });
+  var clearBtn = document.getElementById('act-clear');
+  if (clearBtn) clearBtn.addEventListener('click', function () {
+    START = ''; END = '';
+    var si = document.getElementById('act-start'); if (si) si.value = '';
+    var ei = document.getElementById('act-end'); if (ei) ei.value = '';
+    setCustomActive(false);
+    highlightPreset();
+    var rl = document.getElementById('act-range-label');
+    if (rl) rl.textContent = RANGE;
+    syncActivityUrl();
+    poll();
   });
 
   // All / Confirmed / Unconfirmed filter — same in-place refresh as the range

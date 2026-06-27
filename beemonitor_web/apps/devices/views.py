@@ -352,28 +352,69 @@ def _true_utc(device_recorded_at_or_naive, pi_off):
     return device_recorded_at_or_naive - pi_off
 
 
-def _build_activity_series(device, range_key: str, confirmed: str = "all") -> dict:
+def _parse_custom_range(start, end, zone):
+    """Parse 'YYYY-MM-DD' start/end (interpreted in the display tz) into a
+    (start_loc, end_loc) day-boundary window, or None if either is missing,
+    unparseable, or start > end. The window is capped at 366 days to bound the
+    bucket count and the weather lookup.
+    """
+    if not start or not end:
+        return None
+    try:
+        sd = datetime.strptime(start, "%Y-%m-%d").date()
+        ed = datetime.strptime(end, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+    if sd > ed:
+        return None
+    start_loc = datetime(sd.year, sd.month, sd.day, 0, 0, 0, tzinfo=zone)
+    end_loc = datetime(ed.year, ed.month, ed.day, 23, 59, 59, 999999, tzinfo=zone)
+    if (end_loc - start_loc) > timedelta(days=366):
+        start_loc = end_loc - timedelta(days=366)
+    return start_loc, end_loc
+
+
+def _build_activity_series(device, range_key: str, confirmed: str = "all",
+                           start=None, end=None) -> dict:
     """Snippets per clock-hour/day in the device's DISPLAY timezone. Combines
     uploaded clips (recorded_at) with the device's on-card histogram, converting
     each to its true instant then to the display tz. Shared by page + poll.
 
     `confirmed` filters by the on-device bee-confirmation verdict:
       - "all"         every clip (confirmed + unconfirmed + untagged)
-      - "confirmed"   exclude clips marked NOT a bee (True + untagged) — old default
+      - "confirmed"   only clips explicitly confirmed a bee (bee_confirmed=True) —
+                      matches the Processing page's "Confirmed bee" filter exactly
+                      (uploaded videos only; the on-card histogram is skipped for
+                      this filter since it can't separate confirmed from untagged).
+                      Untagged clips fall under "all" only.
       - "unconfirmed" only clips the device marked NOT a bee (bee_confirmed=False)
     """
     from apps.videos.models import Video
 
     if confirmed not in ("all", "confirmed", "unconfirmed"):
         confirmed = "all"
-    if range_key not in _ACTIVITY_RANGES:
-        range_key = "7d"
-    days, gran, fmt = _ACTIVITY_RANGES[range_key]
     zone, zone_name = _display_zone(device)
     pi_off = timedelta(minutes=device.tz_offset_min or 0)
     now_loc = timezone.now().astimezone(zone)
-    start_loc = now_loc - timedelta(days=days)
-    since = timezone.now() - timedelta(days=days + 1)  # tz slack on the query
+
+    # A custom from–to window (both dates valid) overrides the preset. Hourly
+    # buckets for spans up to 14 days, daily beyond. Otherwise use the preset
+    # range, which always ends at "now".
+    custom = _parse_custom_range(start, end, zone)
+    if custom:
+        start_loc, upper_loc = custom
+        span_days = (upper_loc.date() - start_loc.date()).days
+        gran = "hour" if span_days <= 14 else "day"
+        fmt = "%b %d %H:%M" if gran == "hour" else "%b %d"
+        range_key = "custom"
+    else:
+        if range_key not in _ACTIVITY_RANGES:
+            range_key = "7d"
+        days, gran, fmt = _ACTIVITY_RANGES[range_key]
+        start_loc = now_loc - timedelta(days=days)
+        upper_loc = now_loc
+    since = start_loc.astimezone(dt_timezone.utc) - timedelta(days=1)  # tz slack
+    until = upper_loc.astimezone(dt_timezone.utc) + timedelta(days=1)
 
     def bucket(local_dt):
         if gran == "hour":
@@ -384,17 +425,18 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all") -> di
 
     counts, key_dt = {}, {}
     # Filter uploaded clips by the device's bee-confirmation verdict. "confirmed"
-    # excludes clips the device marked NOT a bee (keeping True + untagged, the old
-    # default); "unconfirmed" keeps only those; "all" counts everything.
+    # = explicitly confirmed a bee (bee_confirmed=True), matching the Processing
+    # page; "unconfirmed" = marked NOT a bee (False); "all" counts everything
+    # (incl. untagged clips, which belong to neither confirmed nor unconfirmed).
     qs = Video.objects.filter(device=device, recorded_at__isnull=False,
-                              recorded_at__gte=since)
+                              recorded_at__gte=since, recorded_at__lte=until)
     if confirmed == "confirmed":
-        qs = qs.exclude(metadata__bee_confirmed=False)
+        qs = qs.filter(metadata__bee_confirmed=True)
     elif confirmed == "unconfirmed":
         qs = qs.filter(metadata__bee_confirmed=False)
     for ra in qs.values_list("recorded_at", flat=True):
         loc = _true_utc(ra, pi_off).astimezone(zone)
-        if loc < start_loc:
+        if loc < start_loc or loc > upper_loc:
             continue
         k, b = bucket(loc)
         counts[k] = counts.get(k, 0) + 1
@@ -404,13 +446,21 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all") -> di
     # card show before they upload. Keys are the Pi's wall-clock hour. The Pi
     # reports confirmed (`activity_by_hour`) and unconfirmed (`unconfirmed_by_hour`)
     # side by side; merge whichever the filter asks for ("all" = their per-hour sum).
+    #
+    # NB: `activity_by_hour` counts confirmed + UNTAGGED clips (the Pi only writes
+    # an `.unconfirmed` marker for non-bees), so it can't be made strict. For the
+    # "confirmed" filter we therefore SKIP it entirely and count only uploaded
+    # bee_confirmed=True videos — exactly matching the Processing page. The cost is
+    # that the confirmed series shows clips only once they've uploaded (same as the
+    # Processing page). `unconfirmed_by_hour` IS strict (== bee_confirmed=False), so
+    # the "unconfirmed" filter keeps its histogram.
     if gran == "hour":
         latest = device.heartbeats.first()
         metrics = (latest.metrics or {}) if latest else {}
         conf_hist = metrics.get("activity_by_hour")
         unconf_hist = metrics.get("unconfirmed_by_hour")
         hist = {}
-        if confirmed in ("all", "confirmed") and isinstance(conf_hist, dict):
+        if confirmed == "all" and isinstance(conf_hist, dict):
             for hk, c in conf_hist.items():
                 try:
                     hist[hk] = hist.get(hk, 0) + int(c)
@@ -428,7 +478,7 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all") -> di
             except (ValueError, TypeError):
                 continue
             loc = _true_utc(naive, pi_off).astimezone(zone)
-            if loc < start_loc:
+            if loc < start_loc or loc > upper_loc:
                 continue
             k, b = bucket(loc)
             counts[k] = max(counts.get(k, 0), int(c))
@@ -442,7 +492,7 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all") -> di
     _, cur = bucket(start_loc)
     while True:
         bk, bdt = bucket(cur)
-        if bdt > now_loc:
+        if bdt > upper_loc:
             break
         counts.setdefault(bk, 0)
         key_dt.setdefault(bk, bdt)
@@ -479,6 +529,11 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all") -> di
         ],
         "weather_enabled": weather_enabled,
         "display_tz": zone_name,
+        # Echo the active custom window (blank when a preset is in use) so the
+        # date inputs stay populated across reloads/polls.
+        "activity_custom": bool(custom),
+        "activity_start": start_loc.strftime("%Y-%m-%d") if custom else "",
+        "activity_end": upper_loc.strftime("%Y-%m-%d") if custom else "",
     }
 
 
@@ -560,9 +615,12 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         ctx["video_count"] = device.videos.count()
 
         # Activity-over-time series for the chart (actual snippets per bucket).
+        # `start`/`end` (YYYY-MM-DD) define a custom window that overrides `range`.
         ctx.update(_build_activity_series(
             device, self.request.GET.get("range", "7d"),
-            self.request.GET.get("confirmed", "all")))
+            self.request.GET.get("confirmed", "all"),
+            start=self.request.GET.get("start"),
+            end=self.request.GET.get("end")))
         return ctx
 
 
@@ -1225,7 +1283,9 @@ class DeviceStatusView(LoginRequiredMixin, View):
         image = ({"url": _presign_image(img_hb.image_storage_key),
                   "ts": img_hb.created_at.isoformat()} if img_hb else None)
         activity = _build_activity_series(device, request.GET.get("range", "7d"),
-                                          request.GET.get("confirmed", "all"))
+                                          request.GET.get("confirmed", "all"),
+                                          start=request.GET.get("start"),
+                                          end=request.GET.get("end"))
         return JsonResponse({
             "online": _is_online(device),
             "last_seen": last_seen,
