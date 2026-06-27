@@ -107,3 +107,16 @@ class ActivitySeriesConfirmedFilterTests(TestCase):
         self.assertEqual(_total(_build_activity_series(self.device, "7d", "confirmed")), 1)
         # "all" still includes the on-card histogram (max per bucket).
         self.assertGreaterEqual(_total(_build_activity_series(self.device, "7d", "all")), 50)
+
+    def test_confirmed_uses_strict_oncard_histogram(self):
+        # New firmware reports confirmed_by_hour (strict). "confirmed" must use it
+        # (7) for the on-card preview, NOT the loose activity_by_hour (50).
+        hour_key = (timezone.now() - timedelta(hours=2)).strftime("%Y-%m-%dT%H")
+        DeviceHeartbeat.objects.create(device=self.device, metrics={
+            "activity_by_hour": {hour_key: 50},     # confirmed + untagged (loose)
+            "confirmed_by_hour": {hour_key: 7},     # strict confirmed
+            "unconfirmed_by_hour": {hour_key: 9},
+        })
+        confirmed_total = _total(_build_activity_series(self.device, "7d", "confirmed"))
+        self.assertGreaterEqual(confirmed_total, 7)   # picks up the strict 7
+        self.assertLess(confirmed_total, 50)          # ignores the loose 50

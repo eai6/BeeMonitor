@@ -382,11 +382,12 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all",
 
     `confirmed` filters by the on-device bee-confirmation verdict:
       - "all"         every clip (confirmed + unconfirmed + untagged)
-      - "confirmed"   only clips explicitly confirmed a bee (bee_confirmed=True) —
-                      matches the Processing page's "Confirmed bee" filter exactly
-                      (uploaded videos only; the on-card histogram is skipped for
-                      this filter since it can't separate confirmed from untagged).
-                      Untagged clips fall under "all" only.
+      - "confirmed"   only clips explicitly confirmed a bee (uploaded
+                      bee_confirmed=True, matching the Processing page's "Confirmed
+                      bee" filter) plus, for on-card preview, the firmware's strict
+                      `confirmed_by_hour` histogram. The loose `activity_by_hour`
+                      (confirmed + untagged) is NOT used here. Untagged clips fall
+                      under "all" only.
       - "unconfirmed" only clips the device marked NOT a bee (bee_confirmed=False)
     """
     from apps.videos.models import Video
@@ -447,21 +448,29 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all",
     # reports confirmed (`activity_by_hour`) and unconfirmed (`unconfirmed_by_hour`)
     # side by side; merge whichever the filter asks for ("all" = their per-hour sum).
     #
-    # NB: `activity_by_hour` counts confirmed + UNTAGGED clips (the Pi only writes
-    # an `.unconfirmed` marker for non-bees), so it can't be made strict. For the
-    # "confirmed" filter we therefore SKIP it entirely and count only uploaded
-    # bee_confirmed=True videos — exactly matching the Processing page. The cost is
-    # that the confirmed series shows clips only once they've uploaded (same as the
-    # Processing page). `unconfirmed_by_hour` IS strict (== bee_confirmed=False), so
-    # the "unconfirmed" filter keeps its histogram.
+    # `activity_by_hour` counts confirmed + UNTAGGED clips (it only excludes the
+    # `.unconfirmed` marker), so it's used for "all" but NOT for "confirmed". The
+    # firmware also reports `confirmed_by_hour` — a strict subset (positively
+    # confirmed bees, `.confirmed` marker) — which the "confirmed" filter uses so
+    # the on-card preview is accurate. Devices on older firmware don't send it, so
+    # "confirmed" then falls back to uploaded bee_confirmed=True videos only (still
+    # exact, just no pre-upload preview). `unconfirmed_by_hour` is strict
+    # (== bee_confirmed=False), so the "unconfirmed" filter keeps its histogram.
     if gran == "hour":
         latest = device.heartbeats.first()
         metrics = (latest.metrics or {}) if latest else {}
         conf_hist = metrics.get("activity_by_hour")
+        strict_hist = metrics.get("confirmed_by_hour")
         unconf_hist = metrics.get("unconfirmed_by_hour")
         hist = {}
         if confirmed == "all" and isinstance(conf_hist, dict):
             for hk, c in conf_hist.items():
+                try:
+                    hist[hk] = hist.get(hk, 0) + int(c)
+                except (ValueError, TypeError):
+                    continue
+        if confirmed == "confirmed" and isinstance(strict_hist, dict):
+            for hk, c in strict_hist.items():
                 try:
                     hist[hk] = hist.get(hk, 0) + int(c)
                 except (ValueError, TypeError):
