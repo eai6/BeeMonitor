@@ -3,6 +3,7 @@ from datetime import datetime, timezone as dt_timezone
 
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 
 
 class Video(models.Model):
@@ -69,6 +70,43 @@ class Video(models.Model):
 
     def __str__(self):
         return f"{self.title} ({self.get_status_display()})"
+
+    # ------------------------------------------------------------------
+    # Sharing / access control
+    # ------------------------------------------------------------------
+    @staticmethod
+    def accessible(user):
+        """Videos the user owns OR can see via a device share (any role).
+
+        The read-scope counterpart to ``Device.accessible(user)``: a viewer or
+        manager on a device sees that device's videos (and the ecological data
+        derived from them). Owner-only WRITE paths (delete, device-delete) must
+        keep filtering on ``user=request.user`` and must NOT use this.
+        """
+        return Video.objects.filter(
+            Q(user=user) | Q(device__shares__user=user)
+        ).distinct()
+
+    @staticmethod
+    def manageable(user):
+        """Videos the user may WRITE (run analysis / delete): owned, or on a
+        device shared with them as **manager** (not viewer).
+
+        Use this for action paths (run, delete, device-delete). Viewers get
+        read-only access via ``accessible`` and are excluded here.
+        """
+        return Video.objects.filter(
+            Q(user=user)
+            | Q(device__shares__user=user, device__shares__role="manager")
+        ).distinct()
+
+    def managed_by(self, user) -> bool:
+        """True if ``user`` owns this video or is a manager of its device."""
+        if self.user_id == user.id:
+            return True
+        if self.device_id is None:
+            return False
+        return self.device.shares.filter(user=user, role="manager").exists()
 
     @staticmethod
     def parse_timestamp_from_filename(filename):

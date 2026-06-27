@@ -90,6 +90,7 @@
     <input type="hidden" name="visualize" value="false">
 
     <input type="hidden" name="analyses_form" value="1">
+    {% if can_manage_any %}
     <!-- Configuration -->
     <div class="bg-white shadow rounded-lg p-4 mb-4">
       <h2 class="text-sm font-semibold text-gray-900 mb-2">What to run</h2>
@@ -127,18 +128,25 @@
           {% else %}<span class="text-gray-400">No bee hotel has a saved ROI yet — set one on the device page.</span>{% endif %}</span>
       </label>
     </div>
+    {% endif %}
 
     <!-- Select videos -->
     <div class="flex items-center justify-between mb-2">
+      {% if can_manage_any %}
       <label class="flex items-center gap-2 text-sm text-gray-700">
         <input type="checkbox" id="select-all" class="rounded border-gray-300"> Select all ({{ video_count }})
       </label>
+      {% else %}
+      <span class="text-sm text-gray-500">{{ video_count }} video{{ video_count|pluralize }} · view only</span>
+      {% endif %}
       <span class="text-xs text-gray-400">{% if video_count > 200 %}Showing 200 most recent — narrow with the filter.{% endif %}</span>
     </div>
     <div class="bg-white shadow rounded-lg divide-y">
       {% for v in videos %}
       <div class="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50">
+        {% if can_manage_any %}
         <input type="checkbox" name="video_ids" value="{{ v.pk }}" id="cb-{{ v.pk }}" class="vid-cb rounded border-gray-300">
+        {% endif %}
         <div class="flex-1 min-w-0">
           <div class="text-sm text-gray-900 flex items-center gap-1.5 min-w-0">
             <a href="{% url 'videos:detail' v.pk %}" class="truncate text-amber-700 hover:underline font-medium" title="View this video">{{ v.title|default:"(untitled)" }}</a>
@@ -167,6 +175,7 @@
     </div>
 
     <!-- Sticky run bar -->
+    {% if can_manage_any %}
     <div class="sticky bottom-0 mt-3 bg-white/95 backdrop-blur border border-gray-200 rounded-lg shadow-lg px-4 py-2.5 flex items-center justify-between gap-3">
       <p class="text-xs text-gray-500"><span id="cred-line">Select videos to run</span><span class="text-gray-400"> · ~{{ est_credits_per_video }} credits/video (A10G)</span></p>
       <button type="submit" id="run-btn" disabled
@@ -174,6 +183,7 @@
         Run analysis (<span id="sel-count">0</span>)
       </button>
     </div>
+    {% endif %}
   </form>
   {% else %}
   <div class="bg-white shadow rounded-lg p-6 text-center">
