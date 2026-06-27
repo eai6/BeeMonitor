@@ -273,6 +273,11 @@ class DeviceListView(LoginRequiredMixin, ListView):
             device.code_commit = (latest.metrics or {}).get("code_commit") if latest else None
             device.needs_update = bool(
                 latest_version and device.code_commit and device.code_commit != latest_version)
+            # An update was queued and the unit isn't on that version yet → show
+            # "Updating…" so a refresh doesn't look idle. Cleared by the heartbeat
+            # once the device reports the target version (or the request goes stale).
+            device.updating = bool(
+                device.update_target and device.code_commit != device.update_target)
 
             lat = device.lat if device.lat is not None else (latest.lat if latest else None)
             lon = device.lon if device.lon is not None else (latest.lon if latest else None)
@@ -1024,11 +1029,16 @@ class DeviceFleetUpdateView(LoginRequiredMixin, View):
         # Only act on devices the caller manages (manager+) and that are active.
         targets = [d for d in Device.accessible(request.user).filter(pk__in=ids)
                    if d.is_active and d.can(request.user, "manager")]
+        now = timezone.now()
         for d in targets:
             d.pending_command = "update"
             d.command_params = params
+            d.update_target = params["version"]   # persists the "updating" state
+            d.update_requested_at = now
         if targets:
-            Device.objects.bulk_update(targets, ["pending_command", "command_params"])
+            Device.objects.bulk_update(
+                targets, ["pending_command", "command_params",
+                          "update_target", "update_requested_at"])
         return JsonResponse({
             "ok": True,
             "version": params["version"],
@@ -1060,7 +1070,10 @@ class DeviceUpdateView(LoginRequiredMixin, View):
                 return redirect("devices:detail", pk=pk)
             device.pending_command = "update"
             device.command_params = params
-            device.save(update_fields=["pending_command", "command_params"])
+            device.update_target = params["version"]
+            device.update_requested_at = timezone.now()
+            device.save(update_fields=["pending_command", "command_params",
+                                       "update_target", "update_requested_at"])
             messages.success(
                 request,
                 f"Artifact update to {params['version']} queued — the device will "

@@ -216,6 +216,14 @@ class Device(models.Model):
     pending_command = models.CharField(max_length=32, blank=True, default="")
     command_params = models.JSONField(default=dict, blank=True)
 
+    # Artifact-update target tracking. `pending_command="update"` is cleared as soon
+    # as the heartbeat hands it back, so it can't drive a UI "updating" state; this
+    # field persists the version a unit is being updated TO until it reports it's on
+    # that version (heartbeat clears it) or the request goes stale. Lets the device
+    # list show "Updating → <version>" across refreshes instead of looking idle.
+    update_target = models.CharField(max_length=64, blank=True, default="")
+    update_requested_at = models.DateTimeField(null=True, blank=True)
+
     # Desired WittyPi power schedule (review/edit from the dashboard). The device
     # reconciles to it via the heartbeat response and enforces the safety floor on
     # its side. Default {"mode": "daylight"} = current sun-window behaviour.
