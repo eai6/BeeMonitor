@@ -123,12 +123,24 @@ def pipeline_editor(request, pk):
 
 @login_required
 def export_notebook(request, pk):
-    """Download the pipeline as a runnable Colab notebook (.ipynb)."""
+    """Download the pipeline as a Colab notebook (.ipynb).
+
+    ?mode=api  → a live notebook that runs the pipeline via the public API (real
+                 endpoints, no SDK — just requests).
+    (default)  → the explainable/offline scaffold notebook (Phase 3b).
+    """
     pipeline = _own_pipeline(request, pk)
-    nb = generate_notebook(pipeline)
+    if request.GET.get("mode") == "api":
+        from .notebook import generate_api_notebook
+        base = request.build_absolute_uri("/").rstrip("/")
+        nb = generate_api_notebook(pipeline, base)
+        suffix = "_live"
+    else:
+        nb = generate_notebook(pipeline)
+        suffix = ""
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", pipeline.title).strip("_") or "pipeline"
     resp = HttpResponse(json.dumps(nb, indent=1), content_type="application/x-ipynb+json")
-    resp["Content-Disposition"] = f'attachment; filename="{safe}.ipynb"'
+    resp["Content-Disposition"] = f'attachment; filename="{safe}{suffix}.ipynb"'
     return resp
 
 

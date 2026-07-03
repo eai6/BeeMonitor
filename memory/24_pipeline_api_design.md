@@ -37,11 +37,14 @@ building auth, keys, or a run engine.
 ## 2. Colab flow (the user experience)
 
 1. **Developer page → Create API Key** → copy `bmk_…` (per-user, shown once).
-2. In Colab: **P1 needs no install** — paste the single-cell client
-   (`apps/pipelines/colab_client.py`, requests-only) and set your key.
-   **P3** turns it into `pip install beemonitor` by *either* publishing to PyPI *or*
-   hosting the client on the site so a notebook can `!pip install` from a URL / `!wget`
-   it — no PyPI account needed. The exported notebook (P3) embeds whichever we pick.
+2. In Colab: **no install, no SDK** — the exported notebook uses raw `requests`
+   (pre-installed in Colab) to call the API. Decision (2026-07-03): after reviewing
+   EcoMorph (whose cloud client is itself just a requests script, not a package) and
+   the "no time for a new repo / don't expose core IP" constraint, we do NOT ship a
+   client package. IP protection is architectural — the notebook only makes HTTP calls;
+   all engine/executor/ML/SageMaker IP stays server-side behind API-key auth. (A
+   paste-able helper client also exists at `apps/pipelines/colab_client.py` for anyone
+   who wants an object, but it's optional and unfeatured.)
 3. Build + run:
    ```python
    from beemonitor import BeeMonitor
@@ -128,7 +131,11 @@ This is exactly "run the pipeline for real via Colab using keys + real endpoints
   (`apps/api/pipelines.py`, API-key authed) — presign → direct PUT → confirm, keyed to
   the key's user; stores `site_name`/device like the browser path. Colab client gains
   `bm.upload_video(path, site=…)`. (Shares the raw-videos CORS + presign already fixed.)
-- **P3 — `pip install beemonitor` client** + `notebook.py` emits API-driven notebooks.
+- **P3 — live notebook export. ✅ SHIPPED (no SDK).** `notebook.generate_api_notebook`
+  emits a Colab that runs the pipeline for real via the API using raw `requests`
+  (create pipeline from its steps → run → poll → per-step outputs as DataFrames).
+  `export_notebook?mode=api` + a "⬇ Notebook (live)" editor button (offline scaffold
+  kept as "⬇ offline"). No package/PyPI — IP stays server-side.
 - **P4 — polish.** API docs page (extend `apps/docs`), Developer-page copy for pipeline
   usage, examples.
 
