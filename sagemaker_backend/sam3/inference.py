@@ -41,7 +41,9 @@ logger = logging.getLogger("beemonitor.sam3")
 
 JSON = "application/json"
 _MODEL_ID = os.environ.get("SAM3_MODEL_ID", "facebook/sam3")
-_DINO_ID = os.environ.get("DINOV3_MODEL_ID", "facebook/dinov3-vitb16-pretrain-lvd1689m")
+# DINOv2-base: ungated, instant. (DINOv3 is manual-review gated — swap the id back
+# here + rebuild once Meta grants access; the AutoModel/AutoImageProcessor API is identical.)
+_DINO_ID = os.environ.get("DINO_MODEL_ID", "facebook/dinov2-base")
 _EMBED_BATCH = int(os.environ.get("DINOV3_BATCH", "16"))
 
 
@@ -56,7 +58,7 @@ def model_fn(model_dir=None):
     model = Sam3Model.from_pretrained(_MODEL_ID, token=token).to(device).eval()
     dino_processor = AutoImageProcessor.from_pretrained(_DINO_ID, token=token)
     dino_model = AutoModel.from_pretrained(_DINO_ID, token=token).to(device).eval()
-    logger.info("SAM 3 (%s) + DINOv3 (%s) loaded on %s", _MODEL_ID, _DINO_ID, device)
+    logger.info("SAM 3 (%s) + DINO (%s) loaded on %s", _MODEL_ID, _DINO_ID, device)
     return {
         "model": model, "processor": processor,
         "dino_model": dino_model, "dino_processor": dino_processor,

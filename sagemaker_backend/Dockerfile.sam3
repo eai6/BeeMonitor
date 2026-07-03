@@ -38,10 +38,10 @@ WORKDIR /opt/program
 COPY sagemaker_backend/sam3/ /opt/program/
 RUN chmod +x /opt/program/serve
 
-# Bake the gated facebook/sam3 + facebook/dinov3 weights (BuildKit secret — never
-# stored in a layer). The build FAILS here if the HF_TOKEN secret is missing or
-# EITHER license isn't accepted; that's intended (the endpoint is useless without
-# both models). Accept licenses at hf.co/facebook/sam3 AND hf.co/facebook/dinov3-vitb16-pretrain-lvd1689m.
+# Bake SAM 3 (gated — HF_TOKEN, accept hf.co/facebook/sam3) + DINOv2-base (ungated)
+# via a BuildKit secret (never stored in a layer). The build FAILS here if the SAM 3
+# license isn't accepted; that's intended. (To move to DINOv3 later, accept
+# hf.co/facebook/dinov3-vitb16-pretrain-lvd1689m and swap the id in inference.py + here.)
 RUN --mount=type=secret,id=hf_token \
     HF_TOKEN="$(cat /run/secrets/hf_token 2>/dev/null || true)" \
     python -c "import os; \
@@ -49,8 +49,8 @@ from transformers import Sam3Model, Sam3Processor, AutoModel, AutoImageProcessor
 t=os.environ.get('HF_TOKEN') or None; \
 Sam3Processor.from_pretrained('facebook/sam3', token=t); \
 Sam3Model.from_pretrained('facebook/sam3', token=t); \
-AutoImageProcessor.from_pretrained('facebook/dinov3-vitb16-pretrain-lvd1689m', token=t); \
-AutoModel.from_pretrained('facebook/dinov3-vitb16-pretrain-lvd1689m', token=t)"
+AutoImageProcessor.from_pretrained('facebook/dinov2-base'); \
+AutoModel.from_pretrained('facebook/dinov2-base')"
 
 # Runtime: read baked weights only — no HF Hub round-trips on cold start.
 ENV HF_HUB_OFFLINE=1 \

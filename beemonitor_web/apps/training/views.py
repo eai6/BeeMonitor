@@ -507,7 +507,7 @@ class SetDriftBaselineView(LoginRequiredMixin, View):
             target=drift.build_reference, args=(request.user.id, paths),
             kwargs={"note": f"{len(paths)} videos"}, daemon=True,
         ).start()
-        messages.info(request, f"Building drift baseline from {len(paths)} video(s) with DINOv3. This takes a few minutes; refresh to see it.")
+        messages.info(request, f"Building drift baseline from {len(paths)} video(s) with DINOv2. This takes a few minutes; refresh to see it.")
         return redirect("training:drift")
 
 
