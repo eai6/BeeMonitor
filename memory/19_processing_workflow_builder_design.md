@@ -2,6 +2,11 @@
 
 **Status:** Proposal for review (IA pivot started 2026-06-15; builder is future, phased)
 **Author:** Drafted with Claude Code, 2026-06-15
+**Update (2026-07-02):** Phase 0 (Processing hub of one-click recipes) has shipped.
+The concrete plan for Phases 1–3 is now [[23_pipeline_builder_port_design]] — port the
+working `pan-APA-AI-Workshop-2026` Scratch-style builder (same Django/steps-JSON/registry
+architecture) and back its blocks with the existing SageMaker jobs. Read doc 23 for the
+block palette, artifact-type system, and the resumable-state-machine executor.
 **Goal:** Turn the "Processing" page from an analytics view into a **visual,
 drag-and-drop workflow builder** (Roboflow Workflows / Scratch style) where a user
 composes AI analysis pipelines over uploaded videos/images to extract **abstract

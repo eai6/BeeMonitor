@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}{{ pipeline.title }} — Pipeline builder{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-4">
+  <div>
+    <form hx-post="{% url 'pipelines:rename' pk=pipeline.pk %}" hx-swap="innerHTML" hx-target="#save-indicator"
+          class="flex items-center gap-2">
+      {% csrf_token %}
+      <input name="title" value="{{ pipeline.title }}"
+             class="text-xl font-bold text-gray-900 border-0 border-b border-transparent hover:border-gray-300 focus:border-amber-500 focus:ring-0 px-0">
+      <button type="submit" class="text-sm text-amber-700">Save</button>
+      <span id="save-indicator"></span>
+    </form>
+    <a href="{% url 'pipelines:list' %}" class="text-xs text-gray-400 hover:text-gray-600">← All pipelines</a>
+  </div>
+  <form method="post" action="{% url 'pipelines:run' pk=pipeline.pk %}">
+    {% csrf_token %}
+    <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-5 py-2 rounded-md text-sm font-semibold">▶ Run</button>
+  </form>
+</div>
+
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+  <!-- Palette -->
+  <div class="md:col-span-1">
+    <div class="bg-white rounded-lg border border-gray-200 shadow-sm p-3" x-data="{ open: '{{ categories.0.slug }}' }">
+      <p class="text-xs uppercase tracking-wide text-gray-400 mb-2 px-1">Blocks</p>
+      {% for cat in categories %}
+      <div class="mb-1">
+        <button type="button" @click="open = (open === '{{ cat.slug }}' ? '' : '{{ cat.slug }}')"
+                class="w-full flex items-center justify-between px-2 py-1.5 rounded hover:bg-gray-50 text-sm font-medium text-gray-700">
+          <span>{{ cat.icon }} {{ cat.name }}</span>
+          <span class="text-gray-400" x-text="open === '{{ cat.slug }}' ? '−' : '+'"></span>
+        </button>
+        <div x-show="open === '{{ cat.slug }}'" class="pl-1 space-y-1 mt-1">
+          {% for block in cat.blocks %}
+          <form hx-post="{% url 'pipelines:add_step' pk=pipeline.pk %}" hx-target="#steps-column" hx-swap="innerHTML">
+            {% csrf_token %}
+            <input type="hidden" name="block_type" value="{{ block.type }}">
+            <button type="submit"
+                    class="w-full text-left px-2 py-1.5 rounded border border-gray-100 hover:border-amber-300 hover:bg-amber-50 text-sm"
+                    title="{{ block.description }}">
+              <span>{{ block.icon }} {{ block.display_name }}</span>
+              <span class="block text-[11px] text-gray-400">{{ block.input_type }} → {{ block.output_type }}</span>
+            </button>
+          </form>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Steps -->
+  <div class="md:col-span-2">
+    <div id="steps-column">
+      {% include "pipelines/_steps.html" %}
+    </div>
+  </div>
+</div>
+
+{% if recent_runs %}
+<div class="mt-8">
+  <h3 class="text-sm font-semibold text-gray-700 mb-2">Recent runs</h3>
+  <ul class="space-y-1">
+    {% for r in recent_runs %}
+    <li class="text-sm">
+      <a href="{% url 'pipelines:run_detail' pk=pipeline.pk run_id=r.pk %}" class="text-amber-700 hover:underline">
+        {{ r.started_at|default:r.id }} — <span class="font-medium">{{ r.get_status_display }}</span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+{% endblock %}

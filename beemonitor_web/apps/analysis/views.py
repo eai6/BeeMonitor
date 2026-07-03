@@ -657,6 +657,7 @@ def _poll_sagemaker_results(jobs) -> int:
                     error_message=f"SageMaker inference failed: {body.decode('utf-8', errors='replace')[:500]}",
                     completed_at=timezone.now(),
                 )
+                _notify_pipeline(job.pk)
                 n += 1
             except ClientError as e:
                 code = e.response.get("Error", {}).get("Code", "")
@@ -680,6 +681,7 @@ def _apply_result_to_job(job, result: dict) -> None:
             error_message=result.get("error_message", "Unknown SM failure"),
             completed_at=timezone.now(),
         )
+        _notify_pipeline(job.pk)
         return
 
     JobResult.objects.update_or_create(
@@ -723,6 +725,22 @@ def _apply_result_to_job(job, result: dict) -> None:
 
     logger.info("Poll: Job %s completed — %s events, %.1fs, $%.4f",
                 job.pk, result.get("total_events", 0), exec_secs, cost_usd)
+    _notify_pipeline(job.pk)
+
+
+def _notify_pipeline(job_pk) -> None:
+    """If a finished Job belongs to a pipeline run, advance that run.
+
+    Re-fetches the job fresh (callers use ``.update()``, leaving stale in-memory
+    objects) and hands it to the pipelines engine. Never raises into the poller.
+    """
+    try:
+        from apps.pipelines.engine import on_job_finished
+        fresh = Job.objects.filter(pk=job_pk).first()
+        if fresh and (fresh.config or {}).get("pipeline_run_id"):
+            on_job_finished(fresh)
+    except Exception:
+        logger.exception("pipeline notify failed for job %s", job_pk)
 
 
 def _video_job_config(base: dict, video, use_device_roi: bool) -> dict:

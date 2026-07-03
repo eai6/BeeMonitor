@@ -53,3 +53,7 @@ beemonitor-mobile/android/
 short_videos/replay_snippets/
 
 images/
+
+# Local review copies (not part of the app) — see memory/23
+scratch/
+.scratch-review/

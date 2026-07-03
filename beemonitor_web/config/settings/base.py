@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     "apps.devices",
     "apps.setup",
     "apps.monitor",
+    "apps.pipelines",
 ]
 
 MIDDLEWARE = [

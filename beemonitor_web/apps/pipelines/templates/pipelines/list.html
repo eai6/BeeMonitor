@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Pipelines — BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">Pipelines</h1>
+    <p class="text-sm text-gray-500">Compose AI analyses over your videos — no code.</p>
+  </div>
+  <a href="{% url 'pipelines:create' %}"
+     class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-md text-sm font-medium">
+    + New pipeline
+  </a>
+</div>
+
+<div class="grid grid-cols-1 gap-4">
+  {% for p in pipelines %}
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4 flex items-center justify-between">
+    <div>
+      <a href="{% url 'pipelines:editor' pk=p.pk %}" class="text-lg font-semibold text-gray-900 hover:text-amber-700">{{ p.title }}</a>
+      <p class="text-sm text-gray-500">{{ p.description|default:"No description" }}</p>
+      <p class="text-xs text-gray-400 mt-1">{{ p.steps|length }} step{{ p.steps|length|pluralize }} · updated {{ p.updated_at|timesince }} ago</p>
+    </div>
+    <div class="flex items-center gap-2">
+      <a href="{% url 'pipelines:editor' pk=p.pk %}" class="text-amber-700 hover:text-amber-900 text-sm font-medium">Edit</a>
+      <form method="post" action="{% url 'pipelines:delete' pk=p.pk %}" onsubmit="return confirm('Delete this pipeline?')">
+        {% csrf_token %}
+        <button type="submit" class="text-red-600 hover:text-red-800 text-sm">Delete</button>
+      </form>
+    </div>
+  </div>
+  {% empty %}
+  <div class="bg-white rounded-lg border border-dashed border-gray-300 p-8 text-center text-gray-500">
+    No pipelines yet. <a href="{% url 'pipelines:create' %}" class="text-amber-700 font-medium">Create your first one</a>.
+  </div>
+  {% endfor %}
+</div>
+
+{% if templates %}
+<h2 class="text-lg font-semibold text-gray-900 mt-8 mb-3">Templates</h2>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+  {% for t in templates %}
+  <div class="bg-amber-50 rounded-lg border border-amber-200 p-4 flex items-center justify-between">
+    <div>
+      <p class="font-semibold text-gray-900">{{ t.title }}</p>
+      <p class="text-sm text-gray-500">{{ t.description }}</p>
+    </div>
+    <form method="post" action="{% url 'pipelines:clone' pk=t.pk %}">
+      {% csrf_token %}
+      <button type="submit" class="bg-white border border-amber-300 text-amber-700 px-3 py-1.5 rounded text-sm font-medium">Use template</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

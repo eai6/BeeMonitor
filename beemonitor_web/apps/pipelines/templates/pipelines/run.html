@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Run — {{ pipeline.title }}{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-4">
+  <div>
+    <h1 class="text-xl font-bold text-gray-900">{{ pipeline.title }}</h1>
+    <a href="{% url 'pipelines:editor' pk=pipeline.pk %}" class="text-xs text-gray-400 hover:text-gray-600">← Back to editor</a>
+  </div>
+  <span class="px-3 py-1 rounded-full text-sm font-medium
+    {% if run.status == 'completed' %}bg-green-100 text-green-800
+    {% elif run.status == 'failed' %}bg-red-100 text-red-800
+    {% else %}bg-amber-100 text-amber-800{% endif %}">{{ run.get_status_display }}</span>
+</div>
+
+{% if not run.is_terminal %}
+<div hx-get="{% url 'pipelines:run_status' pk=pipeline.pk run_id=run.pk %}"
+     hx-trigger="load delay:3s, every 4s" hx-swap="none">
+  <p class="text-sm text-amber-700 mb-3">⏳ Running — GPU steps advance as their jobs finish…</p>
+</div>
+{% endif %}
+
+<div id="run-steps">
+  {% include "pipelines/_run_status.html" %}
+</div>
+
+{% if run.error_message %}
+<div class="bg-red-50 border border-red-200 text-red-800 rounded-md p-3 mt-4 text-sm">{{ run.error_message }}</div>
+{% endif %}
+{% endblock %}
