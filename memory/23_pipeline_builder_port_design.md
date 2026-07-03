@@ -180,7 +180,7 @@ template (`Pipeline.is_template`).
 | **0 — done** | One-click recipes (Processing hub, shipped) |
 | **1 — Port + linear ecology pipeline** | Copy `pipeline` app → `apps/pipelines`; add `ecology` palette (§4); artifact types + **enforced** port validation; multi-input `inputs:{}` + context; `advance_run` on `PollJobsView`; cost estimate before Run. Ship **Foraging-trips** as flagship template. |
 | **1.5 — Visitation + Colony** ✅ | `analyze.visitation` + `analyze.colony_activity` implemented as **local** post-processors over the tracking CSV (`ops.py`): schema-tolerant loader (`track_id/frame/cx/cy`, pixel→0..1 normalise), ROI∩tracks visit/dwell counting, and time-binned occupancy/detection series. Colony template now includes a `track.bee` step. |
-| **2 — Visual DAG canvas** | Replace linear editor with a node-graph canvas (React Flow / Rete / Drawflow — open Q). Scheduler unchanged. |
+| **2 — Visual DAG canvas** ✅ | **Drawflow** canvas (CDN, no build step) replaces the linear editor: palette drag-drop, named typed ports (multi-input via `get_input_ports`), inline node config, save→`graph_to_steps`. `Pipeline.graph` stores the raw layout; `steps` stays the source of truth (canvas rebuilt from `steps` + saved positions). Scheduler + executors unchanged. Linear-editor HTMX endpoints removed. |
 | **3 — Education + advanced ID** | `notebook_generator` → export ecological pipelines to Colab; STEM lesson packs; `identify.marker` (per-track QR/color ID) + per-track taxon. |
 
 ---

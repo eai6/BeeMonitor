@@ -34,6 +34,12 @@ class Pipeline(models.Model):
         help_text="Ordered list of step dicts: "
                   "[{id, block_type, config, inputs?}, ...]",
     )
+    graph = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Raw Drawflow node-graph export (canvas layout). Derived into "
+                  "`steps` on save; empty for pipelines built before the canvas.",
+    )
     is_template = models.BooleanField(default=False)
     cloned_from = models.ForeignKey(
         "self",

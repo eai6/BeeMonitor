@@ -2,29 +2,49 @@
 {% block title %}{{ pipeline.title }} — Pipeline builder{% endblock %}
 
 {% block content %}
-<div class="flex items-center justify-between mb-4">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/drawflow@0.0.60/dist/drawflow.min.css">
+<style>
+  #drawflow { position: relative; width: 100%; height: 620px; background: #f8fafc;
+    background-image: radial-gradient(#e2e8f0 1px, transparent 1px); background-size: 22px 22px;
+    border: 1px solid #e5e7eb; border-radius: 0.5rem; }
+  .pl-node { min-width: 190px; font-size: 12px; }
+  .pl-head { font-weight: 600; color: #111827; }
+  .pl-sub { font-size: 10px; color: #9ca3af; margin: 2px 0 4px; }
+  .pl-body { display: flex; flex-direction: column; gap: 3px; }
+  .pl-lab { font-size: 10px; color: #6b7280; }
+  .pl-inp { width: 100%; border: 1px solid #d1d5db; border-radius: 4px; padding: 2px 4px; font-size: 11px; }
+  .drawflow .drawflow-node { background: #fff; border: 1px solid #d1d5db; border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.06); padding: 8px 10px; }
+  .drawflow .drawflow-node.selected { border-color: #16a34a; box-shadow: 0 0 0 2px #bbf7d0; }
+  .drawflow .connection .main-path { stroke: #16a34a; stroke-width: 2px; }
+  .tray-block { cursor: grab; }
+</style>
+
+<div class="flex items-center justify-between mb-3">
   <div>
-    <form hx-post="{% url 'pipelines:rename' pk=pipeline.pk %}" hx-swap="innerHTML" hx-target="#save-indicator"
-          class="flex items-center gap-2">
+    <form hx-post="{% url 'pipelines:rename' pk=pipeline.pk %}" hx-target="#save-indicator" hx-swap="innerHTML" class="flex items-center gap-2">
       {% csrf_token %}
       <input name="title" value="{{ pipeline.title }}"
              class="text-xl font-bold text-gray-900 border-0 border-b border-transparent hover:border-gray-300 focus:border-amber-500 focus:ring-0 px-0">
-      <button type="submit" class="text-sm text-amber-700">Save</button>
+      <button type="submit" class="text-xs text-amber-700">rename</button>
       <span id="save-indicator"></span>
     </form>
     <a href="{% url 'pipelines:list' %}" class="text-xs text-gray-400 hover:text-gray-600">← All pipelines</a>
   </div>
-  <form method="post" action="{% url 'pipelines:run' pk=pipeline.pk %}">
-    {% csrf_token %}
-    <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-5 py-2 rounded-md text-sm font-semibold">▶ Run</button>
-  </form>
+  <div class="flex items-center gap-2">
+    <button type="button" onclick="plSave()" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-md text-sm font-medium">💾 Save</button>
+    <button type="button" onclick="plRun()" class="bg-amber-600 hover:bg-amber-700 text-white px-5 py-2 rounded-md text-sm font-semibold">▶ Run</button>
+  </div>
 </div>
 
-<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+<div id="pl-errors" class="hidden bg-red-50 border border-red-200 text-red-800 rounded-md p-3 mb-3 text-sm"></div>
+<p id="pl-toast" class="hidden text-sm text-green-700 mb-2"></p>
+
+<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
   <!-- Palette -->
   <div class="md:col-span-1">
     <div class="bg-white rounded-lg border border-gray-200 shadow-sm p-3" x-data="{ open: '{{ categories.0.slug }}' }">
-      <p class="text-xs uppercase tracking-wide text-gray-400 mb-2 px-1">Blocks</p>
+      <p class="text-xs uppercase tracking-wide text-gray-400 mb-1 px-1">Drag onto canvas</p>
       {% for cat in categories %}
       <div class="mb-1">
         <button type="button" @click="open = (open === '{{ cat.slug }}' ? '' : '{{ cat.slug }}')"
@@ -34,16 +54,12 @@
         </button>
         <div x-show="open === '{{ cat.slug }}'" class="pl-1 space-y-1 mt-1">
           {% for block in cat.blocks %}
-          <form hx-post="{% url 'pipelines:add_step' pk=pipeline.pk %}" hx-target="#steps-column" hx-swap="innerHTML">
-            {% csrf_token %}
-            <input type="hidden" name="block_type" value="{{ block.type }}">
-            <button type="submit"
-                    class="w-full text-left px-2 py-1.5 rounded border border-gray-100 hover:border-amber-300 hover:bg-amber-50 text-sm"
-                    title="{{ block.description }}">
-              <span>{{ block.icon }} {{ block.display_name }}</span>
-              <span class="block text-[11px] text-gray-400">{{ block.input_type }} → {{ block.output_type }}</span>
-            </button>
-          </form>
+          <div class="tray-block px-2 py-1.5 rounded border border-gray-100 hover:border-amber-300 hover:bg-amber-50 text-sm"
+               draggable="true" data-block="{{ block.type }}" ondblclick="plAddCenter('{{ block.type }}')"
+               title="{{ block.description }}">
+            <span>{{ block.icon }} {{ block.display_name }}</span>
+            <span class="block text-[11px] text-gray-400">{{ block.input_type }} → {{ block.output_type }}</span>
+          </div>
           {% endfor %}
         </div>
       </div>
@@ -51,26 +67,126 @@
     </div>
   </div>
 
-  <!-- Steps -->
-  <div class="md:col-span-2">
-    <div id="steps-column">
-      {% include "pipelines/_steps.html" %}
-    </div>
+  <!-- Canvas -->
+  <div class="md:col-span-3">
+    <div id="drawflow" ondrop="plDrop(event)" ondragover="event.preventDefault()"></div>
+    <p class="text-xs text-gray-400 mt-1">Drag a block in, connect output → input, edit fields on the node. Select a node and press <kbd>Delete</kbd> to remove it. Save persists the graph.</p>
   </div>
 </div>
 
-{% if recent_runs %}
-<div class="mt-8">
-  <h3 class="text-sm font-semibold text-gray-700 mb-2">Recent runs</h3>
-  <ul class="space-y-1">
-    {% for r in recent_runs %}
-    <li class="text-sm">
-      <a href="{% url 'pipelines:run_detail' pk=pipeline.pk run_id=r.pk %}" class="text-amber-700 hover:underline">
-        {{ r.started_at|default:r.id }} — <span class="font-medium">{{ r.get_status_display }}</span>
-      </a>
-    </li>
-    {% endfor %}
-  </ul>
-</div>
-{% endif %}
+<form id="pl-run-form" method="post" action="{% url 'pipelines:run' pk=pipeline.pk %}" class="hidden">{% csrf_token %}</form>
+
+<script src="https://cdn.jsdelivr.net/npm/drawflow@0.0.60/dist/drawflow.min.js"></script>
+<script>
+const BLOCKS = JSON.parse("{{ blocks_json|escapejs }}");
+const INITIAL_STEPS = JSON.parse("{{ initial_steps_json|escapejs }}");
+const VIDEOS = JSON.parse("{{ videos_json|escapejs }}");
+const SAVE_URL = "{% url 'pipelines:save_graph' pk=pipeline.pk %}";
+const CSRF = "{{ csrf_token }}";
+
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function genId(){ return Math.random().toString(16).slice(2,10); }
+
+function ctrl(field, value){
+  const v = (value!==undefined && value!==null && value!=='') ? value : (field.default!==undefined ? field.default : '');
+  const common = `data-cfg="${field.name}" onmousedown="event.stopPropagation()" class="pl-inp"`;
+  if(field.field_type==='select'){
+    const opts=(field.choices||[]).map(c=>`<option value="${esc(c.value)}" ${String(c.value)===String(v)?'selected':''}>${esc(c.label)}</option>`).join('');
+    return `<select ${common}>${opts}</select>`;
+  }
+  if(field.field_type==='video'){
+    const opts=`<option value="">— video —</option>`+VIDEOS.map(o=>`<option value="${esc(o.id)}" ${String(o.id)===String(v)?'selected':''}>${esc(o.title)}</option>`).join('');
+    return `<select ${common}>${opts}</select>`;
+  }
+  if(field.field_type==='textarea'){ return `<textarea ${common} rows="2">${esc(v)}</textarea>`; }
+  const t = field.field_type==='number' ? 'number' : 'text';
+  return `<input ${common} type="${t}" value="${esc(v)}">`;
+}
+function nodeHtml(b, config){
+  const fields=(b.config_fields||[]).map(f=>`<label class="pl-lab">${esc(f.label)}${f.required?' *':''}</label>${ctrl(f, config?config[f.name]:undefined)}`).join('');
+  const ports=(b.input_ports||[]).map(p=>p.name).join(', ');
+  return `<div class="pl-node"><div class="pl-head">${b.icon} ${esc(b.display_name)}</div>`
+       + `<div class="pl-sub">${b.input_type} → ${b.output_type}${ports?` · in: ${ports}`:''}</div>`
+       + (fields?`<div class="pl-body">${fields}</div>`:'') + `</div>`;
+}
+
+let editor;
+function plAdd(block_type, pos_x, pos_y, config, stepId){
+  const b = BLOCKS[block_type];
+  if(!b) return null;
+  const data = { block_type, step_id: stepId || genId(), config: config || {} };
+  return editor.addNode(block_type, (b.input_ports||[]).length, b.num_out, pos_x, pos_y, 'pl', data, nodeHtml(b, data.config), false);
+}
+function plAddCenter(block_type){ plAdd(block_type, 60 + Math.random()*120, 60 + Math.random()*120, {}, null); }
+
+// Drawflow's official drop-position math (accounts for zoom + pan).
+function plDrop(ev){
+  ev.preventDefault();
+  const bt = ev.dataTransfer.getData('block');
+  if(!bt) return;
+  const z = editor.zoom, pc = editor.precanvas.getBoundingClientRect();
+  const x = ev.clientX * (editor.precanvas.clientWidth / (editor.precanvas.clientWidth * z)) - (pc.x * (editor.precanvas.clientWidth / (editor.precanvas.clientWidth * z)));
+  const y = ev.clientY * (editor.precanvas.clientHeight / (editor.precanvas.clientHeight * z)) - (pc.y * (editor.precanvas.clientHeight / (editor.precanvas.clientHeight * z)));
+  plAdd(bt, x, y, {}, null);
+}
+
+function plScrapeConfig(){
+  // Pull user-edited field values from each node's DOM into node.data.config.
+  const g = editor.export();
+  const data = g.drawflow.Home.data;
+  Object.keys(data).forEach(id => {
+    const el = document.getElementById('node-'+id);
+    if(!el) return;
+    const cfg = {};
+    el.querySelectorAll('[data-cfg]').forEach(inp => { cfg[inp.getAttribute('data-cfg')] = inp.value; });
+    data[id].data.config = cfg;
+  });
+  return g;
+}
+
+async function plSave(){
+  const g = plScrapeConfig();
+  const r = await fetch(SAVE_URL, {method:'POST', headers:{'X-CSRFToken':CSRF,'Content-Type':'application/json'}, body: JSON.stringify(g)});
+  const j = await r.json();
+  plShowErrors(j.errors||[]);
+  const toast = document.getElementById('pl-toast');
+  toast.textContent = j.ok ? `Saved — ${j.step_count} step(s)` : (j.error||'Save failed');
+  toast.classList.remove('hidden'); setTimeout(()=>toast.classList.add('hidden'), 2500);
+  return j;
+}
+async function plRun(){
+  const j = await plSave();
+  if(j.errors && j.errors.length){ return; }        // don't run an invalid graph
+  document.getElementById('pl-run-form').submit();
+}
+function plShowErrors(errors){
+  const box = document.getElementById('pl-errors');
+  if(!errors.length){ box.classList.add('hidden'); box.innerHTML=''; return; }
+  box.innerHTML = '<p class="font-medium mb-1">Fix before running:</p><ul class="list-disc list-inside">'
+                + errors.map(e=>`<li>${esc(e)}</li>`).join('') + '</ul>';
+  box.classList.remove('hidden');
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  editor = new Drawflow(document.getElementById('drawflow'));
+  editor.reroute = true;
+  editor.start();
+
+  // Palette drag source.
+  document.querySelectorAll('.tray-block').forEach(el => {
+    el.addEventListener('dragstart', ev => ev.dataTransfer.setData('block', el.getAttribute('data-block')));
+  });
+
+  // Build the canvas from steps (source of truth) using saved positions.
+  const idmap = {};
+  INITIAL_STEPS.forEach(s => { idmap[s.id] = plAdd(s.block_type, s.pos_x, s.pos_y, s.config, s.id); });
+  INITIAL_STEPS.forEach(s => (s.edges||[]).forEach(e => {
+    if(idmap[e.from]!=null && idmap[s.id]!=null){
+      try { editor.addConnection(idmap[e.from], idmap[s.id], 'output_1', 'input_'+e.port_index); } catch(err){}
+    }
+  }));
+
+  plShowErrors(JSON.parse("{{ errors_json|escapejs }}") || []);
+});
+</script>
 {% endblock %}

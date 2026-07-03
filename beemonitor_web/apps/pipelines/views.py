@@ -19,8 +19,11 @@ from django.views.decorators.http import require_POST
 from apps.videos.models import Video
 
 from . import engine
+from .graph import build_initial_steps, graph_to_steps
 from .models import Pipeline, PipelineRun
-from .registry import BLOCK_REGISTRY, get_block, get_categories, validate_steps
+from .registry import (
+    get_block, get_categories, serialize_blocks, validate_steps,
+)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -33,50 +36,8 @@ def _own_pipeline(request, pk):
     return get_object_or_404(Pipeline, pk=pk, user=request.user)
 
 
-def _enrich_steps(steps):
-    """Attach block metadata + config fields (with current values) for rendering."""
-    enriched = []
-    for step in steps:
-        block = get_block(step.get("block_type", "")) or {}
-        config = step.get("config", {})
-        fields = []
-        for field in block.get("config_fields", []):
-            fields.append({
-                **field,
-                "current_value": config.get(field["name"], field.get("default", "")),
-            })
-        enriched.append({
-            **step,
-            "block": block,
-            "display_name": block.get("display_name", step.get("block_type", "Unknown")),
-            "icon": block.get("icon", "🔧"),
-            "input_type": block.get("input_type", "none"),
-            "output_type": block.get("output_type", "none"),
-            "config_fields": fields,
-        })
-    return enriched
-
-
 def _user_videos(request):
     return Video.objects.filter(user=request.user).order_by("-id")[:200]
-
-
-def _editor_context(request, pipeline, extra=None):
-    ctx = {
-        "pipeline": pipeline,
-        "steps": _enrich_steps(pipeline.steps or []),
-        "categories": get_categories(),
-        "videos": _user_videos(request),
-        "errors": validate_steps(pipeline.steps or []),
-    }
-    if extra:
-        ctx.update(extra)
-    return ctx
-
-
-def _render_steps(request, pipeline):
-    """Return the steps-column partial (used as the HTMX swap target)."""
-    return render(request, "pipelines/_steps.html", _editor_context(request, pipeline))
 
 
 # ── Pipeline CRUD ─────────────────────────────────────────────────────────────
@@ -140,10 +101,41 @@ def _reid(steps):
 @login_required
 def pipeline_editor(request, pk):
     pipeline = _own_pipeline(request, pk)
-    ctx = _editor_context(request, pipeline, {
+    videos = [
+        {"id": str(v.pk), "title": (getattr(v, "title", "") or f"Video {v.pk}")}
+        for v in _user_videos(request)
+    ]
+    ctx = {
+        "pipeline": pipeline,
+        "categories": get_categories(),
+        "blocks_json": json.dumps(serialize_blocks()),
+        "initial_steps_json": json.dumps(build_initial_steps(pipeline)),
+        "saved_graph_json": json.dumps(pipeline.graph or {}),
+        "videos_json": json.dumps(videos),
+        "errors_json": json.dumps(validate_steps(pipeline.steps or [])),
         "recent_runs": pipeline.runs.all()[:5],
-    })
+    }
     return render(request, "pipelines/editor.html", ctx)
+
+
+@login_required
+@require_POST
+def save_graph(request, pk):
+    """Persist the Drawflow canvas: convert graph → steps, store both, revalidate."""
+    pipeline = _own_pipeline(request, pk)
+    try:
+        graph = json.loads(request.body.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({"ok": False, "error": "Invalid graph JSON."}, status=400)
+    steps = graph_to_steps(graph)
+    pipeline.graph = graph
+    pipeline.steps = steps
+    pipeline.save(update_fields=["graph", "steps", "updated_at"])
+    return JsonResponse({
+        "ok": True,
+        "errors": validate_steps(steps),
+        "step_count": len(steps),
+    })
 
 
 @login_required
@@ -164,89 +156,6 @@ def pipeline_rename(request, pk):
     if _is_htmx(request):
         return HttpResponse('<span class="text-green-600 text-sm">Saved</span>')
     return redirect("pipelines:editor", pk=pk)
-
-
-# ── Step editing (HTMX) ───────────────────────────────────────────────────────
-
-@login_required
-@require_POST
-def add_step(request, pk):
-    pipeline = _own_pipeline(request, pk)
-    block_type = request.POST.get("block_type", "").strip()
-    block = get_block(block_type)
-    if not block:
-        return HttpResponse("Unknown block type.", status=400)
-
-    default_config = {f["name"]: f.get("default", "") for f in block.get("config_fields", [])}
-    steps = pipeline.steps or []
-    steps.append({
-        "id": uuid.uuid4().hex[:8],
-        "block_type": block_type,
-        "config": default_config,
-    })
-    pipeline.steps = steps
-    pipeline.save(update_fields=["steps", "updated_at"])
-    return _render_steps(request, pipeline)
-
-
-@login_required
-@require_POST
-def remove_step(request, pk, step_id):
-    pipeline = _own_pipeline(request, pk)
-    steps = [s for s in (pipeline.steps or []) if s.get("id") != step_id]
-    # Drop dangling input references to the removed step.
-    for s in steps:
-        if s.get("inputs"):
-            s["inputs"] = {p: v for p, v in s["inputs"].items() if v != step_id}
-    pipeline.steps = steps
-    pipeline.save(update_fields=["steps", "updated_at"])
-    return _render_steps(request, pipeline)
-
-
-@login_required
-@require_POST
-def move_step(request, pk, step_id, direction):
-    pipeline = _own_pipeline(request, pk)
-    steps = pipeline.steps or []
-    idx = next((i for i, s in enumerate(steps) if s.get("id") == step_id), None)
-    if idx is not None:
-        if direction == "up" and idx > 0:
-            steps[idx - 1], steps[idx] = steps[idx], steps[idx - 1]
-        elif direction == "down" and idx < len(steps) - 1:
-            steps[idx + 1], steps[idx] = steps[idx], steps[idx + 1]
-        pipeline.steps = steps
-        pipeline.save(update_fields=["steps", "updated_at"])
-    return _render_steps(request, pipeline)
-
-
-@login_required
-@require_POST
-def configure_step(request, pk, step_id):
-    pipeline = _own_pipeline(request, pk)
-    steps = pipeline.steps or []
-    step = next((s for s in steps if s.get("id") == step_id), None)
-    if step is None:
-        return HttpResponse("Step not found.", status=404)
-
-    block = get_block(step.get("block_type", "")) or {}
-    config = step.get("config", {})
-    for field in block.get("config_fields", []):
-        name = field["name"]
-        if field["field_type"] == "file":
-            continue
-        value = request.POST.get(name, config.get(name, ""))
-        if field["field_type"] == "number" and value not in ("", None):
-            try:
-                value = float(value)
-                if value == int(value):
-                    value = int(value)
-            except (ValueError, TypeError):
-                pass
-        config[name] = value
-    step["config"] = config
-    pipeline.steps = steps
-    pipeline.save(update_fields=["steps", "updated_at"])
-    return _render_steps(request, pipeline)
 
 
 # ── Running ───────────────────────────────────────────────────────────────────

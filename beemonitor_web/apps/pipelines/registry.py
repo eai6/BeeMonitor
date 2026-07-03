@@ -470,6 +470,61 @@ def get_block(block_type):
     return BLOCK_REGISTRY.get(block_type)
 
 
+# ── Named ports (Phase 2 — the DAG canvas) ────────────────────────────────────
+# Most blocks have a single input port named after their input_type; a few take
+# several typed inputs (e.g. a video AND its ROI). Port *order* is stable and maps
+# to Drawflow's input_1, input_2, … The executors that read specific ports
+# (foraging/visitation/colony read ``tracks``) rely on these names.
+_MULTI_INPUT_PORTS = {
+    "detect.bee":              [{"name": "video", "type": "video"}],
+    "detect.nest":             [{"name": "video", "type": "video"}],
+    "track.bee":               [{"name": "video", "type": "video"},
+                                {"name": "rois", "type": "roi", "optional": True}],
+    "analyze.foraging_trips":  [{"name": "tracks", "type": "tracks"},
+                                {"name": "rois", "type": "roi", "optional": True}],
+    "analyze.visitation":      [{"name": "tracks", "type": "tracks"},
+                                {"name": "rois", "type": "roi", "optional": True}],
+    "analyze.colony_activity": [{"name": "tracks", "type": "tracks"},
+                                {"name": "rois", "type": "roi", "optional": True}],
+}
+
+
+def get_input_ports(block_type):
+    """Return the ordered list of input ports [{name, type, optional?}] for a block."""
+    if block_type in _MULTI_INPUT_PORTS:
+        return _MULTI_INPUT_PORTS[block_type]
+    block = BLOCK_REGISTRY.get(block_type, {})
+    in_type = block.get("input_type", "none")
+    if in_type == "none":
+        return []
+    return [{"name": "in", "type": in_type}]
+
+
+def num_output_ports(block_type):
+    """1 if the block emits an artifact, else 0."""
+    block = BLOCK_REGISTRY.get(block_type, {})
+    return 0 if block.get("output_type", "none") == "none" else 1
+
+
+def serialize_blocks():
+    """A JSON-safe dict of every block for the canvas palette + node rendering."""
+    out = {}
+    for block_type, block in BLOCK_REGISTRY.items():
+        out[block_type] = {
+            "type": block_type,
+            "display_name": block["display_name"],
+            "description": block["description"],
+            "category": block["category"],
+            "icon": block["icon"],
+            "input_type": block["input_type"],
+            "output_type": block["output_type"],
+            "input_ports": get_input_ports(block_type),
+            "num_out": num_output_ports(block_type),
+            "config_fields": block.get("config_fields", []),
+        }
+    return out
+
+
 def get_blocks_by_category(category):
     """Return all blocks in a given category."""
     return {
