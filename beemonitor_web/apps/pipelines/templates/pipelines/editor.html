@@ -32,6 +32,7 @@
     <a href="{% url 'pipelines:list' %}" class="text-xs text-gray-400 hover:text-gray-600">← All pipelines</a>
   </div>
   <div class="flex items-center gap-2">
+    <a href="{% url 'pipelines:export_notebook' pk=pipeline.pk %}" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-md text-sm font-medium" title="Download a runnable Colab notebook">⬇ Notebook</a>
     <button type="button" onclick="plSave()" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-md text-sm font-medium">💾 Save</button>
     <button type="button" onclick="plRun()" class="bg-amber-600 hover:bg-amber-700 text-white px-5 py-2 rounded-md text-sm font-semibold">▶ Run</button>
   </div>

@@ -9,6 +9,7 @@ urlpatterns = [
     path("create/", views.pipeline_create, name="create"),
     path("<uuid:pk>/", views.pipeline_editor, name="editor"),
     path("<uuid:pk>/save-graph/", views.save_graph, name="save_graph"),
+    path("<uuid:pk>/notebook/", views.export_notebook, name="export_notebook"),
     path("<uuid:pk>/rename/", views.pipeline_rename, name="rename"),
     path("<uuid:pk>/delete/", views.pipeline_delete, name="delete"),
     path("<uuid:pk>/clone/", views.clone_pipeline, name="clone"),

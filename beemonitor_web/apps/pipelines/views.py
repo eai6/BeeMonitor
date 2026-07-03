@@ -8,6 +8,7 @@ Tailwind base template and backed by the ``analysis.Job`` machinery.
 
 import copy
 import json
+import re
 import uuid
 
 from django.contrib import messages
@@ -20,6 +21,7 @@ from apps.videos.models import Video
 
 from . import engine
 from .graph import build_initial_steps, graph_to_steps
+from .notebook import generate_notebook
 from .models import Pipeline, PipelineRun
 from .registry import (
     get_block, get_categories, serialize_blocks, validate_steps,
@@ -116,6 +118,17 @@ def pipeline_editor(request, pk):
         "recent_runs": pipeline.runs.all()[:5],
     }
     return render(request, "pipelines/editor.html", ctx)
+
+
+@login_required
+def export_notebook(request, pk):
+    """Download the pipeline as a runnable Colab notebook (.ipynb)."""
+    pipeline = _own_pipeline(request, pk)
+    nb = generate_notebook(pipeline)
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", pipeline.title).strip("_") or "pipeline"
+    resp = HttpResponse(json.dumps(nb, indent=1), content_type="application/x-ipynb+json")
+    resp["Content-Disposition"] = f'attachment; filename="{safe}.ipynb"'
+    return resp
 
 
 @login_required
