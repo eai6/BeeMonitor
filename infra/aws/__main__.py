@@ -107,6 +107,29 @@ processed_bucket = _bucket("processed", "processed")
 models_bucket = _bucket("models", "models")
 user_configs_bucket = _bucket("user-configs", "user-configs")
 
+# Browser direct-to-S3 uploads (apps/api/web_uploads) PUT straight from the web
+# origin to raw-videos, so the bucket needs a CORS rule permitting the cross-origin
+# preflight + PUT. Without it the browser reports "S3 PUT network error" (the PUT
+# never gets a response). Presigned URL + IAM still enforce auth; CORS only tells
+# the browser the cross-origin request is allowed.
+_web_origins = [
+    "https://beemonitor.edwardamoah.com",
+    "https://mqnafc3ejc.us-east-1.awsapprunner.com",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+aws.s3.BucketCorsConfigurationV2(
+    "raw-videos-cors",
+    bucket=raw_videos_bucket.id,
+    cors_rules=[aws.s3.BucketCorsConfigurationV2CorsRuleArgs(
+        allowed_methods=["PUT", "GET", "HEAD"],
+        allowed_origins=_web_origins,
+        allowed_headers=["*"],
+        expose_headers=["ETag"],
+        max_age_seconds=3000,
+    )],
+)
+
 # Raw videos transition to cheaper tiers — these are large, infrequently
 # accessed after initial analysis. Mirrors what we set with the CLI in 1a.
 aws.s3.BucketLifecycleConfigurationV2(
