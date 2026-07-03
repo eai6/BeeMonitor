@@ -149,3 +149,51 @@ jobs:
           docker push "${IMAGE}:${SHA_TAG}"
           docker push "${IMAGE}:latest"
           echo "Pushed ${IMAGE}:${SHA_TAG} and :latest"
+
+  # SAM 3 auto-labeler image (Dockerfile.sam3, GPU) → its own ECR repo. Needs the
+  # HF_TOKEN secret to bake the GATED facebook/sam3 weights; the job fails without
+  # it (add repo secret HF_TOKEN after accepting the license at hf.co/facebook/sam3).
+  build-push-sam3:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      ECR_REPOSITORY: beemonitor-sm-dev-sam3
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push SAM 3 image
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          SHA_TAG: ${{ github.sha }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HF_TOKEN:-}" ]; then
+            echo "HF_TOKEN secret is not set — cannot bake gated facebook/sam3 weights." >&2
+            echo "Accept the license at https://huggingface.co/facebook/sam3 and add the" >&2
+            echo "HF_TOKEN repo secret, then re-run." >&2
+            exit 1
+          fi
+          IMAGE="${REGISTRY}/${ECR_REPOSITORY}"
+          DOCKER_BUILDKIT=1 docker build \
+            -f sagemaker_backend/Dockerfile.sam3 \
+            --secret id=hf_token,env=HF_TOKEN \
+            --platform linux/amd64 \
+            -t "${IMAGE}:${SHA_TAG}" \
+            -t "${IMAGE}:latest" \
+            .
+          docker push "${IMAGE}:${SHA_TAG}"
+          docker push "${IMAGE}:latest"
+          echo "Pushed ${IMAGE}:${SHA_TAG} and :latest"

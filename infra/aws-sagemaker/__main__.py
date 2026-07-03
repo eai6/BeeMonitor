@@ -51,6 +51,11 @@ image_tag = config.get("image-tag") or "latest"
 deploy_endpoint = config.get_bool("deploy-endpoint") or False
 deploy_bioclip = config.get_bool("deploy-bioclip") or False
 max_capacity = config.get_int("max-capacity") or 2
+# SAM 3 auto-labeler (GPU async, scale-to-zero). GPU + large weights, so default to
+# g5.xlarge (24 GB A10G). Only runs at label time, so max-capacity stays small.
+deploy_sam3 = config.get_bool("deploy-sam3") or False
+sam3_instance_type = config.get("sam3-instance-type") or "ml.g5.xlarge"
+sam3_max_capacity = config.get_int("sam3-max-capacity") or 2
 
 prefix = f"beemonitor-sm-{env}"
 ECR_REPO_NAME = f"{prefix}"  # must match the CI workflow
@@ -98,6 +103,19 @@ BIOCLIP_ECR_REPO_NAME = f"{prefix}-bioclip"  # must match the CI workflow
 bioclip_ecr_repo = aws.ecr.Repository(
     "bioclip-repo",
     name=BIOCLIP_ECR_REPO_NAME,
+    image_tag_mutability="MUTABLE",
+    image_scanning_configuration=aws.ecr.RepositoryImageScanningConfigurationArgs(
+        scan_on_push=True,
+    ),
+    force_delete=False,
+)
+
+# ECR for the SAM 3 auto-labeler image (GPU, CI-built). Its own repo so it
+# builds/deploys independently of the video + bioclip images.
+SAM3_ECR_REPO_NAME = f"{prefix}-sam3"  # must match the CI workflow
+sam3_ecr_repo = aws.ecr.Repository(
+    "sam3-repo",
+    name=SAM3_ECR_REPO_NAME,
     image_tag_mutability="MUTABLE",
     image_scanning_configuration=aws.ecr.RepositoryImageScanningConfigurationArgs(
         scan_on_push=True,
@@ -279,6 +297,14 @@ django_invoke_policy = aws.iam.Policy(
                 "Action": "sagemaker:InvokeEndpoint",
                 "Resource": (
                     f"arn:aws:sagemaker:{region}:{account_id}:endpoint/{prefix}-bioclip"
+                ),
+            },
+            {
+                "Sid": "InvokeSam3Endpoint",
+                "Effect": "Allow",
+                "Action": "sagemaker:InvokeEndpointAsync",
+                "Resource": (
+                    f"arn:aws:sagemaker:{region}:{account_id}:endpoint/{prefix}-sam3"
                 ),
             },
             {
@@ -662,6 +688,132 @@ if deploy_bioclip:
 
 
 # ---------------------------------------------------------------------------
+# SAM 3 auto-labeler endpoint — GPU async, scale-to-zero
+# ---------------------------------------------------------------------------
+# GPU (SAM 3 needs a GPU + VRAM), so this mirrors the video endpoint's async +
+# scale-to-zero plumbing rather than BioCLIP's serverless (CPU-only). Runs only at
+# label time, so it sits at 0 instances until a labeling request queues it up.
+# Gated on deploy-sam3 (two-pass: build image first, then flip the flag).
+if deploy_sam3:
+    sam3_tag = config.get("sam3-image-tag") or "latest"
+    sam3_image = pulumi.Output.concat(sam3_ecr_repo.repository_url, ":", sam3_tag)
+    sam3_tag_slug = "".join(c for c in sam3_tag if c.isalnum())[:12] or "latest"
+
+    sam3_model = aws.sagemaker.Model(
+        "sam3-model",
+        name=f"{prefix}-sam3-model-{sam3_tag_slug}",
+        execution_role_arn=sagemaker_role.arn,
+        primary_container=aws.sagemaker.ModelPrimaryContainerArgs(
+            image=sam3_image,
+            mode="SingleModel",
+            # Weights are baked (HF_HUB_OFFLINE=1 in the image), so no HF token or S3
+            # is needed at runtime — SageMaker async handles payload I/O itself.
+            environment={"AWS_REGION": region},
+        ),
+    )
+
+    sam3_config = aws.sagemaker.EndpointConfiguration(
+        "sam3-endpoint-config",
+        name=f"{prefix}-sam3-config-{sam3_tag_slug}",
+        production_variants=[
+            aws.sagemaker.EndpointConfigurationProductionVariantArgs(
+                variant_name=VARIANT_NAME,
+                model_name=sam3_model.name,
+                instance_type=sam3_instance_type,
+                initial_instance_count=1,
+            ),
+        ],
+        async_inference_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigArgs(
+            output_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigOutputConfigArgs(
+                s3_output_path=pulumi.Output.concat("s3://", output_bucket.bucket, "/"),
+            ),
+        ),
+    )
+
+    sam3_endpoint = aws.sagemaker.Endpoint(
+        "sam3-endpoint",
+        name=f"{prefix}-sam3",
+        endpoint_config_name=sam3_config.name,
+    )
+
+    # Scale-to-zero: identical pattern to the video endpoint (target-tracking toward
+    # min=0 + a step policy driven by the HasBacklogWithoutCapacity alarm to wake
+    # from zero). depends_on the endpoint so an image bump rolls cleanly (see the
+    # video endpoint's autoscaling_target comment).
+    sam3_target = aws.appautoscaling.Target(
+        "sam3-autoscaling-target",
+        max_capacity=sam3_max_capacity,
+        min_capacity=0,
+        resource_id=pulumi.Output.concat(
+            "endpoint/", sam3_endpoint.name, "/variant/", VARIANT_NAME,
+        ),
+        scalable_dimension="sagemaker:variant:DesiredInstanceCount",
+        service_namespace="sagemaker",
+        opts=pulumi.ResourceOptions(depends_on=[sam3_endpoint]),
+    )
+
+    aws.appautoscaling.Policy(
+        "sam3-autoscaling-policy",
+        name=f"{prefix}-sam3-scaling-policy",
+        policy_type="TargetTrackingScaling",
+        resource_id=sam3_target.resource_id,
+        scalable_dimension=sam3_target.scalable_dimension,
+        service_namespace=sam3_target.service_namespace,
+        target_tracking_scaling_policy_configuration=aws.appautoscaling
+            .PolicyTargetTrackingScalingPolicyConfigurationArgs(
+                target_value=5.0,
+                customized_metric_specification=aws.appautoscaling
+                    .PolicyTargetTrackingScalingPolicyConfigurationCustomizedMetricSpecificationArgs(
+                        metric_name="ApproximateBacklogSizePerInstance",
+                        namespace="AWS/SageMaker",
+                        statistic="Average",
+                    ),
+                scale_in_cooldown=600,
+                scale_out_cooldown=60,
+            ),
+    )
+
+    sam3_scale_from_zero = aws.appautoscaling.Policy(
+        "sam3-scale-from-zero",
+        name=f"{prefix}-sam3-scale-from-zero",
+        policy_type="StepScaling",
+        resource_id=sam3_target.resource_id,
+        scalable_dimension=sam3_target.scalable_dimension,
+        service_namespace=sam3_target.service_namespace,
+        step_scaling_policy_configuration=aws.appautoscaling
+            .PolicyStepScalingPolicyConfigurationArgs(
+                adjustment_type="ChangeInCapacity",
+                cooldown=300,
+                metric_aggregation_type="Maximum",
+                step_adjustments=[
+                    aws.appautoscaling
+                    .PolicyStepScalingPolicyConfigurationStepAdjustmentArgs(
+                        metric_interval_lower_bound="0",
+                        scaling_adjustment=1,
+                    ),
+                ],
+            ),
+    )
+
+    aws.cloudwatch.MetricAlarm(
+        "sam3-has-backlog-without-capacity",
+        name=f"{prefix}-sam3-has-backlog-without-capacity",
+        namespace="AWS/SageMaker",
+        metric_name="HasBacklogWithoutCapacity",
+        dimensions={"EndpointName": sam3_endpoint.name},
+        statistic="Maximum",
+        period=60,
+        evaluation_periods=1,
+        threshold=1,
+        comparison_operator="GreaterThanOrEqualToThreshold",
+        treat_missing_data="missing",
+        alarm_actions=[sam3_scale_from_zero.arn],
+    )
+
+    pulumi.export("sam3_endpoint_name", sam3_endpoint.name)
+
+
+# ---------------------------------------------------------------------------
 # Outputs
 # ---------------------------------------------------------------------------
 pulumi.export("aws_account_id", account_id)
@@ -672,6 +824,7 @@ pulumi.export("sm_input_bucket", input_bucket.bucket)
 pulumi.export("sm_output_bucket", output_bucket.bucket)
 pulumi.export("sagemaker_exec_role_arn", sagemaker_role.arn)
 pulumi.export("django_invoke_policy_arn", django_invoke_policy.arn)
+pulumi.export("sam3_ecr_repo_url", sam3_ecr_repo.repository_url)
 pulumi.export("training_ecr_repo_url", training_ecr_repo.repository_url)
 pulumi.export("sagemaker_training_role_arn", training_role.arn)
 pulumi.export("django_training_policy_arn", django_training_policy.arn)
