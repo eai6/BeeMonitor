@@ -4,11 +4,11 @@ config:
   beemonitor-sagemaker:instance-type: ml.g4dn.xlarge
   # Image tag in ECR to deploy. CI bumps this after a successful push;
   # for now :latest tracks the most recent main build.
-  beemonitor-sagemaker:image-tag: 27fd27f98ad50ef6ad2092e5008237681890c3ab
+  beemonitor-sagemaker:image-tag: 4cb75caabe90695226527134eb3e1d6f987ad228
   # Two-pass deploy: pass 1 (false) creates ECR + buckets + IAM only,
   # then CI builds the GPU image, then flip to true to create the
   # SageMaker Model / EndpointConfig / Endpoint / autoscaling.
-  beemonitor-sagemaker:deploy-endpoint: "false"
-  beemonitor-sagemaker:max-capacity: "2"
+  beemonitor-sagemaker:deploy-endpoint: "true"
+  beemonitor-sagemaker:max-capacity: "4"
   beemonitor-sagemaker:deploy-bioclip: "true"
 encryptionsalt: v1:KP9os4EO1pI=:v1:Uz8+RClcZwOfibt8:95C+OrayaNewT+KduPYUMyEg3dj+cw==
