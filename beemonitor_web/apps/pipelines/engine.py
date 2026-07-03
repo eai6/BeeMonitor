@@ -11,6 +11,7 @@ the DAG canvas, so the scheduler never needs rewriting for Phase 2.
 Design: ``memory/23_pipeline_builder_port_design.md``.
 """
 
+import copy
 import logging
 
 from django.db import transaction
@@ -23,9 +24,26 @@ from . import executors
 logger = logging.getLogger(__name__)
 
 
-def start_run(run):
-    """Kick a freshly-created run: freeze steps, init status, advance."""
-    run.steps = run.pipeline.steps or []
+def steps_with_video(pipeline, video_id):
+    """A copy of a pipeline's steps with every ``input.video`` step bound to a video.
+
+    Lets one pipeline run across many videos (e.g. from the Processing hub) by
+    injecting each video into the input step at launch time.
+    """
+    steps = copy.deepcopy(pipeline.steps or [])
+    for step in steps:
+        if step.get("block_type") == "input.video":
+            step.setdefault("config", {})["video_id"] = str(video_id)
+    return steps
+
+
+def start_run(run, steps=None):
+    """Kick a freshly-created run: freeze steps, init status, advance.
+
+    ``steps`` overrides the pipeline's steps for this run (e.g. with a specific
+    video injected); defaults to the pipeline's saved steps.
+    """
+    run.steps = steps if steps is not None else (run.pipeline.steps or [])
     run.step_status = {s["id"]: PipelineRun.STEP_PENDING for s in run.steps if s.get("id")}
     run.context = {}
     run.status = PipelineRun.Status.RUNNING

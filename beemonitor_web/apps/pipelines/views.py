@@ -193,6 +193,59 @@ def run_pipeline(request, pk):
 
 
 @login_required
+@require_POST
+def run_on_videos(request):
+    """Run a chosen pipeline once per selected video (from the Processing hub).
+
+    Mirrors analysis ``BatchJobView``'s AJAX contract so the hub's live per-video
+    status + poll keep working unchanged: each pipeline GPU step spawns a tagged
+    ``analysis.Job`` for that video, which ``analysis:poll`` already surfaces.
+    """
+    from apps.videos.models import Video
+
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+    def _fail(msg, status=400, level="warning"):
+        if is_ajax:
+            return JsonResponse({"error": msg}, status=status)
+        getattr(messages, level)(request, msg)
+        return redirect("analysis:processing")
+
+    pipeline = Pipeline.objects.filter(pk=request.POST.get("pipeline")).first()
+    if not pipeline or not (pipeline.is_template or pipeline.user_id == request.user.id):
+        return _fail("Choose a pipeline to run.")
+    if not any(s.get("block_type") == "input.video" for s in (pipeline.steps or [])):
+        return _fail("That pipeline has no video input to run on.")
+
+    video_ids = request.POST.getlist("video_ids")
+    if not video_ids:
+        return _fail("No videos selected.")
+
+    videos = Video.manageable(request.user).filter(pk__in=video_ids)
+    launched, invalid = [], 0
+    for video in videos:
+        steps = engine.steps_with_video(pipeline, video.pk)
+        if validate_steps(steps):
+            invalid += 1
+            continue
+        run = PipelineRun.objects.create(pipeline=pipeline, user=request.user)
+        engine.start_run(run, steps=steps)
+        launched.append(video.pk)
+
+    if not launched:
+        return _fail("Could not start — the pipeline isn't valid for the selected videos.")
+
+    msg = f"Started “{pipeline.title}” on {len(launched)} video(s)."
+    if invalid:
+        msg += f" Skipped {invalid}."
+    if is_ajax:
+        return JsonResponse({"ok": True, "submitted": len(launched), "skipped": invalid,
+                             "message": msg, "video_ids": launched})
+    messages.success(request, msg)
+    return redirect("analysis:processing")
+
+
+@login_required
 def run_detail(request, pk, run_id):
     pipeline = _own_pipeline(request, pk)
     run = get_object_or_404(PipelineRun, pk=run_id, pipeline=pipeline)

@@ -80,53 +80,28 @@
   </div>
 
   {% if videos %}
-  <form method="post" action="{% url 'analysis:batch' %}" id="run-form">
+  <form method="post" action="{% url 'pipelines:run_on_videos' %}" id="run-form">
     {% csrf_token %}
-    <!-- Preselected pipeline (abstract outputs): detect & track -->
-    <input type="hidden" name="detection_mode" value="detect_and_track">
-    <input type="hidden" name="confidence_threshold" value="0.25">
-    <input type="hidden" name="two_mode_tracking" value="true">
-    <input type="hidden" name="gpu_tier" value="A10G">
-    <input type="hidden" name="visualize" value="false">
-
-    <input type="hidden" name="analyses_form" value="1">
     {% if can_manage_any %}
-    <!-- Configuration -->
+    <!-- Choose a pipeline to run on the selected videos -->
     <div class="bg-white shadow rounded-lg p-4 mb-4">
-      <h2 class="text-sm font-semibold text-gray-900 mb-2">What to run</h2>
-      <div class="space-y-2 mb-4">
-        <label class="flex items-start gap-2 text-sm text-gray-700">
-          <input type="checkbox" name="run_tracking" value="on" checked class="mt-0.5 rounded border-gray-300">
-          <span><b>Tracking</b> — detect &amp; track bees across the whole clip → foraging trips, interactions, entries/exits, nest data.</span>
-        </label>
-        <label class="flex items-start gap-2 text-sm text-gray-700">
-          <input type="checkbox" name="run_species" value="on" checked class="mt-0.5 rounded border-gray-300">
-          <span><b>Species ID (taxonomy)</b> — BioCLIP on a few crops from a few frames → which insect was present.</span>
-        </label>
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="text-sm font-semibold text-gray-900">Pipeline to run</h2>
+        <a href="{% url 'pipelines:list' %}" class="text-xs text-amber-700 hover:underline">Build / edit pipelines →</a>
       </div>
-      <h3 class="text-xs font-semibold text-gray-600 mb-2 pt-1 border-t border-gray-100">Models <span class="font-normal text-gray-400">(tracking)</span></h3>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div>
-          <label class="block text-xs font-medium text-gray-600 mb-1">Bee tracking model</label>
-          <select name="custom_bee_model" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
-            <option value="">Default (bee_tracking.pt)</option>
-            {% for m in custom_bee_models %}<option value="{{ m.pk }}">{{ m.name }}</option>{% endfor %}
-          </select>
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-gray-600 mb-1">Nest detection model</label>
-          <select name="custom_nest_model" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
-            <option value="">Default (nest_detection.pt)</option>
-            {% for m in custom_nest_models %}<option value="{{ m.pk }}">{{ m.name }}</option>{% endfor %}
-          </select>
-        </div>
-      </div>
-      <label class="flex items-start gap-2 mt-3 text-sm text-gray-700">
-        <input type="checkbox" name="use_device_roi" value="on" class="mt-0.5 rounded border-gray-300">
-        <span>Use each bee hotel's configured <b>ROI + nest tubes</b> instead of detecting them (the nest model is the backup).
-          {% if roi_devices %}<span class="text-gray-400">Saved for: {{ roi_devices|join:", " }}.</span>
-          {% else %}<span class="text-gray-400">No bee hotel has a saved ROI yet — set one on the device page.</span>{% endif %}</span>
-      </label>
+      {% if pipelines or pipeline_templates %}
+      <select name="pipeline" id="pipeline-select" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+        {% if pipelines %}<optgroup label="My pipelines">
+          {% for p in pipelines %}<option value="{{ p.pk }}">{{ p.title }}</option>{% endfor %}
+        </optgroup>{% endif %}
+        {% if pipeline_templates %}<optgroup label="Templates">
+          {% for p in pipeline_templates %}<option value="{{ p.pk }}">{{ p.title }}</option>{% endfor %}
+        </optgroup>{% endif %}
+      </select>
+      <p class="text-xs text-gray-400 mt-2">Runs the pipeline once per selected video. Model &amp; ROI choices live inside the pipeline (e.g. the “Use bee-hotel ROI” block). Build your own on the <a href="{% url 'pipelines:list' %}" class="text-amber-700 hover:underline">Pipelines</a> page or start from a <a href="{% url 'pipelines:lesson_list' %}" class="text-amber-700 hover:underline">lesson</a>.</p>
+      {% else %}
+      <p class="text-sm text-gray-500">You have no pipelines yet. <a href="{% url 'pipelines:create' %}" class="text-amber-700 hover:underline font-medium">Create one</a> or start from a <a href="{% url 'pipelines:lesson_list' %}" class="text-amber-700 hover:underline">lesson</a>.</p>
+      {% endif %}
     </div>
     {% endif %}
 
@@ -180,7 +155,7 @@
       <p class="text-xs text-gray-500"><span id="cred-line">Select videos to run</span><span class="text-gray-400"> · ~{{ est_credits_per_video }} credits/video (A10G)</span></p>
       <button type="submit" id="run-btn" disabled
               class="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white px-4 py-1.5 rounded text-sm font-medium whitespace-nowrap">
-        Run analysis (<span id="sel-count">0</span>)
+        Run pipeline (<span id="sel-count">0</span>)
       </button>
     </div>
     {% endif %}

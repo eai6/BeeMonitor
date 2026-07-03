@@ -187,6 +187,16 @@ template (`Pipeline.is_template`).
 end-to-end (builder → engine → analytics → visual DAG canvas → advanced ID → notebook
 export → lessons), committed on `main`.
 
+**Processing-hub integration (2026-07-02).** The `/analysis/processing/` hub's fixed
+"What to run" recipe (tracking/species toggles + model selectors + ROI toggle) is
+**replaced by a pipeline picker**: choose one of your pipelines/templates and run it on
+the filtered/selected videos. `pipelines.run_on_videos` creates one `PipelineRun` per
+video via `engine.steps_with_video` (injects each video into the `input.video` step) and
+returns the same AJAX JSON contract as `analysis.BatchJobView`, so the hub's existing
+per-video live status + `analysis:poll` work unchanged (each GPU step spawns a tagged
+`analysis.Job` for that video). Model + ROI choices now live inside the pipeline (the
+`roi.nest_layout` block reads the video's device layout per-run).
+
 ---
 
 ## 9. Where it lives / port mechanics

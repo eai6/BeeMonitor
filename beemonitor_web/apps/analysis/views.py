@@ -346,6 +346,7 @@ class ProcessingHubView(LoginRequiredMixin, View):
         from django.db.models import OuterRef, Subquery
         from apps.devices.models import Device
         from apps.training.models import CustomModel
+        from apps.pipelines.models import Pipeline
 
         # Own videos + videos from devices shared with me (viewer or manager).
         user_videos = Video.accessible(request.user)
@@ -413,6 +414,9 @@ class ProcessingHubView(LoginRequiredMixin, View):
             "custom_nest_models": models.filter(model_type__in=["nest_detection", "custom"]),
             "custom_bee_models": models.filter(model_type__in=["bee_tracking", "custom"]),
             "est_credits_per_video": 349,
+            # Pipelines to run on the selected videos (replaces the fixed recipe).
+            "pipelines": Pipeline.objects.filter(user=request.user, is_template=False).order_by("title"),
+            "pipeline_templates": Pipeline.objects.filter(is_template=True).order_by("title"),
         })
 
     def post(self, request):
