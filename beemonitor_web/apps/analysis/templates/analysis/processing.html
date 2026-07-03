@@ -53,30 +53,10 @@
     {% if has_filter %}<a href="{% url 'analysis:processing' %}" class="text-sm text-amber-700 hover:underline">Clear</a>{% endif %}
   </form>
 
-  <!-- Extracted ecological data + downloads -->
-  <div class="bg-white shadow rounded-lg p-4 mb-5">
-    <h2 class="text-sm font-semibold text-gray-900">Extracted ecological data</h2>
-    <p class="text-xs text-gray-500 mt-1 mb-3">
-      Two kinds of analysis run on your videos{% if has_filter %}
-      <span class="text-amber-700">(matching your filter)</span>{% endif %}. Download as CSV:
-    </p>
-    <div class="mb-3">
-      <div class="text-xs font-medium text-gray-600 mb-1.5">Tracking <span class="text-gray-400">— whole clip</span></div>
-      <div class="flex flex-wrap gap-2">
-        <a href="{% url 'analysis:download_trips' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🌼 Foraging trips</a>
-        <a href="{% url 'analysis:download_interactions' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🔗 Interactions</a>
-        <a href="{% url 'analysis:download_events' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">📋 Events (entries/exits)</a>
-        <a href="{% url 'analysis:download_tracking' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">📈 Tracking</a>
-        <a href="{% url 'analysis:download_nest_data' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🏠 Nest data</a>
-      </div>
-    </div>
-    <div>
-      <div class="text-xs font-medium text-gray-600 mb-1.5">Species taxonomy <span class="text-gray-400">— a few crops (BioCLIP)</span></div>
-      <div class="flex flex-wrap gap-2">
-        <a href="{% url 'analysis:download_species' %}{{ download_qs }}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700 hover:bg-gray-100">🔬 Species (taxon, count, confidence)</a>
-      </div>
-    </div>
-    <p class="text-xs text-gray-400 mt-3">Downloads respect the filter above. Per-video results are on each <span class="text-gray-500">job</span>.</p>
+  <!-- Outputs now come from pipeline runs — see the run history. -->
+  <div class="flex items-center justify-between gap-3 bg-white shadow rounded-lg p-4 mb-5">
+    <p class="text-sm text-gray-600">Ecological data — foraging trips, visitation, species, tracks and more — is produced by the <b>pipeline</b> you run below. Each run's outputs are downloadable from its results page.</p>
+    <a href="{% url 'pipelines:run_list' %}" class="shrink-0 text-sm text-amber-700 hover:underline font-medium whitespace-nowrap">Run history →</a>
   </div>
 
   {% if videos %}

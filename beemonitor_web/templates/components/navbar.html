@@ -10,6 +10,7 @@
         <div class="hidden md:flex md:ml-10 md:space-x-4 md:items-center">
           <a href="{% url 'analysis:processing' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Processing</a>
           <a href="{% url 'pipelines:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Pipelines</a>
+          <a href="{% url 'pipelines:run_list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Runs</a>
           <a href="{% url 'pipelines:lesson_list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Lessons</a>
           <a href="{% url 'monitor:agent_chat' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Monitoring agent</a>
         </div>
@@ -39,6 +40,7 @@
     <div class="px-2 pt-2 pb-3 space-y-1">
       <a href="{% url 'analysis:processing' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Processing</a>
       <a href="{% url 'pipelines:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Pipelines</a>
+      <a href="{% url 'pipelines:run_list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Runs</a>
       <a href="{% url 'pipelines:lesson_list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Lessons</a>
       <a href="{% url 'monitor:agent_chat' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Monitoring agent</a>
       {% if user.is_authenticated %}

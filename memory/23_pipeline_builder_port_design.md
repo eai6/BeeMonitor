@@ -197,6 +197,15 @@ per-video live status + `analysis:poll` work unchanged (each GPU step spawns a t
 `analysis.Job` for that video). Model + ROI choices now live inside the pipeline (the
 `roi.nest_layout` block reads the video's device layout per-run).
 
+**Outputs moved to run history (2026-07-03).** The hub's static "Extracted ecological
+data" CSV block (foraging/interactions/events/tracking/nest/species) is removed —
+those are now **outputs of a pipeline run**. New **Run history** (`pipelines.run_list`
+→ `/pipelines/runs/`, "Runs" nav link) lists every `PipelineRun` for the user (pipeline,
+input video, status, progress); the run detail surfaces per-step outputs with a per-step
+`⬇ CSV` download (`run_output_csv`, serialises table rows) and a "results →" link to the
+underlying `analysis.Job` CSVs for GPU steps. Run views now authorise by `run.user`
+(not template ownership) so hub-launched template runs are viewable.
+
 ---
 
 ## 9. Where it lives / port mechanics

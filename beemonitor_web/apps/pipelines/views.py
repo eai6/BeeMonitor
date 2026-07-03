@@ -246,14 +246,66 @@ def run_on_videos(request):
 
 
 @login_required
+def run_list(request):
+    """History of the current user's pipeline runs (across pipelines)."""
+    runs = list(PipelineRun.objects.filter(user=request.user)
+                .select_related("pipeline").order_by("-started_at", "-id")[:100])
+
+    # Resolve each run's input video title(s) in one query.
+    vid_ids = set()
+    for r in runs:
+        for s in (r.steps or []):
+            if s.get("block_type") == "input.video":
+                vid = (s.get("config") or {}).get("video_id")
+                if str(vid).isdigit():
+                    vid_ids.add(int(vid))
+    titles = {}
+    if vid_ids:
+        titles = {str(v.pk): (getattr(v, "title", "") or f"Video {v.pk}")
+                  for v in Video.objects.filter(pk__in=vid_ids)}
+
+    rows = []
+    for r in runs:
+        inputs = [titles.get(str((s.get("config") or {}).get("video_id")))
+                  for s in (r.steps or []) if s.get("block_type") == "input.video"]
+        inputs = [i for i in inputs if i]
+        status_vals = (r.step_status or {}).values()
+        rows.append({
+            "run": r,
+            "input": ", ".join(inputs) or "—",
+            "done": sum(1 for st in status_vals if st == PipelineRun.STEP_DONE),
+            "total": len(r.steps or []),
+        })
+    return render(request, "pipelines/runs.html", {"rows": rows})
+
+
+@login_required
 def run_detail(request, pk, run_id):
-    pipeline = _own_pipeline(request, pk)
-    run = get_object_or_404(PipelineRun, pk=run_id, pipeline=pipeline)
+    run = get_object_or_404(PipelineRun, pk=run_id, user=request.user)
     return render(request, "pipelines/run.html", {
-        "pipeline": pipeline,
+        "pipeline": run.pipeline,
         "run": run,
         "steps": _run_steps(run),
     })
+
+
+@login_required
+def run_output_csv(request, pk, run_id, step_id):
+    """Download a step's tabular output (visitation / colony / marker rows) as CSV."""
+    import csv
+    import io
+
+    run = get_object_or_404(PipelineRun, pk=run_id, user=request.user)
+    out = (run.context or {}).get(step_id, {})
+    rows = out.get("rows") or []
+    buf = io.StringIO()
+    if rows:
+        writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    resp = HttpResponse(buf.getvalue(), content_type="text/csv")
+    resp["Content-Disposition"] = f'attachment; filename="run-{run_id}-{step_id}.csv"'
+    return resp
 
 
 def _run_steps(run):
@@ -275,8 +327,7 @@ def _run_steps(run):
 @login_required
 def run_status(request, pk, run_id):
     """HTMX poll: nudge any in-flight GPU jobs, then report status."""
-    pipeline = _own_pipeline(request, pk)
-    run = get_object_or_404(PipelineRun, pk=run_id, pipeline=pipeline)
+    run = get_object_or_404(PipelineRun, pk=run_id, user=request.user)
 
     if not run.is_terminal:
         _poll_run_jobs(run)
@@ -288,7 +339,7 @@ def run_status(request, pk, run_id):
             resp["HX-Refresh"] = "true"
             return resp
         return render(request, "pipelines/_run_status.html", {
-            "pipeline": pipeline, "run": run, "steps": _run_steps(run),
+            "pipeline": run.pipeline, "run": run, "steps": _run_steps(run),
         })
 
     return JsonResponse({

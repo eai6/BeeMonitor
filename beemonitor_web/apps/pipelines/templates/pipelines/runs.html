@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Run history — BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">Run history</h1>
+    <p class="text-sm text-gray-500">Every pipeline run on your videos and images — open one to get its outputs.</p>
+  </div>
+  <div class="flex items-center gap-2">
+    <a href="{% url 'pipelines:list' %}" class="text-sm text-amber-700 hover:underline">Pipelines</a>
+    <a href="{% url 'analysis:processing' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-md text-sm font-medium">Run on videos →</a>
+  </div>
+</div>
+
+{% if rows %}
+<div class="bg-white shadow rounded-lg divide-y">
+  {% for row in rows %}
+  <a href="{% url 'pipelines:run_detail' pk=row.run.pipeline_id run_id=row.run.pk %}"
+     class="flex items-center justify-between gap-3 px-4 py-3 hover:bg-gray-50">
+    <div class="min-w-0">
+      <div class="text-sm font-medium text-gray-900 truncate">{{ row.run.pipeline.title }}</div>
+      <div class="text-xs text-gray-400 truncate">{{ row.input }} · {{ row.run.started_at|default:row.run.id|date:"Y-m-d H:i" }}</div>
+    </div>
+    <div class="flex items-center gap-3 shrink-0">
+      <span class="text-xs text-gray-400">{{ row.done }}/{{ row.total }} steps</span>
+      <span class="text-xs px-2 py-0.5 rounded-full
+        {% if row.run.status == 'completed' %}bg-green-100 text-green-700
+        {% elif row.run.status == 'failed' %}bg-red-100 text-red-700
+        {% elif row.run.status == 'running' %}bg-amber-100 text-amber-700
+        {% else %}bg-gray-100 text-gray-600{% endif %}">{{ row.run.get_status_display }}</span>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="bg-white rounded-lg border border-dashed border-gray-300 p-8 text-center text-gray-500">
+  No runs yet. <a href="{% url 'analysis:processing' %}" class="text-amber-700 font-medium">Run a pipeline on your videos</a>.
+</div>
+{% endif %}
+{% endblock %}
