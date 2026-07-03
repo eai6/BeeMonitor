@@ -32,8 +32,7 @@
     <a href="{% url 'pipelines:list' %}" class="text-xs text-gray-400 hover:text-gray-600">← All pipelines</a>
   </div>
   <div class="flex items-center gap-2">
-    <a href="{% url 'pipelines:export_notebook' pk=pipeline.pk %}?mode=api" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-md text-sm font-medium" title="Colab that runs this pipeline live via the API">⬇ Notebook (live)</a>
-    <a href="{% url 'pipelines:export_notebook' pk=pipeline.pk %}" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-500 px-3 py-2 rounded-md text-sm" title="Explainable/offline scaffold notebook">⬇ offline</a>
+    <a href="{% url 'pipelines:open_in_colab' pk=pipeline.pk %}" target="_blank" rel="noopener" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-md text-sm font-medium" title="Open a live, runnable notebook in Google Colab">▶ Open in Colab</a>
     <button type="button" onclick="plSave()" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-md text-sm font-medium">💾 Save</button>
     <button type="button" onclick="plRun()" class="bg-amber-600 hover:bg-amber-700 text-white px-5 py-2 rounded-md text-sm font-semibold">▶ Run</button>
   </div>

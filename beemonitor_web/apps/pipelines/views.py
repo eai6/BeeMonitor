@@ -8,6 +8,7 @@ Tailwind base template and backed by the ``analysis.Job`` machinery.
 
 import copy
 import json
+import logging
 import re
 import uuid
 
@@ -22,11 +23,13 @@ from apps.videos.models import Video
 from . import engine
 from .graph import build_initial_steps, graph_to_steps
 from .lessons import get_lesson, list_lessons
-from .notebook import generate_notebook
+from .notebook import create_colab_gist, generate_api_notebook
 from .models import Pipeline, PipelineRun
 from .registry import (
     get_block, get_categories, serialize_blocks, validate_steps,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -122,25 +125,30 @@ def pipeline_editor(request, pk):
 
 
 @login_required
-def export_notebook(request, pk):
-    """Download the pipeline as a Colab notebook (.ipynb).
+def open_in_colab(request, pk):
+    """Open the pipeline as a live Colab notebook in the browser.
 
-    ?mode=api  → a live notebook that runs the pipeline via the public API (real
-                 endpoints, no SDK — just requests).
-    (default)  → the explainable/offline scaffold notebook (Phase 3b).
+    Pushes the generated (API-driven) notebook to a public GitHub gist and redirects
+    to ``colab.research.google.com/gist/<id>`` — so the user does it all in the web.
+    Falls back to downloading the ``.ipynb`` when no gist token is configured or the
+    gist call fails (or when ``?download=1``).
     """
+    from django.conf import settings
+
     pipeline = _own_pipeline(request, pk)
-    if request.GET.get("mode") == "api":
-        from .notebook import generate_api_notebook
-        base = request.build_absolute_uri("/").rstrip("/")
-        nb = generate_api_notebook(pipeline, base)
-        suffix = "_live"
-    else:
-        nb = generate_notebook(pipeline)
-        suffix = ""
+    base = request.build_absolute_uri("/").rstrip("/")
+    nb = generate_api_notebook(pipeline, base)
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", pipeline.title).strip("_") or "pipeline"
+
+    token = getattr(settings, "GITHUB_GIST_TOKEN", "")
+    if token and request.GET.get("download") != "1":
+        try:
+            return redirect(create_colab_gist(nb, f"{safe}.ipynb", token, f"BeeMonitor: {pipeline.title}"))
+        except Exception:
+            logger.exception("Colab gist export failed for pipeline %s; downloading instead", pk)
+
     resp = HttpResponse(json.dumps(nb, indent=1), content_type="application/x-ipynb+json")
-    resp["Content-Disposition"] = f'attachment; filename="{safe}{suffix}.ipynb"'
+    resp["Content-Disposition"] = f'attachment; filename="{safe}.ipynb"'
     return resp
 
 

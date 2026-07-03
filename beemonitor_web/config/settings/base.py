@@ -175,6 +175,11 @@ SAGEMAKER_OUTPUT_BUCKET = os.environ.get("SAGEMAKER_OUTPUT_BUCKET", "")
 SAGEMAKER_TRAINING_ROLE_ARN = os.environ.get("SAGEMAKER_TRAINING_ROLE_ARN", "")
 SAGEMAKER_TRAINING_IMAGE = os.environ.get("SAGEMAKER_TRAINING_IMAGE", "")
 
+# GitHub token (gist scope) used to push a generated pipeline notebook to a public
+# gist so "Open in Colab" can open it in the browser. Empty = fall back to a plain
+# .ipynb download. The notebook holds no secrets (API key entered at runtime).
+GITHUB_GIST_TOKEN = os.environ.get("GITHUB_GIST_TOKEN", "")
+
 # AI pre-annotation defaults (overridable per request from the project page).
 PREANNOTATE_SAMPLE_INTERVAL = int(os.environ.get("BEEMONITOR_PREANNOTATE_SAMPLE_INTERVAL", "10"))
 PREANNOTATE_MAX_FRAMES = int(os.environ.get("BEEMONITOR_PREANNOTATE_MAX_FRAMES", "300"))

@@ -134,8 +134,12 @@ This is exactly "run the pipeline for real via Colab using keys + real endpoints
 - **P3 — live notebook export. ✅ SHIPPED (no SDK).** `notebook.generate_api_notebook`
   emits a Colab that runs the pipeline for real via the API using raw `requests`
   (create pipeline from its steps → run → poll → per-step outputs as DataFrames).
-  `export_notebook?mode=api` + a "⬇ Notebook (live)" editor button (offline scaffold
-  kept as "⬇ offline"). No package/PyPI — IP stays server-side.
+  A single **"▶ Open in Colab"** editor button (`open_in_colab` view) pushes the
+  notebook to a **public GitHub gist** and redirects to `colab.research.google.com/
+  gist/<id>` — the user runs it entirely in the browser (Colab can't open arbitrary
+  URLs, only GitHub/gist/Drive). Needs `GITHUB_GIST_TOKEN` (gist scope) in env; without
+  it, falls back to a `.ipynb` download. The offline/scaffold notebook was removed.
+  No package/PyPI — IP stays server-side.
 - **P4 — polish.** API docs page (extend `apps/docs`), Developer-page copy for pipeline
   usage, examples.
 
