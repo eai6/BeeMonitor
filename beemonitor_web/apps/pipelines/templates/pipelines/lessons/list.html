@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Lessons — BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">Lessons</h1>
+    <p class="text-sm text-gray-500">Learn ecological AI by building and running real pipelines.</p>
+  </div>
+  <a href="{% url 'pipelines:list' %}" class="text-sm text-amber-700 hover:text-amber-900">My pipelines →</a>
+</div>
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+  {% for lesson in lessons %}
+  <a href="{% url 'pipelines:lesson_detail' slug=lesson.slug %}"
+     class="block bg-white rounded-lg border border-gray-200 shadow-sm p-5 hover:border-amber-300 hover:shadow">
+    <div class="flex items-center justify-between mb-1">
+      <h2 class="text-lg font-semibold text-gray-900">{{ lesson.title }}</h2>
+      <span class="text-[11px] uppercase tracking-wide text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-0.5">{{ lesson.level }}</span>
+    </div>
+    <p class="text-sm text-gray-600">{{ lesson.summary }}</p>
+    <p class="text-xs text-gray-400 mt-3">{{ lesson.objectives|length }} objectives · {{ lesson.questions|length }} questions</p>
+  </a>
+  {% endfor %}
+</div>
+{% endblock %}

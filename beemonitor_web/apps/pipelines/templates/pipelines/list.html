@@ -7,10 +7,12 @@
     <h1 class="text-2xl font-bold text-gray-900">Pipelines</h1>
     <p class="text-sm text-gray-500">Compose AI analyses over your videos — no code.</p>
   </div>
-  <a href="{% url 'pipelines:create' %}"
-     class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-md text-sm font-medium">
-    + New pipeline
-  </a>
+  <div class="flex items-center gap-2">
+    <a href="{% url 'pipelines:lesson_list' %}"
+       class="bg-white border border-amber-300 text-amber-700 hover:bg-amber-50 px-4 py-2 rounded-md text-sm font-medium">📚 Lessons</a>
+    <a href="{% url 'pipelines:create' %}"
+       class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-md text-sm font-medium">+ New pipeline</a>
+  </div>
 </div>
 
 <div class="grid grid-cols-1 gap-4">

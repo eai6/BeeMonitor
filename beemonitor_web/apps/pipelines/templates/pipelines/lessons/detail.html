@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}{{ lesson.title }} — Lessons{% endblock %}
+
+{% block content %}
+<a href="{% url 'pipelines:lesson_list' %}" class="text-xs text-gray-400 hover:text-gray-600">← All lessons</a>
+
+<div class="flex items-start justify-between mt-1 mb-4">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">{{ lesson.title }}</h1>
+    <p class="text-sm text-gray-600 mt-1">{{ lesson.summary }}</p>
+  </div>
+  <span class="text-[11px] uppercase tracking-wide text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-0.5">{{ lesson.level }}</span>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+  <div class="lg:col-span-2 space-y-6">
+    <!-- Objectives -->
+    <div class="bg-white rounded-lg border border-gray-200 p-5">
+      <h2 class="font-semibold text-gray-900 mb-2">You'll learn to</h2>
+      <ul class="list-disc list-inside text-sm text-gray-700 space-y-1">
+        {% for o in lesson.objectives %}<li>{{ o }}</li>{% endfor %}
+      </ul>
+    </div>
+
+    <!-- Explanation -->
+    {% for section in lesson.sections %}
+    <div class="bg-white rounded-lg border border-gray-200 p-5">
+      <h2 class="font-semibold text-gray-900 mb-1">{{ section.heading }}</h2>
+      <p class="text-sm text-gray-700">{{ section.body }}</p>
+    </div>
+    {% endfor %}
+
+    <!-- Guided questions -->
+    <div class="bg-amber-50 rounded-lg border border-amber-200 p-5">
+      <h2 class="font-semibold text-gray-900 mb-2">Think about it</h2>
+      <ol class="list-decimal list-inside text-sm text-gray-800 space-y-1">
+        {% for q in lesson.questions %}<li>{{ q }}</li>{% endfor %}
+      </ol>
+    </div>
+  </div>
+
+  <!-- The pipeline + start -->
+  <div class="lg:col-span-1">
+    <div class="bg-white rounded-lg border border-gray-200 p-5 sticky top-4">
+      <h2 class="font-semibold text-gray-900 mb-2">The pipeline</h2>
+      {% if steps %}
+      <ol class="space-y-2 mb-4">
+        {% for step in steps %}
+        <li class="text-sm">
+          <span class="font-medium text-gray-900">{{ step.icon }} {{ step.display_name }}</span>
+          <span class="block text-xs text-gray-500">{{ step.description }}</span>
+        </li>
+        {% endfor %}
+      </ol>
+      {% if template %}
+      <form method="post" action="{% url 'pipelines:clone' pk=template.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="w-full bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-md text-sm font-semibold">▶ Start this lesson</button>
+      </form>
+      <p class="text-xs text-gray-400 mt-2">Opens an editable copy on the canvas — pick a video and run it, or export it as a notebook.</p>
+      {% endif %}
+      {% else %}
+      <p class="text-sm text-gray-500">Template not seeded yet. Run
+        <code>manage.py seed_pipeline_templates</code>.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
