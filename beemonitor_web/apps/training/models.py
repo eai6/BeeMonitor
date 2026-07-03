@@ -110,3 +110,63 @@ class CustomModel(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.model_type})"
+
+
+class DriftReference(models.Model):
+    """A baseline DINOv3 distribution for a user's 'known-good' footage. New videos are
+    scored against it to detect domain shift — the auto-fine-tuning trigger (memory/25).
+    Stores only the centroid + spread (cheap), not the raw frame embeddings."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="drift_references",
+    )
+    scope = models.CharField(max_length=100, default="default")  # site/device or "default"
+    centroid = models.JSONField(default=list)   # L2-normalised mean embedding
+    ref_mean = models.FloatField(default=0.0)   # mean cosine distance of ref frames -> centroid
+    ref_std = models.FloatField(default=0.0)    # std of those distances (the "normal" spread)
+    dim = models.IntegerField(default=0)
+    n_frames = models.IntegerField(default=0)
+    note = models.CharField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [("user", "scope")]
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"DriftReference({self.user_id}/{self.scope}, n={self.n_frames})"
+
+
+class DriftCheck(models.Model):
+    """Result of scoring one video's DINOv3 embeddings against a DriftReference."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        DONE = "done", "Done"
+        ERROR = "error", "Error"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="drift_checks",
+    )
+    reference = models.ForeignKey(
+        DriftReference, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="checks",
+    )
+    video = models.ForeignKey(
+        "videos.Video", on_delete=models.CASCADE, related_name="drift_checks",
+    )
+    drift_score = models.FloatField(default=0.0)  # mean cosine distance to reference centroid
+    z_score = models.FloatField(default=0.0)      # (drift_score - ref_mean) / ref_std
+    is_drifted = models.BooleanField(default=False)
+    n_frames = models.IntegerField(default=0)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    detail = models.CharField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"DriftCheck(video={self.video_id}, z={self.z_score:.1f}, drifted={self.is_drifted})"

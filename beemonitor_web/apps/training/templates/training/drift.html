@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Domain Drift - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="flex justify-between items-center mb-6">
+  <h1 class="text-2xl font-bold text-gray-900">Domain Drift</h1>
+  <a href="{% url 'training:list' %}" class="px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 font-medium">← Training</a>
+</div>
+
+<p class="text-sm text-gray-500 mb-6 max-w-3xl">
+  DINOv3 embeds your footage and measures how far new videos sit from a
+  <strong>baseline</strong> of known-good videos. A high z-score means the domain has
+  shifted (new site, camera, lighting, species) and the detector should be
+  re-labeled with SAM 3 and fine-tuned.
+</p>
+
+<!-- Baseline status -->
+<div class="bg-white border border-gray-200 rounded-lg p-5 mb-6">
+  <h2 class="text-lg font-semibold text-gray-900 mb-2">Baseline</h2>
+  {% if ref %}
+    <p class="text-sm text-gray-600">
+      Built from <strong>{{ ref.n_frames }}</strong> frames · mean cosine distance
+      <strong>{{ ref.ref_mean|floatformat:3 }}</strong> ± {{ ref.ref_std|floatformat:3 }}
+      · updated {{ ref.updated_at|timesince }} ago.
+    </p>
+  {% else %}
+    <p class="text-sm text-amber-700">No baseline yet — select known-good videos below and set one.</p>
+  {% endif %}
+</div>
+
+<!-- Set baseline + check, from the video list -->
+<form method="post" action="{% url 'training:drift_baseline' %}" class="bg-white border border-gray-200 rounded-lg p-5 mb-6">
+  {% csrf_token %}
+  <div class="flex justify-between items-center mb-3">
+    <h2 class="text-lg font-semibold text-gray-900">Your videos</h2>
+    <button type="submit" class="px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm font-medium">
+      Set checked as baseline
+    </button>
+  </div>
+  <div class="max-h-72 overflow-y-auto divide-y divide-gray-100">
+    {% for v in videos %}
+      <label class="flex items-center gap-3 py-2 text-sm">
+        <input type="checkbox" name="video_ids" value="{{ v.pk }}" class="rounded border-gray-300">
+        <span class="flex-1 text-gray-800">{{ v.title|default:v.pk }}</span>
+        <button type="submit" form="check-{{ v.pk }}"
+                class="px-2 py-1 border border-gray-300 rounded text-xs text-gray-600 hover:bg-gray-50">Check drift</button>
+      </label>
+      <form method="post" action="{% url 'training:drift_check' %}" id="check-{{ v.pk }}" class="hidden">
+        {% csrf_token %}<input type="hidden" name="video_id" value="{{ v.pk }}">
+      </form>
+    {% empty %}
+      <p class="text-sm text-gray-400 py-3">No videos yet.</p>
+    {% endfor %}
+  </div>
+</form>
+
+<!-- Recent checks -->
+<div class="bg-white border border-gray-200 rounded-lg p-5">
+  <h2 class="text-lg font-semibold text-gray-900 mb-3">Recent checks</h2>
+  {% for c in checks %}
+    <div class="flex items-center gap-3 py-2 border-b border-gray-100 text-sm">
+      <span class="flex-1 text-gray-800">{{ c.video.title|default:c.video_id }}</span>
+      {% if c.status == "done" %}
+        {% if c.is_drifted %}
+          <span class="px-2 py-0.5 rounded bg-red-100 text-red-700 text-xs font-medium">DRIFTED · z={{ c.z_score|floatformat:1 }}</span>
+        {% else %}
+          <span class="px-2 py-0.5 rounded bg-green-100 text-green-700 text-xs font-medium">OK · z={{ c.z_score|floatformat:1 }}</span>
+        {% endif %}
+        <span class="text-gray-400 text-xs">{{ c.detail }}</span>
+      {% elif c.status == "error" %}
+        <span class="px-2 py-0.5 rounded bg-gray-100 text-gray-600 text-xs">error · {{ c.detail }}</span>
+      {% else %}
+        <span class="px-2 py-0.5 rounded bg-blue-100 text-blue-700 text-xs">running…</span>
+      {% endif %}
+    </div>
+  {% empty %}
+    <p class="text-sm text-gray-400">No checks yet.</p>
+  {% endfor %}
+</div>
+{% endblock %}

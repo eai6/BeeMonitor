@@ -469,3 +469,64 @@ class UploadModelView(LoginRequiredMixin, FormView):
         logger.info("[upload] CustomModel created for user=%s name='%s'", self.request.user.pk, name)
         messages.success(self.request, f"Model '{name}' uploaded successfully.")
         return redirect("training:models")
+
+
+# --- Domain-drift detection (memory/25, P2c) --------------------------------
+
+class DriftDashboardView(LoginRequiredMixin, View):
+    """Baseline + recent drift checks; pick known-good videos as the baseline and
+    score other videos against it to flag domain shift (the fine-tuning trigger)."""
+
+    def get(self, request):
+        from django.shortcuts import render
+
+        from apps.videos.models import Video
+        from .models import DriftCheck, DriftReference
+
+        ref = DriftReference.objects.filter(user=request.user, scope="default").first()
+        checks = DriftCheck.objects.filter(user=request.user).select_related("video")[:20]
+        videos = Video.objects.filter(user=request.user).order_by("-id")[:100]
+        return render(request, "training/drift.html",
+                      {"ref": ref, "checks": checks, "videos": videos})
+
+
+class SetDriftBaselineView(LoginRequiredMixin, View):
+    def post(self, request):
+        import threading
+
+        from apps.videos.models import Video
+        from . import drift
+
+        ids = request.POST.getlist("video_ids")
+        videos = Video.objects.filter(user=request.user, pk__in=ids)
+        paths = [v.storage_key for v in videos if v.storage_key]
+        if not paths:
+            messages.warning(request, "Select at least one known-good video for the baseline.")
+            return redirect("training:drift")
+        threading.Thread(
+            target=drift.build_reference, args=(request.user.id, paths),
+            kwargs={"note": f"{len(paths)} videos"}, daemon=True,
+        ).start()
+        messages.info(request, f"Building drift baseline from {len(paths)} video(s) with DINOv3. This takes a few minutes; refresh to see it.")
+        return redirect("training:drift")
+
+
+class CheckDriftView(LoginRequiredMixin, View):
+    def post(self, request):
+        import threading
+
+        from django.shortcuts import get_object_or_404
+
+        from apps.videos.models import Video
+        from . import drift
+        from .models import DriftCheck, DriftReference
+
+        video = get_object_or_404(Video, pk=request.POST.get("video_id"), user=request.user)
+        ref = DriftReference.objects.filter(user=request.user, scope="default").first()
+        if not ref:
+            messages.warning(request, "Set a baseline first, then check videos against it.")
+            return redirect("training:drift")
+        check = DriftCheck.objects.create(user=request.user, reference=ref, video=video)
+        threading.Thread(target=drift.run_check, args=(check.id,), daemon=True).start()
+        messages.info(request, f"Checking '{video.title}' for domain drift. Refresh in a minute.")
+        return redirect("training:drift")

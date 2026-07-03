@@ -138,6 +138,8 @@ def predict_fn(payload, ctx):
     if task == "pre_annotate":
         return _pre_annotate(payload, ctx)
     if task == "embed":
+        if payload.get("video_blob_path"):
+            return _embed_video(payload, ctx)
         return _embed_images(payload, ctx)
     return _segment_images(payload, ctx)
 
@@ -169,6 +171,64 @@ def _embed_images(payload, ctx):
         vecs.append(_embed(ctx, images[i:i + _EMBED_BATCH]))
     emb = np.concatenate(vecs, axis=0) if vecs else np.zeros((0, 0))
     return {"dim": int(emb.shape[1]) if emb.size else 0, "embeddings": emb.tolist()}
+
+
+def _embed_video(payload, ctx):
+    """Sample a video's frames and DINOv3-embed them → the drift-trigger primitive.
+
+    {"task": "embed", "video_blob_path": "...", "sample_interval": 20, "max_frames": 200}
+    -> {"dim": D, "n_frames": N, "embeddings": [[...], ...], "centroid": [...]}
+    (centroid = L2-normalised mean, for cheap reference/compare on the web side.)
+    """
+    import tempfile
+    from urllib.parse import urlparse
+
+    import boto3
+    import cv2
+
+    region = os.environ.get("AWS_REGION")
+    raw_bucket = os.environ["AWS_S3_BUCKET_RAW_VIDEOS"]
+    s3 = boto3.client("s3", region_name=region)
+
+    video_blob_path = payload["video_blob_path"]
+    sample_interval = max(1, int(payload.get("sample_interval", 20)))
+    max_frames = int(payload.get("max_frames", 200))
+
+    embs = []
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=True) as tmp:
+        if video_blob_path.startswith("s3://"):
+            u = urlparse(video_blob_path)
+            s3.download_file(u.netloc, u.path.lstrip("/"), tmp.name)
+        else:
+            s3.download_file(raw_bucket, video_blob_path, tmp.name)
+        cap = cv2.VideoCapture(tmp.name)
+        if not cap.isOpened():
+            return {"dim": 0, "n_frames": 0, "embeddings": [], "centroid": []}
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        batch = []
+        for frame_num in range(0, total, sample_interval):
+            if len(embs) * _EMBED_BATCH + len(batch) >= max_frames:
+                break
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
+            ret, frame = cap.read()
+            if not ret:
+                continue
+            batch.append(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
+            if len(batch) >= _EMBED_BATCH:
+                embs.append(_embed(ctx, batch))
+                batch = []
+        if batch:
+            embs.append(_embed(ctx, batch))
+        cap.release()
+
+    if not embs:
+        return {"dim": 0, "n_frames": 0, "embeddings": [], "centroid": []}
+    emb = np.concatenate(embs, axis=0)[:max_frames]
+    centroid = emb.mean(axis=0)
+    n = np.linalg.norm(centroid)
+    centroid = (centroid / n if n else centroid)
+    return {"dim": int(emb.shape[1]), "n_frames": int(emb.shape[0]),
+            "embeddings": emb.tolist(), "centroid": centroid.tolist()}
 
 
 def _pre_annotate(payload, ctx):

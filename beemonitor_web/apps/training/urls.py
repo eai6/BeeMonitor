@@ -12,4 +12,8 @@ urlpatterns = [
     path("models/", views.CustomModelListView.as_view(), name="models"),
     path("models/upload/", views.UploadModelView.as_view(), name="upload_model"),
     path("models/<int:pk>/", views.CustomModelDetailView.as_view(), name="model_detail"),
+    # Domain-drift detection (P2c)
+    path("drift/", views.DriftDashboardView.as_view(), name="drift"),
+    path("drift/baseline/", views.SetDriftBaselineView.as_view(), name="drift_baseline"),
+    path("drift/check/", views.CheckDriftView.as_view(), name="drift_check"),
 ]
