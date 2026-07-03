@@ -8,6 +8,17 @@ from .frames import DeviceFrameView
 from .heartbeat import DeviceCommandView, DeviceHeartbeatView
 from .uploads import UploadCompleteView, UploadInitiateView
 from .web_uploads import WebUploadCompleteView, WebUploadInitiateView
+from .pipelines import (
+    BlocksView,
+    PipelineCloneView,
+    PipelineDetailView,
+    PipelineListCreateView,
+    PipelineRunView,
+    PipelineValidateView,
+    RunDetailView,
+    RunListView,
+    RunStepOutputView,
+)
 from .views import (
     APIKeyViewSet,
     DataSourceViewSet,
@@ -52,4 +63,15 @@ urlpatterns = [
     # csrf_exempt so a stolen URL alone can't be used cross-site.
     path("web-uploads/initiate", WebUploadInitiateView.as_view(), name="web-uploads-initiate"),
     path("web-uploads/complete", WebUploadCompleteView.as_view(), name="web-uploads-complete"),
+    # ── Public pipeline API (P1) — build + run pipelines from Colab (memory/24) ──
+    path("pipelines/blocks/", BlocksView.as_view(), name="pl-blocks"),
+    path("pipelines/validate/", PipelineValidateView.as_view(), name="pl-validate"),
+    path("pipelines/", PipelineListCreateView.as_view(), name="pl-list"),
+    path("pipelines/<uuid:pk>/", PipelineDetailView.as_view(), name="pl-detail"),
+    path("pipelines/<uuid:pk>/clone/", PipelineCloneView.as_view(), name="pl-clone"),
+    path("pipelines/<uuid:pk>/run/", PipelineRunView.as_view(), name="pl-run"),
+    path("pipeline-runs/", RunListView.as_view(), name="pl-run-list"),
+    path("pipeline-runs/<uuid:run_id>/", RunDetailView.as_view(), name="pl-run-detail"),
+    path("pipeline-runs/<uuid:run_id>/steps/<str:step_id>/output/",
+         RunStepOutputView.as_view(), name="pl-run-step-output"),
 ] + router.urls

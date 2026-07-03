@@ -37,7 +37,11 @@ building auth, keys, or a run engine.
 ## 2. Colab flow (the user experience)
 
 1. **Developer page → Create API Key** → copy `bmk_…` (per-user, shown once).
-2. In Colab: `pip install beemonitor` (or paste a client cell); set `BEEMONITOR_API_KEY`.
+2. In Colab: **P1 needs no install** — paste the single-cell client
+   (`apps/pipelines/colab_client.py`, requests-only) and set your key.
+   **P3** turns it into `pip install beemonitor` by *either* publishing to PyPI *or*
+   hosting the client on the site so a notebook can `!pip install` from a URL / `!wget`
+   it — no PyPI account needed. The exported notebook (P3) embeds whichever we pick.
 3. Build + run:
    ```python
    from beemonitor import BeeMonitor
@@ -114,8 +118,12 @@ This is exactly "run the pipeline for real via Colab using keys + real endpoints
 ---
 
 ## 6. Phasing
-- **P1 — read + run.** `blocks/`, pipelines CRUD, `validate/`, `run/`, `runs/{id}` status +
-  per-step output (GET), `steps/{id}.csv`. Ship a Colab **client snippet** (single cell).
+- **P1 — read + run. ✅ SHIPPED.** `apps/api/pipelines.py` + routes: `pipelines/blocks/`,
+  pipelines CRUD, `pipelines/validate/`, `pipelines/{id}/clone/`, `pipelines/{id}/run/`,
+  `pipeline-runs/`, `pipeline-runs/{id}/` (status + per-step outputs, polls in-flight GPU
+  jobs), `pipeline-runs/{id}/steps/{sid}/output/` (`?format=csv`). Paste-able Colab client
+  at `apps/pipelines/colab_client.py`. Auth = the project-wide default (`APIKeyAuthentication`);
+  runs reuse `steps_with_video` + `start_run`.
 - **P2 — uploads via API key.** presign/complete keyed to the API key's user.
 - **P3 — `pip install beemonitor` client** + `notebook.py` emits API-driven notebooks.
 - **P4 — polish.** API docs page (extend `apps/docs`), Developer-page copy for pipeline
