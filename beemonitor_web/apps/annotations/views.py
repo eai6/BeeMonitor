@@ -398,12 +398,17 @@ class PreAnnotateView(LoginRequiredMixin, View):
         # labeler=sam3 routes to the SAM 3 endpoint (domain-robust, open-vocabulary) —
         # the fix for new-domain footage the current YOLO misses. Default: yolo.
         labeler = "sam3" if request.POST.get("labeler") == "sam3" else "yolo"
+        # DINOv3 diverse selection (SAM 3 only). Default diverse for SAM 3 (its point),
+        # uniform every-Nth for YOLO.
+        selection = "diverse" if request.POST.get("selection", "diverse") == "diverse" else "uniform"
+        if labeler != "sam3":
+            selection = "uniform"
 
         # Auto-transfer from S3 if needed, then pre-annotate
         # The background thread handles both transfer and annotation
         thread = threading.Thread(
             target=self._run_pre_annotate,
-            args=(project.pk, video.pk, blob_path, sample_interval, max_frames, confidence, labeler),
+            args=(project.pk, video.pk, blob_path, sample_interval, max_frames, confidence, labeler, selection),
             daemon=True,
         )
         thread.start()
@@ -419,7 +424,7 @@ class PreAnnotateView(LoginRequiredMixin, View):
     @staticmethod
     def _run_pre_annotate(project_pk, video_pk, blob_path,
                           sample_interval=10, max_frames=300, confidence=0.15,
-                          labeler="yolo"):
+                          labeler="yolo", selection="uniform"):
         """Invoke the SageMaker async endpoint (task=pre_annotate), poll the
         result from S3, then create Annotation rows. Runs in a daemon thread."""
         import json
@@ -474,6 +479,7 @@ class PreAnnotateView(LoginRequiredMixin, View):
                 "sample_interval": sample_interval,
                 "max_frames": max_frames,
                 "confidence_threshold": confidence,
+                "selection": selection,  # SAM 3: "diverse" (DINOv3) or "uniform"
             }
             key = f"preannotate/{project_pk}/{video_pk}-{labeler}.json"
             s3.put_object(Bucket=in_bucket, Key=key,
@@ -564,6 +570,9 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
 
         sample_interval, max_frames, confidence = _preannotate_opts(request)
         labeler = "sam3" if request.POST.get("labeler") == "sam3" else "yolo"
+        selection = "diverse" if request.POST.get("selection", "diverse") == "diverse" else "uniform"
+        if labeler != "sam3":
+            selection = "uniform"
         count = 0
         for video in videos:
             blob_path = video.storage_key
@@ -571,7 +580,7 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
                 continue
             thread = threading.Thread(
                 target=PreAnnotateView._run_pre_annotate,
-                args=(project.pk, video.pk, blob_path, sample_interval, max_frames, confidence, labeler),
+                args=(project.pk, video.pk, blob_path, sample_interval, max_frames, confidence, labeler, selection),
                 daemon=True,
             )
             thread.start()
