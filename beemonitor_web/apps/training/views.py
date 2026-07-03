@@ -530,3 +530,54 @@ class CheckDriftView(LoginRequiredMixin, View):
         threading.Thread(target=drift.run_check, args=(check.id,), daemon=True).start()
         messages.info(request, f"Checking '{video.title}' for domain drift. Refresh in a minute.")
         return redirect("training:drift")
+
+
+# --- Closed auto-fine-tuning loop (memory/25, P3) ---------------------------
+
+class AdaptationDashboardView(LoginRequiredMixin, View):
+    """List adaptation runs, advance in-flight ones, and approve promotions."""
+
+    def get(self, request):
+        from django.shortcuts import render
+
+        from . import orchestrator
+        from .models import AdaptationRun
+
+        orchestrator.advance_user_runs(request.user)
+        runs = AdaptationRun.objects.filter(user=request.user).select_related(
+            "project", "training_job", "candidate_model")[:30]
+        return render(request, "training/adaptation.html", {"runs": runs})
+
+
+class StartAdaptationView(LoginRequiredMixin, View):
+    def post(self, request):
+        from . import orchestrator
+
+        ids = request.POST.getlist("video_ids") or (
+            [request.POST["video_id"]] if request.POST.get("video_id") else [])
+        scope = request.POST.get("scope") or "default"
+        if not ids:
+            messages.warning(request, "Select at least one video to adapt to.")
+            return redirect(request.META.get("HTTP_REFERER", "training:adaptation"))
+        run = orchestrator.start_run(request.user, ids, scope=scope)
+        if run:
+            messages.info(request, "Adaptation started: SAM 3 is relabeling, then it will fine-tune. Refresh to follow progress.")
+        else:
+            messages.warning(request, "No usable videos (missing storage) for adaptation.")
+        return redirect("training:adaptation")
+
+
+class PromoteAdaptationView(LoginRequiredMixin, View):
+    def post(self, request):
+        from django.shortcuts import get_object_or_404
+
+        from . import orchestrator
+        from .models import AdaptationRun
+
+        run = get_object_or_404(AdaptationRun, pk=request.POST.get("run_id"), user=request.user)
+        orchestrator.promote_run(run)
+        if run.status == AdaptationRun.Status.PROMOTED:
+            messages.success(request, f"Promoted — '{run.candidate_model.name}' is now the active model.")
+        else:
+            messages.warning(request, "Run is not awaiting approval; nothing promoted.")
+        return redirect("training:adaptation")

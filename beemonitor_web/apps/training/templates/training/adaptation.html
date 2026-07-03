@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Auto-Adaptation - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="flex justify-between items-center mb-6">
+  <h1 class="text-2xl font-bold text-gray-900">Auto-Adaptation</h1>
+  <div class="flex gap-2">
+    <a href="{% url 'training:drift' %}" class="px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 font-medium">Domain Drift</a>
+    <a href="{% url 'training:list' %}" class="px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 font-medium">← Training</a>
+  </div>
+</div>
+
+<p class="text-sm text-gray-500 mb-6 max-w-3xl">
+  The closed loop: SAM 3 relabels drifted footage → YOLO fine-tunes on those labels →
+  the candidate is scored → you approve the promotion. Start one from a
+  <a href="{% url 'training:drift' %}" class="text-amber-700 underline">drifted video</a>,
+  or below.
+</p>
+
+<div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 text-left text-gray-500 text-xs uppercase tracking-wide">
+      <tr>
+        <th class="px-4 py-2">Scope</th>
+        <th class="px-4 py-2">Stage</th>
+        <th class="px-4 py-2">Detail</th>
+        <th class="px-4 py-2">Started</th>
+        <th class="px-4 py-2"></th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for run in runs %}
+        <tr>
+          <td class="px-4 py-3 font-medium text-gray-800">{{ run.scope }}</td>
+          <td class="px-4 py-3">
+            {% if run.status == "promoted" %}
+              <span class="px-2 py-0.5 rounded bg-green-100 text-green-700 text-xs font-medium">Promoted</span>
+            {% elif run.status == "awaiting_approval" %}
+              <span class="px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-xs font-medium">Awaiting approval</span>
+            {% elif run.status == "held" %}
+              <span class="px-2 py-0.5 rounded bg-gray-100 text-gray-600 text-xs font-medium">Held</span>
+            {% elif run.status == "failed" %}
+              <span class="px-2 py-0.5 rounded bg-red-100 text-red-700 text-xs font-medium">Failed</span>
+            {% else %}
+              <span class="px-2 py-0.5 rounded bg-blue-100 text-blue-700 text-xs font-medium">{{ run.get_status_display }}…</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3 text-gray-500">{{ run.detail }}</td>
+          <td class="px-4 py-3 text-gray-400">{{ run.created_at|timesince }} ago</td>
+          <td class="px-4 py-3 text-right">
+            {% if run.status == "awaiting_approval" %}
+              <form method="post" action="{% url 'training:adapt_promote' %}">
+                {% csrf_token %}<input type="hidden" name="run_id" value="{{ run.pk }}">
+                <button type="submit" class="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded text-xs font-medium">Promote</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" class="px-4 py-6 text-center text-gray-400">No adaptation runs yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

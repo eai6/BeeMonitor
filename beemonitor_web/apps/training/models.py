@@ -170,3 +170,46 @@ class DriftCheck(models.Model):
 
     def __str__(self):
         return f"DriftCheck(video={self.video_id}, z={self.z_score:.1f}, drifted={self.is_drifted})"
+
+
+class AdaptationRun(models.Model):
+    """A closed auto-fine-tuning cycle (memory/25, P3): drift → SAM 3 relabel → train
+    → evaluate → (user-approved) promote. Chains the existing annotation + training +
+    custom-model pieces; advanced by a state machine (orchestrator.advance_run)."""
+
+    class Status(models.TextChoices):
+        RELABELING = "relabeling", "Relabeling (SAM 3)"
+        TRAINING = "training", "Training"
+        EVALUATING = "evaluating", "Evaluating"
+        AWAITING = "awaiting_approval", "Awaiting approval"
+        PROMOTED = "promoted", "Promoted"
+        HELD = "held", "Held (below bar)"
+        FAILED = "failed", "Failed"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="adaptation_runs",
+    )
+    scope = models.CharField(max_length=100, default="default")
+    project = models.ForeignKey(
+        "annotations.AnnotationProject", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="adaptation_runs",
+    )
+    training_job = models.ForeignKey(
+        TrainingJob, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="adaptation_runs",
+    )
+    candidate_model = models.ForeignKey(
+        CustomModel, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="adaptation_runs",
+    )
+    status = models.CharField(max_length=24, choices=Status.choices, default=Status.RELABELING)
+    min_map50 = models.FloatField(default=0.5)  # promotion guardrail
+    detail = models.CharField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"AdaptationRun({self.scope}, {self.status})"
