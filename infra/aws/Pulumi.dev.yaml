@@ -5,7 +5,7 @@ config:
   beemonitor-aws:github-repo: eai6/BeeMonitor
   # Two-pass deploy: flip to true once the first image is in ECR.
   beemonitor-aws:deploy-service: "true"
-  beemonitor-aws:analysis-enabled: "false"
+  beemonitor-aws:analysis-enabled: "true"
   beemonitor-aws:anthropic-api-key:
     secure: v1:1A9VIOq3J9tDjDWo:x+PmRxbScymnO3WiT6PjeYDfrLTzqQpgYQ/V77uOcJSsrH8R63YUnHoK5nMUB9wDrLjmAeYJZphB0gfXy5qDEztyB53dPmDGJQLpBZoD3Bx8LqsDXabqF74p70E69BFcRhM+1Ta1W5fufpFr60Nt2JbDGBtwXpVxBTXJaQ==
   beemonitor-aws:bioclip-enabled: "true"
