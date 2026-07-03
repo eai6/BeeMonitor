@@ -220,12 +220,12 @@ BLOCK_REGISTRY = {
     },
     "analyze.colony_activity": {
         "display_name": "Colony Activity",
-        "description": "Occupancy / motion-over-time metrics for in-nest colony activity.",
+        "description": "Occupancy / motion-over-time series from tracks (optionally within an ROI).",
         "category": "analyze",
         "icon": "🏗️",
-        "input_type": "video",
+        "input_type": "tracks",
         "output_type": "table",
-        "backend": "gpu",
+        "backend": "local",
         "config_fields": [
             {
                 "name": "metric",
@@ -235,7 +235,7 @@ BLOCK_REGISTRY = {
                 "default": "occupancy",
                 "choices": [
                     {"value": "occupancy", "label": "Occupancy over time"},
-                    {"value": "motion", "label": "Motion energy over time"},
+                    {"value": "motion", "label": "Detections over time"},
                 ],
             },
         ],

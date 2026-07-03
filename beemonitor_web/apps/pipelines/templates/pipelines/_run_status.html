@@ -8,6 +8,8 @@
     <div class="flex items-center gap-3">
       {% if step.output.note %}<span class="text-[11px] text-gray-400">{{ step.output.note }}</span>{% endif %}
       {% if step.output.foraging_trip_count is not None %}<span class="text-xs text-gray-600">{{ step.output.foraging_trip_count }} trips</span>{% endif %}
+      {% if step.output.table_kind == 'visitation' %}<span class="text-xs text-gray-600">{{ step.output.unique_visitors }} visitors · {{ step.output.total_visits }} visits{% if step.output.total_dwell_sec %} · {{ step.output.total_dwell_sec }}s dwell{% endif %}</span>{% endif %}
+      {% if step.output.table_kind == 'colony_activity' %}<span class="text-xs text-gray-600">{{ step.output.metric }}: peak {{ step.output.peak }}, mean {{ step.output.mean }} ({{ step.output.rows|length }} bins)</span>{% endif %}
       {% if step.output.error %}<span class="text-xs text-red-600">{{ step.output.error }}</span>{% endif %}
       <span class="text-xs font-medium
         {% if step.state == 'done' %}text-green-600

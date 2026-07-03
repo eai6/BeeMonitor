@@ -160,14 +160,53 @@ def _exec_analyze_foraging_trips(step, run, context, inputs, index):
 
 
 def _exec_analyze_visitation(step, run, context, inputs, index):
+    from . import ops
+
     up = inputs.get("tracks") or _first_upstream_result(inputs)
     result = (up or {}).get("result", {})
+    roi = find_artifact("roi", run.steps, index, context) or {}
+    boxes = ops.roi_boxes(roi)
+
+    df = ops.load_tracking_df(result)
+    tidy = ops.normalized_tracks(df, result) if df is not None else None
+    if tidy is not None:
+        if not boxes:
+            return {"artifact": "table", "table_kind": "visitation",
+                    "note": "No ROI upstream — add an ROI (draw or nest layout) to count visits."}
+        summary = ops.compute_visitation(tidy, boxes, ops.fps_of(result))
+        return {"artifact": "table", "table_kind": "visitation", **summary}
+
+    # Fallback: no readable tracking CSV (e.g. dev DB) — surface the job summary.
     return {
         "artifact": "table",
         "table_kind": "visitation",
-        "unique_tracks": result.get("unique_tracks", 0),
-        "entry_count": result.get("entry_count", 0),
-        "note": "Visitation aggregation over tracks∩ROI (scaffold: derived from job summary).",
+        "unique_visitors": result.get("unique_tracks", 0),
+        "total_visits": result.get("entry_count", 0),
+        "rows": [],
+        "note": "Derived from job summary (tracking CSV not available).",
+    }
+
+
+def _exec_analyze_colony_activity(step, run, context, inputs, index):
+    from . import ops
+
+    up = inputs.get("tracks") or _first_upstream_result(inputs)
+    result = (up or {}).get("result", {})
+    metric = (step.get("config") or {}).get("metric", "occupancy")
+    roi = find_artifact("roi", run.steps, index, context) or {}
+    boxes = ops.roi_boxes(roi)
+
+    df = ops.load_tracking_df(result)
+    tidy = ops.normalized_tracks(df, result) if df is not None else None
+    if tidy is not None:
+        series = ops.compute_colony_activity(tidy, boxes, ops.fps_of(result), metric=metric)
+        return {"artifact": "table", "table_kind": "colony_activity", **series}
+    return {
+        "artifact": "table",
+        "table_kind": "colony_activity",
+        "metric": metric,
+        "rows": [],
+        "note": "Derived from job summary (tracking CSV not available).",
     }
 
 
@@ -209,6 +248,7 @@ LOCAL_EXECUTORS = {
     "roi.draw": _exec_roi_draw,
     "analyze.foraging_trips": _exec_analyze_foraging_trips,
     "analyze.visitation": _exec_analyze_visitation,
+    "analyze.colony_activity": _exec_analyze_colony_activity,
     "identify.taxon": _exec_identify_taxon,
     "filter.roi": _exec_filter_passthrough,
     "filter.confidence": _exec_filter_passthrough,
@@ -278,7 +318,7 @@ def submit_gpu_step(run, step, context, index):
     block_type = step.get("block_type", "")
 
     if block_type not in _DETECT_TRACK_BLOCKS:
-        # SCAFFOLD: colony-activity / marker decode need dedicated backend jobs.
+        # SCAFFOLD: marker decode (identify.marker) needs a dedicated backend job.
         return "done", {
             "artifact": get_block(block_type).get("output_type", "any"),
             "note": f"{block_type} is not yet wired to a dedicated GPU job (scaffold placeholder).",

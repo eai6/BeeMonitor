@@ -52,7 +52,8 @@ TEMPLATES = [
         "description": "Measure in-nest colony activity (occupancy / motion over time).",
         "steps": [
             _s("v", "input.video"),
-            _s("a", "analyze.colony_activity", {"metric": "occupancy"}, {"in": "v"}),
+            _s("t", "track.bee", {"confidence": 0.4}, {"video": "v"}),
+            _s("a", "analyze.colony_activity", {"metric": "occupancy"}, {"tracks": "t"}),
             _s("o", "output.table", {}, {"in": "a"}),
         ],
     },
