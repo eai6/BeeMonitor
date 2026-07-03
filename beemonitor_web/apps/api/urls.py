@@ -18,6 +18,8 @@ from .pipelines import (
     RunDetailView,
     RunListView,
     RunStepOutputView,
+    UploadCompleteAPIView,
+    UploadInitiateAPIView,
 )
 from .views import (
     APIKeyViewSet,
@@ -66,6 +68,8 @@ urlpatterns = [
     # ── Public pipeline API (P1) — build + run pipelines from Colab (memory/24) ──
     path("pipelines/blocks/", BlocksView.as_view(), name="pl-blocks"),
     path("pipelines/validate/", PipelineValidateView.as_view(), name="pl-validate"),
+    path("pipelines/uploads/initiate", UploadInitiateAPIView.as_view(), name="pl-upload-initiate"),
+    path("pipelines/uploads/complete", UploadCompleteAPIView.as_view(), name="pl-upload-complete"),
     path("pipelines/", PipelineListCreateView.as_view(), name="pl-list"),
     path("pipelines/<uuid:pk>/", PipelineDetailView.as_view(), name="pl-detail"),
     path("pipelines/<uuid:pk>/clone/", PipelineCloneView.as_view(), name="pl-clone"),

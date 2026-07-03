@@ -124,7 +124,10 @@ This is exactly "run the pipeline for real via Colab using keys + real endpoints
   jobs), `pipeline-runs/{id}/steps/{sid}/output/` (`?format=csv`). Paste-able Colab client
   at `apps/pipelines/colab_client.py`. Auth = the project-wide default (`APIKeyAuthentication`);
   runs reuse `steps_with_video` + `start_run`.
-- **P2 — uploads via API key.** presign/complete keyed to the API key's user.
+- **P2 — uploads via API key. ✅ SHIPPED.** `pipelines/uploads/initiate` + `/complete`
+  (`apps/api/pipelines.py`, API-key authed) — presign → direct PUT → confirm, keyed to
+  the key's user; stores `site_name`/device like the browser path. Colab client gains
+  `bm.upload_video(path, site=…)`. (Shares the raw-videos CORS + presign already fixed.)
 - **P3 — `pip install beemonitor` client** + `notebook.py` emits API-driven notebooks.
 - **P4 — polish.** API docs page (extend `apps/docs`), Developer-page copy for pipeline
   usage, examples.

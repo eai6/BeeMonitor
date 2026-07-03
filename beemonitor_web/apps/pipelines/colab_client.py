@@ -102,6 +102,31 @@ class BeeMonitor:
         r = self.s.delete(self._url(path))
         r.raise_for_status()
 
+    # ── uploads (P2) ──
+    def upload_video(self, path, title=None, site=None, device_id=None, content_type="video/mp4"):
+        """Upload a local video file straight to S3 (presign -> PUT -> confirm).
+
+        Returns the created video dict ({video_id, title, site_name, ...}); pass
+        video_id into run(). Not all videos come from devices — set `site` to group
+        the clip under a location.
+        """
+        import os
+        filename = os.path.basename(path)
+        size = os.path.getsize(path)
+        init = self._post("pipelines/uploads/initiate",
+                          {"filename": filename, "size_bytes": size, "content_type": content_type})
+        with open(path, "rb") as f:
+            put = requests.put(init["upload_url"], data=f, headers={"Content-Type": content_type})
+        if not put.ok:
+            raise requests.HTTPError(f"S3 PUT {put.status_code}: {put.text[:300]}")
+        body = {"storage_key": init["storage_key"], "file_size_bytes": size,
+                "title": title or filename}
+        if site:
+            body["site_name"] = site
+        if device_id:
+            body["device_id"] = device_id
+        return self._post("pipelines/uploads/complete", body)
+
     # ── pipelines ──
     def blocks(self):
         return self._get("pipelines/blocks/")
