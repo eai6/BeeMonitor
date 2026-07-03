@@ -48,6 +48,16 @@ TEMPLATES = [
         ],
     },
     {
+        "title": "Individual bee IDs",
+        "description": "Track bees and read their colour / QR / number marker IDs per trajectory.",
+        "steps": [
+            _s("v", "input.video"),
+            _s("t", "track.bee", {"confidence": 0.4}, {"video": "v"}),
+            _s("m", "identify.marker", {"marker_type": "auto"}, {"in": "t"}),
+            _s("o", "output.table", {}, {"in": "m"}),
+        ],
+    },
+    {
         "title": "Colony activity",
         "description": "Measure in-nest colony activity (occupancy / motion over time).",
         "steps": [

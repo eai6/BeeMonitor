@@ -227,6 +227,45 @@ def compute_colony_activity(tidy, boxes, fps, metric="occupancy", bin_sec=5.0):
     }
 
 
+def marker_identities(df):
+    """Aggregate per-track individual IDs from the tracking CSV's marker columns.
+
+    The tracker emits ``bee_id`` / ``bee_id_method`` (color|number|qrcode) /
+    ``bee_id_confidence`` when individual identification is enabled. This picks each
+    track's dominant (most-frequent) marker. Returns None if the CSV carries no
+    marker data (identification wasn't enabled upstream).
+    """
+    if df is None or len(df) == 0:
+        return None
+    id_col = _pick(df, _ID_COLS)
+    bee_col = _pick(df, ["bee_id", "individual_id", "beeid"])
+    if id_col is None or bee_col is None:
+        return None
+    method_col = _pick(df, ["bee_id_method", "id_method"])
+    conf_col = _pick(df, ["bee_id_confidence", "id_confidence"])
+
+    rows, markers = [], set()
+    for tid, grp in df.groupby(id_col):
+        vals = grp[bee_col].dropna()
+        vals = vals[vals.astype(str).str.strip().str.len() > 0]
+        if len(vals) == 0:
+            continue
+        mode = vals.astype(str).mode()
+        marker = mode.iloc[0] if len(mode) else str(vals.iloc[0])
+        method = ""
+        if method_col is not None and grp[method_col].notna().any():
+            method = str(grp[method_col].dropna().iloc[0])
+        conf = None
+        if conf_col is not None and grp[conf_col].notna().any():
+            conf = round(float(grp[conf_col].dropna().mean()), 3)
+        rows.append({
+            "track": _as_native(tid), "marker": marker,
+            "method": method, "confidence": conf, "frames": int(len(vals)),
+        })
+        markers.add(marker)
+    return {"identified_tracks": len(rows), "unique_markers": len(markers), "rows": rows}
+
+
 def _as_native(v):
     """Coerce numpy scalars to JSON-serialisable Python types."""
     try:

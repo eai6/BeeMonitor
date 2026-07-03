@@ -266,22 +266,24 @@ BLOCK_REGISTRY = {
     },
     "identify.marker": {
         "display_name": "Read Bee Marker (QR / Colour)",
-        "description": "Decode a per-bee QR or colour tag for each trajectory (advanced).",
+        "description": "Read per-track individual IDs (colour / QR / number tags) from tracking.",
         "category": "identify",
         "icon": "🏷️",
         "input_type": "tracks",
-        "output_type": "tracks",
-        "backend": "gpu",
+        "output_type": "table",
+        "backend": "local",
         "config_fields": [
             {
                 "name": "marker_type",
                 "label": "Marker Type",
                 "field_type": "select",
                 "required": True,
-                "default": "color",
+                "default": "auto",
                 "choices": [
+                    {"value": "auto", "label": "Auto (any tag the tracker read)"},
                     {"value": "color", "label": "Colour tag"},
                     {"value": "qr", "label": "QR / data-matrix tag"},
+                    {"value": "number", "label": "Number tag"},
                 ],
             },
         ],

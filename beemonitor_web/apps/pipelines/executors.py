@@ -223,6 +223,23 @@ def _exec_identify_taxon(step, run, context, inputs, index):
     }
 
 
+def _exec_identify_marker(step, run, context, inputs, index):
+    from . import ops
+
+    up = inputs.get("tracks") or _first_upstream_result(inputs)
+    result = (up or {}).get("result", {})
+    df = ops.load_tracking_df(result)
+    ident = ops.marker_identities(df) if df is not None else None
+    if ident is not None:
+        return {"artifact": "table", "table_kind": "marker_id", **ident}
+    return {
+        "artifact": "table", "table_kind": "marker_id",
+        "identified_tracks": 0, "unique_markers": 0, "rows": [],
+        "note": "No marker IDs in the tracking data — enable bee identification "
+                "(the marker step sets it on the tracking job).",
+    }
+
+
 def _exec_filter_passthrough(step, run, context, inputs, index):
     up = _first_upstream_result(inputs)
     out = dict(up) if isinstance(up, dict) else {}
@@ -250,6 +267,7 @@ LOCAL_EXECUTORS = {
     "analyze.visitation": _exec_analyze_visitation,
     "analyze.colony_activity": _exec_analyze_colony_activity,
     "identify.taxon": _exec_identify_taxon,
+    "identify.marker": _exec_identify_marker,
     "filter.roi": _exec_filter_passthrough,
     "filter.confidence": _exec_filter_passthrough,
     "filter.taxon": _exec_filter_passthrough,
@@ -284,6 +302,17 @@ def _pipeline_wants_species(steps):
     return any(s.get("block_type") == "identify.taxon" for s in steps)
 
 
+def _pipeline_wants_markers(steps):
+    return any(s.get("block_type") == "identify.marker" for s in steps)
+
+
+def _marker_method(steps):
+    for s in steps:
+        if s.get("block_type") == "identify.marker":
+            return (s.get("config") or {}).get("marker_type", "auto")
+    return "auto"
+
+
 def build_detect_and_track_config(step, run, context, index):
     """Assemble the ``detect_and_track`` Job config for a detect/track GPU step.
 
@@ -302,6 +331,11 @@ def build_detect_and_track_config(step, run, context, index):
         "run_tracking": step.get("block_type") in ("track.bee", "detect.bee"),
         "run_species": _pipeline_wants_species(run.steps),
     }
+    # When a marker step is downstream, ask the tracker to run individual bee
+    # identification so bee_id columns land in the tracking CSV (worker must honour).
+    if _pipeline_wants_markers(run.steps):
+        config["identify_bees"] = True
+        config["marker_method"] = _marker_method(run.steps)
     roi_out = find_artifact("roi", run.steps, index, context)
     if roi_out:
         if roi_out.get("hotel_roi"):
@@ -318,7 +352,8 @@ def submit_gpu_step(run, step, context, index):
     block_type = step.get("block_type", "")
 
     if block_type not in _DETECT_TRACK_BLOCKS:
-        # SCAFFOLD: marker decode (identify.marker) needs a dedicated backend job.
+        # Any future GPU block without a dedicated job builder resolves to a
+        # placeholder so the run doesn't hang. (All current GPU blocks are covered.)
         return "done", {
             "artifact": get_block(block_type).get("output_type", "any"),
             "note": f"{block_type} is not yet wired to a dedicated GPU job (scaffold placeholder).",
