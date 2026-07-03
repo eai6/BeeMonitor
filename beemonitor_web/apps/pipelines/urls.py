@@ -20,5 +20,6 @@ urlpatterns = [
     path("<uuid:pk>/run/", views.run_pipeline, name="run"),
     path("<uuid:pk>/run/<uuid:run_id>/", views.run_detail, name="run_detail"),
     path("<uuid:pk>/run/<uuid:run_id>/status/", views.run_status, name="run_status"),
+    path("<uuid:pk>/run/<uuid:run_id>/rerun/", views.rerun, name="rerun"),
     path("<uuid:pk>/run/<uuid:run_id>/output/<str:step_id>.csv", views.run_output_csv, name="run_output_csv"),
 ]

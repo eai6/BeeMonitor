@@ -206,6 +206,18 @@ input video, status, progress); the run detail surfaces per-step outputs with a 
 underlying `analysis.Job` CSVs for GPU steps. Run views now authorise by `run.user`
 (not template ownership) so hub-launched template runs are viewable.
 
+**Re-run with step caching (2026-07-03).** A `PipelineRun` already persists frozen
+`steps`, `step_status`, and per-step `context` (outputs). Added a **`StepResult`** cache
+(`user, cache_key, block_type, output`): GPU steps are keyed by a hash of their
+*effective* job config (video + resolved ROI/nest layout + flags via
+`build_detect_and_track_config`). On advance, a matching key reuses the cached output
+**instantly, with no SageMaker job**; only *successful* outputs are cached, so a failed
+GPU step (e.g. `SAGEMAKER_ENDPOINT_NAME` not set) re-runs next time. Local steps always
+recompute (cheap, and they read live data like device ROI) — a changed ROI flows into the
+GPU key and forces a re-run. **`rerun`** view/button starts a fresh run of the *current*
+pipeline on the old run's video; unchanged steps reuse cache. Run detail shows a `cached`
+badge per reused step. Hub notice removed.
+
 ---
 
 ## 9. Where it lives / port mechanics

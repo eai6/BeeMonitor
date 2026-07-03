@@ -5,12 +5,24 @@
 <div class="flex items-center justify-between mb-4">
   <div>
     <h1 class="text-xl font-bold text-gray-900">{{ pipeline.title }}</h1>
-    <a href="{% url 'pipelines:editor' pk=pipeline.pk %}" class="text-xs text-gray-400 hover:text-gray-600">← Back to editor</a>
+    <div class="flex items-center gap-3">
+      <a href="{% url 'pipelines:editor' pk=pipeline.pk %}" class="text-xs text-gray-400 hover:text-gray-600">← Back to editor</a>
+      <a href="{% url 'pipelines:run_list' %}" class="text-xs text-gray-400 hover:text-gray-600">Run history</a>
+    </div>
   </div>
-  <span class="px-3 py-1 rounded-full text-sm font-medium
-    {% if run.status == 'completed' %}bg-green-100 text-green-800
-    {% elif run.status == 'failed' %}bg-red-100 text-red-800
-    {% else %}bg-amber-100 text-amber-800{% endif %}">{{ run.get_status_display }}</span>
+  <div class="flex items-center gap-2">
+    <span class="px-3 py-1 rounded-full text-sm font-medium
+      {% if run.status == 'completed' %}bg-green-100 text-green-800
+      {% elif run.status == 'failed' %}bg-red-100 text-red-800
+      {% else %}bg-amber-100 text-amber-800{% endif %}">{{ run.get_status_display }}</span>
+    {% if run.is_terminal %}
+    <form method="post" action="{% url 'pipelines:rerun' pk=pipeline.pk run_id=run.pk %}">
+      {% csrf_token %}
+      <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-1.5 rounded-md text-sm font-medium"
+              title="Re-run the current pipeline on this video — unchanged steps are reused from cache">↻ Re-run</button>
+    </form>
+    {% endif %}
+  </div>
 </div>
 
 {% if not run.is_terminal %}

@@ -280,6 +280,24 @@ def run_list(request):
 
 
 @login_required
+@require_POST
+def rerun(request, pk, run_id):
+    """Re-run: a fresh run of the CURRENT pipeline on the old run's video.
+
+    Unchanged GPU steps reuse their cached output (``StepResult``), so only steps
+    that actually changed — or previously failed — recompute.
+    """
+    old = get_object_or_404(PipelineRun, pk=run_id, user=request.user)
+    pipeline = old.pipeline
+    video_id = next(((s.get("config") or {}).get("video_id")
+                     for s in (old.steps or []) if s.get("block_type") == "input.video"), None)
+    steps = engine.steps_with_video(pipeline, video_id) if video_id else (pipeline.steps or [])
+    run = PipelineRun.objects.create(pipeline=pipeline, user=request.user)
+    engine.start_run(run, steps=steps)
+    return redirect("pipelines:run_detail", pk=pipeline.pk, run_id=run.pk)
+
+
+@login_required
 def run_detail(request, pk, run_id):
     run = get_object_or_404(PipelineRun, pk=run_id, user=request.user)
     return render(request, "pipelines/run.html", {
@@ -314,12 +332,14 @@ def _run_steps(run):
     for step in run.steps or []:
         block = get_block(step.get("block_type", "")) or {}
         sid = step.get("id")
+        out = (run.context or {}).get(sid, {})
         enriched.append({
             **step,
             "display_name": block.get("display_name", step.get("block_type", "")),
             "icon": block.get("icon", "🔧"),
             "state": run.step_state(sid),
-            "output": (run.context or {}).get(sid, {}),
+            "output": out,
+            "cached": bool(out.get("_cached")),
         })
     return enriched
 

@@ -109,3 +109,32 @@ class PipelineRun(models.Model):
     @property
     def is_terminal(self):
         return self.status in (self.Status.COMPLETED, self.Status.FAILED)
+
+
+class StepResult(models.Model):
+    """Content-addressed cache of a completed step's output, for cross-run reuse.
+
+    Keyed by ``cache_key`` = hash(user, block_type, effective config, upstream cache
+    keys). When a step in a new run has a matching key, its output is reused instantly
+    instead of recomputing — so re-running an edited pipeline only recomputes the
+    steps that actually changed (and their descendants). Only *successful* outputs are
+    cached, so a failed GPU step (e.g. endpoint misconfigured) re-runs next time.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="step_results"
+    )
+    cache_key = models.CharField(max_length=64, db_index=True)
+    block_type = models.CharField(max_length=64)
+    output = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user", "cache_key"], name="uniq_user_cache_key"),
+        ]
+
+    def __str__(self):
+        return f"{self.block_type} [{self.cache_key[:8]}]"

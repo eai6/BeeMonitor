@@ -53,11 +53,6 @@
     {% if has_filter %}<a href="{% url 'analysis:processing' %}" class="text-sm text-amber-700 hover:underline">Clear</a>{% endif %}
   </form>
 
-  <!-- Outputs now come from pipeline runs — see the run history. -->
-  <div class="flex items-center justify-between gap-3 bg-white shadow rounded-lg p-4 mb-5">
-    <p class="text-sm text-gray-600">Ecological data — foraging trips, visitation, species, tracks and more — is produced by the <b>pipeline</b> you run below. Each run's outputs are downloadable from its results page.</p>
-    <a href="{% url 'pipelines:run_list' %}" class="shrink-0 text-sm text-amber-700 hover:underline font-medium whitespace-nowrap">Run history →</a>
-  </div>
 
   {% if videos %}
   <form method="post" action="{% url 'pipelines:run_on_videos' %}" id="run-form">

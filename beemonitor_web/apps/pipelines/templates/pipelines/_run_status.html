@@ -13,6 +13,7 @@
       {% if step.output.table_kind == 'marker_id' %}<span class="text-xs text-gray-600">{{ step.output.identified_tracks }} IDs · {{ step.output.unique_markers }} unique markers</span>{% endif %}
       {% if step.output.rows %}<a href="{% url 'pipelines:run_output_csv' pk=run.pipeline_id run_id=run.pk step_id=step.id %}" class="text-xs text-amber-700 hover:underline">⬇ CSV</a>{% endif %}
       {% if step.output.job_id %}<a href="{% url 'analysis:results' step.output.job_id %}" class="text-xs text-amber-700 hover:underline">results →</a>{% endif %}
+      {% if step.cached %}<span class="text-[10px] text-gray-400 border border-gray-200 rounded px-1" title="Reused from a previous run">cached</span>{% endif %}
       {% if step.output.error %}<span class="text-xs text-red-600">{{ step.output.error }}</span>{% endif %}
       <span class="text-xs font-medium
         {% if step.state == 'done' %}text-green-600

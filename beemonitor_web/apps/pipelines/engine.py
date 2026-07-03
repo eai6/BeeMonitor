@@ -12,16 +12,48 @@ Design: ``memory/23_pipeline_builder_port_design.md``.
 """
 
 import copy
+import hashlib
+import json
 import logging
 
 from django.db import transaction
 from django.utils import timezone
 
-from .models import PipelineRun
+from .models import PipelineRun, StepResult
 from .registry import get_block
 from . import executors
 
 logger = logging.getLogger(__name__)
+
+
+def _gpu_cache_key(run, step, context, index):
+    """Content hash of a GPU step's effective job config (video + ROI + flags).
+
+    Two runs whose track/detect step resolves to the *same* video, ROI/nest layout
+    and analysis flags share a key — so the expensive SageMaker result is reused.
+    A changed ROI or video yields a different key and re-runs. Returns None when the
+    step can't be keyed yet (no upstream video) — then it simply isn't cached.
+    """
+    built, _err = executors.build_detect_and_track_config(step, run, context, index)
+    if not built:
+        return None
+    eff = {"video": built.get("video_id"), **(built.get("config") or {})}
+    payload = json.dumps(
+        {"u": run.user_id, "b": step.get("block_type", ""), "c": eff},
+        sort_keys=True, default=str,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _persist_step_result(user, cache_key, block_type, output):
+    """Cache a successful step output for cross-run reuse (strips _-prefixed meta)."""
+    if not cache_key:
+        return
+    clean = {k: v for k, v in output.items() if not k.startswith("_")}
+    StepResult.objects.update_or_create(
+        user=user, cache_key=cache_key,
+        defaults={"block_type": block_type, "output": clean},
+    )
 
 
 def steps_with_video(pipeline, video_id):
@@ -93,12 +125,28 @@ def advance_run(run_pk):
                 backend = block.get("backend", "local")
 
                 if backend == "gpu":
+                    # Reuse an identical GPU step's cached output (skips SageMaker).
+                    key = _gpu_cache_key(run, step, context, index)
+                    cached = (StepResult.objects.filter(user=run.user, cache_key=key).first()
+                              if key else None)
+                    if cached:
+                        out = dict(cached.output)
+                        out["_cache_key"] = key
+                        out["_cached"] = True
+                        context[sid] = out
+                        status[sid] = PipelineRun.STEP_DONE
+                        progressed = True
+                        continue
+
                     result_state, output = executors.submit_gpu_step(run, step, context, index)
+                    if key:
+                        output["_cache_key"] = key   # so on_job_finished can persist it
                     context[sid] = output
                     if result_state == "submitted":
                         status[sid] = PipelineRun.STEP_RUNNING   # parks the run
                     elif result_state == "done":
                         status[sid] = PipelineRun.STEP_DONE
+                        _persist_step_result(run.user, key, step.get("block_type", ""), output)
                     else:
                         status[sid] = PipelineRun.STEP_FAILED
                     progressed = True
@@ -165,6 +213,10 @@ def on_job_finished(job):
                 out.update({"result": result, "pending": False, "job_id": job.pk})
                 context[step_id] = out
                 status[step_id] = PipelineRun.STEP_DONE
+                # Cache the (expensive) GPU output for reuse by future runs.
+                block_type = next((s.get("block_type", "") for s in (run.steps or [])
+                                   if s.get("id") == step_id), "")
+                _persist_step_result(run.user, out.get("_cache_key"), block_type, out)
             elif job_status == "failed":
                 context[step_id] = {
                     "error": getattr(job, "error_message", "") or "GPU job failed.",
