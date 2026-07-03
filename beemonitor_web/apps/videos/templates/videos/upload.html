@@ -30,6 +30,13 @@
     </div>
 
     <div class="mb-4">
+      <label for="siteInput" class="block text-sm font-medium text-gray-700 mb-1">Site / location (optional)</label>
+      <input type="text" id="siteInput" maxlength="120" placeholder="e.g. Mendel's Garden, Plot B"
+             class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+      <p class="mt-1 text-xs text-gray-500">For clips not from a device. Groups the video under a site so it shows in the site filter. If a device is selected, its location is used unless you set one here.</p>
+    </div>
+
+    <div class="mb-4">
       <label for="video_file" class="block text-sm font-medium text-gray-700 mb-1">Video File</label>
       <input type="file" id="video_file" accept="video/mp4,video/x-matroska,video/quicktime,.h264" required
              class="w-full border border-gray-300 rounded px-3 py-2 text-sm file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:text-sm file:bg-amber-50 file:text-amber-700">
@@ -147,6 +154,8 @@
       };
       const deviceEl = document.getElementById('deviceSelect');
       if (deviceEl && deviceEl.value) body.device_id = deviceEl.value;
+      const siteEl = document.getElementById('siteInput');
+      if (siteEl && siteEl.value.trim()) body.site_name = siteEl.value.trim();
       await postJson('/api/v1/web-uploads/complete', body);
       window.location.href = "{% url 'videos:list' %}";
     } catch (e) {

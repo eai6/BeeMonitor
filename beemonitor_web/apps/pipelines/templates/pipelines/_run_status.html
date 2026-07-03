@@ -1,30 +1,77 @@
 <div class="space-y-2">
   {% for step in steps %}
-  <div class="bg-white rounded-lg border border-gray-200 p-3 flex items-center justify-between">
-    <div class="flex items-center gap-2">
-      <span class="w-6 h-6 flex items-center justify-center rounded-full bg-gray-100 text-gray-600 text-xs font-bold">{{ forloop.counter }}</span>
-      <span class="font-medium text-gray-900">{{ step.icon }} {{ step.display_name }}</span>
+  <div class="bg-white rounded-lg border border-gray-200">
+    <div class="p-3 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <span class="w-6 h-6 flex items-center justify-center rounded-full bg-gray-100 text-gray-600 text-xs font-bold">{{ forloop.counter }}</span>
+        <span class="font-medium text-gray-900">{{ step.icon }} {{ step.display_name }}</span>
+      </div>
+      <div class="flex items-center gap-3">
+        {% if step.output.foraging_trip_count is not None %}<span class="text-xs text-gray-600">{{ step.output.foraging_trip_count }} trips</span>{% endif %}
+        {% if step.output.table_kind == 'visitation' %}<span class="text-xs text-gray-600">{{ step.output.unique_visitors }} visitors · {{ step.output.total_visits }} visits</span>{% endif %}
+        {% if step.output.table_kind == 'colony_activity' %}<span class="text-xs text-gray-600">{{ step.output.metric }}: peak {{ step.output.peak }}</span>{% endif %}
+        {% if step.output.table_kind == 'marker_id' %}<span class="text-xs text-gray-600">{{ step.output.identified_tracks }} IDs · {{ step.output.unique_markers }} markers</span>{% endif %}
+        {% if step.cached %}<span class="text-[10px] text-gray-400 border border-gray-200 rounded px-1" title="Reused from a previous run">cached</span>{% endif %}
+        <span class="text-xs font-medium
+          {% if step.state == 'done' %}text-green-600
+          {% elif step.state == 'failed' %}text-red-600
+          {% elif step.state == 'running' %}text-amber-600{% else %}text-gray-400{% endif %}">
+          {% if step.state == 'done' %}✓ done
+          {% elif step.state == 'failed' %}✗ failed
+          {% elif step.state == 'running' %}● running
+          {% else %}pending{% endif %}
+        </span>
+      </div>
     </div>
-    <div class="flex items-center gap-3">
-      {% if step.output.note %}<span class="text-[11px] text-gray-400">{{ step.output.note }}</span>{% endif %}
-      {% if step.output.foraging_trip_count is not None %}<span class="text-xs text-gray-600">{{ step.output.foraging_trip_count }} trips</span>{% endif %}
-      {% if step.output.table_kind == 'visitation' %}<span class="text-xs text-gray-600">{{ step.output.unique_visitors }} visitors · {{ step.output.total_visits }} visits{% if step.output.total_dwell_sec %} · {{ step.output.total_dwell_sec }}s dwell{% endif %}</span>{% endif %}
-      {% if step.output.table_kind == 'colony_activity' %}<span class="text-xs text-gray-600">{{ step.output.metric }}: peak {{ step.output.peak }}, mean {{ step.output.mean }} ({{ step.output.rows|length }} bins)</span>{% endif %}
-      {% if step.output.table_kind == 'marker_id' %}<span class="text-xs text-gray-600">{{ step.output.identified_tracks }} IDs · {{ step.output.unique_markers }} unique markers</span>{% endif %}
-      {% if step.output.rows %}<a href="{% url 'pipelines:run_output_csv' pk=run.pipeline_id run_id=run.pk step_id=step.id %}" class="text-xs text-amber-700 hover:underline">⬇ CSV</a>{% endif %}
-      {% if step.output.job_id %}<a href="{% url 'analysis:results' step.output.job_id %}" class="text-xs text-amber-700 hover:underline">results →</a>{% endif %}
-      {% if step.cached %}<span class="text-[10px] text-gray-400 border border-gray-200 rounded px-1" title="Reused from a previous run">cached</span>{% endif %}
-      {% if step.output.error %}<span class="text-xs text-red-600">{{ step.output.error }}</span>{% endif %}
-      <span class="text-xs font-medium
-        {% if step.state == 'done' %}text-green-600
-        {% elif step.state == 'failed' %}text-red-600
-        {% elif step.state == 'running' %}text-amber-600{% else %}text-gray-400{% endif %}">
-        {% if step.state == 'done' %}✓ done
-        {% elif step.state == 'failed' %}✗ failed
-        {% elif step.state == 'running' %}● running
-        {% else %}pending{% endif %}
-      </span>
-    </div>
+
+    {% if step.output.error %}
+    <div class="px-3 pb-2 -mt-1 text-xs text-red-600">{{ step.output.error }}</div>
+    {% endif %}
+    {% if step.output.note %}
+    <div class="px-3 pb-2 -mt-1 text-[11px] text-gray-400">{{ step.output.note }}</div>
+    {% endif %}
+
+    {% if step.state == 'done' and step.display.fields or step.display.rows %}
+    <details class="border-t border-gray-100">
+      <summary class="px-3 py-2 text-xs text-amber-700 cursor-pointer hover:bg-gray-50">View output</summary>
+      <div class="px-3 pb-3 space-y-3">
+        <!-- Links -->
+        <div class="flex flex-wrap gap-3">
+          {% if step.output.rows %}<a href="{% url 'pipelines:run_output_csv' pk=run.pipeline_id run_id=run.pk step_id=step.id %}" class="text-xs text-amber-700 hover:underline">⬇ Download CSV</a>{% endif %}
+          {% if step.output.job_id %}<a href="{% url 'analysis:results' step.output.job_id %}" class="text-xs text-amber-700 hover:underline">Full job results & CSVs →</a>{% endif %}
+          {% if step.display.annotated_video %}<span class="text-xs text-gray-400">annotated video available on the job page</span>{% endif %}
+        </div>
+
+        <!-- Scalar metrics -->
+        {% if step.display.fields %}
+        <dl class="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1">
+          {% for label, value in step.display.fields %}
+          <div class="text-xs"><dt class="text-gray-400 capitalize inline">{{ label }}:</dt> <dd class="text-gray-800 inline font-medium">{{ value }}</dd></div>
+          {% endfor %}
+        </dl>
+        {% endif %}
+
+        <!-- Rows table -->
+        {% if step.display.rows %}
+        <div class="overflow-x-auto border border-gray-100 rounded">
+          <table class="min-w-full text-xs">
+            <thead class="bg-gray-50"><tr>
+              {% for col in step.display.columns %}<th class="text-left px-2 py-1 text-gray-500 font-medium">{{ col }}</th>{% endfor %}
+            </tr></thead>
+            <tbody>
+              {% for row in step.display.rows %}
+              <tr class="border-t border-gray-100">
+                {% for cell in row %}<td class="px-2 py-1 text-gray-700">{{ cell }}</td>{% endfor %}
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% if step.display.row_total > 25 %}<p class="text-[11px] text-gray-400 px-2 py-1">Showing 25 of {{ step.display.row_total }} rows — download the CSV for all.</p>{% endif %}
+        </div>
+        {% endif %}
+      </div>
+    </details>
+    {% endif %}
   </div>
   {% endfor %}
 </div>

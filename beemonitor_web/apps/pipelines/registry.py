@@ -205,7 +205,7 @@ BLOCK_REGISTRY = {
         "icon": "🌻",
         "input_type": "tracks",
         "output_type": "events",
-        "backend": "gpu",
+        "backend": "local",
         "config_fields": [],
     },
     "analyze.visitation": {
@@ -249,7 +249,7 @@ BLOCK_REGISTRY = {
         "icon": "🔬",
         "input_type": "tracks",
         "output_type": "observations",
-        "backend": "gpu",
+        "backend": "local",
         "config_fields": [
             {
                 "name": "region_prior",

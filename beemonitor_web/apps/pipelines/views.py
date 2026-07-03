@@ -326,6 +326,42 @@ def run_output_csv(request, pk, run_id, step_id):
     return resp
 
 
+_DISPLAY_SKIP = {
+    "rows", "from", "result", "note", "error", "artifact", "pending", "summary",
+    "table_kind", "event_kind", "output_kind", "filtered_by",
+}
+
+
+def _step_display(output):
+    """A review-friendly view of a step's output: scalar metrics + a rows table."""
+    if not isinstance(output, dict):
+        return {"fields": [], "rows": [], "columns": [], "row_total": 0}
+    result = output.get("result") or {}
+    fields = []
+    seen = set()
+    for src in (output, result):
+        for k, v in src.items():
+            if k in _DISPLAY_SKIP or k.startswith("_") or k in seen:
+                continue
+            if isinstance(v, (dict, list)) or v in (None, ""):
+                continue
+            fields.append((k.replace("_", " "), v))
+            seen.add(k)
+    rows = output.get("rows") or []
+    columns = list(rows[0].keys()) if rows else []
+    # Align each row into a list of cells matching `columns` (templates can't index
+    # a dict by a variable key).
+    cell_rows = [[r.get(c, "") for c in columns] for r in rows[:25]]
+    return {
+        "fields": fields[:24],
+        "rows": cell_rows,
+        "row_total": len(rows),
+        "columns": columns,
+        "annotated_video": result.get("annotated_video_path") or "",
+        "summary": output.get("summary") or result.get("summary_stats") or {},
+    }
+
+
 def _run_steps(run):
     """Enrich the run's frozen steps with per-step status + output for display."""
     enriched = []
@@ -340,6 +376,7 @@ def _run_steps(run):
             "state": run.step_state(sid),
             "output": out,
             "cached": bool(out.get("_cached")),
+            "display": _step_display(out),
         })
     return enriched
 
