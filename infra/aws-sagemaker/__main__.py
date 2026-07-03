@@ -518,6 +518,12 @@ if deploy_endpoint:
     )
 
     # Application Auto Scaling — scale to zero after idle.
+    # depends_on the endpoint (not just its name Output): an image bump REPLACES the
+    # EndpointConfig and updates the endpoint, which takes minutes. Without explicit
+    # ordering, Pulumi runs RegisterScalableTarget concurrently with that swap, and it
+    # fails ("Could not find endpointConfig …") because the config is in flux — which
+    # aborts the run mid-update and leaves the endpoint pointing at a deleted config.
+    # Waiting for the endpoint update to settle first makes every roll clean.
     autoscaling_target = aws.appautoscaling.Target(
         "autoscaling-target",
         max_capacity=max_capacity,
@@ -527,6 +533,7 @@ if deploy_endpoint:
         ),
         scalable_dimension="sagemaker:variant:DesiredInstanceCount",
         service_namespace="sagemaker",
+        opts=pulumi.ResourceOptions(depends_on=[endpoint]),
     )
 
     aws.appautoscaling.Policy(
