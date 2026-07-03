@@ -1,0 +1,5 @@
+#!/bin/sh
+# SageMaker starts the container as `docker run <image> serve`. SAM 3 batches can be
+# large and the GPU cold start (scale-from-zero) is slow, so a generous timeout. One
+# worker — the model loads once at import in serve.py.
+exec gunicorn --bind 0.0.0.0:8080 --workers 1 --timeout 900 serve:app

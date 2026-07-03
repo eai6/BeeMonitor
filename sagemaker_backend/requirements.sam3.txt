@@ -1,0 +1,9 @@
+# SAM 3 auto-labeler inference image deps. torch/torchvision are installed from the
+# CUDA wheel index in Dockerfile.sam3 (kept out of here so pip doesn't pull a
+# mismatched build). SAM 3 support requires transformers >= 5.0 (Sam3Model/Processor).
+transformers>=5.0.0
+huggingface_hub>=0.20.0
+pillow
+numpy
+flask
+gunicorn
