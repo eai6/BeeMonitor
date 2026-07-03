@@ -153,4 +153,8 @@ def create_colab_gist(notebook_dict, filename, token, description=""):
     )
     with urllib.request.urlopen(req, timeout=15) as r:
         gist = _json.loads(r.read())
-    return f"https://colab.research.google.com/gist/{gist['id']}"
+    # Colab expects gist/<owner>/<id> — a bare id gives "Unexpected GitHub Gist path".
+    owner = (gist.get("owner") or {}).get("login")
+    gid = gist["id"]
+    return (f"https://colab.research.google.com/gist/{owner}/{gid}" if owner
+            else f"https://colab.research.google.com/gist/{gid}")
