@@ -839,7 +839,10 @@ class VideoSynthesizer:
             Frame with nest annotations
         """
         for nest_id, coords in nests.items():
-            # Extract ID number
+            # Extract ID number. Coerce to str: device-drawn nest tubes use INTEGER
+            # ids (nest_layout = [{"id": int, ...}]), and `'_' in <int>` raised
+            # "argument of type 'int' is not iterable", aborting the whole render.
+            nest_id = str(nest_id)
             id_num = nest_id.split('_')[-1] if '_' in nest_id else nest_id
             
             # Get coordinates and apply padding
@@ -1144,53 +1147,58 @@ class VideoSynthesizer:
                 
                 start_frame, end_frame = period
                 
-                # Process each frame in the period
+                # Process each frame in the period. Overlays are best-effort — a
+                # single failed draw must NEVER drop frames (that's what produced
+                # empty 0-frame videos when nest ids were ints).
+                overlay_ok = True
                 for frame_num in range(start_frame, end_frame + 1):
                     # Read frame
                     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
                     ret, frame = cap.read()
-                    
+
                     if not ret:
                         continue
-                    
+
                     # Resize frame
                     frame = cv2.resize(frame, (self.res_width, self.res_height))
-                    
-                    # Draw debug data if enabled (blobs and YOLO detections)
-                    if self.debug_mode:
-                        detections = motion.iloc[period_idx].get('detections', {})
-                        frame_detections = detections.get(frame_num, {})
-                        debug_blobs = frame_detections.get('debug_blobs', [])
-                        debug_yolo = frame_detections.get('debug_yolo', [])
-                        if debug_blobs or debug_yolo:
-                            frame = self._draw_debug_data(frame, debug_blobs, debug_yolo)
-                    
-                    # Draw nest holes
-                    frame = self._draw_nest_holes(frame, nest_data['nests'])
-                    
-                    # Draw trajectory paths if requested (for annotation mode)
-                    if show_trajectories and self.annotation_mode:
-                        frame = self._draw_trajectory_path(frame, track_objects, frame_num)
-                    
-                    # Draw tracks
-                    frame = self._draw_tracks(frame, track_objects, frame_num)
 
-                    
-                    # Draw hotel boundary
-                    if 'hotel' in nest_data:
-                        frame = self._draw_hotel_boundary(frame, nest_data['hotel'])
-                    
-                    # Draw event if present
-                    if frame_num in event_dict:
-                        nest_id, action = event_dict[frame_num]
-                        frame = self._draw_event(frame, action, nest_id)
-                        
-                        # Hold frame for visibility
-                        hold_frames = int(self.FRAMES_TO_HOLD_BASE)
-                        for _ in range(hold_frames):
-                            video_writer.write(frame)
-                    
-                    # Write frame
+                    try:
+                        # Draw debug data if enabled (blobs and YOLO detections)
+                        if self.debug_mode:
+                            detections = motion.iloc[period_idx].get('detections', {})
+                            frame_detections = detections.get(frame_num, {})
+                            debug_blobs = frame_detections.get('debug_blobs', [])
+                            debug_yolo = frame_detections.get('debug_yolo', [])
+                            if debug_blobs or debug_yolo:
+                                frame = self._draw_debug_data(frame, debug_blobs, debug_yolo)
+
+                        # Draw nest holes
+                        nests = nest_data.get('nests', {}) if isinstance(nest_data, dict) else {}
+                        frame = self._draw_nest_holes(frame, nests)
+
+                        # Draw trajectory paths if requested (for annotation mode)
+                        if show_trajectories and self.annotation_mode:
+                            frame = self._draw_trajectory_path(frame, track_objects, frame_num)
+
+                        # Draw tracks
+                        frame = self._draw_tracks(frame, track_objects, frame_num)
+
+                        # Draw hotel boundary
+                        if isinstance(nest_data, dict) and 'hotel' in nest_data:
+                            frame = self._draw_hotel_boundary(frame, nest_data['hotel'])
+
+                        # Draw event if present (hold a few frames for visibility)
+                        if frame_num in event_dict:
+                            nest_id, action = event_dict[frame_num]
+                            frame = self._draw_event(frame, action, nest_id)
+                            for _ in range(int(self.FRAMES_TO_HOLD_BASE)):
+                                video_writer.write(frame)
+                    except Exception as e:
+                        if overlay_ok:
+                            print(f"Overlay draw failed in period {period_idx} (frame {frame_num}): {e}")
+                            overlay_ok = False
+
+                    # Always write the frame — overlays are best-effort.
                     video_writer.write(frame)
                     
             except Exception as e:
