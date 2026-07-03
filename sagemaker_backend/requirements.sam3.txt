@@ -7,3 +7,6 @@ pillow
 numpy
 flask
 gunicorn
+# pre_annotate mode: download the video from S3 + sample frames.
+boto3
+opencv-python-headless

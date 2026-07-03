@@ -168,6 +168,9 @@ PASSWORD_RESET_TIMEOUT = int(os.environ.get("PASSWORD_RESET_TIMEOUT", 60 * 60 * 
 # SageMaker Async Inference (Phase 4 of memory/09_aws_migration_plan.md).
 # The endpoint + buckets are provisioned by infra/aws-sagemaker/.
 SAGEMAKER_ENDPOINT_NAME = os.environ.get("SAGEMAKER_ENDPOINT_NAME", "")
+# SAM 3 auto-labeler endpoint (GPU async) — used by pre-annotation when labeler=sam3
+# to seed YOLO training data on new-domain footage the current detector misses.
+SAGEMAKER_SAM3_ENDPOINT_NAME = os.environ.get("SAGEMAKER_SAM3_ENDPOINT_NAME", "")
 SAGEMAKER_INPUT_BUCKET = os.environ.get("SAGEMAKER_INPUT_BUCKET", "")
 SAGEMAKER_OUTPUT_BUCKET = os.environ.get("SAGEMAKER_OUTPUT_BUCKET", "")
 # Fine-tuning (SageMaker training jobs) — role SageMaker assumes for the job and

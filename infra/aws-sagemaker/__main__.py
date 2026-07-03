@@ -706,9 +706,15 @@ if deploy_sam3:
         primary_container=aws.sagemaker.ModelPrimaryContainerArgs(
             image=sam3_image,
             mode="SingleModel",
-            # Weights are baked (HF_HUB_OFFLINE=1 in the image), so no HF token or S3
-            # is needed at runtime — SageMaker async handles payload I/O itself.
-            environment={"AWS_REGION": region},
+            # Weights are baked (HF_HUB_OFFLINE=1 in the image), so no HF token is
+            # needed at runtime. The bucket vars let the pre_annotate mode download the
+            # video from raw-videos and upload sampled frames to processed (same
+            # execution role as the video endpoint, which already grants that S3 I/O).
+            environment={
+                "AWS_REGION": region,
+                "AWS_S3_BUCKET_RAW_VIDEOS": f"beemonitor-{env}-raw-videos-{account_id}",
+                "AWS_S3_BUCKET_PROCESSED": f"beemonitor-{env}-processed-{account_id}",
+            },
         ),
     )
 

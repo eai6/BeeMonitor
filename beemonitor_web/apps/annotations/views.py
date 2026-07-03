@@ -395,26 +395,31 @@ class PreAnnotateView(LoginRequiredMixin, View):
 
         blob_path = video.storage_key
         sample_interval, max_frames, confidence = _preannotate_opts(request)
+        # labeler=sam3 routes to the SAM 3 endpoint (domain-robust, open-vocabulary) —
+        # the fix for new-domain footage the current YOLO misses. Default: yolo.
+        labeler = "sam3" if request.POST.get("labeler") == "sam3" else "yolo"
 
         # Auto-transfer from S3 if needed, then pre-annotate
         # The background thread handles both transfer and annotation
         thread = threading.Thread(
             target=self._run_pre_annotate,
-            args=(project.pk, video.pk, blob_path, sample_interval, max_frames, confidence),
+            args=(project.pk, video.pk, blob_path, sample_interval, max_frames, confidence, labeler),
             daemon=True,
         )
         thread.start()
 
+        engine = "SAM 3" if labeler == "sam3" else "AI"
         is_s3 = blob_path.startswith("s3://")
         if is_s3:
-            messages.info(request, f"Transferring '{video.title}' from S3 then running AI detection. This takes 2-4 minutes. Refresh to see results.")
+            messages.info(request, f"Transferring '{video.title}' from S3 then running {engine} detection. This takes 2-4 minutes. Refresh to see results.")
         else:
-            messages.info(request, f"Pre-annotating '{video.title}' with AI. This takes 1-2 minutes. Refresh to see results.")
+            messages.info(request, f"Pre-annotating '{video.title}' with {engine}. This takes 1-2 minutes. Refresh to see results.")
         return redirect("annotations:detail", pk=pk)
 
     @staticmethod
     def _run_pre_annotate(project_pk, video_pk, blob_path,
-                          sample_interval=10, max_frames=300, confidence=0.15):
+                          sample_interval=10, max_frames=300, confidence=0.15,
+                          labeler="yolo"):
         """Invoke the SageMaker async endpoint (task=pre_annotate), poll the
         result from S3, then create Annotation rows. Runs in a daemon thread."""
         import json
@@ -442,10 +447,16 @@ class PreAnnotateView(LoginRequiredMixin, View):
             classes = project.classes or ["bee", "wasp", "nest"]
             user_id = project.user_id
 
-            endpoint = settings.SAGEMAKER_ENDPOINT_NAME
-            if not endpoint:
-                logger.error("pre-annotate: SAGEMAKER_ENDPOINT_NAME unset — endpoint not deployed?")
-                return
+            if labeler == "sam3":
+                endpoint = settings.SAGEMAKER_SAM3_ENDPOINT_NAME
+                if not endpoint:
+                    logger.error("pre-annotate: SAGEMAKER_SAM3_ENDPOINT_NAME unset — SAM 3 endpoint not deployed?")
+                    return
+            else:
+                endpoint = settings.SAGEMAKER_ENDPOINT_NAME
+                if not endpoint:
+                    logger.error("pre-annotate: SAGEMAKER_ENDPOINT_NAME unset — endpoint not deployed?")
+                    return
             in_bucket = settings.SAGEMAKER_INPUT_BUCKET
             region = settings.AWS_REGION
             connection.close()  # don't hold a DB conn across the long poll
@@ -456,7 +467,7 @@ class PreAnnotateView(LoginRequiredMixin, View):
 
             payload = {
                 "task": "pre_annotate",
-                "job_id": f"preannot-{project_pk}-{video_pk}",
+                "job_id": f"preannot-{labeler}-{project_pk}-{video_pk}",
                 "user_id": str(user_id),
                 "video_blob_path": blob_path,
                 "classes": classes,
@@ -464,7 +475,7 @@ class PreAnnotateView(LoginRequiredMixin, View):
                 "max_frames": max_frames,
                 "confidence_threshold": confidence,
             }
-            key = f"preannotate/{project_pk}/{video_pk}.json"
+            key = f"preannotate/{project_pk}/{video_pk}-{labeler}.json"
             s3.put_object(Bucket=in_bucket, Key=key,
                           Body=json.dumps(payload).encode("utf-8"),
                           ContentType="application/json")
@@ -472,7 +483,7 @@ class PreAnnotateView(LoginRequiredMixin, View):
                 EndpointName=endpoint,
                 InputLocation=f"s3://{in_bucket}/{key}",
                 ContentType="application/json",
-                InferenceId=f"preannot-{project_pk}-{video_pk}",
+                InferenceId=f"preannot-{labeler}-{project_pk}-{video_pk}",
             )
             out = urlparse(resp["OutputLocation"])
             out_bucket, out_key = out.netloc, out.path.lstrip("/")
@@ -552,6 +563,7 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
             return redirect("annotations:detail", pk=pk)
 
         sample_interval, max_frames, confidence = _preannotate_opts(request)
+        labeler = "sam3" if request.POST.get("labeler") == "sam3" else "yolo"
         count = 0
         for video in videos:
             blob_path = video.storage_key
@@ -559,15 +571,16 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
                 continue
             thread = threading.Thread(
                 target=PreAnnotateView._run_pre_annotate,
-                args=(project.pk, video.pk, blob_path, sample_interval, max_frames, confidence),
+                args=(project.pk, video.pk, blob_path, sample_interval, max_frames, confidence, labeler),
                 daemon=True,
             )
             thread.start()
             count += 1
 
+        engine = "SAM 3" if labeler == "sam3" else "AI"
         messages.info(
             request,
-            f"AI pre-annotation started for {count} video(s). This takes 1-4 minutes per video. Refresh to see results.",
+            f"{engine} pre-annotation started for {count} video(s). This takes 1-4 minutes per video. Refresh to see results.",
         )
         return redirect("annotations:detail", pk=pk)
 

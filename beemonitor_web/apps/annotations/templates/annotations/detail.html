@@ -74,8 +74,16 @@
                  min="0.01" max="0.9" step="0.05"
                  class="w-16 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
         </div>
+        <div title="YOLO = the current fast detector. SAM 3 = domain-robust foundation model — use it when the current model misses bees on new footage.">
+          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Labeler</label>
+          <select name="labeler"
+                  class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
+            <option value="yolo">YOLO (current)</option>
+            <option value="sam3">SAM 3 (new domains)</option>
+          </select>
+        </div>
         <button type="submit" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium">
-          AI Pre-annotate All
+          Pre-annotate All
         </button>
       </form>
     </div>
