@@ -124,27 +124,42 @@
 
   <!-- Server-side filters (device · site · year · search) — same as Processing;
        reaches every device/location, not just the first page. -->
-  <form method="get" class="flex flex-wrap gap-2 mb-3 items-end">
-    <input type="text" name="av_q" value="{{ available_filter.q }}" placeholder="Search title…"
-           class="flex-1 min-w-[8rem] border border-gray-300 rounded px-2 py-1.5 text-sm focus:ring-amber-500 focus:border-amber-500">
+  <form method="get" class="flex flex-wrap items-center gap-2 mb-3">
     <select name="av_device" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-      <option value="">All devices</option>
+      <option value="">All bee hotels</option>
       {% for d in available_devices %}
       <option value="{{ d.pk }}" {% if available_filter.device == d.pk|stringformat:"s" %}selected{% endif %}>{{ d.name }}</option>
       {% endfor %}
     </select>
+    <select name="av_confirmed" class="border border-gray-300 rounded px-2 py-1.5 text-sm" title="On-device bee confirmation">
+      <option value="">Any confirmation</option>
+      <option value="yes" {% if available_filter.confirmed == "yes" %}selected{% endif %}>✓ Confirmed bee</option>
+      <option value="no" {% if available_filter.confirmed == "no" %}selected{% endif %}>Unconfirmed</option>
+    </select>
+    {% if available_opts.sites %}
     <select name="av_site" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
       <option value="">All sites</option>
-      {% for site in available_sites %}
-      <option value="{{ site }}" {% if available_filter.site == site %}selected{% endif %}>{{ site }}</option>
-      {% endfor %}
+      {% for s in available_opts.sites %}<option value="{{ s }}" {% if available_filter.site == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
     </select>
+    {% endif %}
     <select name="av_year" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-      <option value="">All years</option>
-      {% for y in available_years %}
-      <option value="{{ y }}" {% if available_filter.year == y|stringformat:"s" %}selected{% endif %}>{{ y }}</option>
-      {% endfor %}
+      <option value="">Year</option>
+      {% for y in available_opts.years %}<option value="{{ y }}" {% if available_filter.year == y|stringformat:"s" %}selected{% endif %}>{{ y }}</option>{% endfor %}
     </select>
+    <select name="av_month" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      <option value="">Month</option>
+      {% for m in available_opts.months %}<option value="{{ m }}" {% if available_filter.month == m|stringformat:"s" %}selected{% endif %}>{{ m }}</option>{% endfor %}
+    </select>
+    <select name="av_day" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      <option value="">Day</option>
+      {% for d in available_opts.days %}<option value="{{ d }}" {% if available_filter.day == d|stringformat:"s" %}selected{% endif %}>{{ d }}</option>{% endfor %}
+    </select>
+    <select name="av_hour" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      <option value="">Hour</option>
+      {% for h in available_opts.hours %}<option value="{{ h }}" {% if available_filter.hour == h|stringformat:"s" %}selected{% endif %}>{{ h }}:00</option>{% endfor %}
+    </select>
+    <input name="av_q" value="{{ available_filter.q }}" placeholder="Search title…"
+           class="border border-gray-300 rounded px-3 py-1.5 text-sm">
     <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded text-sm border border-gray-300">Filter</button>
     {% if available_filter_on %}
     <a href="{% url 'annotations:detail' project.pk %}" class="text-sm text-amber-600 hover:underline">Clear</a>

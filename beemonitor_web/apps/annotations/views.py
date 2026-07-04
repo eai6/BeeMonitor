@@ -98,45 +98,51 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
             video_data.append({"video": video, "annotation_count": ann_count})
         ctx["video_data"] = video_data
 
-        # Available videos to add — server-side filters mirroring the Processing page
-        # (device · site · year · search) so EVERY device/location is reachable, not
-        # just whatever falls in the first page.
+        # Available videos to add — the SAME comprehensive filter as the Processing
+        # page (device · confirmation · site · year · month · day · hour · search),
+        # over all accessible videos (own + shared), so every hotel/location/time is
+        # reachable — not just the first page.
+        from apps.analysis.views import _sanitize_site, _unsanitize_site
         from apps.devices.models import Device
         from apps.videos.models import Video
         existing_ids = set(videos.values_list("pk", flat=True))
-        all_user = Video.objects.filter(user=self.request.user)
+        all_user = Video.accessible(self.request.user)
         available = all_user.exclude(pk__in=existing_ids)
 
         af = {k: self.request.GET.get("av_" + k, "").strip()
-              for k in ("q", "device", "site", "year")}
+              for k in ("q", "device", "site", "year", "month", "day", "hour", "confirmed")}
         if af["q"]:
             available = available.filter(title__icontains=af["q"])
         if af["device"]:
             available = available.filter(device_id=af["device"])
         if af["site"]:
-            available = available.filter(site_name=af["site"])
-        if af["year"]:
-            try:
-                available = available.filter(recorded_at__year=int(af["year"]))
-            except (ValueError, TypeError):
-                pass
+            available = available.filter(site_name=_unsanitize_site(af["site"]))
+        for field in ("year", "month", "day", "hour"):
+            if af[field]:
+                try:
+                    available = available.filter(**{field: int(af[field])})
+                except (ValueError, TypeError):
+                    pass
+        if af["confirmed"] == "yes":
+            available = available.filter(metadata__bee_confirmed=True)
+        elif af["confirmed"] == "no":
+            available = available.filter(metadata__bee_confirmed=False)
         available = available.select_related("device").order_by("-recorded_at", "-id")
 
         ctx["available_videos"] = available[:500]
         ctx["available_count"] = available.count()
         ctx["available_filter"] = af
         ctx["available_filter_on"] = any(af.values())
-        # Filter options from ALL the user's videos (so no device/site/year is hidden).
-        ctx["available_devices"] = Device.objects.filter(
-            pk__in=all_user.exclude(device=None).values_list("device_id", flat=True)
-        ).order_by("name")
-        ctx["available_sites"] = sorted(set(
-            all_user.exclude(site_name="").values_list("site_name", flat=True)
-        ))
-        ctx["available_years"] = sorted(set(
-            y for y in all_user.exclude(recorded_at=None)
-            .values_list("recorded_at__year", flat=True) if y
-        ), reverse=True)
+        ctx["available_devices"] = Device.accessible(self.request.user).order_by("name")
+        # Options from ALL accessible videos so nothing is hidden.
+        ctx["available_opts"] = {
+            "sites": sorted({_sanitize_site(s) for s in
+                             all_user.exclude(site_name="").values_list("site_name", flat=True)}),
+            "years": sorted(set(all_user.exclude(year=None).values_list("year", flat=True))),
+            "months": sorted(set(all_user.exclude(month=None).values_list("month", flat=True))),
+            "days": sorted(set(all_user.exclude(day=None).values_list("day", flat=True))),
+            "hours": sorted(set(all_user.exclude(hour=None).values_list("hour", flat=True))),
+        }
 
         # Build combined frame grid with filters
         filter_video = self.request.GET.get("video", "")
