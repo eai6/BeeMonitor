@@ -65,18 +65,24 @@ def _frame_jpeg(annotation):
 
 
 def _numbered_overlay(jpeg_bytes, boxes):
-    """Draw each box + its index number on the frame → new JPEG bytes."""
-    from PIL import Image, ImageDraw
-    img = Image.open(io.BytesIO(jpeg_bytes)).convert("RGB")
-    draw = ImageDraw.Draw(img)
+    """Draw each box + its index number on the frame → new JPEG bytes.
+
+    Uses cv2 (already a web dep — see FrameImageView), not Pillow.
+    """
+    import cv2
+    import numpy as np
+    img = cv2.imdecode(np.frombuffer(jpeg_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return jpeg_bytes
     for i, b in enumerate(boxes):
-        c = _COLORS[i % len(_COLORS)]
-        x, y, w, h = b["x"], b["y"], b["w"], b["h"]
-        draw.rectangle([x, y, x + w, y + h], outline=c, width=2)
-        draw.text((x + 2, max(0, y - 12)), str(i), fill=c)
-    out = io.BytesIO()
-    img.save(out, format="JPEG", quality=85)
-    return out.getvalue()
+        r, g, bl = _COLORS[i % len(_COLORS)]
+        color = (bl, g, r)  # cv2 is BGR
+        x, y, w, h = int(b["x"]), int(b["y"]), int(b["w"]), int(b["h"])
+        cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
+        cv2.putText(img, str(i), (x + 2, max(12, y - 4)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+    ok, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return encoded.tobytes() if ok else jpeg_bytes
 
 
 def review_boxes(annotation, boxes, model=None):
