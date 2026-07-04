@@ -147,8 +147,10 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         # Build combined frame grid with filters
         filter_video = self.request.GET.get("video", "")
         filter_class = self.request.GET.get("class", "")
+        filter_review = self.request.GET.get("review", "")  # ""|reviewed|unreviewed|human|llm
         ctx["filter_video"] = filter_video
         ctx["filter_class"] = filter_class
+        ctx["filter_review"] = filter_review
 
         anns_qs = project.annotations.select_related("video").order_by("video__title", "frame_number")
         if filter_video:
@@ -156,6 +158,18 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
                 anns_qs = anns_qs.filter(video_id=int(filter_video))
             except (ValueError, TypeError):
                 pass
+        if filter_review == "reviewed":
+            anns_qs = anns_qs.filter(reviewed=True)
+        elif filter_review == "unreviewed":
+            anns_qs = anns_qs.filter(reviewed=False)
+        elif filter_review in ("human", "llm"):
+            anns_qs = anns_qs.filter(review_source=filter_review)
+
+        # Review progress across the whole project (not just the filtered page).
+        proj_anns = project.annotations
+        ctx["reviewed_count"] = proj_anns.filter(reviewed=True).count()
+        ctx["reviewed_human"] = proj_anns.filter(review_source="human").count()
+        ctx["reviewed_llm"] = proj_anns.filter(review_source="llm").count()
 
         total_boxes = 0
         class_counts = {}
@@ -181,6 +195,8 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
                 "box_count": len(boxes),
                 "classes": box_classes,
                 "frame_image_path": ann.frame_image_path or "",
+                "reviewed": ann.reviewed,
+                "review_source": ann.review_source,
             })
 
         # Presigned URLs for frame thumbnails
@@ -435,17 +451,25 @@ class SaveAnnotationView(LoginRequiredMixin, View):
 
         video = get_object_or_404(project.videos, pk=video_id)
 
+        # A human saving in the editor = a human review.
+        from django.utils import timezone
         annotation, created = Annotation.objects.update_or_create(
             project=project,
             video=video,
             frame_number=frame_number,
-            defaults={"boxes": boxes},
+            defaults={
+                "boxes": boxes,
+                "reviewed": True,
+                "review_source": Annotation.ReviewSource.HUMAN,
+                "reviewed_at": timezone.now(),
+            },
         )
 
         return JsonResponse({
             "success": True,
             "created": created,
             "annotation_id": annotation.pk,
+            "reviewed": True,
         })
 
 

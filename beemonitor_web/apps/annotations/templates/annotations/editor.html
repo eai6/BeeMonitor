@@ -295,12 +295,13 @@
   canvas.addEventListener("contextmenu", function(e) { e.preventDefault(); });
 
   // Save annotations — persists only boxes above the confidence filter, so raising
-  // the slider then saving prunes the low-confidence detections for good.
-  document.getElementById("btn-save").addEventListener("click", function() {
+  // the slider then saving prunes the low-confidence detections for good. thenNext:
+  // advance to the next frame on success (the Enter-key review flow).
+  function doSave(thenNext) {
     var kept = visibleBoxes();
     var dropped = boxes.length - kept.length;
     if (statusText) statusText.textContent = "Saving...";
-    fetch(SAVE_URL, {
+    return fetch(SAVE_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-CSRFToken": CSRF_TOKEN },
       body: JSON.stringify({ video_id: VIDEO_ID, frame_number: currentFrame, boxes: kept })
@@ -311,7 +312,10 @@
         boxes = kept;  // reflect the pruning locally
         render(); updateBoxList();
         if (statusText) statusText.textContent = "Saved " + kept.length + " box(es)"
-          + (dropped > 0 ? " (dropped " + dropped + " below " + Math.round(minConf * 100) + "%)" : "") + ".";
+          + (dropped > 0 ? " (dropped " + dropped + " below " + Math.round(minConf * 100) + "%)" : "")
+          + " · reviewed ✓.";
+        var nextUrl = "{{ next_frame_url|escapejs }}";
+        if (thenNext && nextUrl) { window.location.href = nextUrl; }
       } else if (statusText) {
         statusText.textContent = "Error: " + (data.error || "Unknown");
       }
@@ -319,7 +323,8 @@
     .catch(function(err) {
       if (statusText) statusText.textContent = "Network error: " + err.message;
     });
-  });
+  }
+  document.getElementById("btn-save").addEventListener("click", function() { doSave(false); });
 
   // Confidence filter slider
   (function() {
@@ -366,12 +371,13 @@
   updateScale();
   window.addEventListener("resize", updateScale);
 
-  // Keyboard shortcuts: Left/Right for prev/next frame
+  // Keyboard shortcuts: Enter = save + next frame (smooth review), Left/Right = prev/next.
   document.addEventListener("keydown", function(e) {
     if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA") return;
     const prevUrl = "{{ prev_frame_url|escapejs }}";
     const nextUrl = "{{ next_frame_url|escapejs }}";
-    if (e.key === "ArrowLeft" && prevUrl) { e.preventDefault(); window.location.href = prevUrl; }
+    if (e.key === "Enter") { e.preventDefault(); doSave(true); }
+    else if (e.key === "ArrowLeft" && prevUrl) { e.preventDefault(); window.location.href = prevUrl; }
     else if (e.key === "ArrowRight" && nextUrl) { e.preventDefault(); window.location.href = nextUrl; }
   });
 })();

@@ -232,11 +232,22 @@
         {% endfor %}
       </select>
     </div>
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Review</label>
+      <select name="review" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+        <option value="">All</option>
+        <option value="unreviewed" {% if filter_review == "unreviewed" %}selected{% endif %}>Not reviewed</option>
+        <option value="reviewed" {% if filter_review == "reviewed" %}selected{% endif %}>Reviewed</option>
+        <option value="human" {% if filter_review == "human" %}selected{% endif %}>Human-reviewed</option>
+        <option value="llm" {% if filter_review == "llm" %}selected{% endif %}>LLM-reviewed</option>
+      </select>
+    </div>
     <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded text-sm border border-gray-300">Filter</button>
-    {% if filter_video or filter_class %}
+    {% if filter_video or filter_class or filter_review %}
     <a href="{% url 'annotations:detail' project.pk %}" class="text-sm text-amber-600 hover:underline">Clear</a>
     {% endif %}
-    <span class="text-sm text-gray-500 ml-auto">{{ frame_cards|length }} frame(s)</span>
+    <span class="text-sm text-gray-500 ml-auto">{{ frame_cards|length }} frame(s) · {{ reviewed_count }}/{{ total_annotations }} reviewed
+      {% if reviewed_llm %}(<span class="text-blue-600">{{ reviewed_llm }} LLM</span>){% endif %}</span>
   </form>
 </div>
 
@@ -254,6 +265,12 @@
       <span class="absolute top-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
         {{ card.box_count }} box{{ card.box_count|pluralize:"es" }}
       </span>
+      {% if card.reviewed %}
+      <span class="absolute top-1 left-1 text-white text-xs px-1.5 py-0.5 rounded {% if card.review_source == 'llm' %}bg-blue-600/80{% else %}bg-green-600/80{% endif %}"
+            title="Reviewed by {{ card.review_source|default:'human' }}">✓ {{ card.review_source|default:"human" }}</span>
+      {% else %}
+      <span class="absolute top-1 left-1 bg-gray-500/70 text-white text-xs px-1.5 py-0.5 rounded" title="Not reviewed">unreviewed</span>
+      {% endif %}
     </div>
     <div class="p-2">
       <p class="text-xs text-gray-500 truncate">{{ card.video_title }}</p>

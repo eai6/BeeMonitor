@@ -55,6 +55,18 @@ class Annotation(models.Model):
         max_length=500, blank=True, default="",
         help_text="S3 key (in processed bucket) of extracted frame JPEG",
     )
+
+    class ReviewSource(models.TextChoices):
+        NONE = "", "Not reviewed"
+        HUMAN = "human", "Human"
+        LLM = "llm", "LLM"
+
+    reviewed = models.BooleanField(
+        default=False, help_text="A human or the LLM has vetted these boxes.")
+    review_source = models.CharField(
+        max_length=10, choices=ReviewSource.choices, default="", blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
