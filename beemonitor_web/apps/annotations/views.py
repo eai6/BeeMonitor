@@ -942,3 +942,79 @@ class ExportProjectView(LoginRequiredMixin, View):
             f'attachment; filename="{project.name}_yolo_dataset.zip"'
         )
         return response
+
+
+# --- LLM vision review (memory/26) ------------------------------------------
+
+class LLMReviewView(LoginRequiredMixin, View):
+    """Per-frame AI review: filter the current boxes with the accurate model, return
+    the kept set for the editor to show (the human saves = human-reviewed)."""
+
+    def post(self, request, pk):
+        from django.conf import settings
+        from . import llm_review
+
+        if not llm_review.available():
+            return JsonResponse({"error": "LLM review isn't configured on this server "
+                                          "(no ANTHROPIC_API_KEY)."}, status=400)
+        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        try:
+            data = json.loads(request.body)
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+        video_id = data.get("video_id")
+        frame_number = data.get("frame_number")
+        boxes = data.get("boxes", [])
+
+        ann = Annotation.objects.filter(
+            project=project, video_id=video_id, frame_number=frame_number).first()
+        if not ann or not ann.frame_image_path:
+            return JsonResponse({"error": "No saved frame image to review — Save first, "
+                                          "then AI Review."}, status=400)
+        kept, notes = llm_review.review_boxes(ann, boxes, model=settings.ASSISTANT_MODEL)
+        return JsonResponse({
+            "success": True,
+            "boxes": kept,
+            "removed": len(boxes) - len(kept),
+            "notes": notes,
+        })
+
+
+class LLMReviewAllView(LoginRequiredMixin, View):
+    """Batch AI review: filter every UNREVIEWED frame in the project with the cheap
+    model (capped), persisting each as llm-reviewed. Never touches human-reviewed."""
+
+    CAP = 200
+
+    def post(self, request, pk):
+        import threading
+
+        from django.conf import settings
+        from django.shortcuts import redirect
+        from django.contrib import messages
+
+        from . import llm_review
+
+        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        if not llm_review.available():
+            messages.warning(request, "LLM review isn't configured (no ANTHROPIC_API_KEY).")
+            return redirect("annotations:detail", pk=pk)
+
+        ann_ids = list(project.annotations.filter(reviewed=False)
+                       .values_list("pk", flat=True)[:self.CAP])
+        if not ann_ids:
+            messages.info(request, "No unreviewed frames to review.")
+            return redirect("annotations:detail", pk=pk)
+
+        model = settings.ASSISTANT_FAST_MODEL
+
+        def _run():
+            from django.db import connection
+            for aid in ann_ids:
+                llm_review.review_annotation(aid, model=model)
+            connection.close()
+
+        threading.Thread(target=_run, daemon=True).start()
+        messages.info(request, f"LLM is reviewing {len(ann_ids)} unreviewed frame(s) with "
+                               f"{model}. Refresh to see the blue ✓ badges.")
+        return redirect("annotations:detail", pk=pk)

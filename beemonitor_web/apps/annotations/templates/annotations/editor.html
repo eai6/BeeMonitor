@@ -128,6 +128,8 @@
     <!-- Actions -->
     <div class="bg-white shadow rounded-lg p-4">
       <button id="btn-save" class="w-full bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium mb-2">Save Annotations</button>
+      <button id="btn-ai-review" class="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-medium mb-2"
+              title="Claude looks at the frame and removes false-positive boxes. Review, then Save.">AI Review (remove false positives)</button>
       <button id="btn-clear" class="w-full border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded text-sm">Clear All</button>
     </div>
   </div>
@@ -137,6 +139,7 @@
 (function() {
   const VIDEO_ID = {{ video.pk }};
   const SAVE_URL = "{% url 'annotations:save' project.pk %}";
+  const LLM_REVIEW_URL = "{% url 'annotations:llm_review' project.pk %}";
   const CSRF_TOKEN = "{{ csrf_token }}";
   const CLASSES = {{ classes|safe }};
   const currentFrame = {{ frame_number }};
@@ -325,6 +328,31 @@
     });
   }
   document.getElementById("btn-save").addEventListener("click", function() { doSave(false); });
+
+  // AI Review — Claude filters false-positive boxes; the human then Saves to confirm.
+  document.getElementById("btn-ai-review").addEventListener("click", function() {
+    var btn = this, orig = btn.textContent;
+    btn.disabled = true; btn.textContent = "Reviewing…";
+    if (statusText) statusText.textContent = "AI reviewing this frame…";
+    fetch(LLM_REVIEW_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRFToken": CSRF_TOKEN },
+      body: JSON.stringify({ video_id: VIDEO_ID, frame_number: currentFrame, boxes: boxes })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.success) {
+        boxes = data.boxes || [];
+        render(); updateBoxList();
+        if (statusText) statusText.textContent = "AI removed " + (data.removed || 0)
+          + " box(es). Review, then Save (Enter) to confirm.";
+      } else if (statusText) {
+        statusText.textContent = "AI review: " + (data.error || "failed");
+      }
+    })
+    .catch(function(err) { if (statusText) statusText.textContent = "AI review error: " + err.message; })
+    .finally(function() { btn.disabled = false; btn.textContent = orig; });
+  });
 
   // Confidence filter slider
   (function() {
