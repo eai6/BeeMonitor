@@ -517,6 +517,9 @@ if deploy_endpoint:
                 "AWS_REGION": region,
             },
         ),
+        # Retain on replace so an image bump doesn't delete the old model mid-roll
+        # (see the sam3_model note — same UpdateEndpoint race).
+        opts=pulumi.ResourceOptions(retain_on_delete=True),
     )
 
     endpoint_config = aws.sagemaker.EndpointConfiguration(
@@ -535,6 +538,7 @@ if deploy_endpoint:
                 s3_output_path=pulumi.Output.concat("s3://", output_bucket.bucket, "/"),
             ),
         ),
+        opts=pulumi.ResourceOptions(retain_on_delete=True),  # see model note
     )
 
     endpoint = aws.sagemaker.Endpoint(
@@ -716,6 +720,12 @@ if deploy_sam3:
                 "AWS_S3_BUCKET_PROCESSED": f"beemonitor-{env}-processed-{account_id}",
             },
         ),
+        # retain_on_delete: an image bump replaces the model+config. Deleting the OLD
+        # config while SageMaker's async UpdateEndpoint is still switching to the new
+        # one fails ("Could not find endpoint configuration …") and leaves the endpoint
+        # dangling. Retaining old model/config removes that race — the roll is clean;
+        # orphaned model/config objects are free and can be pruned occasionally.
+        opts=pulumi.ResourceOptions(retain_on_delete=True),
     )
 
     sam3_config = aws.sagemaker.EndpointConfiguration(
@@ -734,6 +744,7 @@ if deploy_sam3:
                 s3_output_path=pulumi.Output.concat("s3://", output_bucket.bucket, "/"),
             ),
         ),
+        opts=pulumi.ResourceOptions(retain_on_delete=True),  # see sam3_model note
     )
 
     sam3_endpoint = aws.sagemaker.Endpoint(
