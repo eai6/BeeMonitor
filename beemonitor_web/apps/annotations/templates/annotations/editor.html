@@ -285,6 +285,23 @@
     }
   });
 
+  // Match the canvas drawing buffer to the frame's NATIVE resolution so boxes
+  // (stored in native pixels) align with the image. The hardcoded 1280x720 only
+  // matched 720p footage; higher-res frames drew every box shifted down-right.
+  const frameImg = document.getElementById("frame-image");
+  function sizeCanvasToImage() {
+    if (frameImg && frameImg.naturalWidth && frameImg.naturalHeight) {
+      canvas.width = frameImg.naturalWidth;
+      canvas.height = frameImg.naturalHeight;
+    }
+    render();
+    updateScale();
+  }
+  if (frameImg) {
+    frameImg.addEventListener("load", sizeCanvasToImage);
+    if (frameImg.complete && frameImg.naturalWidth) sizeCanvasToImage();
+  }
+
   // Initial render
   render();
   updateBoxList();
