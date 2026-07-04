@@ -9,6 +9,7 @@ urlpatterns = [
     path("new/", views.ProjectCreateView.as_view(), name="create"),
     path("<int:pk>/", views.ProjectDetailView.as_view(), name="detail"),
     path("<int:pk>/add-videos/", views.AddVideosView.as_view(), name="add_videos"),
+    path("<int:pk>/remove-video/", views.RemoveVideoView.as_view(), name="remove_video"),
     path("<int:pk>/edit/", views.AnnotationEditorView.as_view(), name="editor"),
     path("<int:pk>/transfer/", views.TransferVideoView.as_view(), name="transfer_video"),
     path("<int:pk>/save/", views.SaveAnnotationView.as_view(), name="save"),

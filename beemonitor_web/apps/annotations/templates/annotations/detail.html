@@ -114,44 +114,86 @@
   </div>
 </div>
 
-<!-- Add Videos Modal (hidden by default) -->
-<div id="addVideosModal" class="hidden bg-white shadow rounded-lg p-6 mb-6">
+<!-- Add Videos Modal (auto-opens when a filter is active) -->
+<div id="addVideosModal" class="{% if not available_filter_on %}hidden{% endif %} bg-white shadow rounded-lg p-6 mb-6">
+  <div class="flex justify-between items-center mb-3">
+    <h3 class="text-sm font-medium text-gray-700">Add Videos to Project</h3>
+    <button type="button" onclick="document.getElementById('addVideosModal').classList.add('hidden')"
+            class="text-gray-400 hover:text-gray-600 text-sm">Close</button>
+  </div>
+
+  <!-- Server-side filters (device · site · year · search) — same as Processing;
+       reaches every device/location, not just the first page. -->
+  <form method="get" class="flex flex-wrap gap-2 mb-3 items-end">
+    <input type="text" name="av_q" value="{{ available_filter.q }}" placeholder="Search title…"
+           class="flex-1 min-w-[8rem] border border-gray-300 rounded px-2 py-1.5 text-sm focus:ring-amber-500 focus:border-amber-500">
+    <select name="av_device" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      <option value="">All devices</option>
+      {% for d in available_devices %}
+      <option value="{{ d.pk }}" {% if available_filter.device == d.pk|stringformat:"s" %}selected{% endif %}>{{ d.name }}</option>
+      {% endfor %}
+    </select>
+    <select name="av_site" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      <option value="">All sites</option>
+      {% for site in available_sites %}
+      <option value="{{ site }}" {% if available_filter.site == site %}selected{% endif %}>{{ site }}</option>
+      {% endfor %}
+    </select>
+    <select name="av_year" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      <option value="">All years</option>
+      {% for y in available_years %}
+      <option value="{{ y }}" {% if available_filter.year == y|stringformat:"s" %}selected{% endif %}>{{ y }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded text-sm border border-gray-300">Filter</button>
+    {% if available_filter_on %}
+    <a href="{% url 'annotations:detail' project.pk %}" class="text-sm text-amber-600 hover:underline">Clear</a>
+    {% endif %}
+    <span class="text-xs text-gray-400 ml-auto">{{ available_count }} match(es){% if available_count > 500 %} · showing 500, narrow further{% endif %}</span>
+  </form>
+
+  <!-- Selection + add -->
   <form method="post" action="{% url 'annotations:add_videos' project.pk %}">
     {% csrf_token %}
-    <div class="flex justify-between items-center mb-3">
-      <h3 class="text-sm font-medium text-gray-700">Add Videos to Project</h3>
-      <button type="button" onclick="document.getElementById('addVideosModal').classList.add('hidden')"
-              class="text-gray-400 hover:text-gray-600 text-sm">Close</button>
-    </div>
-    <div class="flex gap-2 mb-3">
-      <input type="text" id="add-search" placeholder="Search videos..."
-             class="flex-1 border border-gray-300 rounded px-2 py-1 text-sm focus:ring-amber-500 focus:border-amber-500"
-             oninput="filterAddVideos()">
-      <select id="add-site-filter" class="border border-gray-300 rounded px-2 py-1 text-sm" onchange="filterAddVideos()">
-        <option value="">All Sites</option>
-        {% for site in available_sites %}
-        <option value="{{ site }}">{{ site }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div class="flex items-center justify-between mb-2">
-      <label class="flex items-center gap-2 text-sm text-gray-500">
-        <input type="checkbox" id="add-select-all" class="rounded border-gray-300"> Select all visible
-      </label>
-      <span id="add-video-count" class="text-xs text-gray-400"></span>
-    </div>
+    <label class="flex items-center gap-2 text-sm text-gray-500 mb-2">
+      <input type="checkbox" id="add-select-all" class="rounded border-gray-300"> Select all shown
+    </label>
     <div class="max-h-60 overflow-y-auto border border-gray-200 rounded p-2 mb-3">
       {% for video in available_videos %}
-      <label class="flex items-center gap-2 py-0.5 text-sm video-add-item" data-site="{{ video.site_name }}" data-title="{{ video.title|lower }}">
+      <label class="flex items-center gap-2 py-0.5 text-sm">
         <input type="checkbox" name="video_ids" value="{{ video.pk }}" class="rounded border-gray-300 add-video-cb">
-        {{ video.title }}
-        {% if video.site_name %}<span class="text-xs text-gray-400">({{ video.site_name }})</span>{% endif %}
+        <span class="flex-1">{{ video.title }}</span>
+        <span class="text-xs text-gray-400">{% if video.device %}{{ video.device.name }}{% endif %}{% if video.site_name %} · {{ video.site_name }}{% endif %}{% if video.recorded_at %} · {{ video.recorded_at|date:"Y-m-d" }}{% endif %}</span>
       </label>
+      {% empty %}
+      <p class="text-xs text-gray-400 py-2">No videos match — adjust the filter.</p>
       {% endfor %}
     </div>
     <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-1.5 rounded text-sm font-medium">Add Selected</button>
   </form>
 </div>
+
+<!-- Videos in this project (always visible) -->
+{% if video_data %}
+<div class="bg-white shadow rounded-lg p-4 mb-6">
+  <h3 class="text-sm font-medium text-gray-700 mb-3">Videos in this project ({{ video_count }})</h3>
+  <div class="divide-y divide-gray-100">
+    {% for item in video_data %}
+    <div class="flex items-center gap-3 py-2 text-sm">
+      <a href="{% url 'annotations:editor' project.pk %}?video={{ item.video.pk }}&frame=0"
+         class="flex-1 text-gray-800 hover:text-amber-700 hover:underline truncate">{{ item.video.title }}</a>
+      <span class="text-xs text-gray-400 hidden sm:inline">{% if item.video.device %}{{ item.video.device.name }}{% endif %}{% if item.video.site_name %} · {{ item.video.site_name }}{% endif %}</span>
+      <span class="text-xs {% if item.annotation_count %}text-green-600{% else %}text-gray-400{% endif %}">{{ item.annotation_count }} frame{{ item.annotation_count|pluralize }}</span>
+      <form method="post" action="{% url 'annotations:remove_video' project.pk %}"
+            onsubmit="return confirm('Remove this video and its annotations from the project?');">
+        {% csrf_token %}<input type="hidden" name="video_id" value="{{ item.video.pk }}">
+        <button type="submit" class="text-red-400 hover:text-red-600 text-xs px-1">Remove</button>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
 
 {% if total_annotations > 0 %}
 <!-- Filter Bar for Frames -->
@@ -237,29 +279,9 @@
 {% endif %}
 
 <script>
+// Filtering is server-side now; select-all just toggles the shown checkboxes.
 document.getElementById('add-select-all')?.addEventListener('change', function() {
-    document.querySelectorAll('.add-video-cb').forEach(cb => {
-        if (cb.closest('.video-add-item').style.display !== 'none') cb.checked = this.checked;
-    });
+    document.querySelectorAll('.add-video-cb').forEach(cb => { cb.checked = this.checked; });
 });
-
-function filterAddVideos() {
-    const site = document.getElementById('add-site-filter').value;
-    const search = (document.getElementById('add-search').value || '').toLowerCase();
-    let visible = 0;
-    document.querySelectorAll('.video-add-item').forEach(el => {
-        const matchSite = !site || el.dataset.site === site;
-        const matchSearch = !search || el.dataset.title.includes(search);
-        if (matchSite && matchSearch) {
-            el.style.display = '';
-            visible++;
-        } else {
-            el.style.display = 'none';
-        }
-    });
-    const countEl = document.getElementById('add-video-count');
-    if (countEl) countEl.textContent = visible + ' video(s)';
-}
-filterAddVideos();
 </script>
 {% endblock %}

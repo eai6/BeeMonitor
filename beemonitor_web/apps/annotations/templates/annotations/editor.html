@@ -103,6 +103,20 @@
       </select>
     </div>
 
+    <!-- Confidence filter -->
+    <div class="bg-white shadow rounded-lg p-4 mb-4">
+      <div class="flex items-center justify-between mb-1">
+        <h3 class="text-sm font-medium text-gray-700">Min confidence</h3>
+        <span id="conf-val" class="text-xs font-mono text-gray-600">0.00</span>
+      </div>
+      <input id="conf-filter" type="range" min="0" max="1" step="0.01" value="0"
+             class="w-full accent-amber-600">
+      <p class="text-[11px] text-gray-400 mt-1">
+        <span id="conf-shown">0</span> of <span id="conf-total">0</span> shown ·
+        Save keeps only shown boxes. Manual boxes always show.
+      </p>
+    </div>
+
     <!-- Box List -->
     <div class="bg-white shadow rounded-lg p-4 mb-4">
       <h3 class="text-sm font-medium text-gray-700 mb-2">Boxes (<span id="box-count">0</span>)</h3>
@@ -169,15 +183,25 @@
     };
   }
 
+  // Confidence filter. Boxes without a confidence (manually drawn) always pass.
+  let minConf = 0;
+  function _passes(box) {
+    return box.confidence == null || box.confidence >= minConf;
+  }
+  function visibleBoxes() { return boxes.filter(_passes); }
+
   // Draw boxes on transparent canvas (frame image shows through)
   function render() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    boxes.forEach(function(box, i) {
+    var n = 0;
+    boxes.forEach(function(box) {
+      if (!_passes(box)) return;
+      n += 1;
       const color = getColor(box.class_id);
       ctx.strokeStyle = color;
       ctx.lineWidth = 2;
       ctx.strokeRect(box.x, box.y, box.w, box.h);
-      const label = box["class"] + " #" + (i + 1);
+      const label = box["class"] + " #" + n;
       ctx.font = "12px sans-serif";
       const tw = ctx.measureText(label).width;
       ctx.fillStyle = color;
@@ -188,19 +212,30 @@
   }
 
   function updateBoxList() {
+    var shown = visibleBoxes().length;
     boxCount.textContent = boxes.length;
+    var totalEl = document.getElementById("conf-total");
+    var shownEl = document.getElementById("conf-shown");
+    if (totalEl) totalEl.textContent = boxes.length;
+    if (shownEl) shownEl.textContent = shown;
     if (boxes.length === 0) {
       boxList.innerHTML = '<p class="text-xs text-gray-400">No boxes yet. Click and drag to draw.</p>';
       return;
     }
     var html = "";
+    var n = 0;
     boxes.forEach(function(box, i) {
+      var passes = _passes(box);
+      if (passes) n += 1;
       var color = getColor(box.class_id);
-      html += '<div class="flex items-center justify-between p-1.5 rounded border border-gray-100 hover:bg-gray-50">'
+      var conf = (box.confidence == null) ? "manual"
+                 : (Math.round(box.confidence * 100) + "%");
+      html += '<div class="flex items-center justify-between p-1.5 rounded border border-gray-100 hover:bg-gray-50'
+        + (passes ? '' : ' opacity-40') + '">'
         + '<div class="flex items-center gap-2">'
         + '<span class="w-3 h-3 rounded-full inline-block" style="background:' + color + '"></span>'
-        + '<span class="text-xs text-gray-700">' + box["class"] + '</span>'
-        + '<span class="text-xs text-gray-400">' + Math.round(box.w) + 'x' + Math.round(box.h) + '</span>'
+        + '<span class="text-xs text-gray-700">' + box["class"] + (passes ? ' #' + n : '') + '</span>'
+        + '<span class="text-xs text-gray-400">' + conf + '</span>'
         + '</div>'
         + '<button onclick="window._deleteBox(' + i + ')" class="text-red-400 hover:text-red-600 text-xs px-1">Del</button>'
         + '</div>';
@@ -259,22 +294,45 @@
 
   canvas.addEventListener("contextmenu", function(e) { e.preventDefault(); });
 
-  // Save annotations
+  // Save annotations — persists only boxes above the confidence filter, so raising
+  // the slider then saving prunes the low-confidence detections for good.
   document.getElementById("btn-save").addEventListener("click", function() {
+    var kept = visibleBoxes();
+    var dropped = boxes.length - kept.length;
     if (statusText) statusText.textContent = "Saving...";
     fetch(SAVE_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-CSRFToken": CSRF_TOKEN },
-      body: JSON.stringify({ video_id: VIDEO_ID, frame_number: currentFrame, boxes: boxes })
+      body: JSON.stringify({ video_id: VIDEO_ID, frame_number: currentFrame, boxes: kept })
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
-      if (statusText) statusText.textContent = data.success ? "Saved." : "Error: " + (data.error || "Unknown");
+      if (data.success) {
+        boxes = kept;  // reflect the pruning locally
+        render(); updateBoxList();
+        if (statusText) statusText.textContent = "Saved " + kept.length + " box(es)"
+          + (dropped > 0 ? " (dropped " + dropped + " below " + Math.round(minConf * 100) + "%)" : "") + ".";
+      } else if (statusText) {
+        statusText.textContent = "Error: " + (data.error || "Unknown");
+      }
     })
     .catch(function(err) {
       if (statusText) statusText.textContent = "Network error: " + err.message;
     });
   });
+
+  // Confidence filter slider
+  (function() {
+    var slider = document.getElementById("conf-filter");
+    var valEl = document.getElementById("conf-val");
+    if (!slider) return;
+    slider.addEventListener("input", function() {
+      minConf = parseFloat(slider.value) || 0;
+      if (valEl) valEl.textContent = minConf.toFixed(2);
+      render();
+      updateBoxList();
+    });
+  })();
 
   // Clear all boxes
   document.getElementById("btn-clear").addEventListener("click", function() {

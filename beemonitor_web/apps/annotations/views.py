@@ -98,14 +98,45 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
             video_data.append({"video": video, "annotation_count": ann_count})
         ctx["video_data"] = video_data
 
-        # Available videos to add
+        # Available videos to add — server-side filters mirroring the Processing page
+        # (device · site · year · search) so EVERY device/location is reachable, not
+        # just whatever falls in the first page.
+        from apps.devices.models import Device
         from apps.videos.models import Video
         existing_ids = set(videos.values_list("pk", flat=True))
-        available = Video.objects.filter(user=self.request.user).exclude(pk__in=existing_ids)
+        all_user = Video.objects.filter(user=self.request.user)
+        available = all_user.exclude(pk__in=existing_ids)
+
+        af = {k: self.request.GET.get("av_" + k, "").strip()
+              for k in ("q", "device", "site", "year")}
+        if af["q"]:
+            available = available.filter(title__icontains=af["q"])
+        if af["device"]:
+            available = available.filter(device_id=af["device"])
+        if af["site"]:
+            available = available.filter(site_name=af["site"])
+        if af["year"]:
+            try:
+                available = available.filter(recorded_at__year=int(af["year"]))
+            except (ValueError, TypeError):
+                pass
+        available = available.select_related("device").order_by("-recorded_at", "-id")
+
         ctx["available_videos"] = available[:500]
+        ctx["available_count"] = available.count()
+        ctx["available_filter"] = af
+        ctx["available_filter_on"] = any(af.values())
+        # Filter options from ALL the user's videos (so no device/site/year is hidden).
+        ctx["available_devices"] = Device.objects.filter(
+            pk__in=all_user.exclude(device=None).values_list("device_id", flat=True)
+        ).order_by("name")
         ctx["available_sites"] = sorted(set(
-            available.exclude(site_name="").values_list("site_name", flat=True)
+            all_user.exclude(site_name="").values_list("site_name", flat=True)
         ))
+        ctx["available_years"] = sorted(set(
+            y for y in all_user.exclude(recorded_at=None)
+            .values_list("recorded_at__year", flat=True) if y
+        ), reverse=True)
 
         # Build combined frame grid with filters
         filter_video = self.request.GET.get("video", "")
@@ -172,6 +203,22 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         }
 
         return ctx
+
+
+class RemoveVideoView(LoginRequiredMixin, View):
+    """Remove one video (and its annotations) from an annotation project."""
+
+    def post(self, request, pk):
+        from django.shortcuts import redirect
+        from django.contrib import messages
+
+        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        video_id = request.POST.get("video_id")
+        if video_id:
+            project.videos.remove(video_id)
+            Annotation.objects.filter(project=project, video_id=video_id).delete()
+            messages.info(request, "Video removed from the project.")
+        return redirect("annotations:detail", pk=pk)
 
 
 class AddVideosView(LoginRequiredMixin, View):
