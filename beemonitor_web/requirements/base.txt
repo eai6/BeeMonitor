@@ -11,4 +11,5 @@ cryptography>=42.0.0
 whitenoise>=6.6
 gunicorn>=21.2
 anthropic>=0.109
+pillow>=10.0            # numbered-box overlays for LLM annotation review
 python-dotenv>=1.0
