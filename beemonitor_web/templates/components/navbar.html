@@ -11,6 +11,8 @@
           <a href="{% url 'analysis:processing' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Processing</a>
           <a href="{% url 'pipelines:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Pipelines</a>
           <a href="{% url 'pipelines:run_list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Runs</a>
+          <a href="{% url 'annotations:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Annotations</a>
+          <a href="{% url 'training:list' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Training</a>
           <a href="{% url 'monitor:agent_chat' %}" class="text-amber-100 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Monitoring agent</a>
         </div>
       </div>
@@ -40,6 +42,8 @@
       <a href="{% url 'analysis:processing' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Processing</a>
       <a href="{% url 'pipelines:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Pipelines</a>
       <a href="{% url 'pipelines:run_list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Runs</a>
+      <a href="{% url 'annotations:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Annotations</a>
+      <a href="{% url 'training:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Training</a>
       <a href="{% url 'monitor:agent_chat' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Monitoring agent</a>
       {% if user.is_authenticated %}
       <a href="{% url 'accounts:usage' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Account &amp; settings</a>

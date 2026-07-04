@@ -239,6 +239,10 @@ sm_training_ecr_repo_arn = (
 sm_bioclip_ecr_repo_arn = (
     f"arn:aws:ecr:{region}:{account_id}:repository/beemonitor-sm-{env}-bioclip"
 )
+# The SAM 3 auto-labeler image (built by the build-push-sam3 CI job).
+sm_sam3_ecr_repo_arn = (
+    f"arn:aws:ecr:{region}:{account_id}:repository/beemonitor-sm-{env}-sam3"
+)
 ecr_push_policy_doc = ecr_repo.arn.apply(lambda repo_arn: json.dumps({
     "Version": "2012-10-17",
     "Statement": [
@@ -263,7 +267,7 @@ ecr_push_policy_doc = ecr_repo.arn.apply(lambda repo_arn: json.dumps({
                 "ecr:DescribeImages",
             ],
             "Resource": [repo_arn, sm_ecr_repo_arn, sm_training_ecr_repo_arn,
-                         sm_bioclip_ecr_repo_arn],
+                         sm_bioclip_ecr_repo_arn, sm_sam3_ecr_repo_arn],
         },
     ],
 }))
