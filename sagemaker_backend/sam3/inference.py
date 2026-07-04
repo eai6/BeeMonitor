@@ -110,6 +110,30 @@ def _embed(ctx, pil_images):
     return emb / norms
 
 
+def _iou(a, b):
+    ax2, ay2 = a["x"] + a["w"], a["y"] + a["h"]
+    bx2, by2 = b["x"] + b["w"], b["y"] + b["h"]
+    ix1, iy1 = max(a["x"], b["x"]), max(a["y"], b["y"])
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+    inter = iw * ih
+    union = a["w"] * a["h"] + b["w"] * b["h"] - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _nms(boxes, iou_thr):
+    """Greedy non-max suppression across ALL boxes (class-agnostic) — collapses the
+    duplicate bee/wasp boxes the per-prompt passes produce on the same object; keeps
+    the higher-confidence label."""
+    order = sorted(range(len(boxes)), key=lambda i: boxes[i].get("confidence") or 0.0,
+                   reverse=True)
+    keep = []
+    for i in order:
+        if all(_iou(boxes[i], boxes[j]) <= iou_thr for j in keep):
+            keep.append(i)
+    return [boxes[i] for i in keep]
+
+
 def _farthest_point_select(emb, k):
     """Greedy farthest-point sampling → k indices maximising min pairwise distance.
 
@@ -255,6 +279,8 @@ def _pre_annotate(payload, ctx):
     sample_interval = max(1, int(payload.get("sample_interval", 10)))
     max_frames = int(payload.get("max_frames", 300))
     conf = float(payload.get("confidence_threshold", 0.3))
+    maxd = int(payload.get("max_detections", 100))
+    nms_iou = float(payload.get("nms_iou", 0.5))  # <=0 disables dedupe
     selection = payload.get("selection", "uniform")
     candidate_cap = int(payload.get("candidate_cap", max(max_frames * 4, 400)))
     # SAM 3 prompts = the project's classes minus "nest" (nest tubes stay manual).
@@ -293,13 +319,16 @@ def _pre_annotate(payload, ctx):
             pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             boxes = []
             for cls_id, cls_name in prompt_classes:
-                for (x1, y1, x2, y2, sc) in _segment(ctx, pil, cls_name, conf):
+                for (x1, y1, x2, y2, sc) in _segment(ctx, pil, cls_name, conf, maxd):
                     boxes.append({
                         "x": round(x1), "y": round(y1),
                         "w": round(x2 - x1), "h": round(y2 - y1),
                         "class": classes[cls_id], "class_id": cls_id,
                         "confidence": round(sc, 3) if sc is not None else None,
                     })
+            # Dedupe overlapping boxes across the per-class prompt passes.
+            if nms_iou > 0 and len(boxes) > 1:
+                boxes = _nms(boxes, nms_iou)
             if boxes:
                 frame_blob = f"frames/{video_blob_path.replace('/', '_')}/f{frame_num:06d}.jpg"
                 try:

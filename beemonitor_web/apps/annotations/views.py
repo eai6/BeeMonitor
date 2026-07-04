@@ -36,6 +36,23 @@ def _preannotate_opts(request):
     )
 
 
+def _sam3_opts(request):
+    """(nms_iou, max_detections) from POST, clamped. SAM 3-specific quality knobs:
+    nms_iou dedupes overlapping boxes across the per-class prompt passes (0 = off);
+    max_detections caps boxes per class per frame."""
+    def _num(name, default, lo, hi, cast):
+        try:
+            v = cast(request.POST.get(name) or default)
+        except (TypeError, ValueError):
+            v = default
+        return max(lo, min(hi, v))
+
+    return (
+        _num("nms_iou", 0.5, 0.0, 1.0, float),
+        _num("max_detections", 100, 1, 500, int),
+    )
+
+
 class ProjectListView(LoginRequiredMixin, ListView):
     model = AnnotationProject
     template_name = "annotations/list.html"
@@ -403,12 +420,14 @@ class PreAnnotateView(LoginRequiredMixin, View):
         selection = "diverse" if request.POST.get("selection", "diverse") == "diverse" else "uniform"
         if labeler != "sam3":
             selection = "uniform"
+        nms_iou, max_detections = _sam3_opts(request)
 
         # Auto-transfer from S3 if needed, then pre-annotate
         # The background thread handles both transfer and annotation
         thread = threading.Thread(
             target=self._run_pre_annotate,
-            args=(project.pk, video.pk, blob_path, sample_interval, max_frames, confidence, labeler, selection),
+            args=(project.pk, video.pk, blob_path, sample_interval, max_frames, confidence,
+                  labeler, selection, nms_iou, max_detections),
             daemon=True,
         )
         thread.start()
@@ -424,7 +443,8 @@ class PreAnnotateView(LoginRequiredMixin, View):
     @staticmethod
     def _run_pre_annotate(project_pk, video_pk, blob_path,
                           sample_interval=10, max_frames=300, confidence=0.15,
-                          labeler="yolo", selection="uniform"):
+                          labeler="yolo", selection="uniform",
+                          nms_iou=0.5, max_detections=100):
         """Invoke the SageMaker async endpoint (task=pre_annotate), poll the
         result from S3, then create Annotation rows. Runs in a daemon thread."""
         import json
@@ -479,7 +499,9 @@ class PreAnnotateView(LoginRequiredMixin, View):
                 "sample_interval": sample_interval,
                 "max_frames": max_frames,
                 "confidence_threshold": confidence,
-                "selection": selection,  # SAM 3: "diverse" (DINOv3) or "uniform"
+                "selection": selection,  # SAM 3: "diverse" (DINOv2) or "uniform"
+                "nms_iou": nms_iou,          # SAM 3: dedupe overlapping boxes (<=0 off)
+                "max_detections": max_detections,  # SAM 3: cap per class per frame
             }
             key = f"preannotate/{project_pk}/{video_pk}-{labeler}.json"
             s3.put_object(Bucket=in_bucket, Key=key,
@@ -573,6 +595,7 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
         selection = "diverse" if request.POST.get("selection", "diverse") == "diverse" else "uniform"
         if labeler != "sam3":
             selection = "uniform"
+        nms_iou, max_detections = _sam3_opts(request)
         count = 0
         for video in videos:
             blob_path = video.storage_key
@@ -580,7 +603,8 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
                 continue
             thread = threading.Thread(
                 target=PreAnnotateView._run_pre_annotate,
-                args=(project.pk, video.pk, blob_path, sample_interval, max_frames, confidence, labeler, selection),
+                args=(project.pk, video.pk, blob_path, sample_interval, max_frames, confidence,
+                      labeler, selection, nms_iou, max_detections),
                 daemon=True,
             )
             thread.start()
