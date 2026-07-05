@@ -153,9 +153,14 @@ def _pre_annotate(payload, pipeline) -> dict:
     class_index = {c.lower(): i for i, c in enumerate(classes)}
 
     storage = pipeline._storage
-    model_paths = pipeline._models.ensure_models()
+    # Custom (fine-tuned) detector when requested; else the built-in bee model.
+    custom_model_key = payload.get("custom_bee_model_path") or ""
+    if custom_model_key:
+        model_path = pipeline._models.ensure_custom_model(custom_model_key)
+    else:
+        model_path = pipeline._models.ensure_models().bee_tracking
     from ultralytics import YOLO
-    yolo = YOLO(model_paths.bee_tracking)
+    yolo = YOLO(model_path)
 
     frames_out = []
     checked = total_detections = 0

@@ -80,6 +80,9 @@
                   class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
             <option value="yolo">YOLO (current)</option>
             <option value="sam3">SAM 3 (new domains)</option>
+            {% for m in custom_bee_models %}
+            <option value="custom:{{ m.pk }}">{{ m.name }}</option>
+            {% endfor %}
           </select>
         </div>
         <div title="SAM 3 only. Diverse = DINOv2 picks a representative, non-redundant set of frames to label (better training data). Uniform = every Nth frame.">

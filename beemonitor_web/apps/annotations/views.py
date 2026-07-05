@@ -36,6 +36,27 @@ def _preannotate_opts(request):
     )
 
 
+def _labeler_opts(request):
+    """(labeler, custom_model_key) from the Labeler select. "custom:<pk>"
+    picks one of the user's fine-tuned models — it runs on the YOLO endpoint
+    with custom_bee_model_path; unknown/foreign pks fall back to the default."""
+    raw = request.POST.get("labeler") or "yolo"
+    if raw == "sam3":
+        return "sam3", ""
+    if raw.startswith("custom:"):
+        from apps.training.models import CustomModel
+        try:
+            cm = CustomModel.objects.get(
+                pk=int(raw[7:]), user=request.user, is_active=True,
+                status=CustomModel.Status.READY,
+            )
+            if cm.storage_key:
+                return "yolo", cm.storage_key
+        except (CustomModel.DoesNotExist, TypeError, ValueError):
+            pass
+    return "yolo", ""
+
+
 def _sam3_opts(request):
     """(nms_iou, max_detections) from POST, clamped. SAM 3-specific quality knobs:
     nms_iou dedupes overlapping boxes across the per-class prompt passes (0 = off);
@@ -230,6 +251,11 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
             "max_frames": settings.PREANNOTATE_MAX_FRAMES,
             "confidence": settings.PREANNOTATE_CONFIDENCE,
         }
+        # Fine-tuned models selectable as the pre-annotation labeler.
+        from apps.training.models import CustomModel
+        ctx["custom_bee_models"] = CustomModel.objects.filter(
+            user=self.request.user, is_active=True, status=CustomModel.Status.READY,
+        ).exclude(storage_key="")
 
         return ctx
 
@@ -497,8 +523,9 @@ class PreAnnotateView(LoginRequiredMixin, View):
         blob_path = video.storage_key
         sample_interval, max_frames, confidence = _preannotate_opts(request)
         # labeler=sam3 routes to the SAM 3 endpoint (domain-robust, open-vocabulary) —
-        # the fix for new-domain footage the current YOLO misses. Default: yolo.
-        labeler = "sam3" if request.POST.get("labeler") == "sam3" else "yolo"
+        # the fix for new-domain footage the current YOLO misses. custom:<pk> runs a
+        # fine-tuned model on the YOLO endpoint. Default: the built-in yolo.
+        labeler, custom_model_key = _labeler_opts(request)
         # DINOv3 diverse selection (SAM 3 only). Default diverse for SAM 3 (its point),
         # uniform every-Nth for YOLO.
         selection = "diverse" if request.POST.get("selection", "diverse") == "diverse" else "uniform"
@@ -511,7 +538,7 @@ class PreAnnotateView(LoginRequiredMixin, View):
         thread = threading.Thread(
             target=self._run_pre_annotate,
             args=(project.pk, video.pk, blob_path, sample_interval, max_frames, confidence,
-                  labeler, selection, nms_iou, max_detections),
+                  labeler, selection, nms_iou, max_detections, custom_model_key),
             daemon=True,
         )
         thread.start()
@@ -528,7 +555,7 @@ class PreAnnotateView(LoginRequiredMixin, View):
     def _run_pre_annotate(project_pk, video_pk, blob_path,
                           sample_interval=10, max_frames=300, confidence=0.15,
                           labeler="yolo", selection="uniform",
-                          nms_iou=0.5, max_detections=100):
+                          nms_iou=0.5, max_detections=100, custom_model_key=""):
         """Invoke the SageMaker async endpoint (task=pre_annotate), poll the
         result from S3, then create Annotation rows. Runs in a daemon thread."""
         import json
@@ -587,6 +614,9 @@ class PreAnnotateView(LoginRequiredMixin, View):
                 "nms_iou": nms_iou,          # SAM 3: dedupe overlapping boxes (<=0 off)
                 "max_detections": max_detections,  # SAM 3: cap per class per frame
             }
+            if custom_model_key:
+                # Fine-tuned detector (models bucket) instead of the built-in one.
+                payload["custom_bee_model_path"] = custom_model_key
             key = f"preannotate/{project_pk}/{video_pk}-{labeler}.json"
             s3.put_object(Bucket=in_bucket, Key=key,
                           Body=json.dumps(payload).encode("utf-8"),
@@ -694,7 +724,7 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
             return redirect("annotations:detail", pk=pk)
 
         sample_interval, max_frames, confidence = _preannotate_opts(request)
-        labeler = "sam3" if request.POST.get("labeler") == "sam3" else "yolo"
+        labeler, custom_model_key = _labeler_opts(request)
         selection = "diverse" if request.POST.get("selection", "diverse") == "diverse" else "uniform"
         if labeler != "sam3":
             selection = "uniform"
@@ -707,7 +737,7 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
             thread = threading.Thread(
                 target=PreAnnotateView._run_pre_annotate,
                 args=(project.pk, video.pk, blob_path, sample_interval, max_frames, confidence,
-                      labeler, selection, nms_iou, max_detections),
+                      labeler, selection, nms_iou, max_detections, custom_model_key),
                 daemon=True,
             )
             thread.start()
