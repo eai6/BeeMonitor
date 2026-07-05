@@ -165,6 +165,7 @@ def _spawn_training_job(job_pk: int) -> None:
             "epochs": job.epochs,
             "imgsz": job.image_size,
             "batch_size": job.batch_size,
+            "val_percent": job.val_percent,
             "classes": classes,
             "video_annotations": video_annotations,
             "model_key": model_key,

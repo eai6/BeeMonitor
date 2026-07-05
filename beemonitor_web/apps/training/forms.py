@@ -30,7 +30,7 @@ class TrainingCreateForm(forms.ModelForm):
     class Meta:
         model = TrainingJob
         fields = ["project", "name", "base_model", "frame_filter",
-                  "epochs", "image_size", "batch_size", "gpu_tier"]
+                  "epochs", "image_size", "batch_size", "val_percent", "gpu_tier"]
         widgets = {
             "name": forms.TextInput(attrs={
                 "class": "w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500",
@@ -54,6 +54,11 @@ class TrainingCreateForm(forms.ModelForm):
                 "class": "w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500",
                 "min": 1,
                 "max": 128,
+            }),
+            "val_percent": forms.NumberInput(attrs={
+                "class": "w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500",
+                "min": 5,
+                "max": 50,
             }),
             "gpu_tier": forms.Select(attrs={
                 "class": "w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500",
@@ -97,6 +102,14 @@ class TrainingCreateForm(forms.ModelForm):
         ]
         if not self.initial.get("base_model"):
             self.initial["base_model"] = "default"
+
+    def clean_val_percent(self):
+        v = self.cleaned_data.get("val_percent")
+        if v is None:
+            return 20
+        if not 5 <= v <= 50:
+            raise forms.ValidationError("Validation split must be between 5% and 50%.")
+        return v
 
     def clean(self):
         cleaned = super().clean()

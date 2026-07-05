@@ -23,12 +23,10 @@
         <dt class="text-sm text-gray-600">Training Frames</dt>
         <dd class="text-sm font-medium text-gray-900">{{ job.get_frame_filter_display }}</dd>
       </div>
-      {% if job.metrics.train_count %}
       <div class="flex justify-between">
         <dt class="text-sm text-gray-600">Dataset Split</dt>
-        <dd class="text-sm font-medium text-gray-900">{{ job.metrics.train_count }} train / {{ job.metrics.val_count }} val (80/20)</dd>
+        <dd class="text-sm font-medium text-gray-900">{% if job.metrics.train_count %}{{ job.metrics.train_count }} train / {{ job.metrics.val_count }} val ({% endif %}{{ job.val_percent }}% val{% if job.metrics.train_count %}){% endif %}</dd>
       </div>
-      {% endif %}
       <div class="flex justify-between">
         <dt class="text-sm text-gray-600">Epochs</dt>
         <dd class="text-sm font-medium text-gray-900">{{ job.epochs }}</dd>

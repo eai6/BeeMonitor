@@ -39,7 +39,7 @@
         {{ form.frame_filter }}
         <p class="mt-1 text-xs text-gray-500">"Human-reviewed only" trains on just the frames you vetted in the editor — higher label quality, smaller dataset.</p>
       </div>
-      <div class="grid grid-cols-3 gap-4 mb-4">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
         <div>
           <label for="id_epochs" class="block text-sm font-medium text-gray-700 mb-1">Epochs</label>
           {{ form.epochs }}
@@ -52,7 +52,12 @@
           <label for="id_batch_size" class="block text-sm font-medium text-gray-700 mb-1">Batch Size</label>
           {{ form.batch_size }}
         </div>
+        <div>
+          <label for="id_val_percent" class="block text-sm font-medium text-gray-700 mb-1">Val Split %</label>
+          {{ form.val_percent }}
+        </div>
       </div>
+      <p class="-mt-2 mb-4 text-xs text-gray-500">Val Split: percent of frames held out for evaluation (metrics + validation predictions); the rest train the model.</p>
       <div class="mb-6">
         <label for="id_gpu_tier" class="block text-sm font-medium text-gray-700 mb-1">GPU Tier</label>
         {{ form.gpu_tier }}

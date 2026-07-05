@@ -52,6 +52,10 @@ class TrainingJob(models.Model):
     epochs = models.IntegerField(default=50)
     image_size = models.IntegerField(default=640)
     batch_size = models.IntegerField(default=16)
+    val_percent = models.IntegerField(
+        default=20,
+        help_text="Percent of frames held out for validation (the metrics set).",
+    )
     gpu_tier = models.CharField(
         max_length=10,
         choices=Job.GpuTier.choices,

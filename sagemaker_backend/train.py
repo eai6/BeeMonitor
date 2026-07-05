@@ -74,9 +74,12 @@ def _build_dataset(manifest: dict, ds_dir: Path) -> tuple[Path, int, int]:
     if not samples:
         raise RuntimeError("manifest has no annotated frames to train on")
 
-    # Deterministic 80/20 split (stable across reruns): last 20% -> val.
+    # Deterministic split (stable across reruns): sort by filename, last
+    # val_percent -> val. Grouping by sorted name keeps adjacent (near-
+    # duplicate) frames out of the val set.
+    val_pct = min(90, max(1, int(manifest.get("val_percent", 20))))
     samples.sort(key=lambda s: s[0])
-    n_val = max(1, len(samples) // 5)
+    n_val = max(1, len(samples) * val_pct // 100)
     val_set = set(range(len(samples) - n_val, len(samples)))
     # With very few samples, reuse train as val so YOLO has a val set.
     tiny = len(samples) < 5
