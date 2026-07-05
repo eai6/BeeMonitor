@@ -154,6 +154,14 @@ BLOCK_REGISTRY = {
                 "default": 0.5,
                 "choices": None,
             },
+            {
+                "name": "nest_model",
+                "label": "Model",
+                "field_type": "nest_model",  # UI renders the custom-model picker (populated at render)
+                "required": False,
+                "default": "",
+                "choices": None,
+            },
         ],
     },
     "detect.bee": {

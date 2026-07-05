@@ -83,6 +83,7 @@ const BLOCKS = JSON.parse("{{ blocks_json|escapejs }}");
 const INITIAL_STEPS = JSON.parse("{{ initial_steps_json|escapejs }}");
 const VIDEOS = JSON.parse("{{ videos_json|escapejs }}");
 const BEE_MODELS = JSON.parse("{{ bee_models_json|escapejs }}");
+const NEST_MODELS = JSON.parse("{{ nest_models_json|escapejs }}");
 const SAVE_URL = "{% url 'pipelines:save_graph' pk=pipeline.pk %}";
 const CSRF = "{{ csrf_token }}";
 
@@ -100,8 +101,10 @@ function ctrl(field, value){
     const opts=`<option value="">— video —</option>`+VIDEOS.map(o=>`<option value="${esc(o.id)}" ${String(o.id)===String(v)?'selected':''}>${esc(o.title)}</option>`).join('');
     return `<select ${common}>${opts}</select>`;
   }
-  if(field.field_type==='bee_model'){
-    const opts=`<option value="">BeeMonitor default bee model</option>`+BEE_MODELS.map(o=>`<option value="${esc(o.id)}" ${String(o.id)===String(v)?'selected':''}>${esc(o.name)}</option>`).join('');
+  if(field.field_type==='bee_model' || field.field_type==='nest_model'){
+    const models = field.field_type==='bee_model' ? BEE_MODELS : NEST_MODELS;
+    const dflt = field.field_type==='bee_model' ? 'BeeMonitor default bee model' : 'BeeMonitor default nest model';
+    const opts=`<option value="">${dflt}</option>`+models.map(o=>`<option value="${esc(o.id)}" ${String(o.id)===String(v)?'selected':''}>${esc(o.name)}</option>`).join('');
     return `<select ${common}>${opts}</select>`;
   }
   if(field.field_type==='textarea'){ return `<textarea ${common} rows="2">${esc(v)}</textarea>`; }

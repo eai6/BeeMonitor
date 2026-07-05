@@ -112,11 +112,17 @@ def pipeline_editor(request, pk):
         for v in _user_videos(request)
     ]
     from apps.training.models import CustomModel
+    ready_models = CustomModel.objects.filter(
+        user=request.user, is_active=True, status=CustomModel.Status.READY,
+    ).exclude(storage_key="")
+    # Same type filters as the New Analysis form's model selects.
     bee_models = [
         {"id": str(m.pk), "name": m.name}
-        for m in CustomModel.objects.filter(
-            user=request.user, is_active=True, status=CustomModel.Status.READY,
-        ).exclude(storage_key="")
+        for m in ready_models.filter(model_type__in=["bee_tracking", "custom"])
+    ]
+    nest_models = [
+        {"id": str(m.pk), "name": m.name}
+        for m in ready_models.filter(model_type__in=["nest_detection", "custom"])
     ]
     ctx = {
         "pipeline": pipeline,
@@ -126,6 +132,7 @@ def pipeline_editor(request, pk):
         "saved_graph_json": json.dumps(pipeline.graph or {}),
         "videos_json": json.dumps(videos),
         "bee_models_json": json.dumps(bee_models),
+        "nest_models_json": json.dumps(nest_models),
         "errors_json": json.dumps(validate_steps(pipeline.steps or [])),
         "recent_runs": pipeline.runs.all()[:5],
     }

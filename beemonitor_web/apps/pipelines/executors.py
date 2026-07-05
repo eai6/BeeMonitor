@@ -331,22 +331,27 @@ def build_detect_and_track_config(step, run, context, index):
         "run_tracking": step.get("block_type") in ("track.bee", "detect.bee"),
         "run_species": _pipeline_wants_species(run.steps),
     }
-    # Custom bee model picked on the node (empty = the built-in bee model).
-    # Resolved by pk against the run owner's models — same contract as the
-    # New Analysis form's custom_bee_model select.
-    if cfg.get("bee_model"):
+    # Custom models picked on the node (empty = the built-in ones). Resolved by
+    # pk against the run owner's models — same contract as the New Analysis
+    # form's custom_bee_model / custom_nest_model selects.
+    for field, config_key, label in (
+        ("bee_model", "custom_bee_model_path", "bee"),
+        ("nest_model", "custom_nest_model_path", "nest"),
+    ):
+        if not cfg.get(field):
+            continue
         from apps.training.models import CustomModel
         try:
-            model_pk = int(cfg["bee_model"])
+            model_pk = int(cfg[field])
         except (TypeError, ValueError):
-            return None, "Invalid bee model selection on this node."
+            return None, f"Invalid {label} model selection on this node."
         cm = CustomModel.objects.filter(
             pk=model_pk, user=run.user, is_active=True,
         ).exclude(storage_key="").first()
         if cm:
-            config["custom_bee_model_path"] = cm.storage_key
+            config[config_key] = cm.storage_key
         else:
-            return None, "The selected bee model is unavailable (removed or deactivated)."
+            return None, f"The selected {label} model is unavailable (removed or deactivated)."
     # When a marker step is downstream, ask the tracker to run individual bee
     # identification so bee_id columns land in the tracking CSV (worker must honour).
     if _pipeline_wants_markers(run.steps):
