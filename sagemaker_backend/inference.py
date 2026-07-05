@@ -102,6 +102,8 @@ def predict_fn(payload, pipeline):
             # present the run uses them and the nest model is the backup.
             hotel_roi=payload.get("hotel_roi"),
             nest_layout=payload.get("nest_layout"),
+            # False = nest/hotel-only fast path (skip tracking + events).
+            run_tracking=bool(payload.get("run_tracking", True)),
         )
     except Exception as exc:
         logger.exception("predict_fn: pipeline failed for job %s", job_id)

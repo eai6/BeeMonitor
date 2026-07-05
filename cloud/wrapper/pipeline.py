@@ -83,6 +83,7 @@ class CloudPipeline:
         custom_bee_model_path: str = "",
         hotel_roi=None,
         nest_layout=None,
+        run_tracking: bool = True,
     ) -> PipelineResult:
         """Run the full BeeMonitor pipeline on a video stored in S3.
 
@@ -122,6 +123,13 @@ class CloudPipeline:
         if custom_bee_model_path:
             logger.info("[%s] Downloading custom bee model: %s", job_id, custom_bee_model_path)
             custom_bee_local = self._models.ensure_custom_model(custom_bee_model_path)
+
+        # Nest/hotel-only jobs (run_tracking=False, e.g. the pipeline builder's
+        # Detect Nest block) skip motion detection, tracking, events, and all
+        # post-processing — they only need the layout.
+        if not run_tracking:
+            return self._nest_only(job_id, user_id, video_local, model_paths,
+                                   custom_nest_local, hotel_roi, nest_layout)
 
         # Step 3 — Build config and run analysis
         logger.info("[%s] Running BeeMonitor analysis", job_id)
@@ -287,6 +295,38 @@ class CloudPipeline:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _nest_only(self, job_id, user_id, video_local, model_paths,
+                   custom_nest_local="", hotel_roi=None, nest_layout=None):
+        """Fast path for run_tracking=False: the device layout if present,
+        else NestDetector on the video's early frames. No motion detection,
+        tracking model, events, or post-processing."""
+        nests = self._build_manual_nests(video_local, hotel_roi, nest_layout)
+        if nests is None:
+            from ultralytics import YOLO
+            from beemonitor.core.config import Config
+            from beemonitor.detection.nest_detector import NestDetector
+
+            config = Config.default()
+            config.models.nest_detection = custom_nest_local or model_paths.nest_detection
+            detector = NestDetector(model=YOLO(config.models.nest_detection), config=config)
+            nests = detector.get_nests_and_hotel_detections(video_path=video_local)
+
+        nest_bboxes = {}
+        for nest_id, bbox in ((nests or {}).get("nests") or {}).items():
+            nest_bboxes[str(nest_id)] = [float(x) for x in bbox]
+
+        logger.info("[%s] Nest-only job complete — %d nests", job_id, len(nest_bboxes))
+        return PipelineResult(
+            job_id=job_id, user_id=user_id,
+            total_events=0, entry_count=0, exit_count=0,
+            unique_tracks=0, nest_count=len(nest_bboxes),
+            events_csv_path="", tracking_csv_path="", foraging_trips_csv_path="",
+            interactions_csv_path="", annotated_video_path="",
+            foraging_trip_count=0, avg_trip_duration_sec=0.0, interaction_count=0,
+            summary_stats={"total_nests": len(nest_bboxes),
+                           "nest_bboxes": nest_bboxes, "nest_only": True},
+        )
+
     def _run_analysis(
         self,
         video_local: str,
@@ -322,6 +362,7 @@ class CloudPipeline:
 
         # Apply user overrides
         config.tracking.confidence_threshold = confidence_threshold
+        config.tracking.ml_threshold = ml_threshold
         config.tracking.enable_two_mode_tracking = two_mode_tracking
         config.output.save_visualizations = visualize
 

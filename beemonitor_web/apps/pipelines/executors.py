@@ -328,6 +328,8 @@ def build_detect_and_track_config(step, run, context, index):
     config = {
         "detection_mode": "yolo",
         "confidence_threshold": float(cfg.get("confidence", 0.4) or 0.4),
+        # Entry/Exit event-classifier cutoff (EventProcessor ml_threshold).
+        "ml_threshold": float(cfg.get("ml_threshold", 0.6) or 0.6),
         "run_tracking": step.get("block_type") in ("track.bee", "detect.bee"),
         "run_species": _pipeline_wants_species(run.steps),
     }

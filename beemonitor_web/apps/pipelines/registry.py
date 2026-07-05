@@ -211,6 +211,16 @@ BLOCK_REGISTRY = {
                 "choices": None,
             },
             {
+                # Event-classifier cutoff for Entry/Exit events. 0.6 = best F1;
+                # lower (0.3-0.4) keeps more real events at some noise cost.
+                "name": "ml_threshold",
+                "label": "Event Confidence",
+                "field_type": "number",
+                "required": False,
+                "default": 0.6,
+                "choices": None,
+            },
+            {
                 "name": "bee_model",
                 "label": "Model",
                 "field_type": "bee_model",  # UI renders the custom-model picker (populated at render)

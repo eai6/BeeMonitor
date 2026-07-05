@@ -453,7 +453,12 @@ class TrackingConfig:
 
     save_crops = True
     crops_per_track = 10
-    
+
+    # Event-classifier confidence cutoff (EventProcessor). 0.6 = best F1 on the
+    # eval set (96% precision / 90% recall); lower to ~0.3-0.4 to recover recall
+    # (keeps more real entries/exits at the cost of a few false positives).
+    ml_threshold: float = 0.6
+
     # Two-mode tracking optimization
     enable_two_mode_tracking: bool = True  # Enable adaptive mode switching
     motion_detection_threshold: int = 1  # Min detections to stay in tracking mode

@@ -206,6 +206,8 @@ def _spawn_gpu_job(job_pk: int) -> None:
             payload["nest_layout"] = job.config["nest_layout"]
         # Which analyses to run (tracking and/or species taxonomy).
         payload["run_tracking"] = bool(job.config.get("run_tracking", True))
+        if job.config.get("ml_threshold") is not None:
+            payload["ml_threshold"] = float(job.config["ml_threshold"])
         payload["run_species"] = bool(job.config.get("run_species", False))
 
         input_uri = _put_inference_payload(job.modal_job_id, payload)
@@ -271,6 +273,8 @@ def _spawn_gpu_batch(jobs_data: list, detection_mode: str, confidence: float,
                 if vcfg.get("nest_layout"):
                     payload["nest_layout"] = vcfg["nest_layout"]
                 payload["run_tracking"] = bool(vcfg.get("run_tracking", True))
+                if vcfg.get("ml_threshold") is not None:
+                    payload["ml_threshold"] = float(vcfg["ml_threshold"])
                 payload["run_species"] = bool(vcfg.get("run_species", False))
 
                 input_uri = _put_inference_payload(jd["job_id"], payload)

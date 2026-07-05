@@ -357,7 +357,10 @@ class BeeMonitor:
         
         from beemonitor.processing.event_processor import EventProcessor
         processor = EventProcessor(config=self.config)
-        return processor.process_tracks(motion_data=motion_data, nests=nests)
+        return processor.process_tracks(
+            motion_data=motion_data, nests=nests,
+            ml_threshold=getattr(self.config.tracking, "ml_threshold", 0.6),
+        )
     
     def synthesize_csv(self, events, video_path):
         from beemonitor.output.csv_generator import CSVGenerator
