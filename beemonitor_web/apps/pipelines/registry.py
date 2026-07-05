@@ -173,6 +173,14 @@ BLOCK_REGISTRY = {
                 "default": 0.4,
                 "choices": None,
             },
+            {
+                "name": "bee_model",
+                "label": "Model",
+                "field_type": "bee_model",  # UI renders the custom-model picker (populated at render)
+                "required": False,
+                "default": "",
+                "choices": None,
+            },
         ],
     },
 
@@ -192,6 +200,14 @@ BLOCK_REGISTRY = {
                 "field_type": "number",
                 "required": False,
                 "default": 0.4,
+                "choices": None,
+            },
+            {
+                "name": "bee_model",
+                "label": "Model",
+                "field_type": "bee_model",  # UI renders the custom-model picker (populated at render)
+                "required": False,
+                "default": "",
                 "choices": None,
             },
         ],

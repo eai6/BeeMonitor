@@ -111,6 +111,13 @@ def pipeline_editor(request, pk):
         {"id": str(v.pk), "title": (getattr(v, "title", "") or f"Video {v.pk}")}
         for v in _user_videos(request)
     ]
+    from apps.training.models import CustomModel
+    bee_models = [
+        {"id": str(m.pk), "name": m.name}
+        for m in CustomModel.objects.filter(
+            user=request.user, is_active=True, status=CustomModel.Status.READY,
+        ).exclude(storage_key="")
+    ]
     ctx = {
         "pipeline": pipeline,
         "categories": get_categories(),
@@ -118,6 +125,7 @@ def pipeline_editor(request, pk):
         "initial_steps_json": json.dumps(build_initial_steps(pipeline)),
         "saved_graph_json": json.dumps(pipeline.graph or {}),
         "videos_json": json.dumps(videos),
+        "bee_models_json": json.dumps(bee_models),
         "errors_json": json.dumps(validate_steps(pipeline.steps or [])),
         "recent_runs": pipeline.runs.all()[:5],
     }
