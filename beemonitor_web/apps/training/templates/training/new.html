@@ -30,14 +30,9 @@
         {{ form.name }}
       </div>
       <div class="mb-4">
-        <label for="id_start_from" class="block text-sm font-medium text-gray-700 mb-1">Fine-tune from</label>
-        {{ form.start_from }}
-        <p class="mt-1 text-xs text-gray-500">Start from an existing model's weights (recommended for domain adaptation) instead of training from scratch. When set, the Base Model below is ignored.</p>
-      </div>
-      <div class="mb-4">
         <label for="id_base_model" class="block text-sm font-medium text-gray-700 mb-1">Base Model</label>
         {{ form.base_model }}
-        <p class="mt-1 text-xs text-gray-500">Used only when training from scratch. Smaller models train faster but may be less accurate.</p>
+        <p class="mt-1 text-xs text-gray-500">Fine-tuning an existing model (recommended) starts from its weights — best for adapting to new footage. From-scratch options start from COCO-pretrained architectures; smaller ones train faster but may be less accurate.</p>
       </div>
       <div class="mb-4">
         <label for="id_frame_filter" class="block text-sm font-medium text-gray-700 mb-1">Training Frames</label>

@@ -19,9 +19,11 @@ class TrainingCreateForm(forms.ModelForm):
         queryset=AnnotationProject.objects.none(),
         widget=forms.Select(attrs={"class": _SELECT_CSS}),
     )
-    start_from = forms.ChoiceField(
-        required=False,
-        label="Fine-tune from",
+    # One select for both fine-tune sources ("default", "cm:<pk>") and
+    # from-scratch architectures (yolov8n, ...); clean() maps fine-tune
+    # picks onto init_weights_key + a plain base_model value.
+    base_model = forms.ChoiceField(
+        label="Base Model",
         widget=forms.Select(attrs={"class": _SELECT_CSS}),
     )
 
@@ -33,9 +35,6 @@ class TrainingCreateForm(forms.ModelForm):
             "name": forms.TextInput(attrs={
                 "class": "w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500",
                 "placeholder": "My Training Job",
-            }),
-            "base_model": forms.Select(attrs={
-                "class": "w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500",
             }),
             "frame_filter": forms.Select(attrs={
                 "class": "w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500",
@@ -79,13 +78,10 @@ class TrainingCreateForm(forms.ModelForm):
         if not self.initial.get("gpu_tier"):
             self.initial["gpu_tier"] = "A10G"
 
-        # Fine-tune sources: the production bee model + the user's ready
-        # custom/trained models. Value encodes the choice: "" (from scratch),
-        # "default", or "cm:<pk>".
-        start_choices = [
-            ("", "None — train the base model from scratch"),
-            ("default", DEFAULT_BEE_MODEL_LABEL),
-        ]
+        # Fine-tune sources (the production bee model + the user's ready
+        # custom/trained models) and from-scratch architectures share the
+        # Base Model select, as optgroups.
+        finetune_choices = [("default", f"{DEFAULT_BEE_MODEL_LABEL} (fine-tune)")]
         self._custom_models = {}
         if user:
             for cm in CustomModel.objects.filter(
@@ -94,21 +90,30 @@ class TrainingCreateForm(forms.ModelForm):
                 self._custom_models[cm.pk] = cm
                 map50 = (cm.metrics or {}).get("mAP50")
                 suffix = f" — mAP50 {map50}" if map50 else ""
-                start_choices.append((f"cm:{cm.pk}", f"{cm.name}{suffix}"))
-        self.fields["start_from"].choices = start_choices
+                finetune_choices.append((f"cm:{cm.pk}", f"{cm.name}{suffix} (fine-tune)"))
+        self.fields["base_model"].choices = [
+            ("Fine-tune an existing model", finetune_choices),
+            ("Train from scratch (COCO-pretrained)", list(TrainingJob.BaseModel.choices)),
+        ]
+        if not self.initial.get("base_model"):
+            self.initial["base_model"] = "default"
 
     def clean(self):
         cleaned = super().clean()
-        choice = cleaned.get("start_from") or ""
+        choice = cleaned.get("base_model") or ""
+        valid_archs = {v for v, _ in TrainingJob.BaseModel.choices}
         if choice == "default":
             self.instance.init_weights_key = DEFAULT_BEE_MODEL_KEY
             self.instance.init_from_label = DEFAULT_BEE_MODEL_LABEL
+            cleaned["base_model"] = TrainingJob.BaseModel.YOLOV8N
         elif choice.startswith("cm:"):
             cm = self._custom_models.get(int(choice[3:]))
             if cm is None:
                 raise forms.ValidationError("Selected fine-tune model is unavailable.")
             self.instance.init_weights_key = cm.storage_key
             self.instance.init_from_label = cm.name
+            cleaned["base_model"] = (
+                cm.base_model if cm.base_model in valid_archs else TrainingJob.BaseModel.YOLOV8N)
         return cleaned
 
 

@@ -32,7 +32,7 @@
           <a href="{% url 'training:detail' job.pk %}" class="text-amber-600 hover:underline font-medium">{{ job.name }}</a>
           <p class="text-xs text-gray-400">{{ job.project.name }}</p>
         </td>
-        <td class="px-6 py-4 text-sm text-gray-500">{{ job.get_base_model_display }}</td>
+        <td class="px-6 py-4 text-sm text-gray-500">{% if job.init_from_label %}{{ job.init_from_label }}{% else %}{{ job.get_base_model_display }}{% endif %}</td>
         <td class="px-6 py-4 text-sm text-gray-500">{{ job.epochs }}</td>
         <td class="px-6 py-4 text-sm">
           <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full
