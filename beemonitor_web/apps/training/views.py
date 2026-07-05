@@ -291,6 +291,27 @@ class TrainingDetailView(LoginRequiredMixin, DetailView):
             ctx["custom_model"] = self.object.custom_model
         except CustomModel.DoesNotExist:
             ctx["custom_model"] = None
+
+        # Rendered best.pt predictions on the held-out val split (uploaded by
+        # the training container); presign so the gallery can show them.
+        pred_keys = (self.object.metrics or {}).get("val_predictions") or []
+        if pred_keys:
+            try:
+                s3 = _boto3("s3")
+                ctx["val_predictions"] = [
+                    {
+                        "name": key.rsplit("/", 1)[-1],
+                        "url": s3.generate_presigned_url(
+                            "get_object",
+                            Params={"Bucket": settings.SAGEMAKER_OUTPUT_BUCKET, "Key": key},
+                            ExpiresIn=3600,
+                        ),
+                    }
+                    for key in pred_keys
+                ]
+            except Exception as e:
+                logger.warning("[train:%s] presigning val predictions failed: %s",
+                               self.object.pk, e)
         return ctx
 
 
@@ -367,6 +388,9 @@ class PollTrainingJobsView(LoginRequiredMixin, View):
                 continue
 
             metrics = result.get("metrics", {}) or {}
+            for extra in ("train_count", "val_count", "val_predictions"):
+                if result.get(extra) is not None:
+                    metrics[extra] = result[extra]
             storage_key = result.get("storage_key", "")
             exec_secs = float(result.get("execution_seconds") or d.get("TrainingTimeInSeconds") or 0)
 

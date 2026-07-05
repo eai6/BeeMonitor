@@ -51,10 +51,10 @@ def log(msg: str) -> None:
     print(f"train: {msg}", flush=True)
 
 
-def _build_dataset(manifest: dict, ds_dir: Path) -> Path:
+def _build_dataset(manifest: dict, ds_dir: Path) -> tuple[Path, int, int]:
     """Download videos, extract annotated frames + labels into a YOLO tree.
 
-    Returns the path to the written data.yaml.
+    Returns (path to the written data.yaml, n_train, n_val).
     """
     classes = manifest["classes"]
     samples = []  # (filename, label_text, video_local, frame_number)
@@ -86,6 +86,8 @@ def _build_dataset(manifest: dict, ds_dir: Path) -> Path:
         (ds_dir / "labels" / split).mkdir(parents=True, exist_ok=True)
 
     extracted = 0
+    n_train = 0
+    n_val = 0
     caps: dict = {}
     for i, (filename, label, video_local, frame_number) in enumerate(samples):
         cap = caps.get(str(video_local))
@@ -102,6 +104,10 @@ def _build_dataset(manifest: dict, ds_dir: Path) -> Path:
         for split in targets:
             cv2.imwrite(str(ds_dir / "images" / split / f"{stem}.jpg"), frame)
             (ds_dir / "labels" / split / f"{stem}.txt").write_text(label or "")
+            if split == "train":
+                n_train += 1
+            else:
+                n_val += 1
         extracted += 1
     for cap in caps.values():
         cap.release()
@@ -118,7 +124,7 @@ def _build_dataset(manifest: dict, ds_dir: Path) -> Path:
         f"nc: {len(classes)}\n"
         f"names:\n{names_block}\n"
     )
-    return data_yaml
+    return data_yaml, n_train, n_val
 
 
 def _train(manifest: dict, data_yaml: Path) -> dict:
@@ -172,6 +178,34 @@ def _train(manifest: dict, data_yaml: Path) -> dict:
     return {"best": best, "metrics": metrics, "epochs": epochs}
 
 
+_VAL_PRED_CAP = 60  # rendered val-set prediction images uploaded per job
+
+
+def _save_val_predictions(best: Path, ds_dir: Path, job_id: str) -> list[str]:
+    """Run best.pt on the val split, render the predicted boxes onto the
+    images, and upload them to the output bucket so the web app can show how
+    the model actually behaves on held-out frames. Returns the S3 keys."""
+    from ultralytics import YOLO
+
+    val_dir = ds_dir / "images" / "val"
+    model = YOLO(str(best))
+    model.predict(
+        source=str(val_dir), save=True, conf=0.25,
+        project=str(WORK), name="val_preds", exist_ok=True, verbose=False,
+    )
+    rendered = sorted((WORK / "val_preds").glob("*.jpg"))
+    if len(rendered) > _VAL_PRED_CAP:
+        log(f"val predictions: uploading {_VAL_PRED_CAP} of {len(rendered)} rendered frames")
+        rendered = rendered[:_VAL_PRED_CAP]
+    keys = []
+    for f in rendered:
+        key = f"training/{job_id}/val_preds/{f.name}"
+        _s3.upload_file(str(f), OUTPUT_BUCKET, key)
+        keys.append(key)
+    log(f"uploaded {len(keys)} val prediction images")
+    return keys
+
+
 def main() -> int:
     t0 = time.time()
     WORK.mkdir(parents=True, exist_ok=True)
@@ -184,8 +218,15 @@ def main() -> int:
 
     try:
         ds_dir = WORK / "dataset"
-        data_yaml = _build_dataset(manifest, ds_dir)
+        data_yaml, n_train, n_val = _build_dataset(manifest, ds_dir)
         out = _train(manifest, data_yaml)
+
+        # Best-effort: rendered predictions on the val set for the web UI.
+        val_pred_keys: list[str] = []
+        try:
+            val_pred_keys = _save_val_predictions(out["best"], ds_dir, manifest["job_id"])
+        except Exception as e:  # noqa: BLE001 - never fail the job over previews
+            log(f"val prediction rendering failed (non-fatal): {e}")
 
         # SageMaker artifact (model.tar.gz) + an explicit copy to the models
         # bucket so the inference ModelManager can load it by key.
@@ -199,6 +240,9 @@ def main() -> int:
             "storage_key": model_key,
             "metrics": out["metrics"],
             "epochs_completed": out["epochs"],
+            "train_count": n_train,
+            "val_count": n_val,
+            "val_predictions": val_pred_keys,
             "execution_seconds": round(time.time() - t0, 1),
         }
         _s3.put_object(
