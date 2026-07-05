@@ -12,6 +12,36 @@
     the trajectories that foraging trips and interactions are derived from.
   </p>
 
+  {% if active_jobs %}
+  <!-- In-flight jobs: what's occupying GPU slots right now, with cancel -->
+  <div class="bg-white shadow rounded-lg p-4 mb-5 border-l-4 border-blue-400">
+    <div class="flex items-center justify-between mb-2">
+      <h2 class="text-sm font-medium text-gray-700">
+        Processing now — {{ active_jobs|length }} job(s), {{ slots_used }}/{{ slots_max }} GPU slots
+      </h2>
+      <form method="post" action="{% url 'analysis:cancel_all' %}"
+            onsubmit="return confirm('Cancel all {{ active_jobs|length }} in-flight job(s)? Their pipeline runs will be marked failed.');">
+        {% csrf_token %}
+        <button type="submit" class="text-xs text-red-500 hover:text-red-700 hover:underline">Cancel all</button>
+      </form>
+    </div>
+    <div class="divide-y divide-gray-100">
+      {% for job in active_jobs %}
+      <div class="flex items-center gap-3 py-1.5 text-sm">
+        <a href="{% url 'analysis:detail' job.pk %}" class="flex-1 text-gray-800 hover:text-amber-700 hover:underline truncate">{{ job.video.title }}</a>
+        <span class="text-xs text-gray-400 hidden sm:inline">{% if job.started_at %}started {{ job.started_at|timesince }} ago{% endif %}</span>
+        <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800 animate-pulse">{{ job.get_status_display }}</span>
+        <form method="post" action="{% url 'analysis:cancel' job.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="text-red-400 hover:text-red-600 text-xs px-1">Cancel</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+    <p class="text-[11px] text-gray-400 mt-2">Cancelling frees the slot for new runs immediately; GPU work already queued may still complete in the background (its result is discarded).</p>
+  </div>
+  {% endif %}
+
   <!-- Filter (flows into the actions below: download or process) -->
   <form method="get" class="flex flex-wrap items-center gap-2 mb-4">
     <select name="device" class="border border-gray-300 rounded px-2 py-1.5 text-sm">

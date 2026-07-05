@@ -217,7 +217,7 @@ def on_job_finished(job):
                 block_type = next((s.get("block_type", "") for s in (run.steps or [])
                                    if s.get("id") == step_id), "")
                 _persist_step_result(run.user, out.get("_cache_key"), block_type, out)
-            elif job_status == "failed":
+            elif job_status in ("failed", "cancelled"):
                 context[step_id] = {
                     "error": getattr(job, "error_message", "") or "GPU job failed.",
                     "job_id": job.pk,
