@@ -622,8 +622,20 @@ class PreAnnotateView(LoginRequiredMixin, View):
             video = Video.objects.get(pk=video_pk)
             width = result.get("video_width", 1280)
             height = result.get("video_height", 720)
+            # Never overwrite frames a human already reviewed; re-detected
+            # boxes invalidate any prior LLM review, so reset review state.
+            human_frames = set(
+                Annotation.objects.filter(
+                    project=project, video=video,
+                    review_source=Annotation.ReviewSource.HUMAN,
+                ).values_list("frame_number", flat=True)
+            )
             created = 0
+            skipped = 0
             for frame_data in result["frames"]:
+                if frame_data["frame_number"] in human_frames:
+                    skipped += 1
+                    continue
                 _, was_created = Annotation.objects.update_or_create(
                     project=project, video=video,
                     frame_number=frame_data["frame_number"],
@@ -631,11 +643,14 @@ class PreAnnotateView(LoginRequiredMixin, View):
                         "boxes": frame_data["boxes"],
                         "image_width": width, "image_height": height,
                         "frame_image_path": frame_data.get("frame_image_path", ""),
+                        "reviewed": False,
+                        "review_source": Annotation.ReviewSource.NONE,
+                        "reviewed_at": None,
                     },
                 )
                 created += int(was_created)
-            logger.info("pre-annotated video %s: %d frames, %d new", video_pk,
-                        len(result["frames"]), created)
+            logger.info("pre-annotated video %s: %d frames, %d new, %d human-reviewed kept",
+                        video_pk, len(result["frames"]), created, skipped)
 
             exec_secs = result.get("execution_seconds", 0) or 0
             credits_used = int(exec_secs) if exec_secs else 30
@@ -653,7 +668,8 @@ class PreAnnotateView(LoginRequiredMixin, View):
 
 
 class PreAnnotateAllView(LoginRequiredMixin, View):
-    """Run AI pre-annotation on ALL videos in a project."""
+    """Run AI pre-annotation on all videos in a project, or on the subset
+    checked in the video list (video_ids)."""
 
     def post(self, request, pk):
         from django.shortcuts import redirect
@@ -662,6 +678,9 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
 
         project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
         videos = project.videos.all()
+        video_ids = request.POST.getlist("video_ids")
+        if video_ids:
+            videos = videos.filter(pk__in=video_ids)
 
         if not videos.exists():
             messages.warning(request, "No videos in this project.")
