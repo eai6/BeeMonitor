@@ -409,7 +409,10 @@ class PollTrainingJobsView(LoginRequiredMixin, View):
                         "user": job.user,
                         "name": f"{job.name} (trained)",
                         "model_type": CustomModel.ModelType.CUSTOM,
-                        "base_model": job.base_model,
+                        # Fine-tunes inherit the source's architecture, not the
+                        # placeholder arch stored on the job — label the lineage.
+                        "base_model": (f"fine-tuned: {job.init_from_label}"[:50]
+                                       if job.init_weights_key else job.base_model),
                         "storage_key": storage_key,
                         "classes": job.project.classes or [],
                         "metrics": metrics,
