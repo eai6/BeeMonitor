@@ -13,6 +13,27 @@
   </div>
 </div>
 
+{% if batches %}
+<div class="mb-6">
+  <h2 class="text-sm font-medium text-gray-500 uppercase mb-2">Batches — aggregate results across videos</h2>
+  <div class="bg-white shadow rounded-lg divide-y">
+    {% for b in batches %}
+    <a href="{% url 'pipelines:batch_detail' batch_id=b.batch_id %}"
+       class="flex items-center justify-between gap-3 px-4 py-3 hover:bg-gray-50">
+      <div class="min-w-0">
+        <div class="text-sm font-medium text-gray-900 truncate">{{ b.pipeline.title }} — {{ b.count }} videos</div>
+        <div class="text-xs text-gray-400">{{ b.started_at|date:"Y-m-d H:i" }} · combined CSVs + cross-video foraging trips</div>
+      </div>
+      <div class="flex items-center gap-3 shrink-0">
+        <span class="text-xs text-gray-400">{{ b.done }}/{{ b.count }} done{% if b.failed %} · <span class="text-red-500">{{ b.failed }} failed</span>{% endif %}</span>
+        <span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">Aggregate →</span>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
 {% if rows %}
 <div class="bg-white shadow rounded-lg divide-y">
   {% for row in rows %}

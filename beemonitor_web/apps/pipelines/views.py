@@ -250,27 +250,32 @@ def run_on_videos(request):
         return _fail("No videos selected.")
 
     videos = Video.manageable(request.user).filter(pk__in=video_ids)
+    batch_id = uuid.uuid4()  # groups this launch for aggregate results
     launched, invalid = [], 0
     for video in videos:
         steps = engine.steps_with_video(pipeline, video.pk)
         if validate_steps(steps):
             invalid += 1
             continue
-        run = PipelineRun.objects.create(pipeline=pipeline, user=request.user)
+        run = PipelineRun.objects.create(pipeline=pipeline, user=request.user,
+                                         batch_id=batch_id)
         engine.start_run(run, steps=steps)
         launched.append(video.pk)
 
     if not launched:
         return _fail("Could not start — the pipeline isn't valid for the selected videos.")
 
+    from django.urls import reverse
+    batch_url = reverse("pipelines:batch_detail", kwargs={"batch_id": batch_id})
     msg = f"Started “{pipeline.title}” on {len(launched)} video(s)."
     if invalid:
         msg += f" Skipped {invalid}."
     if is_ajax:
         return JsonResponse({"ok": True, "submitted": len(launched), "skipped": invalid,
-                             "message": msg, "video_ids": launched})
+                             "message": msg, "video_ids": launched,
+                             "batch_url": batch_url})
     messages.success(request, msg)
-    return redirect("analysis:processing")
+    return redirect(batch_url)
 
 
 @login_required
@@ -304,7 +309,29 @@ def run_list(request):
             "done": sum(1 for st in status_vals if st == PipelineRun.STEP_DONE),
             "total": len(r.steps or []),
         })
-    return render(request, "pipelines/runs.html", {"rows": rows})
+
+    # Batches (multi-video launches) with aggregate results pages.
+    batches = {}
+    for r in runs:
+        if not r.batch_id:
+            continue
+        b = batches.setdefault(r.batch_id, {
+            "batch_id": r.batch_id,
+            "pipeline": r.pipeline,
+            "count": 0, "done": 0, "failed": 0,
+            "started_at": r.started_at,
+        })
+        b["count"] += 1
+        b["done"] += int(r.status == PipelineRun.Status.COMPLETED)
+        b["failed"] += int(r.status == PipelineRun.Status.FAILED)
+        if r.started_at and (b["started_at"] is None or r.started_at > b["started_at"]):
+            b["started_at"] = r.started_at
+    batch_rows = sorted(
+        (b for b in batches.values() if b["count"] > 1),
+        key=lambda b: (b["started_at"] is not None, b["started_at"]), reverse=True,
+    )
+
+    return render(request, "pipelines/runs.html", {"rows": rows, "batches": batch_rows})
 
 
 @login_required
@@ -502,3 +529,105 @@ def clone_pipeline(request, pk):
         cloned_from=source,
     )
     return redirect("pipelines:editor", pk=new.pk)
+
+
+# ── Batch (multi-video) aggregate results ────────────────────────────────────
+
+def _batch_runs(request, batch_id):
+    runs = list(PipelineRun.objects.filter(user=request.user, batch_id=batch_id)
+                .select_related("pipeline").order_by("started_at", "id"))
+    if not runs:
+        raise Http404("No such batch.")
+    return runs
+
+
+def _trip_bounds(request):
+    """min/max trip duration (seconds) from query params, defaulted + clamped."""
+    from . import aggregate
+
+    def _num(name, default, lo, hi):
+        try:
+            v = float(request.GET.get(name) or default)
+        except (TypeError, ValueError):
+            v = default
+        return max(lo, min(hi, v))
+
+    min_sec = _num("min_sec", aggregate.DEFAULT_MIN_SEC, 0, 86400)
+    max_sec = _num("max_sec", aggregate.DEFAULT_MAX_SEC, min_sec, 86400)
+    return min_sec, max_sec
+
+
+@login_required
+def batch_detail(request, batch_id):
+    """Aggregate results for runs launched together: per-run status, combined
+    CSV downloads, and cross-video foraging trips on the absolute timeline."""
+    from . import aggregate
+
+    runs = _batch_runs(request, batch_id)
+    sources, skipped = aggregate.collect_sources(runs)
+    all_done = all(r.is_terminal for r in runs)
+
+    min_sec, max_sec = _trip_bounds(request)
+    trips, summary = (aggregate.aggregate_trips(sources, min_sec, max_sec)
+                      if sources else ([], None))
+
+    # Per-run rows (title + status) for the members table.
+    from apps.videos.models import Video
+    vid_ids = [v for r in runs if (v := aggregate.run_video_id(r)) is not None]
+    titles = {v.pk: (v.title or f"Video {v.pk}")
+              for v in Video.objects.filter(pk__in=vid_ids)}
+    members = [{"run": r,
+                "video": titles.get(aggregate.run_video_id(r), "—")}
+               for r in runs]
+
+    return render(request, "pipelines/batch.html", {
+        "batch_id": batch_id,
+        "pipeline": runs[0].pipeline,
+        "members": members,
+        "all_done": all_done,
+        "running": sum(1 for r in runs if not r.is_terminal),
+        "sources": sources,
+        "skipped": skipped,
+        "trips": trips,
+        "summary": summary,
+        "min_sec": min_sec,
+        "max_sec": max_sec,
+    })
+
+
+def _csv_response(filename, fieldnames, rows):
+    import csv as _csv
+
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    writer = _csv.DictWriter(response, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    return response
+
+
+@login_required
+def batch_trips_csv(request, batch_id):
+    from . import aggregate
+
+    runs = _batch_runs(request, batch_id)
+    sources, _ = aggregate.collect_sources(runs)
+    min_sec, max_sec = _trip_bounds(request)
+    trips, _ = aggregate.aggregate_trips(sources, min_sec, max_sec)
+    fieldnames, rows = aggregate.trips_csv_rows(trips)
+    return _csv_response(f"foraging_trips_batch_{str(batch_id)[:8]}.csv", fieldnames, rows)
+
+
+@login_required
+def batch_combined_csv(request, batch_id, kind):
+    from . import aggregate
+
+    path_key = {"events": "events_csv_path", "tracking": "tracking_csv_path"}.get(kind)
+    if not path_key:
+        raise Http404("Unknown CSV kind.")
+    runs = _batch_runs(request, batch_id)
+    sources, _ = aggregate.collect_sources(runs)
+    fieldnames, rows = aggregate.combined_csv(sources, path_key)
+    if fieldnames is None:
+        raise Http404("No CSVs available yet for this batch.")
+    return _csv_response(f"{kind}_batch_{str(batch_id)[:8]}.csv", fieldnames, rows)

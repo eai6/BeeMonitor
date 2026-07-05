@@ -85,6 +85,9 @@ class PipelineRun(models.Model):
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.PENDING
     )
+    # Runs launched together (one pipeline over many videos) share a batch_id so
+    # results can be aggregated across videos (combined CSVs, cross-video trips).
+    batch_id = models.UUIDField(null=True, blank=True, db_index=True)
     # Frozen copy of the pipeline steps at launch time (so edits mid-run don't corrupt it).
     steps = models.JSONField(default=list, blank=True)
     # step_id -> artifact/output dict produced by that step.
