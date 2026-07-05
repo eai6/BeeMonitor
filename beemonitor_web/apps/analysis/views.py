@@ -209,6 +209,9 @@ def _spawn_gpu_job(job_pk: int) -> None:
         if job.config.get("ml_threshold") is not None:
             payload["ml_threshold"] = float(job.config["ml_threshold"])
         payload["run_species"] = bool(job.config.get("run_species", False))
+        # Recording start metadata → event timestamps; no filename convention needed.
+        if video.recorded_at:
+            payload["recorded_at"] = video.recorded_at.isoformat()
 
         input_uri = _put_inference_payload(job.modal_job_id, payload)
         output_uri = _invoke_endpoint_async(job.modal_job_id, input_uri)
@@ -276,6 +279,9 @@ def _spawn_gpu_batch(jobs_data: list, detection_mode: str, confidence: float,
                 if vcfg.get("ml_threshold") is not None:
                     payload["ml_threshold"] = float(vcfg["ml_threshold"])
                 payload["run_species"] = bool(vcfg.get("run_species", False))
+                # Recording start metadata → event timestamps; no filename convention needed.
+                if video.recorded_at:
+                    payload["recorded_at"] = video.recorded_at.isoformat()
 
                 input_uri = _put_inference_payload(jd["job_id"], payload)
                 output_uri = _invoke_endpoint_async(jd["job_id"], input_uri)

@@ -20,6 +20,10 @@ class VideoConfig:
     res_width: int = 1280
     res_height: int = 720
     fps: int = 30
+    # Recording start time (ISO 8601). When set, event timestamps are computed
+    # from it and the video filename does NOT need the site_YYYY-MM-DD_HH_MM_SS
+    # naming convention. Empty = fall back to parsing the filename.
+    recording_start: str = ""
     auto_detect_from_video: bool = True  # Automatically detect FPS and resolution from video
     annotation_mode: bool = True # Use annotation mode for visualization scaling
     debug_mode : bool = False  # Enable debug mode for verbose logging

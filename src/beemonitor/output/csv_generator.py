@@ -6,9 +6,12 @@ While CSV generation is mostly resolution-independent, this module is updated to
 work seamlessly with the Config system for consistency.
 """
 
+import logging
 from datetime import time, datetime, timedelta
 from typing import Optional
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 class CSVSynthesizer:
@@ -30,16 +33,42 @@ class CSVSynthesizer:
     
     def __init__(self, config):
         """Initialize CSV synthesizer with configuration.
-        
+
         Args:
             config: Config object containing video and output settings
         """
         self.fps = config.video.fps
+        # Recording start (ISO 8601) supplied as metadata — when present the
+        # filename naming convention is not required at all.
+        self.recording_start = getattr(config.video, "recording_start", "") or ""
         # Set default columns if not specified in config
         if config.output.csv_columns is None:
             self.columns = ['timestamp', 'nest_id', 'action', 'track_id', 'species']
         else:
             self.columns = config.output.csv_columns
+
+    def resolve_start_time(self, filename: str) -> datetime:
+        """The video's recording start time, from (in order of preference):
+        1. config.video.recording_start metadata (ISO 8601) — works for any
+           filename;
+        2. the legacy site_YYYY-MM-DD_HH_MM_SS filename convention;
+        3. epoch zero — timestamps become video-relative (00:00:00 = video
+           start) rather than failing the whole run.
+        """
+        if self.recording_start:
+            try:
+                return datetime.fromisoformat(self.recording_start)
+            except ValueError:
+                logger.warning("Unparseable recording_start %r — trying filename",
+                               self.recording_start)
+        try:
+            return self.extract_start_time(filename)
+        except ValueError:
+            logger.warning(
+                "No recording_start metadata and filename %s doesn't follow "
+                "site_YYYY-MM-DD_HH_MM_SS — timestamps will be video-relative.",
+                filename)
+            return datetime(1970, 1, 1)
     
     def extract_start_time(self, filename: str) -> datetime:
         """Extract the start time from a video filename.
@@ -142,8 +171,9 @@ class CSVSynthesizer:
                 empty_df = pd.DataFrame(columns=self.columns + ['filename'])
             return empty_df
         
-        # Extract base datetime from filename
-        base_datetime = self.extract_start_time(filename)
+        # Recording start: metadata first, filename convention second,
+        # video-relative fallback last (see resolve_start_time).
+        base_datetime = self.resolve_start_time(filename)
         
         # Add timestamps
         events = events.copy()

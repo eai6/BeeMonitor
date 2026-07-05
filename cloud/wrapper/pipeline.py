@@ -84,6 +84,7 @@ class CloudPipeline:
         hotel_roi=None,
         nest_layout=None,
         run_tracking: bool = True,
+        recorded_at: str = "",
     ) -> PipelineResult:
         """Run the full BeeMonitor pipeline on a video stored in S3.
 
@@ -146,6 +147,7 @@ class CloudPipeline:
             custom_bee_local=custom_bee_local,
             hotel_roi=hotel_roi,
             nest_layout=nest_layout,
+            recorded_at=recorded_at,
         )
 
         # Step 4 — Post-processing: foraging trips + interactions
@@ -386,6 +388,7 @@ class CloudPipeline:
         custom_bee_local: str = "",
         hotel_roi=None,
         nest_layout=None,
+        recorded_at: str = "",
     ):
         """Build a BeeMonitor Config, instantiate, and run."""
         from beemonitor.core.config import Config, ModelConfig
@@ -410,6 +413,10 @@ class CloudPipeline:
         config.tracking.ml_threshold = ml_threshold
         config.tracking.enable_two_mode_tracking = two_mode_tracking
         config.output.save_visualizations = visualize
+        # Recording start metadata (video.recorded_at) — event timestamps come
+        # from this, so uploads with arbitrary filenames work (the legacy
+        # site_YYYY-MM-DD_HH_MM_SS name is only a fallback).
+        config.video.recording_start = recorded_at or ""
 
         # Device-supplied hotel ROI + nest tubes (normalized 0..1) → pixel-space
         # manual_nests so the run uses the human-set layout (model is the backup).
