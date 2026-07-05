@@ -19,6 +19,11 @@ class TrainingJob(models.Model):
         YOLOV11N = "yolov11n", "YOLOv11n (Nano)"
         YOLOV11S = "yolov11s", "YOLOv11s (Small)"
 
+    class FrameFilter(models.TextChoices):
+        ALL = "all", "All annotated frames"
+        REVIEWED = "reviewed", "Reviewed frames only (human + LLM)"
+        HUMAN = "human", "Human-reviewed frames only"
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -31,6 +36,19 @@ class TrainingJob(models.Model):
     )
     name = models.CharField(max_length=200)
     base_model = models.CharField(max_length=50, choices=BaseModel.choices)
+    frame_filter = models.CharField(
+        max_length=10, choices=FrameFilter.choices, default=FrameFilter.ALL,
+        help_text="Which of the project's annotated frames go into the dataset.",
+    )
+    init_weights_key = models.CharField(
+        max_length=500, blank=True, default="",
+        help_text="S3 key (models bucket) of .pt weights to fine-tune from; "
+                  "empty = train from the pretrained base architecture.",
+    )
+    init_from_label = models.CharField(
+        max_length=200, blank=True, default="",
+        help_text="Human-readable name of the fine-tune source model.",
+    )
     epochs = models.IntegerField(default=50)
     image_size = models.IntegerField(default=640)
     batch_size = models.IntegerField(default=16)

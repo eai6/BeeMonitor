@@ -124,9 +124,18 @@ def _build_dataset(manifest: dict, ds_dir: Path) -> Path:
 def _train(manifest: dict, data_yaml: Path) -> dict:
     from ultralytics import YOLO
 
-    base = manifest.get("base_model", "yolov8n")
-    if not base.endswith(".pt"):
-        base = f"{base}.pt"
+    # Fine-tune from existing weights (models bucket) when the manifest asks
+    # for it; otherwise start from the pretrained base architecture.
+    init_key = manifest.get("init_weights_key") or ""
+    if init_key:
+        base_path = WORK / "init_weights.pt"
+        log(f"fine-tuning from s3://{MODELS_BUCKET}/{init_key}")
+        _s3.download_file(MODELS_BUCKET, init_key, str(base_path))
+        base = str(base_path)
+    else:
+        base = manifest.get("base_model", "yolov8n")
+        if not base.endswith(".pt"):
+            base = f"{base}.pt"
     epochs = int(manifest.get("epochs", 50))
     imgsz = int(manifest.get("imgsz", 640))
     batch = int(manifest.get("batch_size", 16))

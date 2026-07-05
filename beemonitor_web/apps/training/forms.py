@@ -1,27 +1,43 @@
 from django import forms
+from django.conf import settings
 
 from apps.annotations.models import AnnotationProject
 
-from .models import TrainingJob
+from .models import CustomModel, TrainingJob
+
+_SELECT_CSS = "w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+
+# S3 key (models bucket) of the production bee-tracking model the inference
+# pipeline uses (cloud/wrapper/model_manager.py: MODEL_VERSION/bee_tracking.pt).
+DEFAULT_BEE_MODEL_KEY = getattr(
+    settings, "BEEMONITOR_DEFAULT_BEE_MODEL_KEY", "v1/bee_tracking.pt")
+DEFAULT_BEE_MODEL_LABEL = "BeeMonitor current bee-tracking model"
 
 
 class TrainingCreateForm(forms.ModelForm):
     project = forms.ModelChoiceField(
         queryset=AnnotationProject.objects.none(),
-        widget=forms.Select(attrs={
-            "class": "w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500",
-        }),
+        widget=forms.Select(attrs={"class": _SELECT_CSS}),
+    )
+    start_from = forms.ChoiceField(
+        required=False,
+        label="Fine-tune from",
+        widget=forms.Select(attrs={"class": _SELECT_CSS}),
     )
 
     class Meta:
         model = TrainingJob
-        fields = ["project", "name", "base_model", "epochs", "image_size", "batch_size", "gpu_tier"]
+        fields = ["project", "name", "base_model", "frame_filter",
+                  "epochs", "image_size", "batch_size", "gpu_tier"]
         widgets = {
             "name": forms.TextInput(attrs={
                 "class": "w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500",
                 "placeholder": "My Training Job",
             }),
             "base_model": forms.Select(attrs={
+                "class": "w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500",
+            }),
+            "frame_filter": forms.Select(attrs={
                 "class": "w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500",
             }),
             "epochs": forms.NumberInput(attrs={
@@ -62,6 +78,38 @@ class TrainingCreateForm(forms.ModelForm):
         self.fields["gpu_tier"].choices = self.TRAINING_GPU_CHOICES
         if not self.initial.get("gpu_tier"):
             self.initial["gpu_tier"] = "A10G"
+
+        # Fine-tune sources: the production bee model + the user's ready
+        # custom/trained models. Value encodes the choice: "" (from scratch),
+        # "default", or "cm:<pk>".
+        start_choices = [
+            ("", "None — train the base model from scratch"),
+            ("default", DEFAULT_BEE_MODEL_LABEL),
+        ]
+        self._custom_models = {}
+        if user:
+            for cm in CustomModel.objects.filter(
+                user=user, status=CustomModel.Status.READY, is_active=True,
+            ).exclude(storage_key=""):
+                self._custom_models[cm.pk] = cm
+                map50 = (cm.metrics or {}).get("mAP50")
+                suffix = f" — mAP50 {map50}" if map50 else ""
+                start_choices.append((f"cm:{cm.pk}", f"{cm.name}{suffix}"))
+        self.fields["start_from"].choices = start_choices
+
+    def clean(self):
+        cleaned = super().clean()
+        choice = cleaned.get("start_from") or ""
+        if choice == "default":
+            self.instance.init_weights_key = DEFAULT_BEE_MODEL_KEY
+            self.instance.init_from_label = DEFAULT_BEE_MODEL_LABEL
+        elif choice.startswith("cm:"):
+            cm = self._custom_models.get(int(choice[3:]))
+            if cm is None:
+                raise forms.ValidationError("Selected fine-tune model is unavailable.")
+            self.instance.init_weights_key = cm.storage_key
+            self.instance.init_from_label = cm.name
+        return cleaned
 
 
 class ModelUploadForm(forms.Form):

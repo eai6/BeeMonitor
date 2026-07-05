@@ -63,13 +63,19 @@ def _build_training_payload(job: TrainingJob) -> tuple[str, list[dict]]:
         .select_related("video")
         .order_by("video__title", "frame_number")
     )
+    if job.frame_filter == TrainingJob.FrameFilter.REVIEWED:
+        annotations = annotations.filter(reviewed=True)
+    elif job.frame_filter == TrainingJob.FrameFilter.HUMAN:
+        annotations = annotations.filter(review_source=Annotation.ReviewSource.HUMAN)
 
     ann_count = annotations.count()
-    logger.info("[train:%s] Found %d annotations in project '%s'", job.pk, ann_count, project.name)
+    logger.info("[train:%s] Found %d annotations in project '%s' (filter=%s)",
+                job.pk, ann_count, project.name, job.frame_filter)
 
     if ann_count == 0:
         logger.error("[train:%s] No annotations found — aborting", job.pk)
-        raise ValueError("No annotations found in this project")
+        raise ValueError(
+            f"No annotations match the '{job.get_frame_filter_display()}' filter in this project")
 
     # Build dataset YAML
     classes = project.classes or ["bee", "wasp", "nest"]
@@ -155,6 +161,7 @@ def _spawn_training_job(job_pk: int) -> None:
             "job_id": str(job.pk),
             "user_id": str(job.user_id),
             "base_model": job.base_model,
+            "init_weights_key": job.init_weights_key,  # fine-tune source (models bucket), "" = scratch
             "epochs": job.epochs,
             "imgsz": job.image_size,
             "batch_size": job.batch_size,
