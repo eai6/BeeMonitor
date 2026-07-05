@@ -51,6 +51,32 @@
         </dl>
         {% endif %}
 
+        <!-- Nest/hotel layout: first-frame overlay + detected boxes -->
+        {% if step.display.nest_preview %}
+        <div>
+          <a href="{{ step.display.nest_preview }}" target="_blank">
+            <img src="{{ step.display.nest_preview }}" alt="Detected hotel + nest layout"
+                 loading="lazy" class="max-w-full rounded border border-gray-200">
+          </a>
+          <p class="text-[11px] text-gray-400 mt-1">Hotel ROI (orange) and nest tubes (green) on the first frame — click to open full size.</p>
+        </div>
+        {% endif %}
+        {% if step.display.nests %}
+        <div class="overflow-x-auto border border-gray-100 rounded">
+          <table class="min-w-full text-xs">
+            <thead class="bg-gray-50"><tr>
+              <th class="text-left px-2 py-1 text-gray-500 font-medium">nest</th>
+              <th class="text-left px-2 py-1 text-gray-500 font-medium">bbox (x1, y1, x2, y2)</th>
+            </tr></thead>
+            <tbody>
+              {% for n in step.display.nests %}
+              <tr class="border-t border-gray-100"><td class="px-2 py-1 text-gray-700">{{ n.nest }}</td><td class="px-2 py-1 text-gray-700">{{ n.bbox }}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+
         <!-- Rows table -->
         {% if step.display.rows %}
         <div class="overflow-x-auto border border-gray-100 rounded">

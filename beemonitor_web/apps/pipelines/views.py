@@ -414,13 +414,33 @@ def _step_display(output):
     # Align each row into a list of cells matching `columns` (templates can't index
     # a dict by a variable key).
     cell_rows = [[r.get(c, "") for c in columns] for r in rows[:25]]
+
+    # Nest/hotel layout (Detect Nest / Hotel step): the detected boxes + a
+    # rendered first-frame overlay uploaded by the GPU worker.
+    stats = output.get("summary") or result.get("summary_stats") or {}
+    nest_rows = [
+        {"nest": k, "bbox": ", ".join(str(int(x)) for x in v)}
+        for k, v in sorted((stats.get("nest_bboxes") or {}).items())
+    ]
+    nest_preview_url = ""
+    if stats.get("nest_preview_path"):
+        try:
+            from config.storage import get_s3_client
+            nest_preview_url = get_s3_client().generate_presigned_url(
+                "processed", stats["nest_preview_path"])
+        except Exception:
+            logger.warning("could not presign nest preview %s",
+                           stats.get("nest_preview_path"))
+
     return {
         "fields": fields[:24],
         "rows": cell_rows,
         "row_total": len(rows),
         "columns": columns,
         "annotated_video": result.get("annotated_video_path") or "",
-        "summary": output.get("summary") or result.get("summary_stats") or {},
+        "summary": stats,
+        "nests": nest_rows,
+        "nest_preview": nest_preview_url,
     }
 
 

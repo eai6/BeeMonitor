@@ -314,6 +314,22 @@ class CloudPipeline:
         nest_bboxes = {}
         for nest_id, bbox in ((nests or {}).get("nests") or {}).items():
             nest_bboxes[str(nest_id)] = [float(x) for x in bbox]
+        hotel = (nests or {}).get("hotel")
+
+        preview_key = ""
+        try:
+            preview_key = self._upload_nest_preview(job_id, user_id, video_local, nests)
+        except Exception as e:  # preview is a nicety — never fail the job over it
+            logger.warning("[%s] nest preview render failed (non-fatal): %s", job_id, e)
+
+        stats = {
+            "total_nests": len(nest_bboxes),
+            "nest_bboxes": nest_bboxes,
+            "nest_preview_path": preview_key,
+            "nest_only": True,
+        }
+        if hotel:
+            stats["hotel_bbox"] = [float(x) for x in hotel]
 
         logger.info("[%s] Nest-only job complete — %d nests", job_id, len(nest_bboxes))
         return PipelineResult(
@@ -323,9 +339,38 @@ class CloudPipeline:
             events_csv_path="", tracking_csv_path="", foraging_trips_csv_path="",
             interactions_csv_path="", annotated_video_path="",
             foraging_trip_count=0, avg_trip_duration_sec=0.0, interaction_count=0,
-            summary_stats={"total_nests": len(nest_bboxes),
-                           "nest_bboxes": nest_bboxes, "nest_only": True},
+            summary_stats=stats,
         )
+
+    def _upload_nest_preview(self, job_id, user_id, video_local, nests):
+        """Draw the hotel ROI (orange) + nest boxes (green, labeled) on the
+        video's first frame and upload a JPEG to the processed bucket.
+        Returns the S3 key, or '' when no frame could be read."""
+        import cv2
+
+        cap = cv2.VideoCapture(video_local)
+        ok, frame = cap.read()
+        cap.release()
+        if not ok or frame is None:
+            return ""
+
+        hotel = (nests or {}).get("hotel")
+        if hotel:
+            x1, y1, x2, y2 = [int(v) for v in hotel]
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 160, 255), 3)
+            cv2.putText(frame, "hotel", (x1, max(24, y1 - 8)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 160, 255), 2)
+        for nest_id, bbox in ((nests or {}).get("nests") or {}).items():
+            x1, y1, x2, y2 = [int(v) for v in bbox]
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 220, 0), 2)
+            cv2.putText(frame, str(nest_id), (x1, max(16, y1 - 5)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 220, 0), 2)
+
+        local = str(Path(video_local).with_name("nest_preview.jpg"))
+        cv2.imwrite(local, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        key = f"{user_id}/{job_id}/nest_preview.jpg"
+        self._storage.upload_file("processed", key, local)
+        return key
 
     def _run_analysis(
         self,
