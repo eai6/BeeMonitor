@@ -5,7 +5,7 @@
 <div class="max-w-6xl mx-auto">
   <div class="flex items-end justify-between flex-wrap gap-2 mb-1">
     <h1 class="text-2xl font-bold text-gray-900">Processing</h1>
-    <a href="{% url 'videos:upload' %}" class="text-sm text-amber-700 hover:underline">Upload video →</a>
+    <a href="{% url 'videos:batch_upload' %}" class="text-sm text-amber-700 hover:underline">Upload video →</a>
   </div>
   <p class="text-sm text-gray-500 mb-5">
     Select videos and run analysis to extract ecological data. Tracking produces
@@ -138,7 +138,7 @@
   {% else %}
   <div class="bg-white shadow rounded-lg p-6 text-center">
     <p class="text-sm text-gray-500 mb-3">No videos{% if has_filter %} match this filter{% else %} yet{% endif %}. Upload footage or let a bee hotel push activity clips.</p>
-    <a href="{% url 'videos:upload' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Upload a video</a>
+    <a href="{% url 'videos:batch_upload' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Upload a video</a>
   </div>
   {% endif %}
 

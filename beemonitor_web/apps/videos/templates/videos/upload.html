@@ -6,6 +6,7 @@
   <h1 class="text-2xl font-bold text-gray-900 mb-2">Upload Video</h1>
   <p class="text-sm text-gray-500 mb-6">
     The file is uploaded directly from your browser to S3 — it never passes through the BeeMonitor server.
+    Have several files? <a href="{% url 'videos:batch_upload' %}" class="text-amber-600 hover:underline">Use batch upload</a>.
   </p>
 
   <div class="bg-white shadow rounded-lg p-6">
