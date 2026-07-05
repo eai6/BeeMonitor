@@ -171,11 +171,15 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         ctx["reviewed_human"] = proj_anns.filter(review_source="human").count()
         ctx["reviewed_llm"] = proj_anns.filter(review_source="llm").count()
 
+        # Stats run over ALL matching annotations; only the thumbnail grid is
+        # capped (presigning thousands of URLs per page-load is too slow).
+        GRID_CAP = 500
         total_boxes = 0
+        total_matching = 0
         class_counts = {}
         frame_cards = []
 
-        for ann in anns_qs[:500]:
+        for ann in anns_qs:
             boxes = ann.boxes or []
             box_classes = sorted(set(b.get("class", "unknown") for b in boxes)) if boxes else []
 
@@ -183,11 +187,14 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
             if filter_class and filter_class not in box_classes:
                 continue
 
+            total_matching += 1
             total_boxes += len(boxes)
             for b in boxes:
                 cls = b.get("class", "unknown")
                 class_counts[cls] = class_counts.get(cls, 0) + 1
 
+            if len(frame_cards) >= GRID_CAP:
+                continue
             frame_cards.append({
                 "video_pk": ann.video_id,
                 "video_title": ann.video.title,
@@ -211,7 +218,7 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         except Exception as e:
             logger.warning("Failed to presign thumbnails: %s", e)
 
-        ctx["total_annotations"] = len(frame_cards)
+        ctx["total_annotations"] = total_matching
         ctx["total_boxes"] = total_boxes
         ctx["class_counts"] = class_counts
         ctx["frame_cards"] = frame_cards

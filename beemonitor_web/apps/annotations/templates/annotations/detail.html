@@ -279,7 +279,7 @@ function preannotateCheck(predicate) {
     {% if filter_video or filter_class or filter_review %}
     <a href="{% url 'annotations:detail' project.pk %}" class="text-sm text-amber-600 hover:underline">Clear</a>
     {% endif %}
-    <span class="text-sm text-gray-500 ml-auto">{{ frame_cards|length }} frame(s) · {{ reviewed_count }}/{{ total_annotations }} reviewed
+    <span class="text-sm text-gray-500 ml-auto">{% if frame_cards|length < total_annotations %}showing {{ frame_cards|length }} of {{ total_annotations }} frame(s) — use the Video filter to see the rest{% else %}{{ frame_cards|length }} frame(s){% endif %} · {{ reviewed_count }}/{{ total_annotations }} reviewed
       {% if reviewed_llm %}(<span class="text-blue-600">{{ reviewed_llm }} LLM</span>){% endif %}</span>
   </form>
 </div>
