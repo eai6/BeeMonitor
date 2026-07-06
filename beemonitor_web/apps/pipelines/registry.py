@@ -228,6 +228,19 @@ BLOCK_REGISTRY = {
                 "default": "",
                 "choices": None,
             },
+            {
+                # Rendering the annotated video roughly doubles runtime and can
+                # time out long clips; off by default. CSVs/trips don't need it.
+                "name": "annotated_video",
+                "label": "Annotated video",
+                "field_type": "select",
+                "required": False,
+                "default": "off",
+                "choices": [
+                    {"value": "off", "label": "Off (faster)"},
+                    {"value": "on", "label": "On (render overlay video)"},
+                ],
+            },
         ],
     },
 

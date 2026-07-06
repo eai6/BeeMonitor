@@ -67,6 +67,32 @@
       <p class="text-xs text-gray-400 mt-2">Video is served through a smart proxy that ensures browser-compatible H.264 encoding.</p>
     </div>
   </div>
+  {% elif result %}
+  <!-- Annotated video not rendered yet — generate it on demand (post-analysis) -->
+  <div class="bg-white shadow rounded-lg overflow-hidden">
+    <div class="px-6 py-3 border-b border-gray-200 bg-amber-50">
+      <h2 class="text-lg font-medium text-gray-900">Annotated Video</h2>
+    </div>
+    <div class="p-4">
+      {% if annotate_status == 'processing' %}
+        <p class="text-sm text-gray-600">Rendering the overlay video in the background… refresh in a couple of minutes.</p>
+        <script>setTimeout(function(){ location.reload(); }, 20000);</script>
+      {% elif annotate_status == 'failed' %}
+        <p class="text-sm text-red-600 mb-3">Annotation failed last time. You can try again.</p>
+      {% endif %}
+      {% if can_annotate %}
+      <form method="post" action="{% url 'analysis:annotate_video' job.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm font-medium">
+          Generate annotated video
+        </button>
+        <p class="text-xs text-gray-400 mt-2">Analysis runs without rendering (faster, avoids timeouts on long clips). Generate the overlay video here when you want to watch it — it streams from the tracking data, so it won't stall or run out of memory.</p>
+      </form>
+      {% elif not can_annotate and annotate_status != 'processing' %}
+        <p class="text-sm text-gray-500">No tracking data available to annotate for this job.</p>
+      {% endif %}
+    </div>
+  </div>
   {% endif %}
 </div>
 

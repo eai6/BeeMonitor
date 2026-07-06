@@ -332,6 +332,8 @@ def build_detect_and_track_config(step, run, context, index):
         "ml_threshold": float(cfg.get("ml_threshold", 0.6) or 0.6),
         "run_tracking": step.get("block_type") in ("track.bee", "detect.bee"),
         "run_species": _pipeline_wants_species(run.steps),
+        # Annotated video is opt-in (off = much faster, needed for long clips).
+        "visualize": str(cfg.get("annotated_video", "")).lower() in ("1", "true", "on", "yes"),
     }
     # Custom models picked on the node (empty = the built-in ones). Resolved by
     # pk against the run owner's models — same contract as the New Analysis

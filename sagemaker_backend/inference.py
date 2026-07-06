@@ -78,6 +78,8 @@ def predict_fn(payload, pipeline):
     """
     if payload.get("task") == "pre_annotate":
         return _pre_annotate(payload, pipeline)
+    if payload.get("task") == "annotate_video":
+        return _annotate_video(payload, pipeline)
 
     job_id = payload["job_id"]
     user_id = str(payload["user_id"])
@@ -235,6 +237,105 @@ def _pre_annotate(payload, pipeline) -> dict:
         "video_fps": fps,
         "video_width": width,
         "video_height": height,
+        "execution_seconds": round(time.time() - started, 2),
+    }
+
+
+def _annotate_video(payload, pipeline) -> dict:
+    """Render an annotated video AFTER analysis, streaming from the saved
+    tracking CSV — never holds more than one frame in memory, so it can't OOM
+    the way inline visualization did, and it runs as its own invocation with
+    its own time budget.
+
+    Payload: job_id, user_id, video_blob_path, tracking_csv_path,
+    nest_bboxes (optional {id: [x1,y1,x2,y2]}), hotel_bbox (optional).
+    """
+    import csv
+    import tempfile
+    import cv2
+
+    started = time.time()
+    job_id = payload["job_id"]
+    user_id = str(payload["user_id"])
+    video_blob_path = payload["video_blob_path"]
+    tracking_csv_path = payload.get("tracking_csv_path", "")
+    storage = pipeline._storage
+
+    if not tracking_csv_path:
+        return {"status": "failed", "job_id": job_id,
+                "error_message": "annotate_video needs tracking_csv_path"}
+
+    # Tracks grouped by frame -> [(x1,y1,x2,y2,track_id,taxon), ...]
+    import io
+    buf = io.BytesIO()
+    storage.download_to_stream("processed", tracking_csv_path, buf)
+    reader = csv.DictReader(io.StringIO(buf.getvalue().decode("utf-8", "replace")))
+    by_frame = {}
+    for row in reader:
+        try:
+            fn = int(float(row["frame"]))
+            box = (int(float(row["x1"])), int(float(row["y1"])),
+                   int(float(row["x2"])), int(float(row["y2"])))
+        except (KeyError, ValueError, TypeError):
+            continue
+        by_frame.setdefault(fn, []).append(
+            (box, str(row.get("track_id", "")), row.get("taxon", "") or ""))
+
+    nests = payload.get("nest_bboxes") or {}
+    hotel = payload.get("hotel_bbox")
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=True) as tin:
+        storage.download_file("raw-videos", video_blob_path, tin.name)
+        cap = cv2.VideoCapture(tin.name)
+        if not cap.isOpened():
+            return {"status": "failed", "job_id": job_id,
+                    "error_message": "could not open source video"}
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        out_local = tin.name.replace(".mp4", "_annotated.mp4")
+        writer = cv2.VideoWriter(out_local, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+
+        colors = [(0, 0, 255), (255, 0, 0), (0, 255, 0), (0, 255, 255), (255, 0, 255)]
+        fn = 0
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            if hotel and len(hotel) == 4:
+                x1, y1, x2, y2 = [int(v) for v in hotel]
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 160, 255), 2)
+            for nid, bb in nests.items():
+                if bb and len(bb) == 4:
+                    x1, y1, x2, y2 = [int(v) for v in bb]
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 220, 0), 1)
+            for box, tid, taxon in by_frame.get(fn, ()):  # one frame's tracks only
+                x1, y1, x2, y2 = box
+                color = colors[(hash(tid) if tid else 0) % len(colors)]
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                label = f"{taxon}:{tid}" if taxon else f"T:{tid}"
+                cv2.putText(frame, label, (x1, max(12, y1 - 5)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            writer.write(frame)
+            fn += 1
+        cap.release()
+        writer.release()
+
+        blob = f"{user_id}/{job_id}/annotated.mp4"
+        storage.upload_file("processed", blob, out_local, content_type="video/mp4")
+        import os
+        try:
+            os.unlink(out_local)
+        except OSError:
+            pass
+
+    logger.info("annotate_video: %d frames -> %s", fn, blob)
+    return {
+        "status": "completed",
+        "job_id": job_id,
+        "annotated_video_path": blob,
+        "frames": fn,
         "execution_seconds": round(time.time() - started, 2),
     }
 

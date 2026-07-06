@@ -38,8 +38,10 @@ def reconcile_all(limit: int = 500) -> dict:
     """One idempotent convergence pass over all users. Returns pass stats."""
     from django.db import close_old_connections
 
+    from django.contrib.auth import get_user_model
+
     from apps.analysis.models import Job
-    from apps.analysis.views import _poll_sagemaker_results
+    from apps.analysis.views import _poll_sagemaker_results, poll_annotate_jobs
     from apps.pipelines import engine
     from apps.pipelines.models import PipelineRun
 
@@ -59,8 +61,19 @@ def reconcile_all(limit: int = 500) -> dict:
     for uid in run_user_ids:
         engine.reconcile_user_runs(uid)
 
+    # On-demand annotated-video renders in flight.
+    User = get_user_model()
+    annotate_user_ids = list(
+        Job.objects.filter(config__annotate__status="processing")
+        .values_list("user_id", flat=True).distinct()[:50]
+    )
+    for uid in annotate_user_ids:
+        user = User.objects.filter(pk=uid).first()
+        if user:
+            poll_annotate_jobs(user)
+
     return {"jobs_checked": len(jobs), "jobs_resolved": resolved,
-            "run_users": len(run_user_ids)}
+            "run_users": len(run_user_ids), "annotate_users": len(annotate_user_ids)}
 
 
 def _loop():

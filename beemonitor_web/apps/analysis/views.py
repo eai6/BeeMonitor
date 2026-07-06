@@ -192,7 +192,10 @@ def _spawn_gpu_job(job_pk: int) -> None:
             "video_blob_path": blob_path,
             "detection_mode": job.config.get("detection_mode", "yolo"),
             "confidence_threshold": job.config.get("confidence_threshold", 0.25),
-            "visualize": True,
+            # Annotated-video rendering is opt-in: it writes + uploads every
+            # frame, which roughly doubles runtime and can blow the async time
+            # cap on long clips. Tracking/events don't need it.
+            "visualize": bool(job.config.get("visualize", False)),
         }
         if job.config.get("custom_nest_model_path"):
             payload["custom_nest_model_path"] = job.config["custom_nest_model_path"]
@@ -267,7 +270,7 @@ def _spawn_gpu_batch(jobs_data: list, detection_mode: str, confidence: float,
                     "video_blob_path": video.storage_key,
                     "detection_mode": detection_mode,
                     "confidence_threshold": confidence,
-                    "visualize": True,
+                    "visualize": bool((jd.get("config") or {}).get("visualize", False)),
                 }
                 if custom_nest_model_path:
                     payload["custom_nest_model_path"] = custom_nest_model_path
@@ -703,6 +706,11 @@ class PollJobsView(LoginRequiredMixin, View):
         except Exception:
             logger.exception("pipeline run reconciliation failed")
 
+        try:
+            poll_annotate_jobs(request.user)
+        except Exception:
+            logger.exception("annotate poll failed")
+
         if not processing_jobs:
             return JsonResponse({"checked": 0, "completed": 0, "jobs": []})
 
@@ -830,6 +838,70 @@ def _poll_sagemaker_results(jobs) -> int:
         except Exception as e:
             logger.error("Poll error for job %s (%s): %s", job.pk, job.modal_call_id, e)
 
+    return n
+
+
+def poll_annotate_jobs(user) -> int:
+    """Resolve on-demand annotated-video renders (job.config['annotate']).
+
+    Independent of the main analysis lifecycle — the Job is already completed;
+    this only fills in annotated_video_path once the render output lands.
+    Idempotent; safe to call from the poller and the reconciler.
+    """
+    import boto3
+    import json as _json
+    from datetime import timedelta
+    from urllib.parse import urlparse
+    from django.utils import timezone
+    from botocore.exceptions import ClientError
+
+    pending = list(Job.objects.filter(
+        user=user, config__annotate__status="processing",
+    )[:50])
+    if not pending:
+        return 0
+
+    s3 = boto3.client("s3", region_name=getattr(settings, "AWS_REGION", "us-east-1"))
+    now = timezone.now()
+    n = 0
+    for job in pending:
+        ann = dict((job.config or {}).get("annotate") or {})
+        uri = ann.get("output_uri", "")
+        if not uri:
+            continue
+        parsed = urlparse(uri)
+        try:
+            body = s3.get_object(Bucket=parsed.netloc, Key=parsed.path.lstrip("/"))["Body"].read()
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code not in {"NoSuchKey", "404", "NotFound"}:
+                logger.warning("annotate poll error job %s: %s", job.pk, e)
+                continue
+            # Not ready — give up after 1h (annotate is minutes of work).
+            started = ann.get("started_at")
+            try:
+                age = now - timezone.datetime.fromisoformat(started) if started else timedelta(0)
+            except (ValueError, TypeError):
+                age = timedelta(0)
+            if age > timedelta(hours=1):
+                ann["status"] = "failed"
+                cfg = dict(job.config or {}); cfg["annotate"] = ann
+                Job.objects.filter(pk=job.pk).update(config=cfg)
+                n += 1
+            continue
+
+        result = _json.loads(body)
+        cfg = dict(job.config or {})
+        if result.get("status") == "completed" and result.get("annotated_video_path"):
+            JobResult.objects.filter(job_id=job.pk).update(
+                annotated_video_path=result["annotated_video_path"])
+            ann["status"] = "done"
+        else:
+            ann["status"] = "failed"
+            ann["error"] = str(result.get("error_message", ""))[:300]
+        cfg["annotate"] = ann
+        Job.objects.filter(pk=job.pk).update(config=cfg)
+        n += 1
     return n
 
 
@@ -1182,7 +1254,59 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         ctx["tracking_data"] = _load_csv_from_storage(tracking_path)
         ctx["interactions_data"] = _load_csv_from_storage(interactions_path)
 
+        # Annotated-video generation state (post-analysis, on demand).
+        ann = (job.config or {}).get("annotate") or {}
+        ctx["annotate_status"] = ann.get("status", "")
+        ctx["can_annotate"] = bool(tracking_path) and ann.get("status") != "processing"
+
         return ctx
+
+
+class GenerateAnnotatedVideoView(LoginRequiredMixin, View):
+    """Render the annotated overlay video for a finished job — a separate
+    endpoint invocation streaming from the tracking CSV, so it can't OOM or
+    stall the analysis itself (see inference._annotate_video)."""
+
+    def post(self, request, pk):
+        from django.shortcuts import redirect
+        from django.utils import timezone
+
+        job = get_object_or_404(Job, pk=pk, user=request.user)
+        try:
+            result = job.result
+        except JobResult.DoesNotExist:
+            result = None
+        tracking_path = getattr(result, "tracking_csv_path", "") if result else ""
+        if not tracking_path:
+            messages.warning(request, "This job has no tracking data to annotate.")
+            return redirect("analysis:results", pk=pk)
+
+        stats = (getattr(result, "summary_stats", {}) or {})
+        annotate_job_id = f"annot_{uuid.uuid4().hex[:12]}"
+        payload = {
+            "task": "annotate_video",
+            "job_id": annotate_job_id,
+            "user_id": str(job.user_id),
+            "video_blob_path": job.video.storage_key,
+            "tracking_csv_path": tracking_path,
+            "nest_bboxes": stats.get("nest_bboxes") or {},
+            "hotel_bbox": stats.get("hotel_bbox"),
+        }
+        try:
+            input_uri = _put_inference_payload(annotate_job_id, payload)
+            output_uri, _failure_uri = _invoke_endpoint_async(annotate_job_id, input_uri)
+        except Exception as e:
+            logger.exception("annotate spawn failed for job %s", pk)
+            messages.error(request, f"Could not start annotation: {e}")
+            return redirect("analysis:results", pk=pk)
+
+        cfg = dict(job.config or {})
+        cfg["annotate"] = {"status": "processing", "output_uri": output_uri,
+                           "started_at": timezone.now().isoformat()}
+        Job.objects.filter(pk=pk).update(config=cfg)
+        messages.info(request, "Rendering the annotated video — this runs in the "
+                               "background; refresh in a couple of minutes.")
+        return redirect("analysis:results", pk=pk)
 
 
 class _FilteredJobsMixin:
