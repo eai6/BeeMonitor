@@ -214,9 +214,13 @@ def _spawn_gpu_job(job_pk: int) -> None:
             payload["recorded_at"] = video.recorded_at.isoformat()
 
         input_uri = _put_inference_payload(job.modal_job_id, payload)
-        output_uri = _invoke_endpoint_async(job.modal_job_id, input_uri)
+        output_uri, failure_uri = _invoke_endpoint_async(job.modal_job_id, input_uri)
 
-        Job.objects.filter(pk=job_pk).update(modal_call_id=output_uri)
+        if failure_uri:
+            job.config["failure_location"] = failure_uri
+            Job.objects.filter(pk=job_pk).update(modal_call_id=output_uri, config=job.config)
+        else:
+            Job.objects.filter(pk=job_pk).update(modal_call_id=output_uri)
         logger.info("Job %s spawned on SageMaker: %s", job_pk, output_uri)
 
     except Exception as e:
@@ -284,8 +288,13 @@ def _spawn_gpu_batch(jobs_data: list, detection_mode: str, confidence: float,
                     payload["recorded_at"] = video.recorded_at.isoformat()
 
                 input_uri = _put_inference_payload(jd["job_id"], payload)
-                output_uri = _invoke_endpoint_async(jd["job_id"], input_uri)
-                Job.objects.filter(pk=jd["job_pk"]).update(modal_call_id=output_uri)
+                output_uri, failure_uri = _invoke_endpoint_async(jd["job_id"], input_uri)
+                if failure_uri:
+                    vcfg["failure_location"] = failure_uri
+                    Job.objects.filter(pk=jd["job_pk"]).update(
+                        modal_call_id=output_uri, config=vcfg)
+                else:
+                    Job.objects.filter(pk=jd["job_pk"]).update(modal_call_id=output_uri)
                 logger.info("Job %s spawned: %s", jd["job_pk"], output_uri)
             except Exception as e:
                 Job.objects.filter(pk=jd["job_pk"]).update(
@@ -324,8 +333,11 @@ def _put_inference_payload(job_id: str, payload: dict) -> str:
     return f"s3://{bucket}/{key}"
 
 
-def _invoke_endpoint_async(job_id: str, input_uri: str) -> str:
-    """Call invoke_endpoint_async. Returns the s3:// URI where the result will land."""
+def _invoke_endpoint_async(job_id: str, input_uri: str) -> tuple[str, str]:
+    """Call invoke_endpoint_async. Returns (output_uri, failure_uri) — the s3://
+    URIs where the result / a platform-level failure (container crash, request
+    expiry) will land. failure_uri is "" unless the endpoint config has an
+    S3FailurePath."""
     endpoint = settings.SAGEMAKER_ENDPOINT_NAME
     if not endpoint:
         raise RuntimeError("SAGEMAKER_ENDPOINT_NAME is not configured")
@@ -336,7 +348,7 @@ def _invoke_endpoint_async(job_id: str, input_uri: str) -> str:
         InferenceId=job_id,
     )
     # OutputLocation = s3://<output-bucket>/<inference-id>.out  (typical layout)
-    return response["OutputLocation"]
+    return response["OutputLocation"], response.get("FailureLocation", "") or ""
 
 
 ACTIVE_JOB_STATUSES = [
@@ -672,16 +684,16 @@ class PollJobsView(LoginRequiredMixin, View):
     """
 
     def get(self, request):
-        from datetime import timedelta
         from django.http import JsonResponse
-        from django.utils import timezone
 
-        recent_cutoff = timezone.now() - timedelta(hours=4)
+        # ALL in-flight jobs, however old and even if the spawn never finished
+        # (empty modal_call_id) — an age cutoff here previously made jobs older
+        # than 4h permanently invisible: forever "Processing" in the UI while
+        # their results sat in S3.
         processing_jobs = list(Job.objects.filter(
             user=request.user,
             status=Job.Status.PROCESSING,
-            started_at__gte=recent_cutoff,
-        ).exclude(modal_call_id="")[:200])
+        ).order_by("-started_at")[:200])
 
         if not processing_jobs:
             return JsonResponse({"checked": 0, "completed": 0, "jobs": []})
@@ -698,6 +710,39 @@ class PollJobsView(LoginRequiredMixin, View):
         })
 
 
+# SageMaker async caps: 1h max processing + 6h request TTL. Anything still
+# unresolved after this many hours can never complete — fail it out.
+_JOB_TIMEOUT_HOURS = 8
+# Grace period for the spawn thread before we consider a job "never spawned".
+_SPAWN_GRACE_MINUTES = 10
+
+
+def _handle_unspawned_job(job, age) -> int:
+    """A PROCESSING job with no SageMaker request (empty modal_call_id): the
+    spawn thread died before invoking — typically an app restart/deploy between
+    Job creation and the invoke. Re-spawn once; fail if that doesn't take."""
+    from datetime import timedelta
+    from django.utils import timezone
+
+    if age < timedelta(minutes=_SPAWN_GRACE_MINUTES):
+        return 0  # spawn may still be in flight
+    cfg = dict(job.config or {})
+    if not cfg.get("respawn_attempted"):
+        cfg["respawn_attempted"] = True
+        Job.objects.filter(pk=job.pk).update(config=cfg)
+        logger.warning("Job %s has no SageMaker request after %s — re-spawning", job.pk, age)
+        spawn_gpu_job_async(job.pk)
+        return 0
+    Job.objects.filter(pk=job.pk).update(
+        status="failed",
+        error_message="Never reached the GPU (the server restarted during submission, "
+                      "and one re-spawn attempt also failed). Re-run the analysis.",
+        completed_at=timezone.now(),
+    )
+    _notify_pipeline(job.pk)
+    return 1
+
+
 def _poll_sagemaker_results(jobs) -> int:
     """Check each job's expected output S3 URI. Update DB on completion.
 
@@ -705,21 +750,24 @@ def _poll_sagemaker_results(jobs) -> int:
     """
     import boto3
     import json as _json
+    from datetime import timedelta
     from urllib.parse import urlparse
     from django.utils import timezone
     from botocore.exceptions import ClientError
 
     s3 = boto3.client("s3", region_name=getattr(settings, "AWS_REGION", "us-east-1"))
+    now = timezone.now()
     n = 0
 
     for job in jobs:
+        age = now - (job.started_at or now)
         if not job.modal_call_id:
+            n += _handle_unspawned_job(job, age)
             continue
         try:
             parsed = urlparse(job.modal_call_id)
             bucket = parsed.netloc
             key = parsed.path.lstrip("/")
-            failure_key = key.replace(".out", ".failure") if key.endswith(".out") else key + ".failure"
 
             # Check for success first.
             try:
@@ -733,9 +781,19 @@ def _poll_sagemaker_results(jobs) -> int:
                 if code not in {"NoSuchKey", "404", "NotFound"}:
                     raise
 
-            # Then check for inference failure.
+            # Then platform-level failure (container crash, request expiry).
+            # The real location comes from the invoke response (needs
+            # S3FailurePath on the endpoint); the .failure guess is the legacy
+            # fallback for jobs spawned before that existed.
+            failure_uri = (job.config or {}).get("failure_location", "")
+            if failure_uri:
+                fparsed = urlparse(failure_uri)
+                fbucket, fkey = fparsed.netloc, fparsed.path.lstrip("/")
+            else:
+                fbucket = bucket
+                fkey = key.replace(".out", ".failure") if key.endswith(".out") else key + ".failure"
             try:
-                body = s3.get_object(Bucket=bucket, Key=failure_key)["Body"].read()
+                body = s3.get_object(Bucket=fbucket, Key=fkey)["Body"].read()
                 Job.objects.filter(pk=job.pk).update(
                     status="failed",
                     error_message=f"SageMaker inference failed: {body.decode('utf-8', errors='replace')[:500]}",
@@ -743,12 +801,24 @@ def _poll_sagemaker_results(jobs) -> int:
                 )
                 _notify_pipeline(job.pk)
                 n += 1
+                continue
             except ClientError as e:
                 code = e.response.get("Error", {}).get("Code", "")
                 if code not in {"NoSuchKey", "404", "NotFound"}:
                     raise
-                # Still running — neither output nor failure object exists yet.
-                continue
+
+            # Neither output nor failure exists. Past the async platform caps
+            # (1h processing + 6h queue TTL) it can never complete — fail out
+            # instead of showing "Processing" forever.
+            if age > timedelta(hours=_JOB_TIMEOUT_HOURS):
+                Job.objects.filter(pk=job.pk).update(
+                    status="failed",
+                    error_message=f"Timed out: no result after {_JOB_TIMEOUT_HOURS}h "
+                                  "(the GPU request expired or was lost). Re-run the analysis.",
+                    completed_at=timezone.now(),
+                )
+                _notify_pipeline(job.pk)
+                n += 1
         except Exception as e:
             logger.error("Poll error for job %s (%s): %s", job.pk, job.modal_call_id, e)
 

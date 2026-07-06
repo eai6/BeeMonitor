@@ -629,7 +629,14 @@ class PreAnnotateView(LoginRequiredMixin, View):
             )
             out = urlparse(resp["OutputLocation"])
             out_bucket, out_key = out.netloc, out.path.lstrip("/")
-            fail_key = out_key.replace(".out", ".failure")
+            # Real failure location (requires S3FailurePath on the endpoint);
+            # the .failure suffix is the legacy guess for older configs.
+            fail_loc = resp.get("FailureLocation", "") or ""
+            if fail_loc:
+                f = urlparse(fail_loc)
+                fail_bucket, fail_key = f.netloc, f.path.lstrip("/")
+            else:
+                fail_bucket, fail_key = out_bucket, out_key.replace(".out", ".failure")
 
             # Poll the async output (cold start can take a few minutes).
             result = None
@@ -644,7 +651,7 @@ class PreAnnotateView(LoginRequiredMixin, View):
                     if e.response["Error"]["Code"] not in ("NoSuchKey", "404", "NotFound"):
                         raise
                     try:
-                        fail = s3.get_object(Bucket=out_bucket, Key=fail_key)["Body"].read()
+                        fail = s3.get_object(Bucket=fail_bucket, Key=fail_key)["Body"].read()
                         logger.error("pre-annotate: endpoint failure for video %s: %s",
                                      video_pk, fail[:500])
                         return

@@ -536,6 +536,11 @@ if deploy_endpoint:
         async_inference_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigArgs(
             output_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigOutputConfigArgs(
                 s3_output_path=pulumi.Output.concat("s3://", output_bucket.bucket, "/"),
+                # Without a failure path, platform-level failures (container
+                # crash/OOM, 6h request-TTL expiry) are dropped silently and
+                # jobs look "Processing" forever. The web poller reads the
+                # FailureLocation returned by invoke_endpoint_async.
+                s3_failure_path=pulumi.Output.concat("s3://", output_bucket.bucket, "/failures/"),
             ),
         ),
         opts=pulumi.ResourceOptions(retain_on_delete=True),  # see model note
