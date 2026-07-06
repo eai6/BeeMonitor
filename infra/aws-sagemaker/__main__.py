@@ -500,6 +500,11 @@ if deploy_endpoint:
     # rolling deploy). With fixed names, an image change only replaces the Model
     # and the live endpoint keeps serving the old image.
     tag_slug = "".join(c for c in image_tag if c.isalnum())[:12] or "latest"
+    # Bump when the EndpointConfig SHAPE changes without an image bump (the
+    # name must change for the replace-then-update roll to work — same-name
+    # re-creation collides with the retained old config).
+    CONFIG_REV = "r2"
+    tag_slug = f"{tag_slug}-{CONFIG_REV}"
 
     model = aws.sagemaker.Model(
         "model",
