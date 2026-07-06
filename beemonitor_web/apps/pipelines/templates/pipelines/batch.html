@@ -139,6 +139,15 @@
 {% endif %}
 
 {% if running %}
-<script>setTimeout(function(){ window.location.reload(); }, 15000);</script>
+<script>
+// Poll the job checker (it detects finished SageMaker jobs and advances the
+// pipeline runs), then refresh — without this, runs only advance while the
+// Processing page is open.
+setTimeout(function(){
+  fetch("{% url 'analysis:poll' %}", {credentials: 'same-origin'})
+    .catch(function(){})
+    .finally(function(){ window.location.reload(); });
+}, 15000);
+</script>
 {% endif %}
 {% endblock %}
