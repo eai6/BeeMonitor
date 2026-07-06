@@ -1288,12 +1288,16 @@ class BeeTracking:
                 logger.debug(f"Adding {len(lookback_results)} lookback results")
                 results.extend(lookback_results)
             
-            results.append(result)
-            
-            # Write visualization if enabled
+            # Write visualization if enabled, then DROP the frame image from the
+            # result — results are retained for the whole video, and keeping
+            # every annotated frame (~2.7 MB each at 720p) OOM-kills the worker
+            # after a few thousand frames.
             if visualize and output_path and 'visualization' in result:
                 out.write(result['visualization'])
-            
+            result.pop('visualization', None)
+
+            results.append(result)
+
             frame_num += 1
             
             if frame_num % 100 == 0:
