@@ -16,8 +16,9 @@
   <!-- In-flight jobs: what's occupying GPU slots right now, with cancel -->
   <div class="bg-white shadow rounded-lg p-4 mb-5 border-l-4 border-blue-400">
     <div class="flex items-center justify-between mb-2">
-      <h2 class="text-sm font-medium text-gray-700">
-        Processing now — {{ active_jobs|length }} job(s), {{ slots_used }}/{{ slots_max }} GPU slots
+      <h2 class="text-sm font-medium text-gray-700"
+          title="Job slots are your account's concurrent-job allowance. Actual GPUs are a separate, smaller pool — jobs beyond it queue and run as GPUs free up.">
+        Processing now — {{ active_jobs|length }} job(s), {{ slots_used }}/{{ slots_max }} job slots
       </h2>
       <form method="post" action="{% url 'analysis:cancel_all' %}"
             onsubmit="return confirm('Cancel all {{ active_jobs|length }} in-flight job(s)? Their pipeline runs will be marked failed.');">
