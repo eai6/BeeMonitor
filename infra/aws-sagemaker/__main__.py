@@ -503,7 +503,7 @@ if deploy_endpoint:
     # Bump when the EndpointConfig SHAPE changes without an image bump (the
     # name must change for the replace-then-update roll to work — same-name
     # re-creation collides with the retained old config).
-    CONFIG_REV = "r2"
+    CONFIG_REV = "r3"
     tag_slug = f"{tag_slug}-{CONFIG_REV}"
 
     model = aws.sagemaker.Model(
@@ -539,6 +539,13 @@ if deploy_endpoint:
             ),
         ],
         async_inference_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigArgs(
+            # One video pipeline per instance: without this, SageMaker feeds
+            # several invocations into one 16 GB box and concurrent tracking
+            # runs OOM-kill the worker (seen 2026-07-06 at frame 4500 of a
+            # mendels video). Parallelism comes from autoscaling instead.
+            client_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigClientConfigArgs(
+                max_concurrent_invocations_per_instance=1,
+            ),
             output_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigOutputConfigArgs(
                 s3_output_path=pulumi.Output.concat("s3://", output_bucket.bucket, "/"),
                 # Without a failure path, platform-level failures (container
