@@ -695,6 +695,14 @@ class PollJobsView(LoginRequiredMixin, View):
             status=Job.Status.PROCESSING,
         ).order_by("-started_at")[:200])
 
+        # Re-drive pipeline runs whose jobs already resolved but whose
+        # completion notification was missed (restart mid-poll, old cancels).
+        try:
+            from apps.pipelines import engine as pipeline_engine
+            pipeline_engine.reconcile_user_runs(request.user)
+        except Exception:
+            logger.exception("pipeline run reconciliation failed")
+
         if not processing_jobs:
             return JsonResponse({"checked": 0, "completed": 0, "jobs": []})
 

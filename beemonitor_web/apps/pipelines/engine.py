@@ -183,6 +183,57 @@ def _finalize_if_terminal(run, steps, status):
         )
 
 
+def reconcile_user_runs(user, limit=50):
+    """Re-drive in-flight runs whose GPU jobs already resolved.
+
+    A run only advances when the job poller fires ``on_job_finished`` at the
+    moment of transition — a missed notification (deploy restart mid-poll, a
+    job cancelled/failed before the hook handled it) left the run "Running"
+    forever. This replays the hook for any running step whose Job is terminal,
+    and fails steps whose Job row vanished. Idempotent; never raises.
+    """
+    from apps.analysis.models import Job
+
+    try:
+        runs = list(PipelineRun.objects.filter(
+            user=user,
+            status__in=[PipelineRun.Status.PENDING, PipelineRun.Status.RUNNING],
+        ).order_by("-started_at")[:limit])
+        for run in runs:
+            for step in (run.steps or []):
+                sid = step.get("id")
+                if run.step_state(sid) != PipelineRun.STEP_RUNNING:
+                    continue
+                out = (run.context or {}).get(sid) or {}
+                job_pk = out.get("job_id")
+                if not job_pk:
+                    continue  # local step mid-execution / job not yet spawned
+                job = Job.objects.filter(pk=job_pk).first()
+                if job is None:
+                    _fail_step(run.pk, sid, "The analysis job for this step no longer exists.")
+                elif job.status in ("completed", "failed", "cancelled"):
+                    on_job_finished(job)
+    except Exception:  # reconciliation must never break the caller
+        logger.exception("reconcile_user_runs failed for user %s", getattr(user, "pk", "?"))
+
+
+def _fail_step(run_pk, step_id, message):
+    """Mark one step failed and let the state machine finish the run."""
+    with transaction.atomic():
+        try:
+            run = PipelineRun.objects.select_for_update().get(pk=run_pk)
+        except PipelineRun.DoesNotExist:
+            return
+        status = dict(run.step_status or {})
+        context = dict(run.context or {})
+        context[step_id] = {"error": message}
+        status[step_id] = PipelineRun.STEP_FAILED
+        run.step_status = status
+        run.context = context
+        run.save(update_fields=["step_status", "context"])
+    advance_run(run_pk)
+
+
 def on_job_finished(job):
     """Poller hook: an ``analysis.Job`` tagged with a pipeline run has finished.
 

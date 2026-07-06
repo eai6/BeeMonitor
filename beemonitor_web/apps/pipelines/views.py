@@ -288,6 +288,8 @@ def run_on_videos(request):
 @login_required
 def run_list(request):
     """History of the current user's pipeline runs (across pipelines)."""
+    # Unstick runs whose jobs already resolved (missed completion notification).
+    engine.reconcile_user_runs(request.user)
     runs = list(PipelineRun.objects.filter(user=request.user)
                 .select_related("pipeline").order_by("-started_at", "-id")[:100])
 
