@@ -12,28 +12,14 @@
 
 {% if result %}
 
-<!-- Summary Stats -->
-<div class="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-8">
+<!-- Summary Stats — only the analyses that actually ran -->
+<div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
+  {% for tile in stat_tiles %}
   <div class="bg-white shadow rounded-lg p-4 text-center">
-    <p class="text-sm text-gray-500">Total Events</p>
-    <p class="text-2xl font-bold text-gray-900">{{ result.total_events }}</p>
+    <p class="text-sm text-gray-500">{{ tile.label }}</p>
+    <p class="text-2xl font-bold {{ tile.color }}">{{ tile.value }}</p>
   </div>
-  <div class="bg-white shadow rounded-lg p-4 text-center">
-    <p class="text-sm text-gray-500">Entries</p>
-    <p class="text-2xl font-bold text-green-600">{{ result.entry_count }}</p>
-  </div>
-  <div class="bg-white shadow rounded-lg p-4 text-center">
-    <p class="text-sm text-gray-500">Exits</p>
-    <p class="text-2xl font-bold text-red-600">{{ result.exit_count }}</p>
-  </div>
-  <div class="bg-white shadow rounded-lg p-4 text-center">
-    <p class="text-sm text-gray-500">Unique Tracks</p>
-    <p class="text-2xl font-bold text-blue-600">{{ result.unique_tracks }}</p>
-  </div>
-  <div class="bg-white shadow rounded-lg p-4 text-center">
-    <p class="text-sm text-gray-500">Nests</p>
-    <p class="text-2xl font-bold text-amber-600">{{ result.nest_count }}</p>
-  </div>
+  {% endfor %}
 </div>
 
 <!-- Videos Side by Side -->
@@ -97,6 +83,7 @@
 </div>
 
 <!-- Download Section -->
+{% if events_csv_url or tracking_csv_url or interactions_csv_url or species_csv_url or foraging_csv_url or annotated_video_url %}
 <div class="bg-white shadow rounded-lg mb-8">
   <div class="px-6 py-4 border-b border-gray-200">
     <h2 class="text-lg font-medium text-gray-900">Downloads</h2>
@@ -133,6 +120,22 @@
       </a>
       {% endif %}
 
+      {% if foraging_csv_url %}
+      <a href="{{ foraging_csv_url }}" download
+         class="flex items-center justify-center gap-2 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition">
+        <svg class="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        <span class="text-amber-700 font-medium">Foraging Trips CSV</span>
+      </a>
+      {% endif %}
+
+      {% if species_csv_url %}
+      <a href="{{ species_csv_url }}" download
+         class="flex items-center justify-center gap-2 px-4 py-3 bg-teal-50 border border-teal-200 rounded-lg hover:bg-teal-100 transition">
+        <svg class="w-5 h-5 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        <span class="text-teal-700 font-medium">Species CSV</span>
+      </a>
+      {% endif %}
+
       {% if annotated_video_url %}
       <a href="{{ annotated_video_url }}" download
          class="flex items-center justify-center gap-2 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition">
@@ -145,6 +148,7 @@
     </div>
   </div>
 </div>
+{% endif %}
 
 <!-- Events Table -->
 {% if events_data.rows %}
@@ -254,21 +258,34 @@
 </div>
 {% endif %}
 
-<!-- Detailed Summary Stats -->
-{% if result.summary_stats %}
+<!-- Species observations (BioCLIP per-track identification) -->
+{% if species_observations %}
 <div class="bg-white shadow rounded-lg mb-8">
-  <div class="px-6 py-4 border-b border-gray-200">
-    <h2 class="text-lg font-medium text-gray-900">Detailed Statistics</h2>
+  <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+    <h2 class="text-lg font-medium text-gray-900">Species Identified ({{ species_observations|length }})</h2>
+    {% if species_csv_url %}<a href="{{ species_csv_url }}" download class="text-sm text-teal-600 hover:underline">Download per-track CSV</a>{% endif %}
   </div>
-  <div class="px-6 py-4">
-    <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-sm">
-      {% for key, value in result.summary_stats.items %}
-      <div class="flex justify-between py-2 border-b border-gray-100">
-        <dt class="text-gray-500">{{ key }}</dt>
-        <dd class="font-medium text-gray-900">{{ value }}</dd>
-      </div>
-      {% endfor %}
-    </dl>
+  <div class="overflow-x-auto">
+    <table class="min-w-full divide-y divide-gray-200 text-sm">
+      <thead class="bg-gray-50">
+        <tr>
+          <th class="px-4 py-3 text-left font-medium text-gray-500 uppercase tracking-wider text-xs">Species</th>
+          <th class="px-4 py-3 text-left font-medium text-gray-500 uppercase tracking-wider text-xs">Common name</th>
+          <th class="px-4 py-3 text-right font-medium text-gray-500 uppercase tracking-wider text-xs">Tracks</th>
+          <th class="px-4 py-3 text-right font-medium text-gray-500 uppercase tracking-wider text-xs">Avg confidence</th>
+        </tr>
+      </thead>
+      <tbody class="bg-white divide-y divide-gray-200">
+        {% for o in species_observations %}
+        <tr class="hover:bg-gray-50">
+          <td class="px-4 py-2 text-gray-900 italic">{{ o.species }}</td>
+          <td class="px-4 py-2 text-gray-600">{{ o.common_name|default:"—" }}</td>
+          <td class="px-4 py-2 text-right text-gray-700">{{ o.track_count }}</td>
+          <td class="px-4 py-2 text-right text-gray-700">{{ o.avg_confidence }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 </div>
 {% endif %}

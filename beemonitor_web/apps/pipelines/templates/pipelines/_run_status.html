@@ -11,6 +11,7 @@
         {% if step.output.table_kind == 'visitation' %}<span class="text-xs text-gray-600">{{ step.output.unique_visitors }} visitors · {{ step.output.total_visits }} visits</span>{% endif %}
         {% if step.output.table_kind == 'colony_activity' %}<span class="text-xs text-gray-600">{{ step.output.metric }}: peak {{ step.output.peak }}</span>{% endif %}
         {% if step.output.table_kind == 'marker_id' %}<span class="text-xs text-gray-600">{{ step.output.identified_tracks }} IDs · {{ step.output.unique_markers }} markers</span>{% endif %}
+        {% if step.output.species_count is not None %}<span class="text-xs text-gray-600">{{ step.output.species_count }} species · {{ step.output.tracks_classified }} tracks</span>{% endif %}
         {% if step.cached %}<span class="text-[10px] text-gray-400 border border-gray-200 rounded px-1" title="Reused from a previous run">cached</span>{% endif %}
         <span class="text-xs font-medium
           {% if step.state == 'done' %}text-green-600
