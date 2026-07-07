@@ -7,6 +7,7 @@ environment — SageMaker, Modal (legacy), or local.
 
 import json
 import logging
+import os
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
