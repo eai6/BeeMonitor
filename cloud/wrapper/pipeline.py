@@ -34,6 +34,7 @@ class PipelineResult:
     tracking_csv_path: str
     foraging_trips_csv_path: str
     interactions_csv_path: str
+    species_csv_path: str  # per-track BioCLIP species; empty if run_species off
     annotated_video_path: str  # empty if visualize=False
     foraging_trip_count: int
     avg_trip_duration_sec: float
@@ -84,6 +85,7 @@ class CloudPipeline:
         hotel_roi=None,
         nest_layout=None,
         run_tracking: bool = True,
+        run_species: bool = False,
         recorded_at: str = "",
     ) -> PipelineResult:
         """Run the full BeeMonitor pipeline on a video stored in S3.
@@ -230,6 +232,26 @@ class CloudPipeline:
         except Exception as e:
             logger.warning("[%s] Interaction analysis failed (non-fatal): %s", job_id, e)
 
+        # Step 4c — Per-track species identification (BioCLIP), from the crops
+        # the tracker wrote to local disk. Gated on run_species + a configured
+        # endpoint; non-fatal.
+        species_result = None
+        bioclip_endpoint = os.environ.get("SAGEMAKER_BIOCLIP_ENDPOINT_NAME", "")
+        if run_species and bioclip_endpoint:
+            try:
+                from cloud.wrapper import species as species_mod
+                region = os.environ.get("AWS_REGION", "us-east-1")
+                min_conf = float(os.environ.get("BIOCLIP_MIN_CONFIDENCE", "0") or 0)
+                species_result = species_mod.classify_tracks(
+                    str(output_dir), bioclip_endpoint, region, min_confidence=min_conf)
+                if species_result["per_track"]:
+                    species_mod.write_track_species_csv(
+                        species_result["per_track"], str(output_dir / "track_species.csv"))
+            except Exception as e:  # noqa: BLE001 — species is enrichment, not core
+                logger.warning("[%s] species classification failed (non-fatal): %s", job_id, e)
+        elif run_species and not bioclip_endpoint:
+            logger.info("[%s] run_species set but SAGEMAKER_BIOCLIP_ENDPOINT_NAME unset — skipping", job_id)
+
         # Step 5 — Upload results to S3 processed bucket
         logger.info("[%s] Uploading results to S3", job_id)
         result_paths = self._upload_results(job_id, user_id, output_dir, video_local)
@@ -256,6 +278,9 @@ class CloudPipeline:
         stats["foraging_trips"] = trip_summary
         stats["video_fps"] = fps
         stats["interaction_count"] = interaction_count
+        if species_result is not None:
+            stats["species_observations"] = species_result["observations"]
+            stats["species_tracks_classified"] = species_result["tracks_classified"]
 
         # Persist nest bounding boxes for future use (avoids re-detection)
         if nests and isinstance(nests, dict) and nests.get("nests"):
@@ -282,6 +307,7 @@ class CloudPipeline:
             tracking_csv_path=result_paths.get("tracking_csv", ""),
             foraging_trips_csv_path=result_paths.get("foraging_trips_csv", ""),
             interactions_csv_path=result_paths.get("interactions_csv", ""),
+            species_csv_path=result_paths.get("species_csv", ""),
             annotated_video_path=result_paths.get("annotated_video", ""),
             foraging_trip_count=trip_summary["total_trips"],
             avg_trip_duration_sec=trip_summary["avg_duration_sec"],
@@ -339,7 +365,7 @@ class CloudPipeline:
             total_events=0, entry_count=0, exit_count=0,
             unique_tracks=0, nest_count=len(nest_bboxes),
             events_csv_path="", tracking_csv_path="", foraging_trips_csv_path="",
-            interactions_csv_path="", annotated_video_path="",
+            interactions_csv_path="", species_csv_path="", annotated_video_path="",
             foraging_trip_count=0, avg_trip_duration_sec=0.0, interaction_count=0,
             summary_stats=stats,
         )
@@ -504,6 +530,13 @@ class CloudPipeline:
             blob_path = f"{prefix}/interactions.csv"
             self._storage.upload_file(container, blob_path, str(interactions_files[0]))
             uploaded["interactions_csv"] = blob_path
+
+        # Per-track species CSV (BioCLIP)
+        species_files = list(output_dir.glob("track_species.csv"))
+        if species_files:
+            blob_path = f"{prefix}/track_species.csv"
+            self._storage.upload_file(container, blob_path, str(species_files[0]))
+            uploaded["species_csv"] = blob_path
 
         # Annotated video — re-encode to H.264 with ffmpeg for browser playback
         video_files = list(output_dir.glob("*.mp4"))

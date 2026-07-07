@@ -925,6 +925,7 @@ def _apply_result_to_job(job, result: dict) -> None:
             "tracking_csv_path": result.get("tracking_csv_path", ""),
             "foraging_trips_csv_path": result.get("foraging_trips_csv_path", ""),
             "interactions_csv_path": result.get("interactions_csv_path", ""),
+            "species_csv_path": result.get("species_csv_path", ""),
             "annotated_video_path": result.get("annotated_video_path", ""),
             "total_events": result.get("total_events", 0),
             "entry_count": result.get("entry_count", 0),

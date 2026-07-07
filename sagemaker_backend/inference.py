@@ -106,6 +106,8 @@ def predict_fn(payload, pipeline):
             nest_layout=payload.get("nest_layout"),
             # False = nest/hotel-only fast path (skip tracking + events).
             run_tracking=bool(payload.get("run_tracking", True)),
+            # True = classify each track's crops with BioCLIP (per-track species).
+            run_species=bool(payload.get("run_species", False)),
             # ISO recording start (video.recorded_at) — replaces the filename
             # timestamp convention for event timestamps.
             recorded_at=payload.get("recorded_at", "") or "",

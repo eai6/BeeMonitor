@@ -211,16 +211,33 @@ def _exec_analyze_colony_activity(step, run, context, inputs, index):
 
 
 def _exec_identify_taxon(step, run, context, inputs, index):
-    # In the scaffold the upstream detect_and_track Job was launched with
-    # run_species=True (see build_detect_and_track_config), so species observations
-    # ride the same job's summary. Full per-track BioCLIP is Phase 3.
+    # The upstream detect_and_track Job runs with run_species=True (see
+    # build_detect_and_track_config), so the GPU container classifies each
+    # track's crops with BioCLIP and returns species_observations in its
+    # summary. Surface them as observation rows.
     up = _first_upstream_result(inputs)
     result = (up or {}).get("result", {})
-    return {
+    stats = result.get("summary_stats", {}) or {}
+    observations = stats.get("species_observations") or []
+    rows = [
+        {
+            "species": o.get("species", ""),
+            "common_name": o.get("common_name", ""),
+            "tracks": o.get("track_count", 0),
+            "avg_confidence": o.get("avg_confidence", 0),
+        }
+        for o in observations
+    ]
+    out = {
         "artifact": "observations",
-        "summary": result.get("summary_stats", {}),
-        "note": "Species observations from the tracking job's summary (scaffold).",
+        "rows": rows,
+        "species_count": len(rows),
+        "tracks_classified": stats.get("species_tracks_classified", 0),
     }
+    if not rows:
+        out["note"] = ("No species identified — the BioCLIP endpoint may be "
+                       "unset, or no track crops were classifiable.")
+    return out
 
 
 def _exec_identify_marker(step, run, context, inputs, index):
