@@ -396,7 +396,7 @@ _DISPLAY_SKIP = {
 }
 
 
-def _step_display(output):
+def _step_display(output, block_type=""):
     """A review-friendly view of a step's output: scalar metrics + a rows table."""
     if not isinstance(output, dict):
         return {"fields": [], "rows": [], "columns": [], "row_total": 0}
@@ -417,22 +417,25 @@ def _step_display(output):
     # a dict by a variable key).
     cell_rows = [[r.get(c, "") for c in columns] for r in rows[:25]]
 
-    # Nest/hotel layout (Detect Nest / Hotel step): the detected boxes + a
-    # rendered first-frame overlay uploaded by the GPU worker.
+    # Nest/hotel layout — ONLY on the Detect Nest / Hotel step. Every GPU job's
+    # summary carries nest_bboxes (the manual layout it tracked against), so
+    # without this scope the 60-row nest table also rendered on Track Bees.
     stats = output.get("summary") or result.get("summary_stats") or {}
-    nest_rows = [
-        {"nest": k, "bbox": ", ".join(str(int(x)) for x in v)}
-        for k, v in sorted((stats.get("nest_bboxes") or {}).items())
-    ]
+    nest_rows = []
     nest_preview_url = ""
-    if stats.get("nest_preview_path"):
-        try:
-            from config.storage import get_s3_client
-            nest_preview_url = get_s3_client().generate_presigned_url(
-                "processed", stats["nest_preview_path"])
-        except Exception:
-            logger.warning("could not presign nest preview %s",
-                           stats.get("nest_preview_path"))
+    if block_type == "detect.nest":
+        nest_rows = [
+            {"nest": k, "bbox": ", ".join(str(int(x)) for x in v)}
+            for k, v in sorted((stats.get("nest_bboxes") or {}).items())
+        ]
+        if stats.get("nest_preview_path"):
+            try:
+                from config.storage import get_s3_client
+                nest_preview_url = get_s3_client().generate_presigned_url(
+                    "processed", stats["nest_preview_path"])
+            except Exception:
+                logger.warning("could not presign nest preview %s",
+                               stats.get("nest_preview_path"))
 
     return {
         "fields": fields[:24],
@@ -460,7 +463,7 @@ def _run_steps(run):
             "state": run.step_state(sid),
             "output": out,
             "cached": bool(out.get("_cached")),
-            "display": _step_display(out),
+            "display": _step_display(out, step.get("block_type", "")),
         })
     return enriched
 
