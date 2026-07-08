@@ -322,13 +322,26 @@
     return null;
   }
   function hitBox(pt) {
-    // topmost visible box containing pt (later in array = drawn on top)
-    for (var i = boxes.length - 1; i >= 0; i--) {
+    // Pick the box under the cursor so small boxes inside a big one are reachable:
+    //  - if the cursor is near a box's BOUNDARY, prefer those (lets you grab a big
+    //    box by its edge even when small boxes cover its interior);
+    //  - otherwise prefer the SMALLEST-area box containing the point (so clicking
+    //    inside a big box selects the small box drawn within it).
+    var tol = handleTol() * 1.5;
+    var containing = [], onBoundary = [];
+    for (var i = 0; i < boxes.length; i++) {
       var b = boxes[i];
       if (!_passes(b)) continue;
-      if (pt.x >= b.x && pt.x <= b.x + b.w && pt.y >= b.y && pt.y <= b.y + b.h) return i;
+      if (pt.x < b.x || pt.x > b.x + b.w || pt.y < b.y || pt.y > b.y + b.h) continue;
+      containing.push(i);
+      var nearEdge = Math.abs(pt.x - b.x) <= tol || Math.abs(pt.x - (b.x + b.w)) <= tol
+                  || Math.abs(pt.y - b.y) <= tol || Math.abs(pt.y - (b.y + b.h)) <= tol;
+      if (nearEdge) onBoundary.push(i);
     }
-    return -1;
+    var pool = onBoundary.length ? onBoundary : containing;
+    if (!pool.length) return -1;
+    pool.sort(function(a, bb) { return (boxes[a].w * boxes[a].h) - (boxes[bb].w * boxes[bb].h); });
+    return pool[0];
   }
   function drawSelection(b) {
     var hs = boxHandles(b), s = handleSize();
@@ -363,7 +376,11 @@
   function visibleBoxes() { return boxes.filter(_passes); }
 
   // Build one slider per class that has confidence-bearing (detected) boxes.
+  // Skip while a slider is actively being dragged, so we never replace the DOM
+  // node under the user's cursor mid-drag (that made the sliders un-draggable).
+  let threshActive = false;
   function renderClassThresholds() {
+    if (threshActive) return;
     var host = document.getElementById("class-thresholds");
     if (!host) return;
     var byClass = {};  // class_id -> {total, shown}
@@ -406,6 +423,14 @@
     });
     var readout = el.parentElement.querySelector(".cls-readout");
     if (readout) readout.textContent = (parseFloat(el.value) || 0).toFixed(2) + " · " + shown + "/" + total;
+  });
+  // Track active dragging of a threshold slider so renderClassThresholds() won't
+  // rebuild (and drop) it while in use; rebuild once on release for fresh counts.
+  document.getElementById("class-thresholds").addEventListener("pointerdown", function(e) {
+    if (e.target.classList.contains("cls-thresh")) threshActive = true;
+  });
+  window.addEventListener("pointerup", function() {
+    if (threshActive) { threshActive = false; renderClassThresholds(); }
   });
 
   // Draw boxes on transparent canvas (frame image shows through)
