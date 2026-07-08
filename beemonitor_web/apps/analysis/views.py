@@ -212,6 +212,10 @@ def _spawn_gpu_job(job_pk: int) -> None:
         if job.config.get("ml_threshold") is not None:
             payload["ml_threshold"] = float(job.config["ml_threshold"])
         payload["run_species"] = bool(job.config.get("run_species", False))
+        if payload["run_species"]:
+            taxa = _species_candidate_taxa(video)
+            if taxa:
+                payload["candidate_taxa"] = taxa
         # Recording start metadata → event timestamps; no filename convention needed.
         if video.recorded_at:
             payload["recorded_at"] = video.recorded_at.isoformat()
@@ -286,6 +290,10 @@ def _spawn_gpu_batch(jobs_data: list, detection_mode: str, confidence: float,
                 if vcfg.get("ml_threshold") is not None:
                     payload["ml_threshold"] = float(vcfg["ml_threshold"])
                 payload["run_species"] = bool(vcfg.get("run_species", False))
+                if payload["run_species"]:
+                    taxa = _species_candidate_taxa(video)
+                    if taxa:
+                        payload["candidate_taxa"] = taxa
                 # Recording start metadata → event timestamps; no filename convention needed.
                 if video.recorded_at:
                     payload["recorded_at"] = video.recorded_at.isoformat()
@@ -315,6 +323,31 @@ def _spawn_gpu_batch(jobs_data: list, detection_mode: str, confidence: float,
         )
     finally:
         connection.close()
+
+
+def _species_candidate_taxa(video) -> list:
+    """Location-prior candidate species for BioCLIP: locally-observed insects
+    near the video's device, filtered by month. Unconstrained BioCLIP on small
+    bee crops returns nonsense (e.g. a pheasant at 1%); a candidate list turns
+    it into a plausible-local-taxa classifier. Empty when there's no location.
+    """
+    try:
+        device = getattr(video, "device", None)
+        lat = getattr(device, "lat", None) if device else None
+        lon = getattr(device, "lon", None) if device else None
+        if lat is None or lon is None:
+            return []
+        month = None
+        if getattr(video, "recorded_at", None):
+            month = video.recorded_at.month
+        elif getattr(video, "month", None):
+            month = video.month
+        from apps.monitor.priors import region_taxa
+        return region_taxa(lat, lon, month) or []
+    except Exception as e:
+        logger.warning("candidate taxa lookup failed for video %s: %s",
+                       getattr(video, "pk", "?"), e)
+        return []
 
 
 def _put_inference_payload(job_id: str, payload: dict) -> str:

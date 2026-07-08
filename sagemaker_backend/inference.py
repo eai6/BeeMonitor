@@ -108,6 +108,9 @@ def predict_fn(payload, pipeline):
             run_tracking=bool(payload.get("run_tracking", True)),
             # True = classify each track's crops with BioCLIP (per-track species).
             run_species=bool(payload.get("run_species", False)),
+            # Location-prior candidate species (constrains BioCLIP to plausible
+            # local taxa; unconstrained is near-useless on small bee crops).
+            candidate_taxa=payload.get("candidate_taxa") or None,
             # ISO recording start (video.recorded_at) — replaces the filename
             # timestamp convention for event timestamps.
             recorded_at=payload.get("recorded_at", "") or "",

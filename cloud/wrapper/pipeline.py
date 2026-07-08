@@ -87,6 +87,7 @@ class CloudPipeline:
         nest_layout=None,
         run_tracking: bool = True,
         run_species: bool = False,
+        candidate_taxa=None,
         recorded_at: str = "",
     ) -> PipelineResult:
         """Run the full BeeMonitor pipeline on a video stored in S3.
@@ -244,7 +245,11 @@ class CloudPipeline:
                 region = os.environ.get("AWS_REGION", "us-east-1")
                 min_conf = float(os.environ.get("BIOCLIP_MIN_CONFIDENCE", "0") or 0)
                 species_result = species_mod.classify_tracks(
-                    str(output_dir), bioclip_endpoint, region, min_confidence=min_conf)
+                    str(output_dir), bioclip_endpoint, region,
+                    candidate_taxa=candidate_taxa, min_confidence=min_conf)
+                logger.info("[%s] species: prior=%d taxa, classified=%d",
+                            job_id, len(candidate_taxa or []),
+                            species_result["tracks_classified"])
                 if species_result["per_track"]:
                     species_mod.write_track_species_csv(
                         species_result["per_track"], str(output_dir / "track_species.csv"))
