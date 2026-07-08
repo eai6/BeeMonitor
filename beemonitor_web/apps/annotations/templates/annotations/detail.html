@@ -77,6 +77,17 @@
                  min="0.01" max="0.9" step="0.05"
                  class="w-16 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
         </div>
+        <div title="Which labels to detect this run. Uncheck a class to leave it alone: a partial selection MERGES — it adds/refreshes only the checked classes and keeps your existing boxes of the others (e.g. reviewed bees).">
+          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Labels to detect</label>
+          <div class="flex flex-wrap items-center gap-x-2 gap-y-1 border border-gray-300 rounded px-2 py-1.5">
+            {% for cls in project.classes %}
+            <label class="inline-flex items-center gap-1 text-sm text-gray-700">
+              <input type="checkbox" name="target_labels" value="{{ cls }}" checked
+                     class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">{{ cls }}
+            </label>
+            {% endfor %}
+          </div>
+        </div>
         <div title="YOLO = the current fast detector. SAM 3 = domain-robust foundation model — use it when the current model misses bees on new footage.">
           <label class="block text-[10px] uppercase tracking-wide text-gray-400">Labeler</label>
           <select name="labeler"
@@ -113,8 +124,10 @@
       </form>
       <p class="text-[11px] text-gray-400 mt-2">New label? Add it in
         <a href="{% url 'annotations:settings' project.pk %}" class="text-amber-600 hover:underline">project Settings</a>,
-        then pre-annotate with the <strong>SAM 3</strong> labeler — it text-prompts each class, so it can find a
-        label YOLO was never trained on.</p>
+        then pre-annotate with the <strong>SAM 3</strong> labeler (it text-prompts each class, so it finds labels
+        YOLO was never trained on). <strong>To add a label without losing your bees:</strong> check only the new
+        class under “Labels to detect” — a partial selection merges the new boxes in and keeps your existing boxes
+        of the unchecked classes.</p>
     </div>
     <div class="flex gap-2">
       <form method="post" action="{% url 'annotations:llm_review_all' project.pk %}"

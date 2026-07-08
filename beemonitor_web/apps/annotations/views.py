@@ -634,7 +634,9 @@ def _spawn_preannotation(task_pk: int) -> None:
             "job_id": f"preannot-{task_pk}",
             "user_id": str(task.user_id),
             "video_blob_path": blob_path,
-            "classes": task.project.classes or ["bee", "wasp", "nest"],
+            # Detect only the requested labels (SAM 3 prompts / YOLO filter);
+            # finalize re-maps class ids by name against the project's classes.
+            "classes": p.get("target_labels") or task.project.classes,
             "sample_interval": p.get("sample_interval", 10),
             "max_frames": p.get("max_frames", 300),
             "confidence_threshold": p.get("confidence", 0.15),
@@ -729,29 +731,79 @@ def finalize_preannotation_task(task, s3) -> bool:
     frames = result.get("frames") or []
     width = result.get("video_width", 1280)
     height = result.get("video_height", 720)
-    human_frames = set(
-        Annotation.objects.filter(
-            project_id=task.project_id, video_id=task.video_id,
-            review_source=Annotation.ReviewSource.HUMAN,
-        ).values_list("frame_number", flat=True)
-    )
+
+    proj_classes = task.project.classes or []
+    class_id_by_name = {c: i for i, c in enumerate(proj_classes)}
+    target_labels = (task.params or {}).get("target_labels") or proj_classes
+    # Merge mode: this run targets only SOME classes (e.g. nest/hotel) — keep the
+    # frame's existing boxes of OTHER classes (e.g. reviewed bee) and swap in only
+    # the target-class detections. Full-class runs keep the old replace semantics.
+    target_set = set(target_labels)
+    merge_mode = 0 < len(target_set) < len(proj_classes)
+
+    def _remap(box):
+        """Ensure box class_id matches the project's ordering (the detector may
+        have used a subset ordering); drop unknown classes."""
+        name = box.get("class")
+        if name not in class_id_by_name:
+            return None
+        return {**box, "class_id": class_id_by_name[name]}
+
+    existing_by_frame = {}
+    if merge_mode:
+        existing_by_frame = {
+            a.frame_number: a for a in Annotation.objects.filter(
+                project_id=task.project_id, video_id=task.video_id)
+        }
+    else:
+        human_frames = set(
+            Annotation.objects.filter(
+                project_id=task.project_id, video_id=task.video_id,
+                review_source=Annotation.ReviewSource.HUMAN,
+            ).values_list("frame_number", flat=True)
+        )
+
     created = 0
     for fd in frames:
-        if fd["frame_number"] in human_frames:
-            continue
-        Annotation.objects.update_or_create(
-            project_id=task.project_id, video_id=task.video_id,
-            frame_number=fd["frame_number"],
-            defaults={
-                "boxes": fd["boxes"],
-                "image_width": width, "image_height": height,
-                "frame_image_path": fd.get("frame_image_path", ""),
-                "reviewed": False,
-                "review_source": Annotation.ReviewSource.NONE,
-                "reviewed_at": None,
-            },
-        )
-        created += 1
+        fn = fd["frame_number"]
+        detected = [b for b in (_remap(b) for b in fd.get("boxes", [])) if b]
+
+        if merge_mode:
+            existing = existing_by_frame.get(fn)
+            kept = [b for b in (existing.boxes if existing else [])
+                    if b.get("class") not in target_set]  # preserve other classes
+            new = [b for b in detected if b.get("class") in target_set]
+            boxes = kept + new
+            if existing:
+                # Preserve the frame's review status — we only ADD target boxes,
+                # the user's existing (incl. human-reviewed) boxes are untouched.
+                fields = {"boxes": boxes}
+                if not existing.frame_image_path and fd.get("frame_image_path"):
+                    fields["frame_image_path"] = fd["frame_image_path"]
+                Annotation.objects.filter(pk=existing.pk).update(**fields)
+            else:
+                Annotation.objects.create(
+                    project_id=task.project_id, video_id=task.video_id, frame_number=fn,
+                    boxes=boxes, image_width=width, image_height=height,
+                    frame_image_path=fd.get("frame_image_path", ""),
+                    reviewed=False, review_source=Annotation.ReviewSource.NONE,
+                )
+            created += 1
+        else:
+            if fn in human_frames:
+                continue
+            Annotation.objects.update_or_create(
+                project_id=task.project_id, video_id=task.video_id, frame_number=fn,
+                defaults={
+                    "boxes": detected,
+                    "image_width": width, "image_height": height,
+                    "frame_image_path": fd.get("frame_image_path", ""),
+                    "reviewed": False,
+                    "review_source": Annotation.ReviewSource.NONE,
+                    "reviewed_at": None,
+                },
+            )
+            created += 1
 
     PreAnnotationTask.objects.filter(pk=task.pk).update(
         status=PreAnnotationTask.Status.COMPLETED,
@@ -820,6 +872,12 @@ def _create_preannotation_task(request, project, video):
     if labeler != "sam3":
         selection = "uniform"
     nms_iou, max_detections = _sam3_opts(request)
+    # Which labels to (re)detect. A strict subset means "add/refresh only these
+    # classes" — finalize MERGES them into existing annotations, so other-class
+    # boxes (e.g. your reviewed bee boxes) are preserved. Empty/all = every class.
+    proj_classes = project.classes or []
+    posted = set(request.POST.getlist("target_labels"))
+    target_labels = [c for c in proj_classes if c in posted] if posted else list(proj_classes)
     return PreAnnotationTask.objects.create(
         user=request.user, project=project, video=video,
         labeler=labeler, custom_model_key=custom_model_key,
@@ -827,6 +885,7 @@ def _create_preannotation_task(request, project, video):
             "sample_interval": sample_interval, "max_frames": max_frames,
             "confidence": confidence, "selection": selection,
             "nms_iou": nms_iou, "max_detections": max_detections,
+            "target_labels": target_labels,
         },
     )
 
