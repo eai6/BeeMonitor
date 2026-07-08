@@ -249,6 +249,9 @@
       <a href="{% url 'annotations:editor' project.pk %}?video={{ item.video.pk }}&frame=0"
          class="flex-1 text-gray-800 hover:text-amber-700 hover:underline truncate">{{ item.video.title }}</a>
       <span class="text-xs text-gray-400 hidden sm:inline">{% if item.video.device %}{{ item.video.device.name }}{% endif %}{% if item.video.site_name %} · {{ item.video.site_name }}{% endif %}</span>
+      <span class="text-xs text-gray-500 hidden md:inline whitespace-nowrap" title="When the video was recorded">
+        {% if item.video.recorded_at %}📅 {{ item.video.recorded_at|date:"Y-m-d H:i" }}{% else %}<span class="text-gray-300">no date</span>{% endif %}
+      </span>
       <span class="text-xs {% if item.annotation_count %}text-green-600{% else %}text-gray-400{% endif %}">{{ item.annotation_count }} frame{{ item.annotation_count|pluralize }}</span>
       <form method="post" action="{% url 'annotations:remove_video' project.pk %}"
             onsubmit="return confirm('Remove this video and its annotations from the project?');">
