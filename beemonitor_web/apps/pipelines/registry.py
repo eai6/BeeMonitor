@@ -206,16 +206,6 @@ BLOCK_REGISTRY = {
                 "choices": None,
             },
             {
-                # Event-classifier cutoff for Entry/Exit events. 0.6 = best F1;
-                # lower (0.3-0.4) keeps more real events at some noise cost.
-                "name": "ml_threshold",
-                "label": "Event Confidence",
-                "field_type": "number",
-                "required": False,
-                "default": 0.6,
-                "choices": None,
-            },
-            {
                 # YOLO = fast, bee/wasp/nest classes. SAM 3 = open-vocabulary,
                 # text-prompt any organism; much slower (per-frame transformer).
                 "name": "detector",
@@ -231,20 +221,24 @@ BLOCK_REGISTRY = {
             {
                 # Grounding prompt used when detector == sam3 (e.g. "bee",
                 # "hoverfly", "beetle"). Becomes the track's taxon label.
+                # Only shown when Detector = SAM 3.
                 "name": "text_prompt",
                 "label": "SAM 3 prompt",
                 "field_type": "text",
                 "required": False,
                 "default": "bee",
                 "choices": None,
+                "show_if": {"field": "detector", "value": "sam3"},
             },
             {
+                # Only shown when Detector = YOLO.
                 "name": "bee_model",
                 "label": "Model (YOLO)",
                 "field_type": "bee_model",  # UI renders the custom-model picker (populated at render)
                 "required": False,
                 "default": "",
                 "choices": None,
+                "show_if": {"field": "detector", "value": "yolo"},
             },
             {
                 # Rendering the annotated video roughly doubles runtime and can
@@ -265,13 +259,27 @@ BLOCK_REGISTRY = {
     # ── Analyze ───────────────────────────────────────────────────────────────
     "analyze.foraging_trips": {
         "display_name": "Foraging Trips",
-        "description": "Derive foraging-trip events from tracks + the nest/hotel layout.",
+        "description": "Derive foraging-trip events (Exit→Entry) from tracks + the "
+                       "nest/hotel layout. Event Confidence tunes the Entry/Exit "
+                       "classifier applied during tracking.",
         "category": "analyze",
         "icon": "🌻",
         "input_type": "tracks",
         "output_type": "events",
         "backend": "local",
-        "config_fields": [],
+        "config_fields": [
+            {
+                # Event-classifier cutoff for Entry/Exit events. 0.6 = best F1;
+                # lower (0.3-0.4) keeps more real events at some noise cost. Read
+                # by the upstream Track step (events are computed during tracking).
+                "name": "event_confidence",
+                "label": "Event Confidence",
+                "field_type": "number",
+                "required": False,
+                "default": 0.6,
+                "choices": None,
+            },
+        ],
     },
     "analyze.visitation": {
         "display_name": "Visitation Count",

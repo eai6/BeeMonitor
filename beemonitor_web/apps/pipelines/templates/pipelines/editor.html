@@ -11,7 +11,8 @@
   .pl-node { width: 100%; font-size: 12px; box-sizing: border-box; }
   .pl-head { font-weight: 600; color: #111827; }
   .pl-sub { font-size: 10px; margin: 3px 0 5px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-  .pl-body { display: flex; flex-direction: column; gap: 4px; }
+  .pl-body { display: flex; flex-direction: column; gap: 5px; }
+  .pl-field { display: flex; flex-direction: column; gap: 2px; }
   .pl-lab { font-size: 10px; color: #6b7280; }
   .pl-inp { box-sizing: border-box; width: 100%; max-width: 100%; border: 1px solid #d1d5db;
     border-radius: 4px; padding: 3px 6px; font-size: 11px; background: #fff; }
@@ -140,7 +141,13 @@ function typeChip(t){
   return `<span class="pl-type t-${esc(t)}">${esc(t)}</span>`;
 }
 function nodeHtml(b, config){
-  const fields=(b.config_fields||[]).map(f=>`<label class="pl-lab">${esc(f.label)}${f.required?' *':''}</label>${ctrl(f, config?config[f.name]:undefined)}`).join('');
+  const fields=(b.config_fields||[]).map(function(f){
+    // show_if: {field, value} — field only visible when another field equals value.
+    const sif = f.show_if ? ` data-showif-field="${esc(f.show_if.field)}" data-showif-value="${esc(f.show_if.value)}"` : '';
+    return `<div class="pl-field" data-field="${esc(f.name)}"${sif}>`
+         + `<label class="pl-lab">${esc(f.label)}${f.required?' *':''}</label>`
+         + ctrl(f, config?config[f.name]:undefined) + `</div>`;
+  }).join('');
   const inC = typeChip(b.input_type), outC = typeChip(b.output_type);
   const flow = (inC ? inC + ' <span class="pl-arrow">→</span> ' : '')
              + (outC || '<span class="pl-sink">▪ output</span>');
@@ -224,6 +231,16 @@ function plShowErrors(errors){
   box.classList.remove('hidden');
 }
 
+// Conditional field visibility (e.g. show "SAM 3 prompt" only when Detector=SAM 3).
+function plApplyShowIf(scope){
+  (scope || document).querySelectorAll('.pl-field[data-showif-field]').forEach(function(fieldEl){
+    var node = fieldEl.closest('.drawflow-node') || document;
+    var ctrlInput = node.querySelector('.pl-inp[data-cfg="' + fieldEl.getAttribute('data-showif-field') + '"]');
+    var val = ctrlInput ? ctrlInput.value : '';
+    fieldEl.style.display = (String(val) === fieldEl.getAttribute('data-showif-value')) ? '' : 'none';
+  });
+}
+
 window.addEventListener('DOMContentLoaded', () => {
   editor = new Drawflow(document.getElementById('drawflow'));
   editor.reroute = true;
@@ -244,13 +261,21 @@ window.addEventListener('DOMContentLoaded', () => {
   }));
 
   plShowErrors(JSON.parse("{{ errors_json|escapejs }}") || []);
+  plApplyShowIf(document);  // initial visibility from saved config
 
   // Mark dirty on any structural change or config edit. Drawflow fires these
   // events; config inputs are caught by delegation on the canvas.
   ['nodeCreated','nodeRemoved','nodeMoved','connectionCreated','connectionRemoved']
     .forEach(ev => { try { editor.on(ev, plMarkDirty); } catch(e){} });
+  try { editor.on('nodeCreated', function(){ plApplyShowIf(document); }); } catch(e){}
   const canvas = document.getElementById('drawflow');
-  if(canvas){ canvas.addEventListener('input', (e)=>{ if(e.target.classList.contains('pl-inp')) plMarkDirty(); }); }
+  if(canvas){
+    canvas.addEventListener('input', (e)=>{ if(e.target.classList.contains('pl-inp')) plMarkDirty(); });
+    // Re-evaluate conditional fields when a controlling field changes.
+    canvas.addEventListener('change', (e)=>{
+      if(e.target.classList.contains('pl-inp')) plApplyShowIf(e.target.closest('.drawflow-node') || document);
+    });
+  }
 });
 </script>
 {% endblock %}

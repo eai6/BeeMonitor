@@ -295,6 +295,19 @@ def _marker_method(steps):
     return "auto"
 
 
+def _pipeline_event_confidence(steps):
+    """Entry/Exit event-classifier cutoff, read from a downstream Foraging Trips
+    node (events are computed during tracking, so the Track step needs it).
+    Defaults to 0.6 when no foraging node is present."""
+    for s in steps:
+        if s.get("block_type") == "analyze.foraging_trips":
+            try:
+                return float((s.get("config") or {}).get("event_confidence", 0.6) or 0.6)
+            except (TypeError, ValueError):
+                return 0.6
+    return 0.6
+
+
 def build_detect_and_track_config(step, run, context, index):
     """Assemble the ``detect_and_track`` Job config for a detect/track GPU step.
 
@@ -310,8 +323,9 @@ def build_detect_and_track_config(step, run, context, index):
     config = {
         "detection_mode": "yolo",
         "confidence_threshold": float(cfg.get("confidence", 0.4) or 0.4),
-        # Entry/Exit event-classifier cutoff (EventProcessor ml_threshold).
-        "ml_threshold": float(cfg.get("ml_threshold", 0.6) or 0.6),
+        # Entry/Exit event-classifier cutoff — set on the downstream Foraging
+        # Trips node (events are produced during tracking).
+        "ml_threshold": _pipeline_event_confidence(run.steps),
         "run_tracking": step.get("block_type") in ("track.bee", "detect.bee"),
         # Detector: SAM 3 text-prompt tracking, else YOLO.
         "detector_kind": detector_kind,
