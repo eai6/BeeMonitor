@@ -228,15 +228,25 @@ def _exec_identify_taxon(step, run, context, inputs, index):
         }
         for o in observations
     ]
+    classified = stats.get("species_tracks_classified", 0)
+    unique_tracks = result.get("unique_tracks", 0)
     out = {
         "artifact": "observations",
         "rows": rows,
         "species_count": len(rows),
-        "tracks_classified": stats.get("species_tracks_classified", 0),
+        "tracks_classified": classified,
     }
     if not rows:
-        out["note"] = ("No species identified — the BioCLIP endpoint may be "
-                       "unset, or no track crops were classifiable.")
+        if not unique_tracks:
+            out["note"] = ("No species — the tracking step found no bee tracks in "
+                           "this video, so there were no crops to identify.")
+        elif "species_tracks_classified" not in stats:
+            out["note"] = ("No species — this run didn't request identification "
+                           "(re-run so the tracking step classifies crops).")
+        else:
+            out["note"] = (f"No species identified from {unique_tracks} track(s). "
+                           "Set the device's GPS location so BioCLIP can constrain "
+                           "to local taxa — unconstrained crops rarely classify.")
     return out
 
 
