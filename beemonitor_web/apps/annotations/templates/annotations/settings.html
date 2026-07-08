@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Project Settings - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="max-w-lg mx-auto">
+  <h1 class="text-2xl font-bold text-gray-900 mb-1">Project Settings</h1>
+  <p class="text-sm text-gray-500 mb-6">{{ object.name }}</p>
+  <div class="bg-white shadow rounded-lg p-6">
+    <form method="post">
+      {% csrf_token %}
+      {% if form.errors %}
+      <div class="bg-red-50 text-red-700 rounded p-3 mb-4 text-sm">
+        <ul class="list-disc list-inside">
+          {% for field in form %}{% for error in field.errors %}<li>{{ field.label }}: {{ error }}</li>{% endfor %}{% endfor %}
+          {% for error in form.non_field_errors %}<li>{{ error }}</li>{% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+      <div class="mb-4">
+        <label for="id_name" class="block text-sm font-medium text-gray-700 mb-1">Project Name</label>
+        {{ form.name }}
+      </div>
+      <div class="mb-4">
+        <label for="id_description" class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+        {{ form.description }}
+      </div>
+      <div class="mb-6">
+        <label for="id_classes_text" class="block text-sm font-medium text-gray-700 mb-1">Classes</label>
+        {{ form.classes_text }}
+        <p class="mt-1 text-xs text-gray-500">{{ form.classes_text.help_text }} Add a new label here, then pre-annotate the videos with the <strong>SAM 3</strong> labeler to detect it (YOLO only knows its trained classes).</p>
+      </div>
+      <div class="flex space-x-3">
+        <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Save</button>
+        <a href="{% url 'annotations:detail' object.pk %}" class="px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Cancel</a>
+      </div>
+    </form>
+  </div>
+
+  <div class="bg-white shadow rounded-lg p-6 mt-6 border border-red-100">
+    <h2 class="text-sm font-medium text-red-700 mb-2">Danger zone</h2>
+    <p class="text-xs text-gray-500 mb-3">Deleting a project removes it and all its annotations. This cannot be undone.</p>
+    <form method="post" action="{% url 'annotations:delete' object.pk %}"
+          onsubmit="return confirm('Delete project “{{ object.name }}” and all {{ object.annotations.count }} annotation(s)? This cannot be undone.');">
+      {% csrf_token %}
+      <button type="submit" class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded text-sm font-medium">Delete project</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

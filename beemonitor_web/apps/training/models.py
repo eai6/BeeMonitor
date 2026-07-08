@@ -52,6 +52,10 @@ class TrainingJob(models.Model):
     epochs = models.IntegerField(default=50)
     image_size = models.IntegerField(default=640)
     batch_size = models.IntegerField(default=16)
+    class_subset = models.JSONField(
+        default=list, blank=True,
+        help_text="Subset of the project's classes to train on. Empty = all classes.",
+    )
     val_percent = models.IntegerField(
         default=20,
         help_text="Percent of frames held out for validation (the metrics set).",

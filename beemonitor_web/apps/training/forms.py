@@ -113,6 +113,20 @@ class TrainingCreateForm(forms.ModelForm):
 
     def clean(self):
         cleaned = super().clean()
+
+        # Class subset — checkboxes named "class_subset" (dynamic per project,
+        # so validated here rather than as a ChoiceField). Empty stored subset
+        # means "all classes"; unchecking everything is an error.
+        project = cleaned.get("project")
+        if project is not None:
+            proj_classes = project.classes or []
+            selected = set(self.data.getlist("class_subset"))
+            subset = [c for c in proj_classes if c in selected]  # keep project order
+            if not subset:
+                raise forms.ValidationError("Select at least one class to train on.")
+            # All classes selected → store empty (= train on everything).
+            self.instance.class_subset = [] if len(subset) == len(proj_classes) else subset
+
         choice = cleaned.get("base_model") or ""
         valid_archs = {v for v, _ in TrainingJob.BaseModel.choices}
         if choice == "default":

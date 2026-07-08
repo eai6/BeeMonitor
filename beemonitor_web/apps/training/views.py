@@ -45,10 +45,29 @@ def _boto3(service: str):
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
-def _build_training_payload(job: TrainingJob) -> tuple[str, list[dict]]:
-    """Gather annotations from the project and build Modal payload.
+def _yolo_label_subset(ann, name_to_new_id: dict) -> str:
+    """YOLO label lines for only the boxes whose class is in the subset,
+    renumbered to the compact 0..k ids in ``name_to_new_id`` (keyed by class
+    name). Boxes of other classes are dropped; an all-dropped frame yields ""
+    (a valid negative)."""
+    lines = []
+    for box in (ann.boxes or []):
+        name = box.get("class")
+        if name not in name_to_new_id:
+            continue
+        cx = (box["x"] + box["w"] / 2) / ann.image_width
+        cy = (box["y"] + box["h"] / 2) / ann.image_height
+        w = box["w"] / ann.image_width
+        h = box["h"] / ann.image_height
+        lines.append(f"{name_to_new_id[name]} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+    return "\n".join(lines)
 
-    Returns (dataset_yaml_content, video_annotations).
+
+def _build_training_payload(job: TrainingJob) -> tuple[list, list[dict]]:
+    """Gather annotations from the project and build the training payload.
+
+    Returns (effective_classes, video_annotations). effective_classes is the
+    project's classes, or the job's class subset (with labels remapped) when set.
     """
     from apps.annotations.models import Annotation
 
@@ -77,8 +96,18 @@ def _build_training_payload(job: TrainingJob) -> tuple[str, list[dict]]:
         raise ValueError(
             f"No annotations match the '{job.get_frame_filter_display()}' filter in this project")
 
-    # Build dataset YAML
-    classes = project.classes or ["bee", "wasp", "nest"]
+    # Build dataset YAML. A class subset trains a model on only those classes:
+    # drop out-of-subset boxes and renumber the kept classes to a compact 0..k.
+    all_classes = project.classes or ["bee", "wasp", "nest"]
+    subset = [c for c in all_classes if c in (job.class_subset or [])]
+    if subset:
+        classes = subset
+        name_to_new_id = {c: i for i, c in enumerate(subset)}
+        logger.info("[train:%s] Class subset (%d of %d): %s",
+                    job.pk, len(subset), len(all_classes), subset)
+    else:
+        classes = all_classes
+        name_to_new_id = None
     logger.info("[train:%s] Classes (%d): %s", job.pk, len(classes), classes)
     class_lines = "\n".join(f"  {i}: {c}" for i, c in enumerate(classes))
     dataset_yaml = (
@@ -105,7 +134,7 @@ def _build_training_payload(job: TrainingJob) -> tuple[str, list[dict]]:
                 job.pk, vid_pk, ann.video.title, ann.video.storage_key,
             )
         base_name = f"{ann.video.title}_f{ann.frame_number:06d}"
-        yolo_label = ann.to_yolo_format()
+        yolo_label = _yolo_label_subset(ann, name_to_new_id) if name_to_new_id is not None else ann.to_yolo_format()
         box_count = len(ann.boxes) if ann.boxes else 0
         video_groups[vid_pk]["frames"].append({
             "frame_number": ann.frame_number,
@@ -125,7 +154,9 @@ def _build_training_payload(job: TrainingJob) -> tuple[str, list[dict]]:
         int(total_frames * 0.8), total_frames - int(total_frames * 0.8),
     )
 
-    return dataset_yaml, video_annotations
+    # Return the EFFECTIVE classes (subset-aware) so the manifest matches the
+    # remapped labels; dataset_yaml is built by the container from these.
+    return classes, video_annotations
 
 
 def _spawn_training_job(job_pk: int) -> None:
@@ -153,8 +184,7 @@ def _spawn_training_job(job_pk: int) -> None:
         return
 
     try:
-        _dataset_yaml, video_annotations = _build_training_payload(job)
-        classes = job.project.classes or ["bee", "wasp", "nest"]
+        classes, video_annotations = _build_training_payload(job)
         model_key = f"custom/{job.user_id}/{job.pk}/best.pt"
         result_key = f"training/{job.pk}/result.json"
         manifest = {
@@ -246,6 +276,18 @@ class TrainingCreateView(LoginRequiredMixin, CreateView):
         kwargs = super().get_form_kwargs()
         kwargs["user"] = self.request.user
         return kwargs
+
+    def get_context_data(self, **kwargs):
+        import json as _json
+        from apps.annotations.models import AnnotationProject
+        ctx = super().get_context_data(**kwargs)
+        # {project_pk: [class names]} so the Classes checkboxes can react to the
+        # chosen project without a round-trip.
+        ctx["project_classes_json"] = _json.dumps({
+            str(p.pk): (p.classes or [])
+            for p in AnnotationProject.objects.filter(user=self.request.user)
+        })
+        return ctx
 
     def form_valid(self, form):
         form.instance.user = self.request.user
@@ -418,7 +460,9 @@ def poll_training_jobs(user=None) -> dict:
                     "base_model": (f"fine-tuned: {job.init_from_label}"[:50]
                                    if job.init_weights_key else job.base_model),
                     "storage_key": storage_key,
-                    "classes": job.project.classes or [],
+                    # Subset jobs produce a model with only the subset's classes.
+                    "classes": [c for c in (job.project.classes or []) if c in job.class_subset]
+                               or (job.project.classes or []),
                     "metrics": metrics,
                     "status": CustomModel.Status.READY,
                     "is_active": True,

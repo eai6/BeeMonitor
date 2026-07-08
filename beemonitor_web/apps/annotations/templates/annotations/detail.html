@@ -15,7 +15,10 @@
       {% endfor %}
     </div>
   </div>
-  <a href="{% url 'annotations:list' %}" class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Back</a>
+  <div class="flex gap-2">
+    <a href="{% url 'annotations:settings' project.pk %}" class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Settings</a>
+    <a href="{% url 'annotations:list' %}" class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Back</a>
+  </div>
 </div>
 
 <!-- Stats + Actions -->
@@ -108,6 +111,10 @@
           Pre-annotate All
         </button>
       </form>
+      <p class="text-[11px] text-gray-400 mt-2">New label? Add it in
+        <a href="{% url 'annotations:settings' project.pk %}" class="text-amber-600 hover:underline">project Settings</a>,
+        then pre-annotate with the <strong>SAM 3</strong> labeler — it text-prompts each class, so it can find a
+        label YOLO was never trained on.</p>
     </div>
     <div class="flex gap-2">
       <form method="post" action="{% url 'annotations:llm_review_all' project.pk %}"

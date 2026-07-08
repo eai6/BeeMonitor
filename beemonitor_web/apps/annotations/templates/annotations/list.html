@@ -17,6 +17,7 @@
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Videos</th>
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Annotations</th>
         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
+        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-200">
@@ -29,6 +30,14 @@
         <td class="px-6 py-4 text-sm text-gray-500">{{ project.videos.count }}</td>
         <td class="px-6 py-4 text-sm text-gray-500">{{ project.annotations.count }}</td>
         <td class="px-6 py-4 text-sm text-gray-500">{{ project.created_at|timesince }} ago</td>
+        <td class="px-6 py-4 text-sm text-right whitespace-nowrap">
+          <a href="{% url 'annotations:settings' project.pk %}" class="text-gray-500 hover:text-amber-600">Edit</a>
+          <form method="post" action="{% url 'annotations:delete' project.pk %}" class="inline ml-3"
+                onsubmit="return confirm('Delete project “{{ project.name }}” and all {{ project.annotations.count }} annotation(s)? This cannot be undone.');">
+            {% csrf_token %}
+            <button type="submit" class="text-red-400 hover:text-red-600">Delete</button>
+          </form>
+        </td>
       </tr>
       {% endfor %}
     </tbody>

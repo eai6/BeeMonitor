@@ -8,7 +8,7 @@ from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.urls import reverse_lazy
 from django.views import View
-from django.views.generic import CreateView, DetailView, ListView, TemplateView
+from django.views.generic import CreateView, DetailView, ListView, TemplateView, UpdateView
 
 import logging
 
@@ -96,6 +96,38 @@ class ProjectCreateView(LoginRequiredMixin, CreateView):
 
     def get_success_url(self):
         return reverse_lazy("annotations:detail", kwargs={"pk": self.object.pk})
+
+
+class ProjectUpdateView(LoginRequiredMixin, UpdateView):
+    """Edit a project's name, description, and classes. Reuses the create form."""
+    model = AnnotationProject
+    form_class = ProjectCreateForm
+    template_name = "annotations/settings.html"
+
+    def get_queryset(self):
+        return AnnotationProject.objects.filter(user=self.request.user)
+
+    def get_initial(self):
+        initial = super().get_initial()
+        initial["classes_text"] = ", ".join(self.object.classes or [])
+        return initial
+
+    def get_success_url(self):
+        return reverse_lazy("annotations:detail", kwargs={"pk": self.object.pk})
+
+
+class ProjectDeleteView(LoginRequiredMixin, View):
+    """Delete a project (cascades its annotations + pre-annotation tasks)."""
+
+    def post(self, request, pk):
+        from django.shortcuts import redirect
+        from django.contrib import messages
+
+        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        name = project.name
+        project.delete()
+        messages.info(request, f"Deleted project '{name}' and its annotations.")
+        return redirect("annotations:list")
 
 
 class ProjectDetailView(LoginRequiredMixin, DetailView):
