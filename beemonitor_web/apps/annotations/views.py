@@ -1411,13 +1411,27 @@ class PreAnnotateFrameView(LoginRequiredMixin, View):
         video = get_object_or_404(project.videos, pk=data.get("video_id"))
         frame_number = int(data.get("frame_number", 0))
 
+        # Which project classes to detect (default all), plus any free-text custom
+        # labels. A new custom label is added to the project's classes so its boxes
+        # persist and it's available everywhere (Active Class, training/export).
+        target = [c for c in (project.classes or []) if c in (data.get("target_labels") or [])]
+        if not target and not data.get("custom_labels"):
+            target = list(project.classes or [])
+        custom = [str(c).strip() for c in (data.get("custom_labels") or []) if str(c).strip()]
+        added = [c for c in custom if c not in (project.classes or [])]
+        if added:
+            project.classes = (project.classes or []) + added
+            project.save(update_fields=["classes"])
+        prompt_classes = target + custom
+
         task = PreAnnotationTask.objects.create(
             user=request.user, project=project, video=video, labeler="sam3",
             params={
                 "frame_numbers": [frame_number], "max_frames": 1,
                 "confidence": settings.PREANNOTATE_CONFIDENCE,
                 "selection": "uniform", "nms_iou": 0.5, "max_detections": 100,
-                "target_labels": project.classes, "suggest_only": True,
+                "target_labels": prompt_classes or list(project.classes or []),
+                "suggest_only": True,
             },
         )
         spawn_preannotation_async(task.pk)
@@ -1454,7 +1468,8 @@ class PreAnnotateFrameStatusView(LoginRequiredMixin, View):
                 PreAnnotationTask.objects.filter(pk=task.pk).update(
                     status=PreAnnotationTask.Status.COMPLETED, completed_at=timezone.now())
                 return JsonResponse({"status": "completed",
-                                     "boxes": self._frame_boxes(result, frame_number, project)})
+                                     "boxes": self._frame_boxes(result, frame_number, project),
+                                     "classes": project.classes or []})
             except ClientError as e:
                 if e.response.get("Error", {}).get("Code", "") not in ("NoSuchKey", "404", "NotFound"):
                     return JsonResponse({"status": "processing"})
