@@ -14,6 +14,16 @@
   .pl-body { display: flex; flex-direction: column; gap: 5px; }
   .pl-field { display: flex; flex-direction: column; gap: 2px; }
   .pl-lab { font-size: 10px; color: #6b7280; }
+  /* Input-port labels: sit just left of each input dot so it's clear what
+     connects into which port (e.g. video vs. rois). */
+  .drawflow .drawflow-node .inputs .input { position: relative; overflow: visible; }
+  .pl-port-label {
+    position: absolute; right: calc(100% + 5px); top: 50%; transform: translateY(-50%);
+    font-size: 9px; line-height: 1.4; white-space: nowrap; font-weight: 500;
+    padding: 1px 5px; border-radius: 5px; border: 1px solid currentColor;
+    background: #fff; pointer-events: none;
+  }
+  .pl-port-label .pl-opt { opacity: 0.6; font-weight: 400; }
   .pl-inp { box-sizing: border-box; width: 100%; max-width: 100%; border: 1px solid #d1d5db;
     border-radius: 4px; padding: 3px 6px; font-size: 11px; background: #fff; }
   /* Standardized artifact-type chips — same colours in palette + nodes. */
@@ -231,6 +241,26 @@ function plShowErrors(errors){
   box.classList.remove('hidden');
 }
 
+// Label each input dot with the port it accepts (e.g. video vs. rois) so it's
+// obvious what connects where. Idempotent — skips ports already labelled.
+function plLabelPorts(){
+  document.querySelectorAll('#drawflow .drawflow-node').forEach(function(nodeEl){
+    var nd = editor.getNodeFromId(nodeEl.id.replace('node-',''));
+    if(!nd) return;
+    var ports = (BLOCKS[nd.name] && BLOCKS[nd.name].input_ports) || [];
+    ports.forEach(function(p, i){
+      var inp = nodeEl.querySelector('.inputs .input.input_' + (i + 1));
+      if(!inp || inp.querySelector('.pl-port-label')) return;
+      var text = (p.name === 'in') ? p.type : p.name;  // generic port → show type
+      var el = document.createElement('span');
+      el.className = 'pl-port-label t-' + p.type;
+      el.innerHTML = esc(text) + (p.optional ? ' <span class="pl-opt">(opt)</span>' : '');
+      el.title = text + (p.optional ? ' — optional' : ' — required') + ' · type: ' + p.type;
+      inp.appendChild(el);
+    });
+  });
+}
+
 // Conditional field visibility (e.g. show "SAM 3 prompt" only when Detector=SAM 3).
 function plApplyShowIf(scope){
   (scope || document).querySelectorAll('.pl-field[data-showif-field]').forEach(function(fieldEl){
@@ -262,12 +292,13 @@ window.addEventListener('DOMContentLoaded', () => {
 
   plShowErrors(JSON.parse("{{ errors_json|escapejs }}") || []);
   plApplyShowIf(document);  // initial visibility from saved config
+  plLabelPorts();           // label input dots from the block's ports
 
   // Mark dirty on any structural change or config edit. Drawflow fires these
   // events; config inputs are caught by delegation on the canvas.
   ['nodeCreated','nodeRemoved','nodeMoved','connectionCreated','connectionRemoved']
     .forEach(ev => { try { editor.on(ev, plMarkDirty); } catch(e){} });
-  try { editor.on('nodeCreated', function(){ plApplyShowIf(document); }); } catch(e){}
+  try { editor.on('nodeCreated', function(){ plApplyShowIf(document); plLabelPorts(); }); } catch(e){}
   const canvas = document.getElementById('drawflow');
   if(canvas){
     canvas.addEventListener('input', (e)=>{ if(e.target.classList.contains('pl-inp')) plMarkDirty(); });
