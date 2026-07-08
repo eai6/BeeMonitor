@@ -512,12 +512,15 @@
 
   // Mouse events: pan (Space/middle) · resize (handle) · move (box body) · draw (empty)
   canvas.addEventListener("mousedown", function(e) {
-    // Pan takes priority: Space held or middle mouse button.
+    // Pan takes priority: Pan tool / Space held / middle mouse button.
     if (panActive() || e.button === 1) {
       panning = true;
       panStartX = e.clientX; panStartY = e.clientY;
       panOrigX = panX; panOrigY = panY;
       applyView(); e.preventDefault();
+      if (viewZoom <= 1 && statusText) {
+        statusText.textContent = "Zoom in (scroll or +) to pan — the whole frame already fits at 100%.";
+      }
       return;
     }
     if (e.button !== 0) return;
