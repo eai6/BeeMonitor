@@ -99,7 +99,9 @@ class ProjectCreateView(LoginRequiredMixin, CreateView):
 
 
 class ProjectUpdateView(LoginRequiredMixin, UpdateView):
-    """Edit a project's name, description, and classes. Reuses the create form."""
+    """Edit a project's name, description, and classes. Classes are edited as
+    structured rows (add / rename / remove); a rename propagates to every existing
+    box (class_id preserved), a remove drops that class's boxes."""
     model = AnnotationProject
     form_class = ProjectCreateForm
     template_name = "annotations/settings.html"
@@ -111,6 +113,97 @@ class ProjectUpdateView(LoginRequiredMixin, UpdateView):
         initial = super().get_initial()
         initial["classes_text"] = ", ".join(self.object.classes or [])
         return initial
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        # Per-class box counts so the UI can warn before removing a used class.
+        counts = {}
+        for boxes in self.object.annotations.values_list("boxes", flat=True):
+            for b in (boxes or []):
+                nm = b.get("class", "unknown")
+                counts[nm] = counts.get(nm, 0) + 1
+        ctx["class_rows"] = [
+            {"index": i, "name": c, "count": counts.get(c, 0)}
+            for i, c in enumerate(self.object.classes or [])
+        ]
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        from django.shortcuts import redirect
+        from django.contrib import messages
+
+        project = self.get_object()
+        name = (request.POST.get("name") or "").strip()
+        description = (request.POST.get("description") or "").strip()
+        names = request.POST.getlist("class_name")
+        origs = request.POST.getlist("class_orig")
+        old_classes = project.classes or []
+
+        # Rebuild the class list from the rows (order = display order) and a map
+        # old_index -> new_index. A row's class_orig is its original index, or
+        # "new". Blank/duplicate names are dropped.
+        new_classes, remap, seen = [], {}, set()
+        for nm, orig in zip(names, origs):
+            nm = (nm or "").strip()
+            if not nm or nm.lower() in seen:
+                continue
+            seen.add(nm.lower())
+            new_idx = len(new_classes)
+            new_classes.append(nm)
+            if orig != "new":
+                try:
+                    remap[int(orig)] = new_idx
+                except (TypeError, ValueError):
+                    pass
+
+        if not name:
+            messages.error(request, "Project name is required.")
+            return redirect("annotations:settings", pk=project.pk)
+        if not new_classes:
+            messages.error(request, "At least one class is required.")
+            return redirect("annotations:settings", pk=project.pk)
+
+        def _old_index(box):
+            cid = box.get("class_id")
+            if isinstance(cid, int) and 0 <= cid < len(old_classes):
+                return cid
+            nm = box.get("class")
+            return old_classes.index(nm) if nm in old_classes else None
+
+        migrated_frames = dropped_boxes = 0
+        for ann in project.annotations.all():
+            new_boxes, changed = [], False
+            for box in (ann.boxes or []):
+                oi = _old_index(box)
+                if oi is None:
+                    new_boxes.append(box)  # unresolvable — leave untouched
+                    continue
+                if oi in remap:
+                    ni = remap[oi]
+                    nb = {**box, "class_id": ni, "class": new_classes[ni]}
+                    if nb != box:
+                        changed = True
+                    new_boxes.append(nb)
+                else:  # class removed → drop its boxes
+                    changed = True
+                    dropped_boxes += 1
+            if changed:
+                ann.boxes = new_boxes
+                ann.save(update_fields=["boxes"])
+                migrated_frames += 1
+
+        project.name = name
+        project.description = description
+        project.classes = new_classes
+        project.save(update_fields=["name", "description", "classes"])
+
+        msg = "Project settings saved."
+        if migrated_frames:
+            msg += f" Relabeled boxes on {migrated_frames} frame(s)."
+        if dropped_boxes:
+            msg += f" Dropped {dropped_boxes} box(es) from removed class(es)."
+        messages.success(request, msg)
+        return redirect("annotations:detail", pk=project.pk)
 
     def get_success_url(self):
         return reverse_lazy("annotations:detail", kwargs={"pk": self.object.pk})
