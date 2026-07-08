@@ -21,6 +21,7 @@ urlpatterns = [
     path("<int:pk>/preannotate-frame/status/", views.PreAnnotateFrameStatusView.as_view(), name="preannotate_frame_status"),
     path("<int:pk>/llm-review-all/", views.LLMReviewAllView.as_view(), name="llm_review_all"),
     path("<int:pk>/pre-annotate-all/", views.PreAnnotateAllView.as_view(), name="pre_annotate_all"),
+    path("<int:pk>/pre-annotate/cancel/", views.CancelPreAnnotationView.as_view(), name="pre_annotate_cancel"),
     path("<int:pk>/export/", views.ExportProjectView.as_view(), name="export"),
     path("<int:pk>/frame/", views.FrameImageView.as_view(), name="frame_image"),
     # Review redirects to detail (review is now integrated into project page + editor)

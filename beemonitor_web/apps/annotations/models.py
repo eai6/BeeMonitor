@@ -104,6 +104,7 @@ class PreAnnotationTask(models.Model):
         PROCESSING = "processing", "Processing"  # invoked, awaiting result
         COMPLETED = "completed", "Completed"
         FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"  # user cancelled; any result is discarded
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
                              related_name="preannotation_tasks")

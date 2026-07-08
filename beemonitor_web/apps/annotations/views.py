@@ -956,6 +956,35 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
         return redirect("annotations:detail", pk=pk)
 
 
+class CancelPreAnnotationView(LoginRequiredMixin, View):
+    """Cancel in-flight pre-annotation. POST task_id to cancel one, or nothing to
+    cancel all active tasks for the project. Marks tasks CANCELLED so the
+    reconciler (which only polls QUEUED/PROCESSING) stops finalizing them; any GPU
+    work already queued may still finish in the background but its result is
+    discarded — same as cancelling a run on the Processing page."""
+
+    def post(self, request, pk):
+        from django.shortcuts import redirect
+        from django.contrib import messages
+        from django.utils import timezone
+
+        from .models import PreAnnotationTask
+
+        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        active = PreAnnotationTask.objects.filter(
+            project=project, user=request.user,
+            status__in=[PreAnnotationTask.Status.QUEUED, PreAnnotationTask.Status.PROCESSING],
+        )
+        task_id = request.POST.get("task_id")
+        if task_id:
+            active = active.filter(pk=task_id)
+        n = active.update(status=PreAnnotationTask.Status.CANCELLED,
+                          error_message="Cancelled by user.", completed_at=timezone.now())
+        messages.info(request, f"Cancelled {n} pre-annotation task(s)." if n
+                      else "No active pre-annotation to cancel.")
+        return redirect("annotations:detail", pk=pk)
+
+
 class FrameImageView(LoginRequiredMixin, View):
     """Return a JPG image of a specific video frame.
 
