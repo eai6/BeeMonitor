@@ -37,13 +37,12 @@ TEMPLATES = [
     },
     {
         "title": "Flower / ROI visitation",
-        "description": "Track bees, count visits to a drawn region, and identify species.",
+        "description": "Track bees and count visits to a drawn region.",
         "steps": [
             _s("v", "input.video"),
             _s("r", "roi.draw", {"regions": "[]"}, {"in": "v"}),
             _s("t", "track.bee", {"confidence": 0.4}, {"video": "v", "rois": "r"}),
             _s("g", "analyze.visitation", {}, {"tracks": "t"}),
-            _s("i", "identify.taxon", {"region_prior": "on"}, {"in": "t"}),
             _s("o", "output.chart", {"chart_type": "bar"}, {"in": "g"}),
         ],
     },

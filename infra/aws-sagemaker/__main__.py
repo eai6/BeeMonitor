@@ -262,14 +262,6 @@ sagemaker_role_policy = aws.iam.RolePolicy(
                 ],
                 "Resource": "*",
             },
-            {
-                # The GPU tracking job classifies per-track crops by calling the
-                # BioCLIP endpoint synchronously (run_species).
-                "Sid": "InvokeBioclip",
-                "Effect": "Allow",
-                "Action": "sagemaker:InvokeEndpoint",
-                "Resource": f"arn:aws:sagemaker:{region}:{account_id}:endpoint/{prefix}-bioclip",
-            },
         ],
     })),
 )
@@ -511,7 +503,7 @@ if deploy_endpoint:
     # Bump when the EndpointConfig SHAPE changes without an image bump (the
     # name must change for the replace-then-update roll to work — same-name
     # re-creation collides with the retained old config).
-    CONFIG_REV = "r3"
+    CONFIG_REV = "r4"
     tag_slug = f"{tag_slug}-{CONFIG_REV}"
 
     model = aws.sagemaker.Model(
@@ -528,8 +520,6 @@ if deploy_endpoint:
                 "AWS_S3_BUCKET_MODELS": f"beemonitor-{env}-models-{account_id}",
                 "AWS_S3_BUCKET_USER_CONFIGS": f"beemonitor-{env}-user-configs-{account_id}",
                 "AWS_REGION": region,
-                # Per-track species classification (run_species) calls this endpoint.
-                "SAGEMAKER_BIOCLIP_ENDPOINT_NAME": f"{prefix}-bioclip",
             },
         ),
         # Retain on replace so an image bump doesn't delete the old model mid-roll

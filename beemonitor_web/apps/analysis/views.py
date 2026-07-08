@@ -211,11 +211,6 @@ def _spawn_gpu_job(job_pk: int) -> None:
         payload["run_tracking"] = bool(job.config.get("run_tracking", True))
         if job.config.get("ml_threshold") is not None:
             payload["ml_threshold"] = float(job.config["ml_threshold"])
-        payload["run_species"] = bool(job.config.get("run_species", False))
-        if payload["run_species"]:
-            taxa = _species_candidate_taxa(video)
-            if taxa:
-                payload["candidate_taxa"] = taxa
         # Recording start metadata → event timestamps; no filename convention needed.
         if video.recorded_at:
             payload["recorded_at"] = video.recorded_at.isoformat()
@@ -289,11 +284,6 @@ def _spawn_gpu_batch(jobs_data: list, detection_mode: str, confidence: float,
                 payload["run_tracking"] = bool(vcfg.get("run_tracking", True))
                 if vcfg.get("ml_threshold") is not None:
                     payload["ml_threshold"] = float(vcfg["ml_threshold"])
-                payload["run_species"] = bool(vcfg.get("run_species", False))
-                if payload["run_species"]:
-                    taxa = _species_candidate_taxa(video)
-                    if taxa:
-                        payload["candidate_taxa"] = taxa
                 # Recording start metadata → event timestamps; no filename convention needed.
                 if video.recorded_at:
                     payload["recorded_at"] = video.recorded_at.isoformat()
@@ -323,31 +313,6 @@ def _spawn_gpu_batch(jobs_data: list, detection_mode: str, confidence: float,
         )
     finally:
         connection.close()
-
-
-def _species_candidate_taxa(video) -> list:
-    """Location-prior candidate species for BioCLIP: locally-observed insects
-    near the video's device, filtered by month. Unconstrained BioCLIP on small
-    bee crops returns nonsense (e.g. a pheasant at 1%); a candidate list turns
-    it into a plausible-local-taxa classifier. Empty when there's no location.
-    """
-    try:
-        device = getattr(video, "device", None)
-        lat = getattr(device, "lat", None) if device else None
-        lon = getattr(device, "lon", None) if device else None
-        if lat is None or lon is None:
-            return []
-        month = None
-        if getattr(video, "recorded_at", None):
-            month = video.recorded_at.month
-        elif getattr(video, "month", None):
-            month = video.month
-        from apps.monitor.priors import region_taxa
-        return region_taxa(lat, lon, month) or []
-    except Exception as e:
-        logger.warning("candidate taxa lookup failed for video %s: %s",
-                       getattr(video, "pk", "?"), e)
-        return []
 
 
 def _put_inference_payload(job_id: str, payload: dict) -> str:
@@ -958,7 +923,7 @@ def _apply_result_to_job(job, result: dict) -> None:
             "tracking_csv_path": result.get("tracking_csv_path", ""),
             "foraging_trips_csv_path": result.get("foraging_trips_csv_path", ""),
             "interactions_csv_path": result.get("interactions_csv_path", ""),
-            "species_csv_path": result.get("species_csv_path", ""),
+            "crops_csv_path": result.get("crops_csv_path", ""),
             "annotated_video_path": result.get("annotated_video_path", ""),
             "total_events": result.get("total_events", 0),
             "entry_count": result.get("entry_count", 0),
@@ -1060,16 +1025,14 @@ class BatchJobView(LoginRequiredMixin, View):
         gpu_tier = request.POST.get("gpu_tier", "A10G")
         use_device_roi = request.POST.get("use_device_roi") in ("on", "true", "1")
 
-        # Which analyses to run — tracking (whole clip) and/or species taxonomy
-        # (BioCLIP on a few crops). The new Processing form marks itself with
-        # analyses_form so unchecked = off; older callers default to tracking only.
+        # Tracking runs the whole clip; the new Processing form marks itself
+        # with analyses_form so an unchecked run_tracking = off.
         if request.POST.get("analyses_form"):
             run_tracking = request.POST.get("run_tracking") in ("on", "true", "1")
-            run_species = request.POST.get("run_species") in ("on", "true", "1")
         else:
-            run_tracking, run_species = True, False
-        if not (run_tracking or run_species):
-            return _fail("Choose at least one analysis — tracking or species.", level="warning")
+            run_tracking = True
+        if not run_tracking:
+            return _fail("Enable tracking to run analysis.", level="warning")
 
         config = {
             "detection_mode": detection_mode,
@@ -1077,7 +1040,6 @@ class BatchJobView(LoginRequiredMixin, View):
             "two_mode_tracking": two_mode,
             "visualize": visualize,
             "run_tracking": run_tracking,
-            "run_species": run_species,
         }
 
         # Resolve custom model paths (separate for nest and bee)
@@ -1283,9 +1245,6 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
                 job.video.storage_key, container="raw-videos"
             )
 
-        species_path = result.species_csv_path or ""
-        if species_path:
-            ctx["species_csv_url"] = _generate_presigned_url(species_path)
         foraging_path = result.foraging_trips_csv_path or ""
         if foraging_path:
             ctx["foraging_csv_url"] = _generate_presigned_url(foraging_path)
@@ -1313,11 +1272,23 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         if result.interaction_count:
             tiles.append({"label": "Interactions", "value": result.interaction_count,
                           "color": "text-purple-600"})
-        species_obs = stats.get("species_observations") or []
-        if species_obs:
-            tiles.append({"label": "Species", "value": len(species_obs), "color": "text-teal-600"})
         ctx["stat_tiles"] = tiles
-        ctx["species_observations"] = species_obs
+
+        # Per-track crops (for later species ID): presign each track's crop keys.
+        manifest = stats.get("crops_manifest") or {}
+        track_crops = []
+        total_crops = 0
+        if manifest:
+            for track_id in sorted(manifest, key=lambda t: int(t) if str(t).isdigit() else t):
+                keys = manifest[track_id] or []
+                thumbs = [u for k in keys if (u := _generate_presigned_url(k))]
+                if thumbs:
+                    track_crops.append({"track_id": track_id, "crops": thumbs})
+                    total_crops += len(thumbs)
+        ctx["track_crops"] = track_crops
+        ctx["total_crops"] = total_crops
+        if result.crops_csv_path:
+            ctx["crops_csv_url"] = _generate_presigned_url(result.crops_csv_path)
 
         # Annotated-video generation state (post-analysis, on demand).
         ann = (job.config or {}).get("annotate") or {}

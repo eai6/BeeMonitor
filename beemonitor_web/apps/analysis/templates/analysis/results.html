@@ -83,7 +83,7 @@
 </div>
 
 <!-- Download Section -->
-{% if events_csv_url or tracking_csv_url or interactions_csv_url or species_csv_url or foraging_csv_url or annotated_video_url %}
+{% if events_csv_url or tracking_csv_url or interactions_csv_url or crops_csv_url or foraging_csv_url or annotated_video_url %}
 <div class="bg-white shadow rounded-lg mb-8">
   <div class="px-6 py-4 border-b border-gray-200">
     <h2 class="text-lg font-medium text-gray-900">Downloads</h2>
@@ -128,11 +128,11 @@
       </a>
       {% endif %}
 
-      {% if species_csv_url %}
-      <a href="{{ species_csv_url }}" download
+      {% if crops_csv_url %}
+      <a href="{{ crops_csv_url }}" download
          class="flex items-center justify-center gap-2 px-4 py-3 bg-teal-50 border border-teal-200 rounded-lg hover:bg-teal-100 transition">
         <svg class="w-5 h-5 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-        <span class="text-teal-700 font-medium">Species CSV</span>
+        <span class="text-teal-700 font-medium">Crop index CSV</span>
       </a>
       {% endif %}
 
@@ -258,34 +258,30 @@
 </div>
 {% endif %}
 
-<!-- Species observations (BioCLIP per-track identification) -->
-{% if species_observations %}
-<div class="bg-white shadow rounded-lg mb-8">
+<!-- Per-track crops — one strip per track, for later species ID -->
+{% if track_crops %}
+<div class="bg-white shadow rounded-lg mb-8" x-data="{ show: true }">
   <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-    <h2 class="text-lg font-medium text-gray-900">Species Identified ({{ species_observations|length }})</h2>
-    {% if species_csv_url %}<a href="{{ species_csv_url }}" download class="text-sm text-teal-600 hover:underline">Download per-track CSV</a>{% endif %}
+    <h2 class="text-lg font-medium text-gray-900">Track Crops ({{ track_crops|length }} tracks · {{ total_crops }} crops)</h2>
+    <div class="flex gap-4 items-center">
+      {% if crops_csv_url %}<a href="{{ crops_csv_url }}" download class="text-sm text-teal-600 hover:underline">Crop index CSV</a>{% endif %}
+      <button @click="show = !show" class="text-sm text-gray-500 hover:text-gray-700"><span x-show="!show">Show</span><span x-show="show">Hide</span></button>
+    </div>
   </div>
-  <div class="overflow-x-auto">
-    <table class="min-w-full divide-y divide-gray-200 text-sm">
-      <thead class="bg-gray-50">
-        <tr>
-          <th class="px-4 py-3 text-left font-medium text-gray-500 uppercase tracking-wider text-xs">Species</th>
-          <th class="px-4 py-3 text-left font-medium text-gray-500 uppercase tracking-wider text-xs">Common name</th>
-          <th class="px-4 py-3 text-right font-medium text-gray-500 uppercase tracking-wider text-xs">Tracks</th>
-          <th class="px-4 py-3 text-right font-medium text-gray-500 uppercase tracking-wider text-xs">Avg confidence</th>
-        </tr>
-      </thead>
-      <tbody class="bg-white divide-y divide-gray-200">
-        {% for o in species_observations %}
-        <tr class="hover:bg-gray-50">
-          <td class="px-4 py-2 text-gray-900 italic">{{ o.species }}</td>
-          <td class="px-4 py-2 text-gray-600">{{ o.common_name|default:"—" }}</td>
-          <td class="px-4 py-2 text-right text-gray-700">{{ o.track_count }}</td>
-          <td class="px-4 py-2 text-right text-gray-700">{{ o.avg_confidence }}</td>
-        </tr>
+  <div x-show="show" class="px-6 py-4 space-y-4">
+    {% for t in track_crops %}
+    <div>
+      <p class="text-xs font-medium text-gray-500 mb-1">Track {{ t.track_id }} <span class="text-gray-400">· {{ t.crops|length }} crops</span></p>
+      <div class="flex gap-2 overflow-x-auto pb-1">
+        {% for url in t.crops %}
+        <a href="{{ url }}" target="_blank" class="shrink-0">
+          <img src="{{ url }}" alt="track {{ t.track_id }} crop" loading="lazy"
+               class="h-20 w-20 object-cover rounded border border-gray-200 hover:border-amber-400">
+        </a>
         {% endfor %}
-      </tbody>
-    </table>
+      </div>
+    </div>
+    {% endfor %}
   </div>
 </div>
 {% endif %}

@@ -210,46 +210,6 @@ def _exec_analyze_colony_activity(step, run, context, inputs, index):
     }
 
 
-def _exec_identify_taxon(step, run, context, inputs, index):
-    # The upstream detect_and_track Job runs with run_species=True (see
-    # build_detect_and_track_config), so the GPU container classifies each
-    # track's crops with BioCLIP and returns species_observations in its
-    # summary. Surface them as observation rows.
-    up = _first_upstream_result(inputs)
-    result = (up or {}).get("result", {})
-    stats = result.get("summary_stats", {}) or {}
-    observations = stats.get("species_observations") or []
-    rows = [
-        {
-            "species": o.get("species", ""),
-            "common_name": o.get("common_name", ""),
-            "tracks": o.get("track_count", 0),
-            "avg_confidence": o.get("avg_confidence", 0),
-        }
-        for o in observations
-    ]
-    classified = stats.get("species_tracks_classified", 0)
-    unique_tracks = result.get("unique_tracks", 0)
-    out = {
-        "artifact": "observations",
-        "rows": rows,
-        "species_count": len(rows),
-        "tracks_classified": classified,
-    }
-    if not rows:
-        if not unique_tracks:
-            out["note"] = ("No species — the tracking step found no bee tracks in "
-                           "this video, so there were no crops to identify.")
-        elif "species_tracks_classified" not in stats:
-            out["note"] = ("No species — this run didn't request identification "
-                           "(re-run so the tracking step classifies crops).")
-        else:
-            out["note"] = (f"No species identified from {unique_tracks} track(s). "
-                           "Set the device's GPS location so BioCLIP can constrain "
-                           "to local taxa — unconstrained crops rarely classify.")
-    return out
-
-
 def _exec_identify_marker(step, run, context, inputs, index):
     from . import ops
 
@@ -293,7 +253,6 @@ LOCAL_EXECUTORS = {
     "analyze.foraging_trips": _exec_analyze_foraging_trips,
     "analyze.visitation": _exec_analyze_visitation,
     "analyze.colony_activity": _exec_analyze_colony_activity,
-    "identify.taxon": _exec_identify_taxon,
     "identify.marker": _exec_identify_marker,
     "filter.roi": _exec_filter_passthrough,
     "filter.confidence": _exec_filter_passthrough,
@@ -325,10 +284,6 @@ def run_local_step(step, run, context, index):
 _DETECT_TRACK_BLOCKS = {"detect.bee", "detect.nest", "track.bee"}
 
 
-def _pipeline_wants_species(steps):
-    return any(s.get("block_type") == "identify.taxon" for s in steps)
-
-
 def _pipeline_wants_markers(steps):
     return any(s.get("block_type") == "identify.marker" for s in steps)
 
@@ -343,9 +298,8 @@ def _marker_method(steps):
 def build_detect_and_track_config(step, run, context, index):
     """Assemble the ``detect_and_track`` Job config for a detect/track GPU step.
 
-    Pulls the source video + any upstream ROI/nest layout, and flips ``run_species``
-    on when an ``identify.taxon`` step exists downstream (BioCLIP rides the same job
-    in the scaffold).
+    Pulls the source video + any upstream ROI/nest layout. Tracking always
+    uploads per-track crops for later species ID.
     """
     video_out = find_artifact("video", run.steps, index, context)
     if not video_out:
@@ -358,7 +312,6 @@ def build_detect_and_track_config(step, run, context, index):
         # Entry/Exit event-classifier cutoff (EventProcessor ml_threshold).
         "ml_threshold": float(cfg.get("ml_threshold", 0.6) or 0.6),
         "run_tracking": step.get("block_type") in ("track.bee", "detect.bee"),
-        "run_species": _pipeline_wants_species(run.steps),
         # Annotated video is opt-in (off = much faster, needed for long clips).
         "visualize": str(cfg.get("annotated_video", "")).lower() in ("1", "true", "on", "yes"),
     }

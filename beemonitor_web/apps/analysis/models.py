@@ -94,7 +94,7 @@ class JobResult(models.Model):
     tracking_csv_path = models.CharField(max_length=500, blank=True)
     foraging_trips_csv_path = models.CharField(max_length=500, blank=True)
     interactions_csv_path = models.CharField(max_length=500, blank=True)
-    species_csv_path = models.CharField(max_length=500, blank=True)
+    crops_csv_path = models.CharField(max_length=500, blank=True)
     annotated_video_path = models.CharField(max_length=500, blank=True)
     total_events = models.IntegerField(default=0)
     entry_count = models.IntegerField(default=0)

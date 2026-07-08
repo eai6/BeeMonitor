@@ -289,28 +289,6 @@ BLOCK_REGISTRY = {
     },
 
     # ── Identify ──────────────────────────────────────────────────────────────
-    "identify.taxon": {
-        "display_name": "Identify Species (BioCLIP)",
-        "description": "Assign taxonomic IDs to crops / tracked individuals with BioCLIP.",
-        "category": "identify",
-        "icon": "🔬",
-        "input_type": "tracks",
-        "output_type": "observations",
-        "backend": "local",
-        "config_fields": [
-            {
-                "name": "region_prior",
-                "label": "Use location prior",
-                "field_type": "select",
-                "required": False,
-                "default": "on",
-                "choices": [
-                    {"value": "on", "label": "On (constrain to region taxa)"},
-                    {"value": "off", "label": "Off (Tree-of-Life)"},
-                ],
-            },
-        ],
-    },
     "identify.marker": {
         "display_name": "Read Bee Marker (QR / Colour)",
         "description": "Read per-track individual IDs (colour / QR / number tags) from tracking.",
