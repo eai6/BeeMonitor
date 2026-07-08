@@ -33,6 +33,7 @@
   </div>
   <div class="flex items-center gap-2">
     <a href="{% url 'pipelines:open_in_colab' pk=pipeline.pk %}" target="_blank" rel="noopener" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-md text-sm font-medium" title="Open a live, runnable notebook in Google Colab">▶ Open in Colab</a>
+    <span id="pl-dirty" class="hidden text-xs text-amber-600" title="You have unsaved changes">● unsaved</span>
     <button type="button" onclick="plSave()" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-md text-sm font-medium">💾 Save</button>
     <button type="button" onclick="plRun()" class="bg-amber-600 hover:bg-amber-700 text-white px-5 py-2 rounded-md text-sm font-semibold">▶ Run</button>
   </div>
@@ -153,6 +154,23 @@ function plScrapeConfig(){
   return g;
 }
 
+// Unsaved-changes tracking: config lives in the DOM and is only persisted on
+// Save, so a navigation used to silently lose edits.
+let plDirty = false;
+function plMarkDirty(){
+  plDirty = true;
+  const dot = document.getElementById('pl-dirty');
+  if(dot) dot.classList.remove('hidden');
+}
+function plMarkClean(){
+  plDirty = false;
+  const dot = document.getElementById('pl-dirty');
+  if(dot) dot.classList.add('hidden');
+}
+window.addEventListener('beforeunload', (e) => {
+  if(plDirty){ e.preventDefault(); e.returnValue = ''; }
+});
+
 async function plSave(){
   const g = plScrapeConfig();
   const r = await fetch(SAVE_URL, {method:'POST', headers:{'X-CSRFToken':CSRF,'Content-Type':'application/json'}, body: JSON.stringify(g)});
@@ -161,6 +179,7 @@ async function plSave(){
   const toast = document.getElementById('pl-toast');
   toast.textContent = j.ok ? `Saved — ${j.step_count} step(s)` : (j.error||'Save failed');
   toast.classList.remove('hidden'); setTimeout(()=>toast.classList.add('hidden'), 2500);
+  if(j.ok) plMarkClean();
   return j;
 }
 async function plRun(){
@@ -196,6 +215,13 @@ window.addEventListener('DOMContentLoaded', () => {
   }));
 
   plShowErrors(JSON.parse("{{ errors_json|escapejs }}") || []);
+
+  // Mark dirty on any structural change or config edit. Drawflow fires these
+  // events; config inputs are caught by delegation on the canvas.
+  ['nodeCreated','nodeRemoved','nodeMoved','connectionCreated','connectionRemoved']
+    .forEach(ev => { try { editor.on(ev, plMarkDirty); } catch(e){} });
+  const canvas = document.getElementById('drawflow');
+  if(canvas){ canvas.addEventListener('input', (e)=>{ if(e.target.classList.contains('pl-inp')) plMarkDirty(); }); }
 });
 </script>
 {% endblock %}
