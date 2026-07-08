@@ -830,19 +830,28 @@ class FrameImageView(LoginRequiredMixin, View):
         from apps.videos.models import Video
         video = get_object_or_404(Video, pk=video_id, user=request.user)
 
+        ann = None
         try:
             project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
             ann = Annotation.objects.get(project=project, video=video, frame_number=frame_number)
-
-            if ann.frame_image_path:
-                return self._serve_from_storage(ann.frame_image_path, ann if draw_boxes else None)
         except Annotation.DoesNotExist:
-            pass
+            ann = None
+
+        # Prefer the pre-saved JPEG, but FALL BACK to extracting from the video
+        # when that object is missing/broken — otherwise a stale frame_image_path
+        # renders permanently blank even though the video is available.
+        if ann and ann.frame_image_path:
+            resp = self._serve_from_storage(ann.frame_image_path, ann if draw_boxes else None)
+            if resp is not None:
+                return resp
+            logger.warning("FrameImageView: saved frame %s missing — extracting from video",
+                           ann.frame_image_path)
 
         return self._extract_from_video(video, frame_number)
 
     def _serve_from_storage(self, blob_path, ann_for_boxes=None):
-        """Serve a pre-saved JPEG frame from the processed S3 bucket."""
+        """Serve a pre-saved JPEG frame from the processed S3 bucket.
+        Returns None (not a 404) on failure so the caller can fall back."""
         try:
             import io
             from config.storage import get_s3_client
@@ -850,6 +859,8 @@ class FrameImageView(LoginRequiredMixin, View):
             buf = io.BytesIO()
             get_s3_client().download_to_stream("processed", blob_path, buf)
             data = buf.getvalue()
+            if not data:
+                return None
 
             if ann_for_boxes and ann_for_boxes.boxes:
                 import cv2
@@ -869,8 +880,8 @@ class FrameImageView(LoginRequiredMixin, View):
             response["Cache-Control"] = "public, max-age=3600"
             return response
         except Exception as e:
-            logger.error("FrameImageView S3 error: %s", e)
-            return HttpResponse(status=404)
+            logger.warning("FrameImageView S3 miss for %s: %s", blob_path, e)
+            return None  # let the caller fall back to video extraction
 
     def _extract_from_video(self, video, frame_number):
         """Fallback: download video and extract frame (slow)."""
