@@ -24,6 +24,7 @@ class TestPipelineResult:
             tracking_csv_path="processed/user1/job1/tracking_results.csv",
             foraging_trips_csv_path="processed/user1/job1/foraging_trips.csv",
             interactions_csv_path="processed/user1/job1/interactions.csv",
+            crops_csv_path="processed/user1/job1/track_crops.csv",
             annotated_video_path="processed/user1/job1/annotated_video.mp4",
             foraging_trip_count=3,
             avg_trip_duration_sec=120.5,
