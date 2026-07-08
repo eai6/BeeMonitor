@@ -67,18 +67,28 @@
   <!-- Main Canvas Area -->
   <div class="flex-1 min-w-0">
     <div class="bg-white shadow rounded-lg p-4">
+      <!-- Zoom / pan toolbar -->
+      <div class="flex items-center gap-2 mb-2 text-xs text-gray-500">
+        <button type="button" id="btn-zoom-out" class="px-2 py-1 border border-gray-300 rounded hover:bg-gray-50" title="Zoom out">−</button>
+        <span id="zoom-label" class="font-mono w-12 text-center">100%</span>
+        <button type="button" id="btn-zoom-in" class="px-2 py-1 border border-gray-300 rounded hover:bg-gray-50" title="Zoom in">+</button>
+        <button type="button" id="btn-zoom-reset" class="px-2 py-1 border border-gray-300 rounded hover:bg-gray-50">Reset view</button>
+        <span class="text-gray-400">scroll = zoom · hold Space or middle-drag = pan</span>
+      </div>
       <!-- Frame image + Canvas overlay -->
-      <div class="relative border border-gray-300 rounded overflow-hidden" style="aspect-ratio: 16/9;">
-        <!-- Frame image as background -->
-        <img id="frame-image"
-             src="{% url 'annotations:frame_image' project.pk %}?video={{ video.pk }}&frame={{ frame_number }}&project={{ project.pk }}"
-             alt="Frame {{ frame_number }}"
-             style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:contain; background:#000;"
-             onerror="this.style.display='none'">
-        <!-- Transparent canvas on top for drawing -->
-        <canvas id="annotation-canvas" width="1280" height="720"
-                style="position:absolute; top:0; left:0; width:100%; height:100%; cursor:crosshair;">
-        </canvas>
+      <div id="frame-viewport" class="relative border border-gray-300 rounded overflow-hidden" style="aspect-ratio: 16/9;">
+        <div id="zoom-layer" style="position:absolute; inset:0; transform-origin:0 0; will-change:transform;">
+          <!-- Frame image as background -->
+          <img id="frame-image"
+               src="{% url 'annotations:frame_image' project.pk %}?video={{ video.pk }}&frame={{ frame_number }}&project={{ project.pk }}"
+               alt="Frame {{ frame_number }}"
+               style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:contain; background:#000;"
+               onerror="this.style.display='none'">
+          <!-- Transparent canvas on top for drawing -->
+          <canvas id="annotation-canvas" width="1280" height="720"
+                  style="position:absolute; top:0; left:0; width:100%; height:100%; cursor:crosshair;">
+          </canvas>
+        </div>
         {% if not video.storage_key or video.storage_key|slice:":5" == "s3://" %}
         <div class="absolute inset-0 flex flex-col items-center justify-center text-gray-400 text-sm pointer-events-none">
           {% if transferring %}
@@ -175,6 +185,12 @@
   let isDrawing = false;
   let startX = 0, startY = 0;
   let scaleX = 1, scaleY = 1;
+  // Selection / drag state for move & resize on the frame.
+  let selectedIdx = -1;
+  let dragMode = null;        // 'draw' | 'move' | 'resize'
+  let resizeHandle = null;    // 'nw' | 'n' | ... when resizing
+  let dragStart = { x: 0, y: 0 };
+  let dragOrigBox = null;
 
   const CLASS_COLORS = [
     "#ef4444", "#3b82f6", "#22c55e", "#eab308", "#a855f7",
@@ -205,6 +221,130 @@
     };
   }
 
+  // ---- Pan & zoom: a CSS transform on #zoom-layer. getCanvasCoords uses
+  // getBoundingClientRect(), which reflects this transform, so all box math
+  // (draw/hit-test) keeps working unchanged at any zoom/pan. ------------------
+  var viewport = document.getElementById("frame-viewport");
+  var zoomLayer = document.getElementById("zoom-layer");
+  var viewZoom = 1, panX = 0, panY = 0;
+  var spaceDown = false, panning = false, panStartX = 0, panStartY = 0, panOrigX = 0, panOrigY = 0;
+
+  function applyView() {
+    zoomLayer.style.transform = "translate(" + panX + "px," + panY + "px) scale(" + viewZoom + ")";
+    var zl = document.getElementById("zoom-label");
+    if (zl) zl.textContent = Math.round(viewZoom * 100) + "%";
+    canvas.style.cursor = spaceDown ? (panning ? "grabbing" : "grab") : "crosshair";
+  }
+  function clampPan() {
+    var vw = viewport.clientWidth, vh = viewport.clientHeight;
+    panX = Math.max(vw - vw * viewZoom, Math.min(0, panX));
+    panY = Math.max(vh - vh * viewZoom, Math.min(0, panY));
+  }
+  function zoomAt(cx, cy, factor) {
+    var z0 = viewZoom, z = Math.max(1, Math.min(8, z0 * factor));
+    if (z === z0) return;
+    panX = cx - (cx - panX) * (z / z0);
+    panY = cy - (cy - panY) * (z / z0);
+    viewZoom = z;
+    if (z === 1) { panX = 0; panY = 0; }
+    clampPan(); applyView();
+  }
+  if (viewport) {
+    viewport.addEventListener("wheel", function(e) {
+      e.preventDefault();
+      var rect = viewport.getBoundingClientRect();
+      zoomAt(e.clientX - rect.left, e.clientY - rect.top, e.deltaY < 0 ? 1.15 : 1 / 1.15);
+    }, { passive: false });
+  }
+  function zoomCenter(factor) {
+    var r = viewport.getBoundingClientRect();
+    zoomAt(r.width / 2, r.height / 2, factor);
+  }
+  document.getElementById("btn-zoom-in").addEventListener("click", function() { zoomCenter(1.3); });
+  document.getElementById("btn-zoom-out").addEventListener("click", function() { zoomCenter(1 / 1.3); });
+  document.getElementById("btn-zoom-reset").addEventListener("click", function() {
+    viewZoom = 1; panX = 0; panY = 0; applyView();
+  });
+  document.addEventListener("keydown", function(e) {
+    if (e.code === "Space" && !/INPUT|SELECT|TEXTAREA/.test((e.target.tagName || ""))) {
+      if (!spaceDown) { spaceDown = true; applyView(); }
+      e.preventDefault();
+    }
+  });
+  document.addEventListener("keyup", function(e) {
+    if (e.code === "Space") { spaceDown = false; applyView(); }
+  });
+  // Pan drag tracked on the window so it survives leaving the canvas.
+  window.addEventListener("mousemove", function(e) {
+    if (!panning) return;
+    panX = panOrigX + (e.clientX - panStartX);
+    panY = panOrigY + (e.clientY - panStartY);
+    clampPan(); applyView();
+  });
+  window.addEventListener("mouseup", function() {
+    if (panning) { panning = false; applyView(); }
+  });
+
+  // ---- Box selection / move / resize / delete hit-testing -------------------
+  // Tolerances are in image px; derived from scaleX so they stay ~constant on
+  // screen at any zoom (rect.width shrinks as you zoom, so scaleX grows).
+  function handleTol() { return 8 * scaleX; }
+  function handleSize() { return Math.max(4, 5 * scaleX); }
+  function boxHandles(b) {
+    var x = b.x, y = b.y, w = b.w, h = b.h;
+    return {
+      nw: {x: x, y: y}, n: {x: x + w / 2, y: y}, ne: {x: x + w, y: y},
+      e: {x: x + w, y: y + h / 2}, se: {x: x + w, y: y + h},
+      s: {x: x + w / 2, y: y + h}, sw: {x: x, y: y + h}, w: {x: x, y: y + h / 2}
+    };
+  }
+  function deleteCenter(b) {
+    var s = handleSize();
+    return { x: b.x + b.w + s, y: b.y - s, r: s };
+  }
+  function hitDelete(b, pt) {
+    var c = deleteCenter(b);
+    return Math.hypot(pt.x - c.x, pt.y - c.y) <= c.r + handleTol() / 2;
+  }
+  function hitHandle(b, pt) {
+    var tol = handleTol(), hs = boxHandles(b);
+    for (var name in hs) {
+      if (Math.abs(pt.x - hs[name].x) <= tol && Math.abs(pt.y - hs[name].y) <= tol) return name;
+    }
+    return null;
+  }
+  function hitBox(pt) {
+    // topmost visible box containing pt (later in array = drawn on top)
+    for (var i = boxes.length - 1; i >= 0; i--) {
+      var b = boxes[i];
+      if (!_passes(b)) continue;
+      if (pt.x >= b.x && pt.x <= b.x + b.w && pt.y >= b.y && pt.y <= b.y + b.h) return i;
+    }
+    return -1;
+  }
+  function drawSelection(b) {
+    var hs = boxHandles(b), s = handleSize();
+    ctx.lineWidth = 1;
+    for (var name in hs) {
+      ctx.fillStyle = "#ffffff"; ctx.strokeStyle = "#111827";
+      ctx.fillRect(hs[name].x - s / 2, hs[name].y - s / 2, s, s);
+      ctx.strokeRect(hs[name].x - s / 2, hs[name].y - s / 2, s, s);
+    }
+    var c = deleteCenter(b);
+    ctx.fillStyle = "#ef4444"; ctx.beginPath(); ctx.arc(c.x, c.y, c.r, 0, 2 * Math.PI); ctx.fill();
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(c.x - c.r / 2, c.y - c.r / 2); ctx.lineTo(c.x + c.r / 2, c.y + c.r / 2);
+    ctx.moveTo(c.x + c.r / 2, c.y - c.r / 2); ctx.lineTo(c.x - c.r / 2, c.y + c.r / 2);
+    ctx.stroke();
+  }
+  function deleteSelected() {
+    if (selectedIdx < 0 || selectedIdx >= boxes.length) return;
+    boxes.splice(selectedIdx, 1);
+    selectedIdx = -1;
+    render(); updateBoxList();
+  }
+
   // Confidence filter. Boxes without a confidence (manually drawn) always pass.
   let minConf = 0;
   function _passes(box) {
@@ -231,6 +371,13 @@
       ctx.fillStyle = "#ffffff";
       ctx.fillText(label, box.x + 4, box.y - 5);
     });
+    // Selection overlay (handles + delete ✕) on top.
+    if (selectedIdx >= 0 && selectedIdx < boxes.length && _passes(boxes[selectedIdx])) {
+      var sb = boxes[selectedIdx];
+      ctx.strokeStyle = "#111827"; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+      ctx.strokeRect(sb.x, sb.y, sb.w, sb.h); ctx.setLineDash([]);
+      drawSelection(sb);
+    }
   }
 
   function updateBoxList() {
@@ -271,47 +418,99 @@
     updateBoxList();
   };
 
-  // Mouse events for drawing boxes
+  // Mouse events: pan (Space/middle) · resize (handle) · move (box body) · draw (empty)
   canvas.addEventListener("mousedown", function(e) {
+    // Pan takes priority: Space held or middle mouse button.
+    if (spaceDown || e.button === 1) {
+      panning = true;
+      panStartX = e.clientX; panStartY = e.clientY;
+      panOrigX = panX; panOrigY = panY;
+      applyView(); e.preventDefault();
+      return;
+    }
+    if (e.button !== 0) return;
     updateScale();
-    var coords = getCanvasCoords(e);
-    isDrawing = true;
-    startX = coords.x;
-    startY = coords.y;
+    var pt = getCanvasCoords(e);
+    // Delete ✕ / resize handle of the already-selected box.
+    if (selectedIdx >= 0 && selectedIdx < boxes.length) {
+      if (hitDelete(boxes[selectedIdx], pt)) { deleteSelected(); return; }
+      var h = hitHandle(boxes[selectedIdx], pt);
+      if (h) { dragMode = "resize"; resizeHandle = h; dragOrigBox = Object.assign({}, boxes[selectedIdx]); return; }
+    }
+    // Select + move an existing box, else start drawing a new one.
+    var hit = hitBox(pt);
+    if (hit >= 0) {
+      selectedIdx = hit; dragMode = "move";
+      dragStart = pt; dragOrigBox = Object.assign({}, boxes[hit]);
+      render();
+    } else {
+      selectedIdx = -1; dragMode = "draw";
+      startX = pt.x; startY = pt.y;
+      render();
+    }
   });
 
   canvas.addEventListener("mousemove", function(e) {
+    if (panning) return;
     updateScale();
-    var coords = getCanvasCoords(e);
-    if (cursorPos) cursorPos.textContent = Math.round(coords.x) + ", " + Math.round(coords.y);
-    if (isDrawing) {
+    var pt = getCanvasCoords(e);
+    if (cursorPos) cursorPos.textContent = Math.round(pt.x) + ", " + Math.round(pt.y);
+
+    if (dragMode === "resize") {
+      var o = dragOrigBox, hnd = resizeHandle;
+      var x1 = o.x, y1 = o.y, x2 = o.x + o.w, y2 = o.y + o.h;
+      if (hnd.indexOf("n") >= 0) y1 = pt.y;
+      if (hnd.indexOf("s") >= 0) y2 = pt.y;
+      if (hnd.indexOf("w") >= 0) x1 = pt.x;
+      if (hnd.indexOf("e") >= 0) x2 = pt.x;
+      var b = boxes[selectedIdx];
+      b.x = Math.round(Math.min(x1, x2)); b.y = Math.round(Math.min(y1, y2));
+      b.w = Math.max(4, Math.round(Math.abs(x2 - x1))); b.h = Math.max(4, Math.round(Math.abs(y2 - y1)));
       render();
-      ctx.strokeStyle = "#f59e0b";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([5, 3]);
-      ctx.strokeRect(startX, startY, coords.x - startX, coords.y - startY);
+      return;
+    }
+    if (dragMode === "move") {
+      var mb = boxes[selectedIdx];
+      mb.x = Math.round(dragOrigBox.x + (pt.x - dragStart.x));
+      mb.y = Math.round(dragOrigBox.y + (pt.y - dragStart.y));
+      render();
+      return;
+    }
+    if (dragMode === "draw") {
+      render();
+      ctx.strokeStyle = "#f59e0b"; ctx.lineWidth = 2; ctx.setLineDash([5, 3]);
+      ctx.strokeRect(startX, startY, pt.x - startX, pt.y - startY);
       ctx.setLineDash([]);
+      return;
+    }
+    // Idle: cursor feedback (resize / move / crosshair) unless in pan mode.
+    if (!spaceDown) {
+      var cur = "crosshair";
+      if (selectedIdx >= 0 && selectedIdx < boxes.length && hitHandle(boxes[selectedIdx], pt)) cur = "pointer";
+      else if (hitBox(pt) >= 0) cur = "move";
+      canvas.style.cursor = cur;
     }
   });
 
   canvas.addEventListener("mouseup", function(e) {
-    if (!isDrawing) return;
-    isDrawing = false;
-    updateScale();
-    var coords = getCanvasCoords(e);
-    var x = Math.min(startX, coords.x);
-    var y = Math.min(startY, coords.y);
-    var w = Math.abs(coords.x - startX);
-    var h = Math.abs(coords.y - startY);
-    if (w < 5 || h < 5) { render(); return; }
-    var classId = parseInt(classSelect.value);
-    boxes.push({
-      x: Math.round(x), y: Math.round(y),
-      w: Math.round(w), h: Math.round(h),
-      "class": CLASSES[classId], class_id: classId
-    });
-    render();
-    updateBoxList();
+    if (panning) return;
+    var mode = dragMode; dragMode = null; resizeHandle = null;
+    if (mode === "draw") {
+      updateScale();
+      var pt = getCanvasCoords(e);
+      var w = Math.abs(pt.x - startX), h = Math.abs(pt.y - startY);
+      if (w < 5 || h < 5) { render(); return; }
+      var classId = parseInt(classSelect.value);
+      boxes.push({
+        x: Math.round(Math.min(startX, pt.x)), y: Math.round(Math.min(startY, pt.y)),
+        w: Math.round(w), h: Math.round(h),
+        "class": CLASSES[classId], class_id: classId
+      });
+      selectedIdx = boxes.length - 1;
+      render(); updateBoxList();
+    } else if (mode === "move" || mode === "resize") {
+      render(); updateBoxList();
+    }
   });
 
   canvas.addEventListener("contextmenu", function(e) { e.preventDefault(); });
@@ -514,11 +713,16 @@
   render();
   updateBoxList();
   updateScale();
-  window.addEventListener("resize", updateScale);
+  applyView();
+  window.addEventListener("resize", function() { updateScale(); clampPan(); applyView(); });
 
-  // Keyboard shortcuts: Enter = save + next frame (smooth review), Left/Right = prev/next.
+  // Keyboard shortcuts: Enter = save + next frame, Left/Right = prev/next,
+  // Delete/Backspace = remove the selected box.
   document.addEventListener("keydown", function(e) {
     if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA") return;
+    if ((e.key === "Delete" || e.key === "Backspace") && selectedIdx >= 0) {
+      e.preventDefault(); deleteSelected(); return;
+    }
     const prevUrl = "{{ prev_frame_url|escapejs }}";
     const nextUrl = "{{ next_frame_url|escapejs }}";
     if (e.key === "Enter") { e.preventDefault(); doSave(true); }
