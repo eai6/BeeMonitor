@@ -29,17 +29,19 @@
   </div>
   <div class="bg-white shadow rounded-lg p-4 text-center">
     <p class="text-xs text-gray-500 uppercase">Annotated Frames</p>
-    <p class="text-2xl font-bold text-gray-900 mt-1">{{ total_annotations }}</p>
+    <p class="text-2xl font-bold text-gray-900 mt-1">{{ proj_total_frames }}</p>
   </div>
   <div class="bg-white shadow rounded-lg p-4 text-center">
     <p class="text-xs text-gray-500 uppercase">Total Boxes</p>
-    <p class="text-2xl font-bold text-amber-600 mt-1">{{ total_boxes }}</p>
+    <p class="text-2xl font-bold text-amber-600 mt-1">{{ proj_total_boxes }}</p>
   </div>
   <div class="bg-white shadow rounded-lg p-4 text-center">
     <p class="text-xs text-gray-500 uppercase">Class Breakdown</p>
     <div class="flex flex-wrap justify-center gap-1 mt-1">
-      {% for name, count in class_counts.items %}
+      {% for name, count in proj_class_counts.items %}
       <span class="text-xs text-gray-600">{{ name }}: <strong>{{ count }}</strong></span>
+      {% empty %}
+      <span class="text-xs text-gray-400">no boxes yet</span>
       {% endfor %}
     </div>
   </div>
@@ -295,7 +297,7 @@ function preannotateCheck(predicate) {
 </script>
 {% endif %}
 
-{% if total_annotations > 0 %}
+{% if proj_total_frames > 0 %}
 <!-- Filter Bar for Frames -->
 <div class="bg-white shadow rounded-lg p-4 mb-4">
   <form method="get" class="flex flex-wrap gap-3 items-end">
@@ -375,6 +377,16 @@ function preannotateCheck(predicate) {
   </a>
   {% endfor %}
 </div>
+
+{% if not frame_cards %}
+<div class="bg-white shadow rounded-lg p-10 text-center mb-6">
+  <p class="text-gray-500 mb-1">No frames match the current filter.</p>
+  <p class="text-sm text-gray-400">
+    {% if filter_class %}No <strong>{{ filter_class }}</strong> boxes have been annotated yet{% if preannot_active %} — pre-annotation is still running ({{ preannot_active|length }} in progress){% endif %}. {% endif %}
+    <a href="{% url 'annotations:detail' project.pk %}" class="text-amber-600 hover:underline">Clear filters</a>
+  </p>
+</div>
+{% endif %}
 
 {% if total_pages > 1 %}
 {% include "annotations/_frame_pager.html" %}

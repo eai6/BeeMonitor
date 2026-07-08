@@ -244,6 +244,23 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         ctx["reviewed_human"] = proj_anns.filter(review_source="human").count()
         ctx["reviewed_llm"] = proj_anns.filter(review_source="llm").count()
 
+        # Project-wide totals for the top stat tiles — these must NOT change with
+        # the video/class/review filters (a filter making them read 0 looked like
+        # data loss). Class breakdown here also shows which labels actually exist
+        # yet (e.g. is "nest tube" populated, or still pre-annotating?).
+        proj_total_frames = 0
+        proj_total_boxes = 0
+        proj_class_counts = {}
+        for boxes in proj_anns.values_list("boxes", flat=True):
+            proj_total_frames += 1
+            for b in (boxes or []):
+                cls = b.get("class", "unknown")
+                proj_class_counts[cls] = proj_class_counts.get(cls, 0) + 1
+                proj_total_boxes += 1
+        ctx["proj_total_frames"] = proj_total_frames
+        ctx["proj_total_boxes"] = proj_total_boxes
+        ctx["proj_class_counts"] = dict(sorted(proj_class_counts.items()))
+
         # Stats run over ALL matching annotations; the thumbnail grid is
         # paginated (presigning thousands of URLs per page-load is too slow).
         PAGE_SIZE = 500
