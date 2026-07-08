@@ -503,7 +503,7 @@ if deploy_endpoint:
     # Bump when the EndpointConfig SHAPE changes without an image bump (the
     # name must change for the replace-then-update roll to work — same-name
     # re-creation collides with the retained old config).
-    CONFIG_REV = "r4"
+    CONFIG_REV = "r5"
     tag_slug = f"{tag_slug}-{CONFIG_REV}"
 
     model = aws.sagemaker.Model(
@@ -539,12 +539,14 @@ if deploy_endpoint:
             ),
         ],
         async_inference_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigArgs(
-            # One video pipeline per instance: without this, SageMaker feeds
-            # several invocations into one 16 GB box and concurrent tracking
-            # runs OOM-kill the worker (seen 2026-07-06 at frame 4500 of a
-            # mendels video). Parallelism comes from autoscaling instead.
+            # Videos per instance. One YOLO tracking job barely uses the T4 (the
+            # work is mostly CPU/IO), so pack several per instance to clear big
+            # batches faster. Safe now that the annotated-video memory leak is
+            # fixed (was the 2026-07-06 OOM) and each invocation is isolated
+            # (own temp dir + own YOLO instance). Kept <= the container's
+            # gunicorn --threads 4 so a thread stays free for /ping health.
             client_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigClientConfigArgs(
-                max_concurrent_invocations_per_instance=1,
+                max_concurrent_invocations_per_instance=3,
             ),
             output_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigOutputConfigArgs(
                 s3_output_path=pulumi.Output.concat("s3://", output_bucket.bucket, "/"),
