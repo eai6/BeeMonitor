@@ -121,17 +121,42 @@
 {% if val_predictions %}
 <div class="bg-white shadow rounded-lg p-6 mb-6">
   <h2 class="text-sm font-medium text-gray-500 uppercase mb-1">Validation Predictions</h2>
-  <p class="text-xs text-gray-500 mb-4">The trained model's detections (conf ≥ 0.25) on the {{ val_predictions|length }} held-out validation frames it never saw during training — these are the frames behind the metrics above.</p>
+  <p class="text-xs text-gray-500 mb-4">The trained model's detections (conf ≥ 0.25) on the {{ val_predictions|length }} held-out validation frames it never saw during training — click a frame to view it full-size.</p>
   <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
     {% for pred in val_predictions %}
-    <a href="{{ pred.url }}" target="_blank" class="block group">
+    <button type="button" onclick="vpShow('{{ pred.url|escapejs }}', '{{ pred.name|escapejs }}')" class="block text-left group">
       <img src="{{ pred.url }}" alt="{{ pred.name }}" loading="lazy"
-           class="w-full rounded border border-gray-200 group-hover:border-amber-400">
+           class="w-full rounded border border-gray-200 group-hover:border-amber-400 cursor-zoom-in">
       <p class="text-[10px] text-gray-400 truncate mt-0.5">{{ pred.name }}</p>
-    </a>
+    </button>
     {% endfor %}
   </div>
 </div>
+
+<!-- Lightbox: view a prediction frame in-page (no download) -->
+<div id="vp-lightbox" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/80 p-4"
+     onclick="vpHide()">
+  <figure class="max-w-full max-h-full flex flex-col items-center" onclick="event.stopPropagation()">
+    <img id="vp-lightbox-img" src="" alt="" class="max-w-full max-h-[85vh] rounded shadow-lg object-contain">
+    <figcaption class="mt-2 text-xs text-gray-300 font-mono" id="vp-lightbox-cap"></figcaption>
+  </figure>
+  <button type="button" onclick="vpHide()" aria-label="Close"
+          class="absolute top-4 right-5 text-white/80 hover:text-white text-3xl leading-none">&times;</button>
+</div>
+<script>
+  function vpShow(url, name){
+    document.getElementById('vp-lightbox-img').src = url;
+    document.getElementById('vp-lightbox-cap').textContent = name;
+    var lb = document.getElementById('vp-lightbox');
+    lb.classList.remove('hidden'); lb.classList.add('flex');
+  }
+  function vpHide(){
+    var lb = document.getElementById('vp-lightbox');
+    lb.classList.add('hidden'); lb.classList.remove('flex');
+    document.getElementById('vp-lightbox-img').src = '';
+  }
+  document.addEventListener('keydown', function(e){ if(e.key === 'Escape') vpHide(); });
+</script>
 {% endif %}
 
 <!-- Link to Custom Model -->
