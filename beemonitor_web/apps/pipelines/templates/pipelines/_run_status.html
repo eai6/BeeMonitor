@@ -32,6 +32,17 @@
     <div class="px-3 pb-2 -mt-1 text-[11px] text-gray-400">{{ step.output.note }}</div>
     {% endif %}
 
+    {% if step.state == 'failed' %}
+    <div class="px-3 pb-2 -mt-1 flex items-center gap-3">
+      <form method="post" action="{% url 'pipelines:retry_step' pk=run.pipeline_id run_id=run.pk step_id=step.id %}">
+        {% csrf_token %}
+        <button type="submit" class="text-xs text-amber-700 hover:underline"
+                title="Reset this step and everything downstream, then re-run (upstream results are kept)">↻ Retry this step</button>
+      </form>
+      {% if step.output.job_id %}<a href="{% url 'analysis:results' step.output.job_id %}" class="text-xs text-gray-500 hover:underline">View job →</a>{% endif %}
+    </div>
+    {% endif %}
+
     {% if step.state == 'done' and step.display.fields or step.display.rows %}
     <details class="border-t border-gray-100">
       <summary class="px-3 py-2 text-xs text-amber-700 cursor-pointer hover:bg-gray-50">View output</summary>

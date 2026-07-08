@@ -20,7 +20,7 @@ from django.views.decorators.http import require_POST
 
 from apps.videos.models import Video
 
-from . import engine
+from . import engine, executors
 from .graph import build_initial_steps, graph_to_steps
 from .lessons import get_lesson, list_lessons
 from .notebook import create_colab_gist, generate_api_notebook
@@ -359,6 +359,57 @@ def rerun(request, pk, run_id):
     run = PipelineRun.objects.create(pipeline=pipeline, user=request.user)
     engine.start_run(run, steps=steps)
     return redirect("pipelines:run_detail", pk=pipeline.pk, run_id=run.pk)
+
+
+def _descendant_step_ids(steps, target_id):
+    """Step ids that (transitively) depend on target_id, plus target_id itself."""
+    # Reverse adjacency: upstream_id -> [dependent step ids].
+    children = {}
+    for index, step in enumerate(steps):
+        sid = step.get("id")
+        for up in executors.upstream_ids(step, steps, index):
+            children.setdefault(up, []).append(sid)
+    seen = {target_id}
+    stack = [target_id]
+    while stack:
+        cur = stack.pop()
+        for child in children.get(cur, []):
+            if child and child not in seen:
+                seen.add(child)
+                stack.append(child)
+    return seen
+
+
+@login_required
+@require_POST
+def retry_step(request, pk, run_id, step_id):
+    """Retry a single failed step IN PLACE: reset it + everything downstream to
+    pending, clear their outputs, and re-advance. Upstream results are kept, so
+    only this step and its descendants recompute (a fresh GPU job for GPU steps).
+    """
+    from django.contrib import messages
+
+    run = get_object_or_404(PipelineRun, pk=run_id, user=request.user)
+    steps = run.steps or []
+    if not any(s.get("id") == step_id for s in steps):
+        messages.warning(request, "That step isn't part of this run.")
+        return redirect("pipelines:run_detail", pk=pk, run_id=run_id)
+
+    reset = _descendant_step_ids(steps, step_id)
+    status = dict(run.step_status or {})
+    context = dict(run.context or {})
+    for sid in reset:
+        status[sid] = PipelineRun.STEP_PENDING
+        context.pop(sid, None)
+    run.step_status = status
+    run.context = context
+    run.status = PipelineRun.Status.RUNNING
+    run.completed_at = None
+    run.error_message = ""
+    run.save(update_fields=["step_status", "context", "status", "completed_at", "error_message"])
+    engine.advance_run(run.pk)
+    messages.info(request, f"Retrying — reset {len(reset)} step(s).")
+    return redirect("pipelines:run_detail", pk=pk, run_id=run_id)
 
 
 @login_required
