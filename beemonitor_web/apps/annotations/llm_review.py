@@ -41,8 +41,109 @@ _TOOL = {
 }
 
 
+_DETECT_TOOL = {
+    "name": "report_detections",
+    "description": "Report a bounding box for every insect visible in the frame.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "boxes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "x": {"type": "number", "description": "left edge, pixels from left"},
+                        "y": {"type": "number", "description": "top edge, pixels from top"},
+                        "w": {"type": "number", "description": "width in pixels"},
+                        "h": {"type": "number", "description": "height in pixels"},
+                        "class": {"type": "string", "description": "one of the allowed class labels"},
+                    },
+                    "required": ["x", "y", "w", "h"],
+                },
+            },
+            "notes": {"type": "string", "description": "One short line (e.g. 'no insects found')."},
+        },
+        "required": ["boxes"],
+    },
+}
+
+
 def available():
     return bool(getattr(settings, "ANTHROPIC_API_KEY", ""))
+
+
+def detect_boxes(jpeg_bytes, class_names, model=None):
+    """Ask the vision model to propose bounding boxes for insects in one frame.
+
+    Returns (boxes, notes). boxes are pixel dicts {x,y,w,h,class,class_id,confidence}
+    clamped to the image. Fails safe → ([], reason). Intended as a per-frame
+    annotation *assist*: the user reviews/adjusts before saving (LLM boxes are
+    approximate, so treat them as suggestions)."""
+    if not jpeg_bytes:
+        return [], "frame image unavailable"
+    if not available():
+        return [], "LLM not configured"
+    try:
+        import anthropic
+        from PIL import Image
+    except ImportError:
+        return [], "dependencies not installed"
+
+    try:
+        img = Image.open(io.BytesIO(jpeg_bytes))
+        W, H = img.size
+        classes = [c for c in (class_names or []) if c]
+        class_list = ", ".join(classes) or "insect"
+        default_class = classes[0] if classes else "bee"
+        b64 = base64.b64encode(jpeg_bytes).decode()
+        prompt = (
+            f"This is a {W}x{H} px frame from a camera monitoring a solitary-bee hotel "
+            "(a wooden block with rows of round nest holes). Find EVERY insect actually "
+            f"present (allowed labels: {class_list}). Ignore nest holes, wood knots, "
+            "shadows, leaves and grass — those are NOT insects. For each real insect call "
+            "report_detections with a tight bounding box in PIXELS (origin top-left: x,y = "
+            "top-left corner, w,h = size). If there are no insects, return an empty list."
+        )
+        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model=model or settings.ASSISTANT_VISION_MODEL,
+            max_tokens=2048,
+            tools=[_DETECT_TOOL],
+            tool_choice={"type": "tool", "name": "report_detections"},
+            messages=[{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64",
+                                             "media_type": "image/jpeg", "data": b64}},
+                {"type": "text", "text": prompt},
+            ]}],
+        )
+        raw, notes = None, ""
+        for block in msg.content:
+            if getattr(block, "type", "") == "tool_use" and block.name == "report_detections":
+                raw = block.input.get("boxes", [])
+                notes = block.input.get("notes", "")
+        if raw is None:
+            return [], "no tool output"
+
+        class_id = {c: i for i, c in enumerate(classes)}
+        out = []
+        for b in raw:
+            try:
+                x, y, w, h = float(b["x"]), float(b["y"]), float(b["w"]), float(b["h"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            # clamp to the frame
+            x = max(0, min(x, W - 1)); y = max(0, min(y, H - 1))
+            w = max(1, min(w, W - x)); h = max(1, min(h, H - y))
+            name = b.get("class") if b.get("class") in class_id else default_class
+            out.append({
+                "x": round(x), "y": round(y), "w": round(w), "h": round(h),
+                "class": name, "class_id": class_id.get(name, 0),
+                "confidence": 0.5, "source": "llm",
+            })
+        return out, notes or f"found {len(out)} insect(s)"
+    except Exception as e:  # noqa: BLE001
+        logger.error("llm_review: detect_boxes failed: %s", e)
+        return [], f"error: {e}"
 
 
 def _frame_jpeg(annotation):

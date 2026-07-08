@@ -143,6 +143,8 @@
       <button id="btn-save" class="w-full bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium mb-2">Save Annotations</button>
       <button id="btn-empty" class="w-full bg-slate-700 hover:bg-slate-800 text-white px-4 py-2 rounded text-sm font-medium mb-2"
               title="Save this frame as reviewed with NO insects — a negative example for training.">Mark empty (no insect) ✓</button>
+      <button id="btn-ai-detect" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded text-sm font-medium mb-2"
+              title="Claude looks at this frame and proposes insect boxes. Review/adjust, then Save. Boxes are approximate suggestions.">AI Detect (this frame)</button>
       <button id="btn-ai-review" class="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-medium mb-2"
               title="Claude looks at the frame and removes false-positive boxes. Review, then Save.">AI Review (remove false positives)</button>
       <button id="btn-clear" class="w-full border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded text-sm">Clear All</button>
@@ -155,6 +157,7 @@
   const VIDEO_ID = {{ video.pk }};
   const SAVE_URL = "{% url 'annotations:save' project.pk %}";
   const LLM_REVIEW_URL = "{% url 'annotations:llm_review' project.pk %}";
+  const AI_DETECT_URL = "{% url 'annotations:ai_detect' project.pk %}";
   const CSRF_TOKEN = "{{ csrf_token }}";
   const CLASSES = {{ classes|safe }};
   const currentFrame = {{ frame_number }};
@@ -379,6 +382,33 @@
       if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); doJump(); }
     });
   }
+
+  // AI Detect — Claude proposes insect boxes for this frame; the human adjusts + Saves.
+  document.getElementById("btn-ai-detect").addEventListener("click", function() {
+    var btn = this, orig = btn.textContent;
+    btn.disabled = true; btn.textContent = "Detecting…";
+    if (statusText) statusText.textContent = "AI detecting insects on this frame…";
+    fetch(AI_DETECT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRFToken": CSRF_TOKEN },
+      body: JSON.stringify({ video_id: VIDEO_ID, frame_number: currentFrame })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.success) {
+        var found = (data.boxes || []).length;
+        boxes = boxes.concat(data.boxes || []);  // add suggestions to any existing boxes
+        render(); updateBoxList();
+        if (statusText) statusText.textContent = found
+          ? "AI added " + found + " suggested box(es). Adjust, then Save."
+          : "AI found no insects on this frame.";
+      } else if (statusText) {
+        statusText.textContent = "AI detect: " + (data.error || "failed");
+      }
+    })
+    .catch(function(err) { if (statusText) statusText.textContent = "AI detect error: " + err.message; })
+    .finally(function() { btn.disabled = false; btn.textContent = orig; });
+  });
 
   // AI Review — Claude filters false-positive boxes; the human then Saves to confirm.
   document.getElementById("btn-ai-review").addEventListener("click", function() {

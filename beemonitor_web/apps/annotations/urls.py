@@ -17,6 +17,7 @@ urlpatterns = [
     path("<int:pk>/save/", views.SaveAnnotationView.as_view(), name="save"),
     path("<int:pk>/pre-annotate/", views.PreAnnotateView.as_view(), name="pre_annotate"),
     path("<int:pk>/llm-review/", views.LLMReviewView.as_view(), name="llm_review"),
+    path("<int:pk>/ai-detect/", views.AIDetectFrameView.as_view(), name="ai_detect"),
     path("<int:pk>/llm-review-all/", views.LLMReviewAllView.as_view(), name="llm_review_all"),
     path("<int:pk>/pre-annotate-all/", views.PreAnnotateAllView.as_view(), name="pre_annotate_all"),
     path("<int:pk>/export/", views.ExportProjectView.as_view(), name="export"),

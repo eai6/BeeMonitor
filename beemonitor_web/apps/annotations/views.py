@@ -1250,13 +1250,87 @@ class LLMReviewView(LoginRequiredMixin, View):
         if not ann or not ann.frame_image_path:
             return JsonResponse({"error": "No saved frame image to review — Save first, "
                                           "then AI Review."}, status=400)
-        kept, notes = llm_review.review_boxes(ann, boxes, model=settings.ASSISTANT_MODEL)
+        kept, notes = llm_review.review_boxes(ann, boxes, model=settings.ASSISTANT_VISION_MODEL)
         return JsonResponse({
             "success": True,
             "boxes": kept,
             "removed": len(boxes) - len(kept),
             "notes": notes,
         })
+
+
+def _frame_jpeg_bytes(project, video, frame_number):
+    """JPEG bytes for a frame: the saved pre-annotation frame if present, else
+    extracted live from the video. None if unavailable (external-S3/not ingested)."""
+    import io
+    from config.storage import get_s3_client
+
+    ann = Annotation.objects.filter(
+        project=project, video=video, frame_number=frame_number).first()
+    if ann and ann.frame_image_path:
+        try:
+            buf = io.BytesIO()
+            get_s3_client().download_to_stream("processed", ann.frame_image_path, buf)
+            if buf.getvalue():
+                return buf.getvalue()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("AI detect: saved frame fetch failed: %s", e)
+
+    blob = video.storage_key
+    if not blob or blob.startswith("s3://"):
+        return None
+    import os
+    import tempfile
+    import cv2
+    tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+    tmp.close()
+    try:
+        get_s3_client().download_file("raw-videos", blob, tmp.name)
+        cap = cv2.VideoCapture(tmp.name)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_number))
+        ret, frame = cap.read()
+        cap.release()
+        if not ret:
+            return None
+        ok, enc = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        return enc.tobytes() if ok else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("AI detect: video extract failed: %s", e)
+        return None
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
+
+class AIDetectFrameView(LoginRequiredMixin, View):
+    """Per-frame AI pre-annotate: the vision model proposes boxes for the current
+    frame (works even if it was never saved). Returns suggestions for the editor to
+    show; the human adjusts and Saves. LLM boxes are approximate — a starting point."""
+
+    def post(self, request, pk):
+        from django.conf import settings
+        from . import llm_review
+
+        if not llm_review.available():
+            return JsonResponse({"error": "AI detect isn't configured on this server "
+                                          "(no ANTHROPIC_API_KEY)."}, status=400)
+        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        try:
+            data = json.loads(request.body)
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+        video = get_object_or_404(project.videos, pk=data.get("video_id"))
+        frame_number = int(data.get("frame_number", 0))
+
+        jpeg = _frame_jpeg_bytes(project, video, frame_number)
+        if not jpeg:
+            return JsonResponse({"error": "Frame image unavailable (transfer the video first)."},
+                                status=400)
+        boxes, notes = llm_review.detect_boxes(
+            jpeg, project.classes, model=settings.ASSISTANT_VISION_MODEL)
+        return JsonResponse({"success": True, "boxes": boxes, "notes": notes})
 
 
 class LLMReviewAllView(LoginRequiredMixin, View):

@@ -261,6 +261,9 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 # Worker model for the tutor/debugger; Haiku for cheap routing/risk-classify.
 ASSISTANT_MODEL = os.environ.get("ASSISTANT_MODEL", "claude-sonnet-4-6")
 ASSISTANT_FAST_MODEL = os.environ.get("ASSISTANT_FAST_MODEL", "claude-haiku-4-5-20251001")
+# Most capable vision model — used for the interactive per-frame annotation
+# helpers (AI Review + AI Detect), where quality matters and volume is low.
+ASSISTANT_VISION_MODEL = os.environ.get("ASSISTANT_VISION_MODEL", "claude-opus-4-8")
 ASSISTANT_MAX_TOKENS = int(os.environ.get("ASSISTANT_MAX_TOKENS", "1500"))
 # Per-user safety valve so a runaway chat can't burn the account.
 ASSISTANT_DAILY_MESSAGE_LIMIT = int(os.environ.get("ASSISTANT_DAILY_MESSAGE_LIMIT", "200"))
