@@ -14,15 +14,17 @@
   .pl-body { display: flex; flex-direction: column; gap: 5px; }
   .pl-field { display: flex; flex-direction: column; gap: 2px; }
   .pl-lab { font-size: 10px; color: #6b7280; }
-  /* Input-port labels: sit just left of each input dot so it's clear what
-     connects into which port (e.g. video vs. rois). */
-  .drawflow .drawflow-node .inputs .input { position: relative; overflow: visible; }
+  /* Port labels: input dots get a label to their left, output dots to their
+     right, so it's clear what connects where (e.g. video/rois in, tracks out). */
+  .drawflow .drawflow-node .inputs .input,
+  .drawflow .drawflow-node .outputs .output { position: relative; overflow: visible; }
   .pl-port-label {
     position: absolute; right: calc(100% + 5px); top: 50%; transform: translateY(-50%);
     font-size: 9px; line-height: 1.4; white-space: nowrap; font-weight: 500;
     padding: 1px 5px; border-radius: 5px; border: 1px solid currentColor;
     background: #fff; pointer-events: none;
   }
+  .pl-port-label-out { right: auto; left: calc(100% + 5px); }
   .pl-port-label .pl-opt { opacity: 0.6; font-weight: 400; }
   .pl-inp { box-sizing: border-box; width: 100%; max-width: 100%; border: 1px solid #d1d5db;
     border-radius: 4px; padding: 3px 6px; font-size: 11px; background: #fff; }
@@ -247,7 +249,8 @@ function plLabelPorts(){
   document.querySelectorAll('#drawflow .drawflow-node').forEach(function(nodeEl){
     var nd = editor.getNodeFromId(nodeEl.id.replace('node-',''));
     if(!nd) return;
-    var ports = (BLOCKS[nd.name] && BLOCKS[nd.name].input_ports) || [];
+    var b = BLOCKS[nd.name] || {};
+    var ports = b.input_ports || [];
     ports.forEach(function(p, i){
       var inp = nodeEl.querySelector('.inputs .input.input_' + (i + 1));
       if(!inp || inp.querySelector('.pl-port-label')) return;
@@ -258,6 +261,15 @@ function plLabelPorts(){
       el.title = text + (p.optional ? ' — optional' : ' — required') + ' · type: ' + p.type;
       inp.appendChild(el);
     });
+    // Output port — one per producing block; label to the right with its type.
+    var outEl = nodeEl.querySelector('.outputs .output.output_1');
+    if(outEl && b.output_type && b.output_type !== 'none' && !outEl.querySelector('.pl-port-label')){
+      var oel = document.createElement('span');
+      oel.className = 'pl-port-label pl-port-label-out t-' + b.output_type;
+      oel.textContent = b.output_type;
+      oel.title = 'output · type: ' + b.output_type;
+      outEl.appendChild(oel);
+    }
   });
 }
 
