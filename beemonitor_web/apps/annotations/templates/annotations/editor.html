@@ -126,15 +126,11 @@
       </select>
     </div>
 
-    <!-- Confidence filter -->
+    <!-- Per-class confidence filters -->
     <div class="bg-white shadow rounded-lg p-4 mb-4">
-      <div class="flex items-center justify-between mb-1">
-        <h3 class="text-sm font-medium text-gray-700">Min confidence</h3>
-        <span id="conf-val" class="text-xs font-mono text-gray-600">0.00</span>
-      </div>
-      <input id="conf-filter" type="range" min="0" max="1" step="0.01" value="0"
-             class="w-full accent-amber-600">
-      <p class="text-[11px] text-gray-400 mt-1">
+      <h3 class="text-sm font-medium text-gray-700 mb-2">Min confidence (per class)</h3>
+      <div id="class-thresholds" class="space-y-2"></div>
+      <p class="text-[11px] text-gray-400 mt-2">
         <span id="conf-shown">0</span> of <span id="conf-total">0</span> shown ·
         Save keeps only shown boxes. Manual boxes always show.
       </p>
@@ -345,12 +341,60 @@
     render(); updateBoxList();
   }
 
-  // Confidence filter. Boxes without a confidence (manually drawn) always pass.
-  let minConf = 0;
+  // Per-class confidence filter. Boxes without a confidence (manually drawn)
+  // always pass. classThresholds maps class_id -> min confidence (default 0).
+  let classThresholds = {};
+  function _threshold(cid) { return classThresholds[cid] != null ? classThresholds[cid] : 0; }
   function _passes(box) {
-    return box.confidence == null || box.confidence >= minConf;
+    return box.confidence == null || box.confidence >= _threshold(box.class_id);
   }
   function visibleBoxes() { return boxes.filter(_passes); }
+
+  // Build one slider per class that has confidence-bearing (detected) boxes.
+  function renderClassThresholds() {
+    var host = document.getElementById("class-thresholds");
+    if (!host) return;
+    var byClass = {};  // class_id -> {total, shown}
+    boxes.forEach(function(b) {
+      if (b.confidence == null) return;  // manual boxes aren't thresholded
+      var c = byClass[b.class_id] || (byClass[b.class_id] = { total: 0, shown: 0 });
+      c.total += 1; if (_passes(b)) c.shown += 1;
+    });
+    var ids = Object.keys(byClass).sort(function(a, b) { return a - b; });
+    if (!ids.length) {
+      host.innerHTML = '<p class="text-xs text-gray-400">No detected boxes — draw manually or pre-annotate.</p>';
+      return;
+    }
+    host.innerHTML = ids.map(function(cid) {
+      var name = CLASSES[cid] || ("class " + cid), t = _threshold(cid), c = byClass[cid];
+      return '<div>'
+        + '<div class="flex items-center justify-between mb-0.5">'
+        + '<span class="text-xs text-gray-700 flex items-center gap-1">'
+        + '<span class="w-2.5 h-2.5 rounded-full inline-block" style="background:' + getColor(cid) + '"></span>'
+        + esc(name) + '</span>'
+        + '<span class="cls-readout text-xs font-mono text-gray-500">' + t.toFixed(2)
+        + ' · ' + c.shown + '/' + c.total + '</span></div>'
+        + '<input type="range" min="0" max="1" step="0.01" value="' + t + '"'
+        + ' data-cid="' + cid + '" class="cls-thresh w-full accent-amber-600"></div>';
+    }).join("");
+  }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  // Live update as any per-class slider moves — update in place (don't rebuild
+  // the panel mid-drag, which would drop the slider being dragged).
+  document.getElementById("class-thresholds").addEventListener("input", function(e) {
+    var el = e.target;
+    if (!el.classList.contains("cls-thresh")) return;
+    var cid = el.getAttribute("data-cid");
+    classThresholds[cid] = parseFloat(el.value) || 0;
+    render(); updateBoxList();
+    var total = 0, shown = 0;
+    boxes.forEach(function(b) {
+      if (b.confidence == null || String(b.class_id) !== String(cid)) return;
+      total += 1; if (_passes(b)) shown += 1;
+    });
+    var readout = el.parentElement.querySelector(".cls-readout");
+    if (readout) readout.textContent = (parseFloat(el.value) || 0).toFixed(2) + " · " + shown + "/" + total;
+  });
 
   // Draw boxes on transparent canvas (frame image shows through)
   function render() {
@@ -387,6 +431,7 @@
     var shownEl = document.getElementById("conf-shown");
     if (totalEl) totalEl.textContent = boxes.length;
     if (shownEl) shownEl.textContent = shown;
+    renderClassThresholds();
     if (boxes.length === 0) {
       boxList.innerHTML = '<p class="text-xs text-gray-400">No boxes yet. Click and drag to draw.</p>';
       return;
@@ -533,7 +578,7 @@
         boxes = kept;  // reflect the pruning locally
         render(); updateBoxList();
         if (statusText) statusText.textContent = "Saved " + kept.length + " box(es)"
-          + (dropped > 0 ? " (dropped " + dropped + " below " + Math.round(minConf * 100) + "%)" : "")
+          + (dropped > 0 ? " (dropped " + dropped + " below the per-class threshold)" : "")
           + " · reviewed ✓.";
         var nextUrl = "{{ next_frame_url|escapejs }}";
         if (thenNext && nextUrl) { window.location.href = nextUrl; }
@@ -613,12 +658,8 @@
               boxes = boxes.concat(s.boxes || []);  // add to existing boxes
               // Show ALL suggestions regardless of class/score — SAM 3 scores
               // structural classes (nest tube / bee hotel) lower than bees, so a
-              // high min-confidence would hide them. Reset the filter to 0.
-              if (found) {
-                minConf = 0;
-                var cf = document.getElementById("conf-filter"), cv = document.getElementById("conf-val");
-                if (cf) cf.value = 0; if (cv) cv.textContent = "0.00";
-              }
+              // high threshold would hide them. Reset all per-class thresholds to 0.
+              if (found) { classThresholds = {}; }
               render(); updateBoxList();
               if (statusText) statusText.textContent = found
                 ? "SAM 3 added " + found + " box(es) (all classes shown). Adjust, then Save."
@@ -670,18 +711,7 @@
     .finally(function() { btn.disabled = false; btn.textContent = orig; });
   });
 
-  // Confidence filter slider
-  (function() {
-    var slider = document.getElementById("conf-filter");
-    var valEl = document.getElementById("conf-val");
-    if (!slider) return;
-    slider.addEventListener("input", function() {
-      minConf = parseFloat(slider.value) || 0;
-      if (valEl) valEl.textContent = minConf.toFixed(2);
-      render();
-      updateBoxList();
-    });
-  })();
+  // (Per-class confidence sliders are wired via #class-thresholds above.)
 
   // Clear all boxes
   document.getElementById("btn-clear").addEventListener("click", function() {
