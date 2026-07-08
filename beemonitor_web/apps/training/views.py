@@ -320,6 +320,58 @@ class TrainingCreateView(LoginRequiredMixin, CreateView):
         return reverse_lazy("training:detail", kwargs={"pk": self.object.pk})
 
 
+_W, _H, _PAD = 560, 180, 28  # epoch-chart SVG geometry
+
+
+def _line_series(em, keys_colors, y_max):
+    """Build inline-SVG polyline points for each metric series over epochs.
+    keys_colors: list of (key, label, color). Returns series with a `points`
+    string sized to the (_W, _H) viewbox and the last value."""
+    n = len(em)
+    plot_w, plot_h = _W - 2 * _PAD, _H - 2 * _PAD
+    series = []
+    for key, label, color in keys_colors:
+        pts = []
+        last = None
+        for i, row in enumerate(em):
+            v = row.get(key)
+            if v is None:
+                continue
+            x = _PAD + (plot_w * i / (n - 1) if n > 1 else plot_w / 2)
+            y = _PAD + plot_h * (1 - (v / y_max if y_max else 0))
+            pts.append(f"{x:.1f},{y:.1f}")
+            last = v
+        if pts:
+            series.append({"label": label, "color": color,
+                           "points": " ".join(pts), "last": last,
+                           "single": len(pts) == 1})
+    return series
+
+
+def _build_epoch_charts(em):
+    """Two charts (detection metrics 0–1, and losses) from epoch_metrics."""
+    loss_vals = [row[k] for row in em for k in ("box_loss", "cls_loss")
+                 if row.get(k) is not None]
+    loss_max = max(loss_vals) * 1.1 if loss_vals else 1.0
+    return {
+        "w": _W, "h": _H, "pad": _PAD,
+        "epochs": [row["epoch"] for row in em],
+        "detection": _line_series(em, [
+            ("mAP50", "mAP50", "#d97706"),
+            ("mAP50_95", "mAP50-95", "#ea580c"),
+            ("precision", "Precision", "#2563eb"),
+            ("recall", "Recall", "#16a34a"),
+            ("f1", "F1", "#9333ea"),
+        ], 1.0),
+        "detection_ymax": 1.0,
+        "loss": _line_series(em, [
+            ("box_loss", "Box loss", "#dc2626"),
+            ("cls_loss", "Cls loss", "#64748b"),
+        ], loss_max),
+        "loss_ymax": round(loss_max, 3),
+    }
+
+
 class TrainingDetailView(LoginRequiredMixin, DetailView):
     model = TrainingJob
     template_name = "training/detail.html"
@@ -355,6 +407,13 @@ class TrainingDetailView(LoginRequiredMixin, DetailView):
             except Exception as e:
                 logger.warning("[train:%s] presigning val predictions failed: %s",
                                self.object.pk, e)
+
+        # Per-epoch metric curves (present on jobs trained after the container
+        # update that emits epoch_metrics).
+        em = (self.object.metrics or {}).get("epoch_metrics") or []
+        if em:
+            ctx["epoch_charts"] = _build_epoch_charts(em)
+        ctx["best_epoch"] = (self.object.metrics or {}).get("best_epoch")
         return ctx
 
 
@@ -435,7 +494,8 @@ def poll_training_jobs(user=None) -> dict:
             continue
 
         metrics = result.get("metrics", {}) or {}
-        for extra in ("train_count", "val_count", "val_predictions"):
+        for extra in ("train_count", "val_count", "val_predictions",
+                      "epoch_metrics", "best_epoch"):
             if result.get(extra) is not None:
                 metrics[extra] = result[extra]
         storage_key = result.get("storage_key", "")

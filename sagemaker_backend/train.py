@@ -178,7 +178,60 @@ def _train(manifest: dict, data_yaml: Path) -> dict:
         "precision": _m("metrics/precision(B)", "metrics/precision"),
         "recall": _m("metrics/recall(B)", "metrics/recall"),
     }
-    return {"best": best, "metrics": metrics, "epochs": epochs}
+    epoch_metrics, best_epoch = _epoch_metrics()
+    return {"best": best, "metrics": metrics, "epochs": epochs,
+            "epoch_metrics": epoch_metrics, "best_epoch": best_epoch}
+
+
+def _epoch_metrics() -> tuple[list, "int | None"]:
+    """Parse ultralytics' per-epoch results.csv into a compact series for the
+    web charts. Column names vary across versions, so match by substring.
+    Returns (list of per-epoch dicts, best_epoch by mAP50)."""
+    csv_path = WORK / "runs" / "train" / "results.csv"
+    if not csv_path.exists():
+        return [], None
+    import csv as _csv
+
+    def _num(row, includes, excludes=()):
+        for key in row:
+            kl = (key or "").lower()
+            if all(s in kl for s in includes) and not any(e in kl for e in excludes):
+                try:
+                    return round(float(row[key]), 5)
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    out = []
+    try:
+        with open(csv_path, newline="") as f:
+            for i, raw in enumerate(_csv.DictReader(f)):
+                row = {(k or "").strip(): v for k, v in raw.items()}
+                p = _num(row, ["precision"])
+                r = _num(row, ["recall"])
+                f1 = round(2 * p * r / (p + r), 5) if p and r and (p + r) else None
+                ep = _num(row, ["epoch"])
+                out.append({
+                    "epoch": int(ep) if ep is not None else i + 1,
+                    "mAP50": _num(row, ["map50"], ["95"]),
+                    "mAP50_95": _num(row, ["map50-95"]) or _num(row, ["map", "95"]),
+                    "precision": p,
+                    "recall": r,
+                    "f1": f1,
+                    "box_loss": _num(row, ["train", "box", "loss"]) or _num(row, ["box", "loss"]),
+                    "cls_loss": _num(row, ["train", "cls", "loss"]) or _num(row, ["cls", "loss"]),
+                })
+    except Exception as e:  # noqa: BLE001 - curves are best-effort
+        log(f"epoch-metrics parse failed (non-fatal): {e}")
+        return [], None
+
+    best_epoch = None
+    best_map = -1.0
+    for row in out:
+        m = row.get("mAP50")
+        if m is not None and m > best_map:
+            best_map, best_epoch = m, row["epoch"]
+    return out, best_epoch
 
 
 _VAL_PRED_CAP = 60  # rendered val-set prediction images uploaded per job
@@ -243,6 +296,8 @@ def main() -> int:
             "storage_key": model_key,
             "metrics": out["metrics"],
             "epochs_completed": out["epochs"],
+            "epoch_metrics": out["epoch_metrics"],
+            "best_epoch": out["best_epoch"],
             "train_count": n_train,
             "val_count": n_val,
             "val_predictions": val_pred_keys,

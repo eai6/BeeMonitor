@@ -121,6 +121,59 @@
 </div>
 {% endif %}
 
+<!-- Per-epoch training curves (inline SVG, CSP-safe) -->
+{% if epoch_charts %}
+<div class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-sm font-medium text-gray-500 uppercase mb-4">Metrics per epoch</h2>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    {% with c=epoch_charts %}
+    <!-- Detection metrics (0–1) -->
+    <div>
+      <h3 class="text-xs font-medium text-gray-600 mb-2">Detection quality (higher is better)</h3>
+      <div class="overflow-x-auto">
+      <svg viewBox="0 0 {{ c.w }} {{ c.h }}" class="w-full" style="min-width: 360px;" role="img" aria-label="Detection metrics per epoch">
+        <line x1="{{ c.pad }}" y1="{{ c.pad }}" x2="{{ c.pad }}" y2="{{ c.h|add:'-28' }}" stroke="#e5e7eb"/>
+        <line x1="{{ c.pad }}" y1="{{ c.h|add:'-28' }}" x2="{{ c.w|add:'-28' }}" y2="{{ c.h|add:'-28' }}" stroke="#e5e7eb"/>
+        <text x="4" y="{{ c.pad }}" font-size="9" fill="#9ca3af">1.0</text>
+        <text x="4" y="{{ c.h|add:'-28' }}" font-size="9" fill="#9ca3af">0</text>
+        {% for s in c.detection %}
+          <polyline points="{{ s.points }}" fill="none" stroke="{{ s.color }}" stroke-width="1.5"
+                    stroke-linejoin="round"{% if s.single %} stroke-linecap="round" stroke-width="4"{% endif %}/>
+        {% endfor %}
+      </svg>
+      </div>
+      <div class="flex flex-wrap gap-x-3 gap-y-1 mt-2">
+        {% for s in c.detection %}
+        <span class="inline-flex items-center gap-1 text-[11px] text-gray-600"><span class="inline-block w-3 h-[2px]" style="background: {{ s.color }}"></span>{{ s.label }} <span class="text-gray-400">{{ s.last|floatformat:3 }}</span></span>
+        {% endfor %}
+      </div>
+    </div>
+    <!-- Losses -->
+    <div>
+      <h3 class="text-xs font-medium text-gray-600 mb-2">Training loss (lower is better)</h3>
+      <div class="overflow-x-auto">
+      <svg viewBox="0 0 {{ c.w }} {{ c.h }}" class="w-full" style="min-width: 360px;" role="img" aria-label="Training loss per epoch">
+        <line x1="{{ c.pad }}" y1="{{ c.pad }}" x2="{{ c.pad }}" y2="{{ c.h|add:'-28' }}" stroke="#e5e7eb"/>
+        <line x1="{{ c.pad }}" y1="{{ c.h|add:'-28' }}" x2="{{ c.w|add:'-28' }}" y2="{{ c.h|add:'-28' }}" stroke="#e5e7eb"/>
+        <text x="4" y="{{ c.pad }}" font-size="9" fill="#9ca3af">{{ c.loss_ymax }}</text>
+        <text x="4" y="{{ c.h|add:'-28' }}" font-size="9" fill="#9ca3af">0</text>
+        {% for s in c.loss %}
+          <polyline points="{{ s.points }}" fill="none" stroke="{{ s.color }}" stroke-width="1.5"/>
+        {% endfor %}
+      </svg>
+      </div>
+      <div class="flex flex-wrap gap-x-3 gap-y-1 mt-2">
+        {% for s in c.loss %}
+        <span class="inline-flex items-center gap-1 text-[11px] text-gray-600"><span class="inline-block w-3 h-[2px]" style="background: {{ s.color }}"></span>{{ s.label }} <span class="text-gray-400">{{ s.last|floatformat:3 }}</span></span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endwith %}
+  </div>
+  <p class="text-[11px] text-gray-400 mt-3">x-axis: epoch 1 → {{ job.metrics.epoch_metrics|length }}. Best mAP50 at epoch {{ job.metrics.best_epoch }}.</p>
+</div>
+{% endif %}
+
 <!-- Val-set predictions: best.pt rendered on held-out frames -->
 {% if val_predictions %}
 <div class="bg-white shadow rounded-lg p-6 mb-6">
