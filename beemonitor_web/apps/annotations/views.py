@@ -950,45 +950,62 @@ class ExportProjectView(LoginRequiredMixin, View):
             )
             zf.writestr("data.yaml", data_yaml)
 
-            # Group annotations and extract frames from videos
             from config.storage import get_s3_client
             s3 = get_s3_client()
             video_cache = {}  # video_pk -> (cv2.VideoCapture, tmp_path)
 
+            # Deterministic split matching the training container's (sorted tail
+            # → val). val_percent from ?val_percent= (default 20, = the training
+            # job default) so "what you export" == "what training splits".
+            try:
+                val_percent = int(request.GET.get("val_percent", 20))
+            except (TypeError, ValueError):
+                val_percent = 20
+            val_percent = max(0, min(90, val_percent))
             ann_list = list(annotations)
-            split_idx = int(len(ann_list) * 0.8)
+            split_idx = len(ann_list) - max(1, len(ann_list) * val_percent // 100) if ann_list else 0
 
             for i, ann in enumerate(ann_list):
-                split = "train" if i < split_idx else "val"
+                split = "val" if i >= split_idx else "train"
                 base_name = f"{ann.video.title}_f{ann.frame_number:06d}"
-                label_name = f"labels/{split}/{base_name}.txt"
+                zf.writestr(f"labels/{split}/{base_name}.txt", ann.to_yolo_format())
 
-                yolo_txt = ann.to_yolo_format()
-                zf.writestr(label_name, yolo_txt)
-
-                try:
-                    if ann.video.pk not in video_cache:
-                        blob_path = ann.video.storage_key
-                        if blob_path and not blob_path.startswith("s3://"):
-                            import tempfile, cv2
-
-                            tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-                            tmp.close()
-                            s3.download_file("raw-videos", blob_path, tmp.name)
-                            cap = cv2.VideoCapture(tmp.name)
-                            video_cache[ann.video.pk] = (cap, tmp.name)
-
-                    if ann.video.pk in video_cache:
-                        import cv2
-                        cap, _ = video_cache[ann.video.pk]
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, ann.frame_number)
-                        ret, frame = cap.read()
-                        if ret:
-                            _, img_buf = cv2.imencode(".jpg", frame)
-                            zf.writestr(f"images/{split}/{base_name}.jpg", img_buf.tobytes())
-                except Exception as e:
-                    logger.error("Failed to extract frame %d from video %s: %s",
-                                ann.frame_number, ann.video.pk, e)
+                # Prefer the pre-saved frame JPEG (processed bucket) — the
+                # tracker/pre-annotator already extracted it. Re-extract from
+                # video only as a fallback.
+                img_bytes = None
+                if ann.frame_image_path:
+                    try:
+                        import io
+                        b = io.BytesIO()
+                        s3.download_to_stream("processed", ann.frame_image_path, b)
+                        img_bytes = b.getvalue()
+                    except Exception as e:
+                        logger.warning("export: saved frame %s missing (%s) — re-extracting",
+                                       ann.frame_image_path, e)
+                if img_bytes is None:
+                    try:
+                        if ann.video.pk not in video_cache:
+                            blob_path = ann.video.storage_key
+                            if blob_path and not blob_path.startswith("s3://"):
+                                import tempfile, cv2
+                                tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+                                tmp.close()
+                                s3.download_file("raw-videos", blob_path, tmp.name)
+                                video_cache[ann.video.pk] = (cv2.VideoCapture(tmp.name), tmp.name)
+                        if ann.video.pk in video_cache:
+                            import cv2
+                            cap, _ = video_cache[ann.video.pk]
+                            cap.set(cv2.CAP_PROP_POS_FRAMES, ann.frame_number)
+                            ret, frame = cap.read()
+                            if ret:
+                                _, img_buf = cv2.imencode(".jpg", frame)
+                                img_bytes = img_buf.tobytes()
+                    except Exception as e:
+                        logger.error("Failed to extract frame %d from video %s: %s",
+                                     ann.frame_number, ann.video.pk, e)
+                if img_bytes is not None:
+                    zf.writestr(f"images/{split}/{base_name}.jpg", img_bytes)
 
             # Cleanup video captures
             for cap, tmp_path in video_cache.values():

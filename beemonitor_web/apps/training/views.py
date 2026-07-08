@@ -316,126 +316,137 @@ class TrainingDetailView(LoginRequiredMixin, DetailView):
         return ctx
 
 
+_ACTIVE_TRAINING_STATUSES = [
+    TrainingJob.Status.QUEUED,
+    TrainingJob.Status.PREPARING,
+    TrainingJob.Status.TRAINING,
+]
+
+
+def poll_training_jobs(user=None) -> dict:
+    """Poll SageMaker for active training jobs and finalize completed ones.
+
+    Reusable by the page-load view and the background reconciler (so training
+    completes without an open browser). ``user=None`` polls all users.
+    Idempotent; never raises.
+    """
+    qs = TrainingJob.objects.filter(status__in=_ACTIVE_TRAINING_STATUSES).exclude(modal_call_id="")
+    if user is not None:
+        qs = qs.filter(user=user)
+    active_jobs = list(qs.order_by("-created_at")[:20])
+    if not active_jobs:
+        return {"checked": 0, "completed": 0}
+
+    sm = _boto3("sagemaker")
+    s3 = _boto3("s3")
+    completed = 0
+
+    for job in active_jobs:
+        try:
+            d = sm.describe_training_job(TrainingJobName=job.modal_call_id)
+        except Exception as e:
+            logger.warning("[poll] job=%s describe failed: %s", job.pk, e)
+            continue
+
+        st = d.get("TrainingJobStatus", "")
+        if st == "InProgress":
+            secondary = d.get("SecondaryStatus", "")
+            new_status = (
+                TrainingJob.Status.TRAINING
+                if secondary in ("Training", "Uploading")
+                else TrainingJob.Status.PREPARING
+            )
+            if job.status != new_status:
+                TrainingJob.objects.filter(pk=job.pk).update(status=new_status)
+            continue
+
+        if st in ("Failed", "Stopped", "Stopping"):
+            TrainingJob.objects.filter(pk=job.pk).update(
+                status=TrainingJob.Status.FAILED,
+                error_message=d.get("FailureReason", f"training {st.lower()}")[:1000],
+                completed_at=timezone.now(),
+            )
+            completed += 1
+            continue
+
+        if st != "Completed":
+            continue
+
+        # Completed — read the result.json the container wrote to the output bucket.
+        result = {}
+        try:
+            body = s3.get_object(
+                Bucket=settings.SAGEMAKER_OUTPUT_BUCKET,
+                Key=f"training/{job.pk}/result.json",
+            )["Body"].read()
+            result = json.loads(body)
+        except Exception as e:
+            logger.warning("[poll] job=%s no result.json yet: %s", job.pk, e)
+
+        if result.get("status") == "failed":
+            TrainingJob.objects.filter(pk=job.pk).update(
+                status=TrainingJob.Status.FAILED,
+                error_message=str(result.get("error", "training failed"))[:1000],
+                completed_at=timezone.now(),
+            )
+            completed += 1
+            continue
+
+        metrics = result.get("metrics", {}) or {}
+        for extra in ("train_count", "val_count", "val_predictions"):
+            if result.get(extra) is not None:
+                metrics[extra] = result[extra]
+        storage_key = result.get("storage_key", "")
+        exec_secs = float(result.get("execution_seconds") or d.get("TrainingTimeInSeconds") or 0)
+
+        TrainingJob.objects.filter(pk=job.pk).update(
+            status=TrainingJob.Status.COMPLETED,
+            completed_at=timezone.now(),
+            execution_seconds=exec_secs,
+            metrics=metrics,
+        )
+
+        if storage_key:
+            CustomModel.objects.get_or_create(
+                training_job=job,
+                defaults={
+                    "user": job.user,
+                    "name": f"{job.name} (trained)",
+                    "model_type": CustomModel.ModelType.CUSTOM,
+                    # Fine-tunes inherit the source's architecture, not the
+                    # placeholder arch stored on the job — label the lineage.
+                    "base_model": (f"fine-tuned: {job.init_from_label}"[:50]
+                                   if job.init_weights_key else job.base_model),
+                    "storage_key": storage_key,
+                    "classes": job.project.classes or [],
+                    "metrics": metrics,
+                    "status": CustomModel.Status.READY,
+                    "is_active": True,
+                },
+            )
+            logger.info("[poll] job=%s COMPLETED -> CustomModel (%s)", job.pk, storage_key)
+        else:
+            logger.warning("[poll] job=%s completed but no storage_key in result", job.pk)
+
+        credits_used = int(exec_secs)
+        if credits_used > 0:
+            try:
+                from apps.accounts.models import UserProfile
+                profile, _ = UserProfile.objects.get_or_create(user=job.user)
+                profile.charge(credits_used, gpu_seconds=exec_secs)
+            except Exception as e:
+                logger.error("[poll] job=%s credit charge failed: %s", job.pk, e)
+
+        completed += 1
+
+    return {"checked": len(active_jobs), "completed": completed}
+
+
 class PollTrainingJobsView(LoginRequiredMixin, View):
-    """JSON endpoint: poll SageMaker describe_training_job for active jobs."""
+    """JSON endpoint hit by the training pages to advance active jobs."""
 
     def get(self, request):
-        active_jobs = list(
-            TrainingJob.objects.filter(
-                user=request.user,
-                status__in=[
-                    TrainingJob.Status.QUEUED,
-                    TrainingJob.Status.PREPARING,
-                    TrainingJob.Status.TRAINING,
-                ],
-            ).exclude(modal_call_id="")[:20]
-        )
-        if not active_jobs:
-            return JsonResponse({"checked": 0, "completed": 0})
-
-        sm = _boto3("sagemaker")
-        s3 = _boto3("s3")
-        completed = 0
-
-        for job in active_jobs:
-            try:
-                d = sm.describe_training_job(TrainingJobName=job.modal_call_id)
-            except Exception as e:
-                logger.warning("[poll] job=%s describe failed: %s", job.pk, e)
-                continue
-
-            st = d.get("TrainingJobStatus", "")
-            if st == "InProgress":
-                secondary = d.get("SecondaryStatus", "")
-                new_status = (
-                    TrainingJob.Status.TRAINING
-                    if secondary in ("Training", "Uploading")
-                    else TrainingJob.Status.PREPARING
-                )
-                if job.status != new_status:
-                    TrainingJob.objects.filter(pk=job.pk).update(status=new_status)
-                continue
-
-            if st in ("Failed", "Stopped", "Stopping"):
-                TrainingJob.objects.filter(pk=job.pk).update(
-                    status=TrainingJob.Status.FAILED,
-                    error_message=d.get("FailureReason", f"training {st.lower()}")[:1000],
-                    completed_at=timezone.now(),
-                )
-                completed += 1
-                continue
-
-            if st != "Completed":
-                continue
-
-            # Completed — read the result.json the container wrote to the output bucket.
-            result = {}
-            try:
-                body = s3.get_object(
-                    Bucket=settings.SAGEMAKER_OUTPUT_BUCKET,
-                    Key=f"training/{job.pk}/result.json",
-                )["Body"].read()
-                result = json.loads(body)
-            except Exception as e:
-                logger.warning("[poll] job=%s no result.json yet: %s", job.pk, e)
-
-            if result.get("status") == "failed":
-                TrainingJob.objects.filter(pk=job.pk).update(
-                    status=TrainingJob.Status.FAILED,
-                    error_message=str(result.get("error", "training failed"))[:1000],
-                    completed_at=timezone.now(),
-                )
-                completed += 1
-                continue
-
-            metrics = result.get("metrics", {}) or {}
-            for extra in ("train_count", "val_count", "val_predictions"):
-                if result.get(extra) is not None:
-                    metrics[extra] = result[extra]
-            storage_key = result.get("storage_key", "")
-            exec_secs = float(result.get("execution_seconds") or d.get("TrainingTimeInSeconds") or 0)
-
-            TrainingJob.objects.filter(pk=job.pk).update(
-                status=TrainingJob.Status.COMPLETED,
-                completed_at=timezone.now(),
-                execution_seconds=exec_secs,
-                metrics=metrics,
-            )
-
-            if storage_key:
-                CustomModel.objects.get_or_create(
-                    training_job=job,
-                    defaults={
-                        "user": job.user,
-                        "name": f"{job.name} (trained)",
-                        "model_type": CustomModel.ModelType.CUSTOM,
-                        # Fine-tunes inherit the source's architecture, not the
-                        # placeholder arch stored on the job — label the lineage.
-                        "base_model": (f"fine-tuned: {job.init_from_label}"[:50]
-                                       if job.init_weights_key else job.base_model),
-                        "storage_key": storage_key,
-                        "classes": job.project.classes or [],
-                        "metrics": metrics,
-                        "status": CustomModel.Status.READY,
-                        "is_active": True,
-                    },
-                )
-                logger.info("[poll] job=%s COMPLETED -> CustomModel (%s)", job.pk, storage_key)
-            else:
-                logger.warning("[poll] job=%s completed but no storage_key in result", job.pk)
-
-            credits_used = int(exec_secs)
-            if credits_used > 0:
-                try:
-                    from apps.accounts.models import UserProfile
-                    profile, _ = UserProfile.objects.get_or_create(user=job.user)
-                    profile.charge(credits_used, gpu_seconds=exec_secs)
-                except Exception as e:
-                    logger.error("[poll] job=%s credit charge failed: %s", job.pk, e)
-
-            completed += 1
-
-        return JsonResponse({"checked": len(active_jobs), "completed": completed})
+        return JsonResponse(poll_training_jobs(request.user))
 
 
 class CustomModelListView(LoginRequiredMixin, ListView):

@@ -72,8 +72,17 @@ def reconcile_all(limit: int = 500) -> dict:
         if user:
             poll_annotate_jobs(user)
 
+    # SageMaker training jobs (advance without an open browser).
+    training = {"checked": 0, "completed": 0}
+    try:
+        from apps.training.views import poll_training_jobs
+        training = poll_training_jobs()  # all users
+    except Exception:
+        logger.exception("training poll failed")
+
     return {"jobs_checked": len(jobs), "jobs_resolved": resolved,
-            "run_users": len(run_user_ids), "annotate_users": len(annotate_user_ids)}
+            "run_users": len(run_user_ids), "annotate_users": len(annotate_user_ids),
+            "training_completed": training.get("completed", 0)}
 
 
 def _loop():
