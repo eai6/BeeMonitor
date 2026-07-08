@@ -661,6 +661,8 @@ def _spawn_preannotation(task_pk: int) -> None:
             "nms_iou": p.get("nms_iou", 0.5),
             "max_detections": p.get("max_detections", 100),
         }
+        if p.get("frame_numbers"):  # per-frame pre-annotate (editor) targets exact frames
+            payload["frame_numbers"] = p["frame_numbers"]
         if task.custom_model_key:
             payload["custom_bee_model_path"] = task.custom_model_key
 
@@ -748,6 +750,14 @@ def finalize_preannotation_task(task, s3) -> bool:
     frames = result.get("frames") or []
     width = result.get("video_width", 1280)
     height = result.get("video_height", 720)
+
+    # Suggest-only (editor per-frame pre-annotate): don't touch the DB — the boxes
+    # are read straight from this S3 output and shown for the human to Save.
+    if (task.params or {}).get("suggest_only"):
+        PreAnnotationTask.objects.filter(pk=task.pk).update(
+            status=PreAnnotationTask.Status.COMPLETED,
+            frames_written=len(frames), completed_at=timezone.now())
+        return True
 
     proj_classes = task.project.classes or []
     class_id_by_name = {c: i for i, c in enumerate(proj_classes)}
@@ -1259,64 +1269,19 @@ class LLMReviewView(LoginRequiredMixin, View):
         })
 
 
-def _frame_jpeg_bytes(project, video, frame_number):
-    """JPEG bytes for a frame: the saved pre-annotation frame if present, else
-    extracted live from the video. None if unavailable (external-S3/not ingested)."""
-    import io
-    from config.storage import get_s3_client
-
-    ann = Annotation.objects.filter(
-        project=project, video=video, frame_number=frame_number).first()
-    if ann and ann.frame_image_path:
-        try:
-            buf = io.BytesIO()
-            get_s3_client().download_to_stream("processed", ann.frame_image_path, buf)
-            if buf.getvalue():
-                return buf.getvalue()
-        except Exception as e:  # noqa: BLE001
-            logger.warning("AI detect: saved frame fetch failed: %s", e)
-
-    blob = video.storage_key
-    if not blob or blob.startswith("s3://"):
-        return None
-    import os
-    import tempfile
-    import cv2
-    tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-    tmp.close()
-    try:
-        get_s3_client().download_file("raw-videos", blob, tmp.name)
-        cap = cv2.VideoCapture(tmp.name)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_number))
-        ret, frame = cap.read()
-        cap.release()
-        if not ret:
-            return None
-        ok, enc = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        return enc.tobytes() if ok else None
-    except Exception as e:  # noqa: BLE001
-        logger.warning("AI detect: video extract failed: %s", e)
-        return None
-    finally:
-        try:
-            os.unlink(tmp.name)
-        except OSError:
-            pass
-
-
-class AIDetectFrameView(LoginRequiredMixin, View):
-    """Per-frame AI pre-annotate: the vision model proposes boxes for the current
-    frame (works even if it was never saved). Returns suggestions for the editor to
-    show; the human adjusts and Saves. LLM boxes are approximate — a starting point."""
+class PreAnnotateFrameView(LoginRequiredMixin, View):
+    """Per-frame pre-annotate: run the SAM 3 detector on just the current frame
+    (async on the GPU endpoint) and return a task id to poll. suggest_only — the
+    result is shown as suggestions; nothing is written until the human Saves."""
 
     def post(self, request, pk):
         from django.conf import settings
-        from . import llm_review
+        from .models import PreAnnotationTask
 
-        if not llm_review.available():
-            return JsonResponse({"error": "AI detect isn't configured on this server "
-                                          "(no ANTHROPIC_API_KEY)."}, status=400)
         project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        if not getattr(settings, "SAGEMAKER_SAM3_ENDPOINT_NAME", ""):
+            return JsonResponse({"error": "SAM 3 endpoint isn't configured on this server."},
+                                status=400)
         try:
             data = json.loads(request.body)
         except json.JSONDecodeError:
@@ -1324,13 +1289,79 @@ class AIDetectFrameView(LoginRequiredMixin, View):
         video = get_object_or_404(project.videos, pk=data.get("video_id"))
         frame_number = int(data.get("frame_number", 0))
 
-        jpeg = _frame_jpeg_bytes(project, video, frame_number)
-        if not jpeg:
-            return JsonResponse({"error": "Frame image unavailable (transfer the video first)."},
-                                status=400)
-        boxes, notes = llm_review.detect_boxes(
-            jpeg, project.classes, model=settings.ASSISTANT_VISION_MODEL)
-        return JsonResponse({"success": True, "boxes": boxes, "notes": notes})
+        task = PreAnnotationTask.objects.create(
+            user=request.user, project=project, video=video, labeler="sam3",
+            params={
+                "frame_numbers": [frame_number], "max_frames": 1,
+                "confidence": settings.PREANNOTATE_CONFIDENCE,
+                "selection": "uniform", "nms_iou": 0.5, "max_detections": 100,
+                "target_labels": project.classes, "suggest_only": True,
+            },
+        )
+        spawn_preannotation_async(task.pk)
+        return JsonResponse({"success": True, "task_id": task.pk})
+
+
+class PreAnnotateFrameStatusView(LoginRequiredMixin, View):
+    """Poll a per-frame pre-annotate task. Reads the async S3 output directly and
+    returns the frame's boxes when ready (no DB write — that happens on Save)."""
+
+    def get(self, request, pk):
+        import boto3
+        from urllib.parse import urlparse
+        from django.conf import settings
+        from django.utils import timezone
+        from botocore.exceptions import ClientError
+
+        from .models import PreAnnotationTask
+
+        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        task = get_object_or_404(PreAnnotationTask, pk=request.GET.get("task"),
+                                 project=project, user=request.user)
+        if task.status == PreAnnotationTask.Status.FAILED:
+            return JsonResponse({"status": "failed", "error": task.error_message})
+
+        frame_number = ((task.params or {}).get("frame_numbers") or [0])[0]
+        s3 = boto3.client("s3", region_name=settings.AWS_REGION)
+
+        if task.output_uri:
+            out = urlparse(task.output_uri)
+            try:
+                body = s3.get_object(Bucket=out.netloc, Key=out.path.lstrip("/"))["Body"].read()
+                result = json.loads(body)
+                PreAnnotationTask.objects.filter(pk=task.pk).update(
+                    status=PreAnnotationTask.Status.COMPLETED, completed_at=timezone.now())
+                return JsonResponse({"status": "completed",
+                                     "boxes": self._frame_boxes(result, frame_number, project)})
+            except ClientError as e:
+                if e.response.get("Error", {}).get("Code", "") not in ("NoSuchKey", "404", "NotFound"):
+                    return JsonResponse({"status": "processing"})
+                if task.failure_uri:
+                    f = urlparse(task.failure_uri)
+                    try:
+                        s3.get_object(Bucket=f.netloc, Key=f.path.lstrip("/"))
+                        PreAnnotationTask.objects.filter(pk=task.pk).update(
+                            status=PreAnnotationTask.Status.FAILED,
+                            error_message="SAM 3 endpoint failure", completed_at=timezone.now())
+                        return JsonResponse({"status": "failed", "error": "SAM 3 endpoint failure"})
+                    except ClientError:
+                        pass
+        return JsonResponse({"status": "processing"})
+
+    @staticmethod
+    def _frame_boxes(result, frame_number, project):
+        """Boxes for the target frame, with class ids re-mapped to project order."""
+        classes = project.classes or []
+        cid = {c: i for i, c in enumerate(classes)}
+        for fd in (result.get("frames") or []):
+            if fd.get("frame_number") == frame_number:
+                out = []
+                for b in fd.get("boxes", []):
+                    name = b.get("class")
+                    if name in cid:
+                        out.append({**b, "class_id": cid[name]})
+                return out
+        return []
 
 
 class LLMReviewAllView(LoginRequiredMixin, View):

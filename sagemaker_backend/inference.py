@@ -187,12 +187,21 @@ def _pre_annotate(payload, pipeline) -> dict:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        frame_num = 0
-        while frame_num < total and len(frames_out) < max_frames:
+        # An explicit frame_numbers list (editor per-frame pre-annotate) overrides
+        # the every-Nth sampling.
+        explicit = payload.get("frame_numbers")
+        if explicit:
+            target_frames = [int(f) for f in explicit if int(f) >= 0][:max_frames]
+        else:
+            target_frames = list(range(0, total, sample_interval))
+        for frame_num in target_frames:
+            if len(frames_out) >= max_frames:
+                break
+            if frame_num >= total:
+                continue
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
             ret, frame = cap.read()
             if not ret:
-                frame_num += sample_interval
                 continue
             checked += 1
             boxes = []
@@ -226,7 +235,6 @@ def _pre_annotate(payload, pipeline) -> dict:
                     "frame_image_path": frame_blob,
                 })
                 total_detections += len(boxes)
-            frame_num += sample_interval
         cap.release()
 
     logger.info("pre_annotate: %s -> %d frames, %d detections (%d checked)",

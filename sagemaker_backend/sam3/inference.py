@@ -305,8 +305,12 @@ def _pre_annotate(payload, ctx):
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        # Decide which frame numbers to label.
-        if selection == "diverse" and total > 0:
+        # Decide which frame numbers to label. An explicit frame_numbers list
+        # (e.g. the editor's per-frame pre-annotate) overrides sampling.
+        explicit = payload.get("frame_numbers")
+        if explicit:
+            target_frames = [int(f) for f in explicit if 0 <= int(f) < max(total, 1)][:max_frames]
+        elif selection == "diverse" and total > 0:
             target_frames = _diverse_targets(ctx, cap, total, max_frames, candidate_cap)
         else:
             target_frames = list(range(0, max(total, 1), sample_interval))[:max_frames]
