@@ -159,8 +159,10 @@ BLOCK_REGISTRY = {
         ],
     },
     "detect.bee": {
-        "display_name": "Detect Bees (YOLO)",
-        "description": "Detect bees in each frame with the bee YOLO model.",
+        "display_name": "Detect Objects",
+        "description": "Detect objects in each frame. YOLO = fast, bee/wasp/nest "
+                       "classes. SAM 3 = open-vocabulary, text-prompt any organism "
+                       "(much slower). Emits per-frame detections.",
         "category": "detect",
         "icon": "🐝",
         "input_type": "video",
@@ -176,12 +178,36 @@ BLOCK_REGISTRY = {
                 "choices": None,
             },
             {
+                # YOLO = fast, trained classes. SAM 3 = open-vocabulary text prompt.
+                "name": "detector",
+                "label": "Detector",
+                "field_type": "select",
+                "required": False,
+                "default": "yolo",
+                "choices": [
+                    {"value": "yolo", "label": "YOLO (fast)"},
+                    {"value": "sam3", "label": "SAM 3 (text prompt, slow)"},
+                ],
+            },
+            {
+                # Grounding prompt used when detector == sam3. Only shown for SAM 3.
+                "name": "text_prompt",
+                "label": "SAM 3 prompt",
+                "field_type": "text",
+                "required": False,
+                "default": "bee",
+                "choices": None,
+                "show_if": {"field": "detector", "value": "sam3"},
+            },
+            {
+                # Only shown when Detector = YOLO.
                 "name": "bee_model",
-                "label": "Model",
+                "label": "Model (YOLO)",
                 "field_type": "bee_model",  # UI renders the custom-model picker (populated at render)
                 "required": False,
                 "default": "",
                 "choices": None,
+                "show_if": {"field": "detector", "value": "yolo"},
             },
         ],
     },
