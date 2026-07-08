@@ -49,6 +49,19 @@
 </div>
 {% endif %}
 
+<!-- Jump to any frame — reach frames the detector never flagged (e.g. to mark
+     an empty / no-insect frame as a reviewed negative). Shown whenever a video
+     is selected, including videos with no annotations yet. -->
+{% if video %}
+<div class="flex items-center gap-2 mb-3 text-sm">
+  <label for="jump-frame" class="text-gray-600">Go to frame</label>
+  <input id="jump-frame" type="number" min="0" value="{{ frame_number }}"
+         class="w-24 border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-amber-500">
+  <button id="btn-jump" class="px-3 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50">Go</button>
+  <span class="text-xs text-gray-400">— jump to any frame in this video to review it (e.g. mark a no-insect frame).</span>
+</div>
+{% endif %}
+
 <!-- Annotation Editor -->
 <div class="flex gap-4" id="editor-app" style="max-width: 100%; overflow: hidden;">
   <!-- Main Canvas Area -->
@@ -128,6 +141,8 @@
     <!-- Actions -->
     <div class="bg-white shadow rounded-lg p-4">
       <button id="btn-save" class="w-full bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium mb-2">Save Annotations</button>
+      <button id="btn-empty" class="w-full bg-slate-700 hover:bg-slate-800 text-white px-4 py-2 rounded text-sm font-medium mb-2"
+              title="Save this frame as reviewed with NO insects — a negative example for training.">Mark empty (no insect) ✓</button>
       <button id="btn-ai-review" class="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-medium mb-2"
               title="Claude looks at the frame and removes false-positive boxes. Review, then Save.">AI Review (remove false positives)</button>
       <button id="btn-clear" class="w-full border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded text-sm">Clear All</button>
@@ -328,6 +343,42 @@
     });
   }
   document.getElementById("btn-save").addEventListener("click", function() { doSave(false); });
+
+  // Mark empty — save this frame as reviewed with zero boxes (a negative for
+  // training). Works even if the frame was never pre-annotated.
+  function markEmpty() {
+    boxes = []; render(); updateBoxList();
+    if (statusText) statusText.textContent = "Saving (empty)…";
+    return fetch(SAVE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRFToken": CSRF_TOKEN },
+      body: JSON.stringify({ video_id: VIDEO_ID, frame_number: currentFrame, boxes: [] })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.success) {
+        if (statusText) statusText.textContent = "Marked empty — no insect · reviewed ✓.";
+      } else if (statusText) {
+        statusText.textContent = "Error: " + (data.error || "Unknown");
+      }
+    })
+    .catch(function(err) { if (statusText) statusText.textContent = "Network error: " + err.message; });
+  }
+  document.getElementById("btn-empty").addEventListener("click", markEmpty);
+
+  // Jump to an arbitrary frame in this video (reach undetected frames).
+  var jumpBtn = document.getElementById("btn-jump");
+  if (jumpBtn) {
+    var EDIT_BASE = "{% url 'annotations:editor' project.pk %}";
+    function doJump() {
+      var n = parseInt(document.getElementById("jump-frame").value, 10);
+      if (!isNaN(n) && n >= 0) { window.location.href = EDIT_BASE + "?video=" + VIDEO_ID + "&frame=" + n; }
+    }
+    jumpBtn.addEventListener("click", doJump);
+    document.getElementById("jump-frame").addEventListener("keydown", function(e) {
+      if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); doJump(); }
+    });
+  }
 
   // AI Review — Claude filters false-positive boxes; the human then Saves to confirm.
   document.getElementById("btn-ai-review").addEventListener("click", function() {
