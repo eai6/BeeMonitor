@@ -412,9 +412,17 @@
             if (s.status === "completed") {
               var found = (s.boxes || []).length;
               boxes = boxes.concat(s.boxes || []);  // add to existing boxes
+              // Show ALL suggestions regardless of class/score — SAM 3 scores
+              // structural classes (nest tube / bee hotel) lower than bees, so a
+              // high min-confidence would hide them. Reset the filter to 0.
+              if (found) {
+                minConf = 0;
+                var cf = document.getElementById("conf-filter"), cv = document.getElementById("conf-val");
+                if (cf) cf.value = 0; if (cv) cv.textContent = "0.00";
+              }
               render(); updateBoxList();
               if (statusText) statusText.textContent = found
-                ? "SAM 3 added " + found + " box(es). Adjust, then Save."
+                ? "SAM 3 added " + found + " box(es) (all classes shown). Adjust, then Save."
                 : "SAM 3 found no insects on this frame.";
               btn.disabled = false; btn.textContent = orig;
             } else if (s.status === "failed") {

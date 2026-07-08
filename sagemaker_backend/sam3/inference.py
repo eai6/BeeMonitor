@@ -122,14 +122,16 @@ def _iou(a, b):
 
 
 def _nms(boxes, iou_thr):
-    """Greedy non-max suppression across ALL boxes (class-agnostic) — collapses the
-    duplicate bee/wasp boxes the per-prompt passes produce on the same object; keeps
-    the higher-confidence label."""
+    """Greedy per-class non-max suppression — collapses duplicate boxes the prompt
+    passes produce for the SAME class on one object, but NEVER lets one class
+    suppress another (a bee box must not delete an overlapping nest-tube / bee-hotel
+    box; those are different objects that legitimately overlap)."""
     order = sorted(range(len(boxes)), key=lambda i: boxes[i].get("confidence") or 0.0,
                    reverse=True)
     keep = []
     for i in order:
-        if all(_iou(boxes[i], boxes[j]) <= iou_thr for j in keep):
+        if all(_iou(boxes[i], boxes[j]) <= iou_thr for j in keep
+               if boxes[j].get("class") == boxes[i].get("class")):
             keep.append(i)
     return [boxes[i] for i in keep]
 
