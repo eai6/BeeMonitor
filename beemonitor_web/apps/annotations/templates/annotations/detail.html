@@ -132,14 +132,6 @@
         of the unchecked classes.</p>
     </div>
     <div class="flex gap-2">
-      <form method="post" action="{% url 'annotations:llm_review_all' project.pk %}"
-            onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Starting…';"
-            title="Claude reviews every not-yet-reviewed frame and removes false positives.">
-        {% csrf_token %}
-        <button type="submit" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium">
-          LLM Review (unreviewed)
-        </button>
-      </form>
       <a href="{% url 'annotations:export' project.pk %}"
          class="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium">
         Export Dataset
