@@ -5,7 +5,7 @@
 <div class="flex justify-between items-center mb-2">
   <div>
     <h1 class="text-2xl font-bold text-gray-900">{{ pipeline.title }} — batch results</h1>
-    <p class="text-sm text-gray-500">{{ members|length }} video(s), analyzed together. Foraging trips are paired on the day's absolute timeline, so a bee exiting in one video and returning in another still counts as one trip.</p>
+    <p class="text-sm text-gray-500">{{ members|length }} video(s) from this launch, analyzed together{% if sources %} · {{ sources|length }} had events to aggregate{% endif %}. Trips are paired on the absolute timeline, so a bee exiting in one video and returning in another counts as one trip. This page covers only videos launched together — videos run in a separate batch/day have their own page.</p>
   </div>
   <a href="{% url 'pipelines:run_list' %}" class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">All runs</a>
 </div>
@@ -88,6 +88,45 @@
     <button type="submit" class="px-3 py-2 bg-gray-100 hover:bg-gray-200 border border-gray-300 rounded text-sm">Recompute</button>
   </form>
 </div>
+
+<!-- Activity charts (server-computed histograms; CSP-safe inline SVG) -->
+{% if charts.total_events %}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+  <!-- Activity by hour of day -->
+  <div class="bg-white shadow rounded-lg p-4">
+    <div class="flex items-baseline justify-between mb-3">
+      <h2 class="text-sm font-medium text-gray-500 uppercase">Activity by hour of day</h2>
+      <span class="text-xs text-gray-400">peak {{ charts.hod_peak|stringformat:"02d" }}:00</span>
+    </div>
+    <div class="flex items-end gap-[2px] h-40">
+      {% for b in charts.hour_of_day %}
+      <div class="flex-1 flex flex-col justify-end items-center group" title="{{ b.label }}:00 — {{ b.count }} event(s)">
+        <div class="w-full bg-amber-500 group-hover:bg-amber-600 rounded-t" style="height: {{ b.pct }}%; min-height: 1px;"></div>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="flex justify-between text-[10px] text-gray-400 mt-1"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div>
+    <p class="text-[11px] text-gray-400 mt-2">Exit/Entry events bucketed by local hour — the daily foraging rhythm across all {{ sources|length }} videos.</p>
+  </div>
+
+  <!-- Activity over the batch span (per day) -->
+  <div class="bg-white shadow rounded-lg p-4">
+    <div class="flex items-baseline justify-between mb-3">
+      <h2 class="text-sm font-medium text-gray-500 uppercase">Activity over time</h2>
+      <span class="text-xs text-gray-400">{{ charts.n_days }} day(s)</span>
+    </div>
+    <div class="flex items-end gap-[3px] h-40 overflow-x-auto">
+      {% for b in charts.over_time %}
+      <div class="flex flex-col justify-end items-center group" style="min-width: 14px; flex: 1 0 14px;" title="{{ b.label }} — {{ b.count }} event(s)">
+        <div class="w-full bg-emerald-500 group-hover:bg-emerald-600 rounded-t" style="height: {{ b.pct }}%; min-height: 1px;"></div>
+        <span class="text-[9px] text-gray-400 mt-1 whitespace-nowrap" style="transform: rotate(-45deg); transform-origin: top left;">{{ b.label|slice:"5:" }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <p class="text-[11px] text-gray-400 mt-4">Exit/Entry events per calendar day (MM-DD) across the batch.</p>
+  </div>
+</div>
+{% endif %}
 
 <!-- Trips per nest -->
 {% if summary.trips_per_nest %}

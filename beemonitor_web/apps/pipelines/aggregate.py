@@ -153,11 +153,11 @@ def combined_csv(sources, path_key):
 # ── Cross-video foraging trips ────────────────────────────────────────────────
 
 
-def aggregate_trips(sources, min_sec=DEFAULT_MIN_SEC, max_sec=DEFAULT_MAX_SEC):
-    """Pair Exit→Entry per nest across all sources on the absolute timeline.
+def collect_events(sources):
+    """Flatten all sources' Exit/Entry events onto the absolute timeline.
 
-    Returns (trips, summary). Trip dicts carry nest, exit/entry absolute times,
-    duration, source video titles and track ids, and is_cross_video.
+    Each event: {action, nest, time (datetime), video, track_id}. Shared by
+    trip pairing and the activity charts.
     """
     events = []
     for src in sources:
@@ -174,6 +174,54 @@ def aggregate_trips(sources, min_sec=DEFAULT_MIN_SEC, max_sec=DEFAULT_MAX_SEC):
                 "video": src["title"],
                 "track_id": row.get("track_id", ""),
             })
+    return events
+
+
+def activity_charts(events):
+    """Server-computed histograms for the batch page (CSP-safe, no JS charting):
+
+    - by_hour_of_day: 24 buckets (0–23), event counts — daily activity rhythm.
+    - over_time: chronological day buckets across the batch span, event counts.
+    Returns {} when there are no timestamped events.
+    """
+    if not events:
+        return {}
+
+    by_hod = [0] * 24
+    for ev in events:
+        by_hod[ev["time"].hour] += 1
+    hod_max = max(by_hod) or 1
+    hour_of_day = [{"label": f"{h:02d}", "count": c,
+                    "pct": round(100 * c / hod_max, 1)}
+                   for h, c in enumerate(by_hod)]
+
+    # Day buckets across the observed span (calendar date of each event).
+    by_day = {}
+    for ev in events:
+        key = ev["time"].date()
+        by_day[key] = by_day.get(key, 0) + 1
+    days_sorted = sorted(by_day)
+    day_max = max(by_day.values()) if by_day else 1
+    over_time = [{"label": d.isoformat(), "count": by_day[d],
+                  "pct": round(100 * by_day[d] / day_max, 1)}
+                 for d in days_sorted]
+
+    return {
+        "hour_of_day": hour_of_day,
+        "hod_peak": max(range(24), key=lambda h: by_hod[h]),
+        "over_time": over_time,
+        "total_events": len(events),
+        "n_days": len(days_sorted),
+    }
+
+
+def aggregate_trips(sources, min_sec=DEFAULT_MIN_SEC, max_sec=DEFAULT_MAX_SEC):
+    """Pair Exit→Entry per nest across all sources on the absolute timeline.
+
+    Returns (trips, summary). Trip dicts carry nest, exit/entry absolute times,
+    duration, source video titles and track ids, and is_cross_video.
+    """
+    events = collect_events(sources)
 
     trips = []
     by_nest = {}
