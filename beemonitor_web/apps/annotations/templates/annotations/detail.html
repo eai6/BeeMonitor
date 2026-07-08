@@ -311,10 +311,14 @@ function preannotateCheck(predicate) {
     {% if filter_video or filter_class or filter_review %}
     <a href="{% url 'annotations:detail' project.pk %}" class="text-sm text-amber-600 hover:underline">Clear</a>
     {% endif %}
-    <span class="text-sm text-gray-500 ml-auto">{% if frame_cards|length < total_annotations %}showing {{ frame_cards|length }} of {{ total_annotations }} frame(s) — use the Video filter to see the rest{% else %}{{ frame_cards|length }} frame(s){% endif %} · {{ reviewed_count }}/{{ total_annotations }} reviewed
+    <span class="text-sm text-gray-500 ml-auto">{% if total_pages > 1 %}showing {{ page_start }}–{{ page_end }} of {{ total_annotations }} frame(s) (page {{ page }}/{{ total_pages }}){% else %}{{ total_annotations }} frame(s){% endif %} · {{ reviewed_count }}/{{ total_annotations }} reviewed
       {% if reviewed_llm %}(<span class="text-blue-600">{{ reviewed_llm }} LLM</span>){% endif %}</span>
   </form>
 </div>
+
+{% if total_pages > 1 %}
+{% include "annotations/_frame_pager.html" %}
+{% endif %}
 
 <!-- Combined Frame Grid -->
 <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 mb-6">
@@ -351,6 +355,10 @@ function preannotateCheck(predicate) {
   </a>
   {% endfor %}
 </div>
+
+{% if total_pages > 1 %}
+{% include "annotations/_frame_pager.html" %}
+{% endif %}
 
 {% elif video_count > 0 %}
 <!-- No annotations yet -->

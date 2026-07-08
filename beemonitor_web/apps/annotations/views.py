@@ -212,11 +212,18 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         ctx["reviewed_human"] = proj_anns.filter(review_source="human").count()
         ctx["reviewed_llm"] = proj_anns.filter(review_source="llm").count()
 
-        # Stats run over ALL matching annotations; only the thumbnail grid is
-        # capped (presigning thousands of URLs per page-load is too slow).
-        GRID_CAP = 500
+        # Stats run over ALL matching annotations; the thumbnail grid is
+        # paginated (presigning thousands of URLs per page-load is too slow).
+        PAGE_SIZE = 500
+        try:
+            page = max(1, int(self.request.GET.get("page", 1)))
+        except (TypeError, ValueError):
+            page = 1
+        win_start = (page - 1) * PAGE_SIZE
+        win_end = win_start + PAGE_SIZE
+
         total_boxes = 0
-        total_matching = 0
+        total_matching = 0  # index into the (class-)filtered set
         class_counts = {}
         frame_cards = []
 
@@ -228,24 +235,24 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
             if filter_class and filter_class not in box_classes:
                 continue
 
-            total_matching += 1
-            total_boxes += len(boxes)
             for b in boxes:
                 cls = b.get("class", "unknown")
                 class_counts[cls] = class_counts.get(cls, 0) + 1
+            total_boxes += len(boxes)
 
-            if len(frame_cards) >= GRID_CAP:
-                continue
-            frame_cards.append({
-                "video_pk": ann.video_id,
-                "video_title": ann.video.title,
-                "frame_number": ann.frame_number,
-                "box_count": len(boxes),
-                "classes": box_classes,
-                "frame_image_path": ann.frame_image_path or "",
-                "reviewed": ann.reviewed,
-                "review_source": ann.review_source,
-            })
+            # Only build cards for the current page window.
+            if win_start <= total_matching < win_end:
+                frame_cards.append({
+                    "video_pk": ann.video_id,
+                    "video_title": ann.video.title,
+                    "frame_number": ann.frame_number,
+                    "box_count": len(boxes),
+                    "classes": box_classes,
+                    "frame_image_path": ann.frame_image_path or "",
+                    "reviewed": ann.reviewed,
+                    "review_source": ann.review_source,
+                })
+            total_matching += 1
 
         # Presigned URLs for frame thumbnails
         try:
@@ -263,6 +270,22 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         ctx["total_boxes"] = total_boxes
         ctx["class_counts"] = class_counts
         ctx["frame_cards"] = frame_cards
+        # Pagination for the grid.
+        import math
+        total_pages = max(1, math.ceil(total_matching / PAGE_SIZE)) if total_matching else 1
+        page = min(page, total_pages)
+        ctx["page"] = page
+        ctx["total_pages"] = total_pages
+        ctx["page_size"] = PAGE_SIZE
+        ctx["page_start"] = win_start + 1 if frame_cards else 0
+        ctx["page_end"] = win_start + len(frame_cards)
+        ctx["has_prev_page"] = page > 1
+        ctx["has_next_page"] = page < total_pages
+        # Query string carrying the current filters (minus page) for page links.
+        from urllib.parse import urlencode
+        _pg = {k: v for k, v in (("video", filter_video), ("class", filter_class),
+                                 ("review", filter_review)) if v}
+        ctx["page_qs_prefix"] = ("?" + urlencode(_pg) + "&") if _pg else "?"
 
         # Defaults for the AI pre-annotate sampling controls.
         from django.conf import settings

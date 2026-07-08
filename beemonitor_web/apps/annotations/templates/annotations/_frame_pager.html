@@ -1,0 +1,17 @@
+<div class="flex items-center justify-center gap-2 mb-6 text-sm">
+  {% if has_prev_page %}
+  <a href="{{ page_qs_prefix }}page={{ page|add:'-1' }}"
+     class="px-3 py-1.5 bg-white border border-gray-300 rounded hover:bg-gray-50 text-gray-700">← Prev {{ page_size }}</a>
+  {% else %}
+  <span class="px-3 py-1.5 bg-white border border-gray-200 rounded text-gray-300">← Prev {{ page_size }}</span>
+  {% endif %}
+
+  <span class="text-gray-500">Page {{ page }} of {{ total_pages }} · frames {{ page_start }}–{{ page_end }} of {{ total_annotations }}</span>
+
+  {% if has_next_page %}
+  <a href="{{ page_qs_prefix }}page={{ page|add:'1' }}"
+     class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded font-medium">Next {{ page_size }} →</a>
+  {% else %}
+  <span class="px-3 py-1.5 bg-white border border-gray-200 rounded text-gray-300">Next {{ page_size }} →</span>
+  {% endif %}
+</div>
