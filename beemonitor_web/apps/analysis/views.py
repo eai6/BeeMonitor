@@ -207,10 +207,13 @@ def _spawn_gpu_job(job_pk: int) -> None:
             payload["hotel_roi"] = job.config["hotel_roi"]
         if job.config.get("nest_layout"):
             payload["nest_layout"] = job.config["nest_layout"]
-        # Which analyses to run (tracking and/or species taxonomy).
         payload["run_tracking"] = bool(job.config.get("run_tracking", True))
         if job.config.get("ml_threshold") is not None:
             payload["ml_threshold"] = float(job.config["ml_threshold"])
+        # Detector: SAM 3 text-prompt tracking, else YOLO.
+        if job.config.get("detector_kind") == "sam3":
+            payload["detector_kind"] = "sam3"
+            payload["text_prompt"] = job.config.get("text_prompt", "") or "bee"
         # Recording start metadata → event timestamps; no filename convention needed.
         if video.recorded_at:
             payload["recorded_at"] = video.recorded_at.isoformat()
@@ -284,6 +287,9 @@ def _spawn_gpu_batch(jobs_data: list, detection_mode: str, confidence: float,
                 payload["run_tracking"] = bool(vcfg.get("run_tracking", True))
                 if vcfg.get("ml_threshold") is not None:
                     payload["ml_threshold"] = float(vcfg["ml_threshold"])
+                if vcfg.get("detector_kind") == "sam3":
+                    payload["detector_kind"] = "sam3"
+                    payload["text_prompt"] = vcfg.get("text_prompt", "") or "bee"
                 # Recording start metadata → event timestamps; no filename convention needed.
                 if video.recorded_at:
                     payload["recorded_at"] = video.recorded_at.isoformat()

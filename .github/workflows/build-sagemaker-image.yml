@@ -54,11 +54,20 @@ jobs:
         env:
           REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           SHA_TAG: ${{ github.sha }}
+          # Bake the gated facebook/sam3 weights for the optional text-prompt
+          # tracking detector (Dockerfile.gpu). Fails the build if unset.
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -euo pipefail
+          if [ -z "${HF_TOKEN:-}" ]; then
+            echo "HF_TOKEN secret is not set — cannot bake gated facebook/sam3 weights." >&2
+            echo "Accept the license at hf.co/facebook/sam3 and set the HF_TOKEN repo secret." >&2
+            exit 1
+          fi
           IMAGE="${REGISTRY}/${ECR_REPOSITORY}"
           DOCKER_BUILDKIT=1 docker build \
             -f sagemaker_backend/Dockerfile.gpu \
+            --secret id=hf_token,env=HF_TOKEN \
             --platform linux/amd64 \
             -t "${IMAGE}:${SHA_TAG}" \
             -t "${IMAGE}:latest" \

@@ -219,6 +219,20 @@ class BeeMonitor:
         for key, value in tracker_params.items():
             logger.info(f"  {key}: {value}")
         
+        # Detector: SAM 3 text-prompt when configured, else YOLO. SAM 3 runs the
+        # model locally on the GPU (heavy — pair with two-mode motion gating).
+        detector = None
+        detector_kind = getattr(self.config.tracking, 'detector_kind', 'yolo')
+        if detector_kind == 'sam3':
+            from beemonitor.detection.sam3_detector import Sam3Detector
+            prompt = getattr(self.config.tracking, 'text_prompt', '') or 'bee'
+            logger.info("Detector: SAM 3 (prompt=%r) — text-promptable tracking", prompt)
+            detector = Sam3Detector(
+                prompt=prompt,
+                conf_threshold=self.config.tracking.confidence_threshold,
+                iou_threshold=tracker_params['iou_threshold'],
+            )
+
         # Initialize BeeTracking with model path and tracker params
         # BeeTracking creates YOLO model and BeeTracker internally
         tracker = BeeTracking(
@@ -233,7 +247,8 @@ class BeeMonitor:
             iou_threshold=tracker_params['iou_threshold'],
             # Crop saving for identification training
             save_crops=getattr(self.config.tracking, 'save_crops', False),
-            crops_per_track=getattr(self.config.tracking, 'crops_per_track', 10)
+            crops_per_track=getattr(self.config.tracking, 'crops_per_track', 10),
+            detector=detector,
         )
         
         # Pass two-mode config flag

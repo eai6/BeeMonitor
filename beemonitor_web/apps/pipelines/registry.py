@@ -194,8 +194,9 @@ BLOCK_REGISTRY = {
 
     # ── Track ─────────────────────────────────────────────────────────────────
     "track.bee": {
-        "display_name": "Track Bees (MOT)",
-        "description": "Multi-object tracking — turn per-frame detections into trajectories.",
+        "display_name": "Track Objects (MOT)",
+        "description": "Multi-object tracking — turn per-frame detections into trajectories. "
+                       "Detect with YOLO (fast) or SAM 3 (type any prompt: bee, hoverfly, beetle).",
         "category": "track",
         "icon": "🛰️",
         "input_type": "video",
@@ -221,8 +222,31 @@ BLOCK_REGISTRY = {
                 "choices": None,
             },
             {
+                # YOLO = fast, bee/wasp/nest classes. SAM 3 = open-vocabulary,
+                # text-prompt any organism; much slower (per-frame transformer).
+                "name": "detector",
+                "label": "Detector",
+                "field_type": "select",
+                "required": False,
+                "default": "yolo",
+                "choices": [
+                    {"value": "yolo", "label": "YOLO (fast)"},
+                    {"value": "sam3", "label": "SAM 3 (text prompt, slow)"},
+                ],
+            },
+            {
+                # Grounding prompt used when detector == sam3 (e.g. "bee",
+                # "hoverfly", "beetle"). Becomes the track's taxon label.
+                "name": "text_prompt",
+                "label": "SAM 3 prompt",
+                "field_type": "text",
+                "required": False,
+                "default": "bee",
+                "choices": None,
+            },
+            {
                 "name": "bee_model",
-                "label": "Model",
+                "label": "Model (YOLO)",
                 "field_type": "bee_model",  # UI renders the custom-model picker (populated at render)
                 "required": False,
                 "default": "",

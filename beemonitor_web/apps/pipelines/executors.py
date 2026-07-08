@@ -306,12 +306,16 @@ def build_detect_and_track_config(step, run, context, index):
         return None, "No upstream video for this GPU step."
 
     cfg = (step.get("config") or {})
+    detector_kind = "sam3" if str(cfg.get("detector", "yolo")).lower() == "sam3" else "yolo"
     config = {
         "detection_mode": "yolo",
         "confidence_threshold": float(cfg.get("confidence", 0.4) or 0.4),
         # Entry/Exit event-classifier cutoff (EventProcessor ml_threshold).
         "ml_threshold": float(cfg.get("ml_threshold", 0.6) or 0.6),
         "run_tracking": step.get("block_type") in ("track.bee", "detect.bee"),
+        # Detector: SAM 3 text-prompt tracking, else YOLO.
+        "detector_kind": detector_kind,
+        "text_prompt": (cfg.get("text_prompt", "") or "").strip(),
         # Annotated video is opt-in (off = much faster, needed for long clips).
         "visualize": str(cfg.get("annotated_video", "")).lower() in ("1", "true", "on", "yes"),
     }

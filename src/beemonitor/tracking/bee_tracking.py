@@ -751,7 +751,10 @@ class BeeTracking:
         # Crop saving for identification training
         save_crops: bool = False,
         crop_output_dir: Optional[str] = None,
-        crops_per_track: int = 5
+        crops_per_track: int = 5,
+        # Pluggable detector: pass an injected BaseDetector (e.g. Sam3Detector)
+        # to replace YOLO; default None builds the YOLO detector below.
+        detector=None,
     ):
         """
         Initialize BeeTracking with YOLO-only detection and adaptive tracking.
@@ -788,12 +791,19 @@ class BeeTracking:
         #     confidence_threshold=confidence_threshold
         # )
 
-        yolo_model = YOLO(yolo_model_path)
-        self.yolo_detector = YOLODetector(
-            model=yolo_model,
-            conf_threshold=confidence_threshold,
-            iou_threshold=iou_threshold
-        )
+        # Injected detector wins (e.g. SAM 3 text-prompt); else build YOLO.
+        # The attribute stays `yolo_detector` for minimal churn — it's just the
+        # active detector, called at the three .detect() sites below.
+        if detector is not None:
+            logger.info(f"Using injected detector: {detector.get_source_name()}")
+            self.yolo_detector = detector
+        else:
+            yolo_model = YOLO(yolo_model_path)
+            self.yolo_detector = YOLODetector(
+                model=yolo_model,
+                conf_threshold=confidence_threshold,
+                iou_threshold=iou_threshold
+            )
         
         # Blob detector (for motion detection mode)
         logger.info("Initializing blob detector for motion detection")

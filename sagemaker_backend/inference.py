@@ -106,6 +106,9 @@ def predict_fn(payload, pipeline):
             nest_layout=payload.get("nest_layout"),
             # False = nest/hotel-only fast path (skip tracking + events).
             run_tracking=bool(payload.get("run_tracking", True)),
+            # Detector: "sam3" = text-prompt tracking (heavy), else YOLO.
+            detector_kind=payload.get("detector_kind", "yolo") or "yolo",
+            text_prompt=payload.get("text_prompt", "") or "",
             # ISO recording start (video.recorded_at) — replaces the filename
             # timestamp convention for event timestamps.
             recorded_at=payload.get("recorded_at", "") or "",

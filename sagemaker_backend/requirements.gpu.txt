@@ -7,6 +7,11 @@ ultralytics>=8.4.0
 opencv-python-headless>=4.8.0
 filterpy>=1.4.5
 
+# SAM 3 text-prompt detector (optional tracking detector; loaded lazily only
+# when detector_kind=="sam3"). Sam3Model/Processor need transformers >= 5.0.
+transformers>=5.0.0
+huggingface_hub>=0.20.0
+
 # Data / numerics
 numpy>=1.26.0
 pandas>=2.2.0

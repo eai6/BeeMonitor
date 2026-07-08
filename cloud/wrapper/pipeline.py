@@ -86,6 +86,8 @@ class CloudPipeline:
         hotel_roi=None,
         nest_layout=None,
         run_tracking: bool = True,
+        detector_kind: str = "yolo",
+        text_prompt: str = "",
         recorded_at: str = "",
     ) -> PipelineResult:
         """Run the full BeeMonitor pipeline on a video stored in S3.
@@ -150,6 +152,8 @@ class CloudPipeline:
             hotel_roi=hotel_roi,
             nest_layout=nest_layout,
             recorded_at=recorded_at,
+            detector_kind=detector_kind,
+            text_prompt=text_prompt,
         )
 
         # Step 4 — Post-processing: foraging trips + interactions
@@ -397,6 +401,8 @@ class CloudPipeline:
         hotel_roi=None,
         nest_layout=None,
         recorded_at: str = "",
+        detector_kind: str = "yolo",
+        text_prompt: str = "",
     ):
         """Build a BeeMonitor Config, instantiate, and run."""
         from beemonitor.core.config import Config, ModelConfig
@@ -420,6 +426,10 @@ class CloudPipeline:
         config.tracking.confidence_threshold = confidence_threshold
         config.tracking.ml_threshold = ml_threshold
         config.tracking.enable_two_mode_tracking = two_mode_tracking
+        # Detector selection: "sam3" makes tracking use SAM 3 text-prompt
+        # detection (heavy, local GPU) instead of YOLO.
+        config.tracking.detector_kind = detector_kind or "yolo"
+        config.tracking.text_prompt = text_prompt or ""
         config.output.save_visualizations = visualize
         # Recording start metadata (video.recorded_at) — event timestamps come
         # from this, so uploads with arbitrary filenames work (the legacy

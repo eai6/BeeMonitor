@@ -463,6 +463,10 @@ class TrackingConfig:
     # (keeps more real entries/exits at the cost of a few false positives).
     ml_threshold: float = 0.6
 
+    # Detector for tracking: "yolo" (default) or "sam3" (text-promptable, heavy).
+    detector_kind: str = "yolo"
+    text_prompt: str = ""  # SAM 3 grounding prompt, e.g. "bee" / "hoverfly"
+
     # Two-mode tracking optimization
     enable_two_mode_tracking: bool = True  # Enable adaptive mode switching
     motion_detection_threshold: int = 1  # Min detections to stay in tracking mode
