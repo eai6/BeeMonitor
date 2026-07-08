@@ -434,6 +434,7 @@ BLOCK_REGISTRY = {
         "input_type": "table",
         "output_type": "none",
         "backend": "local",
+        "status": "beta",  # passes the table through; no rendered chart yet
         "config_fields": [
             {
                 "name": "chart_type",
@@ -457,6 +458,7 @@ BLOCK_REGISTRY = {
         "input_type": "any",
         "output_type": "none",
         "backend": "local",
+        "status": "beta",  # passes upstream through; no generated summary yet
         "config_fields": [],
     },
     "output.dataset": {
@@ -467,6 +469,7 @@ BLOCK_REGISTRY = {
         "input_type": "any",
         "output_type": "none",
         "backend": "local",
+        "status": "beta",  # passes upstream through; no dataset written yet
         "config_fields": [
             {
                 "name": "format",
@@ -572,6 +575,10 @@ def serialize_blocks():
             "input_ports": get_input_ports(block_type),
             "num_out": num_output_ports(block_type),
             "config_fields": block.get("config_fields", []),
+            # "beta" = the block runs but doesn't yet produce a full deliverable
+            # (surfaced as a palette badge so "valid graph" != "graph that does
+            # everything" is visible).
+            "status": block.get("status", "ready"),
         }
     return out
 

@@ -58,7 +58,7 @@
           <div class="tray-block px-2 py-1.5 rounded border border-gray-100 hover:border-amber-300 hover:bg-amber-50 text-sm"
                draggable="true" data-block="{{ block.type }}" ondblclick="plAddCenter('{{ block.type }}')"
                title="{{ block.description }}">
-            <span>{{ block.icon }} {{ block.display_name }}</span>
+            <span>{{ block.icon }} {{ block.display_name }}{% if block.status == "beta" %} <span class="text-[9px] uppercase tracking-wide text-amber-600 border border-amber-300 rounded px-1 align-middle" title="Runs but doesn't produce a full deliverable yet">beta</span>{% endif %}</span>
             <span class="block text-[11px] text-gray-400">{{ block.input_type }} → {{ block.output_type }}</span>
           </div>
           {% endfor %}
