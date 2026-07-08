@@ -80,9 +80,18 @@ def reconcile_all(limit: int = 500) -> dict:
     except Exception:
         logger.exception("training poll failed")
 
+    # Pre-annotation tasks (durable — finalize writes Annotation rows).
+    preannot_done = 0
+    try:
+        from apps.annotations.views import poll_preannotation_tasks
+        preannot_done = poll_preannotation_tasks()  # all users
+    except Exception:
+        logger.exception("pre-annotation poll failed")
+
     return {"jobs_checked": len(jobs), "jobs_resolved": resolved,
             "run_users": len(run_user_ids), "annotate_users": len(annotate_user_ids),
-            "training_completed": training.get("completed", 0)}
+            "training_completed": training.get("completed", 0),
+            "preannot_finalized": preannot_done}
 
 
 def _loop():

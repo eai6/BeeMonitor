@@ -1,6 +1,7 @@
 import io
 import json
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.http import HttpResponse, JsonResponse
@@ -108,6 +109,25 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         project = self.object
+
+        # Advance any in-flight pre-annotation tasks on page load (the
+        # background reconciler also does this, so it works with no open tab).
+        poll_preannotation_tasks(self.request.user)
+        from .models import PreAnnotationTask
+        active = list(
+            PreAnnotationTask.objects.filter(
+                project=project,
+                status__in=[PreAnnotationTask.Status.QUEUED, PreAnnotationTask.Status.PROCESSING],
+            ).select_related("video")
+        )
+        recent_failed = list(
+            PreAnnotationTask.objects.filter(
+                project=project, status=PreAnnotationTask.Status.FAILED,
+            ).select_related("video")[:5]
+        )
+        ctx["preannot_active"] = active
+        ctx["preannot_failed"] = recent_failed
+
         videos = project.videos.all()
         ctx["project_videos"] = videos
         ctx["video_count"] = videos.count()
@@ -506,209 +526,254 @@ class SaveAnnotationView(LoginRequiredMixin, View):
         })
 
 
+# Bounded pool for the (short) pre-annotation SPAWN — transfer video if needed,
+# then invoke_endpoint_async. Finalization is NOT here; the reconciler does it.
+_PREANNOT_POOL = ThreadPoolExecutor(max_workers=3, thread_name_prefix="preannot-spawn")
+
+
+def spawn_preannotation_async(task_pk: int) -> None:
+    _PREANNOT_POOL.submit(_spawn_preannotation, task_pk)
+
+
+def _spawn_preannotation(task_pk: int) -> None:
+    """Fire the SageMaker async invocation for one PreAnnotationTask and store
+    its output/failure S3 URIs. Durable: after this returns the reconciler can
+    finalize the task even across a deploy. Runs in a bounded thread."""
+    import django
+    django.setup()
+    from urllib.parse import urlparse
+    import boto3
+    from botocore.config import Config
+    from django.conf import settings
+    from django.db import connection
+    from django.utils import timezone
+
+    from .models import PreAnnotationTask
+
+    try:
+        task = PreAnnotationTask.objects.select_related("project", "video", "video__source").get(pk=task_pk)
+    except PreAnnotationTask.DoesNotExist:
+        connection.close()
+        return
+
+    try:
+        video = task.video
+        blob_path = video.storage_key
+        if blob_path.startswith("s3://"):
+            from apps.analysis.views import _ingest_external_s3_to_storage
+            blob_path = _ingest_external_s3_to_storage(video)
+
+        labeler = task.labeler
+        if labeler == "sam3":
+            endpoint = settings.SAGEMAKER_SAM3_ENDPOINT_NAME
+        else:
+            endpoint = settings.SAGEMAKER_ENDPOINT_NAME
+        if not endpoint:
+            raise RuntimeError(f"{'SAM3' if labeler=='sam3' else 'YOLO'} endpoint not configured")
+
+        in_bucket = settings.SAGEMAKER_INPUT_BUCKET
+        region = settings.AWS_REGION
+        p = task.params or {}
+        payload = {
+            "task": "pre_annotate",
+            "job_id": f"preannot-{task_pk}",
+            "user_id": str(task.user_id),
+            "video_blob_path": blob_path,
+            "classes": task.project.classes or ["bee", "wasp", "nest"],
+            "sample_interval": p.get("sample_interval", 10),
+            "max_frames": p.get("max_frames", 300),
+            "confidence_threshold": p.get("confidence", 0.15),
+            "selection": p.get("selection", "uniform"),
+            "nms_iou": p.get("nms_iou", 0.5),
+            "max_detections": p.get("max_detections", 100),
+        }
+        if task.custom_model_key:
+            payload["custom_bee_model_path"] = task.custom_model_key
+
+        cfg = Config(connect_timeout=10, read_timeout=30, retries={"max_attempts": 2})
+        s3 = boto3.client("s3", region_name=region, config=cfg)
+        smrt = boto3.client("sagemaker-runtime", region_name=region, config=cfg)
+        key = f"preannotate/{task.project_id}/{task_pk}-{labeler}.json"
+        s3.put_object(Bucket=in_bucket, Key=key,
+                      Body=json.dumps(payload).encode("utf-8"),
+                      ContentType="application/json")
+        resp = smrt.invoke_endpoint_async(
+            EndpointName=endpoint,
+            InputLocation=f"s3://{in_bucket}/{key}",
+            ContentType="application/json",
+            InferenceId=f"preannot-{task_pk}",
+        )
+        out = urlparse(resp["OutputLocation"])
+        fail_loc = resp.get("FailureLocation", "") or ""
+        if not fail_loc:
+            fail_loc = resp["OutputLocation"].replace(".out", ".failure")
+        PreAnnotationTask.objects.filter(pk=task_pk).update(
+            status=PreAnnotationTask.Status.PROCESSING,
+            output_uri=resp["OutputLocation"], failure_uri=fail_loc,
+            started_at=timezone.now(),
+        )
+        logger.info("pre-annotate task %s invoked -> %s", task_pk, resp["OutputLocation"])
+    except Exception as e:
+        logger.exception("pre-annotate spawn failed for task %s", task_pk)
+        PreAnnotationTask.objects.filter(pk=task_pk).update(
+            status=PreAnnotationTask.Status.FAILED,
+            error_message=str(e)[:1000], completed_at=timezone.now(),
+        )
+    finally:
+        connection.close()
+
+
+# Past this the async request has expired (SM async: 1h processing + 6h TTL).
+_PREANNOT_TIMEOUT_HOURS = 8
+
+
+def finalize_preannotation_task(task, s3) -> bool:
+    """Check one PROCESSING task's output/failure S3 URI. On the result, write
+    Annotation rows (protecting human-reviewed frames) and complete; on failure
+    or timeout, mark failed. Returns True if the task reached a terminal state.
+    Idempotent; safe to call repeatedly from the reconciler."""
+    import json as _json
+    from datetime import timedelta
+    from urllib.parse import urlparse
+    from django.utils import timezone
+    from botocore.exceptions import ClientError
+
+    from .models import Annotation, PreAnnotationTask
+
+    if not task.output_uri:
+        return False
+    out = urlparse(task.output_uri)
+    try:
+        body = s3.get_object(Bucket=out.netloc, Key=out.path.lstrip("/"))["Body"].read()
+        result = _json.loads(body)
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code", "") not in ("NoSuchKey", "404", "NotFound"):
+            logger.warning("pre-annotate poll error task %s: %s", task.pk, e)
+            return False
+        # No output yet — check for a platform failure, else timeout.
+        if task.failure_uri:
+            f = urlparse(task.failure_uri)
+            try:
+                fb = s3.get_object(Bucket=f.netloc, Key=f.path.lstrip("/"))["Body"].read()
+                PreAnnotationTask.objects.filter(pk=task.pk).update(
+                    status=PreAnnotationTask.Status.FAILED,
+                    error_message=f"endpoint failure: {fb.decode('utf-8', 'replace')[:500]}",
+                    completed_at=timezone.now())
+                return True
+            except ClientError:
+                pass
+        age = timezone.now() - (task.started_at or task.created_at)
+        if age > timedelta(hours=_PREANNOT_TIMEOUT_HOURS):
+            PreAnnotationTask.objects.filter(pk=task.pk).update(
+                status=PreAnnotationTask.Status.FAILED,
+                error_message="Timed out — no result. Re-run pre-annotation.",
+                completed_at=timezone.now())
+            return True
+        return False
+
+    frames = result.get("frames") or []
+    width = result.get("video_width", 1280)
+    height = result.get("video_height", 720)
+    human_frames = set(
+        Annotation.objects.filter(
+            project_id=task.project_id, video_id=task.video_id,
+            review_source=Annotation.ReviewSource.HUMAN,
+        ).values_list("frame_number", flat=True)
+    )
+    created = 0
+    for fd in frames:
+        if fd["frame_number"] in human_frames:
+            continue
+        Annotation.objects.update_or_create(
+            project_id=task.project_id, video_id=task.video_id,
+            frame_number=fd["frame_number"],
+            defaults={
+                "boxes": fd["boxes"],
+                "image_width": width, "image_height": height,
+                "frame_image_path": fd.get("frame_image_path", ""),
+                "reviewed": False,
+                "review_source": Annotation.ReviewSource.NONE,
+                "reviewed_at": None,
+            },
+        )
+        created += 1
+
+    PreAnnotationTask.objects.filter(pk=task.pk).update(
+        status=PreAnnotationTask.Status.COMPLETED,
+        frames_written=created, completed_at=timezone.now())
+
+    exec_secs = result.get("execution_seconds", 0) or 0
+    try:
+        from apps.accounts.models import UserProfile
+        profile, _ = UserProfile.objects.get_or_create(user_id=task.user_id)
+        profile.charge(int(exec_secs) if exec_secs else 30, gpu_seconds=exec_secs or 30)
+    except Exception as e:
+        logger.error("pre-annotate credit charge failed task %s: %s", task.pk, e)
+    logger.info("pre-annotate task %s complete: %d frames written", task.pk, created)
+    return True
+
+
+def poll_preannotation_tasks(user=None) -> int:
+    """Finalize in-flight pre-annotation tasks. Reusable by the reconciler and a
+    page poll. ``user=None`` polls all users. Idempotent; never raises."""
+    import boto3
+    from botocore.config import Config
+    from django.conf import settings
+
+    from .models import PreAnnotationTask
+    try:
+        qs = PreAnnotationTask.objects.filter(status=PreAnnotationTask.Status.PROCESSING)
+        if user is not None:
+            qs = qs.filter(user=user)
+        tasks = list(qs.select_related("project", "video")[:100])
+        if not tasks:
+            return 0
+        s3 = boto3.client("s3", region_name=getattr(settings, "AWS_REGION", "us-east-1"),
+                          config=Config(connect_timeout=10, read_timeout=30, retries={"max_attempts": 2}))
+        return sum(1 for t in tasks if finalize_preannotation_task(t, s3))
+    except Exception:
+        logger.exception("poll_preannotation_tasks failed")
+        return 0
+
+
 class PreAnnotateView(LoginRequiredMixin, View):
-    """Run YOLO detection on a video's frames and save as initial annotations."""
+    """Create a durable pre-annotation task for one video and fire it."""
 
     def post(self, request, pk):
         from django.shortcuts import redirect
         from django.contrib import messages
-        import threading
 
         project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
-        video_id = request.POST.get("video_id")
-
         from apps.videos.models import Video
-        video = get_object_or_404(Video, pk=video_id, user=request.user)
+        video = get_object_or_404(Video, pk=request.POST.get("video_id"), user=request.user)
 
-        blob_path = video.storage_key
-        sample_interval, max_frames, confidence = _preannotate_opts(request)
-        # labeler=sam3 routes to the SAM 3 endpoint (domain-robust, open-vocabulary) —
-        # the fix for new-domain footage the current YOLO misses. custom:<pk> runs a
-        # fine-tuned model on the YOLO endpoint. Default: the built-in yolo.
-        labeler, custom_model_key = _labeler_opts(request)
-        # DINOv3 diverse selection (SAM 3 only). Default diverse for SAM 3 (its point),
-        # uniform every-Nth for YOLO.
-        selection = "diverse" if request.POST.get("selection", "diverse") == "diverse" else "uniform"
-        if labeler != "sam3":
-            selection = "uniform"
-        nms_iou, max_detections = _sam3_opts(request)
-
-        # Auto-transfer from S3 if needed, then pre-annotate
-        # The background thread handles both transfer and annotation
-        thread = threading.Thread(
-            target=self._run_pre_annotate,
-            args=(project.pk, video.pk, blob_path, sample_interval, max_frames, confidence,
-                  labeler, selection, nms_iou, max_detections, custom_model_key),
-            daemon=True,
-        )
-        thread.start()
-
-        engine = "SAM 3" if labeler == "sam3" else "AI"
-        is_s3 = blob_path.startswith("s3://")
-        if is_s3:
-            messages.info(request, f"Transferring '{video.title}' from S3 then running {engine} detection. This takes 2-4 minutes. Refresh to see results.")
-        else:
-            messages.info(request, f"Pre-annotating '{video.title}' with {engine}. This takes 1-2 minutes. Refresh to see results.")
+        task = _create_preannotation_task(request, project, video)
+        spawn_preannotation_async(task.pk)
+        engine = "SAM 3" if task.labeler == "sam3" else "AI"
+        messages.info(request, f"Pre-annotating '{video.title}' with {engine}. "
+                               "This runs in the background — refresh to see progress.")
         return redirect("annotations:detail", pk=pk)
 
-    @staticmethod
-    def _run_pre_annotate(project_pk, video_pk, blob_path,
-                          sample_interval=10, max_frames=300, confidence=0.15,
-                          labeler="yolo", selection="uniform",
-                          nms_iou=0.5, max_detections=100, custom_model_key=""):
-        """Invoke the SageMaker async endpoint (task=pre_annotate), poll the
-        result from S3, then create Annotation rows. Runs in a daemon thread."""
-        import json
-        import time
-        from urllib.parse import urlparse
 
-        import boto3
-        from botocore.config import Config
-        from botocore.exceptions import ClientError
-        from django.conf import settings
-        from django.db import connection
+def _create_preannotation_task(request, project, video):
+    """Build a PreAnnotationTask row from the request's pre-annotate options."""
+    from .models import PreAnnotationTask
 
-        try:
-            from apps.annotations.models import Annotation, AnnotationProject
-            from apps.videos.models import Video
-
-            video = Video.objects.select_related("source").get(pk=video_pk)
-            blob_path = video.storage_key
-            if blob_path.startswith("s3://"):
-                logger.info("pre-annotate: transferring video %s from S3", video_pk)
-                from apps.analysis.views import _ingest_external_s3_to_storage
-                blob_path = _ingest_external_s3_to_storage(video)
-
-            project = AnnotationProject.objects.get(pk=project_pk)
-            classes = project.classes or ["bee", "wasp", "nest"]
-            user_id = project.user_id
-
-            if labeler == "sam3":
-                endpoint = settings.SAGEMAKER_SAM3_ENDPOINT_NAME
-                if not endpoint:
-                    logger.error("pre-annotate: SAGEMAKER_SAM3_ENDPOINT_NAME unset — SAM 3 endpoint not deployed?")
-                    return
-            else:
-                endpoint = settings.SAGEMAKER_ENDPOINT_NAME
-                if not endpoint:
-                    logger.error("pre-annotate: SAGEMAKER_ENDPOINT_NAME unset — endpoint not deployed?")
-                    return
-            in_bucket = settings.SAGEMAKER_INPUT_BUCKET
-            region = settings.AWS_REGION
-            connection.close()  # don't hold a DB conn across the long poll
-
-            cfg = Config(connect_timeout=10, read_timeout=30, retries={"max_attempts": 2})
-            s3 = boto3.client("s3", region_name=region, config=cfg)
-            smrt = boto3.client("sagemaker-runtime", region_name=region, config=cfg)
-
-            payload = {
-                "task": "pre_annotate",
-                "job_id": f"preannot-{labeler}-{project_pk}-{video_pk}",
-                "user_id": str(user_id),
-                "video_blob_path": blob_path,
-                "classes": classes,
-                "sample_interval": sample_interval,
-                "max_frames": max_frames,
-                "confidence_threshold": confidence,
-                "selection": selection,  # SAM 3: "diverse" (DINOv2) or "uniform"
-                "nms_iou": nms_iou,          # SAM 3: dedupe overlapping boxes (<=0 off)
-                "max_detections": max_detections,  # SAM 3: cap per class per frame
-            }
-            if custom_model_key:
-                # Fine-tuned detector (models bucket) instead of the built-in one.
-                payload["custom_bee_model_path"] = custom_model_key
-            key = f"preannotate/{project_pk}/{video_pk}-{labeler}.json"
-            s3.put_object(Bucket=in_bucket, Key=key,
-                          Body=json.dumps(payload).encode("utf-8"),
-                          ContentType="application/json")
-            resp = smrt.invoke_endpoint_async(
-                EndpointName=endpoint,
-                InputLocation=f"s3://{in_bucket}/{key}",
-                ContentType="application/json",
-                InferenceId=f"preannot-{labeler}-{project_pk}-{video_pk}",
-            )
-            out = urlparse(resp["OutputLocation"])
-            out_bucket, out_key = out.netloc, out.path.lstrip("/")
-            # Real failure location (requires S3FailurePath on the endpoint);
-            # the .failure suffix is the legacy guess for older configs.
-            fail_loc = resp.get("FailureLocation", "") or ""
-            if fail_loc:
-                f = urlparse(fail_loc)
-                fail_bucket, fail_key = f.netloc, f.path.lstrip("/")
-            else:
-                fail_bucket, fail_key = out_bucket, out_key.replace(".out", ".failure")
-
-            # Poll the async output (cold start can take a few minutes).
-            result = None
-            deadline = time.time() + 15 * 60
-            while time.time() < deadline:
-                time.sleep(10)
-                try:
-                    body = s3.get_object(Bucket=out_bucket, Key=out_key)["Body"].read()
-                    result = json.loads(body)
-                    break
-                except ClientError as e:
-                    if e.response["Error"]["Code"] not in ("NoSuchKey", "404", "NotFound"):
-                        raise
-                    try:
-                        fail = s3.get_object(Bucket=fail_bucket, Key=fail_key)["Body"].read()
-                        logger.error("pre-annotate: endpoint failure for video %s: %s",
-                                     video_pk, fail[:500])
-                        return
-                    except ClientError:
-                        continue  # still running
-
-            if not result or not result.get("frames"):
-                logger.info("pre-annotate: no frames for video %s (timeout or empty)", video_pk)
-                return
-
-            project = AnnotationProject.objects.get(pk=project_pk)
-            video = Video.objects.get(pk=video_pk)
-            width = result.get("video_width", 1280)
-            height = result.get("video_height", 720)
-            # Never overwrite frames a human already reviewed; re-detected
-            # boxes invalidate any prior LLM review, so reset review state.
-            human_frames = set(
-                Annotation.objects.filter(
-                    project=project, video=video,
-                    review_source=Annotation.ReviewSource.HUMAN,
-                ).values_list("frame_number", flat=True)
-            )
-            created = 0
-            skipped = 0
-            for frame_data in result["frames"]:
-                if frame_data["frame_number"] in human_frames:
-                    skipped += 1
-                    continue
-                _, was_created = Annotation.objects.update_or_create(
-                    project=project, video=video,
-                    frame_number=frame_data["frame_number"],
-                    defaults={
-                        "boxes": frame_data["boxes"],
-                        "image_width": width, "image_height": height,
-                        "frame_image_path": frame_data.get("frame_image_path", ""),
-                        "reviewed": False,
-                        "review_source": Annotation.ReviewSource.NONE,
-                        "reviewed_at": None,
-                    },
-                )
-                created += int(was_created)
-            logger.info("pre-annotated video %s: %d frames, %d new, %d human-reviewed kept",
-                        video_pk, len(result["frames"]), created, skipped)
-
-            exec_secs = result.get("execution_seconds", 0) or 0
-            credits_used = int(exec_secs) if exec_secs else 30
-            try:
-                from apps.accounts.models import UserProfile
-                profile, _ = UserProfile.objects.get_or_create(user=project.user)
-                profile.charge(credits_used, gpu_seconds=exec_secs or credits_used)
-            except Exception as charge_err:
-                logger.error("pre-annotate: credit charge failed for %s: %s", video_pk, charge_err)
-
-        except Exception as e:
-            logger.error("pre-annotate failed for video %s: %s", video_pk, e, exc_info=True)
-        finally:
-            connection.close()
+    sample_interval, max_frames, confidence = _preannotate_opts(request)
+    labeler, custom_model_key = _labeler_opts(request)
+    selection = "diverse" if request.POST.get("selection", "diverse") == "diverse" else "uniform"
+    if labeler != "sam3":
+        selection = "uniform"
+    nms_iou, max_detections = _sam3_opts(request)
+    return PreAnnotationTask.objects.create(
+        user=request.user, project=project, video=video,
+        labeler=labeler, custom_model_key=custom_model_key,
+        params={
+            "sample_interval": sample_interval, "max_frames": max_frames,
+            "confidence": confidence, "selection": selection,
+            "nms_iou": nms_iou, "max_detections": max_detections,
+        },
+    )
 
 
 class PreAnnotateAllView(LoginRequiredMixin, View):
@@ -718,7 +783,6 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
     def post(self, request, pk):
         from django.shortcuts import redirect
         from django.contrib import messages
-        import threading
 
         project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
         videos = project.videos.all()
@@ -730,30 +794,23 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
             messages.warning(request, "No videos in this project.")
             return redirect("annotations:detail", pk=pk)
 
-        sample_interval, max_frames, confidence = _preannotate_opts(request)
-        labeler, custom_model_key = _labeler_opts(request)
-        selection = "diverse" if request.POST.get("selection", "diverse") == "diverse" else "uniform"
-        if labeler != "sam3":
-            selection = "uniform"
-        nms_iou, max_detections = _sam3_opts(request)
+        # One durable task per video; the bounded spawn pool + reconciler handle
+        # them (no more one-unbounded-thread-per-video).
         count = 0
+        labeler = "yolo"
         for video in videos:
-            blob_path = video.storage_key
-            if not blob_path:
+            if not video.storage_key:
                 continue
-            thread = threading.Thread(
-                target=PreAnnotateView._run_pre_annotate,
-                args=(project.pk, video.pk, blob_path, sample_interval, max_frames, confidence,
-                      labeler, selection, nms_iou, max_detections, custom_model_key),
-                daemon=True,
-            )
-            thread.start()
+            task = _create_preannotation_task(request, project, video)
+            labeler = task.labeler
+            spawn_preannotation_async(task.pk)
             count += 1
 
         engine = "SAM 3" if labeler == "sam3" else "AI"
         messages.info(
             request,
-            f"{engine} pre-annotation started for {count} video(s). This takes 1-4 minutes per video. Refresh to see results.",
+            f"{engine} pre-annotation started for {count} video(s). Runs in the "
+            "background — refresh to see progress.",
         )
         return redirect("annotations:detail", pk=pk)
 

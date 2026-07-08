@@ -32,8 +32,8 @@ def _metric(metrics, *keys):
 def start_run(user, video_ids, scope="default", min_map50=DEFAULT_MIN_MAP50):
     """Create an AnnotationProject from the given videos, kick off SAM 3 diverse
     relabeling, and open an AdaptationRun in RELABELING."""
-    from apps.annotations.models import AnnotationProject
-    from apps.annotations.views import PreAnnotateView
+    from apps.annotations.models import AnnotationProject, PreAnnotationTask
+    from apps.annotations.views import spawn_preannotation_async
     from apps.videos.models import Video
 
     from .models import AdaptationRun
@@ -52,12 +52,14 @@ def start_run(user, video_ids, scope="default", min_map50=DEFAULT_MIN_MAP50):
         status=AdaptationRun.Status.RELABELING, min_map50=min_map50,
         detail=f"SAM 3 relabeling {len(videos)} video(s)",
     )
+    # Durable SAM 3 diverse pre-annotation tasks (reconciler finalizes them).
     for v in videos:
-        threading.Thread(
-            target=PreAnnotateView._run_pre_annotate,
-            args=(project.pk, v.pk, v.storage_key, 10, 300, 0.3, "sam3", "diverse"),
-            daemon=True,
-        ).start()
+        task = PreAnnotationTask.objects.create(
+            user=user, project=project, video=v, labeler="sam3",
+            params={"sample_interval": 10, "max_frames": 300, "confidence": 0.3,
+                    "selection": "diverse", "nms_iou": 0.5, "max_detections": 100},
+        )
+        spawn_preannotation_async(task.pk)
     logger.info("adapt: run %s started (scope=%s, %d videos)", run.pk, scope, len(videos))
     return run
 

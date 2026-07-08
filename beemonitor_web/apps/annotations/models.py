@@ -87,3 +87,46 @@ class Annotation(models.Model):
             h = box["h"] / self.image_height
             lines.append(f'{box["class_id"]} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}')
         return "\n".join(lines)
+
+
+class PreAnnotationTask(models.Model):
+    """A durable record of one pre-annotation run (one video).
+
+    Replaces the old fire-and-forget daemon thread that polled S3 for 15 min:
+    the SageMaker invocation is fired once, its output S3 URI is stored here,
+    and the background reconciler finalizes the task (writes Annotation rows)
+    when the result lands — so a deploy mid-run no longer loses the result and
+    the UI can show progress / failure.
+    """
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"          # created, not yet invoked
+        PROCESSING = "processing", "Processing"  # invoked, awaiting result
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name="preannotation_tasks")
+    project = models.ForeignKey(AnnotationProject, on_delete=models.CASCADE,
+                                related_name="preannotation_tasks")
+    video = models.ForeignKey("videos.Video", on_delete=models.CASCADE,
+                              related_name="preannotation_tasks")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.QUEUED)
+    labeler = models.CharField(max_length=20, default="yolo")   # yolo | sam3 (custom rides yolo)
+    custom_model_key = models.CharField(max_length=500, blank=True, default="")
+    # Sampling / SAM3 knobs needed to build the payload at spawn time.
+    params = models.JSONField(default=dict, blank=True)
+    # SageMaker async result location (poll target) + failure location.
+    output_uri = models.CharField(max_length=700, blank=True, default="")
+    failure_uri = models.CharField(max_length=700, blank=True, default="")
+    frames_written = models.IntegerField(default=0)
+    error_message = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"PreAnnotate {self.video_id} [{self.status}]"
