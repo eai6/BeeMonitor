@@ -149,6 +149,10 @@ class DriftReference(models.Model):
     ref_std = models.FloatField(default=0.0)    # std of those distances (the "normal" spread)
     dim = models.IntegerField(default=0)
     n_frames = models.IntegerField(default=0)
+    # Opt-in: when a drift check against this baseline flags drift, automatically
+    # start an AdaptationRun (SAM3 relabel → fine-tune → await approval). Off by
+    # default — it spends GPU; promotion is still user-approved.
+    auto_adapt = models.BooleanField(default=False)
     note = models.CharField(max_length=255, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -26,6 +26,16 @@
       <strong>{{ ref.ref_mean|floatformat:3 }}</strong> ± {{ ref.ref_std|floatformat:3 }}
       · updated {{ ref.updated_at|timesince }} ago.
     </p>
+    <form method="post" action="{% url 'training:drift_auto_adapt' %}" class="mt-3 flex items-center gap-2">
+      {% csrf_token %}
+      <label class="flex items-center gap-2 text-sm text-gray-700">
+        <input type="checkbox" name="auto_adapt" onchange="this.form.submit()"
+               {% if ref.auto_adapt %}checked{% endif %}
+               class="rounded border-gray-300 text-amber-600 focus:ring-amber-500">
+        Auto-adapt on drift
+      </label>
+      <span class="text-xs text-gray-400">— when a checked video drifts, automatically SAM 3-relabel + fine-tune (promotion still needs your approval).</span>
+    </form>
   {% else %}
     <p class="text-sm text-amber-700">No baseline yet — select known-good videos below and set one.</p>
   {% endif %}

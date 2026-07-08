@@ -15,6 +15,7 @@ urlpatterns = [
     # Domain-drift detection (P2c)
     path("drift/", views.DriftDashboardView.as_view(), name="drift"),
     path("drift/baseline/", views.SetDriftBaselineView.as_view(), name="drift_baseline"),
+    path("drift/auto-adapt/", views.ToggleAutoAdaptView.as_view(), name="drift_auto_adapt"),
     path("drift/check/", views.CheckDriftView.as_view(), name="drift_check"),
     # Closed auto-fine-tuning loop (P3)
     path("adapt/", views.AdaptationDashboardView.as_view(), name="adaptation"),

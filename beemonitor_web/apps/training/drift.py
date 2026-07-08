@@ -134,6 +134,25 @@ def build_reference(user_id, video_blob_paths, scope="default", note="",
         connection.close()
 
 
+def _maybe_auto_adapt(check, ref):
+    """Start an AdaptationRun for a drifted video — unless one is already in
+    flight for this scope (dedupe so repeated drift checks don't pile up runs)."""
+    from . import orchestrator
+    from .models import AdaptationRun
+
+    active = [AdaptationRun.Status.RELABELING, AdaptationRun.Status.TRAINING,
+              AdaptationRun.Status.EVALUATING, AdaptationRun.Status.AWAITING]
+    if AdaptationRun.objects.filter(
+        user_id=check.user_id, scope=ref.scope, status__in=active,
+    ).exists():
+        logger.info("drift: auto-adapt skipped for scope %s — run already active", ref.scope)
+        return
+    run = orchestrator.start_run(check.user, [check.video_id], scope=ref.scope)
+    if run:
+        logger.info("drift: auto-adapt started run %s for drifted video %s (scope %s)",
+                    run.pk, check.video_id, ref.scope)
+
+
 def run_check(check_id):
     """Score one DriftCheck's video against its reference; fill in the result."""
     from django.db import connection
@@ -170,6 +189,12 @@ def run_check(check_id):
         check.save()
         logger.info("drift: video %s scored drift=%.3f z=%.2f drifted=%s",
                     check.video_id, drift_score, z, check.is_drifted)
+
+        # Close the loop: if the baseline opted into auto-adaptation and this
+        # video drifted, kick off an AdaptationRun (deduped per scope). Promotion
+        # of the resulting model is still user-approved, so this stays cost-safe.
+        if check.is_drifted and ref.auto_adapt:
+            _maybe_auto_adapt(check, ref)
     except Exception as e:  # noqa: BLE001
         logger.error("drift: run_check %s failed: %s", check_id, e, exc_info=True)
         try:

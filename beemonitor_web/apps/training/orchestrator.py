@@ -66,14 +66,28 @@ def start_run(user, video_ids, scope="default", min_map50=DEFAULT_MIN_MAP50):
 
 def advance_run(run):
     """Advance one run based on current DB state. Idempotent."""
-    from apps.annotations.models import Annotation
+    from apps.annotations.models import Annotation, PreAnnotationTask
 
     from .models import AdaptationRun, CustomModel, TrainingJob
 
     S = AdaptationRun.Status
 
     if run.status == S.RELABELING:
-        if run.project and Annotation.objects.filter(project=run.project).exists():
+        # Wait until ALL of the project's SAM3 pre-annotation tasks have
+        # finished (previously fired training the instant *any* annotation row
+        # existed — a race that trained on a half-labeled project). Durable
+        # PreAnnotationTask state makes this reliable.
+        if not run.project:
+            return run
+        pending = PreAnnotationTask.objects.filter(
+            project=run.project,
+            status__in=[PreAnnotationTask.Status.QUEUED, PreAnnotationTask.Status.PROCESSING],
+        ).exists()
+        has_labels = Annotation.objects.filter(project=run.project).exists()
+        if pending:
+            run.detail = "SAM 3 relabeling in progress…"
+            run.save(update_fields=["detail", "updated_at"])
+        elif has_labels:
             job = TrainingJob.objects.create(
                 user=run.user, project=run.project,
                 name=f"Auto-adapt #{run.pk} · {run.scope}",
@@ -85,6 +99,11 @@ def advance_run(run):
             run.save(update_fields=["training_job", "status", "detail", "updated_at"])
             from .views import _spawn_training_job
             threading.Thread(target=_spawn_training_job, args=(job.pk,), daemon=True).start()
+        else:
+            # All relabel tasks finished but produced nothing usable.
+            run.status = S.FAILED
+            run.detail = "SAM 3 relabeling produced no annotations"
+            run.save(update_fields=["status", "detail", "updated_at"])
 
     elif run.status == S.TRAINING:
         job = run.training_job

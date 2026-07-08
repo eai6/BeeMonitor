@@ -88,6 +88,20 @@ def reconcile_all(limit: int = 500) -> dict:
     except Exception:
         logger.exception("pre-annotation poll failed")
 
+    # Auto-adaptation runs (relabel → train → evaluate) advance headlessly.
+    try:
+        from apps.training import orchestrator
+        from apps.training.models import AdaptationRun
+        active = [AdaptationRun.Status.RELABELING, AdaptationRun.Status.TRAINING,
+                  AdaptationRun.Status.EVALUATING]
+        for adapt_run in AdaptationRun.objects.filter(status__in=active)[:50]:
+            try:
+                orchestrator.advance_run(adapt_run)
+            except Exception:
+                logger.exception("adaptation advance failed for run %s", adapt_run.pk)
+    except Exception:
+        logger.exception("adaptation reconcile failed")
+
     return {"jobs_checked": len(jobs), "jobs_resolved": resolved,
             "run_users": len(run_user_ids), "annotate_users": len(annotate_user_ids),
             "training_completed": training.get("completed", 0),

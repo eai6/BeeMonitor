@@ -536,6 +536,24 @@ class DriftDashboardView(LoginRequiredMixin, View):
                       {"ref": ref, "checks": checks, "videos": videos})
 
 
+class ToggleAutoAdaptView(LoginRequiredMixin, View):
+    """Flip the baseline's auto-adapt flag (drift → auto-start adaptation)."""
+
+    def post(self, request):
+        from django.shortcuts import redirect
+        from .models import DriftReference
+
+        ref = DriftReference.objects.filter(user=request.user, scope="default").first()
+        if ref:
+            ref.auto_adapt = request.POST.get("auto_adapt") in ("on", "true", "1")
+            ref.save(update_fields=["auto_adapt"])
+            state = "on" if ref.auto_adapt else "off"
+            messages.info(request, f"Auto-adaptation turned {state}. Promotion stays user-approved.")
+        else:
+            messages.warning(request, "Set a baseline first.")
+        return redirect("training:drift")
+
+
 class SetDriftBaselineView(LoginRequiredMixin, View):
     def post(self, request):
         import threading
