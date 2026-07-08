@@ -98,10 +98,10 @@
       {% if pipelines or pipeline_templates %}
       <select name="pipeline" id="pipeline-select" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
         {% if pipelines %}<optgroup label="My pipelines">
-          {% for p in pipelines %}<option value="{{ p.pk }}">{{ p.title }}</option>{% endfor %}
+          {% for p in pipelines %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}>{{ p.title }}</option>{% endfor %}
         </optgroup>{% endif %}
         {% if pipeline_templates %}<optgroup label="Templates">
-          {% for p in pipeline_templates %}<option value="{{ p.pk }}">{{ p.title }}</option>{% endfor %}
+          {% for p in pipeline_templates %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}>{{ p.title }}</option>{% endfor %}
         </optgroup>{% endif %}
       </select>
       <p class="text-xs text-gray-400 mt-2">Runs the pipeline once per selected video. Model &amp; ROI choices live inside the pipeline (e.g. the “Use bee-hotel ROI” block). Build your own on the <a href="{% url 'pipelines:list' %}" class="text-amber-700 hover:underline">Pipelines</a> page or start from a <a href="{% url 'pipelines:lesson_list' %}" class="text-amber-700 hover:underline">lesson</a>.</p>

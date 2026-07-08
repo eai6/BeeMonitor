@@ -54,22 +54,16 @@ BLOCK_REGISTRY = {
     # ── Input ─────────────────────────────────────────────────────────────────
     "input.video": {
         "display_name": "Video Input",
-        "description": "Pick an uploaded clip or a device recording to feed the pipeline.",
+        "description": "The video the pipeline runs on. The specific clip is chosen "
+                       "at run time (Processing → Run on videos), not here — a "
+                       "pipeline is a reusable template.",
         "category": "input",
         "icon": "🎞️",
         "input_type": "none",
         "output_type": "video",
         "backend": "local",
-        "config_fields": [
-            {
-                "name": "video_id",
-                "label": "Video",
-                "field_type": "video",   # UI renders the video picker (populated at render)
-                "required": True,
-                "default": "",
-                "choices": None,
-            },
-        ],
+        # No config — the video is injected per run (engine.steps_with_video).
+        "config_fields": [],
     },
     "input.image_set": {
         "display_name": "Image Set",

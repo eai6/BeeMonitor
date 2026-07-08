@@ -16,6 +16,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.http import require_POST
 
 from apps.videos.models import Video
@@ -221,6 +222,12 @@ def run_pipeline(request, pk):
     if not pipeline.steps:
         messages.error(request, "Add at least one step before running.")
         return redirect("pipelines:editor", pk=pk)
+
+    # A pipeline is a template — the video is chosen at run time. If it has a
+    # video input, send the user to Processing to pick which videos to run on.
+    if any(s.get("block_type") == "input.video" for s in pipeline.steps):
+        messages.info(request, "Pick the videos to run this pipeline on.")
+        return redirect(f"{reverse('analysis:processing')}?pipeline={pipeline.pk}")
 
     run = PipelineRun.objects.create(pipeline=pipeline, user=request.user)
     engine.start_run(run)
