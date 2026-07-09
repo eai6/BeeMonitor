@@ -765,7 +765,7 @@
 <div class="mt-8">
   <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
     <div class="flex items-baseline gap-3">
-      <h2 class="text-lg font-semibold text-gray-900">Activity over time</h2>
+      <h2 class="text-lg font-semibold text-gray-900">Foraging over time</h2>
       <a href="{% url 'monitor:activity_list' %}?device={{ device.pk }}" class="text-sm text-amber-600 hover:underline">Browse activity &amp; species &rarr;</a>
     </div>
     <div class="flex items-center gap-2 text-xs">
@@ -818,10 +818,10 @@
   <div class="bg-white shadow rounded-lg p-4">
     <canvas id="activityChart" height="90" class="{% if not activity_series %}hidden{% endif %}"></canvas>
     {{ activity_series|json_script:"activity-data" }}
-    <p id="activity-empty" class="text-sm text-gray-500 text-center py-8 {% if activity_series %}hidden{% endif %}">No activity data yet for this range. (Counts the snippets recorded in each clock hour, from this device's uploaded clips.)</p>
+    <p id="activity-empty" class="text-sm text-gray-500 text-center py-8 {% if activity_series %}hidden{% endif %}">No analyzed foraging data yet for this range. (Entries, exits and foraging trips come from running the pipeline on this device's clips.)</p>
     <p class="text-xs text-gray-400 mt-2">
       {% if weather_enabled %}
-        Activity with temperature &amp; precipitation overlaid — weather via
+        Analyzed foraging entries, exits &amp; trips with temperature &amp; precipitation overlaid — weather via
         <a href="https://open-meteo.com/" target="_blank" rel="noopener" class="hover:underline">Open-Meteo</a>
         for this device's coordinates. Times shown in {{ display_tz|default:"UTC" }}.
       {% elif can_manage %}
@@ -849,7 +849,9 @@
         <thead class="bg-gray-50 sticky top-0 text-xs text-gray-500 uppercase tracking-wide">
           <tr>
             <th class="text-left px-3 py-2 font-medium">Period</th>
-            <th class="text-right px-3 py-2 font-medium">Activity</th>
+            <th class="text-right px-3 py-2 font-medium">Entries</th>
+            <th class="text-right px-3 py-2 font-medium">Exits</th>
+            <th class="text-right px-3 py-2 font-medium">Trips</th>
             <th id="act-th-temp" class="text-right px-3 py-2 font-medium hidden">Temp (°C)</th>
             <th id="act-th-precip" class="text-right px-3 py-2 font-medium hidden">Precip (mm)</th>
           </tr>
@@ -935,18 +937,27 @@
     var datasets = [];
     if (hasPrecip) datasets.push({ type: 'bar', label: 'Precipitation (mm)',
       data: rows.map(function (d) { return d.precip; }),
-      backgroundColor: 'rgba(59,130,246,0.30)', yAxisID: 'yP', order: 3 });
-    datasets.push({ type: 'line', label: 'Activity (snippets)',
-      data: rows.map(function (d) { return d.v; }),
-      borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,0.12)',
-      fill: true, tension: 0.3, pointRadius: 1, borderWidth: 2, yAxisID: 'y', order: 1 });
+      backgroundColor: 'rgba(59,130,246,0.30)', yAxisID: 'yP', order: 4 });
+    // Analyzed foraging: entries, exits, and foraging trips (from the pipeline),
+    // replacing the raw clip-snippet count.
+    datasets.push({ type: 'line', label: 'Entries',
+      data: rows.map(function (d) { return d.entries; }),
+      borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,0.10)',
+      fill: false, tension: 0.3, pointRadius: 1, borderWidth: 1.75, yAxisID: 'y', order: 1 });
+    datasets.push({ type: 'line', label: 'Exits',
+      data: rows.map(function (d) { return d.exits; }),
+      borderColor: '#f97316', fill: false, tension: 0.3, pointRadius: 1, borderWidth: 1.75, yAxisID: 'y', order: 1 });
+    datasets.push({ type: 'line', label: 'Foraging trips',
+      data: rows.map(function (d) { return d.trips; }),
+      borderColor: '#7c3aed', backgroundColor: 'rgba(124,58,237,0.10)',
+      fill: true, tension: 0.3, pointRadius: 1, borderWidth: 2, yAxisID: 'y', order: 2 });
     if (hasTemp) datasets.push({ type: 'line', label: 'Temp (°C)',
       data: rows.map(function (d) { return d.temp; }),
       borderColor: '#dc2626', tension: 0.3, pointRadius: 0, borderWidth: 1.5,
       spanGaps: true, yAxisID: 'yT', order: 0 });
     var scales = {
       x: { ticks: { maxTicksLimit: 10, autoSkip: true } },
-      y: { beginAtZero: true, position: 'left', title: { display: true, text: 'Activity' }, ticks: { precision: 0 } },
+      y: { beginAtZero: true, position: 'left', title: { display: true, text: 'Foraging (events / trips)' }, ticks: { precision: 0 } },
     };
     if (hasTemp) scales.yT = { position: 'right', title: { display: true, text: '°C' }, grid: { drawOnChartArea: false } };
     if (hasPrecip) scales.yP = { position: 'right', display: false, beginAtZero: true };
@@ -987,7 +998,9 @@
     if (empty) empty.classList.add('hidden');
     body.innerHTML = rows.slice().reverse().map(function (d) {  // newest first
       var c = '<td class="px-3 py-1.5 text-gray-700">' + esc2(d.t || d.iso || '') + '</td>'
-        + '<td class="px-3 py-1.5 text-right font-medium text-gray-900">' + (d.v != null ? d.v : 0) + '</td>';
+        + '<td class="px-3 py-1.5 text-right text-green-700">' + (d.entries != null ? d.entries : 0) + '</td>'
+        + '<td class="px-3 py-1.5 text-right text-orange-600">' + (d.exits != null ? d.exits : 0) + '</td>'
+        + '<td class="px-3 py-1.5 text-right font-medium text-purple-700">' + (d.trips != null ? d.trips : 0) + '</td>';
       if (hasTemp) c += '<td class="px-3 py-1.5 text-right text-gray-500">' + (d.temp != null ? (Math.round(d.temp * 10) / 10) : '') + '</td>';
       if (hasPrecip) c += '<td class="px-3 py-1.5 text-right text-gray-500">' + (d.precip != null ? d.precip : '') + '</td>';
       return '<tr>' + c + '</tr>';
@@ -998,12 +1011,14 @@
   var csvBtn = document.getElementById('act-csv-btn');
   if (csvBtn) csvBtn.addEventListener('click', function () {
     var rows = window._actRows || [];
-    var cols = ['period_utc', 'period_local', 'activity'];
+    var cols = ['period_utc', 'period_local', 'entries', 'exits', 'foraging_trips'];
     if (window._actHasTemp) cols.push('temp_c');
     if (window._actHasPrecip) cols.push('precip_mm');
     var lines = [cols.join(',')];
     rows.forEach(function (d) {  // chronological in the file
-      var rec = [csvCell(d.iso || ''), csvCell(d.t || ''), (d.v != null ? d.v : 0)];
+      var rec = [csvCell(d.iso || ''), csvCell(d.t || ''),
+                 (d.entries != null ? d.entries : 0), (d.exits != null ? d.exits : 0),
+                 (d.trips != null ? d.trips : 0)];
       if (window._actHasTemp) rec.push(d.temp != null ? d.temp : '');
       if (window._actHasPrecip) rec.push(d.precip != null ? d.precip : '');
       lines.push(rec.join(','));

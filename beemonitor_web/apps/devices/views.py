@@ -519,14 +519,48 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all",
     if weather_enabled and key_dt:
         wx = _weather_lookup(list(key_dt.values()), gran, device.lat, device.lon, zone_name)
 
+    # Analyzed foraging results (entries / exits / trips) per bucket, from the
+    # latest completed analysis of each of the device's videos in range. These are
+    # DB counts (JobResult) — no S3 reads. A video's data is bucketed by its
+    # recorded time, same as the clip counts.
+    from apps.analysis.models import JobResult
+    forage, seen_vid = {}, set()
+    jr = (JobResult.objects
+          .filter(job__video__device=device,
+                  job__video__recorded_at__gte=since,
+                  job__video__recorded_at__lte=until)
+          .order_by("job__video_id", "-job__id")
+          .values("job__video_id", "job__video__recorded_at",
+                  "entry_count", "exit_count", "foraging_trip_count"))
+    for row in jr:
+        vid = row["job__video_id"]
+        if vid in seen_vid:
+            continue
+        seen_vid.add(vid)  # latest job per video only
+        ra = row["job__video__recorded_at"]
+        if not ra:
+            continue
+        loc = _true_utc(ra, pi_off).astimezone(zone)
+        if loc < start_loc or loc > upper_loc:
+            continue
+        k, _b = bucket(loc)
+        f = forage.setdefault(k, {"entries": 0, "exits": 0, "trips": 0})
+        f["entries"] += row["entry_count"] or 0
+        f["exits"] += row["exit_count"] or 0
+        f["trips"] += row["foraging_trip_count"] or 0
+
     series = []
     for k in sorted(counts, key=lambda kk: key_dt[kk]):
         b = key_dt[k]
         w = wx.get(b.strftime(wkey), {})
+        fg = forage.get(k, {})
         series.append({
             "iso": b.astimezone(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "t": b.strftime(fmt),  # display-tz label; the chart shows it as-is
             "v": counts[k],
+            "entries": fg.get("entries", 0),
+            "exits": fg.get("exits", 0),
+            "trips": fg.get("trips", 0),
             "temp": w.get("temp"),
             "precip": w.get("precip"),
         })

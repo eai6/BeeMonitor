@@ -132,27 +132,6 @@
     <p class="text-[11px] text-gray-400 mt-1">Foraging trips ({{ ts.total_trips }}) bucketed by exit time.</p>
   </div>
 
-  <!-- Activity by hour of day (stacked exit/entry) -->
-  <div class="bg-white shadow rounded-lg p-4 lg:col-span-2">
-    <div class="flex items-baseline justify-between mb-3">
-      <h2 class="text-sm font-medium text-gray-500 uppercase">Activity by hour of day</h2>
-      <span class="text-xs text-gray-400">peak {{ charts.hod_peak|stringformat:"02d" }}:00</span>
-    </div>
-    <div class="flex items-end gap-[3px] h-40">
-      {% for b in charts.hour_of_day %}
-      <div class="flex-1 flex flex-col justify-end items-center" title="{{ b.label }}:00 — {{ b.exit }} exit, {{ b.entry }} entry">
-        <div class="w-full bg-green-500 rounded-t" style="height: {{ b.pct_entry }}%; min-height: {% if b.entry %}1px{% else %}0{% endif %};"></div>
-        <div class="w-full bg-red-500" style="height: {{ b.pct_exit }}%; min-height: {% if b.exit %}1px{% else %}0{% endif %};"></div>
-      </div>
-      {% endfor %}
-    </div>
-    <div class="flex justify-between text-[10px] text-gray-400 mt-1"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div>
-    <div class="flex gap-4 mt-2 text-[11px]">
-      <span class="inline-flex items-center gap-1 text-gray-600"><span class="inline-block w-2.5 h-2.5 rounded-sm" style="background:#ef4444"></span>Exit</span>
-      <span class="inline-flex items-center gap-1 text-gray-600"><span class="inline-block w-2.5 h-2.5 rounded-sm" style="background:#22c55e"></span>Entry</span>
-      <span class="text-gray-400">The daily foraging rhythm across all {{ sources|length }} videos.</span>
-    </div>
-  </div>
 </div>
 {% endwith %}{% endif %}
 
