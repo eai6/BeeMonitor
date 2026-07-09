@@ -418,7 +418,7 @@ def _device_forage_trip_times(device, since, until):
     times = []
     if sources:
         try:
-            trips, _summary = aggregate.aggregate_trips(aggregate.collect_events(sources))
+            trips, _summary = aggregate.aggregate_trips(sources)
             times = [t["exit_time"] for t in trips]
         except Exception as e:  # noqa: BLE001 - trips are best-effort
             logger.warning("device %s trip pairing failed: %s", device.pk, e)

@@ -677,9 +677,16 @@ def batch_detail(request, batch_id):
     all_done = all(r.is_terminal for r in runs)
 
     min_sec, max_sec = _trip_bounds(request)
-    trips, summary = (aggregate.aggregate_trips(sources, min_sec, max_sec)
+    events = aggregate.collect_events(sources) if sources else []
+    trips, summary = (aggregate.aggregate_trips(sources, min_sec, max_sec, events=events)
                       if sources else ([], None))
-    charts = aggregate.activity_charts(aggregate.collect_events(sources), trips) if sources else {}
+    charts = aggregate.activity_charts(events, trips) if sources else {}
+    # Individual Exit/Entry events (per-nest drill-down table), newest first.
+    event_rows = sorted(
+        ({"nest": e["nest"], "action": e["action"], "time": e["time"],
+          "video": e["video"], "video_pk": e.get("video_pk")} for e in events),
+        key=lambda e: e["time"], reverse=True,
+    )
 
     # Per-run rows (title + status) for the members table.
     from apps.videos.models import Video
@@ -699,6 +706,7 @@ def batch_detail(request, batch_id):
         "sources": sources,
         "skipped": skipped,
         "trips": trips,
+        "events": event_rows,
         "summary": summary,
         "charts": charts,
         "min_sec": min_sec,

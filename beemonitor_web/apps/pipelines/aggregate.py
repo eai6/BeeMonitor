@@ -270,13 +270,15 @@ def activity_charts(events, trips=None):
     }
 
 
-def aggregate_trips(sources, min_sec=DEFAULT_MIN_SEC, max_sec=DEFAULT_MAX_SEC):
+def aggregate_trips(sources, min_sec=DEFAULT_MIN_SEC, max_sec=DEFAULT_MAX_SEC, events=None):
     """Pair Exit→Entry per nest across all sources on the absolute timeline.
 
     Returns (trips, summary). Trip dicts carry nest, exit/entry absolute times,
-    duration, source video titles and track ids, and is_cross_video.
+    duration, source video titles and track ids, and is_cross_video. Pass
+    ``events`` (from collect_events) to reuse them and avoid a second S3 read.
     """
-    events = collect_events(sources)
+    if events is None:
+        events = collect_events(sources)
 
     trips = []
     by_nest = {}
