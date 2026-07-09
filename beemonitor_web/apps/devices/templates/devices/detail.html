@@ -831,6 +831,10 @@
         Set the device location (ask the owner) to overlay temperature &amp; precipitation.
       {% endif %}
     </p>
+    <p id="unanalyzed-hint" class="hidden text-xs text-gray-500 mt-1 flex items-center gap-1.5">
+      <span class="inline-block w-4 h-3 rounded-sm align-middle" style="background:rgba(100,116,139,0.18)"></span>
+      Shaded periods have clips that haven't been analyzed yet — a flat zero there means <strong>unknown</strong>, not "no foraging". Run the pipeline on those clips to fill them in.
+    </p>
   </div>
 </div>
 
@@ -967,6 +971,31 @@
     };
     if (hasTemp) scales.yT = { position: 'right', title: { display: true, text: '°C' }, grid: { drawOnChartArea: false } };
     if (hasPrecip) scales.yP = { position: 'right', display: false, beginAtZero: true };
+
+    // Shade buckets where clips were recorded but NOT (fully) analyzed, so a flat
+    // zero reads as "not analyzed yet" rather than "no foraging". Opacity scales
+    // with the unanalyzed fraction; fully-analyzed buckets are left clear.
+    var anyUnanalyzed = rows.some(function (d) { return (d.v || 0) > 0 && (d.analyzed || 0) < (d.v || 0); });
+    var unanalyzedBands = {
+      id: 'unanalyzedBands',
+      beforeDatasetsDraw: function (chart) {
+        var xa = chart.scales.x, area = chart.chartArea, c = chart.ctx, n = rows.length;
+        if (!n || !xa) return;
+        var step = n > 1 ? Math.abs(xa.getPixelForValue(1) - xa.getPixelForValue(0)) : (area.right - area.left);
+        var half = step / 2;
+        c.save();
+        for (var i = 0; i < n; i++) {
+          var d = rows[i], clips = d.v || 0;
+          if (clips <= 0) continue;                                  // nothing recorded
+          var frac = 1 - Math.min(1, (d.analyzed || 0) / clips);     // unanalyzed share
+          if (frac <= 0) continue;                                   // fully analyzed
+          var cx = xa.getPixelForValue(i);
+          c.fillStyle = 'rgba(100,116,139,' + (0.18 * frac).toFixed(3) + ')';
+          c.fillRect(cx - half, area.top, half * 2, area.bottom - area.top);
+        }
+        c.restore();
+      }
+    };
     if (window._actChart) window._actChart.destroy();
     window._actChart = new Chart(canvas, {
       type: 'line',
@@ -977,7 +1006,11 @@
         plugins: { legend: { display: datasets.length > 1, labels: { boxWidth: 12, font: { size: 11 } } } },
         scales: scales,
       },
+      plugins: [unanalyzedBands],
     });
+    // Toggle the "not analyzed" legend hint under the chart.
+    var hint = document.getElementById('unanalyzed-hint');
+    if (hint) hint.classList.toggle('hidden', !anyUnanalyzed);
   };
 
   // (Re)build the activity data table from the SAME rows that drive the chart —

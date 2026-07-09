@@ -572,13 +572,17 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all",
     # per-video trip count is ~0 and would wrongly read zero here.
     from apps.analysis.models import JobResult
     forage, seen_vid = {}, set()
-    jr = (JobResult.objects
-          .filter(job__video__device=device,
-                  job__video__recorded_at__gte=since,
-                  job__video__recorded_at__lte=until)
-          .order_by("job__video_id", "-job__id")
-          .values("job__video_id", "job__video__recorded_at",
-                  "entry_count", "exit_count"))
+    analyzed_ct = {}  # analyzed clips per bucket → is this period analyzed at all?
+    jr_qs = JobResult.objects.filter(
+        job__video__device=device,
+        job__video__recorded_at__gte=since,
+        job__video__recorded_at__lte=until)
+    if confirmed == "confirmed":
+        jr_qs = jr_qs.filter(job__video__metadata__bee_confirmed=True)
+    elif confirmed == "unconfirmed":
+        jr_qs = jr_qs.filter(job__video__metadata__bee_confirmed=False)
+    jr = (jr_qs.order_by("job__video_id", "-job__id")
+          .values("job__video_id", "job__video__recorded_at", "entry_count", "exit_count"))
     for row in jr:
         vid = row["job__video_id"]
         if vid in seen_vid:
@@ -594,6 +598,7 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all",
         f = forage.setdefault(k, {"entries": 0, "exits": 0, "trips": 0})
         f["entries"] += row["entry_count"] or 0
         f["exits"] += row["exit_count"] or 0
+        analyzed_ct[k] = analyzed_ct.get(k, 0) + 1
     for exit_time in _device_forage_trip_times(device, since, until):
         loc = _true_utc(exit_time, pi_off).astimezone(zone)
         if loc < start_loc or loc > upper_loc:
@@ -610,6 +615,7 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all",
             "iso": b.astimezone(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "t": b.strftime(fmt),  # display-tz label; the chart shows it as-is
             "v": counts[k],
+            "analyzed": analyzed_ct.get(k, 0),  # analyzed clips in this bucket
             "entries": fg.get("entries", 0),
             "exits": fg.get("exits", 0),
             "trips": fg.get("trips", 0),
