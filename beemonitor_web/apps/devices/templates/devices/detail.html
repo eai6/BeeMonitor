@@ -849,6 +849,7 @@
         <thead class="bg-gray-50 sticky top-0 text-xs text-gray-500 uppercase tracking-wide">
           <tr>
             <th class="text-left px-3 py-2 font-medium">Period</th>
+            <th class="text-right px-3 py-2 font-medium">Activity</th>
             <th class="text-right px-3 py-2 font-medium">Entries</th>
             <th class="text-right px-3 py-2 font-medium">Exits</th>
             <th class="text-right px-3 py-2 font-medium">Trips</th>
@@ -938,8 +939,13 @@
     if (hasPrecip) datasets.push({ type: 'bar', label: 'Precipitation (mm)',
       data: rows.map(function (d) { return d.precip; }),
       backgroundColor: 'rgba(59,130,246,0.30)', yAxisID: 'yP', order: 4 });
-    // Analyzed foraging: entries, exits, and foraging trips (from the pipeline),
-    // replacing the raw clip-snippet count.
+    // Raw recorded activity (clip snippets per bucket) — a subtle dashed
+    // reference behind the analyzed foraging lines.
+    datasets.push({ type: 'line', label: 'Activity (snippets)',
+      data: rows.map(function (d) { return d.v; }),
+      borderColor: '#94a3b8', backgroundColor: 'rgba(148,163,184,0.08)',
+      borderDash: [4, 3], fill: false, tension: 0.3, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y', order: 3 });
+    // Analyzed foraging: entries, exits, and foraging trips (from the pipeline).
     datasets.push({ type: 'line', label: 'Entries',
       data: rows.map(function (d) { return d.entries; }),
       borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,0.10)',
@@ -998,6 +1004,7 @@
     if (empty) empty.classList.add('hidden');
     body.innerHTML = rows.slice().reverse().map(function (d) {  // newest first
       var c = '<td class="px-3 py-1.5 text-gray-700">' + esc2(d.t || d.iso || '') + '</td>'
+        + '<td class="px-3 py-1.5 text-right text-gray-500">' + (d.v != null ? d.v : 0) + '</td>'
         + '<td class="px-3 py-1.5 text-right text-green-700">' + (d.entries != null ? d.entries : 0) + '</td>'
         + '<td class="px-3 py-1.5 text-right text-orange-600">' + (d.exits != null ? d.exits : 0) + '</td>'
         + '<td class="px-3 py-1.5 text-right font-medium text-purple-700">' + (d.trips != null ? d.trips : 0) + '</td>';
@@ -1011,12 +1018,12 @@
   var csvBtn = document.getElementById('act-csv-btn');
   if (csvBtn) csvBtn.addEventListener('click', function () {
     var rows = window._actRows || [];
-    var cols = ['period_utc', 'period_local', 'entries', 'exits', 'foraging_trips'];
+    var cols = ['period_utc', 'period_local', 'activity', 'entries', 'exits', 'foraging_trips'];
     if (window._actHasTemp) cols.push('temp_c');
     if (window._actHasPrecip) cols.push('precip_mm');
     var lines = [cols.join(',')];
     rows.forEach(function (d) {  // chronological in the file
-      var rec = [csvCell(d.iso || ''), csvCell(d.t || ''),
+      var rec = [csvCell(d.iso || ''), csvCell(d.t || ''), (d.v != null ? d.v : 0),
                  (d.entries != null ? d.entries : 0), (d.exits != null ? d.exits : 0),
                  (d.trips != null ? d.trips : 0)];
       if (window._actHasTemp) rec.push(d.temp != null ? d.temp : '');
