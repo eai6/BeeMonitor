@@ -135,13 +135,13 @@
 </div>
 {% endwith %}{% endif %}
 
-<!-- Trips per nest -->
+<!-- Trips per nest — click a nest to filter the trips table below -->
 {% if summary.trips_per_nest %}
 <div class="bg-white shadow rounded-lg p-4 mb-6">
-  <h2 class="text-sm font-medium text-gray-500 uppercase mb-3">Trips per nest</h2>
+  <h2 class="text-sm font-medium text-gray-500 uppercase mb-3">Trips per nest <span class="text-xs normal-case text-gray-400">— click to see that nest's trips</span></h2>
   <div class="flex flex-wrap gap-2">
     {% for nest, n in summary.trips_per_nest.items %}
-    <span class="inline-flex items-center px-2.5 py-1 rounded bg-gray-100 text-sm text-gray-700">nest {{ nest }}: <span class="font-semibold ml-1">{{ n }}</span></span>
+    <button type="button" class="nest-chip inline-flex items-center px-2.5 py-1 rounded bg-gray-100 hover:bg-amber-100 text-sm text-gray-700" data-nest="{{ nest }}">nest {{ nest }}: <span class="font-semibold ml-1">{{ n }}</span></button>
     {% endfor %}
   </div>
 </div>
@@ -149,7 +149,12 @@
 
 <!-- Trips table -->
 <div class="bg-white shadow rounded-lg overflow-hidden mb-6">
-  <div class="px-4 py-2 text-xs text-gray-500 border-b border-gray-100">{{ trips|length }} trip(s) — scroll within the table</div>
+  <div class="px-4 py-2 text-xs text-gray-500 border-b border-gray-100 flex items-center gap-2">
+    <span id="trips-count">{{ trips|length }} trip(s)</span>
+    <span id="nest-filter-note" class="hidden text-amber-700"></span>
+    <button type="button" id="clear-nest" class="hidden text-amber-700 underline">show all nests</button>
+    <span class="ml-auto text-gray-400">scroll within the table</span>
+  </div>
   <div class="overflow-auto max-h-[32rem]">
     <table class="min-w-full divide-y divide-gray-200 text-sm">
       <thead class="bg-gray-50 sticky top-0 z-10">
@@ -162,15 +167,15 @@
           <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Return Video</th>
         </tr>
       </thead>
-      <tbody class="divide-y divide-gray-100">
+      <tbody id="trips-tbody" class="divide-y divide-gray-100">
         {% for t in trips %}
-        <tr {% if t.is_cross_video %}class="bg-amber-50" title="Cross-video trip: exit and return were captured in different recordings"{% endif %}>
-          <td class="px-4 py-2">{{ t.nest }}</td>
+        <tr class="trip-row {% if t.is_cross_video %}bg-amber-50{% endif %}" data-nest="{{ t.nest }}" {% if t.is_cross_video %}title="Cross-video trip: exit and return were captured in different recordings"{% endif %}>
+          <td class="px-4 py-2 font-medium">{{ t.nest }}</td>
           <td class="px-4 py-2 whitespace-nowrap">{{ t.exit_time|date:"M d H:i:s" }}</td>
           <td class="px-4 py-2 whitespace-nowrap">{{ t.entry_time|date:"M d H:i:s" }}</td>
           <td class="px-4 py-2 text-right">{{ t.duration_sec }}s</td>
-          <td class="px-4 py-2 text-gray-500 truncate max-w-[16rem]">{{ t.exit_video }}</td>
-          <td class="px-4 py-2 text-gray-500 truncate max-w-[16rem]">{% if t.is_cross_video %}<span class="text-amber-700 font-medium">{{ t.entry_video }}</span>{% else %}{{ t.entry_video }}{% endif %}</td>
+          <td class="px-4 py-2 truncate max-w-[16rem]">{% if t.exit_video_pk %}<a href="{% url 'videos:detail' t.exit_video_pk %}" class="text-amber-700 hover:underline" title="{{ t.exit_video }}">{{ t.exit_video }}</a>{% else %}<span class="text-gray-500">{{ t.exit_video }}</span>{% endif %}</td>
+          <td class="px-4 py-2 truncate max-w-[16rem]">{% if t.entry_video_pk %}<a href="{% url 'videos:detail' t.entry_video_pk %}" class="{% if t.is_cross_video %}text-amber-700 font-medium{% else %}text-amber-700{% endif %} hover:underline" title="{{ t.entry_video }}">{{ t.entry_video }}</a>{% else %}<span class="text-gray-500">{{ t.entry_video }}</span>{% endif %}</td>
         </tr>
         {% empty %}
         <tr><td colspan="6" class="px-4 py-6 text-center text-gray-400">No trips found in the current duration bounds.</td></tr>
@@ -184,6 +189,50 @@
   No aggregate results — none of the completed runs produced an events CSV (see the skipped list above).
 </div>
 {% endif %}
+
+<script>
+// Click a nest chip to filter the trips table to that nest; "show all" clears.
+(function () {
+  var tbody = document.getElementById('trips-tbody');
+  if (!tbody) return;
+  var note = document.getElementById('nest-filter-note');
+  var clearBtn = document.getElementById('clear-nest');
+  var countEl = document.getElementById('trips-count');
+  var rows = Array.prototype.slice.call(tbody.querySelectorAll('.trip-row'));
+  var total = rows.length;
+  function apply(nest) {
+    var shown = 0;
+    rows.forEach(function (r) {
+      var on = !nest || r.getAttribute('data-nest') === nest;
+      r.style.display = on ? '' : 'none';
+      if (on) shown++;
+    });
+    if (nest) {
+      note.textContent = '· nest ' + nest + ' (' + shown + ')';
+      note.classList.remove('hidden'); clearBtn.classList.remove('hidden');
+    } else {
+      note.classList.add('hidden'); clearBtn.classList.add('hidden');
+    }
+    countEl.textContent = (nest ? shown : total) + ' trip(s)';
+  }
+  document.querySelectorAll('.nest-chip').forEach(function (chip) {
+    chip.addEventListener('click', function () {
+      apply(chip.getAttribute('data-nest'));
+      document.querySelectorAll('.nest-chip').forEach(function (c) {
+        c.classList.toggle('bg-amber-200', c === chip);
+        c.classList.toggle('bg-gray-100', c !== chip);
+      });
+      document.getElementById('trips-tbody').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+  if (clearBtn) clearBtn.addEventListener('click', function () {
+    apply(null);
+    document.querySelectorAll('.nest-chip').forEach(function (c) {
+      c.classList.add('bg-gray-100'); c.classList.remove('bg-amber-200');
+    });
+  });
+})();
+</script>
 
 {% if running %}
 <script>

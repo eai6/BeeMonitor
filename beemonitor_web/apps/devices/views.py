@@ -379,6 +379,53 @@ def _parse_custom_range(start, end, zone):
     return start_loc, end_loc
 
 
+def _device_forage_trip_times(device, since, until):
+    """Exit times of cross-video foraging trips for a device's analyzed videos in
+    [since, until] (UTC). Reads each video's events CSV and pairs Exit->Entry like
+    the batch aggregate, so it catches trips that span clips. Cached ~5 min so the
+    polled device page doesn't re-read S3 on every refresh. Capped for cost."""
+    from django.core.cache import cache
+    from apps.analysis.models import JobResult
+    from apps.pipelines import aggregate
+
+    key = f"devtrips:{device.pk}:{int(since.timestamp())}:{int(until.timestamp())}"
+    hit = cache.get(key)
+    if hit is not None:
+        return hit
+
+    MAX_VIDEOS = 800
+    jrs = (JobResult.objects
+           .filter(job__video__device=device,
+                   job__video__recorded_at__gte=since, job__video__recorded_at__lte=until)
+           .exclude(events_csv_path="")
+           .select_related("job", "job__video")
+           .order_by("job__video_id", "-job__id"))
+    sources, seen = [], set()
+    for jr in jrs:
+        v = jr.job.video
+        if v.pk in seen or not v.recorded_at:
+            continue
+        seen.add(v.pk)  # latest completed analysis per video
+        sources.append({
+            "title": v.title or f"Video {v.pk}", "video": v,
+            "result": {"events_csv_path": jr.events_csv_path},
+            "recorded_at": v.recorded_at,
+            "fps": max(float(v.fps or aggregate.DEFAULT_FPS), 1.0),
+        })
+        if len(sources) >= MAX_VIDEOS:
+            break
+
+    times = []
+    if sources:
+        try:
+            trips, _summary = aggregate.aggregate_trips(aggregate.collect_events(sources))
+            times = [t["exit_time"] for t in trips]
+        except Exception as e:  # noqa: BLE001 - trips are best-effort
+            logger.warning("device %s trip pairing failed: %s", device.pk, e)
+    cache.set(key, times, 300)
+    return times
+
+
 def _build_activity_series(device, range_key: str, confirmed: str = "all",
                            start=None, end=None) -> dict:
     """Snippets per clock-hour/day in the device's DISPLAY timezone. Combines
@@ -519,10 +566,10 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all",
     if weather_enabled and key_dt:
         wx = _weather_lookup(list(key_dt.values()), gran, device.lat, device.lon, zone_name)
 
-    # Analyzed foraging results (entries / exits / trips) per bucket, from the
-    # latest completed analysis of each of the device's videos in range. These are
-    # DB counts (JobResult) — no S3 reads. A video's data is bucketed by its
-    # recorded time, same as the clip counts.
+    # Analyzed foraging per bucket. Entries/exits are cheap per-video DB counts
+    # (JobResult). Trips are paired Exit->Entry ACROSS the device's videos on the
+    # absolute timeline — because a bee usually returns in a DIFFERENT clip, so a
+    # per-video trip count is ~0 and would wrongly read zero here.
     from apps.analysis.models import JobResult
     forage, seen_vid = {}, set()
     jr = (JobResult.objects
@@ -531,7 +578,7 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all",
                   job__video__recorded_at__lte=until)
           .order_by("job__video_id", "-job__id")
           .values("job__video_id", "job__video__recorded_at",
-                  "entry_count", "exit_count", "foraging_trip_count"))
+                  "entry_count", "exit_count"))
     for row in jr:
         vid = row["job__video_id"]
         if vid in seen_vid:
@@ -547,7 +594,12 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all",
         f = forage.setdefault(k, {"entries": 0, "exits": 0, "trips": 0})
         f["entries"] += row["entry_count"] or 0
         f["exits"] += row["exit_count"] or 0
-        f["trips"] += row["foraging_trip_count"] or 0
+    for exit_time in _device_forage_trip_times(device, since, until):
+        loc = _true_utc(exit_time, pi_off).astimezone(zone)
+        if loc < start_loc or loc > upper_loc:
+            continue
+        k, _b = bucket(loc)
+        forage.setdefault(k, {"entries": 0, "exits": 0, "trips": 0})["trips"] += 1
 
     series = []
     for k in sorted(counts, key=lambda kk: key_dt[kk]):

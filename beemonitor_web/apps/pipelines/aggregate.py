@@ -172,6 +172,7 @@ def collect_events(sources):
                 "nest": str(nest),
                 "time": src["recorded_at"] + timedelta(seconds=frame / src["fps"]),
                 "video": src["title"],
+                "video_pk": getattr(src.get("video"), "pk", None),
                 "track_id": row.get("track_id", ""),
             })
     return events
@@ -297,6 +298,8 @@ def aggregate_trips(sources, min_sec=DEFAULT_MIN_SEC, max_sec=DEFAULT_MAX_SEC):
                         "duration_sec": round(duration, 2),
                         "exit_video": last_exit["video"],
                         "entry_video": ev["video"],
+                        "exit_video_pk": last_exit.get("video_pk"),
+                        "entry_video_pk": ev.get("video_pk"),
                         "exit_track_id": last_exit["track_id"],
                         "entry_track_id": ev["track_id"],
                         "is_cross_video": last_exit["video"] != ev["video"],
