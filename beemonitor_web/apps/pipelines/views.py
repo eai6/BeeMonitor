@@ -679,7 +679,7 @@ def batch_detail(request, batch_id):
     min_sec, max_sec = _trip_bounds(request)
     trips, summary = (aggregate.aggregate_trips(sources, min_sec, max_sec)
                       if sources else ([], None))
-    charts = aggregate.activity_charts(aggregate.collect_events(sources)) if sources else {}
+    charts = aggregate.activity_charts(aggregate.collect_events(sources), trips) if sources else {}
 
     # Per-run rows (title + status) for the members table.
     from apps.videos.models import Video

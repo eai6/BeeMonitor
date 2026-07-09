@@ -177,41 +177,95 @@ def collect_events(sources):
     return events
 
 
-def activity_charts(events):
-    """Server-computed histograms for the batch page (CSP-safe, no JS charting):
+def activity_charts(events, trips=None):
+    """Server-computed charts for the batch page (CSP-safe, no JS charting):
 
-    - by_hour_of_day: 24 buckets (0–23), event counts — daily activity rhythm.
-    - over_time: chronological day buckets across the batch span, event counts.
+    - hour_of_day: 24 buckets, exit vs entry split — the daily rhythm.
+    - ts: an hourly (or daily for long spans) time series with pre-computed SVG
+      polyline points for exit / entry / all-events / trips line plots.
     Returns {} when there are no timestamped events.
     """
     if not events:
         return {}
+    trips = trips or []
+    exit_events = sum(1 for e in events if e["action"] == "Exit")
+    entry_events = len(events) - exit_events
 
-    by_hod = [0] * 24
-    for ev in events:
-        by_hod[ev["time"].hour] += 1
-    hod_max = max(by_hod) or 1
-    hour_of_day = [{"label": f"{h:02d}", "count": c,
-                    "pct": round(100 * c / hod_max, 1)}
-                   for h, c in enumerate(by_hod)]
+    # Hour-of-day, exit vs entry (stacked bars in the template).
+    hod_exit, hod_entry = [0] * 24, [0] * 24
+    for e in events:
+        (hod_exit if e["action"] == "Exit" else hod_entry)[e["time"].hour] += 1
+    hod_max = max((hod_exit[h] + hod_entry[h]) for h in range(24)) or 1
+    hour_of_day = [{
+        "label": f"{h:02d}", "exit": hod_exit[h], "entry": hod_entry[h],
+        "total": hod_exit[h] + hod_entry[h],
+        "pct_exit": round(100 * hod_exit[h] / hod_max, 1),
+        "pct_entry": round(100 * hod_entry[h] / hod_max, 1),
+    } for h in range(24)]
+    hod_peak = max(range(24), key=lambda h: hod_exit[h] + hod_entry[h])
 
-    # Day buckets across the observed span (calendar date of each event).
-    by_day = {}
-    for ev in events:
-        key = ev["time"].date()
-        by_day[key] = by_day.get(key, 0) + 1
-    days_sorted = sorted(by_day)
-    day_max = max(by_day.values()) if by_day else 1
-    over_time = [{"label": d.isoformat(), "count": by_day[d],
-                  "pct": round(100 * by_day[d] / day_max, 1)}
-                 for d in days_sorted]
+    # Time series: hourly buckets across the span (daily if the span is huge).
+    def _hkey(t):
+        return t.replace(minute=0, second=0, microsecond=0)
+    tmin, tmax = _hkey(min(e["time"] for e in events)), _hkey(max(e["time"] for e in events))
+    step, fmt = timedelta(hours=1), "%m-%d %H:%M"
+    if (tmax - tmin) > timedelta(days=10):
+        def _hkey(t):
+            return t.replace(hour=0, minute=0, second=0, microsecond=0)
+        tmin, tmax = _hkey(tmin), _hkey(tmax)
+        step, fmt = timedelta(days=1), "%m-%d"
+
+    buckets = []
+    cur = tmin
+    while cur <= tmax:
+        buckets.append(cur)
+        cur += step
+    idx = {b: i for i, b in enumerate(buckets)}
+    n = len(buckets)
+    ex, en, tr = [0] * n, [0] * n, [0] * n
+    for e in events:
+        i = idx.get(_hkey(e["time"]))
+        if i is not None:
+            (ex if e["action"] == "Exit" else en)[i] += 1
+    for t in trips:
+        i = idx.get(_hkey(t["exit_time"]))
+        if i is not None:
+            tr[i] += 1
+    evt = [ex[i] + en[i] for i in range(n)]
+
+    W, H, PAD = 560, 170, 30
+
+    def _pts(vals, ymax):
+        if not vals or ymax <= 0:
+            return ""
+        pw, ph = W - 2 * PAD, H - 2 * PAD
+        out = []
+        for i, v in enumerate(vals):
+            x = PAD + (pw * i / (n - 1) if n > 1 else pw / 2)
+            y = PAD + ph * (1 - v / ymax)
+            out.append(f"{x:.1f},{y:.1f}")
+        return " ".join(out)
+
+    ev_ymax = max(max(ex, default=0), max(en, default=0), 1)
+    trip_ymax = max(max(tr, default=0), 1)
+    labels = [b.strftime(fmt) for b in buckets]
+    xticks = []
+    if n:
+        for i in dict.fromkeys((0, n // 2, n - 1)):
+            x = PAD + (W - 2 * PAD) * i / (n - 1) if n > 1 else W / 2
+            xticks.append({"label": labels[i], "x": round(x, 1)})
 
     return {
-        "hour_of_day": hour_of_day,
-        "hod_peak": max(range(24), key=lambda h: by_hod[h]),
-        "over_time": over_time,
         "total_events": len(events),
-        "n_days": len(days_sorted),
+        "exit_events": exit_events, "entry_events": entry_events,
+        "hour_of_day": hour_of_day, "hod_peak": hod_peak,
+        "ts": {
+            "w": W, "h": H, "pad": PAD, "n": n,
+            "exit_pts": _pts(ex, ev_ymax), "entry_pts": _pts(en, ev_ymax),
+            "events_pts": _pts(evt, ev_ymax), "trips_pts": _pts(tr, trip_ymax),
+            "ev_ymax": ev_ymax, "trip_ymax": trip_ymax,
+            "xticks": xticks, "total_trips": len(trips),
+        },
     }
 
 
