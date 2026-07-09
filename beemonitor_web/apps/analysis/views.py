@@ -48,6 +48,61 @@ def _unsanitize_site(value: str) -> str:
     return _SITEA_RE.sub("natalies", value)
 
 
+# GET/POST params the Processing-hub video filter understands.
+VIDEO_FILTER_KEYS = ("device", "site", "year", "month", "day", "hour",
+                     "from", "to", "q", "confirmed")
+
+
+def apply_video_filters(qs, params):
+    """Apply the Processing-hub video filters to a Video queryset. ``params`` is
+    any dict-like with .get() (a GET or POST QueryDict). Shared by the hub list
+    and the pipeline "run on all filtered videos" path so they never diverge."""
+    from datetime import datetime, time
+    from django.utils import timezone as _tz
+    from django.utils.dateparse import parse_date, parse_datetime
+
+    q = (params.get("q") or "").strip()
+    if q:
+        qs = qs.filter(title__icontains=q)
+    if params.get("device"):
+        qs = qs.filter(device_id=params.get("device"))
+    if params.get("site"):
+        qs = qs.filter(site_name=_unsanitize_site(params.get("site")))
+    for field in ("year", "month", "day", "hour"):
+        val = params.get(field)
+        if val:
+            try:
+                qs = qs.filter(**{field: int(val)})
+            except (ValueError, TypeError):
+                pass
+
+    def _parse_dt(s):
+        dt = parse_datetime(s)
+        if dt is None:
+            d = parse_date(s)
+            if d:
+                dt = datetime.combine(d, time.min)
+        if dt and _tz.is_naive(dt):
+            dt = _tz.make_aware(dt, _tz.get_current_timezone())
+        return dt
+
+    if params.get("from"):
+        dt = _parse_dt(params.get("from"))
+        if dt:
+            qs = qs.filter(recorded_at__gte=dt)
+    if params.get("to"):
+        dt = _parse_dt(params.get("to"))
+        if dt:
+            qs = qs.filter(recorded_at__lte=dt)
+
+    confirmed = params.get("confirmed")
+    if confirmed == "yes":
+        qs = qs.filter(metadata__bee_confirmed=True)
+    elif confirmed == "no":
+        qs = qs.filter(metadata__bee_confirmed=False)
+    return qs
+
+
 def _generate_presigned_url(blob_path: str, container: str = "processed") -> str:
     """Time-limited URL for a blob in S3. Empty string on any error."""
     if not blob_path:
@@ -439,51 +494,12 @@ class ProcessingHubView(LoginRequiredMixin, View):
         user_videos = Video.accessible(request.user)
         qs = user_videos
 
-        # Comprehensive filter: device · site · year · month · day · hour · title.
-        # The same params (minus the title search) drive the CSV download links.
-        f = {k: request.GET.get(k, "") for k in
-             ("device", "site", "year", "month", "day", "hour", "q", "confirmed")}
-        if f["q"]:
-            qs = qs.filter(title__icontains=f["q"].strip())
-        if f["device"]:
-            qs = qs.filter(device_id=f["device"])
-        if f["site"]:
-            qs = qs.filter(site_name=_unsanitize_site(f["site"]))
-        for field in ("year", "month", "day", "hour"):
-            if f[field]:
-                try:
-                    qs = qs.filter(**{field: int(f[field])})
-                except (ValueError, TypeError):
-                    pass
-        # Recorded date/time range (datetime-local inputs). Naive input is made
-        # aware in the current timezone so it compares to the aware recorded_at.
-        f["from"] = request.GET.get("from", "")
-        f["to"] = request.GET.get("to", "")
-        from django.utils import timezone as _tz
-        from django.utils.dateparse import parse_datetime, parse_date
-        def _parse_dt(s):
-            dt = parse_datetime(s) or None
-            if dt is None:
-                d = parse_date(s)
-                if d:
-                    from datetime import datetime, time
-                    dt = datetime.combine(d, time.min)
-            if dt and _tz.is_naive(dt):
-                dt = _tz.make_aware(dt, _tz.get_current_timezone())
-            return dt
-        if f["from"]:
-            dt = _parse_dt(f["from"])
-            if dt:
-                qs = qs.filter(recorded_at__gte=dt)
-        if f["to"]:
-            dt = _parse_dt(f["to"])
-            if dt:
-                qs = qs.filter(recorded_at__lte=dt)
-        # On-device bee-confirmation verdict (Video.metadata.bee_confirmed).
-        if f["confirmed"] == "yes":
-            qs = qs.filter(metadata__bee_confirmed=True)
-        elif f["confirmed"] == "no":
-            qs = qs.filter(metadata__bee_confirmed=False)
+        # Comprehensive filter: device · site · year · month · day · hour · date
+        # range · confirmation · title. `f` mirrors the GET params for the form +
+        # the CSV download links; apply_video_filters does the actual filtering
+        # (shared with the pipeline "run on all filtered" path).
+        f = {k: request.GET.get(k, "") for k in VIDEO_FILTER_KEYS}
+        qs = apply_video_filters(qs, request.GET)
 
         latest = (Job.objects.filter(video=OuterRef("pk"))
                   .order_by("-id").values("status")[:1])

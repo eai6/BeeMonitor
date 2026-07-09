@@ -259,11 +259,24 @@ def run_on_videos(request):
     if not any(s.get("block_type") == "input.video" for s in (pipeline.steps or [])):
         return _fail("That pipeline has no video input to run on.")
 
-    video_ids = request.POST.getlist("video_ids")
-    if not video_ids:
-        return _fail("No videos selected.")
-
-    videos = Video.manageable(request.user).filter(pk__in=video_ids)
+    # "Run on all filtered" — re-apply the hub's filter server-side so the whole
+    # filtered set runs, not just the (capped) list rendered on the page. Capped
+    # at MAX_BATCH so an over-broad filter can't launch tens of thousands of jobs.
+    MAX_BATCH = 2000
+    over_cap = 0
+    if request.POST.get("all_filtered"):
+        from apps.analysis.views import apply_video_filters
+        vqs = apply_video_filters(Video.manageable(request.user), request.POST)
+        total = vqs.count()
+        videos = list(vqs.order_by("-recorded_at", "-uploaded_at")[:MAX_BATCH])
+        over_cap = max(0, total - MAX_BATCH)
+    else:
+        video_ids = request.POST.getlist("video_ids")
+        if not video_ids:
+            return _fail("No videos selected.")
+        videos = list(Video.manageable(request.user).filter(pk__in=video_ids)[:MAX_BATCH])
+    if not videos:
+        return _fail("No videos match the current filter.")
     batch_id = uuid.uuid4()  # groups this launch for aggregate results
     launched, invalid = [], 0
     for video in videos:
@@ -284,6 +297,8 @@ def run_on_videos(request):
     msg = f"Started “{pipeline.title}” on {len(launched)} video(s)."
     if invalid:
         msg += f" Skipped {invalid}."
+    if over_cap:
+        msg += f" ({over_cap} more matched but this run is capped at {MAX_BATCH} — narrow the filter and run again for the rest.)"
     if is_ajax:
         return JsonResponse({"ok": True, "submitted": len(launched), "skipped": invalid,
                              "message": msg, "video_ids": launched,
@@ -326,26 +341,30 @@ def run_list(request):
             "total": len(r.steps or []),
         })
 
-    # Batches (multi-video launches) with aggregate results pages.
-    batches = {}
-    for r in runs:
-        if not r.batch_id:
-            continue
-        b = batches.setdefault(r.batch_id, {
-            "batch_id": r.batch_id,
-            "pipeline": r.pipeline,
-            "count": 0, "done": 0, "failed": 0,
-            "started_at": r.started_at,
-        })
-        b["count"] += 1
-        b["done"] += int(r.status == PipelineRun.Status.COMPLETED)
-        b["failed"] += int(r.status == PipelineRun.Status.FAILED)
-        if r.started_at and (b["started_at"] is None or r.started_at > b["started_at"]):
-            b["started_at"] = r.started_at
-    batch_rows = sorted(
-        (b for b in batches.values() if b["count"] > 1),
-        key=lambda b: (b["started_at"] is not None, b["started_at"]), reverse=True,
+    # Batches (multi-video launches) with aggregate results pages. Counts come
+    # from the DB across ALL runs in each batch — NOT the capped recent-runs
+    # window above — so a large batch shows its true size (was capped at ~100).
+    from django.db.models import Count, Max, Q
+    batch_rows = list(
+        PipelineRun.objects.filter(user=request.user).exclude(batch_id=None)
+        .values("batch_id")
+        .annotate(
+            count=Count("id"),
+            done=Count("id", filter=Q(status=PipelineRun.Status.COMPLETED)),
+            failed=Count("id", filter=Q(status=PipelineRun.Status.FAILED)),
+            started_at=Max("started_at"),
+        )
+        .filter(count__gt=1)
+        .order_by("-started_at")[:50]
     )
+    # Attach each batch's pipeline (a batch runs a single pipeline).
+    pipe_by_batch = {}
+    for r in (PipelineRun.objects.filter(batch_id__in=[b["batch_id"] for b in batch_rows])
+              .values("batch_id", "pipeline_id").distinct()):
+        pipe_by_batch.setdefault(r["batch_id"], r["pipeline_id"])
+    pipes = {p.pk: p for p in Pipeline.objects.filter(pk__in=set(pipe_by_batch.values()))}
+    for b in batch_rows:
+        b["pipeline"] = pipes.get(pipe_by_batch.get(b["batch_id"]))
 
     return render(request, "pipelines/runs.html", {"rows": rows, "batches": batch_rows})
 

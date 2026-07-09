@@ -94,6 +94,10 @@
   {% if videos %}
   <form method="post" action="{% url 'pipelines:run_on_videos' %}" id="run-form">
     {% csrf_token %}
+    <!-- "Run on all filtered" carries the current filter so the server can
+         re-select the whole filtered set (not just the rendered 200). -->
+    <input type="hidden" name="all_filtered" id="all-filtered-flag" value="">
+    {% for k, v in f.items %}{% if v %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
     {% if can_manage_any %}
     <!-- Choose a pipeline to run on the selected videos -->
     <div class="bg-white shadow rounded-lg p-4 mb-4">
@@ -207,13 +211,24 @@
     var cnt = document.getElementById('sel-count');
     var credLine = document.getElementById('cred-line');
     var form = document.getElementById('run-form');
+    var flag = document.getElementById('all-filtered-flag');
+    var TOTAL = {{ video_count }};              // all videos matching the filter
+    var CAP = 2000;                             // server-side per-run limit
     function boxes() { return Array.prototype.slice.call(document.querySelectorAll('.vid-cb')); }
     function refresh() {
-      var n = boxes().filter(function (b) { return b.checked; }).length;
-      if (cnt) cnt.textContent = n;
+      var checked = boxes().filter(function (b) { return b.checked; }).length;
+      // "Select all" + more matches than are rendered → run the WHOLE filtered
+      // set server-side (capped at CAP), not just the visible checkboxes.
+      var useAll = all && all.checked && TOTAL > boxes().length;
+      if (flag) flag.value = useAll ? '1' : '';
+      var n = useAll ? Math.min(TOTAL, CAP) : checked;
+      if (cnt) cnt.textContent = n.toLocaleString();
       if (btn) btn.disabled = n === 0;
-      if (credLine) credLine.textContent = n ? (n + ' selected → ~' + (n * PER).toLocaleString() + ' credits') : 'Select videos to run';
-      if (all) all.checked = n > 0 && n === boxes().length;
+      if (credLine) credLine.textContent = n
+        ? (n.toLocaleString() + (useAll ? ' (all filtered)' : ' selected') + ' → ~' + (n * PER).toLocaleString() + ' credits'
+           + (useAll && TOTAL > CAP ? ' — capped; narrow the filter to run the rest' : ''))
+        : 'Select videos to run';
+      if (!useAll && all) all.checked = checked > 0 && checked === boxes().length;
     }
     if (all) all.addEventListener('change', function () {
       boxes().forEach(function (b) { if (!b.disabled) b.checked = all.checked; }); refresh();
