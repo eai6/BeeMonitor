@@ -27,6 +27,12 @@
         <dt class="text-sm text-gray-600">Classes</dt>
         <dd class="text-sm font-medium text-gray-900">{% if job.class_subset %}{{ job.class_subset|join:", " }}{% else %}All classes{% endif %}{% if job.frames_with_class %} · only frames with these{% endif %}</dd>
       </div>
+      {% if job.metrics.dataset %}
+      <div class="flex justify-between">
+        <dt class="text-sm text-gray-600">Frames used</dt>
+        <dd class="text-sm font-medium text-gray-900 text-right">{{ job.metrics.dataset.frames }} frame{{ job.metrics.dataset.frames|pluralize }} · {{ job.metrics.dataset.videos }} video{{ job.metrics.dataset.videos|pluralize }}{% if job.metrics.dataset.frames_with_class and job.metrics.dataset.skipped_no_class %}<span class="block text-xs text-gray-500 font-normal">skipped {{ job.metrics.dataset.skipped_no_class }} without the class</span>{% endif %}</dd>
+      </div>
+      {% endif %}
       <div class="flex justify-between">
         <dt class="text-sm text-gray-600">Dataset Split</dt>
         <dd class="text-sm font-medium text-gray-900">{% if job.metrics.train_count %}{{ job.metrics.train_count }} train / {{ job.metrics.val_count }} val ({% endif %}{{ job.val_percent }}% val{% if job.metrics.train_count %}){% endif %}</dd>

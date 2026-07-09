@@ -175,6 +175,21 @@ def _build_training_payload(job: TrainingJob) -> tuple[list, list[dict]]:
         int(total_frames * 0.8), total_frames - int(total_frames * 0.8),
     )
 
+    # Record how the dataset was assembled so the job page can show it right away
+    # (before training finishes) — makes the class/frame filtering auditable.
+    job.metrics = {
+        **(job.metrics or {}),
+        "dataset": {
+            "frames": total_frames,
+            "videos": len(video_annotations),
+            "classes": classes,
+            "frame_filter": job.get_frame_filter_display(),
+            "frames_with_class": bool(job.frames_with_class),
+            "skipped_no_class": skipped_frames if job.frames_with_class else 0,
+        },
+    }
+    job.save(update_fields=["metrics"])
+
     # Return the EFFECTIVE classes (subset-aware) so the manifest matches the
     # remapped labels; dataset_yaml is built by the container from these.
     return classes, video_annotations
@@ -333,7 +348,9 @@ class TrainingCreateView(LoginRequiredMixin, CreateView):
 
         messages.info(
             self.request,
-            f"Training job '{self.object.name}' submitted to GPU. This page auto-refreshes.",
+            f"Training job '{self.object.name}' submitted to GPU. The 'Frames used' "
+            "line below shows how many frames the class/frame filters selected. "
+            "This page auto-refreshes.",
         )
         return response
 
@@ -514,7 +531,9 @@ def poll_training_jobs(user=None) -> dict:
             completed += 1
             continue
 
-        metrics = result.get("metrics", {}) or {}
+        # Merge onto the existing metrics so the pre-training "dataset" summary
+        # (frame/class filtering) is preserved alongside the trained metrics.
+        metrics = {**(job.metrics or {}), **(result.get("metrics", {}) or {})}
         for extra in ("train_count", "val_count", "val_predictions",
                       "epoch_metrics", "best_epoch"):
             if result.get(extra) is not None:
