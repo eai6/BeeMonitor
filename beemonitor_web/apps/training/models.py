@@ -56,6 +56,11 @@ class TrainingJob(models.Model):
         default=list, blank=True,
         help_text="Subset of the project's classes to train on. Empty = all classes.",
     )
+    frames_with_class = models.BooleanField(
+        default=False,
+        help_text="Only include frames that contain at least one box of the "
+                  "selected class(es) — skip frames without any.",
+    )
     val_percent = models.IntegerField(
         default=20,
         help_text="Percent of frames held out for validation (the metrics set).",

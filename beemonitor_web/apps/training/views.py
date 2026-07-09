@@ -119,10 +119,22 @@ def _build_training_payload(job: TrainingJob) -> tuple[list, list[dict]]:
     )
     logger.debug("[train:%s] Dataset YAML:\n%s", job.pk, dataset_yaml)
 
+    # "Only frames containing a selected class" — keep only frames that have at
+    # least one box of the target classes (the subset, or any box if no subset).
+    # Lets you train, e.g., a nest-hole model on just the frames with nest holes.
+    frame_class_filter = set(subset) if subset else None
+    skipped_frames = 0
+
     # Group annotations by video
     video_groups: dict[int, dict] = {}
     total_frames = 0
     for ann in annotations:
+        if job.frames_with_class:
+            box_classes = {b.get("class") for b in (ann.boxes or [])}
+            has_target = (box_classes & frame_class_filter) if frame_class_filter is not None else bool(box_classes)
+            if not has_target:
+                skipped_frames += 1
+                continue
         vid_pk = ann.video_id
         if vid_pk not in video_groups:
             video_groups[vid_pk] = {
@@ -146,6 +158,15 @@ def _build_training_payload(job: TrainingJob) -> tuple[list, list[dict]]:
             "[train:%s] Annotation: video=%s frame=%d boxes=%d label_lines=%d",
             job.pk, vid_pk, ann.frame_number, box_count, len(yolo_label.strip().split("\n")) if yolo_label.strip() else 0,
         )
+
+    if job.frames_with_class:
+        logger.info("[train:%s] frames_with_class: kept %d, skipped %d (no target-class box)",
+                    job.pk, total_frames, skipped_frames)
+        if total_frames == 0:
+            names = ", ".join(subset) if subset else "any class"
+            raise ValueError(
+                f"No frames contain the selected class(es) ({names}). Uncheck "
+                "'only frames containing a selected class' or pick different classes.")
 
     video_annotations = list(video_groups.values())
     logger.info(

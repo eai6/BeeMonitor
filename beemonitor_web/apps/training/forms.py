@@ -30,11 +30,15 @@ class TrainingCreateForm(forms.ModelForm):
     class Meta:
         model = TrainingJob
         fields = ["project", "name", "base_model", "frame_filter",
+                  "frames_with_class",
                   "epochs", "image_size", "batch_size", "val_percent", "gpu_tier"]
         widgets = {
             "name": forms.TextInput(attrs={
                 "class": "w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500",
                 "placeholder": "My Training Job",
+            }),
+            "frames_with_class": forms.CheckboxInput(attrs={
+                "class": "rounded border-gray-300 text-amber-600 focus:ring-amber-500",
             }),
             "frame_filter": forms.Select(attrs={
                 "class": "w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500",

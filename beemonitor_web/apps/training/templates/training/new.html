@@ -45,6 +45,12 @@
           <span class="text-xs text-gray-400">Select a project to choose classes…</span>
         </div>
         <p class="mt-1 text-xs text-gray-500">Uncheck a class to train a model that ignores it. All classes selected = a full model. Boxes of unchecked classes are dropped and the remaining classes are renumbered for the new model.</p>
+        <label class="flex items-start gap-2 mt-2 text-sm text-gray-700">
+          {{ form.frames_with_class }}
+          <span>Only frames that <strong>contain</strong> a selected class
+            <span class="block text-xs text-gray-500">Skips frames without any of the checked classes — e.g. train a nest-hole model on just the frames that have nest holes, not every frame.</span>
+          </span>
+        </label>
       </div>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
         <div>

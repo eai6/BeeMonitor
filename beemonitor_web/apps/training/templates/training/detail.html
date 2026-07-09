@@ -25,7 +25,7 @@
       </div>
       <div class="flex justify-between">
         <dt class="text-sm text-gray-600">Classes</dt>
-        <dd class="text-sm font-medium text-gray-900">{% if job.class_subset %}{{ job.class_subset|join:", " }}{% else %}All classes{% endif %}</dd>
+        <dd class="text-sm font-medium text-gray-900">{% if job.class_subset %}{{ job.class_subset|join:", " }}{% else %}All classes{% endif %}{% if job.frames_with_class %} · only frames with these{% endif %}</dd>
       </div>
       <div class="flex justify-between">
         <dt class="text-sm text-gray-600">Dataset Split</dt>
