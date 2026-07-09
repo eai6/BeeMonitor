@@ -455,6 +455,30 @@ class ProcessingHubView(LoginRequiredMixin, View):
                     qs = qs.filter(**{field: int(f[field])})
                 except (ValueError, TypeError):
                     pass
+        # Recorded date/time range (datetime-local inputs). Naive input is made
+        # aware in the current timezone so it compares to the aware recorded_at.
+        f["from"] = request.GET.get("from", "")
+        f["to"] = request.GET.get("to", "")
+        from django.utils import timezone as _tz
+        from django.utils.dateparse import parse_datetime, parse_date
+        def _parse_dt(s):
+            dt = parse_datetime(s) or None
+            if dt is None:
+                d = parse_date(s)
+                if d:
+                    from datetime import datetime, time
+                    dt = datetime.combine(d, time.min)
+            if dt and _tz.is_naive(dt):
+                dt = _tz.make_aware(dt, _tz.get_current_timezone())
+            return dt
+        if f["from"]:
+            dt = _parse_dt(f["from"])
+            if dt:
+                qs = qs.filter(recorded_at__gte=dt)
+        if f["to"]:
+            dt = _parse_dt(f["to"])
+            if dt:
+                qs = qs.filter(recorded_at__lte=dt)
         # On-device bee-confirmation verdict (Video.metadata.bee_confirmed).
         if f["confirmed"] == "yes":
             qs = qs.filter(metadata__bee_confirmed=True)
@@ -485,7 +509,7 @@ class ProcessingHubView(LoginRequiredMixin, View):
             "hours": sorted(set(user_videos.exclude(hour=None).values_list("hour", flat=True))),
         }
         # Query string for the CSV downloads — the download views filter on these.
-        dl = {k: f[k] for k in ("device", "site", "year", "month", "day", "hour", "confirmed") if f[k]}
+        dl = {k: f[k] for k in ("device", "site", "year", "month", "day", "hour", "confirmed", "from", "to") if f[k]}
         download_qs = ("?" + urlencode(dl)) if dl else ""
 
         # Everything currently in flight, with GPU-slot usage — cancellable to

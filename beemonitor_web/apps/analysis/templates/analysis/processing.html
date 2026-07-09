@@ -78,6 +78,12 @@
       <option value="">Hour</option>
       {% for h in opts.hours %}<option value="{{ h }}" {% if f.hour == h|stringformat:"s" %}selected{% endif %}>{{ h }}:00</option>{% endfor %}
     </select>
+    <label class="text-xs text-gray-500 flex items-center gap-1" title="Recorded on/after">From
+      <input type="datetime-local" name="from" value="{{ f.from }}"
+             class="border border-gray-300 rounded px-2 py-1.5 text-sm"></label>
+    <label class="text-xs text-gray-500 flex items-center gap-1" title="Recorded on/before">To
+      <input type="datetime-local" name="to" value="{{ f.to }}"
+             class="border border-gray-300 rounded px-2 py-1.5 text-sm"></label>
     <input name="q" value="{{ f.q }}" placeholder="Search title…"
            class="border border-gray-300 rounded px-3 py-1.5 text-sm">
     <button class="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded text-sm font-medium">Filter</button>

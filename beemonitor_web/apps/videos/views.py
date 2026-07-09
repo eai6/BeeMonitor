@@ -212,6 +212,25 @@ class VideoDetailView(LoginRequiredMixin, DetailView):
             except Exception as e:
                 logger.error("Failed to presign video URL: %s", e)
 
+        # Prev/next consecutive video on the SAME device, ordered by recorded time
+        # (tie-broken by pk) — so you can step through a device's footage in order
+        # without going back to the list. "Prev" = earlier, "Next" = later.
+        from django.db.models import Q
+        siblings = Video.accessible(self.request.user).filter(
+            device_id=video.device_id).exclude(pk=video.pk)
+        ts = video.recorded_at
+        if ts:
+            ctx["prev_video"] = siblings.filter(
+                Q(recorded_at__lt=ts) | Q(recorded_at=ts, pk__lt=video.pk)
+            ).order_by("-recorded_at", "-pk").first()
+            ctx["next_video"] = siblings.filter(
+                Q(recorded_at__gt=ts) | Q(recorded_at=ts, pk__gt=video.pk)
+            ).order_by("recorded_at", "pk").first()
+        else:
+            up = video.uploaded_at
+            ctx["prev_video"] = siblings.filter(uploaded_at__lt=up).order_by("-uploaded_at", "-pk").first() if up else None
+            ctx["next_video"] = siblings.filter(uploaded_at__gt=up).order_by("uploaded_at", "pk").first() if up else None
+
         return ctx
 
 

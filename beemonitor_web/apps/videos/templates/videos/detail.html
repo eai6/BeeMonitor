@@ -3,8 +3,23 @@
 {% block title %}{{ video.title|sanitize_name }} - BeeMonitor{% endblock %}
 
 {% block content %}
-<div class="mb-6">
+<div class="flex items-center justify-between mb-6">
   <a href="{% url 'videos:list' %}" class="text-sm text-amber-600 hover:underline">&larr; Back to Videos</a>
+  <div class="flex items-center gap-2 text-sm">
+    {% if prev_video %}
+    <a href="{% url 'videos:detail' prev_video.pk %}" title="{{ prev_video.recorded_at|date:'Y-m-d H:i' }}"
+       class="px-3 py-1.5 bg-white border border-gray-300 rounded hover:bg-gray-50">&larr; Prev</a>
+    {% else %}
+    <span class="px-3 py-1.5 bg-white border border-gray-200 rounded text-gray-300">&larr; Prev</span>
+    {% endif %}
+    <span class="text-xs text-gray-400">{% if video.device %}{{ video.device.name }}{% else %}this device{% endif %}</span>
+    {% if next_video %}
+    <a href="{% url 'videos:detail' next_video.pk %}" title="{{ next_video.recorded_at|date:'Y-m-d H:i' }}"
+       class="px-3 py-1.5 bg-white border border-gray-300 rounded hover:bg-gray-50">Next &rarr;</a>
+    {% else %}
+    <span class="px-3 py-1.5 bg-white border border-gray-200 rounded text-gray-300">Next &rarr;</span>
+    {% endif %}
+  </div>
 </div>
 
 <div class="flex justify-between items-center mb-4">
