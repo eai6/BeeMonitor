@@ -239,6 +239,9 @@ class DeviceHeartbeatView(APIView):
                 # Whether the device may actually program the WittyPi (off = the
                 # device reports the schedule but doesn't write it).
                 "wake_schedule_apply": device.wake_schedule_apply,
+                # Video upload policy (auto|manual). Manual holds the backlog
+                # until "Upload now" — protects phone-hotspot users' data plans.
+                "video_upload_mode": device.video_upload_mode,
             },
             status=201,
         )
@@ -283,4 +286,6 @@ class DeviceCommandView(APIView):
             # Desired WittyPi power schedule (reconciled device-side).
             "wake_schedule": device.wake_schedule_dict(),
             "wake_schedule_apply": device.wake_schedule_apply,
+            # Upload policy here too so a flip applies within seconds on WiFi.
+            "video_upload_mode": device.video_upload_mode,
         })

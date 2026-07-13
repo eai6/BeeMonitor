@@ -139,6 +139,15 @@ BEE_CONFIRM_MODE_FILE = RECORD_DIR.parent / "bee_confirm_mode.json"
 # Off = stop sampling/sending BioCLIP review crops over cellular (the recorder
 # stops sampling, so no SD/CPU/cellular spend). Same dir as the mode file above.
 ACTIVITY_FRAMES_FILE = RECORD_DIR.parent / "activity_frames.json"
+# Dashboard-pushed video upload policy ({"mode": "auto"|"manual"}); the uploader
+# re-reads it every cycle. manual = hold videos even on WiFi (protects users
+# whose "WiFi" is a phone hotspot); the uploader treats a MISSING file as manual
+# too — any unit that can upload can also beat, so it learns its real mode first.
+VIDEO_UPLOAD_MODE_FILE = RECORD_DIR.parent / "video_upload_mode.json"
+# One-shot "upload now" trigger (dashboard command): the uploader drains the
+# current video backlog once, then deletes this file AFTER a pass ends with
+# nothing pending — so a crash mid-drain re-drains on restart (idempotent).
+UPLOAD_NOW_FILE = RECORD_DIR.parent / "upload_now"
 
 # Activity-frame upload (taxonomic monitoring). The recorder queues mover crops
 # here; we ship them over cellular under a daily cap. See main_motion.py +
@@ -294,6 +303,31 @@ def _mac_address() -> dict:
             out["mac"], out["mac_iface"] = mac, iface
             break
     return out
+
+
+_serial_cached: "str | None" = None
+
+
+def _serial_number() -> dict:
+    """The Pi's hardware serial for identification on the dashboard (shown next
+    to the MAC). Read once (immutable per board): devicetree first (no root, all
+    Pi models), /proc/cpuinfo's Serial line as fallback."""
+    global _serial_cached
+    if _serial_cached is None:
+        serial = ""
+        try:
+            serial = (Path("/proc/device-tree/serial-number")
+                      .read_text().strip("\x00").strip())
+        except OSError:
+            try:
+                for line in Path("/proc/cpuinfo").read_text().splitlines():
+                    if line.lower().startswith("serial"):
+                        serial = line.split(":", 1)[-1].strip()
+                        break
+            except OSError:
+                pass
+        _serial_cached = serial
+    return {"serial": _serial_cached} if _serial_cached else {}
 
 
 def _active_transport() -> str:
@@ -725,6 +759,8 @@ def collect_metrics() -> dict:
         pass
     # Primary network MAC (stable per board) for identification on the dashboard.
     m.update(_mac_address())
+    # Hardware serial (immutable per board), shown next to the MAC.
+    m.update(_serial_number())
     # Which link this beat is actually leaving on (wifi when connected, else
     # cellular) — lets the dashboard confirm telemetry rode WiFi.
     transport = _active_transport()
@@ -898,6 +934,27 @@ def _apply_bee_mode(value) -> None:
             log.info("bee confirm mode set to %s", mode)
     except OSError as e:
         log.warning("could not write bee confirm mode: %s", e)
+
+
+def _apply_upload_mode(value) -> None:
+    """Persist the dashboard-pushed video upload policy (auto|manual) to the file
+    the uploader re-reads each cycle. Ignores absent/invalid values so a cloud
+    that doesn't send the field never clobbers the current mode."""
+    if not isinstance(value, str):
+        return
+    mode = value.strip().lower()
+    if mode not in ("auto", "manual"):
+        return
+    try:
+        new = json.dumps({"mode": mode}, sort_keys=True)
+        cur = (VIDEO_UPLOAD_MODE_FILE.read_text().strip()
+               if VIDEO_UPLOAD_MODE_FILE.exists() else "")
+        if new != cur:
+            VIDEO_UPLOAD_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            VIDEO_UPLOAD_MODE_FILE.write_text(new)
+            log.info("video upload mode set to %s", mode)
+    except OSError as e:
+        log.warning("could not write video upload mode: %s", e)
 
 
 def _apply_activity_crops(value) -> None:
@@ -1618,6 +1675,16 @@ def _handle_command(cmd: str, params: dict) -> None:
     elif cmd == "wifi_scan":
         log.info("command: wifi_scan")
         _wifi_scan()
+    elif cmd == "upload_videos":
+        # One-shot backlog drain (manual upload mode). The uploader consumes the
+        # trigger — deleting it only after a pass ends with nothing pending, so
+        # a crash mid-drain resumes on restart.
+        log.info("command: upload_videos — touching drain trigger")
+        try:
+            UPLOAD_NOW_FILE.parent.mkdir(parents=True, exist_ok=True)
+            UPLOAD_NOW_FILE.touch()
+        except OSError as e:
+            log.warning("command: upload_videos — could not touch trigger: %s", e)
     elif cmd == "cellular_open":
         log.info("command: cellular_open minutes=%s", params.get("minutes"))
         _open_cellular(params)
@@ -1768,6 +1835,8 @@ def main() -> int:
                 _apply_frame_cap(resp.get("frame_daily_cap"))
                 # ...and the bee-confirmation mode (off|tag|gate).
                 _apply_bee_mode(resp.get("bee_confirm_mode"))
+                # ...and the video upload policy (auto|manual).
+                _apply_upload_mode(resp.get("video_upload_mode"))
                 # ...and the crop mode (all|confirmed|off). Prefer the new 3-way
                 # string; fall back to the legacy bool for older clouds.
                 if "activity_crops" in resp:

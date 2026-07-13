@@ -18,6 +18,9 @@ DATABASES = {
         "OPTIONS": {
             "sslmode": "require",
         },
+        # gthread workers open a Postgres connection per request thread; keep
+        # them alive briefly so 2 workers × 4 threads don't reconnect per hit.
+        "CONN_MAX_AGE": int(os.environ.get("DB_CONN_MAX_AGE", "60")),
     }
 }
 

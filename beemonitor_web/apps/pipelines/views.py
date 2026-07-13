@@ -651,19 +651,12 @@ def _batch_runs(request, batch_id):
 
 
 def _trip_bounds(request):
-    """min/max trip duration (seconds) from query params, defaulted + clamped."""
+    """min/max trip duration (seconds) from query params, defaulted + clamped.
+    Shares the clamp with the device chart so both pages agree exactly."""
     from . import aggregate
 
-    def _num(name, default, lo, hi):
-        try:
-            v = float(request.GET.get(name) or default)
-        except (TypeError, ValueError):
-            v = default
-        return max(lo, min(hi, v))
-
-    min_sec = _num("min_sec", aggregate.DEFAULT_MIN_SEC, 0, 86400)
-    max_sec = _num("max_sec", aggregate.DEFAULT_MAX_SEC, min_sec, 86400)
-    return min_sec, max_sec
+    return aggregate.clamp_trip_bounds(
+        request.GET.get("min_sec"), request.GET.get("max_sec"))
 
 
 @login_required
@@ -675,6 +668,15 @@ def batch_detail(request, batch_id):
     runs = _batch_runs(request, batch_id)
     sources, skipped = aggregate.collect_sources(runs)
     all_done = all(r.is_terminal for r in runs)
+
+    # Cap the IN-PAGE aggregation so a huge batch can't ride the request past
+    # App Runner's hard 120s limit (each source may cost an S3 read on a cold
+    # cache). The combined-CSV downloads below remain uncapped. Oldest-first
+    # order is preserved; the page shows what was left out.
+    AGG_CAP = 300
+    agg_total = len(sources)
+    if agg_total > AGG_CAP:
+        sources = sources[:AGG_CAP]
 
     min_sec, max_sec = _trip_bounds(request)
     events = aggregate.collect_events(sources) if sources else []
@@ -709,6 +711,8 @@ def batch_detail(request, batch_id):
         "events": event_rows,
         "summary": summary,
         "charts": charts,
+        "agg_total": agg_total,
+        "agg_capped": agg_total > AGG_CAP,
         "min_sec": min_sec,
         "max_sec": max_sec,
     })

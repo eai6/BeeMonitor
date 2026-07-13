@@ -56,6 +56,9 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    # Outermost so its timing covers the whole stack: logs any request > 5s
+    # (App Runner hard-504s at 120s — slowness must show in logs first).
+    "config.middleware.SlowRequestLogMiddleware",
     "django.middleware.security.SecurityMiddleware",
     # whitenoise serves /static/ in production without S3/CloudFront. Must
     # come immediately after SecurityMiddleware per the whitenoise docs.

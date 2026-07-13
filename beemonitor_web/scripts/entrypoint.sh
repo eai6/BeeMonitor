@@ -33,10 +33,15 @@ echo "Collecting static files..."
 python manage.py collectstatic --noinput 2>/dev/null || true
 
 echo "Starting Gunicorn..."
+# threads>1 switches to the gthread worker: one slow request can no longer
+# starve the site. Timeout sits just UNDER App Runner's hard 120s cap — past
+# that the proxy has already 504'd, so a longer-running request only pins a
+# thread serving a dead connection.
 gunicorn config.wsgi:application \
     --bind 0.0.0.0:8000 \
     --workers 2 \
-    --timeout 1800 \
+    --threads 4 \
+    --timeout 115 \
     --access-logfile - \
     --error-logfile - &
 

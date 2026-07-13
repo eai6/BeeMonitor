@@ -21,6 +21,27 @@ DEFAULT_MIN_SEC = 10.0
 DEFAULT_MAX_SEC = 7200.0
 DEFAULT_FPS = 30.0
 
+# Widest pairing bounds. Summaries store trips paired at these so any narrower
+# user bounds are a pure read-time filter on duration (pairing consumes the
+# Exit on every Entry regardless of bounds, so results are identical).
+FULL_MIN_SEC = 0.0
+FULL_MAX_SEC = 86400.0
+
+
+def clamp_trip_bounds(min_raw, max_raw):
+    """(min_sec, max_sec) from raw query values, defaulted + clamped to
+    [0, 86400] with max >= min. Shared by the batch page and the device chart
+    so both interpret bounds identically."""
+    def _num(raw, default):
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return default
+
+    min_sec = max(0.0, min(86400.0, _num(min_raw, DEFAULT_MIN_SEC)))
+    max_sec = max(min_sec, min(86400.0, _num(max_raw, DEFAULT_MAX_SEC)))
+    return min_sec, max_sec
+
 
 # ── Batch sources ─────────────────────────────────────────────────────────────
 
@@ -94,18 +115,33 @@ def collect_sources(runs):
 # ── CSV plumbing ──────────────────────────────────────────────────────────────
 
 
-def read_processed_csv(blob_path):
-    """Rows (as dicts) of a CSV in the processed bucket; [] on any failure."""
+def read_processed_csv(blob_path, use_cache=False):
+    """Rows (as dicts) of a CSV in the processed bucket; [] on any failure.
+
+    ``use_cache=True`` memoizes the parsed rows (LocMem, 6 h) — safe only for
+    blobs that are immutable once written (a completed job's events CSV) and
+    worth it only for SMALL ones; events CSVs are a handful of rows per video,
+    tracking CSVs are not cached."""
+    if use_cache:
+        from django.core.cache import cache
+
+        key = f"prccsv:{blob_path}"
+        hit = cache.get(key)
+        if hit is not None:
+            return hit
     try:
         from config.storage import get_s3_client
 
         buf = io.BytesIO()
         get_s3_client().download_to_stream("processed", blob_path, buf)
         text = buf.getvalue().decode("utf-8", errors="replace")
-        return list(csv.DictReader(io.StringIO(text)))
+        rows = list(csv.DictReader(io.StringIO(text)))
     except Exception as e:
         logger.warning("aggregate: could not read %s: %s", blob_path, e)
-        return []
+        return []  # failures are NOT cached — next call retries
+    if use_cache:
+        cache.set(key, rows, 6 * 60 * 60)
+    return rows
 
 
 def _frame_number(row):
@@ -161,7 +197,7 @@ def collect_events(sources):
     """
     events = []
     for src in sources:
-        for row in read_processed_csv(src["result"]["events_csv_path"]):
+        for row in read_processed_csv(src["result"]["events_csv_path"], use_cache=True):
             action = (row.get("action") or "").strip()
             nest = row.get("nest", "")
             frame = _frame_number(row)

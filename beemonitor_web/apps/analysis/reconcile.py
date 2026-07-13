@@ -102,10 +102,21 @@ def reconcile_all(limit: int = 500) -> dict:
     except Exception:
         logger.exception("adaptation reconcile failed")
 
+    # Foraging summaries flagged stale by job completions (or never computed):
+    # recompute a bounded batch per tick, newest day first, so device charts
+    # converge without any S3 work in request paths.
+    trips_recomputed = 0
+    try:
+        from apps.analysis import foraging
+        trips_recomputed = foraging.sweep_stale()
+    except Exception:
+        logger.exception("foraging summary sweep failed")
+
     return {"jobs_checked": len(jobs), "jobs_resolved": resolved,
             "run_users": len(run_user_ids), "annotate_users": len(annotate_user_ids),
             "training_completed": training.get("completed", 0),
-            "preannot_finalized": preannot_done}
+            "preannot_finalized": preannot_done,
+            "trips_recomputed": trips_recomputed}
 
 
 def _loop():

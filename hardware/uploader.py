@@ -55,6 +55,29 @@ PUT_TIMEOUT_SECONDS = int(os.environ.get("BEEMONITOR_PUT_TIMEOUT", "7200"))  # 2
 WIFI_ONLY_VIDEO = os.environ.get(
     "BEEMONITOR_WIFI_ONLY_VIDEO", "true").strip().lower() in {"1", "true", "yes", "on"}
 
+# Video upload policy, pushed from the dashboard via the heartbeat (telemetry
+# writes the file; we re-read it every cycle — no restart needed).
+#   auto   = upload videos whenever WiFi is up (pre-existing behaviour)
+#   manual = hold videos even on WiFi until an "Upload now" drain is requested —
+#            protects users whose "WiFi" is a phone hotspot from silently
+#            spending their cellular data plan on bulk video.
+# A missing/unreadable file means MANUAL: uploading needs the same API a
+# heartbeat does, so any unit that can upload will have learned its real mode.
+VIDEO_UPLOAD_MODE_FILE = RECORD_DIR.parent / "video_upload_mode.json"
+# One-shot drain trigger (touched by telemetry on the `upload_videos` command).
+# Deleted only after a pass ends with nothing pending, so a crash mid-drain
+# resumes on restart (re-draining is idempotent — .uploaded sidecars dedupe).
+UPLOAD_NOW_FILE = RECORD_DIR.parent / "upload_now"
+
+
+def _video_upload_mode() -> str:
+    """Current policy ("auto"|"manual"), re-read each cycle. Missing → manual."""
+    try:
+        mode = json.loads(VIDEO_UPLOAD_MODE_FILE.read_text()).get("mode", "")
+        return "auto" if str(mode).strip().lower() == "auto" else "manual"
+    except (OSError, ValueError, AttributeError):
+        return "manual"
+
 
 # Backoff for transient API / network failures.
 INITIAL_BACKOFF = 5
@@ -340,6 +363,7 @@ def main() -> int:
 
     backoff = INITIAL_BACKOFF
     holding_logged = False
+    manual_hold_logged = False
     while _running:
         try:
             pending = _list_pending(RECORD_DIR)
@@ -350,6 +374,12 @@ def main() -> int:
             continue
 
         if not pending and not pending_frames:
+            # Nothing to drain — a leftover "Upload now" trigger is spent (left
+            # in place it would act like permanent auto-upload for new clips).
+            try:
+                UPLOAD_NOW_FILE.unlink(missing_ok=True)
+            except OSError:
+                pass
             time.sleep(POLL_SECONDS)
             backoff = INITIAL_BACKOFF
             continue
@@ -364,6 +394,18 @@ def main() -> int:
             time.sleep(POLL_SECONDS)
             continue
         holding_logged = False
+
+        # Upload policy gate (videos only; the frame archive is small and rides
+        # regardless): in manual mode videos wait for an "Upload now" drain.
+        drain_requested = UPLOAD_NOW_FILE.exists()
+        if pending and not drain_requested and _video_upload_mode() != "auto":
+            if not manual_hold_logged:
+                log.info("manual upload mode — holding %d video(s) until 'Upload now'",
+                         len(pending))
+                manual_hold_logged = True
+            pending = []
+        else:
+            manual_hold_logged = False
 
         if pending:
             log.info("found %d pending video(s)", len(pending))
@@ -394,6 +436,17 @@ def main() -> int:
                 log.exception("frame upload failed for %s: %s", meta_path.name, e)
                 time.sleep(backoff)
                 backoff = min(backoff * 2, MAX_BACKOFF)
+
+        # An "Upload now" drain is complete only when NOTHING is pending — a
+        # crash or failed upload leaves the trigger in place so the next pass
+        # (or restart) finishes the job before returning to manual hold.
+        if drain_requested and _running:
+            try:
+                if not _list_pending(RECORD_DIR):
+                    UPLOAD_NOW_FILE.unlink()
+                    log.info("upload-now drain complete — back to manual hold")
+            except OSError:
+                pass
 
     log.info("uploader stopped")
     return 0

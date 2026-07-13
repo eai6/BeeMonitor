@@ -1004,6 +1004,12 @@ def _apply_result_to_job(job, result: dict) -> None:
 
     logger.info("Poll: Job %s completed — %s events, %.1fs, $%.4f",
                 job.pk, result.get("total_events", 0), exec_secs, cost_usd)
+
+    # Flag the day's foraging summary as stale (cheap upsert — the background
+    # sweep does the actual recompute). Never raises.
+    from apps.analysis import foraging
+    foraging.mark_stale_for_job(job)
+
     _notify_pipeline(job.pk)
 
 

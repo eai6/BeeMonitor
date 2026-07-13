@@ -529,9 +529,10 @@
       {% endif %}
     </div>
   </div>
-  {% if metrics.mac %}
+  {% if metrics.mac or metrics.serial or device.hw_id %}
   <p class="text-xs text-gray-400 mb-1">
-    MAC <span class="font-mono text-gray-600 select-all">{{ metrics.mac }}</span>{% if metrics.mac_iface %} <span class="text-gray-300">· {{ metrics.mac_iface }}</span>{% endif %}{% if metrics.wifi_ip %} · IP <span class="font-mono text-gray-600 select-all">{{ metrics.wifi_ip }}</span>{% endif %}
+    {% if metrics.mac %}MAC <span class="font-mono text-gray-600 select-all">{{ metrics.mac }}</span>{% if metrics.mac_iface %} <span class="text-gray-300">· {{ metrics.mac_iface }}</span>{% endif %}{% if metrics.wifi_ip %} · IP <span class="font-mono text-gray-600 select-all">{{ metrics.wifi_ip }}</span>{% endif %}{% endif %}
+    {% if metrics.serial or device.hw_id %}{% if metrics.mac %} · {% endif %}Serial <span class="font-mono text-gray-600 select-all">{{ metrics.serial|default:device.hw_id }}</span>{% endif %}
   </p>
   {% endif %}
   <p class="text-xs text-gray-400 mb-3">
@@ -539,6 +540,44 @@
     connected (falling back to cellular when it isn't), so these commands reach
     the device either way. It acts on its next check-in.
   </p>
+  <!-- Video upload policy: manual (default) protects phone-hotspot data plans;
+       "Upload now" drains the current backlog once. -->
+  <div class="mb-3 p-3 rounded border {% if device.video_upload_mode == 'auto' %}border-green-200 bg-green-50/50{% else %}border-amber-200 bg-amber-50/50{% endif %}">
+    <div class="flex items-center justify-between flex-wrap gap-2">
+      <div class="text-sm">
+        {% if device.video_upload_mode == 'auto' %}
+          <span class="font-medium text-green-800">Auto-upload on</span>
+          <span class="text-gray-500">— videos upload whenever WiFi is connected.</span>
+        {% else %}
+          <span class="font-medium text-amber-800">Auto-upload off</span>
+          <span class="text-gray-500">— videos are held on the device{% if metrics.pending_uploads %} (<span class="font-medium">{{ metrics.pending_uploads }} pending</span>){% endif %} until you upload them.</span>
+        {% endif %}
+      </div>
+      {% if can_manage %}
+      <div class="flex items-center gap-2">
+        {% if device.video_upload_mode != 'auto' %}
+        <form method="post" action="{% url 'devices:upload_now' device.pk %}">
+          {% csrf_token %}
+          <button class="px-3 py-1.5 bg-amber-600 rounded text-sm text-white hover:bg-amber-700">Upload now</button>
+        </form>
+        {% endif %}
+        <form method="post" action="{% url 'devices:upload_mode' device.pk %}"
+              {% if device.video_upload_mode != 'auto' %}onsubmit="return confirm('Turn on auto-upload? If this device joins a phone hotspot, video uploads will use that phone\'s data plan.')"{% endif %}>
+          {% csrf_token %}
+          <input type="hidden" name="mode" value="{% if device.video_upload_mode == 'auto' %}manual{% else %}auto{% endif %}">
+          <button class="px-3 py-1.5 bg-white border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">
+            {% if device.video_upload_mode == 'auto' %}Switch to manual{% else %}Turn on auto-upload{% endif %}
+          </button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+    <p class="text-xs text-gray-400 mt-1.5">
+      Manual mode protects your data plan when the device's “WiFi” is a phone
+      hotspot. “Upload now” pushes everything currently pending, then holds again.
+      The device applies changes on its next check-in.
+    </p>
+  </div>
   {% if can_manage %}
   <!-- In-range networks (from a device scan); click one to fill the SSID below. -->
   <div class="mb-3">
@@ -797,6 +836,15 @@
         <button type="button" id="act-apply" class="px-2 py-1 rounded bg-gray-100 text-gray-600 hover:bg-gray-200">Apply</button>
         <button type="button" id="act-clear" class="px-2 py-1 rounded text-gray-500 hover:text-gray-700 {% if not activity_custom %}hidden{% endif %}">Clear</button>
       </div>
+      <div class="flex items-center gap-1" title="Foraging-trip duration bounds (seconds) — same filter as the batch page">
+        <span class="text-gray-400">trip</span>
+        <input type="number" id="act-min-sec" min="0" max="86400" step="1" value="{{ activity_min_sec|floatformat:0 }}"
+               class="w-16 border border-gray-300 rounded px-1.5 py-1 text-xs" aria-label="Min trip seconds">
+        <span class="text-gray-400">–</span>
+        <input type="number" id="act-max-sec" min="1" max="86400" step="1" value="{{ activity_max_sec|floatformat:0 }}"
+               class="w-16 border border-gray-300 rounded px-1.5 py-1 text-xs" aria-label="Max trip seconds">
+        <span class="text-gray-400">s</span>
+      </div>
     </div>
   </div>
   {% if can_manage %}
@@ -907,14 +955,20 @@
   var START = "{{ activity_start }}";
   var END = "{{ activity_end }}";
   var CUSTOM = {{ activity_custom|yesno:"true,false" }};
+  // Foraging-trip duration bounds (seconds) — same semantics as the batch page.
+  var MIN_SEC = "{{ activity_min_sec|floatformat:0 }}";
+  var MAX_SEC = "{{ activity_max_sec|floatformat:0 }}";
 
   // The query the chart/table/poll all use: a custom window when active,
-  // otherwise the preset range. Confirmation filter rides along on both.
+  // otherwise the preset range. Confirmation filter + trip bounds ride along.
   function activityQuery() {
     var base = (CUSTOM && START && END)
       ? 'start=' + encodeURIComponent(START) + '&end=' + encodeURIComponent(END)
       : 'range=' + encodeURIComponent(RANGE);
-    return base + '&confirmed=' + encodeURIComponent(CONFIRMED);
+    base += '&confirmed=' + encodeURIComponent(CONFIRMED);
+    if (MIN_SEC !== '') base += '&min_sec=' + encodeURIComponent(MIN_SEC);
+    if (MAX_SEC !== '') base += '&max_sec=' + encodeURIComponent(MAX_SEC);
+    return base;
   }
 
   // Keep the URL reflecting the active view so a refresh / shared link restores it.
@@ -1083,8 +1137,17 @@
   function dot(ok) { return '<span class="w-1.5 h-1.5 rounded-full ' + (ok ? 'bg-green-500' : 'bg-gray-300') + '"></span>'; }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
-  function poll() {
-    fetch("{% url 'devices:status' device.pk %}?" + activityQuery(), { cache: 'no-store' })
+  // Tiles refresh every tick (cheap DB reads); the chart series is only
+  // requested (`chart=1`) on load, on a param change, or every ~60s — building
+  // buckets + weather 12×/minute per open tab is what used to melt the server.
+  // CHART_SEQ guards against a stale in-flight chart response overwriting a
+  // newer one after a quick range/filter change.
+  var CHART_SEQ = 0;
+  function poll(withChart) {
+    var q = activityQuery();
+    var seq = withChart ? ++CHART_SEQ : 0;
+    fetch("{% url 'devices:status' device.pk %}?" + q + (withChart ? '&chart=1' : ''),
+          { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (IS_ACTIVE) {
@@ -1181,8 +1244,10 @@
             }
           }
         }
-        buildActivityChart(d.activity_series, d.weather_enabled, d.activity_gran);
-        buildActivityTable(d.activity_series, d.weather_enabled, d.activity_gran);
+        if (d.activity_series && seq === CHART_SEQ) {
+          buildActivityChart(d.activity_series, d.weather_enabled, d.activity_gran);
+          buildActivityTable(d.activity_series, d.weather_enabled, d.activity_gran);
+        }
       }).catch(function () {});
   }
   // One range selector drives BOTH the chart and the table, in place (no reload),
@@ -1225,7 +1290,7 @@
       var rl = document.getElementById('act-range-label');
       if (rl) rl.textContent = RANGE;
       syncActivityUrl();
-      poll();  // refetch this range -> rebuilds the chart AND the table at once
+      poll(true);  // refetch this range -> rebuilds the chart AND the table at once
     });
   });
 
@@ -1242,7 +1307,7 @@
     var rl = document.getElementById('act-range-label');
     if (rl) rl.textContent = s + ' – ' + en;
     syncActivityUrl();
-    poll();
+    poll(true);
   });
   var clearBtn = document.getElementById('act-clear');
   if (clearBtn) clearBtn.addEventListener('click', function () {
@@ -1254,7 +1319,7 @@
     var rl = document.getElementById('act-range-label');
     if (rl) rl.textContent = RANGE;
     syncActivityUrl();
-    poll();
+    poll(true);
   });
 
   // All / Confirmed / Unconfirmed filter — same in-place refresh as the range
@@ -1272,11 +1337,26 @@
         b.classList.toggle('hover:bg-gray-200', !on);
       });
       syncActivityUrl();
-      poll();  // refetch with the new filter -> rebuilds chart AND table
+      poll(true);  // refetch with the new filter -> rebuilds chart AND table
     });
   });
 
-  setInterval(poll, 5000);  // matches the 5s minimum beat rate
+  // Trip-duration bounds: applying on change refreshes chart + table in place,
+  // exactly like the range/filter controls.
+  ['act-min-sec', 'act-max-sec'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('change', function () {
+      MIN_SEC = (document.getElementById('act-min-sec') || {}).value || '';
+      MAX_SEC = (document.getElementById('act-max-sec') || {}).value || '';
+      syncActivityUrl();
+      poll(true);
+    });
+  });
+
+  // Tiles every 5s (matches the 5s minimum beat rate); chart every 12th tick
+  // (~60s) — param changes above refresh it immediately via poll(true).
+  var TICK = 0;
+  setInterval(function () { TICK++; poll(TICK % 12 === 0); }, 5000);
 })();
 </script>
 

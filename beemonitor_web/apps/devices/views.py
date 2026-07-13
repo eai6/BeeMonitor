@@ -379,55 +379,8 @@ def _parse_custom_range(start, end, zone):
     return start_loc, end_loc
 
 
-def _device_forage_trip_times(device, since, until):
-    """Exit times of cross-video foraging trips for a device's analyzed videos in
-    [since, until] (UTC). Reads each video's events CSV and pairs Exit->Entry like
-    the batch aggregate, so it catches trips that span clips. Cached ~5 min so the
-    polled device page doesn't re-read S3 on every refresh. Capped for cost."""
-    from django.core.cache import cache
-    from apps.analysis.models import JobResult
-    from apps.pipelines import aggregate
-
-    key = f"devtrips:{device.pk}:{int(since.timestamp())}:{int(until.timestamp())}"
-    hit = cache.get(key)
-    if hit is not None:
-        return hit
-
-    MAX_VIDEOS = 800
-    jrs = (JobResult.objects
-           .filter(job__video__device=device,
-                   job__video__recorded_at__gte=since, job__video__recorded_at__lte=until)
-           .exclude(events_csv_path="")
-           .select_related("job", "job__video")
-           .order_by("job__video_id", "-job__id"))
-    sources, seen = [], set()
-    for jr in jrs:
-        v = jr.job.video
-        if v.pk in seen or not v.recorded_at:
-            continue
-        seen.add(v.pk)  # latest completed analysis per video
-        sources.append({
-            "title": v.title or f"Video {v.pk}", "video": v,
-            "result": {"events_csv_path": jr.events_csv_path},
-            "recorded_at": v.recorded_at,
-            "fps": max(float(v.fps or aggregate.DEFAULT_FPS), 1.0),
-        })
-        if len(sources) >= MAX_VIDEOS:
-            break
-
-    times = []
-    if sources:
-        try:
-            trips, _summary = aggregate.aggregate_trips(sources)
-            times = [t["exit_time"] for t in trips]
-        except Exception as e:  # noqa: BLE001 - trips are best-effort
-            logger.warning("device %s trip pairing failed: %s", device.pk, e)
-    cache.set(key, times, 300)
-    return times
-
-
 def _build_activity_series(device, range_key: str, confirmed: str = "all",
-                           start=None, end=None) -> dict:
+                           start=None, end=None, min_sec=None, max_sec=None) -> dict:
     """Snippets per clock-hour/day in the device's DISPLAY timezone. Combines
     uploaded clips (recorded_at) with the device's on-card histogram, converting
     each to its true instant then to the display tz. Shared by page + poll.
@@ -599,7 +552,13 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all",
         f["entries"] += row["entry_count"] or 0
         f["exits"] += row["exit_count"] or 0
         analyzed_ct[k] = analyzed_ct.get(k, 0) + 1
-    for exit_time in _device_forage_trip_times(device, since, until):
+    # Trips come from persisted DailyForagingSummary rows — a pure DB read
+    # (no S3 in this request path; the reconciler sweep keeps rows fresh).
+    # User-adjustable duration bounds are a read-time filter on stored trips.
+    from apps.analysis import foraging as _foraging
+    from apps.pipelines.aggregate import clamp_trip_bounds
+    min_sec, max_sec = clamp_trip_bounds(min_sec, max_sec)
+    for exit_time in _foraging.device_trips(device, since, until, min_sec, max_sec):
         loc = _true_utc(exit_time, pi_off).astimezone(zone)
         if loc < start_loc or loc > upper_loc:
             continue
@@ -640,6 +599,9 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all",
         "activity_custom": bool(custom),
         "activity_start": start_loc.strftime("%Y-%m-%d") if custom else "",
         "activity_end": upper_loc.strftime("%Y-%m-%d") if custom else "",
+        # Active trip-duration bounds (clamped), echoed so the inputs persist.
+        "activity_min_sec": min_sec,
+        "activity_max_sec": max_sec,
     }
 
 
@@ -729,7 +691,9 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
             device, self.request.GET.get("range", "7d"),
             self.request.GET.get("confirmed", "all"),
             start=self.request.GET.get("start"),
-            end=self.request.GET.get("end")))
+            end=self.request.GET.get("end"),
+            min_sec=self.request.GET.get("min_sec"),
+            max_sec=self.request.GET.get("max_sec")))
         return ctx
 
 
@@ -1399,10 +1363,18 @@ class DeviceStatusView(LoginRequiredMixin, View):
         img_hb = device.heartbeats.exclude(image_storage_key="").first()
         image = ({"url": _presign_image(img_hb.image_storage_key),
                   "ts": img_hb.created_at.isoformat()} if img_hb else None)
-        activity = _build_activity_series(device, request.GET.get("range", "7d"),
-                                          request.GET.get("confirmed", "all"),
-                                          start=request.GET.get("start"),
-                                          end=request.GET.get("end"))
+        # The chart series is only built when asked (?chart=1): the page polls
+        # this endpoint every 5s for the cheap telemetry tiles, but refreshes
+        # the chart on its own slower cadence — recomputing buckets + weather
+        # lookups 12×/minute per open tab was pure waste.
+        activity = None
+        if request.GET.get("chart") == "1":
+            activity = _build_activity_series(device, request.GET.get("range", "7d"),
+                                              request.GET.get("confirmed", "all"),
+                                              start=request.GET.get("start"),
+                                              end=request.GET.get("end"),
+                                              min_sec=request.GET.get("min_sec"),
+                                              max_sec=request.GET.get("max_sec"))
         return JsonResponse({
             "online": _is_online(device),
             "last_seen": last_seen,
@@ -1445,10 +1417,11 @@ class DeviceStatusView(LoginRequiredMixin, View):
             "power_source": metrics.get("power_source"),
             "image": image,
             "telemetry_interval_label": device.telemetry_interval_label,
-            "activity_series": activity["activity_series"],
-            "activity_gran": activity["activity_gran"],
-            "activity_confirmed": activity["activity_confirmed"],
-            "weather_enabled": activity["weather_enabled"],
+            **({"activity_series": activity["activity_series"],
+                "activity_gran": activity["activity_gran"],
+                "activity_confirmed": activity["activity_confirmed"],
+                "weather_enabled": activity["weather_enabled"]}
+               if activity is not None else {}),
         })
 
 
@@ -1525,6 +1498,61 @@ COMMON_TIMEZONES = [
     "Africa/Nairobi", "Asia/Jerusalem", "Asia/Kolkata", "Asia/Shanghai",
     "Asia/Tokyo", "Australia/Sydney", "Pacific/Auckland",
 ]
+
+
+class DeviceVideoUploadModeView(LoginRequiredMixin, View):
+    """Set the video upload policy (auto|manual) from the dashboard.
+
+    manual (default) = the uploader holds recorded videos even on WiFi until
+    "Upload now" — so tethering the unit to a phone hotspot can't silently
+    drain a cellular data plan. auto = upload whenever WiFi is connected.
+    The device adopts the change on its next check-in.
+    """
+
+    VALID = {"auto", "manual"}
+
+    def post(self, request, pk):
+        device = _device_or_403(request.user, pk, "manager")
+        is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        mode = (request.POST.get("mode") or "").strip().lower()
+        if mode not in self.VALID:
+            if is_ajax:
+                return JsonResponse({"error": "Invalid upload mode."}, status=400)
+            messages.error(request, "Invalid upload mode.")
+            return redirect("devices:detail", pk=pk)
+        device.video_upload_mode = mode
+        device.save(update_fields=["video_upload_mode"])
+        label = dict(device.VIDEO_UPLOAD_MODES).get(mode, mode)
+        if is_ajax:
+            return JsonResponse({"ok": True, "mode": mode, "label": label})
+        messages.success(
+            request,
+            f"Video uploads set to “{label}”. The device adopts it on its next check-in.",
+        )
+        return redirect("devices:detail", pk=pk)
+
+
+class DeviceUploadNowView(LoginRequiredMixin, View):
+    """One-shot backlog drain: queue an `upload_videos` command for the device.
+
+    Used with manual upload mode — the uploader pushes everything currently
+    pending, then goes back to holding. NOTE: `pending_command` is a single
+    slot, so this replaces any not-yet-delivered command (and vice versa)."""
+
+    def post(self, request, pk):
+        device = _device_or_403(request.user, pk, "manager")
+        is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        device.pending_command = "upload_videos"
+        device.command_params = {}
+        device.save(update_fields=["pending_command", "command_params"])
+        if is_ajax:
+            return JsonResponse({"ok": True})
+        messages.success(
+            request,
+            "Upload requested — the device pushes its pending videos on its next "
+            "check-in (WiFi required).",
+        )
+        return redirect("devices:detail", pk=pk)
 
 
 class DeviceDisplayTzView(LoginRequiredMixin, View):

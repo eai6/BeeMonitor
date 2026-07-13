@@ -142,6 +142,18 @@ class DailyForagingSummary(models.Model):
     trips_csv_path = models.CharField(max_length=500, blank=True)
     video_count = models.IntegerField(default=0)
     computed_at = models.DateTimeField(auto_now=True)
+    # The day's trips paired UNFILTERED (bounds 0–86400s) as compact rows
+    # [exit_epoch_sec, duration_sec, nest, is_cross_video], so charts can apply
+    # user min/max bounds as a pure read-time filter with no S3 access. NULL =
+    # not yet computed by the new path (the reconciler sweep fills it in).
+    # NOTE: total_trips/avg/median above stay at the DEFAULT bounds (10/7200),
+    # so total_trips != len(trips) by design.
+    trips = models.JSONField(null=True, blank=True)
+    # Dirty flag: set by job completion, cleared by the recompute sweep. The
+    # guarded clear (filter on stale_marked_at) makes concurrent re-marks safe
+    # without locks — a row re-marked mid-recompute stays stale for next tick.
+    stale = models.BooleanField(default=False)
+    stale_marked_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         unique_together = ("user", "site_name", "device", "date")

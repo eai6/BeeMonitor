@@ -211,6 +211,19 @@ class Device(models.Model):
     # the same physical unit maps back to the same Device instead of duplicating.
     hw_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
 
+    # Whether the uploader may push videos automatically when WiFi is up.
+    # "manual" (default) holds the backlog until the user taps "Upload now" or
+    # flips to auto — protects people whose "WiFi" is a phone hotspot from
+    # burning their cellular data plan. Pushed in the heartbeat; the uploader
+    # treats a missing state file as manual too (any unit that can upload can
+    # also beat, so it always learns its real mode first).
+    VIDEO_UPLOAD_MODES = [
+        ("manual", "Manual — hold videos until 'Upload now'"),
+        ("auto", "Auto — upload whenever WiFi is connected"),
+    ]
+    video_upload_mode = models.CharField(
+        max_length=8, default="manual", choices=VIDEO_UPLOAD_MODES)
+
     # Pending command for the device, returned in the next heartbeat response and
     # then cleared. "" | "capture_image" | "stream" | "wifi_stream".
     pending_command = models.CharField(max_length=32, blank=True, default="")
