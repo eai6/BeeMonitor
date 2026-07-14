@@ -8,7 +8,7 @@ fields to produce activity charts and summaries.
 import logging
 from collections import defaultdict
 
-from django.db.models import Avg, Count, Sum
+from django.db.models import Avg, Count, Q, Sum
 
 from apps.videos.models import Video
 
@@ -238,7 +238,8 @@ def get_summary_stats(user, site_name=None, year=None, month=None, day=None, hou
 
     # Prefer DailyForagingSummary for trip stats (includes cross-video trips).
     # It is device-keyed, so a device filter narrows it directly.
-    daily_qs = DailyForagingSummary.objects.filter(user=user)
+    daily_qs = DailyForagingSummary.objects.filter(
+        Q(user=user) | Q(device__shares__user=user)).distinct()
     if site_name:
         daily_qs = daily_qs.filter(site_name=site_name)
     if device:
@@ -316,7 +317,8 @@ def get_foraging_trips_over_time(user, site_name=None, year=None, month=None, da
     """
     # Try DailyForagingSummary first (includes cross-video trips). It is
     # device-keyed, so a device filter narrows it directly.
-    daily_qs = DailyForagingSummary.objects.filter(user=user)
+    daily_qs = DailyForagingSummary.objects.filter(
+        Q(user=user) | Q(device__shares__user=user)).distinct()
     if site_name:
         daily_qs = daily_qs.filter(site_name=site_name)
     if device:

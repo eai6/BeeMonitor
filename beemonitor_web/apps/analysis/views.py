@@ -574,7 +574,7 @@ class ProcessingHubView(LoginRequiredMixin, View):
         videos = (qs.annotate(job_status=Subquery(latest), job_id=Subquery(latest_id))
                   .select_related("device")
                   .order_by("-recorded_at", "-uploaded_at")[:200])
-        recent_jobs = (Job.objects.filter(user=request.user)
+        recent_jobs = (Job.objects.filter(video__in=Video.accessible(request.user))
                        .select_related("video").order_by("-id")[:8])
 
         devices = list(Device.accessible(request.user).order_by("name"))
@@ -599,7 +599,8 @@ class ProcessingHubView(LoginRequiredMixin, View):
         from apps.accounts.models import UserProfile
         profile, _ = UserProfile.objects.get_or_create(user=request.user)
         active_jobs = list(
-            Job.objects.filter(user=request.user, status__in=ACTIVE_JOB_STATUSES)
+            Job.objects.filter(video__in=Video.accessible(request.user),
+                               status__in=ACTIVE_JOB_STATUSES)
             .select_related("video").order_by("started_at", "id")
         )
 
@@ -654,7 +655,8 @@ class JobListView(LoginRequiredMixin, ListView):
     paginate_by = 50
 
     def get_queryset(self):
-        qs = Job.objects.filter(user=self.request.user).select_related("video")
+        qs = (Job.objects.filter(video__in=Video.accessible(self.request.user))
+              .select_related("video"))
 
         # Filters
         status = self.request.GET.get("status", "")
@@ -693,7 +695,7 @@ class JobListView(LoginRequiredMixin, ListView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        user_videos = Video.objects.filter(user=self.request.user)
+        user_videos = Video.accessible(self.request.user)
 
         ctx["site_names"] = sorted(set(
             _sanitize_site(s) for s in
@@ -728,7 +730,10 @@ class JobDetailView(LoginRequiredMixin, DetailView):
     context_object_name = "job"
 
     def get_queryset(self):
-        return Job.objects.filter(user=self.request.user).select_related("video")
+        # Read scope follows the VIDEO's device shares (viewer/manager see the
+        # owner's runs on shared devices), not just who launched the job.
+        return (Job.objects.filter(video__in=Video.accessible(self.request.user))
+                .select_related("video"))
 
 
 class JobCreateView(LoginRequiredMixin, FormView):
@@ -803,8 +808,11 @@ class PollJobsView(LoginRequiredMixin, View):
         # (empty modal_call_id) — an age cutoff here previously made jobs older
         # than 4h permanently invisible: forever "Processing" in the UI while
         # their results sat in S3.
+        # Share-scoped: a viewer/manager watching a shared device's video keeps
+        # driving the owner's in-flight jobs to completion (results/credits
+        # still land on the job's owner).
         processing_jobs = list(Job.objects.filter(
-            user=request.user,
+            video__in=Video.accessible(request.user),
             status=Job.Status.PROCESSING,
         ).order_by("-started_at")[:200])
 
@@ -1487,7 +1495,10 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        job = get_object_or_404(Job, pk=self.kwargs["pk"], user=self.request.user)
+        # Device shares grant read access to results on the video's device.
+        job = get_object_or_404(
+            Job, pk=self.kwargs["pk"],
+            video__in=Video.accessible(self.request.user))
         ctx["job"] = job
 
         try:
@@ -1585,7 +1596,8 @@ class GenerateAnnotatedVideoView(LoginRequiredMixin, View):
         from django.shortcuts import redirect
         from django.utils import timezone
 
-        job = get_object_or_404(Job, pk=pk, user=request.user)
+        # Rendering costs GPU money — owner or device MANAGER only.
+        job = get_object_or_404(Job, pk=pk, video__in=Video.manageable(request.user))
         try:
             result = job.result
         except JobResult.DoesNotExist:
@@ -2059,7 +2071,7 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
         ctx["current_device"] = device
 
         # Job progress metrics
-        user_jobs = Job.objects.filter(user=user)
+        user_jobs = Job.objects.filter(video__in=Video.accessible(user))
         processing_jobs = user_jobs.filter(status=Job.Status.PROCESSING).select_related("video")
         failed_jobs = user_jobs.filter(status=Job.Status.FAILED).select_related("video").order_by("-created_at")[:5]
         completed_recent = user_jobs.filter(status=Job.Status.COMPLETED).order_by("-completed_at")[:5]

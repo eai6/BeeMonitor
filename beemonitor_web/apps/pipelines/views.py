@@ -438,9 +438,24 @@ def retry_step(request, pk, run_id, step_id):
     return redirect("pipelines:run_detail", pk=pk, run_id=run_id)
 
 
+def _viewable_run_or_404(request, run_id):
+    """The launcher sees their run; device-share users (viewer/manager) see
+    runs on videos of devices shared with them. Write paths (rerun, retry)
+    stay launcher-only."""
+    run = get_object_or_404(PipelineRun.objects.select_related("pipeline"), pk=run_id)
+    if run.user_id == request.user.id:
+        return run
+    from apps.videos.models import Video
+    from . import aggregate
+    vid = aggregate.run_video_id(run)
+    if vid is not None and Video.accessible(request.user).filter(pk=vid).exists():
+        return run
+    raise Http404("No such run.")
+
+
 @login_required
 def run_detail(request, pk, run_id):
-    run = get_object_or_404(PipelineRun, pk=run_id, user=request.user)
+    run = _viewable_run_or_404(request, run_id)
     return render(request, "pipelines/run.html", {
         "pipeline": run.pipeline,
         "run": run,
@@ -454,7 +469,7 @@ def run_output_csv(request, pk, run_id, step_id):
     import csv
     import io
 
-    run = get_object_or_404(PipelineRun, pk=run_id, user=request.user)
+    run = _viewable_run_or_404(request, run_id)
     out = (run.context or {}).get(step_id, {})
     rows = out.get("rows") or []
     buf = io.StringIO()
@@ -548,7 +563,7 @@ def _run_steps(run):
 @login_required
 def run_status(request, pk, run_id):
     """HTMX poll: nudge any in-flight GPU jobs, then report status."""
-    run = get_object_or_404(PipelineRun, pk=run_id, user=request.user)
+    run = _viewable_run_or_404(request, run_id)
 
     if not run.is_terminal:
         _poll_run_jobs(run)
@@ -643,8 +658,22 @@ def clone_pipeline(request, pk):
 # ── Batch (multi-video) aggregate results ────────────────────────────────────
 
 def _batch_runs(request, batch_id):
-    runs = list(PipelineRun.objects.filter(user=request.user, batch_id=batch_id)
+    """The batch's runs, visible to the launcher — or to device-share users
+    for the runs whose videos live on devices shared with them."""
+    runs = list(PipelineRun.objects.filter(batch_id=batch_id)
                 .select_related("pipeline").order_by("started_at", "id"))
+    if not runs:
+        raise Http404("No such batch.")
+    if all(r.user_id == request.user.id for r in runs):
+        return runs
+    from apps.videos.models import Video
+    from . import aggregate
+    accessible = set(
+        Video.accessible(request.user)
+        .filter(pk__in=[v for r in runs if (v := aggregate.run_video_id(r)) is not None])
+        .values_list("pk", flat=True))
+    runs = [r for r in runs
+            if r.user_id == request.user.id or aggregate.run_video_id(r) in accessible]
     if not runs:
         raise Http404("No such batch.")
     return runs

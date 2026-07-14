@@ -838,6 +838,11 @@ if deploy_service:
         # stack; Django passes the role + image to create_training_job.
         "SAGEMAKER_TRAINING_ROLE_ARN": f"arn:aws:iam::{account_id}:role/beemonitor-sm-{env}-training-exec-role",
         "SAGEMAKER_TRAINING_IMAGE": f"{account_id}.dkr.ecr.{region}.amazonaws.com/beemonitor-sm-{env}-training:latest",
+        # Long videos are tracked as multiple chunked invocations (memory/27
+        # §7d). Requires the range-aware GPU image on the endpoint — enabled
+        # 2026-07-14 (set live via update-service; kept here so pulumi up
+        # doesn't revert it).
+        "BEEMONITOR_CHUNK_TRACKING": "1",
     })
 
     runtime_secrets = pulumi.Output.all(
