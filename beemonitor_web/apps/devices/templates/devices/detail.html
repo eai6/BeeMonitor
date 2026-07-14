@@ -215,16 +215,23 @@
 <!-- Recording: capture mode + daily hour window -->
 <div class="mt-6 bg-white shadow rounded-lg p-4">
   <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
-    <h2 class="text-sm font-semibold text-gray-700">Recording</h2>
+    <h2 class="text-sm font-semibold text-gray-700 flex items-center gap-2">
+      Recording
+      <span id="rec-status" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium
+            {% if device.record_mode == 'off' %}bg-red-100 text-red-700{% else %}bg-green-100 text-green-800{% endif %}">
+        <span class="w-1.5 h-1.5 rounded-full {% if device.record_mode == 'off' %}bg-red-500{% else %}bg-green-500{% endif %}"></span>{% if device.record_mode == 'off' %}Off{% else %}On{% endif %}
+      </span>
+    </h2>
     <div class="text-xs text-gray-500">
       <span id="rec-label" class="font-medium text-gray-700">{{ device.get_record_mode_display }} · {% if device.record_window %}{{ device.record_window.start|stringformat:"02d" }}:00–{{ device.record_window.end|stringformat:"02d" }}:00{% else %}all day{% endif %}</span>
     </div>
   </div>
   <p class="text-xs text-gray-400 mb-3">
+    <b>Off</b> stops the camera recording entirely (telemetry keeps running).
     <b>Motion-triggered</b> saves a clip only when something moves (default).
     <b>Continuous</b> records the whole window in ~10-minute clips — expect the
     SD card and pending uploads to grow much faster. The hour window (device
-    local time, {{ display_tz|default:"UTC" }}) limits when EITHER mode records;
+    local time, {{ display_tz|default:"UTC" }}) limits when EITHER recording mode runs;
     start after end wraps past midnight. The unit still needs to be powered —
     the Power schedule above is the outer envelope.
   </p>
@@ -280,6 +287,14 @@
           if (d && d.ok) {
             var lbl = document.getElementById('rec-label');
             if (lbl) lbl.textContent = d.mode_label + ' · ' + d.window_label;
+            var st = document.getElementById('rec-status');
+            if (st) {
+              var off = d.mode === 'off';
+              st.className = 'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium '
+                + (off ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-800');
+              st.innerHTML = '<span class="w-1.5 h-1.5 rounded-full ' + (off ? 'bg-red-500' : 'bg-green-500')
+                + '"></span>' + (off ? 'Off' : 'On');
+            }
             var s = document.getElementById('rec-saved');
             if (s) { s.classList.remove('hidden'); setTimeout(function () { s.classList.add('hidden'); }, 2500); }
           } else {

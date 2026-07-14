@@ -134,7 +134,7 @@ def load_record_settings():
     (BEEMONITOR_RECORD_MODE / BEEMONITOR_RECORD_WINDOW "H-H" / BEEMONITOR_POST_ROLL
     / BEEMONITOR_MAX_SEGMENT), so a no-shell unit can be reconfigured remotely.
     Window start > end wraps past midnight."""
-    mode = RECORD_MODE if RECORD_MODE in ("motion", "continuous") else "motion"
+    mode = RECORD_MODE if RECORD_MODE in ("off", "motion", "continuous") else "motion"
     window = None
     if "-" in RECORD_WINDOW:
         window = _valid_window(*(RECORD_WINDOW.split("-", 1) + [None])[:2])
@@ -150,7 +150,7 @@ def load_record_settings():
     d = _load_json_file(RECORD_SETTINGS_FILE)
     if isinstance(d, dict):
         m = str(d.get("mode", "")).strip().lower()
-        if m in ("motion", "continuous"):
+        if m in ("off", "motion", "continuous"):
             mode = m
         w = d.get("window")
         if w is None:

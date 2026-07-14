@@ -348,11 +348,12 @@ def record() -> None:
                 # Still keep the bg model current on skipped frames.
                 gate.warm(gray)
 
-            # Open decisions, gated by the daily hour window (both modes):
-            # continuous keeps a clip open through the whole window; motion
-            # opens only on a trigger.
+            # Open decisions, gated by recording being ON and the daily hour
+            # window (both modes): continuous keeps a clip open through the whole
+            # window; motion opens only on a trigger. mode "off" never opens
+            # (recording disabled from the dashboard).
             in_window = _in_record_window(rec_window)
-            if not encoding and in_window:
+            if not encoding and rec_mode != "off" and in_window:
                 if rec_mode == "continuous":
                     _open_segment(now_mono, "continuous")
                 elif motion:
@@ -397,8 +398,11 @@ def record() -> None:
                     log.warning("activity frame capture failed: %s", e)
 
             if encoding:
+                # Recording turned off (dashboard) closes the open clip now.
+                if rec_mode == "off":
+                    _close_segment(now_mono, "recording-off")
                 # The window closing ends the clip in EITHER mode.
-                if not in_window:
+                elif not in_window:
                     _close_segment(now_mono, "window-end")
                 elif rec_mode == "continuous":
                     # Continuous: rotate on the segment length; never close on

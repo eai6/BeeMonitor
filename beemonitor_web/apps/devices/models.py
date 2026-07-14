@@ -229,6 +229,7 @@ class Device(models.Model):
     # (default); continuous = record the whole window, rotated into ~10-minute
     # clips (heavy on SD + upload volume — the UI warns).
     RECORD_MODES = [
+        ("off", "Off — recording disabled"),
         ("motion", "Motion-triggered (default)"),
         ("continuous", "Continuous — save in 10-minute clips"),
     ]

@@ -1065,7 +1065,7 @@ def _apply_record_settings(mode, window, post_roll=None, max_segment=None) -> No
     (post-roll tail, max clip length) to the file the recorder hot-reloads. Only
     called when the beat carried record_mode (new clouds), so window=None is a
     deliberate "all day" — not an old cloud omitting the field."""
-    if not isinstance(mode, str) or mode.strip().lower() not in ("motion", "continuous"):
+    if not isinstance(mode, str) or mode.strip().lower() not in ("off", "motion", "continuous"):
         return
     mode = mode.strip().lower()
     win = None
