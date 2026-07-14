@@ -242,6 +242,11 @@ class DeviceHeartbeatView(APIView):
                 # Video upload policy (auto|manual). Manual holds the backlog
                 # until "Upload now" — protects phone-hotspot users' data plans.
                 "video_upload_mode": device.video_upload_mode,
+                # Recording behaviour: capture mode (motion|continuous) + the
+                # local-time hour window the recorder may record in (None = all
+                # day). The recorder hot-reloads both.
+                "record_mode": device.record_mode,
+                "record_window": device.record_window,
             },
             status=201,
         )
@@ -288,4 +293,7 @@ class DeviceCommandView(APIView):
             "wake_schedule_apply": device.wake_schedule_apply,
             # Upload policy here too so a flip applies within seconds on WiFi.
             "video_upload_mode": device.video_upload_mode,
+            # Recording mode + window for parity with the beat.
+            "record_mode": device.record_mode,
+            "record_window": device.record_window,
         })

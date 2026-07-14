@@ -44,6 +44,17 @@ POST_ROLL = _env_float("BEEMONITOR_POST_ROLL", 4.0)
 MAX_SEGMENT = _env_float("BEEMONITOR_MAX_SEGMENT", 120.0)   # force-rotate cap
 WARMUP_SECONDS = _env_float("BEEMONITOR_WARMUP", 5.0)        # let MOG2 learn bg
 
+# --- Recording mode + daily hour window -------------------------------------
+# motion = clips only on motion triggers (default). continuous = record the
+# whole window, rotated into CONTINUOUS_SEGMENT-second clips. Both are gated by
+# an optional local-time hour window. Env values are the fallback; the
+# dashboard pushes record_settings.json (see overrides.load_record_settings),
+# which the recorder hot-reloads.
+RECORD_MODE = os.environ.get("BEEMONITOR_RECORD_MODE", "motion").strip().lower()
+# "H-H" (e.g. "8-18"; start > end wraps past midnight) or "" = all day.
+RECORD_WINDOW = os.environ.get("BEEMONITOR_RECORD_WINDOW", "").strip()
+CONTINUOUS_SEGMENT = _env_float("BEEMONITOR_CONTINUOUS_SEGMENT", 600.0)  # 10 min
+
 # Telemetry stills queue. Periodic capture is OFF by default now — telemetry is
 # JSON-only over cellular; stills are captured ON DEMAND (picture / live view).
 # Set BEEMONITOR_TELEMETRY_IMAGE_INTERVAL > 0 to re-enable periodic stills.
@@ -212,6 +223,10 @@ NEST_LAYOUT_FILE = CALIB_FILE.parent / "nest_layout.json"
 # from the heartbeat; the recorder hot-reloads it over the env default, so a
 # no-shell unit can be switched between observe (tag) and filter (gate) remotely.
 BEE_CONFIRM_MODE_FILE = CALIB_FILE.parent / "bee_confirm_mode.json"
+# Dashboard-pushed recording settings ({"mode": "motion"|"continuous",
+# "window": {"start": H, "end": H} | null}). telemetry.py writes it from the
+# heartbeat; the recorder hot-reloads it over the env defaults above.
+RECORD_SETTINGS_FILE = CALIB_FILE.parent / "record_settings.json"
 # Dashboard-pushed toggle for sampling/sending BioCLIP review crops over cellular.
 # telemetry.py writes it from the heartbeat; the recorder hot-reloads it over the
 # env ACTIVITY_FRAMES default, so a no-shell unit can stop the 1-few crops/activity

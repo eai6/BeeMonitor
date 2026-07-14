@@ -212,6 +212,76 @@
   {% endif %}
 </div>
 
+<!-- Recording: capture mode + daily hour window -->
+<div class="mt-6 bg-white shadow rounded-lg p-4">
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Recording</h2>
+    <div class="text-xs text-gray-500">
+      <span id="rec-label" class="font-medium text-gray-700">{{ device.get_record_mode_display }} · {% if device.record_window %}{{ device.record_window.start|stringformat:"02d" }}:00–{{ device.record_window.end|stringformat:"02d" }}:00{% else %}all day{% endif %}</span>
+    </div>
+  </div>
+  <p class="text-xs text-gray-400 mb-3">
+    <b>Motion-triggered</b> saves a clip only when something moves (default).
+    <b>Continuous</b> records the whole window in ~10-minute clips — expect the
+    SD card and pending uploads to grow much faster. The hour window (device
+    local time, {{ display_tz|default:"UTC" }}) limits when EITHER mode records;
+    start after end wraps past midnight. The unit still needs to be powered —
+    the Power schedule above is the outer envelope.
+  </p>
+  {% if can_manage %}
+  <form id="rec-form" method="post" action="{% url 'devices:record_settings' device.pk %}" class="flex flex-wrap items-center gap-2">
+    {% csrf_token %}
+    <select name="mode" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      {% for val, label in record_modes %}
+      <option value="{{ val }}" {% if val == device.record_mode %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <span class="text-xs text-gray-500">from</span>
+    <select name="start" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      <option value="">— always —</option>
+      {% for h in hours %}
+      <option value="{{ h }}" {% if device.record_window.start == h %}selected{% endif %}>{{ h|stringformat:"02d" }}:00</option>
+      {% endfor %}
+    </select>
+    <span class="text-xs text-gray-500">to</span>
+    <select name="end" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      <option value="">— always —</option>
+      {% for h in hours %}
+      <option value="{{ h }}" {% if device.record_window.end == h %}selected{% endif %}>{{ h|stringformat:"02d" }}:00</option>
+      {% endfor %}
+    </select>
+    <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Set</button>
+    <span id="rec-saved" class="text-xs text-green-700 hidden">Saved ✓</span>
+  </form>
+  <script>
+    (function () {
+      var f = document.getElementById('rec-form');
+      if (!f) return;
+      f.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var token = f.querySelector('[name=csrfmiddlewaretoken]').value;
+        fetch(f.action, {
+          method: 'POST',
+          headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': token},
+          body: new FormData(f),
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          if (d && d.ok) {
+            var lbl = document.getElementById('rec-label');
+            if (lbl) lbl.textContent = d.mode_label + ' · ' + d.window_label;
+            var s = document.getElementById('rec-saved');
+            if (s) { s.classList.remove('hidden'); setTimeout(function () { s.classList.add('hidden'); }, 2500); }
+          } else {
+            alert((d && d.error) || 'Could not set recording.');
+          }
+        }).catch(function () { alert('Could not set recording.'); });
+      });
+    })();
+  </script>
+  {% else %}
+  <p class="text-xs text-gray-400 italic">Read-only — changing recording requires manager access.</p>
+  {% endif %}
+</div>
+
 <!-- Bee confirmation (on-device species filter) -->
 <div class="mt-6 bg-white shadow rounded-lg p-4">
   <div class="flex flex-wrap items-center justify-between gap-2 mb-1">

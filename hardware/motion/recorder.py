@@ -51,13 +51,14 @@ from motion.config import (
     TELEMETRY_IMAGE_INTERVAL, TELEMETRY_QUEUE,
     FRAME_MAX_CANDIDATES, FRAME_CAPTURE_INTERVAL, BEE_CONFIRM_MODE_FILE,
     ACTIVITY_FRAMES_FILE, SAVE_ACTIVITY_FRAMES,
+    RECORD_SETTINGS_FILE, CONTINUOUS_SEGMENT,
 )
 from motion.frames import _main_array_to_bgr
 from motion.roi import _resolve_record_roi
 from motion.overrides import (
     _build_gate, load_calibration, _apply_calibration,
     load_tuning, _apply_tuning, load_roi_override_lores, load_bee_confirm_mode,
-    load_activity_crops_mode,
+    load_activity_crops_mode, load_record_settings,
 )
 from motion.remux import _remux, _snippet_paths
 from motion.telemetry_still import _save_telemetry_still
@@ -154,6 +155,22 @@ def _write_clip_tag(mp4_path, status, confidence, taxon, runs, mode) -> None:
         pass
 
 
+def _in_record_window(window) -> bool:
+    """True when the current DEVICE-LOCAL hour is inside the window.
+
+    window = (start_hour, end_hour) or None (all day). start > end wraps past
+    midnight (e.g. (20, 6) = evenings + nights). The system timezone is kept
+    correct remotely (GPS-derived tz via the heartbeat), so local hours are
+    meaningful even on field units."""
+    if not window:
+        return True
+    start, end = window
+    h = datetime.now().hour
+    if start < end:
+        return start <= h < end
+    return h >= start or h < end
+
+
 def record() -> None:
     """Main capture loop. Blocks until SIGTERM/SIGINT."""
     if not HAVE_PICAMERA2:
@@ -247,6 +264,13 @@ def record() -> None:
     crops_mode = load_activity_crops_mode()
     act_frames_on = crops_mode != "off"
     act_frames_mtime = ACTIVITY_FRAMES_FILE.stat().st_mtime if ACTIVITY_FRAMES_FILE.exists() else 0.0
+    # Recording mode (motion|continuous) + daily hour window, dashboard-pushed
+    # via record_settings.json (env fallback) and hot-reloaded below.
+    rec_mode, rec_window = load_record_settings()
+    rec_settings_mtime = (RECORD_SETTINGS_FILE.stat().st_mtime
+                          if RECORD_SETTINGS_FILE.exists() else 0.0)
+    if rec_mode != "motion" or rec_window:
+        log.info("record settings: mode=%s window=%s", rec_mode, rec_window or "all-day")
     last_calib_check = time.monotonic()
     last_override_check = time.monotonic()
 
@@ -324,8 +348,15 @@ def record() -> None:
                 # Still keep the bg model current on skipped frames.
                 gate.warm(gray)
 
-            if motion and not encoding:
-                _open_segment(now_mono, "motion")
+            # Open decisions, gated by the daily hour window (both modes):
+            # continuous keeps a clip open through the whole window; motion
+            # opens only on a trigger.
+            in_window = _in_record_window(rec_window)
+            if not encoding and in_window:
+                if rec_mode == "continuous":
+                    _open_segment(now_mono, "continuous")
+                elif motion:
+                    _open_segment(now_mono, "motion")
 
             # While a clip is open, grab a full main still (the costly bit) at most
             # once every FRAME_CAPTURE_INTERVAL, capped per clip — and feed that ONE
@@ -366,8 +397,17 @@ def record() -> None:
                     log.warning("activity frame capture failed: %s", e)
 
             if encoding:
+                # The window closing ends the clip in EITHER mode.
+                if not in_window:
+                    _close_segment(now_mono, "window-end")
+                elif rec_mode == "continuous":
+                    # Continuous: rotate on the segment length; never close on
+                    # idle (the whole window is recorded).
+                    if now_mono - seg_start >= CONTINUOUS_SEGMENT:
+                        _close_segment(now_mono, "segment")
+                        _open_segment(now_mono, "continuous")
                 # Force-rotate over-long segments (stuck scene / wind in frame).
-                if now_mono - seg_start >= MAX_SEGMENT:
+                elif now_mono - seg_start >= MAX_SEGMENT:
                     _close_segment(now_mono, "max-len")
                     if motion:  # still active -> immediately start a fresh clip
                         _open_segment(now_mono, "motion-continued")
@@ -473,6 +513,21 @@ def record() -> None:
                         act_frames_on = new_mode != "off"
                         log.info("activity-crop mode %s (dashboard)", new_mode)
                     act_frames_mtime = am
+                # Live recording mode + hour window from the dashboard. An open
+                # clip isn't cut here — the state machine above closes/rotates
+                # it naturally on the next frame under the new rules.
+                try:
+                    rsm = (RECORD_SETTINGS_FILE.stat().st_mtime
+                           if RECORD_SETTINGS_FILE.exists() else 0.0)
+                except OSError:
+                    rsm = rec_settings_mtime
+                if rsm != rec_settings_mtime:
+                    new_mode, new_window = load_record_settings()
+                    if (new_mode, new_window) != (rec_mode, rec_window):
+                        rec_mode, rec_window = new_mode, new_window
+                        log.info("record settings -> mode=%s window=%s (dashboard)",
+                                 rec_mode, rec_window or "all-day")
+                    rec_settings_mtime = rsm
 
             # On-demand still requested by telemetry (picture / live view / ROI
             # editor): the telemetry service drops capture.request. We send a CLEAN

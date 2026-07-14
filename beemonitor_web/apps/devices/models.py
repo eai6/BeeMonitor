@@ -224,6 +224,22 @@ class Device(models.Model):
     video_upload_mode = models.CharField(
         max_length=8, default="manual", choices=VIDEO_UPLOAD_MODES)
 
+    # How the recorder captures within its window, pushed in the heartbeat
+    # (the recorder hot-reloads it). motion = clips only when motion triggers
+    # (default); continuous = record the whole window, rotated into ~10-minute
+    # clips (heavy on SD + upload volume — the UI warns).
+    RECORD_MODES = [
+        ("motion", "Motion-triggered (default)"),
+        ("continuous", "Continuous — save in 10-minute clips"),
+    ]
+    record_mode = models.CharField(
+        max_length=12, default="motion", choices=RECORD_MODES)
+    # Local-time hour window the recorder may record/save in. None = all day.
+    # {"start": 0-23, "end": 0-23}; start > end wraps past midnight (e.g. 20→6).
+    # This gates BOTH modes and only applies while the unit is powered (the
+    # WittyPi power schedule remains the outer on/off envelope).
+    record_window = models.JSONField(null=True, blank=True)
+
     # Pending command for the device, returned in the next heartbeat response and
     # then cleared. "" | "capture_image" | "stream" | "wifi_stream".
     pending_command = models.CharField(max_length=32, blank=True, default="")

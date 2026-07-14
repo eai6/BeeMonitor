@@ -655,6 +655,8 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         from .models import TELEMETRY_INTERVAL_CHOICES
         ctx["telemetry_interval_choices"] = TELEMETRY_INTERVAL_CHOICES
         ctx["bee_confirm_modes"] = device.BEE_CONFIRM_MODES  # on-device species filter
+        ctx["record_modes"] = device.RECORD_MODES  # capture mode + hour window
+        ctx["hours"] = list(range(24))
         # Floating support-assistant widget (read-only AI; shows only if a key is set).
         from apps.setup.assistant import client as _assistant_client
         ctx["assistant_enabled"] = _assistant_client.is_enabled()
@@ -1498,6 +1500,63 @@ COMMON_TIMEZONES = [
     "Africa/Nairobi", "Asia/Jerusalem", "Asia/Kolkata", "Asia/Shanghai",
     "Asia/Tokyo", "Australia/Sydney", "Pacific/Auckland",
 ]
+
+
+class DeviceRecordSettingsView(LoginRequiredMixin, View):
+    """Set the recorder's capture mode + daily hour window from the dashboard.
+
+    mode: motion (clips only on motion — default) | continuous (record the
+    whole window in ~10-minute clips; heavy on SD card + uploads).
+    window: start/end hours (0-23, device local time), both blank = all day;
+    start > end wraps past midnight. Gates BOTH modes; the WittyPi power
+    schedule stays the outer envelope. The recorder hot-reloads the change
+    after the device's next check-in.
+    """
+
+    def post(self, request, pk):
+        device = _device_or_403(request.user, pk, "manager")
+        is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+        def _fail(msg):
+            if is_ajax:
+                return JsonResponse({"error": msg}, status=400)
+            messages.error(request, msg)
+            return redirect("devices:detail", pk=pk)
+
+        mode = (request.POST.get("mode") or "").strip().lower()
+        if mode not in dict(device.RECORD_MODES):
+            return _fail("Invalid recording mode.")
+
+        start_raw = (request.POST.get("start") or "").strip()
+        end_raw = (request.POST.get("end") or "").strip()
+        window = None
+        if start_raw or end_raw:
+            try:
+                start, end = int(start_raw), int(end_raw)
+            except (TypeError, ValueError):
+                return _fail("Pick both a start and end hour (or clear both for all-day).")
+            if not (0 <= start <= 23 and 0 <= end <= 23):
+                return _fail("Hours must be 0–23.")
+            if start == end:
+                return _fail("Start and end can't be the same hour — clear both to record all day.")
+            window = {"start": start, "end": end}
+
+        device.record_mode = mode
+        device.record_window = window
+        device.save(update_fields=["record_mode", "record_window"])
+
+        mode_label = dict(device.RECORD_MODES)[mode]
+        window_label = (f"{window['start']:02d}:00–{window['end']:02d}:00"
+                        if window else "all day")
+        if is_ajax:
+            return JsonResponse({"ok": True, "mode": mode, "mode_label": mode_label,
+                                 "window_label": window_label})
+        messages.success(
+            request,
+            f"Recording set to “{mode_label}”, {window_label}. The device adopts "
+            "it on its next check-in.",
+        )
+        return redirect("devices:detail", pk=pk)
 
 
 class DeviceVideoUploadModeView(LoginRequiredMixin, View):

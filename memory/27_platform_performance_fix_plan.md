@@ -153,6 +153,29 @@ allowed through the firewall but only runs while the link is up).
   stale write would bake drift in instead of fixing it. No WittyPi → no-op.
 - Beats now report `ntp_synced` in metrics for drift visibility.
 
+## 7c. Feature: recording hour window + continuous mode (SHIPPED 2026-07-14)
+
+Advanced-settings "Recording" card (manager+): capture mode + daily hour window.
+
+- **Window**: start/end hours 0–23 in the device's local time (GPS-corrected tz),
+  blank = all day, start > end wraps past midnight. Gates BOTH modes; the WittyPi
+  power schedule stays the outer on/off envelope.
+- **Mode**: `motion` (clips on motion triggers — unchanged default) or
+  `continuous` (record the whole window, rotated into 10-minute clips —
+  `BEEMONITOR_CONTINUOUS_SEGMENT`, default 600 s). Continuous never closes on
+  idle; the window closing ends the open clip in either mode. Motion detection
+  keeps running in continuous mode so activity crops + bee confirmation still work.
+- Plumbing mirrors bee_confirm_mode end-to-end: `Device.record_mode` +
+  `record_window` (migration 0024) → heartbeat + command-poll responses →
+  telemetry `_apply_record_settings` → `record_settings.json` → recorder
+  hot-reload (~15 s). Key-presence guard: telemetry only applies when the beat
+  carries `record_mode`, so an older cloud can't clobber the window to all-day.
+  Env fallbacks for shell-configured units: `BEEMONITOR_RECORD_MODE`,
+  `BEEMONITOR_RECORD_WINDOW` ("H-H").
+- UI warns that continuous mode grows the SD card + pending uploads much faster
+  (pairs naturally with manual upload mode, §5).
+- Device side rides the NEXT artifact tag (not in v0.1.3).
+
 ## 8. Verification done at implementation time (2026-07-13)
 
 - `manage.py check` + `makemigrations --check` clean; new migrations
