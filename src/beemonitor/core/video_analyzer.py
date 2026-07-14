@@ -257,11 +257,15 @@ class BeeMonitor:
         logger.info("✓ Tracking system initialized (v2.2.1 CONFIG-BASED, two_mode=%s)", tracker.enable_two_mode)
         logger.info("="*70 + "\n")
         
-        # Process video with output path and visualize flag
+        # Process video with output path and visualize flag. A configured
+        # frame range (chunked long videos) confines this run to one slice;
+        # frame numbers in the output remain absolute.
         tracking_df = tracker.process_video(
             video_path=video_path,
             output_path=output_folder,
-            visualize=visualize
+            visualize=visualize,
+            start_frame=getattr(self.config.video, 'start_frame', 0) or 0,
+            end_frame=getattr(self.config.video, 'end_frame', None)
         )
         grouped_df = self._convert_tracking_to_grouped_format(tracking_df)
         

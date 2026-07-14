@@ -24,6 +24,12 @@ class VideoConfig:
     # from it and the video filename does NOT need the site_YYYY-MM-DD_HH_MM_SS
     # naming convention. Empty = fall back to parsing the filename.
     recording_start: str = ""
+    # Frame range for chunked long videos (one chunk per invocation so no
+    # single GPU call exceeds the async platform's 1h cap). Frame numbers in
+    # all outputs stay ABSOLUTE within the original video. end_frame is
+    # exclusive; None/0 = to EOF.
+    start_frame: int = 0
+    end_frame: Optional[int] = None
     auto_detect_from_video: bool = True  # Automatically detect FPS and resolution from video
     annotation_mode: bool = True # Use annotation mode for visualization scaling
     debug_mode : bool = False  # Enable debug mode for verbose logging

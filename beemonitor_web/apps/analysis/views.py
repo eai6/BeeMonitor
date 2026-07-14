@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -273,15 +274,13 @@ def _spawn_gpu_job(job_pk: int) -> None:
         if video.recorded_at:
             payload["recorded_at"] = video.recorded_at.isoformat()
 
-        input_uri = _put_inference_payload(job.modal_job_id, payload)
-        output_uri, failure_uri = _invoke_endpoint_async(job.modal_job_id, input_uri)
-
-        if failure_uri:
-            job.config["failure_location"] = failure_uri
-            Job.objects.filter(pk=job_pk).update(modal_call_id=output_uri, config=job.config)
+        modal_call_id, extra_cfg = _launch_gpu(payload, video, job.modal_job_id)
+        if extra_cfg:
+            job.config.update(extra_cfg)
+            Job.objects.filter(pk=job_pk).update(modal_call_id=modal_call_id, config=job.config)
         else:
-            Job.objects.filter(pk=job_pk).update(modal_call_id=output_uri)
-        logger.info("Job %s spawned on SageMaker: %s", job_pk, output_uri)
+            Job.objects.filter(pk=job_pk).update(modal_call_id=modal_call_id)
+        logger.info("Job %s spawned on SageMaker: %s", job_pk, modal_call_id)
 
     except Exception as e:
         Job.objects.filter(pk=job_pk).update(status="failed", error_message=str(e))
@@ -349,15 +348,14 @@ def _spawn_gpu_batch(jobs_data: list, detection_mode: str, confidence: float,
                 if video.recorded_at:
                     payload["recorded_at"] = video.recorded_at.isoformat()
 
-                input_uri = _put_inference_payload(jd["job_id"], payload)
-                output_uri, failure_uri = _invoke_endpoint_async(jd["job_id"], input_uri)
-                if failure_uri:
-                    vcfg["failure_location"] = failure_uri
+                modal_call_id, extra_cfg = _launch_gpu(payload, video, jd["job_id"])
+                if extra_cfg:
+                    vcfg.update(extra_cfg)
                     Job.objects.filter(pk=jd["job_pk"]).update(
-                        modal_call_id=output_uri, config=vcfg)
+                        modal_call_id=modal_call_id, config=vcfg)
                 else:
-                    Job.objects.filter(pk=jd["job_pk"]).update(modal_call_id=output_uri)
-                logger.info("Job %s spawned: %s", jd["job_pk"], output_uri)
+                    Job.objects.filter(pk=jd["job_pk"]).update(modal_call_id=modal_call_id)
+                logger.info("Job %s spawned: %s", jd["job_pk"], modal_call_id)
             except Exception as e:
                 Job.objects.filter(pk=jd["job_pk"]).update(
                     status="failed", error_message=str(e),
@@ -415,6 +413,70 @@ def _invoke_endpoint_async(job_id: str, input_uri: str) -> tuple[str, str]:
     )
     # OutputLocation = s3://<output-bucket>/<inference-id>.out  (typical layout)
     return response["OutputLocation"], response.get("FailureLocation", "") or ""
+
+
+# ── Chunked tracking for long videos ─────────────────────────────────────────
+# The async platform hard-caps one invocation at 1 h. Long videos are split
+# into frame ranges, one invocation each, and the CSVs merged when all land.
+# Chunk sizes keep worst-case per-chunk GPU time comfortably under the cap
+# (SAM 3 runs a heavy transformer on EVERY frame, hence the tiny chunks).
+#
+# GATED behind BEEMONITOR_CHUNK_TRACKING=1: the GPU image must support
+# start_frame/end_frame first — an older image would silently ignore them and
+# process the WHOLE video once per chunk (duplicated results, N× cost). Flip
+# the env on only after the endpoint runs the range-aware image.
+_CHUNK_LIMIT_SECONDS = {"yolo": 1200.0, "sam3": 60.0}
+
+
+def _chunk_ranges(video, detector_kind):
+    """[(start_frame, end_frame_or_None), ...] for a long video, else None.
+
+    Built from duration/fps metadata. Boundaries are shared (chunk i's end ==
+    chunk i+1's start) so coverage has no gap or overlap even if the fps
+    estimate is off, and the LAST chunk runs to EOF so an imprecise duration
+    can never truncate the tail."""
+    import math
+
+    if os.environ.get("BEEMONITOR_CHUNK_TRACKING") != "1":
+        return None
+    limit = _CHUNK_LIMIT_SECONDS["sam3" if detector_kind == "sam3" else "yolo"]
+    dur = float(getattr(video, "duration_seconds", 0) or 0)
+    if dur <= limit:
+        return None  # fits one invocation (also: unknown duration -> unchunked)
+    fps = float(getattr(video, "fps", 0) or 30.0)
+    total_frames = int(dur * fps)
+    n = math.ceil(dur / limit)
+    per = math.ceil(total_frames / n)
+    return [(i * per, (i + 1) * per if i < n - 1 else None) for i in range(n)]
+
+
+def _launch_gpu(payload, video, mid):
+    """Fire one invocation — or N chunked ones for a long video.
+
+    Returns (modal_call_id, cfg_updates): cfg_updates carries either the
+    single invocation's failure_location or the chunk manifest the poller
+    drives to completion."""
+    ranges = _chunk_ranges(video, payload.get("detector_kind", "yolo"))
+    if not ranges:
+        input_uri = _put_inference_payload(mid, payload)
+        output_uri, failure_uri = _invoke_endpoint_async(mid, input_uri)
+        return output_uri, ({"failure_location": failure_uri} if failure_uri else {})
+
+    chunks = []
+    for i, (start, end) in enumerate(ranges):
+        cp = dict(payload)
+        cp["job_id"] = f"{mid}-c{i}"
+        cp["start_frame"] = start
+        if end is not None:
+            cp["end_frame"] = end
+        cp["visualize"] = False  # a merged annotated video isn't supported
+        input_uri = _put_inference_payload(cp["job_id"], cp)
+        out_uri, fail_uri = _invoke_endpoint_async(cp["job_id"], input_uri)
+        chunks.append({"i": i, "output_uri": out_uri,
+                       "failure_uri": fail_uri, "result": None})
+    logger.info("job %s: video %.0fs chunked into %d invocations",
+                mid, float(video.duration_seconds or 0), len(chunks))
+    return chunks[0]["output_uri"], {"chunks": chunks}
 
 
 ACTIVE_JOB_STATUSES = [
@@ -828,6 +890,13 @@ def _poll_sagemaker_results(jobs) -> int:
         if not job.modal_call_id:
             n += _handle_unspawned_job(job, age)
             continue
+        # Chunked long videos: N invocations converge into one merged result.
+        if (job.config or {}).get("chunks"):
+            try:
+                n += _poll_chunked_job(job, s3, age)
+            except Exception as e:  # noqa: BLE001 - never kill the whole poll
+                logger.warning("chunk poll failed for job %s: %s", job.pk, e)
+            continue
         try:
             parsed = urlparse(job.modal_call_id)
             bucket = parsed.netloc
@@ -951,6 +1020,159 @@ def poll_annotate_jobs(user) -> int:
         Job.objects.filter(pk=job.pk).update(config=cfg)
         n += 1
     return n
+
+
+def _poll_chunked_job(job, s3, age) -> int:
+    """Advance one chunked job: collect landed chunk outputs, fail fast on any
+    chunk failure, merge + complete when the last chunk lands. Returns 1 when
+    the job reached a terminal state this pass."""
+    import json as _json
+    from datetime import timedelta
+    from urllib.parse import urlparse
+    from botocore.exceptions import ClientError
+    from django.utils import timezone
+
+    def _fail(msg):
+        Job.objects.filter(pk=job.pk).update(
+            status="failed", error_message=msg[:500], completed_at=timezone.now())
+        _notify_pipeline(job.pk)
+        return 1
+
+    cfg = job.config or {}
+    chunks = cfg["chunks"]
+    changed = False
+    for ch in chunks:
+        if ch.get("result") is not None:
+            continue
+        p = urlparse(ch["output_uri"])
+        try:
+            body = s3.get_object(Bucket=p.netloc, Key=p.path.lstrip("/"))["Body"].read()
+            res = _json.loads(body)
+            if res.get("status") == "failed":
+                return _fail(f"Chunk {ch['i']} failed: {res.get('error_message', 'unknown')}")
+            ch["result"] = res
+            changed = True
+            continue
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code", "") not in {"NoSuchKey", "404", "NotFound"}:
+                raise
+        # No output yet — platform-level failure for this chunk?
+        if ch.get("failure_uri"):
+            fp = urlparse(ch["failure_uri"])
+            try:
+                body = s3.get_object(Bucket=fp.netloc, Key=fp.path.lstrip("/"))["Body"].read()
+                return _fail(f"Chunk {ch['i']} — SageMaker inference failed: "
+                             f"{body.decode('utf-8', errors='replace')}")
+            except ClientError as e:
+                if e.response.get("Error", {}).get("Code", "") not in {"NoSuchKey", "404", "NotFound"}:
+                    raise
+    if changed:
+        Job.objects.filter(pk=job.pk).update(config=cfg)
+
+    if all(ch.get("result") is not None for ch in chunks):
+        merged = _merge_chunk_results(job, chunks)
+        _apply_result_to_job(job, merged)
+        return 1
+    if age > timedelta(hours=_JOB_TIMEOUT_HOURS):
+        pending = sum(1 for ch in chunks if ch.get("result") is None)
+        return _fail(f"Timed out: {pending}/{len(chunks)} chunks never returned after "
+                     f"{_JOB_TIMEOUT_HOURS}h. Re-run the analysis.")
+    return 0
+
+
+def _remap_chunk_track_id(tid, chunk_i):
+    """Namespace a chunk-local track id so ids can't collide across chunks
+    (each chunk's tracker restarts numbering). Numeric ids below 1M stay
+    numeric via a per-chunk offset; anything else gets a prefixed string,
+    keeping the scheme collision-free in all cases."""
+    try:
+        tid_i = int(float(tid))
+    except (TypeError, ValueError):
+        return f"{chunk_i}_{tid}"
+    if 0 <= tid_i < 1_000_000:
+        return str(chunk_i * 1_000_000 + tid_i)
+    return f"{chunk_i}_{tid_i}"
+
+
+def _merge_chunk_results(job, chunks) -> dict:
+    """One result dict from N chunk results: concatenated events/tracking CSVs
+    (frame numbers are already absolute; track ids get namespaced) uploaded to
+    the job's canonical keys, plus summed counts. Annotated video, per-track
+    crops and interactions aren't merged (documented in summary_stats) —
+    day-level foraging trips are recomputed from the merged events anyway."""
+    import csv as _csv
+    import io
+
+    from config.storage import get_s3_client
+
+    s3c = get_s3_client()
+    uid, mid = str(job.user_id), job.modal_job_id
+    results = [ch["result"] for ch in chunks]
+
+    def _read_rows(path):
+        if not path:
+            return []
+        buf = io.BytesIO()
+        try:
+            s3c.download_to_stream("processed", path, buf)
+        except Exception as e:  # noqa: BLE001 - a chunk with no rows is valid
+            logger.warning("chunk csv read failed (%s): %s", path, e)
+            return []
+        return list(_csv.DictReader(io.StringIO(buf.getvalue().decode("utf-8", "replace"))))
+
+    merged_paths = {}
+    for kind, key in (("events_csv_path", f"{uid}/{mid}/events.csv"),
+                      ("tracking_csv_path", f"{uid}/{mid}/tracking.csv")):
+        fieldnames, all_rows = None, []
+        for i, res in enumerate(results):
+            rows = _read_rows(res.get(kind))
+            if rows and fieldnames is None:
+                fieldnames = list(rows[0].keys())
+            for row in rows:
+                if "track_id" in row:
+                    row["track_id"] = _remap_chunk_track_id(row.get("track_id"), i)
+                all_rows.append(row)
+        if fieldnames:
+            out = io.StringIO()
+            w = _csv.DictWriter(out, fieldnames=fieldnames, extrasaction="ignore")
+            w.writeheader()
+            w.writerows(all_rows)
+            s3c.upload_stream("processed", key,
+                              io.BytesIO(out.getvalue().encode("utf-8")),
+                              content_type="text/csv")
+            merged_paths[kind] = key
+        else:
+            merged_paths[kind] = ""
+
+    def _sum(k):
+        return sum(int(r.get(k) or 0) for r in results)
+
+    stats0 = (results[0].get("summary_stats") or {}) if results else {}
+    return {
+        "status": "completed",
+        "events_csv_path": merged_paths["events_csv_path"],
+        "tracking_csv_path": merged_paths["tracking_csv_path"],
+        "foraging_trips_csv_path": "",
+        "interactions_csv_path": "",
+        "crops_csv_path": "",
+        "annotated_video_path": "",
+        "total_events": _sum("total_events"),
+        "entry_count": _sum("entry_count"),
+        "exit_count": _sum("exit_count"),
+        "unique_tracks": _sum("unique_tracks"),
+        "nest_count": max((int(r.get("nest_count") or 0) for r in results), default=0),
+        "foraging_trip_count": _sum("foraging_trip_count"),
+        "avg_trip_duration_sec": None,
+        "interaction_count": _sum("interaction_count"),
+        "summary_stats": {
+            "video_fps": stats0.get("video_fps"),
+            "chunked": len(chunks),
+            "note": "merged from chunked invocations; annotated video, "
+                    "interactions and per-track crops are unavailable for chunked runs",
+        },
+        "execution_seconds": round(
+            sum(float(r.get("execution_seconds") or 0) for r in results), 2),
+    }
 
 
 def _apply_result_to_job(job, result: dict) -> None:

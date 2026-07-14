@@ -112,6 +112,10 @@ def predict_fn(payload, pipeline):
             # ISO recording start (video.recorded_at) — replaces the filename
             # timestamp convention for event timestamps.
             recorded_at=payload.get("recorded_at", "") or "",
+            # Chunked long videos: one frame range per invocation so no single
+            # GPU call exceeds the async platform's 1h cap. Absent = whole video.
+            start_frame=int(payload.get("start_frame", 0) or 0),
+            end_frame=int(payload["end_frame"]) if payload.get("end_frame") else None,
         )
     except Exception as exc:
         logger.exception("predict_fn: pipeline failed for job %s", job_id)

@@ -89,6 +89,8 @@ class CloudPipeline:
         detector_kind: str = "yolo",
         text_prompt: str = "",
         recorded_at: str = "",
+        start_frame: int = 0,
+        end_frame: "int | None" = None,
     ) -> PipelineResult:
         """Run the full BeeMonitor pipeline on a video stored in S3.
 
@@ -152,6 +154,8 @@ class CloudPipeline:
             hotel_roi=hotel_roi,
             nest_layout=nest_layout,
             recorded_at=recorded_at,
+            start_frame=start_frame,
+            end_frame=end_frame,
             detector_kind=detector_kind,
             text_prompt=text_prompt,
         )
@@ -401,6 +405,8 @@ class CloudPipeline:
         hotel_roi=None,
         nest_layout=None,
         recorded_at: str = "",
+        start_frame: int = 0,
+        end_frame: "int | None" = None,
         detector_kind: str = "yolo",
         text_prompt: str = "",
     ):
@@ -435,6 +441,11 @@ class CloudPipeline:
         # from this, so uploads with arbitrary filenames work (the legacy
         # site_YYYY-MM-DD_HH_MM_SS name is only a fallback).
         config.video.recording_start = recorded_at or ""
+        # Chunked long videos: process only [start_frame, end_frame). Frame
+        # numbers in outputs stay absolute, so the merged CSVs and timestamps
+        # (recording_start of the ORIGINAL video) line up untouched.
+        config.video.start_frame = int(start_frame or 0)
+        config.video.end_frame = int(end_frame) if end_frame else None
 
         # Device-supplied hotel ROI + nest tubes (normalized 0..1) → pixel-space
         # manual_nests so the run uses the human-set layout (model is the backup).

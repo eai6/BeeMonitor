@@ -1252,25 +1252,38 @@ class BeeTracking:
         self,
         video_path: str,
         output_path: Optional[str] = None,
-        visualize: bool = False
+        visualize: bool = False,
+        start_frame: int = 0,
+        end_frame: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
-        Process entire video.
-        
+        Process entire video (or one frame range of it).
+
         Args:
             video_path: Path to input video
             output_path: Path to output video (if visualize=True)
             visualize: Whether to create output video
-            
+            start_frame: First frame to process (chunked long videos)
+            end_frame: Stop before this frame (exclusive); None = to EOF
+
         Returns:
             List of results for each frame
         """
         # Initialize for this video
         self.initialize_video(video_path, output_path)
-        
+
         # Open video
         cap = cv2.VideoCapture(video_path)
-        
+
+        # Frame-range support (chunked long videos): seek to start_frame; the
+        # loop stops before end_frame. frame_num stays ABSOLUTE within the
+        # original video, so event timestamps (recording_start + frame/fps)
+        # and cross-chunk CSV merges line up without any offsetting.
+        if start_frame > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            logger.info(f"Chunk range: seeking to frame {start_frame}"
+                        + (f", processing until {end_frame}" if end_frame else " (to EOF)"))
+
         # Setup video writer if visualizing
         if visualize and output_path:
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -1280,15 +1293,17 @@ class BeeTracking:
                 self.fps,
                 (self.video_width, self.video_height)
             )
-        
+
         results = []
-        frame_num = 0
-        
+        frame_num = start_frame
+
         while True:
+            if end_frame is not None and frame_num >= end_frame:
+                break
             ret, frame = cap.read()
             if not ret:
                 break
-            
+
             # Process frame
             result = self.process_frame(frame, frame_num, visualize=visualize)
             

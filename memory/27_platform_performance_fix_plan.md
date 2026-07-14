@@ -176,6 +176,37 @@ Advanced-settings "Recording" card (manager+): capture mode + daily hour window.
   (pairs naturally with manual upload mode, §5).
 - Device side rides the NEXT artifact tag (not in v0.1.3).
 
+## 7d. Feature: chunked tracking for long videos (SHIPPED 2026-07-14, env-gated)
+
+The async platform hard-caps one invocation at **1 h** (`InvocationTimeoutSeconds`
+was also raised from the 15-min default to that max on every invoke —
+`analysis/views.py`, `annotations/views.py`, `training/drift.py`). Videos whose
+GPU time would still exceed it are now **split into frame-range chunks, one
+invocation each, merged when all land** (Edward chose pure chunking — every
+frame detected, all detectors, no striding).
+
+- **Container**: `start_frame`/`end_frame` flow payload → `inference.py` →
+  wrapper → `VideoConfig` → `BeeTracking.process_video` (seek + bounded loop).
+  Frame numbers stay ABSOLUTE within the original video, so timestamps
+  (recorded_at + frame/fps) and merges need no offsetting.
+- **Web**: `_chunk_ranges` (yolo >1200 s, sam3 >60 s — SAM 3 runs a heavy
+  transformer per frame; chunks sized to stay well under the 1 h cap) →
+  `_launch_gpu` fires N invocations into `Job.config.chunks` → the poller's
+  `_poll_chunked_job` collects results, fails fast on any chunk failure, and
+  `_merge_chunk_results` concatenates events/tracking CSVs (track ids
+  namespaced per chunk, collision-free) to the job's canonical keys + sums the
+  counts → normal `_apply_result_to_job`. Cross-chunk trips are recovered by
+  the day-level DailyForagingSummary pairing (absolute timeline), same as
+  cross-video trips.
+- **Not merged for chunked runs** (documented in summary_stats): annotated
+  video, interactions, per-track crops.
+- **ACTIVATION IS GATED**: `BEEMONITOR_CHUNK_TRACKING=1` (App Runner env).
+  An old GPU image ignores the range keys and would process the WHOLE video
+  once per chunk (duplicate results, N× cost). Order: (1) this push rebuilds
+  the SageMaker image via CI; (2) the endpoint must actually run it (it pulls
+  on instance provisioning — a warm 24/7 endpoint needs an endpoint update /
+  scale event); (3) only then set the env flag.
+
 ## 8. Verification done at implementation time (2026-07-13)
 
 - `manage.py check` + `makemigrations --check` clean; new migrations
