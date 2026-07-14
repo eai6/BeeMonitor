@@ -411,12 +411,23 @@ def _put_inference_payload(job_id: str, payload: dict) -> str:
     return f"s3://{bucket}/{key}"
 
 
-def _invoke_endpoint_async(job_id: str, input_uri: str) -> tuple[str, str]:
+def _tracking_endpoint(detector_kind: str) -> str:
+    """Which endpoint a tracking job runs on. SAM 3 is heavy and needs the
+    A10G/g5 SAM 3 endpoint (the T4/g4dn OOMs); YOLO stays on the default g4dn.
+    Falls back to the default endpoint if the SAM 3 one isn't configured."""
+    if detector_kind == "sam3":
+        sam3 = getattr(settings, "SAGEMAKER_SAM3_ENDPOINT_NAME", "")
+        if sam3:
+            return sam3
+    return settings.SAGEMAKER_ENDPOINT_NAME
+
+
+def _invoke_endpoint_async(job_id: str, input_uri: str, endpoint: str = "") -> tuple[str, str]:
     """Call invoke_endpoint_async. Returns (output_uri, failure_uri) — the s3://
     URIs where the result / a platform-level failure (container crash, request
     expiry) will land. failure_uri is "" unless the endpoint config has an
-    S3FailurePath."""
-    endpoint = settings.SAGEMAKER_ENDPOINT_NAME
+    S3FailurePath. ``endpoint`` defaults to the main (YOLO/g4dn) endpoint."""
+    endpoint = endpoint or settings.SAGEMAKER_ENDPOINT_NAME
     if not endpoint:
         raise RuntimeError("SAGEMAKER_ENDPOINT_NAME is not configured")
     response = _sagemaker_runtime().invoke_endpoint_async(
@@ -474,10 +485,12 @@ def _launch_gpu(payload, video, mid):
     Returns (modal_call_id, cfg_updates): cfg_updates carries either the
     single invocation's failure_location or the chunk manifest the poller
     drives to completion."""
-    ranges = _chunk_ranges(video, payload.get("detector_kind", "yolo"))
+    detector_kind = payload.get("detector_kind", "yolo")
+    endpoint = _tracking_endpoint(detector_kind)  # SAM 3 tracking → g5, YOLO → g4dn
+    ranges = _chunk_ranges(video, detector_kind)
     if not ranges:
         input_uri = _put_inference_payload(mid, payload)
-        output_uri, failure_uri = _invoke_endpoint_async(mid, input_uri)
+        output_uri, failure_uri = _invoke_endpoint_async(mid, input_uri, endpoint)
         return output_uri, ({"failure_location": failure_uri} if failure_uri else {})
 
     chunks = []
@@ -489,7 +502,7 @@ def _launch_gpu(payload, video, mid):
             cp["end_frame"] = end
         cp["visualize"] = False  # a merged annotated video isn't supported
         input_uri = _put_inference_payload(cp["job_id"], cp)
-        out_uri, fail_uri = _invoke_endpoint_async(cp["job_id"], input_uri)
+        out_uri, fail_uri = _invoke_endpoint_async(cp["job_id"], input_uri, endpoint)
         chunks.append({"i": i, "output_uri": out_uri,
                        "failure_uri": fail_uri, "result": None})
     logger.info("job %s: video %.0fs chunked into %d invocations",

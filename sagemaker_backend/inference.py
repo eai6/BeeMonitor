@@ -167,14 +167,66 @@ def _pre_annotate(payload, pipeline) -> dict:
     class_index = {c.lower(): i for i, c in enumerate(classes)}
 
     storage = pipeline._storage
-    # Custom (fine-tuned) detector when requested; else the built-in bee model.
-    custom_model_key = payload.get("custom_bee_model_path") or ""
-    if custom_model_key:
-        model_path = pipeline._models.ensure_custom_model(custom_model_key)
+    # Detector: SAM 3 text-prompt (default for pre-annotation) or YOLO. Both
+    # yield the same per-frame box list via ``_detect`` so the sampling/save
+    # loop below is detector-agnostic.
+    detector_kind = (payload.get("detector_kind") or "yolo").strip().lower()
+    if detector_kind == "sam3":
+        from beemonitor.detection.sam3_detector import Sam3Detector
+
+        # Prompt SAM 3 with the project's classes (nest tubes stay manual).
+        prompt_classes = [c for c in classes if c.lower() != "nest"]
+        nms_iou = float(payload.get("nms_iou", 0.5))
+        _sam3 = Sam3Detector(
+            prompt=",".join(prompt_classes) or "bee",
+            conf_threshold=conf,
+            iou_threshold=nms_iou if nms_iou > 0 else 0.0,
+            max_detections=int(payload.get("max_detections", 100)),
+        )
+
+        def _detect(frame):
+            out = []
+            for det in _sam3.detect(frame):
+                name = (det.label or "").lower()
+                if name not in class_index:
+                    continue
+                x1, y1, x2, y2 = det.bbox
+                out.append({
+                    "x": round(x1), "y": round(y1),
+                    "w": round(x2 - x1), "h": round(y2 - y1),
+                    "class": classes[class_index[name]],
+                    "class_id": class_index[name],
+                    "confidence": round(float(det.confidence), 3)
+                    if det.confidence is not None else None,
+                })
+            return out
     else:
-        model_path = pipeline._models.ensure_models().bee_tracking
-    from ultralytics import YOLO
-    yolo = YOLO(model_path)
+        # Custom (fine-tuned) detector when requested; else the built-in bee model.
+        custom_model_key = payload.get("custom_bee_model_path") or ""
+        if custom_model_key:
+            model_path = pipeline._models.ensure_custom_model(custom_model_key)
+        else:
+            model_path = pipeline._models.ensure_models().bee_tracking
+        from ultralytics import YOLO
+        yolo = YOLO(model_path)
+
+        def _detect(frame):
+            out = []
+            for r in yolo(frame, conf=conf, verbose=False):
+                for box in r.boxes:
+                    cls_id = int(box.cls[0])
+                    name = (r.names.get(cls_id, f"class_{cls_id}") or "").lower()
+                    if name not in class_index:
+                        continue
+                    x1, y1, x2, y2 = box.xyxy[0].tolist()
+                    out.append({
+                        "x": round(x1), "y": round(y1),
+                        "w": round(x2 - x1), "h": round(y2 - y1),
+                        "class": classes[class_index[name]],
+                        "class_id": class_index[name],
+                        "confidence": round(float(box.conf[0]), 3),
+                    })
+            return out
 
     frames_out = []
     checked = total_detections = 0
@@ -208,21 +260,7 @@ def _pre_annotate(payload, pipeline) -> dict:
             if not ret:
                 continue
             checked += 1
-            boxes = []
-            for r in yolo(frame, conf=conf, verbose=False):
-                for box in r.boxes:
-                    cls_id = int(box.cls[0])
-                    name = (r.names.get(cls_id, f"class_{cls_id}") or "").lower()
-                    if name not in class_index:
-                        continue
-                    x1, y1, x2, y2 = box.xyxy[0].tolist()
-                    boxes.append({
-                        "x": round(x1), "y": round(y1),
-                        "w": round(x2 - x1), "h": round(y2 - y1),
-                        "class": classes[class_index[name]],
-                        "class_id": class_index[name],
-                        "confidence": round(float(box.conf[0]), 3),
-                    })
+            boxes = _detect(frame)
             if boxes:
                 frame_blob = f"frames/{video_blob_path.replace('/', '_')}/f{frame_num:06d}.jpg"
                 try:

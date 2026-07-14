@@ -739,6 +739,9 @@ def _spawn_preannotation(task_pk: int) -> None:
             "job_id": f"preannot-{task_pk}",
             "user_id": str(task.user_id),
             "video_blob_path": blob_path,
+            # Detector for the unified image: SAM 3 text-prompt (the only
+            # pre-annotation labeler now). The endpoint runs it on the g5.
+            "detector_kind": "sam3" if labeler == "sam3" else "yolo",
             # Detect only the requested labels (SAM 3 prompts / YOLO filter);
             # finalize re-maps class ids by name against the project's classes.
             "classes": p.get("target_labels") or task.project.classes,

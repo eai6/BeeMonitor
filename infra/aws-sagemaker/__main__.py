@@ -717,10 +717,15 @@ if deploy_bioclip:
 # scale-to-zero plumbing rather than BioCLIP's serverless (CPU-only). Runs only at
 # label time, so it sits at 0 instances until a labeling request queues it up.
 # Gated on deploy-sam3 (two-pass: build image first, then flip the flag).
+# UNIFIED IMAGE (Option A, 2026-07-14): the SAM 3 endpoint now runs the SAME
+# image as the main video endpoint (ecr_repo:image_tag) on a g5/A10G, so it
+# serves BOTH SAM 3 pre-annotation AND SAM 3 tracking. This retires the separate
+# auto-labeler image and removes the two-image transformers/Sam3Model drift.
+# The bespoke sam3_ecr_repo + sam3-image-tag are no longer used for the endpoint.
 if deploy_sam3:
-    sam3_tag = config.get("sam3-image-tag") or "latest"
-    sam3_image = pulumi.Output.concat(sam3_ecr_repo.repository_url, ":", sam3_tag)
-    sam3_tag_slug = "".join(c for c in sam3_tag if c.isalnum())[:12] or "latest"
+    sam3_image = pulumi.Output.concat(ecr_repo.repository_url, ":", image_tag)
+    sam3_tag_slug = "".join(c for c in image_tag if c.isalnum())[:12] or "latest"
+    sam3_tag_slug = f"{sam3_tag_slug}-u1"  # bump when this config SHAPE changes
 
     sam3_model = aws.sagemaker.Model(
         "sam3-model",
@@ -729,14 +734,15 @@ if deploy_sam3:
         primary_container=aws.sagemaker.ModelPrimaryContainerArgs(
             image=sam3_image,
             mode="SingleModel",
-            # Weights are baked (HF_HUB_OFFLINE=1 in the image), so no HF token is
-            # needed at runtime. The bucket vars let the pre_annotate mode download the
-            # video from raw-videos and upload sampled frames to processed (same
-            # execution role as the video endpoint, which already grants that S3 I/O).
+            # Same full env as the main model — the unified image runs the whole
+            # tracking pipeline here too (ensure_models pulls from the models
+            # bucket, etc.), not just pre_annotate.
             environment={
                 "AWS_REGION": region,
                 "AWS_S3_BUCKET_RAW_VIDEOS": f"beemonitor-{env}-raw-videos-{account_id}",
                 "AWS_S3_BUCKET_PROCESSED": f"beemonitor-{env}-processed-{account_id}",
+                "AWS_S3_BUCKET_MODELS": f"beemonitor-{env}-models-{account_id}",
+                "AWS_S3_BUCKET_USER_CONFIGS": f"beemonitor-{env}-user-configs-{account_id}",
             },
         ),
         # retain_on_delete: an image bump replaces the model+config. Deleting the OLD
@@ -761,6 +767,9 @@ if deploy_sam3:
         async_inference_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigArgs(
             output_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigOutputConfigArgs(
                 s3_output_path=pulumi.Output.concat("s3://", output_bucket.bucket, "/"),
+                # Failure records for SAM 3 TRACKING jobs (the poller reads these
+                # to surface a chunk/job failure instead of hanging).
+                s3_failure_path=pulumi.Output.concat("s3://", output_bucket.bucket, "/failures/"),
             ),
         ),
         opts=pulumi.ResourceOptions(retain_on_delete=True),  # see sam3_model note

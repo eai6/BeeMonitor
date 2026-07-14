@@ -214,6 +214,39 @@ frame detected, all detectors, no striding).
   on instance provisioning — a warm 24/7 endpoint needs an endpoint update /
   scale event); (3) only then set the env flag.
 
+## 7e. Feature: SAM 3 tracking on the g5 (unified image, Option A — 2026-07-14)
+
+SAM 3 tracking was routed to the g4dn T4 and OOM'd (16 GB too small); the g5
+SAM 3 endpoint had the A10G but ran the auto-labeler image (no tracking
+pipeline). Fix = **one unified image on both endpoints**, routed by detector:
+
+- **Main image now does SAM 3 pre-annotation too**: `_pre_annotate`
+  (`sagemaker_backend/inference.py`) branches on `detector_kind` — `sam3`
+  reuses the in-image `Sam3Detector` (same weights already baked for tracking),
+  else YOLO. Pre-annotation payload sends `detector_kind: "sam3"`.
+- **Tracking routing** (`apps/analysis/views.py`): `_tracking_endpoint(kind)`
+  → SAM 3 tracking uses `SAGEMAKER_SAM3_ENDPOINT_NAME` (g5), YOLO stays on
+  `SAGEMAKER_ENDPOINT_NAME` (g4dn); threaded through `_launch_gpu` /
+  `_invoke_endpoint_async` (incl. chunked invocations). Falls back to the main
+  endpoint if the g5 name is unset.
+- **Infra** (`infra/aws-sagemaker/__main__.py`): the g5 SAM 3 endpoint now runs
+  `ecr_repo:image_tag` (the MAIN image) with the full bucket env + an
+  `s3_failure_path`. The separate `sam3_ecr_repo` / `sam3-image-tag` are no
+  longer used for the endpoint. Kills the two-image `Sam3Model` transformers
+  drift permanently.
+- **Net result**: g4dn = YOLO tracking (cheap); g5 = ALL SAM 3 (tracking +
+  pre-annotation). Long SAM 3 videos still chunk (60s chunks, §7d).
+
+**DEPLOY ORDER (needs CI build + `pulumi up` — passphrase):**
+1. This push rebuilds the main image (CI, touches `sagemaker_backend/`).
+2. Bump `Pulumi.dev.yaml` `image-tag` to the new build's commit.
+3. `pulumi up` — swaps the g5 endpoint to the unified image (retain_on_delete
+   makes the roll clean). **Verify SAM 3 pre-annotation still works** right
+   after (it now runs on the unified image).
+4. The web routing (SAM 3 tracking → g5) auto-deploys via App Runner; it only
+   *works* once step 3 lands. In the interim SAM 3 tracking still fails (as it
+   does today) — no working path regresses; YOLO tracking is untouched.
+
 ## 8. Verification done at implementation time (2026-07-13)
 
 - `manage.py check` + `makemigrations --check` clean; new migrations
