@@ -40,7 +40,10 @@ FPS = _env_int("BEEMONITOR_FPS", 25)
 
 # Clip timing (seconds).
 PRE_ROLL = _env_float("BEEMONITOR_PRE_ROLL", 3.0)
-POST_ROLL = _env_float("BEEMONITOR_POST_ROLL", 4.0)
+# Tail kept AFTER motion stops before a clip closes. A short tail cuts clips off
+# while a bee briefly pauses (grooming, at a tube), so this is generous — a bee
+# that resumes within POST_ROLL keeps one continuous clip instead of two stubs.
+POST_ROLL = _env_float("BEEMONITOR_POST_ROLL", 8.0)
 MAX_SEGMENT = _env_float("BEEMONITOR_MAX_SEGMENT", 120.0)   # force-rotate cap
 WARMUP_SECONDS = _env_float("BEEMONITOR_WARMUP", 5.0)        # let MOG2 learn bg
 

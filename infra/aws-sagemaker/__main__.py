@@ -601,7 +601,7 @@ if deploy_endpoint:
                         namespace="AWS/SageMaker",
                         statistic="Average",
                     ),
-                scale_in_cooldown=600,   # wait 10 min idle before scaling in
+                scale_in_cooldown=180,   # wait 3 min idle before scaling in (was 600)
                 scale_out_cooldown=60,
             ),
     )
@@ -804,7 +804,7 @@ if deploy_sam3:
                         namespace="AWS/SageMaker",
                         statistic="Average",
                     ),
-                scale_in_cooldown=600,
+                scale_in_cooldown=180,   # 3 min idle before scale-in (was 600)
                 scale_out_cooldown=60,
             ),
     )
