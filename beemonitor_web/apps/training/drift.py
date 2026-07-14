@@ -59,6 +59,8 @@ def _embed_video(video_blob_path, sample_interval=20, max_frames=200, timeout_s=
         EndpointName=endpoint,
         InputLocation=f"s3://{in_bucket}/{key}",
         ContentType="application/json",
+        # Default is 15 min; long videos need the platform max (1 h).
+        InvocationTimeoutSeconds=3600,
     )
     out = urlparse(resp["OutputLocation"])
     out_bucket, out_key = out.netloc, out.path.lstrip("/")

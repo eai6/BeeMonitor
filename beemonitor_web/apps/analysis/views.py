@@ -408,6 +408,10 @@ def _invoke_endpoint_async(job_id: str, input_uri: str) -> tuple[str, str]:
         InputLocation=input_uri,
         ContentType="application/json",
         InferenceId=job_id,
+        # Platform default is 15 MINUTES — long clips (e.g. continuous-mode
+        # 10-min videos) blow past it and die as "Timed out uploading object".
+        # 3600 is the async platform maximum.
+        InvocationTimeoutSeconds=3600,
     )
     # OutputLocation = s3://<output-bucket>/<inference-id>.out  (typical layout)
     return response["OutputLocation"], response.get("FailureLocation", "") or ""

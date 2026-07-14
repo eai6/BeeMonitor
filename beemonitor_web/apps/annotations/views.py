@@ -788,6 +788,8 @@ def _spawn_preannotation(task_pk: int) -> None:
             InputLocation=f"s3://{in_bucket}/{key}",
             ContentType="application/json",
             InferenceId=f"preannot-{task_pk}",
+            # Default is 15 min; long videos need the platform max (1 h).
+            InvocationTimeoutSeconds=3600,
         )
         out = urlparse(resp["OutputLocation"])
         fail_loc = resp.get("FailureLocation", "") or ""
