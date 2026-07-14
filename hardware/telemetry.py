@@ -584,6 +584,57 @@ def _wittypi_value(snippet: str) -> "str | None":
     return r.stdout.strip()
 
 
+# --- WittyPi "default ON when powered" ---------------------------------------
+# Make the unit boot AUTOMATICALLY whenever 5V is applied to the WittyPi. This
+# matters for solar/battery field units: after a full discharge, the WittyPi
+# cuts power; when the battery recharges, WITHOUT this the Pi stays OFF until
+# someone presses the button — a truck-roll to a remote hive. With it set, the
+# unit self-recovers on the next power-up.
+#
+# It's the WittyPi 4 firmware config register I2C_CONF_DEFAULT_ON (reg 17 on the
+# MCU at i2c 0x08; 1 = on). Verified against the WittyPi 4 firmware source. The
+# register map is board-SPECIFIC, so we ONLY write it when the firmware id
+# (reg 0) reads 0x26 = WittyPi 4; any other board is left untouched. The value
+# persists in the MCU across power loss, so this is a set-once (idempotent:
+# we read first and only write when it isn't already 1).
+_WITTYPI4_FW_ID = 0x26
+_WITTYPI_ADDR = "0x08"
+_I2C_CONF_DEFAULT_ON = 17
+_DEFAULT_ON_ENABLED = os.environ.get(
+    "BEEMONITOR_WITTYPI_DEFAULT_ON", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _wittypi_i2c_read(reg: int) -> "int | None":
+    """One WittyPi MCU config register as an int (handles 0x.. or decimal), or None."""
+    v = _wittypi_value(f"i2c_read 0x01 {_WITTYPI_ADDR} {reg}")
+    if not v:
+        return None
+    try:
+        return int(v, 16) if v.lower().startswith("0x") else int(v)
+    except ValueError:
+        return None
+
+
+def _apply_wittypi_default_on() -> None:
+    """Ensure the WittyPi powers the Pi on automatically when 5V is applied.
+    Best-effort, WittyPi-4-gated, idempotent. Runs once at startup."""
+    if not _DEFAULT_ON_ENABLED or _wittypi_dir() is None:
+        return
+    fw = _wittypi_i2c_read(0)  # I2C_ID
+    if fw != _WITTYPI4_FW_ID:
+        log.info("wittypi default-on: skipped (firmware id %s, not WittyPi 4 0x26)",
+                 hex(fw) if fw is not None else "unreadable")
+        return
+    if _wittypi_i2c_read(_I2C_CONF_DEFAULT_ON) == 1:
+        return  # already on — nothing to do
+    r = _wittypi_sh(f"i2c_write 0x01 {_WITTYPI_ADDR} {_I2C_CONF_DEFAULT_ON} 1")
+    if r is not None and r.returncode == 0:
+        log.info("wittypi default-on: ENABLED — the unit now boots when power is applied")
+    else:
+        log.warning("wittypi default-on: i2c_write failed (%s)",
+                    (r.stderr or "").strip() if r else "no result")
+
+
 # --- Internet-time → RTC sync -------------------------------------------------
 # Keep the WittyPi RTC in step with internet time. The WittyPi restores the
 # system clock from its RTC on every wake (before any network exists), so RTC
@@ -1911,6 +1962,9 @@ def main() -> int:
     signal.signal(signal.SIGINT, _handle_signal)
     # Make telemetry ride WiFi (not metered cellular) whenever WiFi is connected.
     _prefer_wifi_route()
+    # One-time: make the WittyPi boot the unit automatically when power returns
+    # (self-recovery after a battery discharge). Best-effort, WittyPi-4-only.
+    _apply_wittypi_default_on()
     log.info("telemetry loop started — interval=%ds, queue=%s", _interval, QUEUE_DIR)
 
     last_cleanup = 0.0
