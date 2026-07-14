@@ -78,6 +78,19 @@
       <option value="">Hour</option>
       {% for h in opts.hours %}<option value="{{ h }}" {% if f.hour == h|stringformat:"s" %}selected{% endif %}>{{ h }}:00</option>{% endfor %}
     </select>
+    <span class="flex items-center gap-1 text-xs text-gray-500"
+          title="Daily time-of-day window — only videos recorded in this hour range, EVERY day. Combine with the From/To dates for e.g. 18:00–19:00 across June. Start after end wraps past midnight.">
+      daily
+      <select name="hfrom" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+        <option value="">—</option>
+        {% for h in opts.hours24 %}<option value="{{ h }}" {% if f.hfrom == h|stringformat:"s" %}selected{% endif %}>{{ h|stringformat:"02d" }}:00</option>{% endfor %}
+      </select>
+      –
+      <select name="hto" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+        <option value="">—</option>
+        {% for h in opts.hours24 %}<option value="{{ h }}" {% if f.hto == h|stringformat:"s" %}selected{% endif %}>{{ h|stringformat:"02d" }}:00</option>{% endfor %}
+      </select>
+    </span>
     <label class="text-xs text-gray-500 flex items-center gap-1" title="Recorded on/after">From
       <input type="datetime-local" name="from" value="{{ f.from }}"
              class="border border-gray-300 rounded px-2 py-1.5 text-sm"></label>

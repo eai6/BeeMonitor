@@ -51,7 +51,7 @@ def _unsanitize_site(value: str) -> str:
 
 # GET/POST params the Processing-hub video filter understands.
 VIDEO_FILTER_KEYS = ("device", "site", "year", "month", "day", "hour",
-                     "from", "to", "q", "confirmed")
+                     "hfrom", "hto", "from", "to", "q", "confirmed")
 
 
 def apply_video_filters(qs, params):
@@ -76,6 +76,24 @@ def apply_video_filters(qs, params):
                 qs = qs.filter(**{field: int(val)})
             except (ValueError, TypeError):
                 pass
+
+    # Daily time-of-day window: videos recorded between hfrom:00 (inclusive)
+    # and hto:00 (exclusive) EVERY day — combine with from/to for "6–7 pm each
+    # day across June". hfrom > hto wraps past midnight (e.g. 22 → 4).
+    try:
+        hfrom = int(params.get("hfrom")) if params.get("hfrom") not in (None, "") else None
+        hto = int(params.get("hto")) if params.get("hto") not in (None, "") else None
+    except (ValueError, TypeError):
+        hfrom = hto = None
+    if hfrom is not None or hto is not None:
+        lo = hfrom if hfrom is not None else 0
+        hi = hto if hto is not None else 24
+        if lo < hi:
+            qs = qs.filter(hour__gte=lo, hour__lt=hi)
+        elif lo > hi:  # wraps past midnight
+            from django.db.models import Q as _Q
+            qs = qs.filter(_Q(hour__gte=lo) | _Q(hour__lt=hi))
+        # lo == hi selects nothing meaningful -> ignore (treat as no window)
 
     def _parse_dt(s):
         dt = parse_datetime(s)
@@ -589,9 +607,13 @@ class ProcessingHubView(LoginRequiredMixin, View):
             "months": sorted(set(user_videos.exclude(month=None).values_list("month", flat=True))),
             "days": sorted(set(user_videos.exclude(day=None).values_list("day", flat=True))),
             "hours": sorted(set(user_videos.exclude(hour=None).values_list("hour", flat=True))),
+            # Full clock for the daily time-of-day window (unlike "hours",
+            # which only lists hours that actually have videos).
+            "hours24": list(range(24)),
         }
         # Query string for the CSV downloads — the download views filter on these.
-        dl = {k: f[k] for k in ("device", "site", "year", "month", "day", "hour", "confirmed", "from", "to") if f[k]}
+        dl = {k: f[k] for k in ("device", "site", "year", "month", "day", "hour",
+                                "hfrom", "hto", "confirmed", "from", "to") if f[k]}
         download_qs = ("?" + urlencode(dl)) if dl else ""
 
         # Everything currently in flight, with GPU-slot usage — cancellable to
@@ -1682,6 +1704,20 @@ class _FilteredJobsMixin:
                 qs = qs.filter(job__video__hour=int(hour))
             except (ValueError, TypeError):
                 pass
+        # Daily time-of-day window (same semantics as apply_video_filters).
+        try:
+            hfrom = int(request.GET["hfrom"]) if request.GET.get("hfrom") else None
+            hto = int(request.GET["hto"]) if request.GET.get("hto") else None
+        except (ValueError, TypeError):
+            hfrom = hto = None
+        if hfrom is not None or hto is not None:
+            lo = hfrom if hfrom is not None else 0
+            hi = hto if hto is not None else 24
+            if lo < hi:
+                qs = qs.filter(job__video__hour__gte=lo, job__video__hour__lt=hi)
+            elif lo > hi:  # wraps past midnight
+                from django.db.models import Q as _Q
+                qs = qs.filter(_Q(job__video__hour__gte=lo) | _Q(job__video__hour__lt=hi))
 
         label_parts = []
         if device:
