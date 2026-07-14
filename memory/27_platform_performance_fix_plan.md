@@ -134,6 +134,25 @@ per blob in `read_processed_csv(use_cache=True)` via `collect_events`.
   `device.hw_id` (already captured at zero-touch enrollment) as fallback, so
   enrolled units show it even before the new artifact lands.
 
+## 7b. Feature: RTC internet-time sync (SHIPPED device-side, same artifact)
+
+The WittyPi restores the system clock from its RTC on every wake (before any
+network), so RTC drift shifts the local-time wake window and early clip
+timestamps. Cellular units are extra exposed (long offline stretches; NTP is
+allowed through the firewall but only runs while the link is up).
+
+- After every successful beat (proof a WiFi/cellular link is up), telemetry
+  checks `timedatectl NTPSynchronized`:
+  - **not synced** → `sudo -n timedatectl set-ntp true` (idempotent nudge; new
+    sudoers line in `provision/sudoers.d/beemonitor-timedatectl`, installed by
+    the self-provisioning pass) and retry next beat;
+  - **synced** → write system time into the WittyPi RTC via utilities.sh
+    `system_to_rtc`, throttled to `BEEMONITOR_RTC_SYNC_SECONDS` (default 1 h);
+    the first beat after every boot/wake always writes.
+- The clock is NEVER written to the RTC unless NTP reports synchronized — a
+  stale write would bake drift in instead of fixing it. No WittyPi → no-op.
+- Beats now report `ntp_synced` in metrics for drift visibility.
+
 ## 8. Verification done at implementation time (2026-07-13)
 
 - `manage.py check` + `makemigrations --check` clean; new migrations

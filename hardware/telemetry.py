@@ -581,6 +581,51 @@ def _wittypi_value(snippet: str) -> "str | None":
     return r.stdout.strip()
 
 
+# --- Internet-time → RTC sync -------------------------------------------------
+# Keep the WittyPi RTC in step with internet time. The WittyPi restores the
+# system clock from its RTC on every wake (before any network exists), so RTC
+# drift shifts the local-time wake window and early clip timestamps. Every
+# successful beat proves a WiFi/cellular link is up; when the system clock is
+# NTP-disciplined we write it into the RTC (throttled). We NEVER write an
+# unsynced clock — that would bake drift into the RTC instead of fixing it.
+RTC_SYNC_SECONDS = int(os.environ.get("BEEMONITOR_RTC_SYNC_SECONDS", "3600"))
+_last_rtc_sync = 0.0
+
+
+def _ntp_synchronized() -> "bool | None":
+    """True/False from timedatectl's NTPSynchronized; None if unknowable."""
+    r = _run(["timedatectl", "show", "-p", "NTPSynchronized", "--value"], timeout=5)
+    if r is None or r.returncode != 0:
+        return None
+    v = r.stdout.strip().lower()
+    return True if v == "yes" else (False if v == "no" else None)
+
+
+def _sync_rtc_from_internet() -> None:
+    """Called after every successful beat (link is up on WiFi or cellular).
+
+    Unsynced system clock -> kick NTP (the cellular firewall already allows
+    UDP 123) and try again next beat. Synced -> write system time to the
+    WittyPi RTC via utilities.sh's system_to_rtc, at most every
+    RTC_SYNC_SECONDS (first beat after start always writes, so every
+    boot/wake with connectivity re-trues the RTC). No WittyPi -> no-op
+    (timesyncd + fake-hwclock already cover RTC-less units)."""
+    global _last_rtc_sync
+    synced = _ntp_synchronized()
+    if synced is False:
+        base = ["timedatectl"] if os.geteuid() == 0 else ["sudo", "-n", "timedatectl"]
+        _run(base + ["set-ntp", "true"], timeout=5)  # idempotent nudge
+        return
+    if synced is None:
+        return  # can't verify the clock — never risk writing a stale one
+    if time.time() - _last_rtc_sync < RTC_SYNC_SECONDS:
+        return
+    r = _wittypi_sh("type system_to_rtc >/dev/null 2>&1 && system_to_rtc")
+    if r is not None and r.returncode == 0:
+        _last_rtc_sync = time.time()
+        log.info("WittyPi RTC synced from NTP-disciplined system clock")
+
+
 def _to_float(s) -> "float | None":
     try:
         return float(str(s).strip())
@@ -761,6 +806,10 @@ def collect_metrics() -> dict:
     m.update(_mac_address())
     # Hardware serial (immutable per board), shown next to the MAC.
     m.update(_serial_number())
+    # Whether the system clock is currently NTP-disciplined (drift visibility).
+    ntp = _ntp_synchronized()
+    if ntp is not None:
+        m["ntp_synced"] = ntp
     # Which link this beat is actually leaving on (wifi when connected, else
     # cellular) — lets the dashboard confirm telemetry rode WiFi.
     transport = _active_transport()
@@ -1857,6 +1906,9 @@ def main() -> int:
                 # The link is up (the beat landed) — ship a batch of queued
                 # activity-frame crops for taxonomic ID, under the daily cap.
                 _drain_activity_frames()
+                # ...and keep the WittyPi RTC in step with internet time
+                # (throttled; only ever writes an NTP-verified clock).
+                _sync_rtc_from_internet()
             # Free SD space: delete clips a human cleared on the dashboard.
             if CLEANUP_INTERVAL > 0 and time.time() - last_cleanup >= CLEANUP_INTERVAL:
                 _run_cleanup()
