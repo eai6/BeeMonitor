@@ -721,6 +721,14 @@ def _spawn_preannotation(task_pk: int) -> None:
         connection.close()
         return
 
+    # Cancel guard: a task cancelled while waiting in the pool must never reach
+    # the GPU (an async invocation can't be recalled once sent). Also inert
+    # against accidental double-spawn.
+    if task.status != PreAnnotationTask.Status.QUEUED:
+        logger.info("pre-annotate task %s skipped (status=%s)", task_pk, task.status)
+        connection.close()
+        return
+
     try:
         video = task.video
         blob_path = video.storage_key
@@ -766,6 +774,15 @@ def _spawn_preannotation(task_pk: int) -> None:
         s3.put_object(Bucket=in_bucket, Key=key,
                       Body=json.dumps(payload).encode("utf-8"),
                       ContentType="application/json")
+        # Last look before spending GPU money: the ingest + payload upload above
+        # can be slow, so re-check that a cancel didn't land meanwhile.
+        cur = (PreAnnotationTask.objects
+               .filter(pk=task_pk).values_list("status", flat=True).first())
+        if cur != PreAnnotationTask.Status.QUEUED:
+            logger.info("pre-annotate task %s cancelled before invoke (status=%s)",
+                        task_pk, cur)
+            return
+
         resp = smrt.invoke_endpoint_async(
             EndpointName=endpoint,
             InputLocation=f"s3://{in_bucket}/{key}",
@@ -776,7 +793,13 @@ def _spawn_preannotation(task_pk: int) -> None:
         fail_loc = resp.get("FailureLocation", "") or ""
         if not fail_loc:
             fail_loc = resp["OutputLocation"].replace(".out", ".failure")
-        PreAnnotationTask.objects.filter(pk=task_pk).update(
+        # Guarded: only a still-QUEUED row advances to PROCESSING. If a cancel
+        # won the race after the invoke, the row stays CANCELLED — the
+        # reconciler only polls QUEUED/PROCESSING, so the GPU result is
+        # discarded (the documented cancel semantics).
+        PreAnnotationTask.objects.filter(
+            pk=task_pk, status=PreAnnotationTask.Status.QUEUED,
+        ).update(
             status=PreAnnotationTask.Status.PROCESSING,
             output_uri=resp["OutputLocation"], failure_uri=fail_loc,
             started_at=timezone.now(),
@@ -784,7 +807,10 @@ def _spawn_preannotation(task_pk: int) -> None:
         logger.info("pre-annotate task %s invoked -> %s", task_pk, resp["OutputLocation"])
     except Exception as e:
         logger.exception("pre-annotate spawn failed for task %s", task_pk)
-        PreAnnotationTask.objects.filter(pk=task_pk).update(
+        # Guarded likewise: a cancelled task must not be re-marked FAILED.
+        PreAnnotationTask.objects.filter(
+            pk=task_pk, status=PreAnnotationTask.Status.QUEUED,
+        ).update(
             status=PreAnnotationTask.Status.FAILED,
             error_message=str(e)[:1000], completed_at=timezone.now(),
         )
@@ -1052,9 +1078,11 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
 class CancelPreAnnotationView(LoginRequiredMixin, View):
     """Cancel in-flight pre-annotation. POST task_id to cancel one, or nothing to
     cancel all active tasks for the project. Marks tasks CANCELLED so the
-    reconciler (which only polls QUEUED/PROCESSING) stops finalizing them; any GPU
-    work already queued may still finish in the background but its result is
-    discarded — same as cancelling a run on the Processing page."""
+    reconciler (which only polls QUEUED/PROCESSING) stops finalizing them.
+    Tasks not yet sent to the GPU are truly skipped (the spawn worker re-checks
+    status before invoking); invocations already sent can't be recalled — they
+    finish in the background and their result is discarded, same as cancelling
+    a run on the Processing page."""
 
     def post(self, request, pk):
         from django.shortcuts import redirect
