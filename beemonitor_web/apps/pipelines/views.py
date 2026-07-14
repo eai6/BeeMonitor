@@ -774,7 +774,9 @@ def batch_trips_csv(request, batch_id):
 def batch_combined_csv(request, batch_id, kind):
     from . import aggregate
 
-    path_key = {"events": "events_csv_path", "tracking": "tracking_csv_path"}.get(kind)
+    path_key = {"events": "events_csv_path",
+                "tracking": "tracking_csv_path",
+                "interactions": "interactions_csv_path"}.get(kind)
     if not path_key:
         raise Http404("Unknown CSV kind.")
     runs = _batch_runs(request, batch_id)
