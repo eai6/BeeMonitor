@@ -16,7 +16,10 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq-dev gcc \
+        libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
+# libglib2.0-0: opencv-python-headless still links libgthread/glib on slim,
+# so `import cv2` needs it even though the headless build drops the GUI libs.
 
 # Install Python deps first so they cache across code changes.
 COPY beemonitor_web/requirements/ /app/beemonitor_web/requirements/
