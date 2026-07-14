@@ -5,16 +5,13 @@
 <div class="flex justify-between items-center mb-6">
   <h1 class="text-2xl font-bold text-gray-900">Auto-Adaptation</h1>
   <div class="flex gap-2">
-    <a href="{% url 'training:drift' %}" class="px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 font-medium">Domain Drift</a>
     <a href="{% url 'training:list' %}" class="px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 font-medium">← Training</a>
   </div>
 </div>
 
 <p class="text-sm text-gray-500 mb-6 max-w-3xl">
-  The closed loop: SAM 3 relabels drifted footage → YOLO fine-tunes on those labels →
-  the candidate is scored → you approve the promotion. Start one from a
-  <a href="{% url 'training:drift' %}" class="text-amber-700 underline">drifted video</a>,
-  or below.
+  The closed loop: SAM 3 relabels footage → YOLO fine-tunes on those labels →
+  the candidate is scored → you approve the promotion. Start one below.
 </p>
 
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">

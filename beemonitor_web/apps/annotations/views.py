@@ -38,24 +38,11 @@ def _preannotate_opts(request):
 
 
 def _labeler_opts(request):
-    """(labeler, custom_model_key) from the Labeler select. "custom:<pk>"
-    picks one of the user's fine-tuned models — it runs on the YOLO endpoint
-    with custom_bee_model_path; unknown/foreign pks fall back to the default."""
-    raw = request.POST.get("labeler") or "yolo"
-    if raw == "sam3":
-        return "sam3", ""
-    if raw.startswith("custom:"):
-        from apps.training.models import CustomModel
-        try:
-            cm = CustomModel.objects.get(
-                pk=int(raw[7:]), user=request.user, is_active=True,
-                status=CustomModel.Status.READY,
-            )
-            if cm.storage_key:
-                return "yolo", cm.storage_key
-        except (CustomModel.DoesNotExist, TypeError, ValueError):
-            pass
-    return "yolo", ""
+    """(labeler, custom_model_key). Pre-annotation is SAM 3 only — text-prompt
+    labeling of each class is what seeds new domains, and it's the single GPU
+    path we keep for the annotation editor. (YOLO / custom-model pre-annotation
+    was removed to avoid a second endpoint's GPU time.)"""
+    return "sam3", ""
 
 
 def _sam3_opts(request):
@@ -1016,9 +1003,9 @@ def _create_preannotation_task(request, project, video):
 
     sample_interval, max_frames, confidence = _preannotate_opts(request)
     labeler, custom_model_key = _labeler_opts(request)
-    selection = "diverse" if request.POST.get("selection", "diverse") == "diverse" else "uniform"
-    if labeler != "sam3":
-        selection = "uniform"
+    # Frame selection is always "every Nth" (uniform). The DINOv2 "diverse"
+    # selection was removed — it added embedding GPU work we don't need.
+    selection = "uniform"
     nms_iou, max_detections = _sam3_opts(request)
     # Which labels to (re)detect. A strict subset means "add/refresh only these
     # classes" — finalize MERGES them into existing annotations, so other-class

@@ -90,24 +90,9 @@
             {% endfor %}
           </div>
         </div>
-        <div title="YOLO = the current fast detector. SAM 3 = domain-robust foundation model — use it when the current model misses bees on new footage.">
+        <div title="SAM 3 text-prompts each class per sampled frame — the labeler for the annotation editor.">
           <label class="block text-[10px] uppercase tracking-wide text-gray-400">Labeler</label>
-          <select name="labeler"
-                  class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
-            <option value="yolo">YOLO (current)</option>
-            <option value="sam3">SAM 3 (new domains)</option>
-            {% for m in custom_bee_models %}
-            <option value="custom:{{ m.pk }}">{{ m.name }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div title="SAM 3 only. Diverse = DINOv2 picks a representative, non-redundant set of frames to label (better training data). Uniform = every Nth frame.">
-          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Frames</label>
-          <select name="selection"
-                  class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
-            <option value="diverse">Diverse (DINOv2)</option>
-            <option value="uniform">Uniform (every Nth)</option>
-          </select>
+          <div class="border border-gray-200 bg-gray-50 rounded px-2 py-1.5 text-sm text-gray-600">SAM 3</div>
         </div>
         <div title="SAM 3 only. Max boxes kept per class per frame.">
           <label class="block text-[10px] uppercase tracking-wide text-gray-400">Max det</label>
@@ -126,8 +111,8 @@
       </form>
       <p class="text-[11px] text-gray-400 mt-2">New label? Add it in
         <a href="{% url 'annotations:settings' project.pk %}" class="text-amber-600 hover:underline">project Settings</a>,
-        then pre-annotate with the <strong>SAM 3</strong> labeler (it text-prompts each class, so it finds labels
-        YOLO was never trained on). <strong>To add a label without losing your bees:</strong> check only the new
+        then pre-annotate — SAM 3 text-prompts each class, so it finds labels a fixed model was never trained on.
+        <strong>To add a label without losing your bees:</strong> check only the new
         class under “Labels to detect” — a partial selection merges the new boxes in and keeps your existing boxes
         of the unchecked classes.</p>
     </div>

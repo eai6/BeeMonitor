@@ -12,12 +12,8 @@ urlpatterns = [
     path("models/", views.CustomModelListView.as_view(), name="models"),
     path("models/upload/", views.UploadModelView.as_view(), name="upload_model"),
     path("models/<int:pk>/", views.CustomModelDetailView.as_view(), name="model_detail"),
-    # Domain-drift detection (P2c)
-    path("drift/", views.DriftDashboardView.as_view(), name="drift"),
-    path("drift/baseline/", views.SetDriftBaselineView.as_view(), name="drift_baseline"),
-    path("drift/auto-adapt/", views.ToggleAutoAdaptView.as_view(), name="drift_auto_adapt"),
-    path("drift/check/", views.CheckDriftView.as_view(), name="drift_check"),
-    # Closed auto-fine-tuning loop (P3)
+    # Domain-drift detection (DINOv3 on the SAM 3 endpoint) removed 2026-07-14
+    # to cut g5 GPU spend; auto-adaptation stays (SAM 3 relabel + fine-tune).
     path("adapt/", views.AdaptationDashboardView.as_view(), name="adaptation"),
     path("adapt/start/", views.StartAdaptationView.as_view(), name="adapt_start"),
     path("adapt/promote/", views.PromoteAdaptationView.as_view(), name="adapt_promote"),
