@@ -1527,6 +1527,21 @@ class DeviceRecordSettingsView(LoginRequiredMixin, View):
         if mode not in dict(device.RECORD_MODES):
             return _fail("Invalid recording mode.")
 
+        # Clip tail (post-roll) + max clip length (force-rotate). Clamped to sane
+        # ranges; blank keeps the current value.
+        def _clamp_int(name, lo, hi, cur):
+            raw = (request.POST.get(name) or "").strip()
+            if raw == "":
+                return cur
+            try:
+                return max(lo, min(hi, int(raw)))
+            except (ValueError, TypeError):
+                return None
+        post_roll = _clamp_int("post_roll", 1, 300, device.record_post_roll)
+        max_segment = _clamp_int("max_segment", 30, 3600, device.record_max_segment)
+        if post_roll is None or max_segment is None:
+            return _fail("Clip tail and max length must be whole numbers of seconds.")
+
         start_raw = (request.POST.get("start") or "").strip()
         end_raw = (request.POST.get("end") or "").strip()
         window = None
@@ -1543,14 +1558,18 @@ class DeviceRecordSettingsView(LoginRequiredMixin, View):
 
         device.record_mode = mode
         device.record_window = window
-        device.save(update_fields=["record_mode", "record_window"])
+        device.record_post_roll = post_roll
+        device.record_max_segment = max_segment
+        device.save(update_fields=["record_mode", "record_window",
+                                   "record_post_roll", "record_max_segment"])
 
         mode_label = dict(device.RECORD_MODES)[mode]
         window_label = (f"{window['start']:02d}:00–{window['end']:02d}:00"
                         if window else "all day")
         if is_ajax:
             return JsonResponse({"ok": True, "mode": mode, "mode_label": mode_label,
-                                 "window_label": window_label})
+                                 "window_label": window_label,
+                                 "post_roll": post_roll, "max_segment": max_segment})
         messages.success(
             request,
             f"Recording set to “{mode_label}”, {window_label}. The device adopts "

@@ -250,6 +250,18 @@
       <option value="{{ h }}" {% if device.record_window.end == h %}selected{% endif %}>{{ h|stringformat:"02d" }}:00</option>
       {% endfor %}
     </select>
+    <span class="flex items-center gap-1 text-xs text-gray-500"
+          title="Clip tail — seconds of no motion before a motion clip closes. Higher keeps a briefly-paused bee (grooming, at a tube) in one clip.">
+      tail
+      <input type="number" name="post_roll" min="1" max="300" step="1" value="{{ device.record_post_roll }}"
+             class="w-16 border border-gray-300 rounded px-2 py-1.5 text-sm">s
+    </span>
+    <span class="flex items-center gap-1 text-xs text-gray-500"
+          title="Max clip length — continuous motion (a staying bee, or wind/shadows) is force-split into a fresh clip at this length so one file can't grow unbounded.">
+      max
+      <input type="number" name="max_segment" min="30" max="3600" step="10" value="{{ device.record_max_segment }}"
+             class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm">s
+    </span>
     <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Set</button>
     <span id="rec-saved" class="text-xs text-green-700 hidden">Saved ✓</span>
   </form>

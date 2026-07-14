@@ -15,7 +15,7 @@ from motion.config import (
     log, CALIB_FILE, TUNING_FILE, ROI_OVERRIDE_FILE, NEST_LAYOUT_FILE,
     BEE_CONFIRM_MODE_FILE, BEE_CONFIRM_MODE, ACTIVITY_FRAMES_FILE, ACTIVITY_FRAMES,
     ACTIVITY_CROPS_MODE, LORES_W, LORES_H,
-    RECORD_SETTINGS_FILE, RECORD_MODE, RECORD_WINDOW,
+    RECORD_SETTINGS_FILE, RECORD_MODE, RECORD_WINDOW, POST_ROLL, MAX_SEGMENT,
 )
 from motion.gate import MotionGate
 
@@ -125,16 +125,27 @@ def _valid_window(start, end):
 
 
 def load_record_settings():
-    """(mode, window) for the recorder: mode 'motion'|'continuous', window
-    (start_hour, end_hour) in device local time or None for all-day.
+    """(mode, window, post_roll, max_segment) for the recorder: mode
+    'motion'|'continuous', window (start_hour, end_hour) in device local time or
+    None for all-day, post_roll (clip tail seconds), max_segment (force-rotate
+    cap seconds).
 
     The dashboard-pushed record_settings.json wins over the env defaults
-    (BEEMONITOR_RECORD_MODE / BEEMONITOR_RECORD_WINDOW "H-H"), so a no-shell
-    unit can be reconfigured remotely. Window start > end wraps past midnight."""
+    (BEEMONITOR_RECORD_MODE / BEEMONITOR_RECORD_WINDOW "H-H" / BEEMONITOR_POST_ROLL
+    / BEEMONITOR_MAX_SEGMENT), so a no-shell unit can be reconfigured remotely.
+    Window start > end wraps past midnight."""
     mode = RECORD_MODE if RECORD_MODE in ("motion", "continuous") else "motion"
     window = None
     if "-" in RECORD_WINDOW:
         window = _valid_window(*(RECORD_WINDOW.split("-", 1) + [None])[:2])
+    post_roll = POST_ROLL
+    max_segment = MAX_SEGMENT
+
+    def _clamp(v, lo, hi):
+        try:
+            return max(lo, min(hi, float(v)))
+        except (TypeError, ValueError):
+            return None
 
     d = _load_json_file(RECORD_SETTINGS_FILE)
     if isinstance(d, dict):
@@ -146,7 +157,13 @@ def load_record_settings():
             window = None  # explicit all-day from the dashboard
         elif isinstance(w, dict):
             window = _valid_window(w.get("start"), w.get("end")) or window
-    return mode, window
+        pr = _clamp(d.get("post_roll"), 1, 300)
+        if pr is not None:
+            post_roll = pr
+        ms = _clamp(d.get("max_segment"), 30, 3600)
+        if ms is not None:
+            max_segment = ms
+    return mode, window, post_roll, max_segment
 
 
 def load_tuning():

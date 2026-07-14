@@ -239,6 +239,15 @@ class Device(models.Model):
     # This gates BOTH modes and only applies while the unit is powered (the
     # WittyPi power schedule remains the outer on/off envelope).
     record_window = models.JSONField(null=True, blank=True)
+    # Motion-mode clip tail: seconds of no motion before a clip closes. Higher
+    # keeps a briefly-paused bee (grooming, at a tube) in one clip instead of
+    # splitting it. Pushed in the heartbeat; the recorder hot-reloads it.
+    record_post_roll = models.PositiveIntegerField(default=30)
+    # Hard cap on a single motion clip's length (seconds). Continuous motion
+    # (a bee that stays, or wind/shadows/grass) is force-rotated at this length
+    # into a fresh clip so one file can't grow unbounded and fill the card.
+    # Default 600s (10 min). Pushed in the heartbeat; the recorder hot-reloads.
+    record_max_segment = models.PositiveIntegerField(default=600)
 
     # Pending command for the device, returned in the next heartbeat response and
     # then cleared. "" | "capture_image" | "stream" | "wifi_stream".

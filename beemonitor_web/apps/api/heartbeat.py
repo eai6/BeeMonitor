@@ -247,6 +247,8 @@ class DeviceHeartbeatView(APIView):
                 # day). The recorder hot-reloads both.
                 "record_mode": device.record_mode,
                 "record_window": device.record_window,
+                "record_post_roll": device.record_post_roll,
+                "record_max_segment": device.record_max_segment,
             },
             status=201,
         )

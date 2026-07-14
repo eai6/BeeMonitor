@@ -266,11 +266,11 @@ def record() -> None:
     act_frames_mtime = ACTIVITY_FRAMES_FILE.stat().st_mtime if ACTIVITY_FRAMES_FILE.exists() else 0.0
     # Recording mode (motion|continuous) + daily hour window, dashboard-pushed
     # via record_settings.json (env fallback) and hot-reloaded below.
-    rec_mode, rec_window = load_record_settings()
+    rec_mode, rec_window, rec_post_roll, rec_max_segment = load_record_settings()
     rec_settings_mtime = (RECORD_SETTINGS_FILE.stat().st_mtime
                           if RECORD_SETTINGS_FILE.exists() else 0.0)
-    if rec_mode != "motion" or rec_window:
-        log.info("record settings: mode=%s window=%s", rec_mode, rec_window or "all-day")
+    log.info("record settings: mode=%s window=%s post_roll=%.0fs max_seg=%.0fs",
+             rec_mode, rec_window or "all-day", rec_post_roll, rec_max_segment)
     last_calib_check = time.monotonic()
     last_override_check = time.monotonic()
 
@@ -407,12 +407,12 @@ def record() -> None:
                         _close_segment(now_mono, "segment")
                         _open_segment(now_mono, "continuous")
                 # Force-rotate over-long segments (stuck scene / wind in frame).
-                elif now_mono - seg_start >= MAX_SEGMENT:
+                elif now_mono - seg_start >= rec_max_segment:
                     _close_segment(now_mono, "max-len")
                     if motion:  # still active -> immediately start a fresh clip
                         _open_segment(now_mono, "motion-continued")
-                # Normal close: no motion for POST_ROLL.
-                elif (now_mono - last_motion) >= POST_ROLL:
+                # Normal close: no motion for the (dashboard-tunable) clip tail.
+                elif (now_mono - last_motion) >= rec_post_roll:
                     _close_segment(now_mono, "idle")
 
             # Resolve finished bee-confirmation verdicts (async, off the hot path):
@@ -522,11 +522,12 @@ def record() -> None:
                 except OSError:
                     rsm = rec_settings_mtime
                 if rsm != rec_settings_mtime:
-                    new_mode, new_window = load_record_settings()
-                    if (new_mode, new_window) != (rec_mode, rec_window):
-                        rec_mode, rec_window = new_mode, new_window
-                        log.info("record settings -> mode=%s window=%s (dashboard)",
-                                 rec_mode, rec_window or "all-day")
+                    new = load_record_settings()
+                    if new != (rec_mode, rec_window, rec_post_roll, rec_max_segment):
+                        rec_mode, rec_window, rec_post_roll, rec_max_segment = new
+                        log.info("record settings -> mode=%s window=%s post_roll=%.0fs "
+                                 "max_seg=%.0fs (dashboard)", rec_mode,
+                                 rec_window or "all-day", rec_post_roll, rec_max_segment)
                     rec_settings_mtime = rsm
 
             # On-demand still requested by telemetry (picture / live view / ROI

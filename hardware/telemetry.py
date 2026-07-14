@@ -1009,11 +1009,11 @@ def _apply_upload_mode(value) -> None:
         log.warning("could not write video upload mode: %s", e)
 
 
-def _apply_record_settings(mode, window) -> None:
-    """Persist the dashboard's recording mode + daily hour window to the file
-    the recorder hot-reloads. Only called when the beat carried record_mode
-    (new clouds), so window=None is a deliberate "all day" — not an old cloud
-    omitting the field."""
+def _apply_record_settings(mode, window, post_roll=None, max_segment=None) -> None:
+    """Persist the dashboard's recording mode + daily hour window + clip-timing
+    (post-roll tail, max clip length) to the file the recorder hot-reloads. Only
+    called when the beat carried record_mode (new clouds), so window=None is a
+    deliberate "all day" — not an old cloud omitting the field."""
     if not isinstance(mode, str) or mode.strip().lower() not in ("motion", "continuous"):
         return
     mode = mode.strip().lower()
@@ -1025,14 +1025,29 @@ def _apply_record_settings(mode, window) -> None:
             s = e = -1
         if 0 <= s <= 23 and 0 <= e <= 23 and s != e:
             win = {"start": s, "end": e}
+
+    def _clamp(v, lo, hi):
+        try:
+            return max(lo, min(hi, int(v)))
+        except (TypeError, ValueError):
+            return None
+
+    payload = {"mode": mode, "window": win}
+    pr = _clamp(post_roll, 1, 300)
+    if pr is not None:
+        payload["post_roll"] = pr
+    ms = _clamp(max_segment, 30, 3600)
+    if ms is not None:
+        payload["max_segment"] = ms
     try:
-        new = json.dumps({"mode": mode, "window": win}, sort_keys=True)
+        new = json.dumps(payload, sort_keys=True)
         cur = (RECORD_SETTINGS_FILE.read_text().strip()
                if RECORD_SETTINGS_FILE.exists() else "")
         if new != cur:
             RECORD_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
             RECORD_SETTINGS_FILE.write_text(new)
-            log.info("record settings set to mode=%s window=%s", mode, win or "all-day")
+            log.info("record settings set to mode=%s window=%s post_roll=%s max_seg=%s",
+                     mode, win or "all-day", payload.get("post_roll"), payload.get("max_segment"))
     except OSError as e:
         log.warning("could not write record settings: %s", e)
 
@@ -1922,7 +1937,9 @@ def main() -> int:
                 # (all-day) — an older cloud omitting both must not clobber.
                 if "record_mode" in resp:
                     _apply_record_settings(resp.get("record_mode"),
-                                           resp.get("record_window"))
+                                           resp.get("record_window"),
+                                           resp.get("record_post_roll"),
+                                           resp.get("record_max_segment"))
                 # ...and the crop mode (all|confirmed|off). Prefer the new 3-way
                 # string; fall back to the legacy bool for older clouds.
                 if "activity_crops" in resp:

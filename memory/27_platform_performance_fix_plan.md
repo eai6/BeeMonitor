@@ -175,6 +175,13 @@ Advanced-settings "Recording" card (manager+): capture mode + daily hour window.
 - UI warns that continuous mode grows the SD card + pending uploads much faster
   (pairs naturally with manual upload mode, §5).
 - Device side rides the NEXT artifact tag (not in v0.1.3).
+- **Clip timing now dashboard-configurable (2026-07-14)**: the Recording card
+  also sets `record_post_roll` (clip tail — seconds of no motion before a motion
+  clip closes; default 30s, was a hardcoded 4s) and `record_max_segment`
+  (force-rotate cap — max length of one motion clip before it's split so a file
+  can't grow unbounded; default 600s/10min, was 120s). Both push via the same
+  heartbeat → `record_settings.json` → recorder hot-reload path; env fallbacks
+  `BEEMONITOR_POST_ROLL` / `BEEMONITOR_MAX_SEGMENT`.
 
 ## 7d. Feature: chunked tracking for long videos (SHIPPED 2026-07-14, env-gated)
 
