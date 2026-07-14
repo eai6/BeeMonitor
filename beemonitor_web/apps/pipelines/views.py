@@ -770,6 +770,34 @@ def batch_trips_csv(request, batch_id):
     return _csv_response(f"foraging_trips_batch_{str(batch_id)[:8]}.csv", fieldnames, rows)
 
 
+def _backfill_interactions_paths(sources):
+    """Runs completed before interactions_csv_path joined the engine's result
+    summary have contexts without it — enrich from the linked JobResult (each
+    step's context entry stores its job_id)."""
+    from apps.analysis.models import JobResult
+
+    need = [s for s in sources if not s["result"].get("interactions_csv_path")]
+    if not need:
+        return
+    job_by_run = {}
+    for s in need:
+        run = s.get("run")
+        for out in (getattr(run, "context", None) or {}).values():
+            r = (out or {}).get("result") or {}
+            if out.get("job_id") and (r.get("events_csv_path") or r.get("tracking_csv_path")):
+                job_by_run[run.pk] = out["job_id"]
+                break
+    if not job_by_run:
+        return
+    paths = dict(JobResult.objects.filter(job_id__in=job_by_run.values())
+                 .exclude(interactions_csv_path="")
+                 .values_list("job_id", "interactions_csv_path"))
+    for s in need:
+        jid = job_by_run.get(getattr(s.get("run"), "pk", None))
+        if jid in paths:
+            s["result"]["interactions_csv_path"] = paths[jid]
+
+
 @login_required
 def batch_combined_csv(request, batch_id, kind):
     from . import aggregate
@@ -781,7 +809,12 @@ def batch_combined_csv(request, batch_id, kind):
         raise Http404("Unknown CSV kind.")
     runs = _batch_runs(request, batch_id)
     sources, _ = aggregate.collect_sources(runs)
+    if path_key == "interactions_csv_path":
+        _backfill_interactions_paths(sources)
     fieldnames, rows = aggregate.combined_csv(sources, path_key)
     if fieldnames is None:
-        raise Http404("No CSVs available yet for this batch.")
+        # Friendlier than a bare 404: back to the batch page with the reason.
+        messages.info(request, f"No {kind} data available for this batch — "
+                               "none of its completed runs produced that CSV.")
+        return redirect("pipelines:batch_detail", batch_id=batch_id)
     return _csv_response(f"{kind}_batch_{str(batch_id)[:8]}.csv", fieldnames, rows)

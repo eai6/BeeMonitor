@@ -298,6 +298,7 @@ def _job_result_summary(job):
         "foraging_trip_count", "avg_trip_duration_sec", "foraging_trips_csv_path",
         "tracking_csv_path", "events_csv_path", "unique_tracks", "entry_count",
         "exit_count", "nest_count", "total_events", "interaction_count",
+        "interactions_csv_path", "crops_csv_path",
         "annotated_video_path", "summary_stats",
     )
     return {f: getattr(result, f, None) for f in fields}
