@@ -85,7 +85,14 @@
                src="{% url 'annotations:frame_image' project.pk %}?video={{ video.pk }}&frame={{ frame_number }}&project={{ project.pk }}"
                alt="Frame {{ frame_number }}"
                style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:contain; background:#000;"
-               onerror="this.style.display='none'">
+               onerror="this.style.display='none'; var m=document.getElementById('frame-load-error'); if(m) m.style.display='flex';">
+          <!-- Shown only when the frame image fails to load (was a silent blank). -->
+          <div id="frame-load-error"
+               style="display:none; position:absolute; inset:0; align-items:center; justify-content:center; text-align:center; padding:1rem; color:#6b7280; font-size:0.875rem;">
+            Couldn't load this frame's image. The frame is extracted from the video on
+            demand — if the video is missing or still processing, try another frame or
+            re-run pre-annotation.
+          </div>
           <!-- Transparent canvas on top for drawing -->
           <canvas id="annotation-canvas" width="1280" height="720"
                   style="position:absolute; top:0; left:0; width:100%; height:100%; cursor:crosshair;">

@@ -12,4 +12,7 @@ whitenoise>=6.6
 gunicorn>=21.2
 anthropic>=0.109
 pillow>=10.0            # numbered-box overlays for LLM annotation review
+# Frame extraction for the annotation editor (FrameImageView) — pulling one
+# frame out of a video to review/annotate. headless = no GUI/X libs.
+opencv-python-headless>=4.8
 python-dotenv>=1.0
