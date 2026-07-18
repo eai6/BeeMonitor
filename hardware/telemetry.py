@@ -864,6 +864,12 @@ def collect_metrics() -> dict:
     ntp = _ntp_synchronized()
     if ntp is not None:
         m["ntp_synced"] = ntp
+    # The wall-clock the device is currently running on — machine-readable ISO
+    # (with UTC offset) plus a friendly local string for the dashboard, so drift
+    # is visible next to ntp_synced.
+    now_local = datetime.now().astimezone()
+    m["device_time"] = now_local.isoformat(timespec="seconds")
+    m["device_time_human"] = now_local.strftime("%Y-%m-%d %H:%M:%S %Z")
     # Which link this beat is actually leaving on (wifi when connected, else
     # cellular) — lets the dashboard confirm telemetry rode WiFi.
     transport = _active_transport()
@@ -1837,6 +1843,15 @@ def _handle_command(cmd: str, params: dict) -> None:
     elif cmd == "cellular_gate":
         log.info("command: cellular_gate")
         _gate_cellular()
+    elif cmd == "sync_clock":
+        # One-shot "sync clock now" from the dashboard: force an internet-time →
+        # RTC re-true immediately, bypassing the hourly throttle. If the clock
+        # isn't NTP-disciplined yet this just kicks systemd-timesyncd and the RTC
+        # write happens on a later beat once it syncs (never write a stale clock).
+        log.info("command: sync_clock — forcing internet-time → RTC sync")
+        global _last_rtc_sync
+        _last_rtc_sync = 0.0
+        _sync_rtc_from_internet()
     else:
         log.warning("ignoring unknown command: %s", cmd)
 

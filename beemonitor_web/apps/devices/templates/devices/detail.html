@@ -529,6 +529,57 @@
   {% endif %}
 </div>
 
+<!-- Clock / time (internet-time → WittyPi RTC) -->
+<div class="mt-6 bg-white shadow rounded-lg p-4">
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Clock / time</h2>
+    {% if metrics.ntp_synced %}
+    <span id="ntp-badge" class="text-xs inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 text-green-800"><span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>NTP synced</span>
+    {% elif metrics.ntp_synced is False %}
+    <span id="ntp-badge" class="text-xs inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>NTP not synced</span>
+    {% else %}
+    <span id="ntp-badge" class="text-xs inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-600"><span class="w-1.5 h-1.5 rounded-full bg-gray-400"></span>NTP unknown</span>
+    {% endif %}
+  </div>
+  <p class="text-xs text-gray-400 mb-3">
+    The device disciplines its clock to internet time (NTP) and copies it into the
+    WittyPi RTC, which restores the clock on every wake before any network exists.
+    Accurate time keeps the wake window and clip timestamps correct. Sync forces an
+    immediate re-true on the device's next check-in.
+  </p>
+  <div class="text-xs text-gray-600 mb-3">
+    Device time: <span id="m-device-time" class="font-medium text-gray-800 font-mono">{{ metrics.device_time_human|default:"—" }}</span>
+  </div>
+  {% if can_manage %}
+  <form id="clock-form" method="post" action="{% url 'devices:sync_clock' device.pk %}" class="flex flex-wrap items-center gap-3">
+    {% csrf_token %}
+    <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Sync clock now</button>
+    <span id="clock-queued" class="text-xs text-green-700 hidden">Queued — the device syncs on its next check-in ✓</span>
+  </form>
+  <script>
+    (function () {
+      var f = document.getElementById('clock-form');
+      if (!f) return;
+      f.addEventListener('submit', function (e) {
+        e.preventDefault();
+        fetch(f.action, {
+          method: 'POST',
+          headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': f.querySelector('[name=csrfmiddlewaretoken]').value},
+          body: new FormData(f),
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          if (d && d.ok) {
+            var s = document.getElementById('clock-queued');
+            if (s) { s.classList.remove('hidden'); setTimeout(function () { s.classList.add('hidden'); }, 4000); }
+          } else { alert((d && d.error) || 'Could not queue a clock sync.'); }
+        }).catch(function () { alert('Could not queue a clock sync.'); });
+      });
+    })();
+  </script>
+  {% else %}
+  <p class="text-xs text-gray-400 italic">Read-only — syncing the clock requires manager access.</p>
+  {% endif %}
+</div>
+
 <!-- Motion tuning (debug sensitivity) -->
 <div class="mt-6 bg-white shadow rounded-lg p-4">
   <div class="flex items-center justify-between mb-1">
@@ -1299,6 +1350,7 @@
         setText('sched-label', d.wake_schedule_label);
         setText('sched-next-boot', d.next_boot || '—');
         setText('sched-next-shutdown', d.next_shutdown || '—');
+        setText('m-device-time', d.device_time || '—');
         var sb = document.getElementById('sched-badge');
         if (sb) {
           if (d.schedule_state === 'active') sb.outerHTML = '<span id="sched-badge" class="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 text-green-800">' + dot(true) + 'active on device</span>';

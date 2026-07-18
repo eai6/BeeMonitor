@@ -226,7 +226,9 @@
     var form = document.getElementById('run-form');
     var flag = document.getElementById('all-filtered-flag');
     var TOTAL = {{ video_count }};              // all videos matching the filter
-    var CAP = 2000;                             // server-side per-run limit
+    // Per-launch cap, from the server (settings.PIPELINE_MAX_BATCH). 0/None → no
+    // cap, treated as Infinity so nothing is trimmed and no "capped" note shows.
+    var CAP = {{ pipeline_max_batch|default:0 }} || Infinity;
     function boxes() { return Array.prototype.slice.call(document.querySelectorAll('.vid-cb')); }
     function refresh() {
       var checked = boxes().filter(function (b) { return b.checked; }).length;

@@ -655,6 +655,10 @@ class ProcessingHubView(LoginRequiredMixin, View):
             "custom_nest_models": models.filter(model_type__in=["nest_detection", "custom"]),
             "custom_bee_models": models.filter(model_type__in=["bee_tracking", "custom"]),
             "est_credits_per_video": 349,
+            # Per-launch cap the run bar shows — mirrors the server enforcement in
+            # pipelines.run_on_videos so the button label can't diverge from it.
+            # 0/None means "no cap" (the template treats it as unlimited).
+            "pipeline_max_batch": getattr(settings, "PIPELINE_MAX_BATCH", 50000),
             # Pipelines to run on the selected videos (replaces the fixed recipe).
             "pipelines": Pipeline.objects.filter(user=request.user, is_template=False).order_by("title"),
             "pipeline_templates": Pipeline.objects.filter(is_template=True).order_by("title"),

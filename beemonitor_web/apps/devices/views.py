@@ -981,6 +981,19 @@ class DeviceWifiScanView(LoginRequiredMixin, View):
         return JsonResponse({"ok": True})
 
 
+class DeviceSyncClockView(LoginRequiredMixin, View):
+    """Queue a one-shot internet-time → WittyPi RTC sync. The device forces the
+    sync on its next command poll (bypassing its hourly throttle) and reports the
+    refreshed wall-clock in metrics.device_time, shown on the Advanced page."""
+
+    def post(self, request, pk):
+        device = _device_or_403(request.user, pk, "manager")
+        device.pending_command = "sync_clock"
+        device.command_params = {}
+        device.save(update_fields=["pending_command", "command_params"])
+        return JsonResponse({"ok": True})
+
+
 class DeviceCellularView(LoginRequiredMixin, View):
     """Open the cellular egress firewall for remote debugging (rpi-connect), or
     re-gate it. Rides the telemetry command channel (the one thing always allowed
@@ -1412,6 +1425,8 @@ class DeviceStatusView(LoginRequiredMixin, View):
             "wifi_scan": metrics.get("wifi_scan") or [],
             "cell_firewall": metrics.get("cell_firewall"),
             "active_transport": metrics.get("active_transport"),
+            "device_time": metrics.get("device_time_human") or metrics.get("device_time"),
+            "ntp_synced": metrics.get("ntp_synced"),
             "usb_status": _usb_text(metrics.get("usb")),
             "usb_present": metrics.get("usb_present"),
             # Power schedule (desired) + what the device reports it's running, plus

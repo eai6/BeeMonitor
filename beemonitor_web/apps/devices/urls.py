@@ -33,6 +33,7 @@ urlpatterns = [
     path("<int:pk>/schedule/", views.DeviceScheduleView.as_view(), name="schedule"),
     path("<int:pk>/roi-editor/", views.DeviceRoiEditorView.as_view(), name="roi_editor"),
     path("<int:pk>/display-tz/", views.DeviceDisplayTzView.as_view(), name="display_tz"),
+    path("<int:pk>/sync-clock/", views.DeviceSyncClockView.as_view(), name="sync_clock"),
     path("<int:pk>/request-image/", views.DeviceRequestImageView.as_view(), name="request_image"),
     path("<int:pk>/latest-image.json", views.DeviceLatestImageView.as_view(), name="latest_image"),
     path("<int:pk>/status.json", views.DeviceStatusView.as_view(), name="status"),
