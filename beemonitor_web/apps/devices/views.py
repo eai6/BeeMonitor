@@ -687,6 +687,13 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         ctx["videos"] = device.videos.all()[:12]
         ctx["video_count"] = device.videos.count()
 
+        # Detailed-data export is offered only when this device has at least one
+        # completed analysis job — otherwise there's nothing behind the buttons.
+        from apps.analysis.models import Job, JobResult
+        ctx["has_analysis"] = JobResult.objects.filter(
+            job__video__device=device, job__status=Job.Status.COMPLETED
+        ).exists()
+
         # Activity-over-time series for the chart (actual snippets per bucket).
         # `start`/`end` (YYYY-MM-DD) define a custom window that overrides `range`.
         ctx.update(_build_activity_series(

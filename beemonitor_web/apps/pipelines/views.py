@@ -262,19 +262,24 @@ def run_on_videos(request):
     # "Run on all filtered" — re-apply the hub's filter server-side so the whole
     # filtered set runs, not just the (capped) list rendered on the page. Capped
     # at MAX_BATCH so an over-broad filter can't launch tens of thousands of jobs.
-    MAX_BATCH = 2000
+    # Configurable via the PIPELINE_MAX_BATCH setting; set it to 0 (or None) to
+    # disable the cap entirely.
+    from django.conf import settings
+    MAX_BATCH = getattr(settings, "PIPELINE_MAX_BATCH", 50000)
     over_cap = 0
     if request.POST.get("all_filtered"):
         from apps.analysis.views import apply_video_filters
         vqs = apply_video_filters(Video.manageable(request.user), request.POST)
         total = vqs.count()
-        videos = list(vqs.order_by("-recorded_at", "-uploaded_at")[:MAX_BATCH])
-        over_cap = max(0, total - MAX_BATCH)
+        vqs = vqs.order_by("-recorded_at", "-uploaded_at")
+        videos = list(vqs[:MAX_BATCH] if MAX_BATCH else vqs)
+        over_cap = max(0, total - MAX_BATCH) if MAX_BATCH else 0
     else:
         video_ids = request.POST.getlist("video_ids")
         if not video_ids:
             return _fail("No videos selected.")
-        videos = list(Video.manageable(request.user).filter(pk__in=video_ids)[:MAX_BATCH])
+        vqs = Video.manageable(request.user).filter(pk__in=video_ids)
+        videos = list(vqs[:MAX_BATCH] if MAX_BATCH else vqs)
     if not videos:
         return _fail("No videos match the current filter.")
     batch_id = uuid.uuid4()  # groups this launch for aggregate results

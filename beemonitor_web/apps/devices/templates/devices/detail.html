@@ -1014,6 +1014,35 @@
   </div>
 </div>
 
+<!-- Download detailed analysis data (per-event CSVs, all completed jobs for this device) -->
+{% if has_analysis %}
+<div class="mt-4">
+  <div class="bg-white shadow rounded-lg p-4">
+    <div class="flex flex-wrap gap-3 items-center justify-between">
+      <div>
+        <h3 class="text-sm font-semibold text-gray-700">Download detailed data</h3>
+        <p class="text-xs text-gray-500 mt-0.5">
+          Combined CSVs across all completed analyses for this device — each row tagged with its
+          video &amp; timestamp. (The activity table above exports the on-screen summary only.)
+        </p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <a href="{% url 'analysis:download_events' %}?device={{ device.pk }}"
+           class="inline-flex items-center gap-1 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium">Events CSV</a>
+        <a href="{% url 'analysis:download_tracking' %}?device={{ device.pk }}"
+           class="inline-flex items-center gap-1 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium">Tracking CSV</a>
+        <a href="{% url 'analysis:download_trips' %}?device={{ device.pk }}"
+           class="inline-flex items-center gap-1 px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded text-sm font-medium">Foraging Trips CSV</a>
+        <a href="{% url 'analysis:download_interactions' %}?device={{ device.pk }}"
+           class="inline-flex items-center gap-1 px-3 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded text-sm font-medium">Interactions CSV</a>
+        <a href="{% url 'analysis:download_nest_data' %}?device={{ device.pk }}"
+           class="inline-flex items-center gap-1 px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm font-medium">Nest Data CSV</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <!-- Videos from this device -->
 <div class="mt-8">
   <div class="flex items-center justify-between mb-3">
