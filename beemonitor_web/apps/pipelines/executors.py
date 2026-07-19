@@ -386,10 +386,8 @@ def submit_gpu_step(run, step, context, index):
     if err:
         return "error", {"error": err}
 
-    from django.utils import timezone
     from apps.videos.models import Video
     from apps.analysis.models import Job
-    from apps.analysis.views import spawn_gpu_job_async
 
     try:
         video = Video.objects.get(pk=built["video_id"])
@@ -401,16 +399,18 @@ def submit_gpu_step(run, step, context, index):
     job_config["pipeline_run_id"] = str(run.pk)
     job_config["pipeline_step_id"] = step.get("id")
 
+    # Create QUEUED (no immediate spawn): the reconciler / an inline drain in
+    # run_on_videos promotes it to PROCESSING only while under the global
+    # SageMaker cap, so a large "run on all filtered" launch drains in waves
+    # instead of flooding the endpoint (which mass-failed jobs on throttling).
     job = Job.objects.create(
         user=run.user,
         video=video,
-        status=Job.Status.PROCESSING,
-        started_at=timezone.now(),
+        status=Job.Status.QUEUED,
         modal_job_id=f"pl_{uuid.uuid4().hex[:14]}",
         config=job_config,
     )
-    spawn_gpu_job_async(job.pk)
-    logger.info("Pipeline run %s step %s spawned Job %s", run.pk, step.get("id"), job.pk)
+    logger.info("Pipeline run %s step %s queued Job %s", run.pk, step.get("id"), job.pk)
     return "submitted", {
         "artifact": get_block(block_type).get("output_type", "tracks"),
         "job_id": job.pk,

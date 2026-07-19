@@ -41,7 +41,7 @@ def reconcile_all(limit: int = 500) -> dict:
     from django.contrib.auth import get_user_model
 
     from apps.analysis.models import Job
-    from apps.analysis.views import _poll_sagemaker_results, poll_annotate_jobs
+    from apps.analysis.views import _drain_queue, _poll_sagemaker_results, poll_annotate_jobs
     from apps.pipelines import engine
     from apps.pipelines.models import PipelineRun
 
@@ -52,6 +52,15 @@ def reconcile_all(limit: int = 500) -> dict:
         .order_by("-started_at")[:limit]
     )
     resolved = _poll_sagemaker_results(jobs) if jobs else 0
+
+    # Promote QUEUED jobs onto the endpoint while under the global concurrency
+    # cap — after the poll above, so slots freed by just-completed jobs refill in
+    # the same pass. This is what drains a big pipeline launch over time.
+    spawned = 0
+    try:
+        spawned = _drain_queue()
+    except Exception:
+        logger.exception("queue drain failed")
 
     run_user_ids = list(
         PipelineRun.objects.filter(
@@ -113,6 +122,7 @@ def reconcile_all(limit: int = 500) -> dict:
         logger.exception("foraging summary sweep failed")
 
     return {"jobs_checked": len(jobs), "jobs_resolved": resolved,
+            "jobs_spawned": spawned,
             "run_users": len(run_user_ids), "annotate_users": len(annotate_user_ids),
             "training_completed": training.get("completed", 0),
             "preannot_finalized": preannot_done,

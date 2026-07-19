@@ -199,16 +199,25 @@ def _ingest_external_s3_to_storage(video) -> str:
 #                    head_objects this URI to detect completion.
 
 
-def _sagemaker_runtime():
-    """Boto3 sagemaker-runtime client, region-aware."""
-    import boto3
+def _boto_config(read_timeout: int = 60):
+    """Shared boto3 Config for the SageMaker-spawn hot path: bounded timeouts +
+    adaptive retries. Adaptive mode adds client-side rate-limiting/backoff, so a
+    throttled invoke waits and retries instead of failing the job outright — the
+    thing that mass-failed jobs during a large pipeline launch. Spawns now run in
+    the pool/reconciler (not the request path), so a longer worst-case call is fine.
+    """
     from botocore.config import Config
+    return Config(connect_timeout=10, read_timeout=read_timeout,
+                  retries={"mode": "adaptive", "max_attempts": 5})
+
+
+def _sagemaker_runtime():
+    """Boto3 sagemaker-runtime client, region-aware, with adaptive retries."""
+    import boto3
     return boto3.client(
         "sagemaker-runtime",
         region_name=getattr(settings, "AWS_REGION", "us-east-1"),
-        # Fail fast. Without this, a network gap (e.g. a missing VPC endpoint)
-        # blocks the worker — and the DB connection it holds — for 60s+ per call.
-        config=Config(connect_timeout=10, read_timeout=30, retries={"max_attempts": 1}),
+        config=_boto_config(),
     )
 
 
@@ -222,6 +231,33 @@ _SPAWN_POOL = ThreadPoolExecutor(max_workers=3, thread_name_prefix="gpu-spawn")
 def spawn_gpu_job_async(job_pk: int) -> None:
     """Queue a single-job SageMaker spawn on the bounded pool (non-blocking)."""
     _SPAWN_POOL.submit(_spawn_gpu_job, job_pk)
+
+
+def _drain_queue() -> int:
+    """Promote QUEUED GPU jobs to PROCESSING (spawn them) while under the global
+    SageMaker concurrency cap, oldest first. Jobs are created QUEUED and drained
+    here so a large pipeline launch trickles onto the endpoint in waves instead of
+    flooding it (which mass-failed jobs on throttling). Returns the count spawned.
+
+    Safe to call from any worker/instance and from a request path: each job is
+    claimed with an atomic compare-and-swap (filter(status=QUEUED).update(...) — a
+    single SQL UPDATE) so it spawns exactly once even if several drains overlap.
+    Best-effort; callers wrap request-path calls in try/except.
+    """
+    from django.utils import timezone
+    cap = getattr(settings, "SAGEMAKER_MAX_CONCURRENT", 6)
+    active = Job.objects.filter(status=Job.Status.PROCESSING).count()
+    slots = max(0, cap - active)
+    if slots <= 0:
+        return 0
+    spawned = 0
+    for job in Job.objects.filter(status=Job.Status.QUEUED).order_by("created_at")[:slots]:
+        claimed = Job.objects.filter(pk=job.pk, status=Job.Status.QUEUED).update(
+            status=Job.Status.PROCESSING, started_at=timezone.now())
+        if claimed:  # 1 = this worker won the row; 0 = another already took it
+            spawn_gpu_job_async(job.pk)
+            spawned += 1
+    return spawned
 
 
 def _spawn_gpu_job(job_pk: int) -> None:
@@ -401,7 +437,8 @@ def _put_inference_payload(job_id: str, payload: dict) -> str:
     key = f"{job_id}.json"
     # Direct boto3 PUT; the input bucket isn't one of the 4 we wrap in S3StorageClient.
     import boto3
-    s3 = boto3.client("s3", region_name=getattr(settings, "AWS_REGION", "us-east-1"))
+    s3 = boto3.client("s3", region_name=getattr(settings, "AWS_REGION", "us-east-1"),
+                      config=_boto_config())
     s3.put_object(
         Bucket=bucket,
         Key=key,
@@ -677,10 +714,15 @@ class ProcessingHubView(LoginRequiredMixin, View):
         job = Job.objects.create(
             user=request.user, video=video,
             config={"detection_mode": mode, "confidence_threshold": 0.25},
-            status=Job.Status.PROCESSING, started_at=timezone.now(),
+            status=Job.Status.QUEUED,
             modal_job_id=f"modal_{uuid.uuid4().hex[:12]}",
         )
-        spawn_gpu_job_async(job.pk)
+        # Drain inline (best-effort): starts immediately if a slot is free, else
+        # the reconciler picks it up. Never let a drain hiccup break the request.
+        try:
+            _drain_queue()
+        except Exception:
+            logger.exception("inline drain after one-click job %s failed", job.pk)
         messages.info(
             request,
             f"Analysis #{job.pk} started on “{video.title}”. It runs on the GPU; "
@@ -928,7 +970,8 @@ def _poll_sagemaker_results(jobs) -> int:
     from django.utils import timezone
     from botocore.exceptions import ClientError
 
-    s3 = boto3.client("s3", region_name=getattr(settings, "AWS_REGION", "us-east-1"))
+    s3 = boto3.client("s3", region_name=getattr(settings, "AWS_REGION", "us-east-1"),
+                      config=_boto_config())
     now = timezone.now()
     n = 0
 
@@ -1674,6 +1717,26 @@ class GenerateAnnotatedVideoView(LoginRequiredMixin, View):
         return redirect("analysis:results", pk=pk)
 
 
+def _download_range_bounds(dfrom, dto, zone):
+    """Parse 'YYYY-MM-DD' from/to (interpreted in `zone`) into inclusive
+    day-boundary datetimes — start at 00:00, end at 23:59:59.999999 so the whole
+    end day is included (matching the device activity chart's _parse_custom_range).
+    Either bound is None if its input is absent or unparseable."""
+    from datetime import datetime as _dt, time as _time
+    start = end = None
+    if dfrom:
+        try:
+            start = _dt.combine(_dt.strptime(dfrom, "%Y-%m-%d").date(), _time.min, tzinfo=zone)
+        except (ValueError, TypeError):
+            pass
+    if dto:
+        try:
+            end = _dt.combine(_dt.strptime(dto, "%Y-%m-%d").date(), _time.max, tzinfo=zone)
+        except (ValueError, TypeError):
+            pass
+    return start, end
+
+
 class _FilteredJobsMixin:
     """Shared logic for filtering completed jobs by site/year/month/day/hour."""
 
@@ -1685,6 +1748,8 @@ class _FilteredJobsMixin:
         hour = request.GET.get("hour", "")
         device = request.GET.get("device", "")
         confirmed = request.GET.get("confirmed", "")
+        dfrom = request.GET.get("from", "")
+        dto = request.GET.get("to", "")
 
         # Ecological data follows video access: results for any video the user
         # owns OR can see via a device share (mirrors Video.accessible).
@@ -1736,6 +1801,27 @@ class _FilteredJobsMixin:
                 from django.db.models import Q as _Q
                 qs = qs.filter(_Q(job__video__hour__gte=lo) | _Q(job__video__hour__lt=hi))
 
+        # Arbitrary date range (from/to, YYYY-MM-DD) on the clip's recorded time.
+        # Interpreted in the device's display tz — matching the on-page activity
+        # chart — when a device is given, else the server tz; end day inclusive.
+        if dfrom or dto:
+            from django.utils import timezone as _tz
+            zone = _tz.get_current_timezone()
+            if device:
+                try:
+                    from apps.devices.models import Device
+                    from apps.devices.views import _display_zone
+                    dev = Device.objects.filter(pk=device).first()
+                    if dev:
+                        zone = _display_zone(dev)[0]
+                except Exception:  # never let tz resolution break a download
+                    pass
+            start, end = _download_range_bounds(dfrom, dto, zone)
+            if start:
+                qs = qs.filter(job__video__recorded_at__gte=start)
+            if end:
+                qs = qs.filter(job__video__recorded_at__lte=end)
+
         label_parts = []
         if device:
             label_parts.append(f"device{device}")
@@ -1749,6 +1835,12 @@ class _FilteredJobsMixin:
             label_parts.append(f"day{day}")
         if hour:
             label_parts.append(f"hour{hour}")
+        if dfrom and dto:
+            label_parts.append(f"{dfrom}_to_{dto}")
+        elif dfrom:
+            label_parts.append(f"from{dfrom}")
+        elif dto:
+            label_parts.append(f"to{dto}")
         label = "_".join(label_parts) if label_parts else "all"
 
         return qs, label

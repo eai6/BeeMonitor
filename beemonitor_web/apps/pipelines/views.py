@@ -294,6 +294,16 @@ def run_on_videos(request):
         engine.start_run(run, steps=steps)
         launched.append(video.pk)
 
+    # The GPU steps were created QUEUED. Kick the queue once for the whole batch:
+    # spawn up to the global SageMaker cap now, leave the rest QUEUED for the
+    # reconciler to drain in waves. Best-effort — never break the launch response.
+    if launched:
+        try:
+            from apps.analysis.views import _drain_queue
+            _drain_queue()
+        except Exception:
+            logger.exception("inline drain after pipeline batch launch failed")
+
     if not launched:
         return _fail("Could not start — the pipeline isn't valid for the selected videos.")
 

@@ -176,6 +176,12 @@ SAGEMAKER_ENDPOINT_NAME = os.environ.get("SAGEMAKER_ENDPOINT_NAME", "")
 SAGEMAKER_SAM3_ENDPOINT_NAME = os.environ.get("SAGEMAKER_SAM3_ENDPOINT_NAME", "")
 SAGEMAKER_INPUT_BUCKET = os.environ.get("SAGEMAKER_INPUT_BUCKET", "")
 SAGEMAKER_OUTPUT_BUCKET = os.environ.get("SAGEMAKER_OUTPUT_BUCKET", "")
+# Max GPU jobs to have invoking the SageMaker async endpoint at once. Jobs are
+# created QUEUED and the background reconciler promotes them to PROCESSING only
+# while fewer than this are in flight, so a large pipeline launch drains in waves
+# instead of flooding the endpoint (which caps at ~6 concurrent invocations).
+# Track this to the endpoint's real capacity; raise it when infra is scaled up.
+SAGEMAKER_MAX_CONCURRENT = int(os.environ.get("SAGEMAKER_MAX_CONCURRENT", "6"))
 # Fine-tuning (SageMaker training jobs) — role SageMaker assumes for the job and
 # the training image. Set by the aws-sagemaker stack via App Runner env.
 SAGEMAKER_TRAINING_ROLE_ARN = os.environ.get("SAGEMAKER_TRAINING_ROLE_ARN", "")
