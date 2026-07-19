@@ -92,10 +92,16 @@
   <div class="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-gray-100">
     <button type="button" id="select-needs" class="text-xs text-amber-700 hover:underline">Select all that need updating</button>
     <span class="text-xs text-gray-300">·</span>
+    <button type="button" id="select-updating" class="text-xs text-amber-700 hover:underline">Select all updating</button>
+    <span class="text-xs text-gray-300">·</span>
     <span id="sel-count" class="text-sm text-gray-600">0 selected</span>
     <span id="fleet-update-status" class="text-xs"></span>
+    <button type="button" id="fleet-cancel-btn" disabled
+            class="ml-auto px-3 py-1.5 bg-white border border-red-300 text-red-700 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed rounded text-sm font-medium">
+      Cancel updates
+    </button>
     <button type="button" id="fleet-update-btn" disabled
-            class="ml-auto px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded text-sm font-medium">
+            class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded text-sm font-medium">
       Update selected{% if latest_artifact_version %} to {{ latest_artifact_version }}{% endif %}
     </button>
   </div>
@@ -125,7 +131,7 @@
         {% if can_fleet_update %}
         <td class="px-4 py-4">
           {% if d.can_manage and d.is_active %}
-          <input type="checkbox" class="dev-check rounded border-gray-300" value="{{ d.pk }}" data-needs="{{ d.needs_update|yesno:'1,0' }}">
+          <input type="checkbox" class="dev-check rounded border-gray-300" value="{{ d.pk }}" data-needs="{{ d.needs_update|yesno:'1,0' }}" data-updating="{{ d.updating|yesno:'1,0' }}">
           {% endif %}
         </td>
         {% endif %}
@@ -158,6 +164,7 @@
               <svg class="w-2.5 h-2.5 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>
               Updating → <span class="font-mono">{{ d.update_target|truncatechars:14 }}</span>
             </span>
+            {% if d.can_manage %}<button type="button" class="dev-cancel ml-1 text-[10px] text-red-600 hover:underline" data-url="{% url 'devices:cancel_update' d.pk %}" title="Cancel this queued update — won't stop an update already downloading on the device">Cancel</button>{% endif %}
           {% elif d.code_commit %}
             <span class="font-mono text-xs" title="{{ d.code_commit }}">{{ d.code_commit|truncatechars:14 }}</span>
             {% if d.needs_update %}<span class="ml-1 inline-flex px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-amber-100 text-amber-800" title="A newer signed artifact is published">update</span>{% endif %}
@@ -209,12 +216,14 @@
 
     var countEl = document.getElementById('sel-count');
     var btn = document.getElementById('fleet-update-btn');
+    var cancelBtn = document.getElementById('fleet-cancel-btn');
     var statusEl = document.getElementById('fleet-update-status');
 
     function updateCount() {
       var n = selectedIds().length;
       if (countEl) countEl.textContent = n + ' selected';
       if (btn) btn.disabled = (n === 0) || !LATEST;
+      if (cancelBtn) cancelBtn.disabled = (n === 0);
     }
 
     // --- client-side filtering (table is small; no round-trip) ---------------
@@ -256,6 +265,14 @@
       });
       updateCount();
     });
+    var selUpdating = document.getElementById('select-updating');
+    if (selUpdating) selUpdating.addEventListener('click', function () {
+      checks().forEach(function (cb) {
+        var r = cb.closest('.dev-row');
+        cb.checked = (cb.getAttribute('data-updating') === '1' && r && r.style.display !== 'none');
+      });
+      updateCount();
+    });
 
     // --- bulk artifact update ----------------------------------------------
     if (btn) btn.addEventListener('click', function () {
@@ -288,6 +305,55 @@
           setTimeout(function () { location.reload(); }, 1200);
         } else {
           if (statusEl) { statusEl.textContent = (d && d.error) || 'Update failed.'; statusEl.className = 'text-xs text-red-600'; }
+          updateCount();
+        }
+      }).catch(function () {
+        if (statusEl) { statusEl.textContent = 'Network error.'; statusEl.className = 'text-xs text-red-600'; }
+        updateCount();
+      });
+    });
+
+    // --- per-row cancel (clear one stuck "Updating →" pill) ------------------
+    var CSRF = document.querySelector('[name=csrfmiddlewaretoken]');
+    Array.prototype.slice.call(document.querySelectorAll('.dev-cancel')).forEach(function (b) {
+      b.addEventListener('click', function () {
+        if (!confirm('Cancel this queued update? It clears the pending update but ' +
+                     "won't stop an update already downloading on the device.")) return;
+        b.disabled = true; b.textContent = 'Cancelling…';
+        fetch(b.getAttribute('data-url'), {
+          method: 'POST',
+          headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': CSRF.value},
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          if (d && d.ok) { location.reload(); }
+          else { b.disabled = false; b.textContent = 'Cancel'; alert('Could not cancel.'); }
+        }).catch(function () { b.disabled = false; b.textContent = 'Cancel'; alert('Network error.'); });
+      });
+    });
+
+    // --- bulk cancel updates ------------------------------------------------
+    if (cancelBtn) cancelBtn.addEventListener('click', function () {
+      var ids = selectedIds();
+      if (!ids.length) return;
+      if (!confirm('Cancel queued updates on ' + ids.length + ' device(s)?\n\nThis clears the ' +
+                   "pending update. It won't stop an update already downloading on a device.")) return;
+      cancelBtn.disabled = true;
+      if (statusEl) { statusEl.textContent = 'Cancelling…'; statusEl.className = 'text-xs text-gray-500'; }
+      var token = document.querySelector('[name=csrfmiddlewaretoken]').value;
+      fetch("{% url 'devices:fleet_cancel_update' %}", {
+        method: 'POST',
+        headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': token,
+                  'Content-Type': 'application/json'},
+        body: JSON.stringify({device_ids: ids}),
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        if (d && d.ok) {
+          if (statusEl) {
+            statusEl.textContent = 'Cancelled on ' + d.cancelled +
+              (d.skipped ? ' (' + d.skipped + ' skipped)' : '');
+            statusEl.className = 'text-xs text-green-700';
+          }
+          setTimeout(function () { location.reload(); }, 1000);
+        } else {
+          if (statusEl) { statusEl.textContent = (d && d.error) || 'Cancel failed.'; statusEl.className = 'text-xs text-red-600'; }
           updateCount();
         }
       }).catch(function () {

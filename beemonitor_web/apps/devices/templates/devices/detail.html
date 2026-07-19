@@ -941,6 +941,13 @@
       <input type="hidden" name="mode" value="artifact">
       <button class="px-3 py-1.5 bg-white border border-amber-300 text-amber-700 hover:bg-amber-50 rounded text-sm" title="Download + minisign-verify the published hardware-only bundle (feature 18)">Update via signed artifact</button>
     </form>
+    {% if device.update_target %}
+    <form method="post" action="{% url 'devices:cancel_update' device.pk %}"
+          onsubmit="return confirm('Cancel the queued update to {{ device.update_target }}? This clears the pending update. It will NOT stop an update already downloading on the device.')">
+      {% csrf_token %}
+      <button class="px-3 py-1.5 bg-white border border-red-300 text-red-700 hover:bg-red-50 rounded text-sm" title="Clear the queued update. Won't stop an update already downloading on the device.">Cancel update → {{ device.update_target|truncatechars:14 }}</button>
+    </form>
+    {% endif %}
   </div>
   {% endif %}
 </div>

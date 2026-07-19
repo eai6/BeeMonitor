@@ -1173,6 +1173,75 @@ class DeviceUpdateView(LoginRequiredMixin, View):
         return redirect("devices:detail", pk=pk)
 
 
+class DeviceCancelUpdateView(LoginRequiredMixin, View):
+    """Cancel a queued/stuck software update — clears the web-side "Updating →"
+    state and drops the queued command if the device hasn't picked it up yet.
+
+    The update command is one-shot (handed off on the next beat) and there is no
+    device-side abort, so this fully cancels a still-queued update and always
+    clears the dashboard pill — but it cannot stop an update already downloading /
+    applying on the device (that runs to completion and auto-rolls-back if unhealthy).
+    """
+
+    def post(self, request, pk):
+        device = _device_or_403(request.user, pk, "manager")
+        fields = ["update_target", "update_requested_at"]
+        device.update_target = ""
+        device.update_requested_at = None
+        # Only wipe the queued command if it's still the (undelivered) update —
+        # don't clobber some other command queued in the meantime.
+        if device.pending_command == "update":
+            device.pending_command = ""
+            device.command_params = {}
+            fields += ["pending_command", "command_params"]
+        device.save(update_fields=fields)
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return JsonResponse({"ok": True})
+        messages.success(
+            request,
+            "Update cancelled — the queued update was cleared. (An update already "
+            "downloading on the device can't be stopped remotely.)")
+        return redirect("devices:detail", pk=pk)
+
+
+class DeviceFleetCancelUpdateView(LoginRequiredMixin, View):
+    """Cancel queued/stuck updates on many devices at once — the mirror of the
+    fleet update. Clears the "Updating →" state on every selected device the caller
+    manages. Same caveat as the per-device cancel: won't stop an in-flight update."""
+
+    def post(self, request):
+        ids = request.POST.getlist("device_ids")
+        if not ids and request.body:
+            try:
+                ids = json.loads(request.body).get("device_ids", [])
+            except (ValueError, AttributeError):
+                ids = []
+        try:
+            ids = {int(i) for i in ids}
+        except (TypeError, ValueError):
+            return JsonResponse({"ok": False, "error": "Invalid device selection."}, status=400)
+        if not ids:
+            return JsonResponse({"ok": False, "error": "No devices selected."}, status=400)
+
+        targets = [d for d in Device.accessible(request.user).filter(pk__in=ids)
+                   if d.can(request.user, "manager")]
+        for d in targets:
+            d.update_target = ""
+            d.update_requested_at = None
+            if d.pending_command == "update":
+                d.pending_command = ""
+                d.command_params = {}
+        if targets:
+            Device.objects.bulk_update(
+                targets, ["pending_command", "command_params",
+                          "update_target", "update_requested_at"])
+        return JsonResponse({
+            "ok": True,
+            "cancelled": len(targets),
+            "skipped": len(ids) - len(targets),
+        })
+
+
 class DeviceUsbTransferView(LoginRequiredMixin, View):
     """Queue an on-demand copy of new recordings to a plugged-in USB drive.
 
