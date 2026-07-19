@@ -1846,249 +1846,133 @@ class _FilteredJobsMixin:
         return qs, label
 
 
+def _stream_combined_csv(results, path_attr, fallback_basename, filename, noun):
+    """Stream a combined CSV (header + per-row video prefix) across many
+    JobResults, one per-job CSV pulled from S3.
+
+    The per-job S3 objects are fetched by a bounded thread pool and rows are
+    yielded as they arrive via StreamingHttpResponse — so a large device / date
+    range export starts sending immediately, uses little memory, and doesn't blow
+    the request timeout by doing hundreds of *sequential* S3 GETs before the first
+    byte (the reason a busy device's date-range download was timing out).
+
+    `_fetch` touches only S3 (job + video are already select_related, so no
+    cross-thread DB access); the boto3 client is thread-safe.
+    """
+    import csv
+    import io
+    import itertools
+    from collections import deque
+    from django.http import StreamingHttpResponse
+
+    s3 = get_s3_client()
+
+    def _fetch(result):
+        path = getattr(result, path_attr) or ""
+        if not path:
+            mid = result.job.modal_job_id
+            if not mid:
+                return None
+            path = f"{result.job.user_id}/{mid}/{fallback_basename}"
+        try:
+            buf = io.BytesIO()
+            s3.download_to_stream("processed", path, buf)
+            return result, buf.getvalue().decode("utf-8")
+        except Exception as e:
+            logger.error("Failed to read %s CSV %s: %s", noun, path, e)
+            return None
+
+    class _Echo:
+        def write(self, value):
+            return value
+    writer = csv.writer(_Echo())
+
+    def _prefetched(pool, items, window):
+        """Yield _fetch results in input order with at most `window` in flight."""
+        sentinel = object()
+        it = iter(items)
+        pending = deque(pool.submit(_fetch, x) for x in itertools.islice(it, window))
+        while pending:
+            yield pending.popleft().result()
+            nxt = next(it, sentinel)
+            if nxt is not sentinel:
+                pending.append(pool.submit(_fetch, nxt))
+
+    def _rows():
+        header_written = False
+        with ThreadPoolExecutor(max_workers=12, thread_name_prefix="csv-dl") as pool:
+            for fetched in _prefetched(pool, results.iterator(), 24):
+                if not fetched:
+                    continue
+                result, content = fetched
+                reader = csv.reader(io.StringIO(content))
+                headers = next(reader, [])
+                if not header_written:
+                    yield writer.writerow(["video_title", "site_name", "recorded_at"] + headers)
+                    header_written = True
+                video = result.job.video
+                prefix = [video.title, video.site_name,
+                          video.recorded_at.isoformat() if video.recorded_at else ""]
+                for row in reader:
+                    yield writer.writerow(prefix + row)
+        if not header_written:
+            yield writer.writerow([f"No {noun} data found for this filter"])
+
+    resp = StreamingHttpResponse(_rows(), content_type="text/csv")
+    resp["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return resp
+
+
 class DownloadEventsCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
     """Download combined events CSV for all filtered completed jobs."""
 
     def get(self, request):
-        import csv
-        import io
-        from django.http import HttpResponse
-
         results, label = self._get_filtered_results(request)
-
         if not results.exists():
             from django.contrib import messages as msg
             msg.warning(request, "No completed jobs matching this filter.")
             return redirect("analysis:processing")
-
-        response = HttpResponse(content_type="text/csv")
-        response["Content-Disposition"] = f'attachment; filename="beemonitor_events_{label}.csv"'
-
-        writer = None
-        s3 = get_s3_client()
-
-        for result in results:
-            path = result.events_csv_path
-            if not path:
-                # Try constructing from modal_job_id
-                mid = result.job.modal_job_id
-                uid = str(result.job.user_id)
-                if mid:
-                    path = f"{uid}/{mid}/events.csv"
-                else:
-                    continue
-
-            try:
-                buf = io.BytesIO()
-                s3.download_to_stream("processed", path, buf)
-                content = buf.getvalue().decode("utf-8")
-                reader = csv.reader(io.StringIO(content))
-                headers = next(reader, [])
-
-                if writer is None:
-                    all_headers = ["video_title", "site_name", "recorded_at"] + headers
-                    writer = csv.writer(response)
-                    writer.writerow(all_headers)
-
-                video = result.job.video
-                prefix = [
-                    video.title,
-                    video.site_name,
-                    video.recorded_at.isoformat() if video.recorded_at else "",
-                ]
-                for row in reader:
-                    writer.writerow(prefix + row)
-            except Exception as e:
-                logger.error("Failed to read events CSV %s: %s", path, e)
-
-        if writer is None:
-            writer = csv.writer(response)
-            writer.writerow(["No event data found for this filter"])
-
-        return response
+        return _stream_combined_csv(results, "events_csv_path", "events.csv",
+                                    f"beemonitor_events_{label}.csv", "event")
 
 
 class DownloadTrackingCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
     """Download combined tracking CSV for all filtered completed jobs."""
 
     def get(self, request):
-        import csv
-        import io
-        from django.http import HttpResponse
-
         results, label = self._get_filtered_results(request)
-
         if not results.exists():
             from django.contrib import messages as msg
             msg.warning(request, "No completed jobs matching this filter.")
             return redirect("analysis:processing")
-
-        response = HttpResponse(content_type="text/csv")
-        response["Content-Disposition"] = f'attachment; filename="beemonitor_tracking_{label}.csv"'
-
-        writer = None
-        s3 = get_s3_client()
-
-        for result in results:
-            path = result.tracking_csv_path
-            if not path:
-                mid = result.job.modal_job_id
-                uid = str(result.job.user_id)
-                if mid:
-                    path = f"{uid}/{mid}/tracking_results.csv"
-                else:
-                    continue
-
-            try:
-                buf = io.BytesIO()
-                s3.download_to_stream("processed", path, buf)
-                content = buf.getvalue().decode("utf-8")
-                reader = csv.reader(io.StringIO(content))
-                headers = next(reader, [])
-
-                if writer is None:
-                    all_headers = ["video_title", "site_name", "recorded_at"] + headers
-                    writer = csv.writer(response)
-                    writer.writerow(all_headers)
-
-                video = result.job.video
-                prefix = [
-                    video.title,
-                    video.site_name,
-                    video.recorded_at.isoformat() if video.recorded_at else "",
-                ]
-                for row in reader:
-                    writer.writerow(prefix + row)
-            except Exception as e:
-                logger.error("Failed to read tracking CSV %s: %s", path, e)
-
-        if writer is None:
-            writer = csv.writer(response)
-            writer.writerow(["No tracking data found for this filter"])
-
-        return response
+        return _stream_combined_csv(results, "tracking_csv_path", "tracking_results.csv",
+                                    f"beemonitor_tracking_{label}.csv", "tracking")
 
 
 class DownloadTripsCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
     """Download combined foraging trips CSV for all filtered completed jobs."""
 
     def get(self, request):
-        import csv
-        import io
-        from django.http import HttpResponse
-
         results, label = self._get_filtered_results(request)
-
         if not results.exists():
             from django.contrib import messages as msg
             msg.warning(request, "No completed jobs matching this filter.")
             return redirect("analysis:processing")
-
-        response = HttpResponse(content_type="text/csv")
-        response["Content-Disposition"] = f'attachment; filename="beemonitor_foraging_trips_{label}.csv"'
-
-        writer = None
-        s3 = get_s3_client()
-
-        for result in results:
-            path = result.foraging_trips_csv_path
-            if not path:
-                mid = result.job.modal_job_id
-                uid = str(result.job.user_id)
-                if mid:
-                    path = f"{uid}/{mid}/foraging_trips.csv"
-                else:
-                    continue
-
-            try:
-                buf = io.BytesIO()
-                s3.download_to_stream("processed", path, buf)
-                content = buf.getvalue().decode("utf-8")
-                reader = csv.reader(io.StringIO(content))
-                headers = next(reader, [])
-
-                if writer is None:
-                    all_headers = ["video_title", "site_name", "recorded_at"] + headers
-                    writer = csv.writer(response)
-                    writer.writerow(all_headers)
-
-                video = result.job.video
-                prefix = [
-                    video.title,
-                    video.site_name,
-                    video.recorded_at.isoformat() if video.recorded_at else "",
-                ]
-                for row in reader:
-                    writer.writerow(prefix + row)
-            except Exception as e:
-                logger.error("Failed to read foraging trips CSV %s: %s", path, e)
-
-        if writer is None:
-            writer = csv.writer(response)
-            writer.writerow(["No foraging trip data found for this filter"])
-
-        return response
+        return _stream_combined_csv(results, "foraging_trips_csv_path", "foraging_trips.csv",
+                                    f"beemonitor_foraging_trips_{label}.csv", "foraging trip")
 
 
 class DownloadInteractionsCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
     """Download combined interactions CSV for all filtered completed jobs."""
 
     def get(self, request):
-        import csv
-        import io
-        from django.http import HttpResponse
-
         results, label = self._get_filtered_results(request)
-
         if not results.exists():
             from django.contrib import messages as msg
             msg.warning(request, "No completed jobs matching this filter.")
             return redirect("analysis:processing")
-
-        response = HttpResponse(content_type="text/csv")
-        response["Content-Disposition"] = f'attachment; filename="beemonitor_interactions_{label}.csv"'
-
-        writer = None
-        s3 = get_s3_client()
-
-        for result in results:
-            path = result.interactions_csv_path
-            if not path:
-                mid = result.job.modal_job_id
-                uid = str(result.job.user_id)
-                if mid:
-                    path = f"{uid}/{mid}/interactions.csv"
-                else:
-                    continue
-
-            try:
-                buf = io.BytesIO()
-                s3.download_to_stream("processed", path, buf)
-                content = buf.getvalue().decode("utf-8")
-                reader = csv.reader(io.StringIO(content))
-                headers = next(reader, [])
-
-                if writer is None:
-                    all_headers = ["video_title", "site_name", "recorded_at"] + headers
-                    writer = csv.writer(response)
-                    writer.writerow(all_headers)
-
-                video = result.job.video
-                prefix = [
-                    video.title,
-                    video.site_name,
-                    video.recorded_at.isoformat() if video.recorded_at else "",
-                ]
-                for row in reader:
-                    writer.writerow(prefix + row)
-            except Exception as e:
-                logger.error("Failed to read interactions CSV %s: %s", path, e)
-
-        if writer is None:
-            writer = csv.writer(response)
-            writer.writerow(["No interaction data found for this filter"])
-
-        return response
+        return _stream_combined_csv(results, "interactions_csv_path", "interactions.csv",
+                                    f"beemonitor_interactions_{label}.csv", "interaction")
 
 
 class DownloadNestDataCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):

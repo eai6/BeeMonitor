@@ -1,6 +1,7 @@
 """Tests for the from/to date-range filter on the CSV-download mixin."""
 
 from datetime import datetime
+from unittest import mock
 from zoneinfo import ZoneInfo
 
 from django.contrib.auth.models import User
@@ -67,3 +68,39 @@ class DownloadRangeFilterTest(TestCase):
         qs, label = self._run()
         self.assertEqual(qs.count(), 4)
         self.assertEqual(label, "all")
+
+
+class StreamCombinedCSVTest(TestCase):
+    """The events download streams a combined CSV across jobs (parallel S3 fetch)."""
+
+    def setUp(self):
+        self.user = User.objects.create(username="s")
+        self.client.force_login(self.user)
+        for i in range(3):
+            v = Video.objects.create(user=self.user, title=f"vid{i}", site_name="siteX",
+                                     storage_key=f"k{i}", file_size_bytes=1,
+                                     recorded_at=datetime(2026, 7, 3, 10, tzinfo=UTC))
+            job = Job.objects.create(user=self.user, video=v,
+                                     status=Job.Status.COMPLETED, modal_job_id=f"j{i}")
+            JobResult.objects.create(job=job, events_csv_path=f"p/{i}/events.csv")
+
+    def test_streams_header_and_prefixed_rows(self):
+        class FakeS3:
+            def download_to_stream(self, container, path, buf):
+                # Each per-job CSV: one header + one data row tagged with its path.
+                buf.write(f"frame,x\r\n{path},7\r\n".encode("utf-8"))
+
+        from django.urls import reverse
+        with mock.patch("apps.analysis.views.get_s3_client", return_value=FakeS3()):
+            resp = self.client.get(reverse("analysis:download_events"))
+            body = b"".join(resp.streaming_content).decode("utf-8")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("attachment; filename=", resp["Content-Disposition"])
+        lines = [ln for ln in body.splitlines() if ln]
+        self.assertEqual(lines[0], "video_title,site_name,recorded_at,frame,x")  # header once
+        self.assertEqual(len(lines), 4)                                          # header + 3 rows
+        # Every job's row carries its video-title prefix + its own S3 path.
+        for i in range(3):
+            self.assertTrue(any(f"vid{i},siteX," in ln and f"p/{i}/events.csv,7" in ln
+                                for ln in lines[1:]))
