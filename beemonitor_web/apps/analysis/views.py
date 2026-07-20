@@ -1950,7 +1950,12 @@ class DownloadTrackingCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
 
 
 class DownloadTripsCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
-    """Download combined foraging trips CSV for all filtered completed jobs."""
+    """Download combined foraging trips CSV for all filtered completed jobs.
+
+    NOTE: this is the PER-VIDEO computation — a bee exiting and re-entering within
+    the SAME clip (duration = frame/fps delta, seconds). For the cross-video trips
+    shown on the batch page + activity chart (a bee returning in a LATER clip),
+    use DownloadDeviceTripsCSVView (download_device_trips)."""
 
     def get(self, request):
         results, label = self._get_filtered_results(request)
@@ -1960,6 +1965,104 @@ class DownloadTripsCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
             return redirect("analysis:processing")
         return _stream_combined_csv(results, "foraging_trips_csv_path", "foraging_trips.csv",
                                     f"beemonitor_foraging_trips_{label}.csv", "foraging trip")
+
+
+def _stream_concat_csv(objects, path_attr, filename, noun):
+    """Stream several already-formed CSVs (identical columns) as one file: the
+    header from the first, subsequent headers dropped. Objects are fetched from
+    the 'processed' bucket with a small bounded thread pool. Used for the
+    pre-computed per-day trips CSVs (no per-row prefix — each row is complete)."""
+    import io
+    import itertools
+    from collections import deque
+    from django.http import StreamingHttpResponse
+
+    s3 = get_s3_client()
+
+    def _fetch(obj):
+        path = getattr(obj, path_attr) or ""
+        if not path:
+            return None
+        try:
+            buf = io.BytesIO()
+            s3.download_to_stream("processed", path, buf)
+            return buf.getvalue().decode("utf-8")
+        except Exception as e:
+            logger.error("Failed to read %s CSV %s: %s", noun, path, e)
+            return None
+
+    def _prefetched(pool, items, window):
+        sentinel = object()
+        it = iter(items)
+        pending = deque(pool.submit(_fetch, x) for x in itertools.islice(it, window))
+        while pending:
+            yield pending.popleft().result()
+            nxt = next(it, sentinel)
+            if nxt is not sentinel:
+                pending.append(pool.submit(_fetch, nxt))
+
+    def _rows():
+        header = None
+        with ThreadPoolExecutor(max_workers=8, thread_name_prefix="csv-cat") as pool:
+            for content in _prefetched(pool, objects.iterator(), 16):
+                if not content:
+                    continue
+                lines = content.splitlines()
+                if not lines:
+                    continue
+                if header is None:
+                    header = lines[0]
+                    yield header + "\n"
+                for ln in lines[1:]:
+                    yield ln + "\n"
+        if header is None:
+            yield f"No {noun} data found for this filter\n"
+
+    resp = StreamingHttpResponse(_rows(), content_type="text/csv")
+    resp["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return resp
+
+
+class DownloadDeviceTripsCSVView(LoginRequiredMixin, View):
+    """Cross-video foraging trips for a device — the SAME computation as the batch
+    page's trips table and the device activity chart: a bee exiting in one clip and
+    returning in a later one, duration = return_time - exit_time. Streams the
+    pre-computed per-day DailyForagingSummary.trips_csv_path objects (≈1 per day)."""
+
+    def get(self, request):
+        from datetime import datetime as _dt
+        from apps.analysis.models import DailyForagingSummary
+        from apps.devices.models import Device
+
+        device = get_object_or_404(Device.accessible(request.user),
+                                   pk=request.GET.get("device"))
+        qs = DailyForagingSummary.objects.filter(device=device).exclude(trips_csv_path="")
+
+        dfrom = request.GET.get("from", "")
+        dto = request.GET.get("to", "")
+        for val, lookup in ((dfrom, "date__gte"), (dto, "date__lte")):
+            if val:
+                try:
+                    qs = qs.filter(**{lookup: _dt.strptime(val, "%Y-%m-%d").date()})
+                except (ValueError, TypeError):
+                    pass
+        qs = qs.order_by("date")
+
+        if not qs.exists():
+            from django.contrib import messages as msg
+            msg.warning(request, "No cross-video foraging trips computed for this "
+                                 "device / range yet.")
+            return redirect("devices:detail", pk=device.pk)
+
+        parts = [f"device{device.pk}"]
+        if dfrom and dto:
+            parts.append(f"{dfrom}_to_{dto}")
+        elif dfrom:
+            parts.append(f"from{dfrom}")
+        elif dto:
+            parts.append(f"to{dto}")
+        filename = f"beemonitor_foraging_trips_{'_'.join(parts)}.csv"
+        return _stream_concat_csv(qs, "trips_csv_path", filename, "cross-video trip")
 
 
 class DownloadInteractionsCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):

@@ -1098,8 +1098,9 @@
          class="dl-link inline-flex items-center gap-1 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium">Events CSV</a>
       <a data-base="{% url 'analysis:download_tracking' %}?device={{ device.pk }}" href="{% url 'analysis:download_tracking' %}?device={{ device.pk }}"
          class="dl-link inline-flex items-center gap-1 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium">Tracking CSV</a>
-      <a data-base="{% url 'analysis:download_trips' %}?device={{ device.pk }}" href="{% url 'analysis:download_trips' %}?device={{ device.pk }}"
-         class="dl-link inline-flex items-center gap-1 px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded text-sm font-medium">Foraging Trips CSV</a>
+      <a data-base="{% url 'analysis:download_device_trips' %}?device={{ device.pk }}" href="{% url 'analysis:download_device_trips' %}?device={{ device.pk }}"
+         class="dl-link inline-flex items-center gap-1 px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded text-sm font-medium"
+         title="Cross-video foraging trips (a bee returning in a later clip) — matches the activity chart & batch trips table">Foraging Trips CSV</a>
       <a data-base="{% url 'analysis:download_interactions' %}?device={{ device.pk }}" href="{% url 'analysis:download_interactions' %}?device={{ device.pk }}"
          class="dl-link inline-flex items-center gap-1 px-3 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded text-sm font-medium">Interactions CSV</a>
       <a data-base="{% url 'analysis:download_nest_data' %}?device={{ device.pk }}" href="{% url 'analysis:download_nest_data' %}?device={{ device.pk }}"

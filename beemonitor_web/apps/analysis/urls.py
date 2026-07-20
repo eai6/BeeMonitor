@@ -12,6 +12,7 @@ urlpatterns = [
     path("analytics/download-events/", views.DownloadEventsCSVView.as_view(), name="download_events"),
     path("analytics/download-tracking/", views.DownloadTrackingCSVView.as_view(), name="download_tracking"),
     path("analytics/download-trips/", views.DownloadTripsCSVView.as_view(), name="download_trips"),
+    path("analytics/download-device-trips/", views.DownloadDeviceTripsCSVView.as_view(), name="download_device_trips"),
     path("analytics/download-interactions/", views.DownloadInteractionsCSVView.as_view(), name="download_interactions"),
     path("analytics/download-nest-data/", views.DownloadNestDataCSVView.as_view(), name="download_nest_data"),
     path("download-species/", views.DownloadSpeciesCSVView.as_view(), name="download_species"),
