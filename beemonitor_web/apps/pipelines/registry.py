@@ -231,13 +231,13 @@ BLOCK_REGISTRY = {
     # reference used to be separate roi.* nodes; folding it in here is what makes
     # the three-module abstraction hold.
     "detect.objects": {
-        "display_name": "Detector — Objects & Reference",
-        "description": "Find the insects to track or count, and the reference "
-                       "object activity is measured against (bee hotel / nest "
-                       "tubes / a drawn region). YOLO is fast with trained "
-                       "classes; SAM 3 takes any text prompt but is much slower. "
-                       "Detection and tracking run in one GPU pass, so adding a "
-                       "MOT module downstream costs nothing extra.",
+        "display_name": "Detect",
+        "description": "Detect one class of thing in the video — an insect to "
+                       "track, or a reference object to measure activity "
+                       "against. Use one node per class: a Detect(bee) feeding "
+                       "MOT, a Detect(nest tube) feeding an analyzer's reference "
+                       "port. Every Detect node on the same video shares a single "
+                       "GPU pass, so adding classes costs no extra compute.",
         "category": "detect",
         "icon": "🎯",
         "input_type": "video",
@@ -256,18 +256,21 @@ BLOCK_REGISTRY = {
                 ],
             },
             {
-                # Becomes the detection's label -> the tracking CSV's `taxon`.
-                "name": "text_prompt",
-                "label": "SAM 3 prompt",
+                # The class this node detects. One field for both detectors on
+                # purpose: for YOLO it selects which trained class to keep, for
+                # SAM 3 it *is* the grounding prompt. Either way it ends up as the
+                # detection's label — the tracking CSV's `taxon` column — which is
+                # how each node picks its own rows out of the shared GPU result.
+                "name": "label",
+                "label": "Detect what?",
                 "field_type": "text",
-                "required": False,
+                "required": True,
                 "default": "bee",
                 "choices": None,
-                "show_if": {"field": "model_family", "value": "sam3"},
             },
             {
                 "name": "object_model",
-                "label": "Object model (YOLO)",
+                "label": "Model (YOLO)",
                 "field_type": "bee_model",  # custom-model picker, populated at render
                 "required": False,
                 "default": "",
@@ -283,52 +286,6 @@ BLOCK_REGISTRY = {
                 "choices": None,
             },
             {
-                # Replaces the old roi.nest_layout / roi.draw / detect.nest nodes.
-                "name": "reference_source",
-                "label": "Reference object",
-                "field_type": "select",
-                "required": False,
-                "default": "device_layout",
-                "choices": [
-                    {"value": "device_layout", "label": "The device's saved hotel + nest tubes"},
-                    {"value": "detect", "label": "Detect the nest / hotel in the video"},
-                    {"value": "drawn", "label": "Region(s) I draw"},
-                    {"value": "none", "label": "None"},
-                ],
-            },
-            {
-                "name": "regions",
-                "label": "Regions (JSON)",
-                "field_type": "textarea",
-                "required": False,
-                "default": "[]",
-                "choices": None,
-                "show_if": {"field": "reference_source", "value": "drawn"},
-            },
-            {
-                "name": "reference_model",
-                "label": "Nest / hotel model",
-                "field_type": "nest_model",
-                "required": False,
-                "default": "",
-                "choices": None,
-                "show_if": {"field": "reference_source", "value": "detect"},
-            },
-            {
-                # The only way to reach the cheap nest-only GPU path. Explicit,
-                # because that path produces NO detections or tracks at all —
-                # inferring it from the graph would silently yield empty results.
-                "name": "run_scope",
-                "label": "Run scope",
-                "field_type": "select",
-                "required": False,
-                "default": "full",
-                "choices": [
-                    {"value": "full", "label": "Objects + reference"},
-                    {"value": "reference_only", "label": "Reference only (fast, no objects)"},
-                ],
-            },
-            {
                 # Rendering the overlay roughly doubles runtime; off by default.
                 "name": "annotated_video",
                 "label": "Annotated video",
@@ -339,6 +296,47 @@ BLOCK_REGISTRY = {
                     {"value": "off", "label": "Off (faster)"},
                     {"value": "on", "label": "On (render overlay video)"},
                 ],
+            },
+        ],
+    },
+
+    # ── Reference geometry (not a detection) ──────────────────────────────────
+    # The hotel/nest layout drawn in the ROI editor, or regions drawn here, are
+    # saved coordinates — nothing needs detecting. Keeping them out of the Detect
+    # node is what lets Detect mean exactly one thing.
+    "reference.layout": {
+        "display_name": "Reference — Saved Layout",
+        "description": "Use coordinates you already have as the reference an "
+                       "analyzer measures against: the device's saved bee-hotel "
+                       "ROI and nest tubes, or region(s) drawn here. No detection "
+                       "and no GPU. To find the reference in the video instead, "
+                       "use a Detect node and wire it to the analyzer's reference "
+                       "port.",
+        "category": "roi",
+        "icon": "📐",
+        "input_type": "video",
+        "output_type": "roi",
+        "backend": "local",
+        "config_fields": [
+            {
+                "name": "source",
+                "label": "Source",
+                "field_type": "select",
+                "required": True,
+                "default": "device_layout",
+                "choices": [
+                    {"value": "device_layout", "label": "The device's saved hotel + nest tubes"},
+                    {"value": "drawn", "label": "Region(s) I draw"},
+                ],
+            },
+            {
+                "name": "regions",
+                "label": "Regions (JSON)",
+                "field_type": "textarea",
+                "required": False,
+                "default": "[]",
+                "choices": None,
+                "show_if": {"field": "source", "value": "drawn"},
             },
         ],
     },
@@ -771,13 +769,13 @@ for _legacy_type in _LEGACY_BLOCKS:
 
 CATEGORY_META = {
     "input":    {"name": "Input",           "slug": "input",    "icon": "📥", "order": 0},
-    "roi":      {"name": "Region",          "slug": "roi",      "icon": "📐", "order": 1},
+    "roi":      {"name": "Reference",       "slug": "roi",      "icon": "📐", "order": 3},
     "detect":   {"name": "1 · Detect",      "slug": "detect",   "icon": "🎯", "order": 2},
-    "track":    {"name": "2 · Track (MOT)", "slug": "track",    "icon": "🛰️", "order": 3},
-    "analyze":  {"name": "3 · Analyze",     "slug": "analyze",  "icon": "📊", "order": 4},
-    "identify": {"name": "Identity",        "slug": "identify", "icon": "🔬", "order": 5},
-    "filter":   {"name": "Filter",    "slug": "filter",   "icon": "🧲", "order": 6},
-    "output":   {"name": "Output",    "slug": "output",   "icon": "📤", "order": 7},
+    "track":    {"name": "2 · Track (MOT)", "slug": "track",    "icon": "🛰️", "order": 4},
+    "analyze":  {"name": "3 · Analyze",     "slug": "analyze",  "icon": "📊", "order": 5},
+    "identify": {"name": "Identity",        "slug": "identify", "icon": "🔬", "order": 6},
+    "filter":   {"name": "Filter",          "slug": "filter",   "icon": "🧲", "order": 7},
+    "output":   {"name": "Output",          "slug": "output",   "icon": "📤", "order": 8},
 }
 
 
@@ -823,23 +821,35 @@ def get_block(block_type):
 # several typed inputs (e.g. a video AND its ROI). Port *order* is stable and maps
 # to Drawflow's input_1, input_2, … The executors that read specific ports
 # (foraging/visitation/colony read ``tracks``) rely on these names.
+# The reference port accepts either saved geometry (reference.layout -> roi) or a
+# Detect node aimed at the reference class (-> detections). That equivalence is
+# what makes "one node per detection class" work: nest tubes are just another
+# class, and the analyzer doesn't care which way you got them.
+_REFERENCE_PORT = {"name": "rois", "type": "roi", "optional": True,
+                   "accepts": ["roi", "detections"]}
+
 _MULTI_INPUT_PORTS = {
     "detect.objects":          [{"name": "video", "type": "video"}],
+    "reference.layout":        [{"name": "video", "type": "video"}],
     "track.mot":               [{"name": "detections", "type": "detections"}],
     "analyze.interaction":     [{"name": "tracks", "type": "tracks",
-                                 "accepts": ["tracks", "detections"]}],
+                                 "accepts": ["tracks", "detections"]},
+                                _REFERENCE_PORT],
     "analyze.detection_count": [{"name": "detections", "type": "detections",
-                                 "accepts": ["detections", "tracks"]}],
+                                 "accepts": ["detections", "tracks"]},
+                                _REFERENCE_PORT],
     "identify.marker":         [{"name": "tracks", "type": "tracks",
                                  "accepts": ["tracks", "detections"]}],
     "detect.bee":              [{"name": "video", "type": "video"}],
     "detect.nest":             [{"name": "video", "type": "video"}],
     "track.bee":               [{"name": "video", "type": "video"},
                                 {"name": "rois", "type": "roi", "optional": True}],
-    "analyze.foraging_trips":  [{"name": "tracks", "type": "tracks"},
-                                {"name": "rois", "type": "roi", "optional": True}],
-    "analyze.visitation":      [{"name": "tracks", "type": "tracks"},
-                                {"name": "rois", "type": "roi", "optional": True}],
+    "analyze.foraging_trips":  [{"name": "tracks", "type": "tracks",
+                                 "accepts": ["tracks", "detections"]},
+                                _REFERENCE_PORT],
+    "analyze.visitation":      [{"name": "tracks", "type": "tracks",
+                                 "accepts": ["tracks", "detections"]},
+                                _REFERENCE_PORT],
     "analyze.colony_activity": [{"name": "tracks", "type": "tracks"},
                                 {"name": "rois", "type": "roi", "optional": True}],
 }

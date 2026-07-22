@@ -23,10 +23,10 @@ def _s(step_id, block_type, config=None, inputs=None):
     return step
 
 
-def _detector(reference_source, **extra):
-    """Module 1 config — the detector defaults every template shares."""
-    return {"model_family": "yolo", "confidence": 0.4, "run_scope": "full",
-            "reference_source": reference_source, **extra}
+def _detect(label, **extra):
+    """A Detect node for one class. Every Detect node on a video shares one GPU
+    pass, so a template can name as many classes as it needs for free."""
+    return {"model_family": "yolo", "label": label, "confidence": 0.4, **extra}
 
 
 _MOT = {"tracker": "beetrack"}
@@ -37,13 +37,16 @@ _MOT = {"tracker": "beetrack"}
 TEMPLATES = [
     {
         "title": "Foraging trips",
-        "description": "Detect bees against the nest/hotel, track them, and derive "
-                       "foraging-trip events (exit → entry at a nest tube).",
+        "description": "Detect bees and the nest tubes they use, track the bees, and "
+                       "derive foraging-trip events (exit → entry at a tube).",
         "steps": [
             _s("v", "input.video"),
-            _s("d", "detect.objects", _detector("device_layout"), {"video": "v"}),
+            _s("d", "detect.objects", _detect("bee"), {"video": "v"}),
             _s("m", "track.mot", _MOT, {"detections": "d"}),
-            _s("f", "analyze.foraging_trips", {"event_confidence": 0.6}, {"tracks": "m"}),
+            # The reference is the device's saved hotel + nest-tube layout.
+            _s("r", "reference.layout", {"source": "device_layout"}, {"video": "v"}),
+            _s("f", "analyze.foraging_trips", {"event_confidence": 0.6},
+               {"tracks": "m", "rois": "r"}),
         ],
     },
     {
@@ -52,19 +55,18 @@ TEMPLATES = [
                        "(a flower, a patch, a nest entrance).",
         "steps": [
             _s("v", "input.video"),
-            _s("d", "detect.objects", _detector("drawn", regions="[]"), {"video": "v"}),
+            _s("d", "detect.objects", _detect("bee"), {"video": "v"}),
             _s("m", "track.mot", _MOT, {"detections": "d"}),
-            _s("g", "analyze.visitation", {}, {"tracks": "m"}),
+            _s("r", "reference.layout", {"source": "drawn", "regions": "[]"}, {"video": "v"}),
+            _s("g", "analyze.visitation", {}, {"tracks": "m", "rois": "r"}),
         ],
     },
     {
         "title": "Individual bee IDs",
-        "description": "Track bees and read their colour / QR / number marker IDs "
-                       "per trajectory. The marker decoder is not implemented yet — "
-                       "this template shows the shape of the pipeline.",
+        "description": "Track bees and read their colour marker IDs per trajectory.",
         "steps": [
             _s("v", "input.video"),
-            _s("d", "detect.objects", _detector("none"), {"video": "v"}),
+            _s("d", "detect.objects", _detect("bee"), {"video": "v"}),
             _s("m", "track.mot", _MOT, {"detections": "d"}),
             _s("i", "identify.marker", {"marker_type": "auto"}, {"tracks": "m"}),
         ],
@@ -75,7 +77,7 @@ TEMPLATES = [
                        "asking who went where.",
         "steps": [
             _s("v", "input.video"),
-            _s("d", "detect.objects", _detector("device_layout"), {"video": "v"}),
+            _s("d", "detect.objects", _detect("bee"), {"video": "v"}),
             _s("m", "track.mot", _MOT, {"detections": "d"}),
             _s("a", "analyze.detection_count",
                {"metric": "over_time", "bin_seconds": 5}, {"detections": "m"}),
@@ -84,12 +86,17 @@ TEMPLATES = [
     {
         "title": "Interactions",
         "description": "Find proximity interactions — insect ↔ insect, and insect ↔ "
-                       "reference object (e.g. a bee at a nest tube).",
+                       "reference object. Two Detect nodes, one per class: the bees "
+                       "are tracked, the nest tubes are the reference.",
         "steps": [
             _s("v", "input.video"),
-            _s("d", "detect.objects", _detector("device_layout"), {"video": "v"}),
+            _s("d", "detect.objects", _detect("bee"), {"video": "v"}),
             _s("m", "track.mot", _MOT, {"detections": "d"}),
-            _s("x", "analyze.interaction", {"interaction_type": "all"}, {"tracks": "m"}),
+            # A second Detect node, aimed at the reference class — it rides the
+            # same GPU pass as the bee detector.
+            _s("n", "detect.objects", _detect("nest"), {"video": "v"}),
+            _s("x", "analyze.interaction", {"interaction_type": "all"},
+               {"tracks": "m", "rois": "n"}),
         ],
     },
 ]

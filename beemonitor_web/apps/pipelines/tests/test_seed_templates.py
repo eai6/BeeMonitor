@@ -61,11 +61,24 @@ class SeedTemplateTests(TestCase):
             )
 
     def test_every_template_is_the_three_modules(self):
-        """Detector → MOT → Analyzer (or Identity) — the shape from the design."""
+        """video → Detect → MOT → Analyzer/Identity, plus optional reference
+        nodes. Order is not fixed: a template may add a reference.layout or a
+        second Detect node (one per class) anywhere before the analyzer."""
         for template in self._templates():
             kinds = [s["block_type"].split(".", 1)[0] for s in template.steps]
-            self.assertEqual(kinds[:3], ["input", "detect", "track"], template.title)
-            self.assertIn(kinds[3], ("analyze", "identify"), template.title)
+            self.assertEqual(kinds[0], "input", template.title)
+            self.assertIn("detect", kinds, template.title)
+            self.assertIn("track", kinds, template.title)
+            self.assertTrue({"analyze", "identify"} & set(kinds), template.title)
+
+    def test_detect_nodes_always_name_a_class(self):
+        """One node per class only works if every Detect node says which."""
+        for template in self._templates():
+            for step in template.steps:
+                if step["block_type"] != "detect.objects":
+                    continue
+                self.assertTrue((step.get("config") or {}).get("label"),
+                                f"{template.title}: Detect node with no label")
 
     def test_every_lesson_resolves_to_a_seeded_template(self):
         titles = {p.title for p in self._templates()}

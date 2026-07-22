@@ -243,6 +243,54 @@ def compute_colony_activity(tidy, boxes, fps, metric="occupancy", bin_sec=5.0):
     }
 
 
+def filter_by_label(df, label):
+    """Keep only rows whose taxon matches ``label`` (case-insensitive).
+
+    This is what makes one GPU pass serve several Detect nodes: every node reads
+    the same table and takes its own class. An empty label means "no filter", and
+    a table with no taxon column is passed through unchanged rather than emptied —
+    older results predate the column, and silently returning nothing would look
+    like "no detections" instead of "can't tell".
+    """
+    if df is None or len(df) == 0 or not label:
+        return df
+    col = _pick(df, ["taxon", "label", "class", "class_name"])
+    if col is None:
+        return df
+    wanted = {p.strip().lower() for p in str(label).split(",") if p.strip()}
+    if not wanted:
+        return df
+    return df[df[col].astype(str).str.strip().str.lower().isin(wanted)]
+
+
+def boxes_for_label(df, label, max_boxes=200):
+    """Distinct 0..1 boxes for a label — a detected reference object.
+
+    One box per detected instance: rows are per-frame, so the same nest tube
+    appears in every frame. Dedupes on rounded coordinates to collapse those back
+    into the handful of real objects.
+    """
+    df = filter_by_label(df, label)
+    if df is None or len(df) == 0:
+        return []
+    cols = {k: _pick(df, v) for k, v in _BBOX.items()}
+    if any(c is None for c in cols.values()):
+        return []
+    seen, boxes = set(), []
+    for _, r in df.iterrows():
+        try:
+            box = tuple(round(float(r[cols[k]]), 3) for k in ("x1", "y1", "x2", "y2"))
+        except (TypeError, ValueError):
+            continue
+        if box in seen:
+            continue
+        seen.add(box)
+        boxes.append(list(box))
+        if len(boxes) >= max_boxes:
+            break
+    return boxes
+
+
 def compute_detection_counts(tidy, boxes, fps, per_frame=False, count_tracks=True):
     """Detection totals from a tidy [tid, frame, x, y] table.
 

@@ -92,8 +92,15 @@ def find_artifact(artifact_type, steps, index, context):
     return None
 
 
+def detector_label(step):
+    """The class a Detect node is aimed at (its detections' ``taxon``)."""
+    cfg = step.get("config") or {}
+    # ``text_prompt`` is the legacy detect.bee/track.bee key for the same idea.
+    return (cfg.get("label") or cfg.get("text_prompt") or "").strip()
+
+
 def resolve_reference(step, run, context, index):
-    """Resolve a Detector node's reference/ROI config into ROI-shaped data.
+    """Resolve a reference node's config into ROI-shaped data.
 
     Returns the ``{hotel_roi?, nest_layout?, regions?}`` shape ``ops.roi_boxes``
     already consumes. Deliberately a function of the step's **config** (plus the
@@ -101,11 +108,15 @@ def resolve_reference(step, run, context, index):
     step's output dict in ``StepResult`` and replays it verbatim on a hit, and
     drawn regions are not part of the hashed job config — so a reference stashed
     in the output would go stale the moment the user edited it.
+
+    Handles ``reference.layout`` (saved geometry) and the legacy detect.objects
+    ``reference_source`` config, which predates the split into one node per class.
     """
     import json
 
     cfg = step.get("config") or {}
-    source = cfg.get("reference_source", "device_layout")
+    # reference.layout uses "source"; legacy detect.objects used "reference_source".
+    source = cfg.get("source") or cfg.get("reference_source") or "device_layout"
 
     if source == "none":
         return {}
@@ -119,9 +130,9 @@ def resolve_reference(step, run, context, index):
         return {"artifact": "roi", "regions": regions, "source": "drawn"}
 
     if source == "detect":
-        # The nest/hotel model runs inside the GPU job; its boxes come back on the
-        # result. Absent until the job finishes, which is fine — analyzers only
-        # read the reference after their upstream step is done.
+        # Legacy only. The nest/hotel model ran inside the GPU job; its boxes come
+        # back on the result. New graphs express this as a Detect node wired to the
+        # analyzer's reference port instead.
         out = context.get(step.get("id")) or {}
         summary = ((out.get("result") or {}).get("summary_stats")) or {}
         boxes = summary.get("nest_bboxes") or []
@@ -153,21 +164,79 @@ def resolve_reference(step, run, context, index):
     }
 
 
-def find_reference(steps, index, context, run):
-    """Find the reference/ROI for a step, from either era of the builder.
+_REFERENCE_BLOCKS = ("reference.layout", "roi.nest_layout", "roi.draw")
 
-    Replaces ``find_artifact("roi", ...)``: since the module refactor the
-    reference lives in the Detector's config rather than in a separate ``roi.*``
-    node's output. Walks upstream and returns whichever it meets first, so a
-    ``detector → mot → analyzer`` chain and a legacy ``roi.* → track.bee`` chain
-    both resolve. Returns ``{}`` when there is no reference.
+
+def find_reference(steps, index, context, run):
+    """Find the reference geometry for a step, from any era of the builder.
+
+    Prefers an explicit ``rois`` edge — with one node per class, a Detect node
+    aimed at the reference class is wired straight into the analyzer's reference
+    port, and that intent should win over anything found by walking. Falls back to
+    an upstream reference node (or a legacy Detector carrying reference config).
+    Returns ``{}`` when there is no reference.
     """
+    by_id = {s.get("id"): (i, s) for i, s in enumerate(steps)}
+    explicit = ((steps[index].get("inputs") or {}).get("rois"))
+    if explicit and explicit in by_id:
+        i, step = by_id[explicit]
+        ref = _reference_from(step, run, context, i)
+        if ref:
+            return ref
+
     for sid, i, step in _walk_upstream(steps, index):
         out = context.get(sid, {})
-        if out.get("artifact") == "roi":  # legacy roi.nest_layout / roi.draw
+        if out.get("artifact") == "roi":  # a reference node that already ran
             return out
-        if step is not None and step.get("block_type") == "detect.objects":
+        if step is not None and step.get("block_type") in _REFERENCE_BLOCKS:
             return resolve_reference(step, run, context, i)
+        # Legacy: the Detector used to carry reference_source in its own config.
+        if (step is not None and step.get("block_type") == "detect.objects"
+                and (step.get("config") or {}).get("reference_source")):
+            return resolve_reference(step, run, context, i)
+    return {}
+
+
+def _reference_from(step, run, context, index):
+    """Reference geometry from one node, whichever kind it is."""
+    block_type = step.get("block_type")
+    if block_type in _REFERENCE_BLOCKS:
+        return resolve_reference(step, run, context, index)
+    if block_type == "detect.objects":
+        # A Detect node aimed at the reference class: its boxes ARE the reference.
+        return detected_reference(step, run, context, index)
+    out = context.get(step.get("id")) or {}
+    return out if out.get("artifact") == "roi" else {}
+
+
+def detected_reference(step, run, context, index):
+    """Turn a Detect node's detections into reference boxes.
+
+    Reads the shared GPU result and keeps only rows whose taxon matches this
+    node's label — the same label-filtering every Detect consumer does. Falls back
+    to the job's ``nest_bboxes`` summary, which the worker fills in when it
+    located the hotel/nest layout itself.
+    """
+    from . import ops
+
+    out = context.get(step.get("id")) or {}
+    result = out.get("result") or {}
+    label = detector_label(step)
+
+    df = ops.load_detections_df(result)
+    if df is None:
+        df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
+    boxes = ops.boxes_for_label(df, label) if df is not None else []
+    if boxes:
+        return {"artifact": "roi", "source": "detected", "label": label,
+                "regions": [{"box": b} for b in boxes]}
+
+    summary = result.get("summary_stats") or {}
+    nest_boxes = summary.get("nest_bboxes") or {}
+    if nest_boxes:
+        values = nest_boxes.values() if isinstance(nest_boxes, dict) else nest_boxes
+        return {"artifact": "roi", "source": "detected", "label": label,
+                "nest_layout": [{"box": b} for b in values if b]}
     return {}
 
 
@@ -225,6 +294,21 @@ def _exec_roi_draw(step, run, context, inputs, index):
     return {"artifact": "roi", "regions": regions, "source": "drawn"}
 
 
+def _upstream_label(inputs):
+    """The class carried by whatever fed this analyzer.
+
+    Set by the MOT step (inherited from its Detect node). Analyzers use it to take
+    only their own rows out of the shared GPU result, so a Detect(bee) → MOT →
+    Visitation branch counts bees even when a Detect(nest tube) node put nest rows
+    in the same table.
+    """
+    for key in ("tracks", "detections", "in"):
+        value = inputs.get(key)
+        if isinstance(value, dict) and value.get("label"):
+            return value["label"]
+    return ""
+
+
 def _first_upstream_result(inputs):
     """Return the (single) upstream output dict for a linear step."""
     if not inputs:
@@ -256,11 +340,17 @@ def _exec_mot(step, run, context, inputs, index):
                      "tracking data — set its Run scope to 'Objects + reference' "
                      "if it is currently 'Reference only'.",
         }
+    # Carry the upstream Detect node's class forward. Several Detect nodes share
+    # one GPU result, so "which rows are mine" is decided by label, and every
+    # downstream analyzer needs to inherit that answer rather than re-deriving it.
+    detector = _upstream_detector(run.steps, index) if run is not None else None
+    label = detector_label(detector) if detector else ""
     return {
         "artifact": "tracks",
         "result": result,
         "job_id": up.get("job_id"),
         "tracker": (step.get("config") or {}).get("tracker", "beetrack"),
+        "label": label,
         "unique_tracks": result.get("unique_tracks", 0),
     }
 
@@ -313,7 +403,8 @@ def _exec_analyze_detection_count(step, run, context, inputs, index):
     reference = find_reference(run.steps, index, context, run)
     boxes = ops.roi_boxes(reference)
 
-    df = ops.load_detections_df(result)
+    label = _upstream_label(inputs)
+    df = ops.filter_by_label(ops.load_detections_df(result), label)
     raw = df is not None
     if raw:
         note = ("Counted from the raw detector output — every detection, "
@@ -325,7 +416,7 @@ def _exec_analyze_detection_count(step, run, context, inputs, index):
             df = df.copy()
             df["track_id"] = range(len(df))
     else:
-        df = ops.load_tracking_df(result)
+        df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
         note = ("Counted from the tracked-detection table — this job predates "
                 "raw-detection export, so detections the tracker discarded are "
                 "not included. Re-run it to count raw detections.")
@@ -378,7 +469,7 @@ def _exec_analyze_visitation(step, run, context, inputs, index):
     roi = find_reference(run.steps, index, context, run)
     boxes = ops.roi_boxes(roi)
 
-    df = ops.load_tracking_df(result)
+    df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
     tidy = ops.normalized_tracks(df, result) if df is not None else None
     if tidy is not None:
         if not boxes:
@@ -407,7 +498,7 @@ def _exec_analyze_colony_activity(step, run, context, inputs, index):
     roi = find_reference(run.steps, index, context, run)
     boxes = ops.roi_boxes(roi)
 
-    df = ops.load_tracking_df(result)
+    df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
     tidy = ops.normalized_tracks(df, result) if df is not None else None
     if tidy is not None:
         series = ops.compute_colony_activity(tidy, boxes, ops.fps_of(result), metric=metric)
@@ -440,7 +531,7 @@ def _exec_identify_marker(step, run, context, inputs, index):
     result = (up or {}).get("result", {})
     marker_type = (step.get("config") or {}).get("marker_type", "auto")
 
-    df = ops.load_tracking_df(result)
+    df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
     ident = ops.marker_identities(df) if df is not None else None
     if ident is not None:
         return {"artifact": "table", "table_kind": "marker_id",
@@ -488,6 +579,9 @@ def _exec_output(step, run, context, inputs, index):
 LOCAL_EXECUTORS = {
     "input.video": _exec_input_video,
     # ── The three-module palette ──
+    "reference.layout": lambda s, r, c, i, idx: resolve_reference(s, r, c, idx) or {
+        "artifact": "roi", "source": (s.get("config") or {}).get("source", "device_layout"),
+    },
     "track.mot": _exec_mot,
     "analyze.interaction": _exec_analyze_interaction,
     "analyze.detection_count": _exec_analyze_detection_count,
@@ -555,17 +649,43 @@ def downstream_ids(step_id, steps):
         frontier.extend(children.get(sid, []))
 
 
+def _all_detector_labels(steps):
+    """Every label any Detect node in the graph asks for, de-duped, in order.
+
+    All Detect nodes on a video share one GPU pass. Collecting their labels here
+    means each node's job config comes out **identical**, so the first one submits
+    and the rest hit the StepResult cache — the existing cache does the
+    de-duplication for free, and adding a class costs no extra compute.
+    """
+    labels = []
+    for s in steps or []:
+        if s.get("block_type") != "detect.objects":
+            continue
+        label = detector_label(s)
+        if label and label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _upstream_detector(steps, index):
+    """The Detect node feeding this step, if any — for label filtering."""
+    for _sid, i, step in _walk_upstream(steps, index):
+        if step is not None and step.get("block_type") == "detect.objects":
+            return step
+    return None
+
+
 def _run_tracking_for(step):
     """Whether this GPU step's job should run detection + tracking.
 
-    For the Detector module this is the node's own explicit ``run_scope``, not an
-    inference from the graph. It has to be explicit: ``run_tracking=False`` sends
-    the worker down a nest-only path that writes no tracking CSV at all, so
-    guessing it from "is there a MOT node downstream" would silently produce a
-    pipeline whose analyzers have nothing to read.
+    A Detect node always runs the full pass. ``run_tracking=False`` sends the
+    worker down a nest-only path that writes no CSVs at all — not even
+    detections — so it can never serve a Detect node, whose entire output is the
+    detections table. Only the legacy nest-only block uses that path.
     """
     block_type = step.get("block_type")
     if block_type == "detect.objects":
+        # Legacy graphs may still carry run_scope from before the class split.
         return (step.get("config") or {}).get("run_scope", "full") != "reference_only"
     if block_type == "detect.nest":  # legacy nest-only fast path
         return False
@@ -608,10 +728,16 @@ def build_detect_and_track_config(step, run, context, index):
         return None, "No upstream video for this GPU step."
 
     cfg = (step.get("config") or {})
-    # Detector choice: "model_family" on the Detector module, "detector" on the
+    # Detector choice: "model_family" on the Detect module, "detector" on the
     # legacy detect.bee/track.bee nodes.
     raw_family = cfg.get("model_family") or cfg.get("detector") or "yolo"
     detector_kind = "sam3" if str(raw_family).lower() == "sam3" else "yolo"
+    # Every Detect node's label rides one job. For SAM 3 the union becomes the
+    # grounding prompt (the detector already takes a comma-separated list and
+    # labels each detection with the prompt that matched). For YOLO the model
+    # detects its trained classes regardless; nodes filter by taxon on read.
+    labels = _all_detector_labels(run.steps)
+    prompt = ",".join(labels) if labels else (cfg.get("text_prompt", "") or "").strip()
     config = {
         "detection_mode": "yolo",
         "confidence_threshold": float(cfg.get("confidence", 0.4) or 0.4),
@@ -621,16 +747,20 @@ def build_detect_and_track_config(step, run, context, index):
         "run_tracking": _run_tracking_for(step),
         # Detector: SAM 3 text-prompt tracking, else YOLO.
         "detector_kind": detector_kind,
-        "text_prompt": (cfg.get("text_prompt", "") or "").strip(),
+        "text_prompt": prompt,
+        # Informational for the worker + part of the cache key, so adding or
+        # renaming a class re-runs rather than serving a stale result.
+        "detect_labels": labels,
         # Annotated video is opt-in (off = much faster, needed for long clips).
         "visualize": str(cfg.get("annotated_video", "")).lower() in ("1", "true", "on", "yes"),
         # Selected on the downstream MOT node; inert on the worker for now.
         "tracker": _pipeline_tracker(step, run.steps),
     }
-    if step.get("block_type") == "detect.objects":
-        # Part of the hashed job config so two Detectors that differ only in how
-        # they get their reference don't share a cached GPU result.
-        config["reference_source"] = cfg.get("reference_source", "device_layout")
+    legacy_ref = cfg.get("reference_source")
+    if step.get("block_type") == "detect.objects" and legacy_ref:
+        # Legacy graphs only: part of the hashed config so two pre-split Detectors
+        # differing solely in how they got their reference don't share a result.
+        config["reference_source"] = legacy_ref
     # Custom models picked on the node (empty = the built-in ones). Resolved by
     # pk against the run owner's models — same contract as the New Analysis
     # form's custom_bee_model / custom_nest_model selects. The Detector module

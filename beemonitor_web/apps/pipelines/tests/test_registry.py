@@ -18,7 +18,7 @@ from apps.pipelines.registry import (
 MODULE_STEPS = [
     {"id": "v", "block_type": "input.video", "config": {}},
     {"id": "d", "block_type": "detect.objects",
-     "config": {"reference_source": "device_layout"}, "inputs": {"video": "v"}},
+     "config": {"label": "bee"}, "inputs": {"video": "v"}},
     {"id": "m", "block_type": "track.mot", "config": {"tracker": "beetrack"},
      "inputs": {"detections": "d"}},
     {"id": "f", "block_type": "analyze.foraging_trips",
@@ -86,6 +86,7 @@ class HiddenBlockTests(SimpleTestCase):
         self.assertEqual(palette, {
             "input.video",
             "detect.objects",
+            "reference.layout",
             "track.mot",
             "analyze.foraging_trips", "analyze.visitation",
             "analyze.interaction", "analyze.detection_count",
@@ -98,8 +99,10 @@ class HiddenBlockTests(SimpleTestCase):
 
     def test_categories_that_went_empty_are_dropped(self):
         slugs = {c["slug"] for c in get_categories()}
-        # roi/filter/output are entirely legacy now — no empty accordions.
-        self.assertEqual(slugs & {"roi", "filter", "output"}, set())
+        # filter/output are entirely legacy — no empty accordions. "roi" is NOT
+        # empty: reference.layout lives there.
+        self.assertEqual(slugs & {"filter", "output"}, set())
+        self.assertIn("roi", slugs)
 
     def test_include_hidden_brings_the_legacy_blocks_back(self):
         palette = {b["type"] for c in get_categories(include_hidden=True)
@@ -132,7 +135,7 @@ class ValidateStepsTests(SimpleTestCase):
     def test_detector_straight_into_an_analyzer_is_allowed(self):
         steps = [
             {"id": "v", "block_type": "input.video", "config": {}},
-            {"id": "d", "block_type": "detect.objects", "config": {},
+            {"id": "d", "block_type": "detect.objects", "config": {"label": "bee"},
              "inputs": {"video": "v"}},
             {"id": "c", "block_type": "analyze.detection_count",
              "config": {"metric": "total"}, "inputs": {"detections": "d"}},

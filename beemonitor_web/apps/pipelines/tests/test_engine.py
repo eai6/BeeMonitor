@@ -36,7 +36,7 @@ class EngineTestCase(TestCase):
             {"id": "v", "block_type": "input.video",
              "config": {"video_id": str(self.video.pk)}},
             {"id": "d", "block_type": "detect.objects",
-             "config": detector_config or {"reference_source": "device_layout"},
+             "config": detector_config or {"label": "bee"},
              "inputs": {"video": "v"}},
             {"id": "m", "block_type": "track.mot", "config": {"tracker": "beetrack"},
              "inputs": {"detections": "d"}},
@@ -105,7 +105,7 @@ class RunAdvancementTests(EngineTestCase):
 
     def test_reference_only_detector_fails_the_mot_step_with_a_reason(self):
         steps = self._steps(detector_config={
-            "reference_source": "device_layout", "run_scope": "reference_only"})
+            "label": "bee", "run_scope": "reference_only"})
         run = self._start(steps)
         self._finish_job(Job.objects.get(), tracking_csv_path="")
 
@@ -158,7 +158,7 @@ class StepCacheTests(EngineTestCase):
         self._finish_job(Job.objects.get())
 
         self._start(self._steps(detector_config={
-            "reference_source": "device_layout", "confidence": 0.9}))
+            "label": "bee", "confidence": 0.9}))
 
         self.assertEqual(Job.objects.count(), 2)
 

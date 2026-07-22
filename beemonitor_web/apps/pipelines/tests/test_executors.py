@@ -85,16 +85,23 @@ class ExecutorTestCase(TestCase):
         run.context = context or {}
         return run
 
-    def _module_steps(self, detector_config=None, analyzer=None):
+    def _layout(self, config):
+        """A reference.layout node — saved geometry, not a detection."""
+        return {"id": "r", "block_type": "reference.layout", "config": config,
+                "inputs": {"video": "v"}}
+
+    def _module_steps(self, detector_config=None, analyzer=None, reference=None):
         steps = [
             {"id": "v", "block_type": "input.video",
              "config": {"video_id": str(self.video.pk)}},
             {"id": "d", "block_type": "detect.objects",
-             "config": detector_config or {"reference_source": "device_layout"},
+             "config": detector_config or {"label": "bee"},
              "inputs": {"video": "v"}},
             {"id": "m", "block_type": "track.mot", "config": {"tracker": "beetrack"},
              "inputs": {"detections": "d"}},
         ]
+        if reference is not None:
+            steps.append(self._layout(reference))
         if analyzer:
             steps.append(analyzer)
         return steps
@@ -104,59 +111,50 @@ class ExecutorTestCase(TestCase):
 
 
 class ResolveReferenceTests(ExecutorTestCase):
-    def test_device_layout_reads_the_saved_roi_and_tubes(self):
-        steps = self._module_steps()
-        run = self._run(steps, self._video_context())
+    """Saved geometry lives on its own node now — Detect means detect."""
 
-        ref = executors.resolve_reference(steps[1], run, run.context, 1)
+    def _resolve(self, config):
+        steps = self._module_steps(reference=config)
+        run = self._run(steps, self._video_context())
+        idx = next(i for i, st in enumerate(steps) if st["id"] == "r")
+        return executors.resolve_reference(steps[idx], run, run.context, idx)
+
+    def test_device_layout_reads_the_saved_roi_and_tubes(self):
+        ref = self._resolve({"source": "device_layout"})
 
         self.assertEqual(ref["hotel_roi"], [0.0, 0.0, 0.6, 0.6])
         self.assertEqual(ref["nest_layout"], [{"id": 1, "box": [0.1, 0.1, 0.3, 0.3]}])
 
     def test_drawn_parses_the_regions_json(self):
-        steps = self._module_steps(
-            {"reference_source": "drawn", "regions": '[{"box": [0, 0, 1, 1]}]'})
+        ref = self._resolve({"source": "drawn", "regions": '[{"box": [0, 0, 1, 1]}]'})
+
+        self.assertEqual(ref["regions"], [{"box": [0, 0, 1, 1]}])
+
+    def test_drawn_survives_malformed_json(self):
+        self.assertEqual(self._resolve({"source": "drawn", "regions": "{oops"})["regions"], [])
+
+    def test_legacy_detector_reference_config_still_resolves(self):
+        """Pre-split graphs kept reference_source on the Detect node itself."""
+        steps = self._module_steps({"label": "bee", "reference_source": "drawn",
+                                    "regions": '[{"box": [0, 0, 1, 1]}]'})
         run = self._run(steps, self._video_context())
 
         ref = executors.resolve_reference(steps[1], run, run.context, 1)
 
         self.assertEqual(ref["regions"], [{"box": [0, 0, 1, 1]}])
 
-    def test_drawn_survives_malformed_json(self):
-        steps = self._module_steps({"reference_source": "drawn", "regions": "{oops"})
-        run = self._run(steps, self._video_context())
-
-        ref = executors.resolve_reference(steps[1], run, run.context, 1)
-
-        self.assertEqual(ref["regions"], [])
-
-    def test_none_resolves_to_nothing(self):
-        steps = self._module_steps({"reference_source": "none"})
-        run = self._run(steps, self._video_context())
-
-        self.assertEqual(executors.resolve_reference(steps[1], run, run.context, 1), {})
-
-    def test_detect_reads_nest_boxes_off_the_job_result(self):
-        steps = self._module_steps({"reference_source": "detect"})
-        context = self._video_context()
-        context["d"] = {"artifact": "detections", "result": {
-            "summary_stats": {"nest_bboxes": {"1": [0.2, 0.2, 0.4, 0.4]}}}}
-        run = self._run(steps, context)
-
-        ref = executors.resolve_reference(steps[1], run, run.context, 1)
-
-        self.assertEqual(ref["nest_layout"], [{"box": "1"}])
-
 
 class FindReferenceTests(ExecutorTestCase):
     def test_walks_through_the_mot_step_to_the_detector(self):
         """detector → mot → analyzer must still resolve the Detector's reference."""
         analyzer = {"id": "g", "block_type": "analyze.visitation", "config": {},
-                    "inputs": {"tracks": "m"}}
-        steps = self._module_steps(analyzer=analyzer)
+                    "inputs": {"tracks": "m", "rois": "r"}}
+        steps = self._module_steps(reference={"source": "device_layout"},
+                                   analyzer=analyzer)
         run = self._run(steps, self._video_context())
+        idx = next(i for i, st in enumerate(steps) if st["id"] == "g")
 
-        ref = executors.find_reference(steps, 3, run.context, run)
+        ref = executors.find_reference(steps, idx, run.context, run)
 
         self.assertEqual(ref["hotel_roi"], [0.0, 0.0, 0.6, 0.6])
 
@@ -179,7 +177,7 @@ class FindReferenceTests(ExecutorTestCase):
     def test_returns_empty_when_there_is_no_reference(self):
         analyzer = {"id": "g", "block_type": "analyze.visitation", "config": {},
                     "inputs": {"tracks": "m"}}
-        steps = self._module_steps({"reference_source": "none"}, analyzer=analyzer)
+        steps = self._module_steps(analyzer=analyzer)
         run = self._run(steps, self._video_context())
 
         self.assertEqual(executors.find_reference(steps, 3, run.context, run), {})
@@ -220,8 +218,7 @@ class BuildJobConfigTests(ExecutorTestCase):
         self.assertTrue(built["config"]["run_tracking"])
 
     def test_reference_only_scope_skips_tracking(self):
-        steps = self._module_steps(
-            {"reference_source": "device_layout", "run_scope": "reference_only"})
+        steps = self._module_steps({"label": "bee", "run_scope": "reference_only"})
         built, err = self._build(steps)
         self.assertIsNone(err)
         self.assertFalse(built["config"]["run_tracking"])
@@ -239,11 +236,21 @@ class BuildJobConfigTests(ExecutorTestCase):
         self.assertEqual(built["config"]["nest_layout"],
                          [{"id": 1, "box": [0.1, 0.1, 0.3, 0.3]}])
 
-    def test_reference_source_is_part_of_the_config(self):
-        """So two Detectors differing only in how they get a reference don't
-        collide in the StepResult cache."""
-        built, _ = self._build(self._module_steps())
-        self.assertEqual(built["config"]["reference_source"], "device_layout")
+    def test_every_detect_label_rides_one_job(self):
+        """All Detect nodes share a GPU pass, so every node's config lists every
+        label — which makes their cache keys identical and de-dupes the job."""
+        steps = self._module_steps()
+        steps.append({"id": "n", "block_type": "detect.objects",
+                      "config": {"label": "nest"}, "inputs": {"video": "v"}})
+        run = self._run(steps, self._video_context())
+        nest_idx = next(i for i, st in enumerate(steps) if st["id"] == "n")
+
+        bee, _ = executors.build_detect_and_track_config(steps[1], run, run.context, 1)
+        nest, _ = executors.build_detect_and_track_config(
+            steps[nest_idx], run, run.context, nest_idx)
+
+        self.assertEqual(bee["config"]["detect_labels"], ["bee", "nest"])
+        self.assertEqual(bee["config"], nest["config"])  # same key -> one job
 
     def test_sam3_family_selects_the_sam3_detector(self):
         steps = self._module_steps({"model_family": "sam3", "text_prompt": " hoverfly "})
@@ -341,6 +348,11 @@ class MotStepTests(ExecutorTestCase):
 
 
 class AnalyzerTests(ExecutorTestCase):
+    @staticmethod
+    def _idx(steps, step_id):
+        """Locate a step by id — a reference node shifts positional indices."""
+        return next(i for i, st in enumerate(steps) if st["id"] == step_id)
+
     def _analyzer_inputs(self, csv_key, path):
         return {"tracks": {"artifact": "tracks", "result": {csv_key: path, "fps": 1}},
                 "detections": {"artifact": "tracks", "result": {csv_key: path, "fps": 1}}}
@@ -349,14 +361,13 @@ class AnalyzerTests(ExecutorTestCase):
         """Raw detector output includes detections the tracker discarded."""
         path = _write_csv(DETECTION_ROWS, "detections.csv")
         steps = self._module_steps(
-            {"reference_source": "none"},
             analyzer={"id": "c", "block_type": "analyze.detection_count",
                       "config": {"metric": "total"}, "inputs": {"detections": "m"}})
         run = self._run(steps, self._video_context())
 
         out = executors._exec_analyze_detection_count(
-            steps[3], run, run.context,
-            self._analyzer_inputs("detections_csv_path", path), 3,
+            steps[self._idx(steps, "c")], run, run.context,
+            self._analyzer_inputs("detections_csv_path", path), self._idx(steps, "c"),
         )
 
         self.assertEqual(out["detections"], 5)
@@ -370,14 +381,13 @@ class AnalyzerTests(ExecutorTestCase):
         """Jobs that predate raw-detection export still work, and say so."""
         path = _write_csv(TRACKING_ROWS, "tracking.csv")
         steps = self._module_steps(
-            {"reference_source": "none"},
             analyzer={"id": "c", "block_type": "analyze.detection_count",
                       "config": {"metric": "total"}, "inputs": {"detections": "m"}})
         run = self._run(steps, self._video_context())
 
         out = executors._exec_analyze_detection_count(
-            steps[3], run, run.context,
-            self._analyzer_inputs("tracking_csv_path", path), 3,
+            steps[self._idx(steps, "c")], run, run.context,
+            self._analyzer_inputs("tracking_csv_path", path), self._idx(steps, "c"),
         )
 
         self.assertEqual(out["detections"], 4)
@@ -389,14 +399,15 @@ class AnalyzerTests(ExecutorTestCase):
         """With a reference box, only detections inside it count."""
         path = _write_csv(TRACKING_ROWS, "tracking.csv")
         steps = self._module_steps(
-            {"reference_source": "drawn", "regions": '[{"box": [0.0, 0.0, 0.6, 0.6]}]'},
+            reference={"source": "drawn", "regions": '[{"box": [0.0, 0.0, 0.6, 0.6]}]'},
             analyzer={"id": "c", "block_type": "analyze.detection_count",
-                      "config": {"metric": "total"}, "inputs": {"detections": "m"}})
+                      "config": {"metric": "total"},
+                      "inputs": {"detections": "m", "rois": "r"}})
         run = self._run(steps, self._video_context())
 
         out = executors._exec_analyze_detection_count(
-            steps[3], run, run.context,
-            self._analyzer_inputs("tracking_csv_path", path), 3,
+            steps[self._idx(steps, "c")], run, run.context,
+            self._analyzer_inputs("tracking_csv_path", path), self._idx(steps, "c"),
         )
 
         self.assertEqual(out["detections"], 2)  # track 2 sits outside the box
