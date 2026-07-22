@@ -600,6 +600,21 @@ if deploy_endpoint:
                         metric_name="ApproximateBacklogSizePerInstance",
                         namespace="AWS/SageMaker",
                         statistic="Average",
+                        # WITHOUT this dimension the metric matches nothing that
+                        # SageMaker publishes, so Application Auto Scaling's
+                        # scale-IN alarm sits in INSUFFICIENT_DATA forever and
+                        # never scales the variant back down. That is exactly how
+                        # both GPU endpoints ended up billing 24.0 h/day with zero
+                        # traffic (~$1.5k/month). The scale-from-zero policy below
+                        # is unaffected — it fires on a different metric — so the
+                        # endpoint could wake but never sleep.
+                        dimensions=[
+                            aws.appautoscaling
+                            .PolicyTargetTrackingScalingPolicyConfigurationCustomizedMetricSpecificationDimensionArgs(
+                                name="EndpointName",
+                                value=endpoint.name,
+                            ),
+                        ],
                     ),
                 scale_in_cooldown=180,   # wait 3 min idle before scaling in (was 600)
                 scale_out_cooldown=60,
@@ -812,6 +827,15 @@ if deploy_sam3:
                         metric_name="ApproximateBacklogSizePerInstance",
                         namespace="AWS/SageMaker",
                         statistic="Average",
+                        # Required — see the video endpoint's policy for what
+                        # omitting this costs.
+                        dimensions=[
+                            aws.appautoscaling
+                            .PolicyTargetTrackingScalingPolicyConfigurationCustomizedMetricSpecificationDimensionArgs(
+                                name="EndpointName",
+                                value=sam3_endpoint.name,
+                            ),
+                        ],
                     ),
                 scale_in_cooldown=180,   # 3 min idle before scale-in (was 600)
                 scale_out_cooldown=60,
