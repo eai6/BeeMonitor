@@ -22,6 +22,14 @@ from .color_identifier import (
     build_identifier,
     hue_distance,
 )
+from .species import (
+    IMAGE_SIZE,
+    NON_BEE_TAXA,
+    SpeciesIdentifier,
+    SpeciesVote,
+    taxa,
+    taxon_ranks,
+)
 
 __all__ = [
     "BaseIdentifier",
@@ -30,8 +38,14 @@ __all__ = [
     "Identification",
     "QUEEN_MARKING_PALETTE",
     "EXTENDED_PALETTE",
+    "IMAGE_SIZE",
+    "NON_BEE_TAXA",
+    "SpeciesIdentifier",
+    "SpeciesVote",
     "available_marker_types",
     "build_identifier",
     "crop_bbox",
     "hue_distance",
+    "taxa",
+    "taxon_ranks",
 ]

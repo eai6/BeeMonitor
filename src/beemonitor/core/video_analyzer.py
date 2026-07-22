@@ -236,6 +236,23 @@ class BeeMonitor:
 
         # Initialize BeeTracking with model path and tracker params
         # BeeTracking creates YOLO model and BeeTracker internally
+        # BeeMachine species classifier, built only when a model is configured.
+        # Lazily imported like the SAM 3 detector above so a worker without the
+        # model (or without onnxruntime) is unaffected.
+        species_classifier = None
+        species_model = getattr(self.config.tracking, 'species_model', '') or ''
+        if species_model:
+            try:
+                from beemonitor.identification.species import SpeciesIdentifier
+                species_classifier = SpeciesIdentifier(
+                    model_path=species_model,
+                    min_confidence=getattr(
+                        self.config.tracking, 'species_min_confidence', 0.5),
+                )
+                logger.info(f"Species classification enabled: {species_model}")
+            except Exception as exc:
+                logger.warning(f"Species classifier unavailable ({exc}) — continuing without it")
+
         tracker = BeeTracking(
             yolo_model_path=self.config.models.tracking,
             confidence_threshold=self.config.tracking.confidence_threshold,
@@ -250,6 +267,7 @@ class BeeMonitor:
             save_crops=getattr(self.config.tracking, 'save_crops', False),
             crops_per_track=getattr(self.config.tracking, 'crops_per_track', 10),
             detector=detector,
+            species_classifier=species_classifier,
         )
         
         # Pass two-mode config flag

@@ -473,6 +473,12 @@ class TrackingConfig:
     detector_kind: str = "yolo"
     text_prompt: str = ""  # SAM 3 grounding prompt, e.g. "bee" / "hoverfly"
 
+    # BeeMachine species classification (354 taxa, EfficientNetV2-S @ 300px).
+    # Runs inside the tracking pass, voting per trajectory — see
+    # beemonitor.identification.species. Empty path = disabled.
+    species_model: str = ""
+    species_min_confidence: float = 0.5
+
     # Two-mode tracking optimization
     enable_two_mode_tracking: bool = True  # Enable adaptive mode switching
     motion_detection_threshold: int = 1  # Min detections to stay in tracking mode

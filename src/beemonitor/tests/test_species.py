@@ -1,0 +1,218 @@
+"""BeeMachine species classification + per-track voting.
+
+The model file itself isn't in the repo (89 MB, and it needs an offline ONNX
+conversion), so these drive a stub session. What that still pins down is
+everything around the model, which is where the bugs live: preprocessing, the
+softmax/argmax contract, the class-list mapping, and the voting that turns 900
+noisy per-frame readings into one answer per animal.
+"""
+
+import json
+import unittest
+
+import numpy as np
+
+from beemonitor.identification import species as sp
+from beemonitor.identification.species import (
+    IMAGE_SIZE, NON_BEE_TAXA, SpeciesIdentifier, SpeciesVote, taxa, taxon_ranks,
+)
+
+
+class StubSession:
+    """Stands in for an onnxruntime session; returns a fixed distribution."""
+
+    def __init__(self, probs):
+        self.probs = np.asarray(probs, dtype=np.float32)[None, :]
+        self.calls = 0
+
+    def run(self, _outputs, feed):
+        self.calls += 1
+        self.batch = next(iter(feed.values()))
+        return [self.probs]
+
+    def get_inputs(self):
+        class _In:
+            name = "input_1"
+        return [_In()]
+
+
+def one_hot(index, n=None, peak=0.9):
+    n = n or len(taxa())
+    probs = np.full(n, (1.0 - peak) / (n - 1), dtype=np.float32)
+    probs[index] = peak
+    return probs
+
+
+def crop(size=64, colour=(40, 60, 90)):
+    img = np.zeros((size, size, 3), np.uint8)
+    img[:] = colour
+    return img
+
+
+class TaxaListTests(unittest.TestCase):
+    def test_the_published_class_count(self):
+        """354 taxa — the number BeeMachine's own report states."""
+        self.assertEqual(len(taxa()), 354)
+
+    def test_names_are_unique_and_ordered(self):
+        names = taxa()
+        self.assertEqual(len(set(names)), len(names))
+        self.assertIsInstance(names, tuple)  # cached + immutable
+
+    def test_asset_records_the_model_it_belongs_to(self):
+        """A class list is only meaningful next to the model that produced it."""
+        with sp._TAXA_FILE.open() as fh:
+            meta = json.load(fh)
+        self.assertEqual(meta["image_size"], IMAGE_SIZE)
+        self.assertIn("EfficientNetV2S", meta["model"])
+
+    def test_rank_parsing(self):
+        self.assertEqual(taxon_ranks("Bombus_impatiens"),
+                         {"genus": "Bombus", "species": "Bombus impatiens"})
+        self.assertEqual(taxon_ranks("Andrena"), {"genus": "Andrena"})
+        self.assertEqual(taxon_ranks("Bombus_vagans_sandersoni")["species"],
+                         "Bombus vagans sandersoni")
+
+    def test_non_bee_classes_get_no_genus(self):
+        """Syrphidae/Wasp/Diptera are coarse groups, not genera."""
+        for name in NON_BEE_TAXA:
+            self.assertEqual(taxon_ranks(name), {}, name)
+        self.assertTrue(NON_BEE_TAXA <= set(taxa()))
+
+
+class PreprocessTests(unittest.TestCase):
+    def setUp(self):
+        self.identifier = SpeciesIdentifier(session=StubSession(one_hot(0)))
+
+    def test_resizes_to_the_models_input(self):
+        batch = self.identifier.preprocess(crop(size=37))
+        self.assertEqual(batch.shape, (1, IMAGE_SIZE, IMAGE_SIZE, 3))
+        self.assertEqual(batch.dtype, np.float32)
+
+    def test_keeps_0_255_range(self):
+        """EfficientNetV2 rescales internally — normalising here would halve
+        the effective brightness and quietly wreck accuracy."""
+        batch = self.identifier.preprocess(crop(colour=(255, 255, 255)))
+        self.assertGreater(batch.max(), 1.5)
+        self.assertAlmostEqual(float(batch.max()), 255.0, delta=1.0)
+
+    def test_converts_bgr_to_rgb(self):
+        """OpenCV hands us BGR; the model was trained on RGB."""
+        batch = self.identifier.preprocess(crop(colour=(255, 0, 0)))  # blue in BGR
+        pixel = batch[0, IMAGE_SIZE // 2, IMAGE_SIZE // 2]
+        self.assertAlmostEqual(float(pixel[2]), 255.0, delta=1.0)  # -> blue in RGB
+        self.assertAlmostEqual(float(pixel[0]), 0.0, delta=1.0)
+
+    def test_rejects_degenerate_input(self):
+        for bad in (None, np.zeros((0, 0, 3), np.uint8), np.zeros((8, 8), np.uint8)):
+            self.assertIsNone(self.identifier.preprocess(bad))
+
+
+class IdentifyTests(unittest.TestCase):
+    def test_maps_argmax_to_the_right_taxon(self):
+        index = taxa().index("Bombus_impatiens")
+        ident = SpeciesIdentifier(session=StubSession(one_hot(index)))
+
+        name, method, confidence = ident.identify(crop())
+
+        self.assertEqual(name, "Bombus_impatiens")
+        self.assertEqual(method, "species")
+        self.assertAlmostEqual(confidence, 0.9, places=3)
+
+    def test_low_confidence_is_discarded(self):
+        """The softmax always picks a winner — the floor is what stops a blurred
+        wing being reported as a species."""
+        probs = np.full(len(taxa()), 1.0 / len(taxa()), dtype=np.float32)
+        ident = SpeciesIdentifier(session=StubSession(probs), min_confidence=0.5)
+
+        self.assertIsNone(ident.identify(crop()))
+
+    def test_logits_are_softmaxed(self):
+        """Tolerate an export that left the final activation off."""
+        logits = np.full(len(taxa()), -5.0, dtype=np.float32)
+        logits[3] = 12.0
+        ident = SpeciesIdentifier(session=StubSession(logits))
+
+        name, _method, confidence = ident.identify(crop())
+
+        self.assertEqual(name, taxa()[3])
+        self.assertLessEqual(confidence, 1.0)
+        self.assertGreater(confidence, 0.9)
+
+    def test_output_size_mismatch_refuses_to_guess(self):
+        """A model with a different head must not be silently mapped onto our
+        class list — that would invent species."""
+        ident = SpeciesIdentifier(session=StubSession(one_hot(0, n=10)))
+        self.assertIsNone(ident.identify(crop()))
+
+    def test_bbox_selects_the_region(self):
+        session = StubSession(one_hot(0))
+        ident = SpeciesIdentifier(session=session)
+        frame = np.zeros((100, 200, 3), np.uint8)
+
+        ident.identify(frame, (10, 10, 60, 60))
+
+        self.assertEqual(session.calls, 1)
+        self.assertEqual(session.batch.shape, (1, IMAGE_SIZE, IMAGE_SIZE, 3))
+
+    def test_never_raises(self):
+        class Exploding:
+            def get_inputs(self):
+                raise RuntimeError("boom")
+
+            def run(self, *a, **k):
+                raise RuntimeError("boom")
+
+        self.assertIsNone(SpeciesIdentifier(session=Exploding()).identify(crop()))
+
+    def test_missing_model_path_does_not_crash_the_frame_loop(self):
+        self.assertIsNone(SpeciesIdentifier().identify(crop()))
+
+
+class SpeciesVoteTests(unittest.TestCase):
+    def test_majority_wins(self):
+        vote = SpeciesVote()
+        vote.add("Bombus_impatiens", 0.8)
+        vote.add("Apis_mellifera", 0.95)     # single strong outlier
+        vote.add("Bombus_impatiens", 0.7)
+        vote.add("Bombus_impatiens", 0.75)
+
+        taxon, confidence, votes = vote.winner()
+
+        self.assertEqual(taxon, "Bombus_impatiens")
+        self.assertEqual(votes, 3)
+        self.assertAlmostEqual(confidence, 0.75, places=3)
+
+    def test_ties_break_on_summed_confidence(self):
+        vote = SpeciesVote()
+        vote.add("Apis_mellifera", 0.6)
+        vote.add("Bombus_impatiens", 0.95)
+
+        self.assertEqual(vote.winner()[0], "Bombus_impatiens")
+
+    def test_empty_vote_has_no_winner(self):
+        self.assertIsNone(SpeciesVote().winner())
+        self.assertEqual(SpeciesVote().as_dict()["taxon"], None)
+
+    def test_agreement_reports_how_unanimous_the_track_was(self):
+        vote = SpeciesVote()
+        for _ in range(9):
+            vote.add("Bombus_impatiens", 0.9)
+        vote.add("Apis_mellifera", 0.9)
+
+        summary = vote.as_dict()
+
+        self.assertEqual(summary["taxon"], "Bombus_impatiens")
+        self.assertEqual(summary["taxon_votes"], 9)
+        self.assertEqual(summary["taxon_frames"], 10)
+        self.assertAlmostEqual(summary["taxon_agreement"], 0.9, places=3)
+
+    def test_blank_readings_are_ignored(self):
+        vote = SpeciesVote()
+        vote.add("", 0.9)
+        vote.add(None, 0.9)
+        self.assertIsNone(vote.winner())
+
+
+if __name__ == "__main__":
+    unittest.main()

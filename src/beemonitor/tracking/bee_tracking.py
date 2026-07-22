@@ -748,6 +748,10 @@ class BeeTracking:
         iou_threshold: float = 0.3,
         # Bee identification
         identifier=None,  # BeeIdentifierManager or ColorIdentifier instance
+        # Species classifier (BeeMachine). Where `identifier` answers "which
+        # individual", this answers "which species" — and votes across every
+        # frame of a trajectory instead of sticking on the first read.
+        species_classifier=None,
         # Crop saving for identification training
         save_crops: bool = False,
         crop_output_dir: Optional[str] = None,
@@ -833,6 +837,10 @@ class BeeTracking:
         
         # Bee identifier (optional)
         self.identifier = identifier
+
+        # Species classification, voted per track (see SpeciesVote).
+        self.species_classifier = species_classifier
+        self.species_votes = {}   # track_id -> SpeciesVote
 
         # Raw pre-association detections from the last process_video call.
         # Populated there; None until a video has been processed.
@@ -986,6 +994,29 @@ class BeeTracking:
         # Motion detected if we have any blobs
         return len(blob_detections) > 0
     
+    def _classify_species(self, frame: np.ndarray, tracks: List[Dict]):
+        """Add one species vote per confirmed track for this frame."""
+        from beemonitor.identification.species import SpeciesVote
+
+        for track in tracks:
+            track_id = track.get('track_id')
+            if track_id is None:
+                continue
+            bbox = (track.get('x1'), track.get('y1'),
+                    track.get('x2'), track.get('y2'))
+            if any(v is None for v in bbox):
+                continue
+            result = self.species_classifier.identify(frame, bbox)
+            if not result:
+                continue
+            taxon, _method, confidence = result
+            self.species_votes.setdefault(track_id, SpeciesVote()).add(taxon, confidence)
+
+    def species_for(self, track_id):
+        """The winning taxon for a track, or None while it has no votes."""
+        vote = self.species_votes.get(track_id)
+        return vote.winner() if vote else None
+
     def _save_track_crops(self, frame: np.ndarray, tracks: List[Dict], frame_num: int):
         """
         Save bbox crops for tracked bees (for identification training data).
@@ -1006,8 +1037,11 @@ class BeeTracking:
             track_id = track['track_id']
             
             # Check if we've saved enough crops for this track
+            # crops_per_track <= 0 keeps EVERY frame of the trajectory — the full
+            # record, so historical footage can be re-classified by a future
+            # model without re-running the GPU. One S3 PUT per crop.
             saved = self.track_crop_counts.get(track_id, 0)
-            if saved >= self.crops_per_track:
+            if self.crops_per_track > 0 and saved >= self.crops_per_track:
                 continue
             
             # Extract bbox
@@ -1171,6 +1205,13 @@ class BeeTracking:
                 # Refresh tracks list with updated bee_ids
                 tracks = self.tracker.get_active_tracks()
         
+        # Species classification — every frame, every confirmed track. A track
+        # is one animal, so its frames should agree; where they don't the
+        # majority wins. That is why this runs on all frames rather than
+        # stopping at the first confident read the way markers do.
+        if self.species_classifier and tracks:
+            self._classify_species(frame, tracks)
+
         # Save crops for identification training
         if self.save_crops and tracks:
             self._save_track_crops(frame, tracks, frame_num)
@@ -1359,7 +1400,8 @@ class BeeTracking:
 
         # Define clean column list
         columns = ['frame', 'track_id', 'x1', 'y1', 'x2', 'y2', 'cx', 'cy',
-                   'confidence', 'source', 'taxon', 'bee_id', 'bee_id_method', 'bee_id_confidence', 'mode']
+                   'confidence', 'source', 'taxon', 'taxon_confidence', 'taxon_votes',
+                   'bee_id', 'bee_id_method', 'bee_id_confidence', 'mode']
         
         if not results:
             # Return empty DataFrame with expected columns
@@ -1379,6 +1421,8 @@ class BeeTracking:
                 if track_id is None:
                     logger.warning(f"Track missing track_id! Track keys: {track.keys()}")
                     continue  # Skip tracks without ID
+
+                species = self.species_for(track_id)
                 
                 row = {
                     'frame': frame_num,
@@ -1391,7 +1435,13 @@ class BeeTracking:
                     'cy': track['cy'],
                     'confidence': track.get('confidence', 0.0),
                     'source': track.get('source', 'unknown'),
-                    'taxon': track.get('taxon', 'bee'),
+                    # The voted species wins over the detector's class label:
+                    # YOLO says "bee", BeeMachine says which bee. Falls back to
+                    # the detector label when no classifier ran or nothing was
+                    # legible, so this column is never empty.
+                    'taxon': (species[0] if species else track.get('taxon', 'bee')),
+                    'taxon_confidence': (species[1] if species else None),
+                    'taxon_votes': (species[2] if species else 0),
                     'bee_id': track.get('bee_id'),
                     'bee_id_method': track.get('bee_id_method'),
                     'bee_id_confidence': track.get('bee_id_confidence', 0.0),
