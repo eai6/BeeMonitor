@@ -40,11 +40,6 @@ instance_memory = config.get("instance-memory") or "2048"  # 2 GB
 _analysis_enabled = config.get_bool("analysis-enabled")
 analysis_enabled = True if _analysis_enabled is None else _analysis_enabled
 
-# BioCLIP insect-ID toggle. When true, the app points at the serverless BioCLIP
-# endpoint (deployed by the aws-sagemaker stack with deploy-bioclip=true); when
-# false the app gets an empty name and classification no-ops (frames still ingest).
-bioclip_enabled = config.get_bool("bioclip-enabled") or False
-
 prefix = f"beemonitor-{env}"
 account_id = aws.get_caller_identity().account_id
 region = aws.get_region().name
@@ -235,10 +230,6 @@ sm_ecr_repo_arn = (
 sm_training_ecr_repo_arn = (
     f"arn:aws:ecr:{region}:{account_id}:repository/beemonitor-sm-{env}-training"
 )
-# The BioCLIP insect-ID image (built by the build-push-bioclip CI job).
-sm_bioclip_ecr_repo_arn = (
-    f"arn:aws:ecr:{region}:{account_id}:repository/beemonitor-sm-{env}-bioclip"
-)
 # The SAM 3 auto-labeler image (built by the build-push-sam3 CI job).
 sm_sam3_ecr_repo_arn = (
     f"arn:aws:ecr:{region}:{account_id}:repository/beemonitor-sm-{env}-sam3"
@@ -267,7 +258,7 @@ ecr_push_policy_doc = ecr_repo.arn.apply(lambda repo_arn: json.dumps({
                 "ecr:DescribeImages",
             ],
             "Resource": [repo_arn, sm_ecr_repo_arn, sm_training_ecr_repo_arn,
-                         sm_bioclip_ecr_repo_arn, sm_sam3_ecr_repo_arn],
+                         sm_sam3_ecr_repo_arn],
         },
     ],
 }))
@@ -830,8 +821,6 @@ if deploy_service:
         # SageMaker (Phase 4) — set by convention; the SM stack owns the names.
         # Blanked when analysis-enabled=false so uploads don't spawn jobs.
         "SAGEMAKER_ENDPOINT_NAME": f"beemonitor-sm-{env}" if analysis_enabled else "",
-        # BioCLIP serverless endpoint — empty disables classification (Phase 0 only).
-        "SAGEMAKER_BIOCLIP_ENDPOINT_NAME": f"beemonitor-sm-{env}-bioclip" if bioclip_enabled else "",
         "SAGEMAKER_INPUT_BUCKET": f"beemonitor-sm-{env}-input-{account_id}",
         "SAGEMAKER_OUTPUT_BUCKET": f"beemonitor-sm-{env}-output-{account_id}",
         # Fine-tuning (SageMaker training jobs) — names by convention from the SM

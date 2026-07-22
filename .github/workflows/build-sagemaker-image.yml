@@ -15,8 +15,8 @@ on:
       - ".github/workflows/build-sagemaker-image.yml"
   workflow_dispatch:
 
-# Three images, each to its own ECR repo: the GPU video endpoint, the fine-tuning
-# trainer, and the CPU BioCLIP insect-ID endpoint.
+# Two images, each to its own ECR repo: the GPU video endpoint (which also serves
+# SAM 3) and the fine-tuning trainer.
 
 env:
   AWS_REGION: us-east-1
@@ -113,44 +113,6 @@ jobs:
           IMAGE="${REGISTRY}/${ECR_REPOSITORY}"
           DOCKER_BUILDKIT=1 docker build \
             -f sagemaker_backend/Dockerfile.training \
-            --platform linux/amd64 \
-            -t "${IMAGE}:${SHA_TAG}" \
-            -t "${IMAGE}:latest" \
-            .
-          docker push "${IMAGE}:${SHA_TAG}"
-          docker push "${IMAGE}:latest"
-          echo "Pushed ${IMAGE}:${SHA_TAG} and :latest"
-
-  # BioCLIP insect-ID image (Dockerfile.bioclip, CPU) → its own ECR repo.
-  build-push-bioclip:
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-    env:
-      ECR_REPOSITORY: beemonitor-sm-dev-bioclip
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Login to ECR
-        id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build & push BioCLIP image
-        env:
-          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
-          SHA_TAG: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          IMAGE="${REGISTRY}/${ECR_REPOSITORY}"
-          DOCKER_BUILDKIT=1 docker build \
-            -f sagemaker_backend/Dockerfile.bioclip \
             --platform linux/amd64 \
             -t "${IMAGE}:${SHA_TAG}" \
             -t "${IMAGE}:latest" \

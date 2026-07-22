@@ -49,7 +49,6 @@ env = config.get("environment") or "dev"
 instance_type = config.get("instance-type") or "ml.g4dn.xlarge"
 image_tag = config.get("image-tag") or "latest"
 deploy_endpoint = config.get_bool("deploy-endpoint") or False
-deploy_bioclip = config.get_bool("deploy-bioclip") or False
 max_capacity = config.get_int("max-capacity") or 2
 # SAM 3 auto-labeler (GPU async, scale-to-zero). GPU + large weights, so default to
 # g5.xlarge (24 GB A10G). Only runs at label time, so max-capacity stays small.
@@ -126,23 +125,8 @@ ecr_repo = aws.ecr.Repository(
 
 ecr_lifecycle("inference-repo-lifecycle", ecr_repo)
 
-# ECR for the BioCLIP insect-ID image (CPU, CI-built). Separate repo from the
-# video image so the two build/deploy independently.
-BIOCLIP_ECR_REPO_NAME = f"{prefix}-bioclip"  # must match the CI workflow
-bioclip_ecr_repo = aws.ecr.Repository(
-    "bioclip-repo",
-    name=BIOCLIP_ECR_REPO_NAME,
-    image_tag_mutability="MUTABLE",
-    image_scanning_configuration=aws.ecr.RepositoryImageScanningConfigurationArgs(
-        scan_on_push=True,
-    ),
-    force_delete=False,
-)
-
-ecr_lifecycle("bioclip-repo-lifecycle", bioclip_ecr_repo)
-
 # ECR for the SAM 3 auto-labeler image (GPU, CI-built). Its own repo so it
-# builds/deploys independently of the video + bioclip images.
+# builds/deploys independently of the video image.
 SAM3_ECR_REPO_NAME = f"{prefix}-sam3"  # must match the CI workflow
 sam3_ecr_repo = aws.ecr.Repository(
     "sam3-repo",
@@ -322,14 +306,6 @@ django_invoke_policy = aws.iam.Policy(
                 "Action": "sagemaker:InvokeEndpointAsync",
                 "Resource": (
                     f"arn:aws:sagemaker:{region}:{account_id}:endpoint/{prefix}"
-                ),
-            },
-            {
-                "Sid": "InvokeBioclipEndpoint",
-                "Effect": "Allow",
-                "Action": "sagemaker:InvokeEndpoint",
-                "Resource": (
-                    f"arn:aws:sagemaker:{region}:{account_id}:endpoint/{prefix}-bioclip"
                 ),
             },
             {
@@ -691,63 +667,14 @@ if deploy_endpoint:
 
 
 # ---------------------------------------------------------------------------
-# BioCLIP insect-ID endpoint — SageMaker Serverless (CPU, scale-to-zero)
-# ---------------------------------------------------------------------------
-# Separate from the video endpoint: each request is one tiny crop, so Serverless
-# Inference fits (sync, small payload) and scales to zero natively — no instance
-# to keep alive, no autoscaling plumbing, no idle bill (the failure mode we just
-# fixed on the GPU endpoint can't happen here). Gated on deploy-bioclip so the
-# ECR image is built first (same two-pass flow as the video endpoint).
-if deploy_bioclip:
-    bioclip_tag = config.get("bioclip-image-tag") or "latest"
-    bioclip_image = pulumi.Output.concat(
-        bioclip_ecr_repo.repository_url, ":", bioclip_tag)
-    bioclip_tag_slug = "".join(c for c in bioclip_tag if c.isalnum())[:12] or "latest"
-
-    bioclip_model = aws.sagemaker.Model(
-        "bioclip-model",
-        name=f"{prefix}-bioclip-model-{bioclip_tag_slug}",
-        execution_role_arn=sagemaker_role.arn,
-        primary_container=aws.sagemaker.ModelPrimaryContainerArgs(
-            image=bioclip_image,
-            mode="SingleModel",
-            environment={"BIOCLIP_TOPK": str(config.get_int("bioclip-topk") or 5)},
-        ),
-    )
-
-    bioclip_config = aws.sagemaker.EndpointConfiguration(
-        "bioclip-endpoint-config",
-        name=f"{prefix}-bioclip-config-{bioclip_tag_slug}",
-        production_variants=[
-            aws.sagemaker.EndpointConfigurationProductionVariantArgs(
-                variant_name=VARIANT_NAME,
-                model_name=bioclip_model.name,
-                serverless_config=aws.sagemaker
-                    .EndpointConfigurationProductionVariantServerlessConfigArgs(
-                        # BioCLIP (CLIP ViT-B + torch) resident ~1.5-2 GB; give
-                        # headroom (max serverless is 6144) for fast cold loads.
-                        memory_size_in_mb=config.get_int("bioclip-memory") or 6144,
-                        max_concurrency=config.get_int("bioclip-max-concurrency") or 5,
-                    ),
-            ),
-        ],
-    )
-
-    bioclip_endpoint = aws.sagemaker.Endpoint(
-        "bioclip-endpoint",
-        name=f"{prefix}-bioclip",
-        endpoint_config_name=bioclip_config.name,
-    )
-
-    pulumi.export("bioclip_endpoint_name", bioclip_endpoint.name)
 
 
 # ---------------------------------------------------------------------------
 # SAM 3 auto-labeler endpoint — GPU async, scale-to-zero
 # ---------------------------------------------------------------------------
 # GPU (SAM 3 needs a GPU + VRAM), so this mirrors the video endpoint's async +
-# scale-to-zero plumbing rather than BioCLIP's serverless (CPU-only). Runs only at
-# label time, so it sits at 0 instances until a labeling request queues it up.
+# scale-to-zero plumbing. Runs only at label time, so it sits at 0 instances
+# until a labeling request queues it up.
 # Gated on deploy-sam3 (two-pass: build image first, then flip the flag).
 # UNIFIED IMAGE (Option A, 2026-07-14): the SAM 3 endpoint now runs the SAME
 # image as the main video endpoint (ecr_repo:image_tag) on a g5/A10G, so it

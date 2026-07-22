@@ -10,7 +10,6 @@ config:
   # SageMaker Model / EndpointConfig / Endpoint / autoscaling.
   beemonitor-sagemaker:deploy-endpoint: "true"
   beemonitor-sagemaker:max-capacity: "4"
-  beemonitor-sagemaker:deploy-bioclip: "true"
   # SAM 3 auto-labeler (GPU async, scale-to-zero). Image baked with SAM 3 + DINOv2.
   beemonitor-sagemaker:deploy-sam3: "true"
   beemonitor-sagemaker:sam3-image-tag: a1d01998e95d786d8ce252c3259a7a5fa6d6b02b
