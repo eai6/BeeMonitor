@@ -47,110 +47,155 @@
   </div>
 </div>
 
-<!-- Action Bar -->
-<div class="bg-white shadow rounded-lg p-4 mb-6">
-  <div class="flex flex-wrap gap-3 items-center justify-between">
-    <div class="flex gap-2">
-      <!-- Add Videos -->
-      <button type="button" onclick="document.getElementById('addVideosModal').classList.toggle('hidden')"
-              class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 font-medium">
-        + Add Videos
-      </button>
-      <!-- Step 1: sample frames (CPU only, no GPU) -->
-      <form id="sample-form" method="post" action="{% url 'annotations:sample_frames' project.pk %}"
-            class="flex items-end gap-2"
-            onsubmit="this.querySelector('button[type=submit]').disabled=true; this.querySelector('button[type=submit]').textContent='Sampling…';">
-        {% csrf_token %}
-        <div title="Sample every Nth frame">
-          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Every Nth</label>
-          <input type="number" name="sample_interval" value="30" min="1" max="600"
-                 class="w-16 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
-        </div>
-        <div title="Maximum frames to keep per video">
-          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Max frames</label>
-          <input type="number" name="max_frames" value="100" min="1" max="2000"
-                 class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
-        </div>
-        <button type="submit" id="sample-submit"
-                class="px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm font-medium">
-          1 · Sample frames
-        </button>
-      </form>
-      <p class="text-[11px] text-gray-400 mt-2 w-full">
-        Sampling just pulls frames out of the video so you can annotate them — it runs on
-        the server's CPU and costs no GPU time. Annotate them by hand, and call SAM 3 on
-        individual frames from the editor when it helps. Auto-labelling every sampled
-        frame up-front (below) is the expensive option: it runs SAM 3 on a GPU for each
-        frame, whether or not you end up using the result.
-      </p>
+<!-- Workflow — one step per row. The two forms used to share a flex row, which
+     put two identical "Every Nth / Max frames" pairs side by side meaning
+     different things, with explanatory prose wedged between the controls. -->
+<div class="bg-white shadow rounded-lg mb-6 divide-y divide-gray-100">
 
-      <!-- Step 2 (optional): auto-label every sampled frame with SAM 3 — GPU -->
-      <form id="preannotate-form" method="post" action="{% url 'annotations:pre_annotate_all' project.pk %}"
-            class="flex items-end gap-2"
-            onsubmit="this.querySelector('button[type=submit]').disabled=true; this.querySelector('button[type=submit]').textContent='Running AI...';">
-        {% csrf_token %}
-        <div title="Sample every Nth frame">
-          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Every Nth</label>
+  <!-- 1 · Add videos -->
+  <div class="p-4 flex flex-wrap items-center gap-3">
+    <span class="flex-none w-6 h-6 rounded-full bg-gray-100 text-gray-600 text-xs font-bold flex items-center justify-center">1</span>
+    <div class="flex-1 min-w-[16rem]">
+      <h3 class="text-sm font-semibold text-gray-900">Add videos</h3>
+      <p class="text-xs text-gray-500">{{ video_data|length }} video{{ video_data|length|pluralize }} in this project.</p>
+    </div>
+    <button type="button" onclick="document.getElementById('addVideosModal').classList.toggle('hidden')"
+            class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 font-medium">
+      + Add Videos
+    </button>
+  </div>
+
+  <!-- 2 · Sample frames (CPU) -->
+  <div class="p-4">
+    <div class="flex flex-wrap items-center gap-3 mb-1">
+      <span class="flex-none w-6 h-6 rounded-full bg-amber-100 text-amber-700 text-xs font-bold flex items-center justify-center">2</span>
+      <h3 class="text-sm font-semibold text-gray-900">Sample frames</h3>
+      <span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-green-100 text-green-700 font-semibold">No GPU</span>
+    </div>
+    <p class="text-xs text-gray-500 mb-3 ml-9">
+      Pulls frames out of each video so you can annotate them. Runs on the server's
+      CPU, so it costs no GPU time.
+    </p>
+    <form id="sample-form" method="post" action="{% url 'annotations:sample_frames' project.pk %}"
+          class="flex flex-wrap items-end gap-3 ml-9"
+          onsubmit="this.querySelector('button[type=submit]').disabled=true; this.querySelector('button[type=submit]').textContent='Sampling…';">
+      {% csrf_token %}
+      <div title="Keep one frame out of every N">
+        <label class="block text-[10px] uppercase tracking-wide text-gray-400">Every Nth frame</label>
+        <input type="number" name="sample_interval" value="30" min="1" max="600"
+               class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
+      </div>
+      <div title="Cap on frames kept per video">
+        <label class="block text-[10px] uppercase tracking-wide text-gray-400">Max per video</label>
+        <input type="number" name="max_frames" value="100" min="1" max="2000"
+               class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
+      </div>
+      <button type="submit" id="sample-submit"
+              class="px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm font-medium">
+        Sample frames
+      </button>
+    </form>
+  </div>
+
+  <!-- 3 · Annotate — the actual work, and it was missing from this bar entirely -->
+  <div class="p-4">
+    <div class="flex flex-wrap items-center gap-3 mb-1">
+      <span class="flex-none w-6 h-6 rounded-full bg-amber-100 text-amber-700 text-xs font-bold flex items-center justify-center">3</span>
+      <h3 class="text-sm font-semibold text-gray-900">Annotate</h3>
+      <span class="text-xs text-gray-500">{{ proj_total_frames }} frame{{ proj_total_frames|pluralize }} so far</span>
+    </div>
+    <p class="text-xs text-gray-500 ml-9">
+      Pick a video below to open the editor and draw boxes. SAM 3 is available there
+      <strong>per frame</strong>, on the frames where it actually helps — that is the
+      cheap way to use it.
+    </p>
+  </div>
+
+  <!-- 4 · Auto-label everything (GPU) — optional and expensive -->
+  <div class="p-4 bg-blue-50/40">
+    <div class="flex flex-wrap items-center gap-3 mb-1">
+      <span class="flex-none w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center">4</span>
+      <h3 class="text-sm font-semibold text-gray-900">Auto-label every sampled frame</h3>
+      <span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-semibold">Uses GPU</span>
+      <span class="text-xs text-gray-500">optional</span>
+    </div>
+    <p class="text-xs text-gray-500 mb-3 ml-9">
+      Runs SAM 3 on a GPU for <em>every</em> sampled frame, whether or not you end up
+      using the result. Leave this alone unless you want a first pass over everything.
+      Ticking only some labels <strong>merges</strong> — it refreshes just those classes
+      and keeps your existing boxes for the rest, which is how you add a new label
+      without losing your bees.
+      New label? Add it in <a href="{% url 'annotations:settings' project.pk %}" class="text-amber-600 hover:underline">project Settings</a> first.
+    </p>
+    <form id="preannotate-form" method="post" action="{% url 'annotations:pre_annotate_all' project.pk %}"
+          class="ml-9"
+          onsubmit="this.querySelector('button[type=submit]').disabled=true; this.querySelector('button[type=submit]').textContent='Running AI...';">
+      {% csrf_token %}
+      <div class="mb-3">
+        <label class="block text-[10px] uppercase tracking-wide text-gray-400 mb-1">Labels to detect</label>
+        <div class="flex flex-wrap items-center gap-3">
+          {% for cls in project.classes %}
+          <label class="inline-flex items-center gap-1.5 text-sm text-gray-700 whitespace-nowrap">
+            <input type="checkbox" name="target_labels" value="{{ cls }}" checked
+                   class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">{{ cls }}
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="flex flex-wrap items-end gap-3">
+        <div title="Keep one frame out of every N">
+          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Every Nth frame</label>
           <input type="number" name="sample_interval" value="{{ preannotate_defaults.sample_interval }}"
                  min="1" max="120"
-                 class="w-16 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
+                 class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         </div>
-        <div title="Maximum frames to keep per video">
-          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Max frames</label>
+        <div title="Cap on frames per video">
+          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Max per video</label>
           <input type="number" name="max_frames" value="{{ preannotate_defaults.max_frames }}"
                  min="10" max="2000"
-                 class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
+                 class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         </div>
         <div title="Detection confidence threshold">
-          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Conf</label>
+          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Confidence</label>
           <input type="number" name="confidence" value="{{ preannotate_defaults.confidence }}"
                  min="0.01" max="0.9" step="0.05"
-                 class="w-16 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
+                 class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         </div>
-        <div title="Which labels to detect this run. Uncheck a class to leave it alone: a partial selection MERGES — it adds/refreshes only the checked classes and keeps your existing boxes of the others (e.g. reviewed bees).">
-          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Labels to detect</label>
-          <div class="flex flex-wrap items-center gap-x-2 gap-y-1 border border-gray-300 rounded px-2 py-1.5">
-            {% for cls in project.classes %}
-            <label class="inline-flex items-center gap-1 text-sm text-gray-700">
-              <input type="checkbox" name="target_labels" value="{{ cls }}" checked
-                     class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">{{ cls }}
-            </label>
-            {% endfor %}
-          </div>
-        </div>
-        <div title="SAM 3 text-prompts each class per sampled frame — the labeler for the annotation editor.">
-          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Labeler</label>
-          <div class="border border-gray-200 bg-gray-50 rounded px-2 py-1.5 text-sm text-gray-600">SAM 3</div>
-        </div>
-        <div title="SAM 3 only. Max boxes kept per class per frame.">
-          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Max det</label>
+        <div title="Max boxes kept per class per frame">
+          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Max boxes</label>
           <input type="number" name="max_detections" value="100" min="1" max="500"
-                 class="w-16 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
+                 class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         </div>
-        <div title="SAM 3 only. Merge overlapping boxes above this IoU (dedupes bee/wasp double-boxes). 0 = keep all.">
+        <div title="Merge overlapping boxes above this IoU (dedupes bee/wasp double-boxes). 0 = keep all.">
           <label class="block text-[10px] uppercase tracking-wide text-gray-400">Dedupe IoU</label>
           <input type="number" name="nms_iou" value="0.5" min="0" max="1" step="0.05"
-                 class="w-16 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
+                 class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <div title="SAM 3 text-prompts each class per frame, so it finds labels a fixed model was never trained on.">
+          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Labeler</label>
+          <div class="border border-gray-200 bg-gray-50 rounded px-3 py-1.5 text-sm text-gray-600 whitespace-nowrap">SAM 3</div>
         </div>
         <button type="submit" id="preannotate-submit"
-                class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium"
+                class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium whitespace-nowrap"
                 title="Runs SAM 3 on a GPU for every sampled frame in each selected video">
-          2 · Auto-label all (GPU)
+          Auto-label all (GPU)
         </button>
-      </form>
-      <p class="text-[11px] text-gray-400 mt-2">New label? Add it in
-        <a href="{% url 'annotations:settings' project.pk %}" class="text-amber-600 hover:underline">project Settings</a>,
-        then pre-annotate — SAM 3 text-prompts each class, so it finds labels a fixed model was never trained on.
-        <strong>To add a label without losing your bees:</strong> check only the new
-        class under “Labels to detect” — a partial selection merges the new boxes in and keeps your existing boxes
-        of the unchecked classes.</p>
+      </div>
+    </form>
+  </div>
+
+  <!-- Export -->
+  <div class="p-4 flex flex-wrap items-center gap-3">
+    <div class="flex-1 min-w-[16rem]">
+      <h3 class="text-sm font-semibold text-gray-900">Export dataset</h3>
+      <p class="text-xs text-gray-500">
+        YOLO format, train/val split. Frames sampled but never annotated are left out.
+      </p>
     </div>
-    <div class="flex gap-2">
-      <a href="{% url 'annotations:export' project.pk %}"
-         class="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium">
-        Export Dataset
-      </a>
-    </div>
+    <a href="{% url 'annotations:export' project.pk %}"
+       class="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium">
+      Export Dataset
+    </a>
   </div>
 </div>
 
@@ -306,9 +351,9 @@
 function preannotateLabel() {
   var n = document.querySelectorAll('.preannotate-check:checked').length;
   var btn = document.getElementById('preannotate-submit');
-  if (btn) btn.textContent = n ? '2 · Auto-label selected (' + n + ', GPU)' : '2 · Auto-label all (GPU)';
+  if (btn) btn.textContent = n ? 'Auto-label selected (' + n + ', GPU)' : 'Auto-label all (GPU)';
   var sbtn = document.getElementById('sample-submit');
-  if (sbtn) sbtn.textContent = n ? '1 · Sample selected (' + n + ')' : '1 · Sample frames';
+  if (sbtn) sbtn.textContent = n ? 'Sample selected (' + n + ')' : 'Sample frames';
 }
 function preannotateCheck(predicate) {
   document.querySelectorAll('.preannotate-check').forEach(function(c) { c.checked = predicate(c); });
