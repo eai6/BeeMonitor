@@ -297,6 +297,40 @@ BLOCK_REGISTRY = {
                     {"value": "on", "label": "On (render overlay video)"},
                 ],
             },
+            {
+                # Static things — nest tubes, flowers — don't move, so watching
+                # every frame buys nothing. A 10-min clip is ~18,000 frames;
+                # 20 samples is 0.1% of the work for the same answer. Sampled
+                # mode can't feed MOT (frames are too far apart to associate),
+                # so wire it straight to an analyzer.
+                "name": "analyse",
+                "label": "Frames to analyse",
+                "field_type": "select",
+                "required": False,
+                "default": "every_frame",
+                "choices": [
+                    {"value": "every_frame", "label": "Every frame (needed for tracking)"},
+                    {"value": "sampled", "label": "Sampled frames (fast — static objects)"},
+                ],
+            },
+            {
+                "name": "sample_interval",
+                "label": "Sample every Nth frame",
+                "field_type": "number",
+                "required": False,
+                "default": 30,
+                "choices": None,
+                "show_if": {"field": "analyse", "value": "sampled"},
+            },
+            {
+                "name": "max_frames",
+                "label": "Max frames to sample",
+                "field_type": "number",
+                "required": False,
+                "default": 20,
+                "choices": None,
+                "show_if": {"field": "analyse", "value": "sampled"},
+            },
         ],
     },
 
@@ -522,10 +556,24 @@ BLOCK_REGISTRY = {
                 "required": True,
                 "default": "total",
                 "choices": [
+                    # For static objects the first two are what you want:
+                    # counting raw detections multiplies each object by the
+                    # number of frames that saw it.
+                    {"value": "distinct", "label": "Distinct objects (dedupe across frames)"},
+                    {"value": "modal", "label": "Most common per-frame count"},
                     {"value": "total", "label": "Totals"},
                     {"value": "per_frame", "label": "Per frame"},
                     {"value": "over_time", "label": "Over time"},
                 ],
+            },
+            {
+                "name": "iou_threshold",
+                "label": "Overlap to treat as the same object",
+                "field_type": "number",
+                "required": False,
+                "default": 0.5,
+                "choices": None,
+                "show_if": {"field": "metric", "value": "distinct"},
             },
             {
                 "name": "bin_seconds",

@@ -321,6 +321,15 @@ def _spawn_gpu_job(job_pk: int) -> None:
         if job.config.get("ml_threshold") is not None:
             payload["ml_threshold"] = float(job.config["ml_threshold"])
         # Detector: SAM 3 text-prompt tracking, else YOLO.
+        # Sampled detection (static objects: nest tubes, flowers) runs the
+        # worker's pre_annotate task over a handful of frames instead of the
+        # full tracking pass — a different task with a different result shape.
+        if job.config.get("task") == "pre_annotate":
+            payload["task"] = "pre_annotate"
+            for k in ("classes", "sample_interval", "max_frames", "selection"):
+                if job.config.get(k) is not None:
+                    payload[k] = job.config[k]
+
         if job.config.get("detector_kind") == "sam3":
             payload["detector_kind"] = "sam3"
             payload["text_prompt"] = job.config.get("text_prompt", "") or "bee"
@@ -1291,6 +1300,14 @@ def _apply_result_to_job(job, result: dict) -> None:
         _notify_pipeline(job.pk)
         return
 
+    # A sampled-detection job returns per-frame boxes rather than CSVs. Park
+    # them in summary_stats (already a JSONField that passes through untouched)
+    # so the pipeline step can read them without a new column.
+    summary = dict(result.get("summary_stats") or {})
+    if result.get("frames") is not None:
+        summary["sampled_frames"] = result["frames"]
+        summary["sampled_selection"] = result.get("selection", "uniform")
+
     JobResult.objects.update_or_create(
         job_id=job.pk,
         defaults={
@@ -1309,7 +1326,7 @@ def _apply_result_to_job(job, result: dict) -> None:
             "foraging_trip_count": result.get("foraging_trip_count", 0),
             "avg_trip_duration_sec": result.get("avg_trip_duration_sec"),
             "interaction_count": result.get("interaction_count", 0),
-            "summary_stats": result.get("summary_stats", {}),
+            "summary_stats": summary,
         },
     )
 

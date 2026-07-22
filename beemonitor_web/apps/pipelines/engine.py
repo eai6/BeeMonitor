@@ -35,7 +35,7 @@ def _gpu_cache_key(run, step, context, index):
     A changed ROI or video yields a different key and re-runs. Returns None when the
     step can't be keyed yet (no upstream video) — then it simply isn't cached.
     """
-    built, _err = executors.build_detect_and_track_config(step, run, context, index)
+    built, _err = executors.build_job_config(step, run, context, index)
     if not built:
         return None
     eff = {"video": built.get("video_id"), **(built.get("config") or {})}

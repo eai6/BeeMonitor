@@ -385,6 +385,115 @@ def summarize_interactions(df, kind=None):
     }
 
 
+def _iou(a, b):
+    """Intersection-over-union of two (x1, y1, x2, y2) boxes."""
+    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    area_a = max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
+    area_b = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+def sampled_boxes(frames, label=""):
+    """Flatten a sampled-detection result into [(frame, box, confidence), ...].
+
+    ``frames`` is the worker's sampled-frame payload:
+    ``[{frame_number, boxes: [{x, y, w, h, class, confidence}]}, ...]`` — boxes in
+    native pixels, x/y/w/h rather than corners.
+    """
+    wanted = {p.strip().lower() for p in str(label).split(",") if p.strip()}
+    out = []
+    for frame in frames or []:
+        n = frame.get("frame_number")
+        for b in frame.get("boxes") or []:
+            if wanted and str(b.get("class", "")).strip().lower() not in wanted:
+                continue
+            try:
+                x, y = float(b["x"]), float(b["y"])
+                w, h = float(b["w"]), float(b["h"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            out.append((n, (x, y, x + w, y + h), float(b.get("confidence") or 0.0)))
+    return out
+
+
+def count_distinct_objects(frames, label="", iou_threshold=0.5):
+    """Count physically distinct objects across sampled frames.
+
+    A static object — a nest tube, a flower — appears in *every* sampled frame,
+    so summing detections multiplies it by the frame count. This clusters boxes
+    that overlap across frames so one real object counts once, however many
+    frames saw it. Greedy agglomeration against cluster representatives: cheap,
+    order-stable, and sufficient because the objects don't move.
+
+    Boxes are matched by IoU rather than exact coordinates because detector
+    output jitters by a few pixels between frames — exact matching would report
+    one object per frame.
+    """
+    detections = sampled_boxes(frames, label)
+    if not detections:
+        return {"distinct_objects": 0, "rows": [], "frames_sampled": len(frames or [])}
+
+    # Strongest detections first, so each cluster is anchored on its best box.
+    detections.sort(key=lambda d: -d[2])
+    clusters = []
+    for _frame, box, conf in detections:
+        for c in clusters:
+            if _iou(c["box"], box) >= iou_threshold:
+                c["hits"] += 1
+                c["confidence"] += conf
+                break
+        else:
+            clusters.append({"box": box, "hits": 1, "confidence": conf})
+
+    rows = []
+    for i, c in enumerate(sorted(clusters, key=lambda c: (c["box"][1], c["box"][0])), 1):
+        x1, y1, x2, y2 = c["box"]
+        rows.append({
+            "object": i,
+            "x1": round(x1, 1), "y1": round(y1, 1),
+            "x2": round(x2, 1), "y2": round(y2, 1),
+            "seen_in_frames": c["hits"],
+            "confidence": round(c["confidence"] / c["hits"], 3),
+        })
+    return {"distinct_objects": len(rows), "rows": rows,
+            "frames_sampled": len(frames or [])}
+
+
+def modal_frame_count(frames, label=""):
+    """Most common per-frame detection count across sampled frames.
+
+    For a static scene every frame should see every object, so the modal count is
+    a robust estimate that ignores the odd frame where one was missed or
+    double-detected. Cheaper and steadier than clustering, but it yields only a
+    number — no per-object boxes — and undercounts objects occluded in most
+    frames.
+    """
+    from collections import Counter
+
+    detections = sampled_boxes(frames, label)
+    per_frame = Counter()
+    for n, _box, _conf in detections:
+        per_frame[n] += 1
+    # Sampled frames with no detections are real zeros and must count.
+    counts = [per_frame.get(f.get("frame_number"), 0) for f in frames or []]
+    if not counts:
+        return {"modal_count": 0, "rows": [], "frames_sampled": 0}
+    tally = Counter(counts)
+    modal = max(tally, key=lambda c: (tally[c], c))
+    return {
+        "modal_count": modal,
+        "frames_sampled": len(counts),
+        "frames_agreeing": tally[modal],
+        "rows": [{"count": c, "frames": n} for c, n in sorted(tally.items())],
+    }
+
+
 def species_identities(df):
     """Per-track species from the tracking CSV's taxon columns.
 

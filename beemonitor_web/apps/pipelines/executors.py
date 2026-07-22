@@ -404,6 +404,40 @@ def _exec_analyze_detection_count(step, run, context, inputs, index):
     boxes = ops.roi_boxes(reference)
 
     label = _upstream_label(inputs)
+
+    # Sampled detection returns per-frame boxes rather than CSVs. Distinct and
+    # modal only mean anything there: they answer "how many objects are there",
+    # not "how many detections were made".
+    frames = (result.get("summary_stats") or {}).get("sampled_frames")
+    if metric in ("distinct", "modal"):
+        if frames is None:
+            return {
+                "artifact": "table", "table_kind": "detection_count",
+                "metric": metric, "rows": [],
+                "note": "This metric needs sampled detection. Set the Detect "
+                        "node's 'Frames to analyse' to 'Sampled frames' and "
+                        "re-run — counting distinct objects is not meaningful "
+                        "over a full tracking pass.",
+            }
+        detector = _upstream_detector(run.steps, index)
+        want = label or (detector_label(detector) if detector else "")
+        if metric == "distinct":
+            try:
+                iou = float(cfg.get("iou_threshold", 0.5) or 0.5)
+            except (TypeError, ValueError):
+                iou = 0.5
+            summary = ops.count_distinct_objects(frames, want, iou_threshold=iou)
+            note = (f"{summary['distinct_objects']} distinct object(s) across "
+                    f"{summary['frames_sampled']} sampled frame(s); boxes "
+                    f"overlapping by IoU >= {iou} counted once.")
+        else:
+            summary = ops.modal_frame_count(frames, want)
+            note = (f"Most common per-frame count across "
+                    f"{summary['frames_sampled']} sampled frame(s); "
+                    f"{summary.get('frames_agreeing', 0)} frame(s) agreed.")
+        return {"artifact": "table", "table_kind": "detection_count",
+                "metric": metric, "note": note, **summary}
+
     df = ops.filter_by_label(ops.load_detections_df(result), label)
     raw = df is not None
     if raw:
@@ -674,8 +708,93 @@ def downstream_ids(step_id, steps):
         frontier.extend(children.get(sid, []))
 
 
+def _resolve_custom_models(cfg, run, config):
+    """Resolve node-picked custom models (pk -> S3 key) into ``config``.
+
+    Empty selection means the built-in models. Resolved by pk against the run
+    owner's own models — same contract as the New Analysis form's
+    custom_bee_model / custom_nest_model selects. The Detect module names these
+    object_model/reference_model; the legacy nodes bee/nest_model.
+
+    Returns an error string, or None on success.
+    """
+    for fields, config_key, label in (
+        (("object_model", "bee_model"), "custom_bee_model_path", "object"),
+        (("reference_model", "nest_model"), "custom_nest_model_path", "reference"),
+    ):
+        raw = next((cfg[f] for f in fields if cfg.get(f)), None)
+        if not raw:
+            continue
+        from apps.training.models import CustomModel
+        try:
+            model_pk = int(raw)
+        except (TypeError, ValueError):
+            return f"Invalid {label} model selection on this node."
+        cm = CustomModel.objects.filter(
+            pk=model_pk, user=run.user, is_active=True,
+        ).exclude(storage_key="").first()
+        if not cm:
+            return f"The selected {label} model is unavailable (removed or deactivated)."
+        config[config_key] = cm.storage_key
+    return None
+
+
+def is_sampled(step):
+    """True when a Detect node analyses sampled frames rather than every one."""
+    return (step.get("config") or {}).get("analyse") == "sampled"
+
+
+def build_sampled_detection_config(step, run, context, index):
+    """Job config for sampled detection — the worker's `pre_annotate` task.
+
+    Static objects don't move, so counting them doesn't need the tracking pass
+    over every frame. The worker already samples every Nth frame, runs the
+    detector and returns per-frame boxes; this just points a Detect node at it.
+    Far cheaper: 20 frames instead of ~18,000 for a 10-minute clip.
+
+    Deliberately NOT merged with the tracking config — the two produce different
+    result shapes, and a shared builder would blur which one a step gets.
+    """
+    video_out = find_artifact("video", run.steps, index, context)
+    if not video_out:
+        return None, "No upstream video for this GPU step."
+
+    cfg = step.get("config") or {}
+    label = detector_label(step)
+    if not label:
+        return None, "This Detect node needs a label to sample for."
+
+    def _clamp(name, default, lo, hi):
+        # `or default` would be wrong here: an explicit 0 is a real value that
+        # should clamp to the floor, not silently fall back to the default.
+        raw = cfg.get(name)
+        if raw in (None, ""):
+            raw = default
+        try:
+            return max(lo, min(hi, int(float(raw))))
+        except (TypeError, ValueError):
+            return default
+
+    raw_family = cfg.get("model_family") or "yolo"
+    config = {
+        "task": "pre_annotate",
+        # Only this node's own class — sampled detection is per-node, so unlike
+        # the tracking path there is no shared result to filter afterwards.
+        "classes": [p.strip() for p in label.split(",") if p.strip()],
+        "detector_kind": "sam3" if str(raw_family).lower() == "sam3" else "yolo",
+        "sample_interval": _clamp("sample_interval", 30, 1, 600),
+        "max_frames": _clamp("max_frames", 20, 1, 300),
+        "confidence_threshold": float(cfg.get("confidence", 0.4) or 0.4),
+        "selection": "uniform",
+    }
+    model_err = _resolve_custom_models(cfg, run, config)
+    if model_err:
+        return None, model_err
+    return {"video_id": video_out["video_id"], "config": config}, None
+
+
 def _all_detector_labels(steps):
-    """Every label any Detect node in the graph asks for, de-duped, in order.
+    """Every label any *full-frame* Detect node asks for, de-duped, in order.
 
     All Detect nodes on a video share one GPU pass. Collecting their labels here
     means each node's job config comes out **identical**, so the first one submits
@@ -684,8 +803,8 @@ def _all_detector_labels(steps):
     """
     labels = []
     for s in steps or []:
-        if s.get("block_type") != "detect.objects":
-            continue
+        if s.get("block_type") != "detect.objects" or is_sampled(s):
+            continue  # sampled nodes run their own job; they share nothing
         label = detector_label(s)
         if label and label not in labels:
             labels.append(label)
@@ -764,6 +883,19 @@ def _pipeline_event_confidence(step, steps):
     return 0.6
 
 
+def build_job_config(step, run, context, index):
+    """The job config for a GPU step, whichever kind it is.
+
+    Single entry point on purpose: engine._gpu_cache_key and submit_gpu_step both
+    call this, so the hashed config is always exactly the one submitted. A
+    sampled Detect node produces a completely different job (and result shape)
+    from a tracking one, and routing it anywhere else would let the two drift.
+    """
+    if step.get("block_type") == "detect.objects" and is_sampled(step):
+        return build_sampled_detection_config(step, run, context, index)
+    return build_detect_and_track_config(step, run, context, index)
+
+
 def build_detect_and_track_config(step, run, context, index):
     """Assemble the ``detect_and_track`` Job config for a detect/track GPU step.
 
@@ -812,29 +944,9 @@ def build_detect_and_track_config(step, run, context, index):
         # Legacy graphs only: part of the hashed config so two pre-split Detectors
         # differing solely in how they got their reference don't share a result.
         config["reference_source"] = legacy_ref
-    # Custom models picked on the node (empty = the built-in ones). Resolved by
-    # pk against the run owner's models — same contract as the New Analysis
-    # form's custom_bee_model / custom_nest_model selects. The Detector module
-    # names these object_model/reference_model; the legacy nodes bee/nest_model.
-    for fields, config_key, label in (
-        (("object_model", "bee_model"), "custom_bee_model_path", "object"),
-        (("reference_model", "nest_model"), "custom_nest_model_path", "reference"),
-    ):
-        raw = next((cfg[f] for f in fields if cfg.get(f)), None)
-        if not raw:
-            continue
-        from apps.training.models import CustomModel
-        try:
-            model_pk = int(raw)
-        except (TypeError, ValueError):
-            return None, f"Invalid {label} model selection on this node."
-        cm = CustomModel.objects.filter(
-            pk=model_pk, user=run.user, is_active=True,
-        ).exclude(storage_key="").first()
-        if cm:
-            config[config_key] = cm.storage_key
-        else:
-            return None, f"The selected {label} model is unavailable (removed or deactivated)."
+    model_err = _resolve_custom_models(cfg, run, config)
+    if model_err:
+        return None, model_err
     # NOTE: this used to set identify_bees/marker_method when an identify.marker
     # node was present. Nothing consumed them — analysis.views._spawn_gpu_job
     # builds the SageMaker payload key-by-key and drops them — while
@@ -871,7 +983,7 @@ def submit_gpu_step(run, step, context, index):
             "note": f"{block_type} is not yet wired to a dedicated GPU job (scaffold placeholder).",
         }
 
-    built, err = build_detect_and_track_config(step, run, context, index)
+    built, err = build_job_config(step, run, context, index)
     if err:
         return "error", {"error": err}
 
