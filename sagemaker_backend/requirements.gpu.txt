@@ -12,6 +12,15 @@ filterpy>=1.4.5
 transformers>=5.0.0
 huggingface_hub>=0.20.0
 
+# BeeMachine species classifier (EfficientNetV2-S, 354 bee taxa), run inside the
+# tracking pass. ONNX rather than the published Keras .h5 so we don't pull ~600 MB
+# of TensorFlow into a torch image and have the two fight over CUDA. The 1.19
+# series is the CUDA 12 / cuDNN 9 build, matching the base image above.
+# Loaded lazily and only when a pipeline asks for species, and the session falls
+# back to CPUExecutionProvider if the CUDA provider can't initialise — so a bad
+# install degrades species labels rather than failing tracking.
+onnxruntime-gpu>=1.19,<2
+
 # Data / numerics
 numpy>=1.26.0
 pandas>=2.2.0
