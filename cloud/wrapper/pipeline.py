@@ -33,10 +33,6 @@ class PipelineResult:
     nest_count: int
     events_csv_path: str  # S3 key in processed bucket
     tracking_csv_path: str
-    # Raw per-frame detector output, before track association. Emitted from the
-    # same pass as the tracking CSV (the detections were already in memory), so
-    # "count detections" analyses don't have to infer counts from tracked rows.
-    detections_csv_path: str
     foraging_trips_csv_path: str
     interactions_csv_path: str
     crops_csv_path: str  # per-track crop index (track_id -> crop S3 keys)
@@ -45,6 +41,13 @@ class PipelineResult:
     avg_trip_duration_sec: float
     interaction_count: int
     summary_stats: dict
+    # Raw per-frame detector output, before track association — emitted from the
+    # same pass as the tracking CSV, since the detections were already in memory.
+    # Optional (and therefore last: dataclass fields with defaults must follow
+    # those without) so a result built without it still constructs. That keeps
+    # this dataclass compatible across a worker-image rollover, where the web
+    # side may see payloads from an older worker that never wrote one.
+    detections_csv_path: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
