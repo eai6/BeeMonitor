@@ -385,6 +385,47 @@ def summarize_interactions(df, kind=None):
     }
 
 
+def species_identities(df):
+    """Per-track species from the tracking CSV's taxon columns.
+
+    The voting already happened on the GPU during tracking (every frame of a
+    trajectory got a say), so ``taxon`` is constant within a track and this is a
+    read, not a re-aggregation. Returns None when the CSV carries no
+    ``taxon_votes`` column — that means the run predates species classification,
+    and the plain ``taxon`` there is just the detector's class label, which would
+    be misleading to report as an identification.
+    """
+    if df is None or len(df) == 0:
+        return None
+    id_col = _pick(df, _ID_COLS)
+    taxon_col = _pick(df, ["taxon"])
+    votes_col = _pick(df, ["taxon_votes"])
+    if id_col is None or taxon_col is None or votes_col is None:
+        return None
+    conf_col = _pick(df, ["taxon_confidence"])
+
+    rows, seen = [], set()
+    for tid, grp in df.groupby(id_col):
+        votes = int(grp[votes_col].fillna(0).max() or 0)
+        if votes <= 0:
+            continue  # detector label only — nothing was actually classified
+        taxon = str(grp[taxon_col].dropna().iloc[0]) if grp[taxon_col].notna().any() else ""
+        if not taxon:
+            continue
+        confidence = None
+        if conf_col is not None and grp[conf_col].notna().any():
+            confidence = round(float(grp[conf_col].dropna().mean()), 3)
+        rows.append({
+            "track": _as_native(tid), "taxon": taxon,
+            "confidence": confidence, "votes": votes,
+            "frames": int(len(grp)),
+        })
+        seen.add(taxon)
+    if not rows:
+        return None
+    return {"identified_tracks": len(rows), "unique_taxa": len(seen), "rows": rows}
+
+
 def marker_identities(df):
     """Aggregate per-track individual IDs from the tracking CSV's marker columns.
 

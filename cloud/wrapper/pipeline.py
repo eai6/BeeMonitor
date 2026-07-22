@@ -98,6 +98,9 @@ class CloudPipeline:
         recorded_at: str = "",
         start_frame: int = 0,
         end_frame: "int | None" = None,
+        identify_species: bool = False,
+        species_model_key: str = "",
+        species_min_confidence: float = 0.5,
     ) -> PipelineResult:
         """Run the full BeeMonitor pipeline on a video stored in S3.
 
@@ -138,6 +141,20 @@ class CloudPipeline:
             logger.info("[%s] Downloading custom bee model: %s", job_id, custom_bee_model_path)
             custom_bee_local = self._models.ensure_custom_model(custom_bee_model_path)
 
+        # BeeMachine species classifier — fetched only when asked for, since it
+        # is ~83 MB and most runs don't need it. A failure here must not sink the
+        # job: tracking is still useful without species labels.
+        species_local = ""
+        if identify_species:
+            key = species_model_key or os.environ.get(
+                "BEEMACHINE_MODEL_KEY", "v1/beemachine_v2s_300.onnx")
+            try:
+                species_local = self._models.ensure_custom_model(key)
+                logger.info("[%s] Species classifier ready: %s", job_id, species_local)
+            except Exception as exc:
+                logger.warning("[%s] Species classifier unavailable (%s) — "
+                               "continuing without species labels", job_id, exc)
+
         # Nest/hotel-only jobs (run_tracking=False, e.g. the pipeline builder's
         # Detect Nest block) skip motion detection, tracking, events, and all
         # post-processing — they only need the layout.
@@ -165,6 +182,8 @@ class CloudPipeline:
             end_frame=end_frame,
             detector_kind=detector_kind,
             text_prompt=text_prompt,
+            species_model=species_local,
+            species_min_confidence=species_min_confidence,
         )
 
         # Step 4 — Post-processing: foraging trips + interactions
@@ -418,6 +437,8 @@ class CloudPipeline:
         end_frame: "int | None" = None,
         detector_kind: str = "yolo",
         text_prompt: str = "",
+        species_model: str = "",
+        species_min_confidence: float = 0.5,
     ):
         """Build a BeeMonitor Config, instantiate, and run."""
         from beemonitor.core.config import Config, ModelConfig
@@ -444,6 +465,9 @@ class CloudPipeline:
         # Detector selection: "sam3" makes tracking use SAM 3 text-prompt
         # detection (heavy, local GPU) instead of YOLO.
         config.tracking.detector_kind = detector_kind or "yolo"
+        # Empty path leaves species classification off (video_analyzer checks).
+        config.tracking.species_model = species_model or ""
+        config.tracking.species_min_confidence = float(species_min_confidence or 0.5)
         config.tracking.text_prompt = text_prompt or ""
         config.output.save_visualizations = visualize
         # Recording start metadata (video.recorded_at) — event timestamps come

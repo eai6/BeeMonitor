@@ -90,7 +90,7 @@ class HiddenBlockTests(SimpleTestCase):
             "track.mot",
             "analyze.foraging_trips", "analyze.visitation",
             "analyze.interaction", "analyze.detection_count",
-            "identify.marker",
+            "identify.marker", "identify.species",
         })
 
     def test_no_legacy_block_reaches_the_palette(self):

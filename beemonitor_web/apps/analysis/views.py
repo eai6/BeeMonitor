@@ -324,6 +324,15 @@ def _spawn_gpu_job(job_pk: int) -> None:
         if job.config.get("detector_kind") == "sam3":
             payload["detector_kind"] = "sam3"
             payload["text_prompt"] = job.config.get("text_prompt", "") or "bee"
+        # Species classification runs inside the tracking pass; the worker fetches
+        # the BeeMachine model only when this flag is set.
+        if job.config.get("identify_species"):
+            payload["identify_species"] = True
+            if job.config.get("species_model_key"):
+                payload["species_model_key"] = job.config["species_model_key"]
+            if job.config.get("species_min_confidence") is not None:
+                payload["species_min_confidence"] = float(
+                    job.config["species_min_confidence"])
         # Recording start metadata → event timestamps; no filename convention needed.
         if video.recorded_at:
             payload["recorded_at"] = video.recorded_at.isoformat()

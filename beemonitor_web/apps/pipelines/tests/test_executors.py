@@ -273,6 +273,32 @@ class BuildJobConfigTests(ExecutorTestCase):
         built, _ = self._build(self._module_steps(analyzer=analyzer))
         self.assertEqual(built["config"]["ml_threshold"], 0.3)
 
+    def test_species_node_turns_classification_on_in_the_job(self):
+        """The whole chain hangs off this flag: _spawn_gpu_job forwards it, the
+        handler passes it to CloudPipeline, and the tracker classifies with it."""
+        analyzer = {"id": "sp", "block_type": "identify.species",
+                    "config": {"min_confidence": 0.7}, "inputs": {"tracks": "m"}}
+        built, err = self._build(self._module_steps(analyzer=analyzer))
+
+        self.assertIsNone(err)
+        self.assertTrue(built["config"]["identify_species"])
+        self.assertEqual(built["config"]["species_min_confidence"], 0.7)
+
+    def test_species_flag_absent_without_the_node(self):
+        built, _ = self._build(self._module_steps())
+        self.assertNotIn("identify_species", built["config"])
+
+    def test_adding_the_species_node_changes_the_cache_key(self):
+        """Unlike the marker flag this replaced, species classification really
+        does change the output — the taxon column differs — so it must re-run
+        rather than serve a result computed without it."""
+        analyzer = {"id": "sp", "block_type": "identify.species",
+                    "config": {}, "inputs": {"tracks": "m"}}
+        without, _ = self._build(self._module_steps())
+        with_species, _ = self._build(self._module_steps(analyzer=analyzer))
+
+        self.assertNotEqual(without["config"], with_species["config"])
+
     def test_marker_node_does_not_add_identify_flags(self):
         """Regression: identify_bees was a pure cache-buster.
 

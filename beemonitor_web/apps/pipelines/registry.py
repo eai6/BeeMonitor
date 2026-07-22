@@ -562,6 +562,34 @@ BLOCK_REGISTRY = {
     },
 
     # ── Identify ──────────────────────────────────────────────────────────────
+    "identify.species": {
+        "display_name": "Identify Species",
+        "description": "Name the species of each tracked insect (BeeMachine — "
+                       "354 bee taxa). Runs inside the tracking GPU pass, "
+                       "classifying every frame of a trajectory and taking the "
+                       "majority, so one blurred frame can't rename an animal. "
+                       "Adding this node changes what the tracking job produces, "
+                       "so it re-runs rather than reusing a cached result.",
+        "category": "identify",
+        "icon": "🔬",
+        "input_type": "tracks",
+        "accepts": ["tracks", "detections"],
+        "output_type": "table",
+        "backend": "local",
+        "config_fields": [
+            {
+                # The model always emits a softmax over 354 classes, so
+                # something always wins. This floor is what keeps a motion-blurred
+                # wing from being recorded as a species.
+                "name": "min_confidence",
+                "label": "Minimum confidence",
+                "field_type": "number",
+                "required": False,
+                "default": 0.5,
+                "choices": None,
+            },
+        ],
+    },
     "identify.marker": {
         "display_name": "Read Bee Marker (QR / Colour)",
         "description": "Read which individual each track is, from its paint "
@@ -839,6 +867,8 @@ _MULTI_INPUT_PORTS = {
                                  "accepts": ["detections", "tracks"]},
                                 _REFERENCE_PORT],
     "identify.marker":         [{"name": "tracks", "type": "tracks",
+                                 "accepts": ["tracks", "detections"]}],
+    "identify.species":        [{"name": "tracks", "type": "tracks",
                                  "accepts": ["tracks", "detections"]}],
     "detect.bee":              [{"name": "video", "type": "video"}],
     "detect.nest":             [{"name": "video", "type": "video"}],

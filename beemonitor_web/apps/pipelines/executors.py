@@ -512,6 +512,30 @@ def _exec_analyze_colony_activity(step, run, context, inputs, index):
     }
 
 
+def _exec_identify_species(step, run, context, inputs, index):
+    """Report the species each track was classified as.
+
+    The GPU wrote the winner into the tracking CSV's taxon column during the
+    tracking pass (voting across every frame), so this is a pure read — the
+    taxon_confidence / taxon_votes columns say how firm each call was.
+    """
+    from . import ops
+
+    up = inputs.get("tracks") or _first_upstream_result(inputs)
+    result = (up or {}).get("result", {})
+    df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
+    summary = ops.species_identities(df) if df is not None else None
+    if summary is not None and summary.get("rows"):
+        return {"artifact": "table", "table_kind": "species", **summary}
+    return {
+        "artifact": "table", "table_kind": "species",
+        "identified_tracks": 0, "unique_taxa": 0, "rows": [],
+        "note": "No species labels in the tracking data. Species classification "
+                "runs during tracking, so this pipeline has to be re-run with "
+                "this node present for the worker to produce them.",
+    }
+
+
 def _exec_identify_marker(step, run, context, inputs, index):
     """Identity add-on — per-individual marker IDs on top of tracks.
 
@@ -593,6 +617,7 @@ LOCAL_EXECUTORS = {
     "analyze.visitation": _exec_analyze_visitation,
     "analyze.colony_activity": _exec_analyze_colony_activity,
     "identify.marker": _exec_identify_marker,
+    "identify.species": _exec_identify_species,
     "filter.roi": _exec_filter_passthrough,
     "filter.confidence": _exec_filter_passthrough,
     "filter.taxon": _exec_filter_passthrough,
@@ -692,6 +717,28 @@ def _run_tracking_for(step):
     return block_type in ("track.bee", "detect.bee")
 
 
+def _pipeline_species(step, steps):
+    """Species-classification settings from a downstream Identify Species node.
+
+    Unlike the marker flag this was replaced with, these keys are consumed all
+    the way down: _spawn_gpu_job forwards them, the handler passes them to
+    CloudPipeline, and the tracker classifies with them. They belong in the
+    hashed job config precisely *because* they change the output — the taxon
+    column differs — so adding the node correctly forces a re-run instead of
+    serving a cached result computed without it.
+    """
+    for s in downstream_ids(step.get("id"), steps):
+        if s.get("block_type") != "identify.species":
+            continue
+        cfg = s.get("config") or {}
+        try:
+            floor = float(cfg.get("min_confidence", 0.5) or 0.5)
+        except (TypeError, ValueError):
+            floor = 0.5
+        return True, floor
+    return False, 0.5
+
+
 def _pipeline_tracker(step, steps):
     """Tracking algorithm, read from a downstream MOT node (default BeeTrack).
 
@@ -756,6 +803,10 @@ def build_detect_and_track_config(step, run, context, index):
         # Selected on the downstream MOT node; inert on the worker for now.
         "tracker": _pipeline_tracker(step, run.steps),
     }
+    wants_species, species_floor = _pipeline_species(step, run.steps)
+    if wants_species:
+        config["identify_species"] = True
+        config["species_min_confidence"] = species_floor
     legacy_ref = cfg.get("reference_source")
     if step.get("block_type") == "detect.objects" and legacy_ref:
         # Legacy graphs only: part of the hashed config so two pre-split Detectors
