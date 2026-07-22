@@ -69,6 +69,51 @@ region = aws.get_region().name
 # ECR — holds the GPU inference image (CI-built, never local)
 # ---------------------------------------------------------------------------
 
+def ecr_lifecycle(resource_name: str, repo, keep: int = 10):
+    """Standard retention for a CI-built image repo.
+
+    The untagged rule alone is a no-op here: CI tags **every** push with the
+    commit SHA (plus :latest), so no image is ever untagged and nothing expires.
+    That is how the inference repo reached 44 images / ~305 GB of image size.
+    The count rule is the one that actually reclaims storage.
+
+    ``keep`` is a rollback window, not just a cost knob — the deployed image is
+    pinned by SHA in Pulumi.<stack>.yaml, so rolling back further than the newest
+    ``keep`` images would reference a tag that no longer exists. At the current
+    push rate that is roughly a month of history.
+    """
+    return aws.ecr.LifecyclePolicy(
+        resource_name,
+        repository=repo.name,
+        policy=json.dumps({
+            "rules": [
+                {
+                    "rulePriority": 1,
+                    "description": "Expire untagged images after 14 days",
+                    "selection": {
+                        "tagStatus": "untagged",
+                        "countType": "sinceImagePushed",
+                        "countUnit": "days",
+                        "countNumber": 14,
+                    },
+                    "action": {"type": "expire"},
+                },
+                {
+                    # ECR requires the tagStatus:"any" rule to sort last.
+                    "rulePriority": 2,
+                    "description": f"Keep only the {keep} most recent images",
+                    "selection": {
+                        "tagStatus": "any",
+                        "countType": "imageCountMoreThan",
+                        "countNumber": keep,
+                    },
+                    "action": {"type": "expire"},
+                },
+            ],
+        }),
+    )
+
+
 ecr_repo = aws.ecr.Repository(
     "inference-repo",
     name=ECR_REPO_NAME,
@@ -79,23 +124,7 @@ ecr_repo = aws.ecr.Repository(
     force_delete=False,
 )
 
-aws.ecr.LifecyclePolicy(
-    "inference-repo-lifecycle",
-    repository=ecr_repo.name,
-    policy=json.dumps({
-        "rules": [{
-            "rulePriority": 1,
-            "description": "Expire untagged images after 14 days",
-            "selection": {
-                "tagStatus": "untagged",
-                "countType": "sinceImagePushed",
-                "countUnit": "days",
-                "countNumber": 14,
-            },
-            "action": {"type": "expire"},
-        }],
-    }),
-)
+ecr_lifecycle("inference-repo-lifecycle", ecr_repo)
 
 # ECR for the BioCLIP insect-ID image (CPU, CI-built). Separate repo from the
 # video image so the two build/deploy independently.
@@ -110,6 +139,8 @@ bioclip_ecr_repo = aws.ecr.Repository(
     force_delete=False,
 )
 
+ecr_lifecycle("bioclip-repo-lifecycle", bioclip_ecr_repo)
+
 # ECR for the SAM 3 auto-labeler image (GPU, CI-built). Its own repo so it
 # builds/deploys independently of the video + bioclip images.
 SAM3_ECR_REPO_NAME = f"{prefix}-sam3"  # must match the CI workflow
@@ -122,6 +153,8 @@ sam3_ecr_repo = aws.ecr.Repository(
     ),
     force_delete=False,
 )
+
+ecr_lifecycle("sam3-repo-lifecycle", sam3_ecr_repo)
 
 
 # ---------------------------------------------------------------------------
@@ -343,23 +376,7 @@ training_ecr_repo = aws.ecr.Repository(
     force_delete=False,
 )
 
-aws.ecr.LifecyclePolicy(
-    "training-repo-lifecycle",
-    repository=training_ecr_repo.name,
-    policy=json.dumps({
-        "rules": [{
-            "rulePriority": 1,
-            "description": "Expire untagged images after 14 days",
-            "selection": {
-                "tagStatus": "untagged",
-                "countType": "sinceImagePushed",
-                "countUnit": "days",
-                "countNumber": 14,
-            },
-            "action": {"type": "expire"},
-        }],
-    }),
-)
+ecr_lifecycle("training-repo-lifecycle", training_ecr_repo)
 
 # Execution role assumed by the training container.
 #   - Read the manifest (sm-input) + raw videos.
