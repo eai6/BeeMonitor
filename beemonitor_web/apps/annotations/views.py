@@ -667,6 +667,10 @@ class SaveAnnotationView(LoginRequiredMixin, View):
                 "reviewed": True,
                 "review_source": Annotation.ReviewSource.HUMAN,
                 "reviewed_at": timezone.now(),
+                # A human saved this frame, so it is no longer a bare sampled
+                # placeholder — including when they saved it with no boxes, which
+                # is a deliberate negative example.
+                "sampled_only": False,
             },
         )
 
@@ -971,13 +975,48 @@ def poll_preannotation_tasks(user=None) -> int:
         if user is not None:
             qs = qs.filter(user=user)
         tasks = list(qs.select_related("project", "video")[:100])
-        if not tasks:
-            return 0
-        s3 = boto3.client("s3", region_name=getattr(settings, "AWS_REGION", "us-east-1"),
-                          config=Config(connect_timeout=10, read_timeout=30, retries={"max_attempts": 2}))
-        return sum(1 for t in tasks if finalize_preannotation_task(t, s3))
+        finalized = 0
+        if tasks:
+            s3 = boto3.client("s3", region_name=getattr(settings, "AWS_REGION", "us-east-1"),
+                              config=Config(connect_timeout=10, read_timeout=30, retries={"max_attempts": 2}))
+            finalized = sum(1 for t in tasks if finalize_preannotation_task(t, s3))
+        # Drain QUEUED tasks under a concurrency cap, after finalizing so slots
+        # freed this pass refill immediately — same shape as
+        # analysis.views._drain_queue. Without it, pre-annotating an N-video
+        # project fires N async SageMaker invocations at once, with only the
+        # 3-worker spawn pool (which serialises the *invoke*, not the GPU work)
+        # as backpressure.
+        drain_preannotation_queue()
+        return finalized
     except Exception:
         logger.exception("poll_preannotation_tasks failed")
+        return 0
+
+
+def drain_preannotation_queue() -> int:
+    """Promote QUEUED pre-annotation tasks while under the concurrency cap."""
+    from django.conf import settings
+
+    from .models import PreAnnotationTask
+
+    try:
+        cap = getattr(settings, "PREANNOTATION_MAX_CONCURRENT", 4)
+        in_flight = PreAnnotationTask.objects.filter(
+            status=PreAnnotationTask.Status.PROCESSING).count()
+        slots = max(0, cap - in_flight)
+        if not slots:
+            return 0
+        spawned = 0
+        for task in PreAnnotationTask.objects.filter(
+            status=PreAnnotationTask.Status.QUEUED,
+        ).order_by("created_at")[:slots]:
+            # _spawn_preannotation re-checks the status before invoking, so a
+            # task cancelled between here and the pool never reaches the GPU.
+            spawn_preannotation_async(task.pk)
+            spawned += 1
+        return spawned
+    except Exception:
+        logger.exception("drain_preannotation_queue failed")
         return 0
 
 
@@ -1046,8 +1085,9 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
             messages.warning(request, "No videos in this project.")
             return redirect("annotations:detail", pk=pk)
 
-        # One durable task per video; the bounded spawn pool + reconciler handle
-        # them (no more one-unbounded-thread-per-video).
+        # One durable QUEUED task per video. The drain below promotes only as
+        # many as the concurrency cap allows and the reconciler picks up the
+        # rest, so a 200-video project doesn't fire 200 GPU invocations at once.
         count = 0
         labeler = "yolo"
         for video in videos:
@@ -1055,15 +1095,16 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
                 continue
             task = _create_preannotation_task(request, project, video)
             labeler = task.labeler
-            spawn_preannotation_async(task.pk)
             count += 1
+        started = drain_preannotation_queue()
 
         engine = "SAM 3" if labeler == "sam3" else "AI"
-        messages.info(
-            request,
-            f"{engine} pre-annotation started for {count} video(s). Runs in the "
-            "background — refresh to see progress.",
-        )
+        queued = max(0, count - started)
+        msg = (f"{engine} pre-annotation started for {started} video(s). Runs in "
+               "the background — refresh to see progress.")
+        if queued:
+            msg += f" {queued} more queued; they start as slots free up."
+        messages.info(request, msg)
         return redirect("annotations:detail", pk=pk)
 
 
@@ -1279,7 +1320,10 @@ class ExportProjectView(LoginRequiredMixin, View):
         project = get_object_or_404(
             AnnotationProject, pk=pk, user=request.user
         )
-        annotations = project.annotations.select_related("video").order_by("video", "frame_number")
+        # Same rule as the training payload: un-annotated sampled frames are
+        # navigation placeholders, not labelled data.
+        annotations = (project.annotations.exclude(sampled_only=True)
+                       .select_related("video").order_by("video", "frame_number"))
 
         if not annotations.exists():
             from django.contrib import messages
@@ -1485,3 +1529,72 @@ class PreAnnotateFrameStatusView(LoginRequiredMixin, View):
         return []
 
 
+
+
+# ── Frame sampling (decoupled from SAM 3) ─────────────────────────────────────
+
+class SampleFramesView(LoginRequiredMixin, View):
+    """Sample frames from the project's videos so they can be annotated.
+
+    The cheap half of what used to be one fused SAM 3 call: this only decodes and
+    uploads frames (web CPU, no GPU). Auto-labelling stays a separate, opt-in
+    action — per project or, in the editor, per frame.
+    """
+
+    def post(self, request, pk):
+        from django.contrib import messages
+        from django.shortcuts import redirect
+
+        from . import sampling
+        from .models import FrameSamplingTask
+
+        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        videos = project.videos.all()
+        video_ids = request.POST.getlist("video_ids") or (
+            [request.POST["video_id"]] if request.POST.get("video_id") else []
+        )
+        if video_ids:
+            videos = videos.filter(pk__in=video_ids)
+        videos = list(videos)
+        if not videos:
+            messages.warning(request, "No videos selected to sample.")
+            return redirect("annotations:detail", pk=pk)
+
+        params = sampling.clamp_params({
+            "sample_interval": request.POST.get("sample_interval", 30),
+            "max_frames": request.POST.get("max_frames", 100),
+        })
+        for video in videos:
+            task = FrameSamplingTask.objects.create(
+                user=request.user, project=project, video=video, params=params,
+            )
+            sampling.spawn_sampling_async(task.pk)
+
+        messages.info(
+            request,
+            f"Sampling up to {params['max_frames']} frame(s) from "
+            f"{len(videos)} video(s), every {params['sample_interval']} frames. "
+            "Refresh to see them appear — no GPU is used.",
+        )
+        return redirect("annotations:detail", pk=pk)
+
+
+class CancelSamplingView(LoginRequiredMixin, View):
+    """Cancel this project's queued/running frame-sampling tasks."""
+
+    def post(self, request, pk):
+        from django.contrib import messages
+        from django.shortcuts import redirect
+        from django.utils import timezone
+
+        from .models import FrameSamplingTask
+
+        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        cancelled = FrameSamplingTask.objects.filter(
+            project=project,
+            status__in=[FrameSamplingTask.Status.QUEUED,
+                        FrameSamplingTask.Status.PROCESSING],
+        ).update(status=FrameSamplingTask.Status.CANCELLED,
+                 completed_at=timezone.now())
+        messages.info(request, f"Cancelled {cancelled} sampling task(s).")
+        return redirect("annotations:detail", pk=pk)

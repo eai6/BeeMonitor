@@ -92,6 +92,10 @@ class JobResult(models.Model):
     )
     events_csv_path = models.CharField(max_length=500, blank=True)
     tracking_csv_path = models.CharField(max_length=500, blank=True)
+    # Raw per-frame detector output, before track association. Distinct from
+    # tracking_csv_path, which only holds detections the tracker associated into
+    # a confirmed track — so counts derived from the two legitimately differ.
+    detections_csv_path = models.CharField(max_length=500, blank=True)
     foraging_trips_csv_path = models.CharField(max_length=500, blank=True)
     interactions_csv_path = models.CharField(max_length=500, blank=True)
     crops_csv_path = models.CharField(max_length=500, blank=True)

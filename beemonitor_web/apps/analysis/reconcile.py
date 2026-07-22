@@ -111,6 +111,24 @@ def reconcile_all(limit: int = 500) -> dict:
     except Exception:
         logger.exception("adaptation reconcile failed")
 
+    # Frame sampling (CPU, web-side) — re-spawns tasks a deploy interrupted.
+    try:
+        from apps.annotations.sampling import poll_frame_sampling_tasks
+
+        poll_frame_sampling_tasks()
+    except Exception:
+        logger.exception("frame sampling poll failed")
+
+    # Per-device pipeline schedules — this loop is the only clock in the
+    # deployment, so a due schedule launches here or nowhere.
+    sched = {"due": 0, "launched_runs": 0}
+    try:
+        from apps.devices import scheduling
+
+        sched = scheduling.run_due_schedules()
+    except Exception:
+        logger.exception("device pipeline schedules failed")
+
     # Foraging summaries flagged stale by job completions (or never computed):
     # recompute a bounded batch per tick, newest day first, so device charts
     # converge without any S3 work in request paths.
@@ -126,6 +144,8 @@ def reconcile_all(limit: int = 500) -> dict:
             "run_users": len(run_user_ids), "annotate_users": len(annotate_user_ids),
             "training_completed": training.get("completed", 0),
             "preannot_finalized": preannot_done,
+            "schedules_due": sched.get("due", 0),
+            "scheduled_runs": sched.get("launched_runs", 0),
             "trips_recomputed": trips_recomputed}
 
 

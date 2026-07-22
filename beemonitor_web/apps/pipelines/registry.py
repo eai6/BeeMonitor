@@ -50,6 +50,19 @@ def types_compatible(upstream_out, downstream_in):
     return upstream_out == downstream_in
 
 
+def accepted_types(block_type):
+    """Every artifact type a block's primary input will take.
+
+    Most blocks accept exactly their ``input_type``. Analyzers declare an
+    ``accepts`` list instead, because the same node reads either tracks (from the
+    MOT module) or raw detections (straight from the Detector) — the branch the
+    design doc calls for. ``input_type`` stays scalar so the editor's type chip
+    (``t-<type>``) and port labels keep rendering one canonical type.
+    """
+    block = BLOCK_REGISTRY.get(block_type, {})
+    return block.get("accepts") or [block.get("input_type", "none")]
+
+
 BLOCK_REGISTRY = {
     # ── Input ─────────────────────────────────────────────────────────────────
     "input.video": {
@@ -212,7 +225,151 @@ BLOCK_REGISTRY = {
         ],
     },
 
-    # ── Track ─────────────────────────────────────────────────────────────────
+    # ── Module 1 — Detector ───────────────────────────────────────────────────
+    # Finds the organisms to track/count AND the reference objects (bee hotel,
+    # nest tubes, a flower) that the analyzers measure activity against. The
+    # reference used to be separate roi.* nodes; folding it in here is what makes
+    # the three-module abstraction hold.
+    "detect.objects": {
+        "display_name": "Detector — Objects & Reference",
+        "description": "Find the insects to track or count, and the reference "
+                       "object activity is measured against (bee hotel / nest "
+                       "tubes / a drawn region). YOLO is fast with trained "
+                       "classes; SAM 3 takes any text prompt but is much slower. "
+                       "Detection and tracking run in one GPU pass, so adding a "
+                       "MOT module downstream costs nothing extra.",
+        "category": "detect",
+        "icon": "🎯",
+        "input_type": "video",
+        "output_type": "detections",
+        "backend": "gpu",
+        "config_fields": [
+            {
+                "name": "model_family",
+                "label": "Detector",
+                "field_type": "select",
+                "required": False,
+                "default": "yolo",
+                "choices": [
+                    {"value": "yolo", "label": "YOLO (fast)"},
+                    {"value": "sam3", "label": "SAM 3 (text prompt, slow)"},
+                ],
+            },
+            {
+                # Becomes the detection's label -> the tracking CSV's `taxon`.
+                "name": "text_prompt",
+                "label": "SAM 3 prompt",
+                "field_type": "text",
+                "required": False,
+                "default": "bee",
+                "choices": None,
+                "show_if": {"field": "model_family", "value": "sam3"},
+            },
+            {
+                "name": "object_model",
+                "label": "Object model (YOLO)",
+                "field_type": "bee_model",  # custom-model picker, populated at render
+                "required": False,
+                "default": "",
+                "choices": None,
+                "show_if": {"field": "model_family", "value": "yolo"},
+            },
+            {
+                "name": "confidence",
+                "label": "Confidence Threshold",
+                "field_type": "number",
+                "required": False,
+                "default": 0.4,
+                "choices": None,
+            },
+            {
+                # Replaces the old roi.nest_layout / roi.draw / detect.nest nodes.
+                "name": "reference_source",
+                "label": "Reference object",
+                "field_type": "select",
+                "required": False,
+                "default": "device_layout",
+                "choices": [
+                    {"value": "device_layout", "label": "The device's saved hotel + nest tubes"},
+                    {"value": "detect", "label": "Detect the nest / hotel in the video"},
+                    {"value": "drawn", "label": "Region(s) I draw"},
+                    {"value": "none", "label": "None"},
+                ],
+            },
+            {
+                "name": "regions",
+                "label": "Regions (JSON)",
+                "field_type": "textarea",
+                "required": False,
+                "default": "[]",
+                "choices": None,
+                "show_if": {"field": "reference_source", "value": "drawn"},
+            },
+            {
+                "name": "reference_model",
+                "label": "Nest / hotel model",
+                "field_type": "nest_model",
+                "required": False,
+                "default": "",
+                "choices": None,
+                "show_if": {"field": "reference_source", "value": "detect"},
+            },
+            {
+                # The only way to reach the cheap nest-only GPU path. Explicit,
+                # because that path produces NO detections or tracks at all —
+                # inferring it from the graph would silently yield empty results.
+                "name": "run_scope",
+                "label": "Run scope",
+                "field_type": "select",
+                "required": False,
+                "default": "full",
+                "choices": [
+                    {"value": "full", "label": "Objects + reference"},
+                    {"value": "reference_only", "label": "Reference only (fast, no objects)"},
+                ],
+            },
+            {
+                # Rendering the overlay roughly doubles runtime; off by default.
+                "name": "annotated_video",
+                "label": "Annotated video",
+                "field_type": "select",
+                "required": False,
+                "default": "off",
+                "choices": [
+                    {"value": "off", "label": "Off (faster)"},
+                    {"value": "on", "label": "On (render overlay video)"},
+                ],
+            },
+        ],
+    },
+
+    # ── Module 2 — MOT ────────────────────────────────────────────────────────
+    "track.mot": {
+        "display_name": "MOT — Track Objects",
+        "description": "Multi-object tracking: associate per-frame detections "
+                       "into trajectories. Runs inside the Detector's GPU pass — "
+                       "this module picks the algorithm and hands tracks to the "
+                       "analyzers.",
+        "category": "track",
+        "icon": "🛰️",
+        "input_type": "detections",
+        "output_type": "tracks",
+        "backend": "local",
+        "config_fields": [
+            {
+                "name": "tracker",
+                "label": "Tracking algorithm",
+                "field_type": "select",
+                "required": False,
+                "default": "beetrack",
+                "choices": [
+                    {"value": "beetrack", "label": "BeeTrack (default)"},
+                ],
+            },
+        ],
+    },
+
+    # ── Track (legacy) ────────────────────────────────────────────────────────
     "track.bee": {
         "display_name": "Track Objects (MOT)",
         "description": "Multi-object tracking — turn per-frame detections into trajectories. "
@@ -291,6 +448,7 @@ BLOCK_REGISTRY = {
         "category": "analyze",
         "icon": "🌻",
         "input_type": "tracks",
+        "accepts": ["tracks", "detections"],
         "output_type": "events",
         "backend": "local",
         "config_fields": [
@@ -309,13 +467,78 @@ BLOCK_REGISTRY = {
     },
     "analyze.visitation": {
         "display_name": "Visitation Count",
-        "description": "Count visits (and dwell time) of tracks entering a region of interest.",
+        "description": "Count unique tracks visiting the reference object (a "
+                       "flower, a nest tube, anything the Detector found), plus "
+                       "how long each stayed.",
         "category": "analyze",
         "icon": "🔢",
         "input_type": "tracks",
+        "accepts": ["tracks", "detections"],
         "output_type": "table",
         "backend": "local",
         "config_fields": [],
+    },
+    "analyze.interaction": {
+        "display_name": "Interactions",
+        "description": "Proximity interactions — insect-to-insect, and "
+                       "insect-to-reference (e.g. a bee at a nest tube) — with "
+                       "their durations.",
+        "category": "analyze",
+        "icon": "🤝",
+        "input_type": "tracks",
+        "accepts": ["tracks", "detections"],
+        "output_type": "table",
+        "backend": "local",
+        "config_fields": [
+            {
+                "name": "interaction_type",
+                "label": "Interaction type",
+                "field_type": "select",
+                "required": False,
+                "default": "all",
+                "choices": [
+                    {"value": "all", "label": "All"},
+                    {"value": "organism_organism", "label": "Insect ↔ insect"},
+                    {"value": "organism_reference", "label": "Insect ↔ reference"},
+                ],
+            },
+        ],
+    },
+    "analyze.detection_count": {
+        "display_name": "Detection Count",
+        "description": "Count detections rather than trips or visits — total, "
+                       "per frame, or binned over time. Wire it straight to the "
+                       "Detector when you only need 'how much was there', not "
+                       "who went where.",
+        "category": "analyze",
+        "icon": "#️⃣",
+        "input_type": "detections",
+        "accepts": ["detections", "tracks"],
+        "output_type": "table",
+        "backend": "local",
+        "config_fields": [
+            {
+                "name": "metric",
+                "label": "Metric",
+                "field_type": "select",
+                "required": True,
+                "default": "total",
+                "choices": [
+                    {"value": "total", "label": "Totals"},
+                    {"value": "per_frame", "label": "Per frame"},
+                    {"value": "over_time", "label": "Over time"},
+                ],
+            },
+            {
+                "name": "bin_seconds",
+                "label": "Bin size (seconds)",
+                "field_type": "number",
+                "required": False,
+                "default": 5,
+                "choices": None,
+                "show_if": {"field": "metric", "value": "over_time"},
+            },
+        ],
     },
     "analyze.colony_activity": {
         "display_name": "Colony Activity",
@@ -343,10 +566,15 @@ BLOCK_REGISTRY = {
     # ── Identify ──────────────────────────────────────────────────────────────
     "identify.marker": {
         "display_name": "Read Bee Marker (QR / Colour)",
-        "description": "Read per-track individual IDs (colour / QR / number tags) from tracking.",
+        "description": "Read which individual each track is, from its paint "
+                       "mark. Decoded from the per-track crops the tracking run "
+                       "already saved, voting across a track's crops — so it "
+                       "also works on videos you analysed earlier. Printed tag "
+                       "(ArUco / QR) decoding is not implemented yet.",
         "category": "identify",
         "icon": "🏷️",
         "input_type": "tracks",
+        "accepts": ["tracks", "detections"],
         "output_type": "table",
         "backend": "local",
         "config_fields": [
@@ -357,10 +585,12 @@ BLOCK_REGISTRY = {
                 "required": True,
                 "default": "auto",
                 "choices": [
-                    {"value": "auto", "label": "Auto (any tag the tracker read)"},
-                    {"value": "color", "label": "Colour tag"},
-                    {"value": "qr", "label": "QR / data-matrix tag"},
-                    {"value": "number", "label": "Number tag"},
+                    {"value": "auto", "label": "Auto (try every decoder)"},
+                    {"value": "color", "label": "Colour paint mark"},
+                    # No decoder behind these two yet — labelled so choosing one
+                    # is an informed choice, not a silent no-op.
+                    {"value": "number", "label": "Number / ArUco tag (not yet available)"},
+                    {"value": "qr", "label": "QR / data-matrix tag (not yet available)"},
                 ],
             },
         ],
@@ -515,22 +745,55 @@ BLOCK_REGISTRY = {
 }
 
 
+# ── Legacy blocks (superseded by the three-module refactor, 2026-07) ──────────
+# The builder collapsed to Video → Detector → MOT → Analyzer (+ Identity), which
+# absorbed these: the roi.* nodes became the Detector's ``reference_source``,
+# detect.bee/track.bee became detect.objects + track.mot, and the filter/output
+# nodes were never more than pass-throughs (see the executors).
+#
+# They stay in BLOCK_REGISTRY on purpose. ``get_block`` — which the engine, the
+# executors and the canvas rebuild all go through — keeps resolving them, so every
+# pipeline saved before the refactor still validates, opens with its edges intact
+# and runs. They are simply absent from the palette, so no *new* pipeline can be
+# built on them. Do not delete these entries without a data migration.
+_LEGACY_BLOCKS = (
+    "input.image_set",
+    "roi.nest_layout", "roi.draw",
+    "detect.nest", "detect.bee", "track.bee",
+    "analyze.colony_activity",
+    "filter.roi", "filter.confidence", "filter.taxon", "filter.time",
+    "output.table", "output.chart", "output.summary", "output.dataset",
+)
+
+for _legacy_type in _LEGACY_BLOCKS:
+    BLOCK_REGISTRY[_legacy_type]["hidden"] = True
+
+
 CATEGORY_META = {
-    "input":    {"name": "Input",     "slug": "input",    "icon": "📥", "order": 0},
-    "roi":      {"name": "Region",    "slug": "roi",      "icon": "📐", "order": 1},
-    "detect":   {"name": "Detect",    "slug": "detect",   "icon": "🎯", "order": 2},
-    "track":    {"name": "Track",     "slug": "track",    "icon": "🛰️", "order": 3},
-    "analyze":  {"name": "Analyze",   "slug": "analyze",  "icon": "📊", "order": 4},
-    "identify": {"name": "Identify",  "slug": "identify", "icon": "🔬", "order": 5},
+    "input":    {"name": "Input",           "slug": "input",    "icon": "📥", "order": 0},
+    "roi":      {"name": "Region",          "slug": "roi",      "icon": "📐", "order": 1},
+    "detect":   {"name": "1 · Detect",      "slug": "detect",   "icon": "🎯", "order": 2},
+    "track":    {"name": "2 · Track (MOT)", "slug": "track",    "icon": "🛰️", "order": 3},
+    "analyze":  {"name": "3 · Analyze",     "slug": "analyze",  "icon": "📊", "order": 4},
+    "identify": {"name": "Identity",        "slug": "identify", "icon": "🔬", "order": 5},
     "filter":   {"name": "Filter",    "slug": "filter",   "icon": "🧲", "order": 6},
     "output":   {"name": "Output",    "slug": "output",   "icon": "📤", "order": 7},
 }
 
 
-def get_categories():
-    """Return an ordered list of categories, each with its blocks (for the palette)."""
+def get_categories(include_hidden=False):
+    """Return an ordered list of categories, each with its blocks (for the palette).
+
+    Blocks marked ``hidden`` are legacy: they still execute and still render on the
+    canvas (``serialize_blocks``/``get_block`` keep returning them, so pipelines
+    built before the module refactor open and run unchanged), but they are not
+    offered for new work. A category whose blocks are all hidden is dropped
+    entirely rather than rendering an empty accordion.
+    """
     cats = {}
     for block_type, block in BLOCK_REGISTRY.items():
+        if block.get("hidden") and not include_hidden:
+            continue
         cat_key = block["category"]
         if cat_key not in cats:
             meta = CATEGORY_META.get(
@@ -544,7 +807,10 @@ def get_categories():
             "description": block["description"],
             **block,
         })
-    return sorted(cats.values(), key=lambda c: c.get("order", 99))
+    return sorted(
+        (c for c in cats.values() if c["blocks"]),
+        key=lambda c: c.get("order", 99),
+    )
 
 
 def get_block(block_type):
@@ -558,6 +824,14 @@ def get_block(block_type):
 # to Drawflow's input_1, input_2, … The executors that read specific ports
 # (foraging/visitation/colony read ``tracks``) rely on these names.
 _MULTI_INPUT_PORTS = {
+    "detect.objects":          [{"name": "video", "type": "video"}],
+    "track.mot":               [{"name": "detections", "type": "detections"}],
+    "analyze.interaction":     [{"name": "tracks", "type": "tracks",
+                                 "accepts": ["tracks", "detections"]}],
+    "analyze.detection_count": [{"name": "detections", "type": "detections",
+                                 "accepts": ["detections", "tracks"]}],
+    "identify.marker":         [{"name": "tracks", "type": "tracks",
+                                 "accepts": ["tracks", "detections"]}],
     "detect.bee":              [{"name": "video", "type": "video"}],
     "detect.nest":             [{"name": "video", "type": "video"}],
     "track.bee":               [{"name": "video", "type": "video"},
@@ -600,9 +874,13 @@ def serialize_blocks():
             "icon": block["icon"],
             "input_type": block["input_type"],
             "output_type": block["output_type"],
+            "accepts": accepted_types(block_type),
             "input_ports": get_input_ports(block_type),
             "num_out": num_output_ports(block_type),
             "config_fields": block.get("config_fields", []),
+            # Legacy block: still renders + runs on the canvas, but is not in the
+            # palette. The editor tags these nodes so it's clear why.
+            "hidden": bool(block.get("hidden")),
             # "beta" = the block runs but doesn't yet produce a full deliverable
             # (surfaced as a palette badge so "valid graph" != "graph that does
             # everything" is visible).
@@ -611,11 +889,12 @@ def serialize_blocks():
     return out
 
 
-def get_blocks_by_category(category):
-    """Return all blocks in a given category."""
+def get_blocks_by_category(category, include_hidden=True):
+    """Return all blocks in a given category (legacy blocks included by default)."""
     return {
         bt: block for bt, block in BLOCK_REGISTRY.items()
         if block["category"] == category
+        and (include_hidden or not block.get("hidden"))
     }
 
 
@@ -648,6 +927,12 @@ def validate_steps(steps):
         in_type = block.get("input_type", "none")
         if in_type == "none":
             continue
+        # A block may accept several artifact types (analyzers take tracks OR
+        # detections); in_type is only the canonical one used for display.
+        in_types = accepted_types(block_type)
+
+        def _accepts(up_out):
+            return any(types_compatible(up_out, t) for t in in_types)
 
         upstreams = step.get("inputs")
         if upstreams:
@@ -661,12 +946,13 @@ def validate_steps(steps):
                     errors.append(f"Step {i + 1}: input '{port}' points to a missing step.")
                     continue
                 up_block = BLOCK_REGISTRY.get(up.get("block_type", ""), {})
-                if types_compatible(up_block.get("output_type", "none"), in_type):
+                if _accepts(up_block.get("output_type", "none")):
                     matched = True
             if upstreams and not matched:
                 errors.append(
-                    f"Step {i + 1} ({block['display_name']}): needs a '{in_type}' input "
-                    f"but none of its connected steps produce one."
+                    f"Step {i + 1} ({block['display_name']}): needs a "
+                    f"'{' or '.join(in_types)}' input but none of its connected "
+                    f"steps produce one."
                 )
         elif i == 0:
             errors.append(
@@ -676,9 +962,10 @@ def validate_steps(steps):
             prev = steps[i - 1]
             prev_block = BLOCK_REGISTRY.get(prev.get("block_type", ""), {})
             prev_out = prev_block.get("output_type", "none")
-            if not types_compatible(prev_out, in_type):
+            if not _accepts(prev_out):
                 errors.append(
-                    f"Step {i + 1} ({block['display_name']}): expects '{in_type}' but "
-                    f"the previous step produces '{prev_out}'."
+                    f"Step {i + 1} ({block['display_name']}): expects "
+                    f"'{' or '.join(in_types)}' but the previous step produces "
+                    f"'{prev_out}'."
                 )
     return errors

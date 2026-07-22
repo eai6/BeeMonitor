@@ -10,7 +10,7 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DJANGO_ENV=production \
-    PYTHONPATH=/app/beemonitor_web:/app
+    PYTHONPATH=/app/beemonitor_web:/app:/app/src
 
 WORKDIR /app
 
@@ -28,6 +28,10 @@ RUN pip install --no-cache-dir -r /app/beemonitor_web/requirements/base.txt djan
 # Application code — Django project plus the cloud package it imports.
 COPY beemonitor_web/ /app/beemonitor_web/
 COPY cloud/ /app/cloud/
+# src/beemonitor for the pure-CV bits the web app shares with the GPU worker
+# (currently beemonitor.identification, the marker decoder run over track
+# crops). The heavy analyzer imports are lazy, so this pulls in no torch.
+COPY src/ /app/src/
 
 # collectstatic at build time so we don't pay it on every container start;
 # whitenoise serves out of STATIC_ROOT (beemonitor_web/staticfiles).

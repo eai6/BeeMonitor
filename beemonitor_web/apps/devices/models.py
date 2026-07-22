@@ -577,3 +577,103 @@ class EnrollmentToken(models.Model):
             prefix=raw[:18],
         )
         return tok, raw
+
+
+class DevicePipelineSchedule(models.Model):
+    """Run a pipeline over a device's new videos on a recurring cadence.
+
+    The dashboard's Advanced page sets one of these per (device, pipeline). The
+    background reconciler (``apps.analysis.reconcile.reconcile_all``) ticks every
+    ~120s and calls ``apps.devices.scheduling.run_due_schedules``, which launches
+    the pipeline over the videos this device recorded since ``last_run_at``.
+
+    There is no cron in this deployment — the reconciler daemon *is* the clock.
+    Several web workers may tick concurrently, so claiming a schedule is a
+    compare-and-swap on ``last_run_at`` (same technique as ``_drain_queue``).
+    """
+
+    CADENCES = [
+        ("hourly", "Every hour"),
+        ("every_6h", "Every 6 hours"),
+        ("daily", "Once a day"),
+    ]
+    # Cadence -> minimum gap between launches.
+    CADENCE_SECONDS = {"hourly": 3600, "every_6h": 6 * 3600, "daily": 24 * 3600}
+
+    device = models.ForeignKey(
+        Device, on_delete=models.CASCADE, related_name="pipeline_schedules",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name="device_pipeline_schedules",
+        help_text="Whose runs + credits these launches are billed to.",
+    )
+    pipeline = models.ForeignKey(
+        "pipelines.Pipeline", on_delete=models.CASCADE, related_name="device_schedules",
+    )
+    enabled = models.BooleanField(default=True)
+    cadence = models.CharField(max_length=16, choices=CADENCES, default="daily")
+    at_hour = models.IntegerField(
+        null=True, blank=True,
+        help_text="Hour of day (device-local) for the daily cadence; null = any hour.",
+    )
+    lookback_hours = models.IntegerField(
+        default=1,
+        help_text="Overlap added to the back of the window so a clip that lands "
+                  "late (or a missed tick) still gets picked up. Re-runs are cheap: "
+                  "an identical GPU step reuses its StepResult cache.",
+    )
+    last_run_at = models.DateTimeField(null=True, blank=True)
+    last_batch_id = models.UUIDField(null=True, blank=True)
+    last_launched_count = models.IntegerField(default=0)
+    last_error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["device", "pipeline"], name="uniq_device_pipeline_schedule",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.device.name} → {self.pipeline.title} ({self.cadence})"
+
+    @property
+    def interval_seconds(self) -> int:
+        return self.CADENCE_SECONDS.get(self.cadence, 24 * 3600)
+
+    def is_due(self, now=None) -> bool:
+        """True when this schedule should launch on the current tick."""
+        if not self.enabled:
+            return False
+        now = now or timezone.now()
+        if self.last_run_at is None:
+            return True
+        if (now - self.last_run_at).total_seconds() < self.interval_seconds:
+            return False
+        # Daily schedules pinned to an hour only fire inside that hour, in the
+        # device's own timezone (a unit in another tz shouldn't fire at UTC 00).
+        if self.cadence == "daily" and self.at_hour is not None:
+            return self._local_now(now).hour == self.at_hour
+        return True
+
+    def _local_now(self, now):
+        tzname = getattr(self.device, "display_tz", "") or ""
+        if not tzname:
+            return now
+        try:
+            from zoneinfo import ZoneInfo
+
+            return now.astimezone(ZoneInfo(tzname))
+        except Exception:  # unknown tz name — fall back to server time
+            return now
+
+    def window_start(self):
+        """Start of the video window for the next launch (None = no lower bound)."""
+        if self.last_run_at is None:
+            return None
+        from datetime import timedelta
+
+        return self.last_run_at - timedelta(hours=max(0, self.lookback_hours))

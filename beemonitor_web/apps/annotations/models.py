@@ -63,6 +63,13 @@ class Annotation(models.Model):
 
     reviewed = models.BooleanField(
         default=False, help_text="A human or the LLM has vetted these boxes.")
+    sampled_only = models.BooleanField(
+        default=False,
+        help_text="This row is a sampled frame nobody has annotated yet — it "
+                  "exists so the editor can navigate to the frame. Distinct from "
+                  "a frame a human deliberately marked empty, which IS a valid "
+                  "negative example; training excludes these but keeps those.",
+    )
     review_source = models.CharField(
         max_length=10, choices=ReviewSource.choices, default="", blank=True)
     reviewed_at = models.DateTimeField(null=True, blank=True)
@@ -131,3 +138,45 @@ class PreAnnotationTask(models.Model):
 
     def __str__(self):
         return f"PreAnnotate {self.video_id} [{self.status}]"
+
+
+class FrameSamplingTask(models.Model):
+    """Extract frames from one video so they can be annotated.
+
+    Sampling used to be fused into the SAM 3 pre-annotation call: the only way to
+    get frames was to pay for a g5 auto-labelling pass over the whole video. This
+    task decouples the two — it decodes frames on the web container's CPU and
+    writes an empty ``Annotation`` row per frame, so the editor can navigate them
+    immediately and SAM 3 becomes an opt-in, per-frame action.
+
+    Deliberately shaped like ``PreAnnotationTask`` (durable row, advanced by the
+    background reconciler) so the two read the same way on the project page.
+    """
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        PROCESSING = "processing", "Processing"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name="frame_sampling_tasks")
+    project = models.ForeignKey(AnnotationProject, on_delete=models.CASCADE,
+                                related_name="frame_sampling_tasks")
+    video = models.ForeignKey("videos.Video", on_delete=models.CASCADE,
+                              related_name="frame_sampling_tasks")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.QUEUED)
+    # {"sample_interval": int, "max_frames": int}
+    params = models.JSONField(default=dict, blank=True)
+    frames_written = models.IntegerField(default=0)
+    error_message = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"SampleFrames {self.video_id} [{self.status}]"
