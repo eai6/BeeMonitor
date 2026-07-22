@@ -121,6 +121,7 @@ def predict_fn(payload, pipeline):
             identify_species=bool(payload.get("identify_species", False)),
             species_model_key=payload.get("species_model_key", "") or "",
             species_min_confidence=float(payload.get("species_min_confidence", 0.5) or 0.5),
+            species_max_votes=int(payload.get("species_max_votes", 25) or 25),
         )
     except Exception as exc:
         logger.exception("predict_fn: pipeline failed for job %s", job_id)

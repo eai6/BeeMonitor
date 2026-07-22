@@ -101,6 +101,7 @@ class CloudPipeline:
         identify_species: bool = False,
         species_model_key: str = "",
         species_min_confidence: float = 0.5,
+        species_max_votes: int = 25,
     ) -> PipelineResult:
         """Run the full BeeMonitor pipeline on a video stored in S3.
 
@@ -184,6 +185,7 @@ class CloudPipeline:
             text_prompt=text_prompt,
             species_model=species_local,
             species_min_confidence=species_min_confidence,
+            species_max_votes=species_max_votes,
         )
 
         # Step 4 — Post-processing: foraging trips + interactions
@@ -439,6 +441,7 @@ class CloudPipeline:
         text_prompt: str = "",
         species_model: str = "",
         species_min_confidence: float = 0.5,
+        species_max_votes: int = 25,
     ):
         """Build a BeeMonitor Config, instantiate, and run."""
         from beemonitor.core.config import Config, ModelConfig
@@ -468,6 +471,7 @@ class CloudPipeline:
         # Empty path leaves species classification off (video_analyzer checks).
         config.tracking.species_model = species_model or ""
         config.tracking.species_min_confidence = float(species_min_confidence or 0.5)
+        config.tracking.species_max_votes = int(species_max_votes)
         config.tracking.text_prompt = text_prompt or ""
         config.output.save_visualizations = visualize
         # Recording start metadata (video.recorded_at) — event timestamps come

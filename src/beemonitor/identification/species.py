@@ -91,9 +91,11 @@ class SpeciesIdentifier(BaseIdentifier):
 
     method = "species"
 
-    def __init__(self, model_path=None, min_confidence: float = 0.5, session=None):
+    def __init__(self, model_path=None, min_confidence: float = 0.5, session=None,
+                 min_crop_side: int = 24):
         self.model_path = str(model_path or os.environ.get("BEEMACHINE_MODEL_PATH", ""))
         self.min_confidence = float(min_confidence)
+        self.min_crop_side = int(min_crop_side)
         self._session = session
         self._kind = "stub" if session is not None else None
 
@@ -162,36 +164,85 @@ class SpeciesIdentifier(BaseIdentifier):
             return np.asarray(session.predict(batch, verbose=0))
         raise TypeError(f"unusable inference session: {type(session).__name__}")
 
+    def _decode(self, probs):
+        """One row of model output -> a reading, or None."""
+        names = taxa()
+        probs = np.asarray(probs).reshape(-1)
+        if probs.size != len(names):
+            logger.warning(
+                "BeeMachine output has %d units but %d taxa are configured — "
+                "refusing to guess a mapping", probs.size, len(names))
+            return None
+        # Softmax if the export left logits unnormalised.
+        if probs.min() < 0 or not (0.99 <= float(probs.sum()) <= 1.01):
+            shifted = probs - probs.max()
+            exp = np.exp(shifted)
+            probs = exp / exp.sum()
+        index = int(np.argmax(probs))
+        confidence = float(probs[index])
+        if confidence < self.min_confidence:
+            return None
+        return (names[index], self.method, round(confidence, 4))
+
+    def _usable(self, region):
+        """Reject crops too small to classify.
+
+        A handful of pixels upscaled to 300x300 is noise, and a low-quality vote
+        is worse than no vote — it is exactly the input that produces confident
+        nonsense, and majority voting only helps when most votes are informative.
+        """
+        if region is None or region.size == 0:
+            return False
+        if region.ndim != 3 or region.shape[2] != 3:
+            return False
+        h, w = region.shape[:2]
+        return min(h, w) >= self.min_crop_side
+
     def identify(self, frame, bbox=None):
         """Return ``(taxon, "species", confidence)`` or None."""
         try:
             region = crop_bbox(frame, bbox)
+            if not self._usable(region):
+                return None
             batch = self.preprocess(region)
             if batch is None:
                 return None
             scores = self._infer(batch)
             if scores is None or getattr(scores, "size", 0) == 0:
                 return None
-            probs = np.asarray(scores).reshape(-1)
-            names = taxa()
-            if probs.size != len(names):
-                logger.warning(
-                    "BeeMachine output has %d units but %d taxa are configured — "
-                    "refusing to guess a mapping", probs.size, len(names))
-                return None
-            # Softmax if the export left logits unnormalised.
-            if probs.min() < 0 or not (0.99 <= float(probs.sum()) <= 1.01):
-                shifted = probs - probs.max()
-                exp = np.exp(shifted)
-                probs = exp / exp.sum()
-            index = int(np.argmax(probs))
-            confidence = float(probs[index])
-            if confidence < self.min_confidence:
-                return None
-            return (names[index], self.method, round(confidence, 4))
+            return self._decode(np.asarray(scores)[0])
         except Exception:  # inside the per-frame loop — never propagate
             logger.debug("BeeMachine classification failed", exc_info=True)
             return None
+
+    def identify_batch(self, frame, bboxes):
+        """Classify several crops of one frame in a single forward pass.
+
+        Returns a list aligned with ``bboxes`` (None where a crop was unusable or
+        below the confidence floor). Batching matters because at batch 1 the GPU
+        is latency-bound — it spends most of its time on launch overhead rather
+        than arithmetic — so the tracker classifies all of a frame's tracks
+        together instead of one call each.
+        """
+        results = [None] * len(bboxes)
+        usable = []
+        try:
+            for i, bbox in enumerate(bboxes):
+                region = crop_bbox(frame, bbox)
+                if not self._usable(region):
+                    continue
+                batch = self.preprocess(region)
+                if batch is not None:
+                    usable.append((i, batch[0]))
+            if not usable:
+                return results
+            stacked = np.stack([b for _i, b in usable]).astype(np.float32)
+            scores = np.asarray(self._infer(stacked))
+            for row, (i, _b) in enumerate(usable):
+                results[i] = self._decode(scores[row])
+        except Exception:
+            logger.debug("BeeMachine batch classification failed", exc_info=True)
+        return results
 
 
 class SpeciesVote:

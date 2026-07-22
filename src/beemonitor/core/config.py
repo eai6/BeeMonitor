@@ -478,6 +478,9 @@ class TrackingConfig:
     # beemonitor.identification.species. Empty path = disabled.
     species_model: str = ""
     species_min_confidence: float = 0.5
+    # Votes per track before a species is settled; 0 = every frame. See
+    # BeeTracking.species_max_votes for why capping barely costs accuracy.
+    species_max_votes: int = 25
 
     # Two-mode tracking optimization
     enable_two_mode_tracking: bool = True  # Enable adaptive mode switching

@@ -171,6 +171,70 @@ class IdentifyTests(unittest.TestCase):
         self.assertIsNone(SpeciesIdentifier().identify(crop()))
 
 
+class BatchAndGatingTests(unittest.TestCase):
+    """The two things that make this affordable: batching and skipping."""
+
+    class BatchStub:
+        def __init__(self, n_taxa):
+            self.n = n_taxa
+            self.batch_sizes = []
+
+        def get_inputs(self):
+            class _In:
+                name = "input_1"
+            return [_In()]
+
+        def run(self, _outputs, feed):
+            batch = next(iter(feed.values()))
+            self.batch_sizes.append(batch.shape[0])
+            probs = np.full((batch.shape[0], self.n), (1 - 0.9) / (self.n - 1),
+                            dtype=np.float32)
+            probs[:, 0] = 0.9
+            return [probs]
+
+    def test_batch_is_one_forward_pass_for_many_crops(self):
+        session = self.BatchStub(len(taxa()))
+        ident = SpeciesIdentifier(session=session)
+        frame = np.zeros((200, 400, 3), np.uint8)
+        frame[:] = (40, 60, 90)
+        boxes = [(0, 0, 60, 60), (80, 0, 140, 60), (200, 0, 260, 60)]
+
+        results = ident.identify_batch(frame, boxes)
+
+        self.assertEqual(len(results), 3)
+        self.assertTrue(all(r is not None for r in results))
+        self.assertEqual(session.batch_sizes, [3])  # one call, not three
+
+    def test_batch_result_order_matches_input_order(self):
+        session = self.BatchStub(len(taxa()))
+        ident = SpeciesIdentifier(session=session)
+        frame = np.zeros((100, 300, 3), np.uint8)
+        frame[:] = (40, 60, 90)
+        # Middle box is too small to classify — the gap must land at index 1.
+        boxes = [(0, 0, 60, 60), (70, 0, 75, 5), (150, 0, 210, 60)]
+
+        results = ident.identify_batch(frame, boxes)
+
+        self.assertIsNotNone(results[0])
+        self.assertIsNone(results[1])
+        self.assertIsNotNone(results[2])
+        self.assertEqual(session.batch_sizes, [2])  # the tiny crop never ran
+
+    def test_tiny_crops_are_skipped(self):
+        """A few pixels upscaled to 300x300 is noise, and a bad vote is worse
+        than no vote."""
+        ident = SpeciesIdentifier(session=self.BatchStub(len(taxa())),
+                                  min_crop_side=24)
+        self.assertIsNone(ident.identify(crop(size=8)))
+        self.assertIsNotNone(ident.identify(crop(size=40)))
+
+    def test_empty_batch_makes_no_call(self):
+        session = self.BatchStub(len(taxa()))
+        ident = SpeciesIdentifier(session=session)
+        self.assertEqual(ident.identify_batch(np.zeros((50, 50, 3), np.uint8), []), [])
+        self.assertEqual(session.batch_sizes, [])
+
+
 class SpeciesVoteTests(unittest.TestCase):
     def test_majority_wins(self):
         vote = SpeciesVote()

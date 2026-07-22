@@ -752,6 +752,12 @@ class BeeTracking:
         # individual", this answers "which species" — and votes across every
         # frame of a trajectory instead of sticking on the first read.
         species_classifier=None,
+        # Votes to collect per track before a species is considered settled.
+        # Majority voting saturates fast: at 70% per-frame accuracy, 25 votes is
+        # 98.2% and 900 votes is 100% — 1.8 points for 36x the GPU time. Capping
+        # is the difference between ~$0.02 and ~$0.0002 of classification per
+        # video. 0 = no cap (classify every frame).
+        species_max_votes: int = 25,
         # Crop saving for identification training
         save_crops: bool = False,
         crop_output_dir: Optional[str] = None,
@@ -840,6 +846,7 @@ class BeeTracking:
 
         # Species classification, voted per track (see SpeciesVote).
         self.species_classifier = species_classifier
+        self.species_max_votes = int(species_max_votes)
         self.species_votes = {}   # track_id -> SpeciesVote
 
         # Raw pre-association detections from the last process_video call.
@@ -995,18 +1002,35 @@ class BeeTracking:
         return len(blob_detections) > 0
     
     def _classify_species(self, frame: np.ndarray, tracks: List[Dict]):
-        """Add one species vote per confirmed track for this frame."""
+        """Add a species vote per still-unsettled track, in one forward pass.
+
+        Two things keep this cheap. Tracks that already have `species_max_votes`
+        are skipped — voting accuracy saturates long before a full trajectory is
+        consumed. The rest go through the classifier together, because at batch 1
+        the GPU is latency-bound and spends most of its time on launch overhead.
+        """
         from beemonitor.identification.species import SpeciesVote
 
+        pending, boxes = [], []
         for track in tracks:
             track_id = track.get('track_id')
             if track_id is None:
                 continue
+            if self.species_max_votes > 0:
+                vote = self.species_votes.get(track_id)
+                if vote is not None and vote.frames >= self.species_max_votes:
+                    continue
             bbox = (track.get('x1'), track.get('y1'),
                     track.get('x2'), track.get('y2'))
             if any(v is None for v in bbox):
                 continue
-            result = self.species_classifier.identify(frame, bbox)
+            pending.append(track_id)
+            boxes.append(bbox)
+
+        if not pending:
+            return
+        for track_id, result in zip(
+                pending, self.species_classifier.identify_batch(frame, boxes)):
             if not result:
                 continue
             taxon, _method, confidence = result

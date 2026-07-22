@@ -268,6 +268,8 @@ class BeeMonitor:
             crops_per_track=getattr(self.config.tracking, 'crops_per_track', 10),
             detector=detector,
             species_classifier=species_classifier,
+            species_max_votes=getattr(
+                self.config.tracking, 'species_max_votes', 25),
         )
         
         # Pass two-mode config flag
