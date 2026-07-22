@@ -123,12 +123,20 @@ class SpeciesIdentifier(BaseIdentifier):
         return self._session
 
     def preprocess(self, region):
-        """Crop -> (1, 300, 300, 3) float32 batch.
+        """Crop -> (1, 300, 300, 3) float32 batch, scaled to 0..1.
 
-        EfficientNetV2 in Keras carries its own rescaling layer, so the input
-        stays in 0..255 — normalising here would halve the effective brightness
-        and quietly wreck accuracy. The ONNX export inherits that same layer.
-        BGR->RGB matters: OpenCV gives BGR, the model was trained on RGB.
+        Both steps were verified against the reference image the model ships
+        with (a bumblebee on Echinacea), because getting either wrong fails
+        *silently but confidently*:
+
+        * **0..1, not 0..255.** This export has no internal rescaling layer, so
+          feeding 0..255 drives the network into saturation — it returned
+          ``Xylocopa_violacea`` at exactly 1.0000 confidence for that bumblebee.
+          Scaled to 0..1 the same image gives ``Bombus_fervidus`` 0.911 with an
+          all-Bombus top-3. High confidence is not evidence of correct
+          preprocessing; a calibrated distribution is.
+        * **BGR->RGB.** OpenCV decodes BGR, Keras trained on RGB. Skipping the
+          swap also returns a confident wrong answer (``Megachile``).
         """
         import cv2
 
@@ -138,7 +146,7 @@ class SpeciesIdentifier(BaseIdentifier):
             return None
         rgb = cv2.cvtColor(region, cv2.COLOR_BGR2RGB)
         resized = cv2.resize(rgb, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_AREA)
-        return resized.astype(np.float32)[None, ...]
+        return resized.astype(np.float32)[None, ...] / 255.0
 
     def _infer(self, batch):
         """Run the batch, dispatching on what the session actually offers.

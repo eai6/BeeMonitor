@@ -8,6 +8,7 @@ noisy per-frame readings into one answer per animal.
 """
 
 import json
+import pathlib
 import unittest
 
 import numpy as np
@@ -89,19 +90,20 @@ class PreprocessTests(unittest.TestCase):
         self.assertEqual(batch.shape, (1, IMAGE_SIZE, IMAGE_SIZE, 3))
         self.assertEqual(batch.dtype, np.float32)
 
-    def test_keeps_0_255_range(self):
-        """EfficientNetV2 rescales internally — normalising here would halve
-        the effective brightness and quietly wreck accuracy."""
+    def test_scales_to_0_1(self):
+        """Verified against the model's own reference image: at 0..255 it
+        saturates and returns a confidently WRONG taxon. This export carries no
+        internal rescaling layer."""
         batch = self.identifier.preprocess(crop(colour=(255, 255, 255)))
-        self.assertGreater(batch.max(), 1.5)
-        self.assertAlmostEqual(float(batch.max()), 255.0, delta=1.0)
+        self.assertLessEqual(float(batch.max()), 1.0)
+        self.assertAlmostEqual(float(batch.max()), 1.0, delta=0.01)
 
     def test_converts_bgr_to_rgb(self):
         """OpenCV hands us BGR; the model was trained on RGB."""
         batch = self.identifier.preprocess(crop(colour=(255, 0, 0)))  # blue in BGR
         pixel = batch[0, IMAGE_SIZE // 2, IMAGE_SIZE // 2]
-        self.assertAlmostEqual(float(pixel[2]), 255.0, delta=1.0)  # -> blue in RGB
-        self.assertAlmostEqual(float(pixel[0]), 0.0, delta=1.0)
+        self.assertAlmostEqual(float(pixel[2]), 1.0, delta=0.01)  # -> blue in RGB
+        self.assertAlmostEqual(float(pixel[0]), 0.0, delta=0.01)
 
     def test_rejects_degenerate_input(self):
         for bad in (None, np.zeros((0, 0, 3), np.uint8), np.zeros((8, 8), np.uint8)):
@@ -212,6 +214,52 @@ class SpeciesVoteTests(unittest.TestCase):
         vote.add("", 0.9)
         vote.add(None, 0.9)
         self.assertIsNone(vote.winner())
+
+
+class RealModelTests(unittest.TestCase):
+    """End-to-end against the converted ONNX + the reference image.
+
+    Skipped unless both are present (neither is committed — 83 MB). This is the
+    test that caught the 0..255 preprocessing error, which every stubbed test
+    happily passed.
+    """
+
+    MODEL = pathlib.Path("models/beemachine/beemachine_v2s_300.onnx")
+    IMAGE = pathlib.Path("models/beemachine/test.jpg")
+
+    def setUp(self):
+        if not (self.MODEL.exists() and self.IMAGE.exists()):
+            self.skipTest("converted model / reference image not present")
+        try:
+            import onnxruntime  # noqa: F401
+        except ImportError:
+            self.skipTest("onnxruntime not installed in this interpreter")
+
+    def test_reference_bumblebee_is_identified_as_a_bumblebee(self):
+        import cv2
+
+        ident = SpeciesIdentifier(str(self.MODEL), min_confidence=0.5)
+        result = ident.identify(cv2.imread(str(self.IMAGE)))
+
+        self.assertIsNotNone(result, "no reading for the reference image")
+        taxon, method, confidence = result
+        self.assertTrue(taxon.startswith("Bombus"),
+                        f"expected a bumblebee, got {taxon}")
+        self.assertEqual(method, "species")
+        # Calibrated, not saturated. Exactly 1.0 was the signature of the
+        # 0..255 bug.
+        self.assertGreater(confidence, 0.5)
+        self.assertLess(confidence, 0.999)
+
+    def test_output_width_matches_the_class_list(self):
+        import cv2
+
+        ident = SpeciesIdentifier(str(self.MODEL))
+        batch = ident.preprocess(cv2.imread(str(self.IMAGE)))
+        probs = np.asarray(ident._infer(batch)).reshape(-1)
+
+        self.assertEqual(probs.size, len(taxa()))
+        self.assertAlmostEqual(float(probs.sum()), 1.0, places=3)
 
 
 if __name__ == "__main__":

@@ -57,3 +57,9 @@ images/in
 # Local review copies (not part of the app) — see memory/23
 scratch/
 .scratch-review/
+
+# Model weights — fetched from the models bucket / Drive, never committed.
+# BeeMachine species classifier (85 MB .h5, plus its ONNX conversion).
+models/beemachine/
+*.h5
+*.onnx
