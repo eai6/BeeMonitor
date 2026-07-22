@@ -240,24 +240,93 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         ctx["preannot_active"] = active
         ctx["preannot_failed"] = recent_failed
 
+        from django.db.models import Count, Q as _Q
+
+        from apps.analysis.views import _sanitize_site, _unsanitize_site
+        from apps.devices.models import Device
+        from apps.videos.models import Video
+
         videos = project.videos.all()
         ctx["project_videos"] = videos
         ctx["video_count"] = videos.count()
 
-        # Video data for "no annotations" fallback links
-        video_data = []
-        for video in videos:
-            ann_count = Annotation.objects.filter(project=project, video=video).count()
-            video_data.append({"video": video, "annotation_count": ann_count})
-        ctx["video_data"] = video_data
+        # Per-video annotated-frame counts in ONE query. This used to be a COUNT
+        # per video inside a loop — 45 queries for a 45-video project, growing
+        # linearly with the project.
+        counted = list(
+            videos.annotate(
+                annotation_count=Count("annotations",
+                                       filter=_Q(annotations__project=project),
+                                       distinct=True))
+            .select_related("device")
+        )
+
+        # Filter the project's OWN videos. A flat list of every video stops being
+        # usable past a few dozen. Same dimensions as the Processing hub, but
+        # prefixed v_ so they can't collide with the add-videos modal's av_.
+        vf = {k: self.request.GET.get("v_" + k, "").strip()
+              for k in ("q", "device", "site", "year", "month", "day",
+                        "hfrom", "hto", "state")}
+
+        def _keep(v):
+            if vf["q"] and vf["q"].lower() not in (v.title or "").lower():
+                return False
+            if vf["device"] and str(v.device_id or "") != vf["device"]:
+                return False
+            if vf["site"] and v.site_name != _unsanitize_site(vf["site"]):
+                return False
+            for field in ("year", "month", "day"):
+                if vf[field] and str(getattr(v, field, "") or "") != vf[field]:
+                    return False
+            # Hour-of-day window: inclusive start, exclusive end. start > end
+            # wraps past midnight (22 -> 4), matching the Processing hub.
+            if vf["hfrom"] or vf["hto"]:
+                hour = getattr(v, "hour", None)
+                if hour is None:
+                    return False
+                lo = int(vf["hfrom"]) if vf["hfrom"] else 0
+                hi = int(vf["hto"]) if vf["hto"] else 24
+                inside = (lo <= hour < hi) if lo < hi else (hour >= lo or hour < hi)
+                if lo != hi and not inside:
+                    return False
+            if vf["state"] == "annotated" and v.annotation_count == 0:
+                return False
+            if vf["state"] == "unannotated" and v.annotation_count > 0:
+                return False
+            return True
+
+        try:
+            filtered = [v for v in counted if _keep(v)]
+        except (TypeError, ValueError):
+            filtered = counted  # a malformed filter shows everything, not nothing
+        filtered.sort(key=lambda v: (v.recorded_at is None, v.recorded_at, v.pk),
+                      reverse=True)
+
+        VIDEO_LIST_CAP = 500
+        shown = filtered[:VIDEO_LIST_CAP]
+        ctx["video_data"] = [{"video": v, "annotation_count": v.annotation_count}
+                             for v in shown]
+        ctx["video_filter"] = vf
+        ctx["video_filter_on"] = any(vf.values())
+        ctx["video_filtered_count"] = len(filtered)
+        ctx["video_list_capped"] = len(filtered) > len(shown)
+        ctx["video_annotated_count"] = sum(1 for v in counted if v.annotation_count > 0)
+        ctx["hours"] = list(range(24))
+        # Options come from the project's own videos, so a filter can never offer
+        # a value that matches nothing here.
+        ctx["video_filter_opts"] = {
+            "devices": sorted({(v.device_id, v.device.name) for v in counted if v.device_id},
+                              key=lambda d: d[1]),
+            "sites": sorted({_sanitize_site(v.site_name) for v in counted if v.site_name}),
+            "years": sorted({v.year for v in counted if v.year}),
+            "months": sorted({v.month for v in counted if v.month}),
+            "days": sorted({v.day for v in counted if v.day}),
+        }
 
         # Available videos to add — the SAME comprehensive filter as the Processing
         # page (device · confirmation · site · year · month · day · hour · search),
         # over all accessible videos (own + shared), so every hotel/location/time is
         # reachable — not just the first page.
-        from apps.analysis.views import _sanitize_site, _unsanitize_site
-        from apps.devices.models import Device
-        from apps.videos.models import Video
         existing_ids = set(videos.values_list("pk", flat=True))
         all_user = Video.accessible(self.request.user)
         available = all_user.exclude(pk__in=existing_ids)

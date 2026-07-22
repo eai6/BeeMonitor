@@ -311,45 +311,150 @@
 </div>
 {% endif %}
 
-<!-- Videos in this project (always visible) -->
-{% if video_data %}
-<div class="bg-white shadow rounded-lg p-4 mb-6">
-  <div class="flex items-center justify-between mb-3">
-    <h3 class="text-sm font-medium text-gray-700">Videos in this project ({{ video_count }})</h3>
-    <div class="flex gap-3 text-xs">
+<!-- Videos in this project — filterable, so the steps above can act on a slice
+     (one hotel, one day, an evening window) instead of all-or-hand-picked. -->
+{% if video_count %}
+<div class="bg-white shadow rounded-lg mb-6">
+  <div class="p-4 border-b border-gray-100">
+    <div class="flex flex-wrap items-baseline justify-between gap-2">
+      <h3 class="text-sm font-semibold text-gray-900">Videos in this project</h3>
+      <p class="text-xs text-gray-500">
+        {{ video_count }} total · {{ video_annotated_count }} with frames{% if video_filter_on %} ·
+        <span class="text-amber-700 font-medium">{{ video_filtered_count }} match the filter</span>{% endif %}
+      </p>
+    </div>
+
+    <!-- Filter. GET so a filtered view is a shareable URL and survives reload. -->
+    <form method="get" class="flex flex-wrap items-end gap-2 mt-3">
+      <div>
+        <label class="block text-[10px] uppercase tracking-wide text-gray-400">Device</label>
+        <select name="v_device" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="">All devices</option>
+          {% for pk, name in video_filter_opts.devices %}
+          <option value="{{ pk }}" {% if video_filter.device == pk|stringformat:"s" %}selected{% endif %}>{{ name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-[10px] uppercase tracking-wide text-gray-400">Location</label>
+        <select name="v_site" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="">All locations</option>
+          {% for s in video_filter_opts.sites %}
+          <option value="{{ s }}" {% if video_filter.site == s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-[10px] uppercase tracking-wide text-gray-400">Year</label>
+        <select name="v_year" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="">Any</option>
+          {% for y in video_filter_opts.years %}
+          <option value="{{ y }}" {% if video_filter.year == y|stringformat:"s" %}selected{% endif %}>{{ y }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-[10px] uppercase tracking-wide text-gray-400">Month</label>
+        <select name="v_month" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="">Any</option>
+          {% for m in video_filter_opts.months %}
+          <option value="{{ m }}" {% if video_filter.month == m|stringformat:"s" %}selected{% endif %}>{{ m }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-[10px] uppercase tracking-wide text-gray-400">Day</label>
+        <select name="v_day" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="">Any</option>
+          {% for d in video_filter_opts.days %}
+          <option value="{{ d }}" {% if video_filter.day == d|stringformat:"s" %}selected{% endif %}>{{ d }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div title="Hour-of-day window, every day. Start after end wraps past midnight (22 → 4).">
+        <label class="block text-[10px] uppercase tracking-wide text-gray-400">Hour of day</label>
+        <div class="flex items-center gap-1">
+          <select name="v_hfrom" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="">—</option>
+            {% for h in hours %}<option value="{{ h }}" {% if video_filter.hfrom == h|stringformat:"s" %}selected{% endif %}>{{ h }}:00</option>{% endfor %}
+          </select>
+          <span class="text-xs text-gray-400">to</span>
+          <select name="v_hto" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="">—</option>
+            {% for h in hours %}<option value="{{ h }}" {% if video_filter.hto == h|stringformat:"s" %}selected{% endif %}>{{ h }}:00</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+      <div>
+        <label class="block text-[10px] uppercase tracking-wide text-gray-400">State</label>
+        <select name="v_state" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="">Any</option>
+          <option value="unannotated" {% if video_filter.state == "unannotated" %}selected{% endif %}>Not yet sampled</option>
+          <option value="annotated" {% if video_filter.state == "annotated" %}selected{% endif %}>Has frames</option>
+        </select>
+      </div>
+      <input name="v_q" value="{{ video_filter.q }}" placeholder="Search title…"
+             class="border border-gray-300 rounded px-3 py-1.5 text-sm w-40">
+      <button class="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded text-sm font-medium">Filter</button>
+      {% if video_filter_on %}
+      <a href="{% url 'annotations:detail' project.pk %}" class="text-xs text-gray-500 hover:underline px-1">Reset</a>
+      {% endif %}
+    </form>
+  </div>
+
+  <!-- Selection summary — what the steps above will act on. -->
+  <div class="px-4 py-2 bg-gray-50 border-b border-gray-100 flex flex-wrap items-center justify-between gap-2 text-xs">
+    <span class="text-gray-600">
+      <strong id="sel-count">0</strong> selected
+      <span class="text-gray-400">— steps 2 and 4 use your selection, or all {{ video_count }} when nothing is picked.</span>
+    </span>
+    <span class="flex gap-3">
+      <button type="button" onclick="preannotateCheck(function(){ return true; })"
+              class="text-blue-600 hover:underline">Select all shown ({{ video_data|length }})</button>
       <button type="button" onclick="preannotateCheck(function(c){ return c.dataset.frames === '0'; })"
-              class="text-blue-600 hover:underline">Select unannotated</button>
+              class="text-blue-600 hover:underline">Select unsampled</button>
       <button type="button" onclick="preannotateCheck(function(){ return false; })"
               class="text-gray-500 hover:underline">Clear</button>
-    </div>
+    </span>
   </div>
-  <div class="divide-y divide-gray-100">
+
+  <!-- Capped + scrollable: the list must not push the workflow off the screen. -->
+  <div class="divide-y divide-gray-100 max-h-96 overflow-y-auto">
     {% for item in video_data %}
-    <div class="flex items-center gap-3 py-2 text-sm">
+    <div class="flex items-center gap-3 px-4 py-2 text-sm hover:bg-gray-50">
       <input type="checkbox" name="video_ids" value="{{ item.video.pk }}" form="preannotate-form"
              data-frames="{{ item.annotation_count }}"
              onchange="preannotateLabel()"
              class="preannotate-check rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-             title="Check to pre-annotate only selected videos">
+             title="Check to sample / auto-label only the selected videos">
       <a href="{% url 'annotations:editor' project.pk %}?video={{ item.video.pk }}&frame=0"
          class="flex-1 text-gray-800 hover:text-amber-700 hover:underline truncate">{{ item.video.title }}</a>
-      <span class="text-xs text-gray-400 hidden sm:inline">{% if item.video.device %}{{ item.video.device.name }}{% endif %}{% if item.video.site_name %} · {{ item.video.site_name }}{% endif %}</span>
+      <span class="text-xs text-gray-400 hidden sm:inline whitespace-nowrap">{% if item.video.device %}{{ item.video.device.name }}{% endif %}{% if item.video.site_name %} · {{ item.video.site_name }}{% endif %}</span>
       <span class="text-xs text-gray-500 hidden md:inline whitespace-nowrap" title="When the video was recorded">
-        {% if item.video.recorded_at %}📅 {{ item.video.recorded_at|date:"Y-m-d H:i" }}{% else %}<span class="text-gray-300">no date</span>{% endif %}
+        {% if item.video.recorded_at %}{{ item.video.recorded_at|date:"Y-m-d H:i" }}{% else %}<span class="text-gray-300">no date</span>{% endif %}
       </span>
-      <span class="text-xs {% if item.annotation_count %}text-green-600{% else %}text-gray-400{% endif %}">{{ item.annotation_count }} frame{{ item.annotation_count|pluralize }}</span>
+      <span class="text-xs whitespace-nowrap {% if item.annotation_count %}text-green-600{% else %}text-gray-400{% endif %}">{{ item.annotation_count }} frame{{ item.annotation_count|pluralize }}</span>
       <form method="post" action="{% url 'annotations:remove_video' project.pk %}"
             onsubmit="return confirm('Remove this video and its annotations from the project?');">
         {% csrf_token %}<input type="hidden" name="video_id" value="{{ item.video.pk }}">
         <button type="submit" class="text-red-400 hover:text-red-600 text-xs px-1">Remove</button>
       </form>
     </div>
+    {% empty %}
+    <p class="px-4 py-6 text-sm text-gray-400 text-center">No videos match this filter.</p>
     {% endfor %}
   </div>
+  {% if video_list_capped %}
+  <p class="px-4 py-2 text-xs text-amber-700 bg-amber-50 border-t border-amber-100">
+    Showing the {{ video_data|length }} most recent of {{ video_filtered_count }} matches — narrow the filter to reach the rest.
+  </p>
+  {% endif %}
 </div>
 <script>
 function preannotateLabel() {
   var n = document.querySelectorAll('.preannotate-check:checked').length;
+  var count = document.getElementById('sel-count');
+  if (count) count.textContent = n;
   var btn = document.getElementById('preannotate-submit');
   if (btn) btn.textContent = n ? 'Auto-label selected (' + n + ', GPU)' : 'Auto-label all (GPU)';
   var sbtn = document.getElementById('sample-submit');
