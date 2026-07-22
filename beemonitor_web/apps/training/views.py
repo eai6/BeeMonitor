@@ -79,6 +79,11 @@ def _build_training_payload(job: TrainingJob) -> tuple[list, list[dict]]:
 
     annotations = (
         Annotation.objects.filter(project=project)
+        # Frames that were sampled but never annotated are navigation
+        # placeholders, not data — training on them would inject blank negatives
+        # nobody vetted. Frames a human deliberately marked empty have
+        # sampled_only=False and DO stay in as real negative examples.
+        .exclude(sampled_only=True)
         .select_related("video")
         .order_by("video__title", "frame_number")
     )

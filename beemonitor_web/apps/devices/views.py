@@ -654,9 +654,22 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         # Telemetry rate control (manager+) + which link the last beat rode.
         from .models import TELEMETRY_INTERVAL_CHOICES
         ctx["telemetry_interval_choices"] = TELEMETRY_INTERVAL_CHOICES
-        ctx["bee_confirm_modes"] = device.BEE_CONFIRM_MODES  # on-device species filter
         ctx["record_modes"] = device.RECORD_MODES  # capture mode + hour window
         ctx["hours"] = list(range(24))
+        # Recurring pipeline runs over this device's videos (Advanced page card).
+        from apps.pipelines.models import Pipeline
+
+        from .models import DevicePipelineSchedule
+
+        ctx["schedulable_pipelines"] = list(
+            Pipeline.objects.filter(Q(user=self.request.user) | Q(is_template=True))
+            .order_by("title").only("id", "title")
+        )
+        ctx["pipeline_schedule"] = (
+            DevicePipelineSchedule.objects.filter(device=device)
+            .select_related("pipeline").first()
+        )
+        ctx["pipeline_cadences"] = DevicePipelineSchedule.CADENCES
         # Floating support-assistant widget (read-only AI; shows only if a key is set).
         from apps.setup.assistant import client as _assistant_client
         ctx["assistant_enabled"] = _assistant_client.is_enabled()
@@ -1323,6 +1336,11 @@ class DeviceBeeConfirmView(LoginRequiredMixin, View):
     gate = filter — unconfirmed clips aren't counted and their crops aren't sent
            (the clip is still recorded + uploaded either way, so nothing is lost).
     "" = use the unit's env default. The device adopts the change within seconds.
+
+    The dashboard card was removed from the device page (2026-07) — running YOLO on
+    the device is parked, not abandoned. This endpoint, the model field and the
+    heartbeat push all stay wired, so the mode is still settable from the Django
+    admin and still reported by ``Device.remote_config_summary()``.
     """
 
     VALID = {"", "off", "tag", "gate"}
@@ -1358,6 +1376,11 @@ class DeviceActivityCropsView(LoginRequiredMixin, View):
                 cellular + compute).
     off       = stop sampling entirely on the recorder (no SD/CPU/cellular spend).
     The device adopts the change on its next check-in.
+
+    The dashboard card was removed from the device page (2026-07) — sending crops over
+    cellular for cloud species ID may come back later. This endpoint, the model field
+    and the heartbeat push all stay wired, so the mode is still settable from the
+    Django admin and still reported by ``Device.remote_config_summary()``.
     """
 
     VALID = {"all", "confirmed", "off"}
@@ -1859,3 +1882,72 @@ class DeviceShareRemoveView(LoginRequiredMixin, View):
         share.delete()
         messages.success(request, f"Removed {username}'s access to '{device.name}'.")
         return redirect("devices:edit", pk=pk)
+
+
+class DevicePipelineScheduleView(LoginRequiredMixin, View):
+    """Create, update, or delete a recurring pipeline run over this device's videos.
+
+    The dashboard's Advanced page posts here. The schedule itself is executed by
+    ``apps.devices.scheduling.run_due_schedules``, ticked by the background
+    reconciler — see that module for why claiming is a compare-and-swap.
+    """
+
+    def post(self, request, pk):
+        from apps.pipelines.models import Pipeline
+
+        from .models import DevicePipelineSchedule
+
+        device = _device_or_403(request.user, pk, "manager")
+        is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+        def _fail(msg):
+            if is_ajax:
+                return JsonResponse({"error": msg}, status=400)
+            messages.error(request, msg)
+            return redirect("devices:detail", pk=pk)
+
+        # Delete: "off" clears the device's schedule entirely.
+        if (request.POST.get("action") or "").strip() == "delete":
+            DevicePipelineSchedule.objects.filter(device=device).delete()
+            if is_ajax:
+                return JsonResponse({"ok": True, "label": "Off", "enabled": False})
+            messages.success(request, "Scheduled processing turned off.")
+            return redirect("devices:detail", pk=pk)
+
+        pipeline = Pipeline.objects.filter(pk=request.POST.get("pipeline")).first()
+        if not pipeline or not (pipeline.is_template or pipeline.user_id == request.user.id):
+            return _fail("Choose a pipeline to schedule.")
+        if not any(s.get("block_type") == "input.video" for s in (pipeline.steps or [])):
+            return _fail("That pipeline has no video input to run on.")
+
+        cadence = (request.POST.get("cadence") or "daily").strip()
+        if cadence not in dict(DevicePipelineSchedule.CADENCES):
+            return _fail("Invalid cadence.")
+
+        at_hour = None
+        raw_hour = (request.POST.get("at_hour") or "").strip()
+        if cadence == "daily" and raw_hour != "":
+            try:
+                at_hour = max(0, min(23, int(raw_hour)))
+            except (ValueError, TypeError):
+                return _fail("Invalid hour.")
+
+        # One schedule per device: switching pipelines replaces the old row rather
+        # than silently stacking two recurring launches on the same unit.
+        DevicePipelineSchedule.objects.filter(device=device).exclude(
+            pipeline=pipeline,
+        ).delete()
+        schedule, _created = DevicePipelineSchedule.objects.update_or_create(
+            device=device, pipeline=pipeline,
+            defaults={
+                "user": request.user,
+                "enabled": True,
+                "cadence": cadence,
+                "at_hour": at_hour,
+            },
+        )
+        label = f"{pipeline.title} · {schedule.get_cadence_display().lower()}"
+        if is_ajax:
+            return JsonResponse({"ok": True, "label": label, "enabled": True})
+        messages.success(request, f"Scheduled “{pipeline.title}” — {label}.")
+        return redirect("devices:detail", pk=pk)

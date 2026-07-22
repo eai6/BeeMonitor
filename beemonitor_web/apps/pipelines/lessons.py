@@ -30,15 +30,17 @@ LESSONS = {
                      "their brood. Counting and timing those trips tells us how hard bees "
                      "are working and how healthy the habitat is."},
             {"heading": "How the pipeline answers it",
-             "body": "We locate the nest tubes (ROI), track every bee across the video, "
-                     "then detect when a track exits and later re-enters a tube. Each "
-                     "exit→entry pair is one foraging trip, with a duration."},
+             "body": "Three modules. The Detector finds the bees and the reference object "
+                     "(the nest tubes). MOT links those detections into tracks — one "
+                     "trajectory per bee. The Analyzer then spots when a track exits a "
+                     "tube and later re-enters: each exit→entry pair is one foraging "
+                     "trip, with a duration."},
             {"heading": "What to look at",
              "body": "The trips table shows how many trips happened and their average "
                      "duration. Longer or fewer trips can mean forage is farther away."},
         ],
         "questions": [
-            "Why do we detect the nest tubes before tracking the bees?",
+            "Why does the Detector need to find the nest tubes, not just the bees?",
             "If average trip duration doubled, what might have changed in the habitat?",
             "How could a mis-tracked bee create a false trip? How would you guard against it?",
         ],
@@ -59,9 +61,9 @@ LESSONS = {
              "body": "Which flowers get visited most, and by whom? Visitation is a core "
                      "measure of pollination services."},
             {"heading": "How the pipeline answers it",
-             "body": "You draw an ROI over the flower. We track bees, count each track "
-                     "that enters the ROI as a visit (with dwell time), and identify the "
-                     "species of the visitors."},
+             "body": "On the Detector you set the reference to a region you draw over the "
+                     "flower. MOT turns detections into tracks, and the Analyzer counts "
+                     "each track that enters that region as a visit, with its dwell time."},
             {"heading": "What to look at",
              "body": "Compare visits vs. dwell time: many short visits and a few long ones "
                      "mean different things for pollen transfer."},
@@ -79,6 +81,8 @@ LESSONS = {
         "summary": "Read per-bee colour, QR, or number tags so each trajectory belongs "
                    "to a known individual.",
         "template": "Individual bee IDs",
+        "note": "Colour paint marks can be read today; printed number/QR tags "
+                "are not implemented yet.",
         "objectives": [
             "Explain why individual identity (not just counts) unlocks new questions.",
             "Understand how a marker turns a track into a named individual.",
@@ -90,9 +94,11 @@ LESSONS = {
                      "individual IDs you can measure how often one bee forages, or whether "
                      "individuals specialise on particular flowers."},
             {"heading": "How the pipeline answers it",
-             "body": "Bees carry tags (paint marks, number tags, or QR codes). The tracker "
-                     "reads a tag per detection; we take each track's most-frequent tag as "
-                     "its identity, with a confidence."},
+             "body": "Bees are marked with a dot of paint. During tracking the system "
+                     "saves several small crops of each bee; the Identity step reads the "
+                     "paint colour from each crop and takes the majority verdict as that "
+                     "track's identity. Reading several crops rather than one is the "
+                     "point — a single blurred frame shouldn't rename a bee."},
             {"heading": "What to look at",
              "body": "Unique markers vs. identified tracks: a gap means some tracks never "
                      "got a confident read."},
@@ -111,8 +117,8 @@ LESSONS = {
                    "into a time series.",
         "template": "Colony activity",
         "objectives": [
-            "Turn per-frame tracks into a time series.",
-            "Interpret occupancy vs. detection-rate metrics.",
+            "Turn per-frame detections into a time series.",
+            "Understand why counting is easier than identifying.",
             "Relate activity peaks to biological rhythms.",
         ],
         "sections": [
@@ -120,17 +126,49 @@ LESSONS = {
              "body": "When is a nest most active? Activity rhythms reveal foraging bouts, "
                      "temperature responses, and colony health."},
             {"heading": "How the pipeline answers it",
-             "body": "We track bees, then bin the video into short time windows and count "
-                     "how many distinct bees appear in each (occupancy), producing a curve "
-                     "over time."},
+             "body": "The Analyzer bins the video into short time windows and counts the "
+                     "detections in each, producing a curve over time. This question needs "
+                     "no identities and no trips — just how much was there, when."},
             {"heading": "What to look at",
              "body": "Peaks and troughs in the curve. A single tall peak vs. a broad plateau "
                      "describe very different activity patterns."},
         ],
         "questions": [
             "Why bin by time instead of counting every frame?",
-            "Occupancy and detection-rate can disagree — when, and what does each capture?",
+            "Counting detections and counting distinct bees can disagree — when, and what "
+            "does each one actually capture?",
             "What environmental variable would you overlay on the activity curve, and why?",
+        ],
+    },
+    "interactions": {
+        "title": "Who meets whom: interactions",
+        "level": "Intermediate",
+        "summary": "Find the moments when two insects — or an insect and a nest tube — "
+                   "come close enough to matter.",
+        "template": "Interactions",
+        "objectives": [
+            "Define an interaction in terms of proximity and time.",
+            "Distinguish insect ↔ insect from insect ↔ reference interactions.",
+            "Reason about what a distance threshold does and does not capture.",
+        ],
+        "sections": [
+            {"heading": "The question",
+             "body": "Behaviour is relational. Competition at a flower, a bee inspecting a "
+                     "tube, two individuals meeting at an entrance — all of it is invisible "
+                     "if you only count individuals."},
+            {"heading": "How the pipeline answers it",
+             "body": "From the tracks, the Analyzer looks for pairs that stay within a short "
+                     "distance of each other over consecutive frames. The partner can be "
+                     "another track, or the reference object the Detector found."},
+            {"heading": "What to look at",
+             "body": "Interaction counts alongside durations. Many brief contacts and a few "
+                     "long ones mean quite different things."},
+        ],
+        "questions": [
+            "Two bees pass within a few pixels for one frame. Is that an interaction? What "
+            "would you require before calling it one?",
+            "How would a camera mounted further away change the interaction count?",
+            "Why is 'close in the image' not the same as 'close in the world'?",
         ],
     },
 }

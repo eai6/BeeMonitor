@@ -39,11 +39,12 @@ class AnalysisResults:
         tracks: List,
         nests: Dict,
         video_path: str,
-        motion_data: Optional[pd.DataFrame] = None, 
-        config: Optional[Any] = None
+        motion_data: Optional[pd.DataFrame] = None,
+        config: Optional[Any] = None,
+        detections: Optional[pd.DataFrame] = None
     ):
         """Initialize analysis results.
-        
+
         Args:
             events: DataFrame with processed events
             tracks: List of bee trajectories
@@ -51,6 +52,8 @@ class AnalysisResults:
             video_path: Path to analyzed video
             motion_data: Motion detection data (optional)
             config: Configuration object (optional)
+            detections: Raw per-frame detector output, before the tracker
+                associated it into trajectories (optional)
         """
         self.events = events
         self.tracks = tracks
@@ -58,6 +61,7 @@ class AnalysisResults:
         self.video_path = video_path
         self.motion_data = motion_data
         self.config = config
+        self.detections = detections
     
     def to_csv(self, output_folder: str = "output", columns: Optional[List[str]] = None) -> None:
         """Export events and tracking results to CSV files.
@@ -92,6 +96,16 @@ class AnalysisResults:
         
         logger.info(f"Saved {len(self.events)} events to {events_filename}")
         
+        # === SAVE RAW DETECTIONS ===
+        # Pre-association detector output: one row per detection per frame,
+        # including detections the tracker never turned into a confirmed track.
+        # Written only when the tracker supplied it (older callers pass None).
+        if self.detections is not None and isinstance(self.detections, pd.DataFrame):
+            detections_filename = str(
+                Path(output_folder) / f"{base_filename}_detections.csv")
+            self.detections.to_csv(detections_filename, index=False)
+            logger.info(f"Saved {len(self.detections)} detections to {detections_filename}")
+
         # === SAVE TRACKING RESULTS ===
         tracking_filename = str(Path(output_folder) / f"{base_filename}_tracking_results.csv")
         

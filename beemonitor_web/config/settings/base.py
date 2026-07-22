@@ -20,6 +20,11 @@ except ImportError:
 # (cloud/ is a sibling of beemonitor_web/, not a Django app).
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+# src/ holds the beemonitor CV package. The web app only uses its light,
+# torch-free parts (beemonitor.identification — the marker decoder it runs over
+# track crops); the analyzer imports are lazy, so this costs nothing at boot.
+if str(REPO_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "src"))
 
 SECRET_KEY = os.environ.get(
     "DJANGO_SECRET_KEY",

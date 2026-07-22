@@ -37,11 +37,8 @@ def _pick(df, candidates):
     return None
 
 
-def load_tracking_df(job_result):
-    """Read ``tracking_csv_path`` (s3:// or local) into a pandas DataFrame or None."""
-    if not job_result:
-        return None
-    path = job_result.get("tracking_csv_path") or ""
+def _read_csv(path):
+    """Read a CSV at ``path`` (s3:// or local) into a DataFrame, or None."""
     if not path:
         return None
     try:
@@ -62,8 +59,27 @@ def load_tracking_df(job_result):
             return pd.read_csv(BytesIO(body))
         return pd.read_csv(path)
     except Exception as exc:
-        logger.info("Could not read tracking CSV %s: %s", path, exc)
+        logger.info("Could not read CSV %s: %s", path, exc)
         return None
+
+
+def load_tracking_df(job_result):
+    """Read the job's ``tracking_csv_path`` into a pandas DataFrame or None."""
+    return _read_csv((job_result or {}).get("tracking_csv_path") or "")
+
+
+def load_interactions_df(job_result):
+    """Read the job's ``interactions_csv_path`` into a pandas DataFrame or None."""
+    return _read_csv((job_result or {}).get("interactions_csv_path") or "")
+
+
+def load_detections_df(job_result):
+    """Read the job's raw (pre-association) detections CSV, or None.
+
+    Only jobs run since the worker started emitting it have one; older jobs
+    return None and callers fall back to the tracked table.
+    """
+    return _read_csv((job_result or {}).get("detections_csv_path") or "")
 
 
 def normalized_tracks(df, summary=None):
@@ -224,6 +240,100 @@ def compute_colony_activity(tidy, boxes, fps, metric="occupancy", bin_sec=5.0):
         "rows": rows,
         "peak": max(values),
         "mean": round(sum(values) / len(values), 2),
+    }
+
+
+def compute_detection_counts(tidy, boxes, fps, per_frame=False, count_tracks=True):
+    """Detection totals from a tidy [tid, frame, x, y] table.
+
+    One row is one detection. If ``boxes`` is non-empty only detections inside
+    the reference count. With ``per_frame`` the rows are per-frame counts;
+    otherwise just the totals.
+
+    ``count_tracks=False`` for the raw detections table, whose rows carry no real
+    track id — reporting a track count there would just restate the detection
+    count.
+    """
+    empty = {"detections": 0, "frames_with_detections": 0, "mean_per_frame": 0,
+             "rows": []}
+    if count_tracks:
+        empty["unique_tracks"] = 0
+    if tidy is None or len(tidy) == 0:
+        return empty
+    df = tidy
+    if boxes:
+        mask = [in_any_box(x, y, boxes) for x, y in zip(df["x"], df["y"])]
+        df = df[mask]
+    if len(df) == 0:
+        return empty
+
+    frames = df["frame"].nunique()
+    summary = {
+        "detections": int(len(df)),
+        "frames_with_detections": int(frames),
+        "mean_per_frame": round(len(df) / frames, 2) if frames else 0,
+        "rows": [],
+    }
+    if count_tracks:
+        summary["unique_tracks"] = int(df["tid"].nunique())
+    if per_frame:
+        counts = df.groupby("frame").size()
+        summary["rows"] = [
+            {"frame": int(f), "t_sec": round(int(f) / fps, 2) if fps else None,
+             "detections": _as_native(n)}
+            for f, n in counts.items()
+        ]
+    return summary
+
+
+def summarize_interactions(df, kind=None):
+    """Aggregate the interactions CSV into a summary + per-interaction rows.
+
+    ``kind`` filters on the worker's ``interaction_type`` literals
+    (``organism-to-organism`` / ``organism-to-reference``); None keeps both.
+    Schema-tolerant like the tracking reader — column names have drifted.
+    """
+    if df is None or len(df) == 0:
+        return {"interaction_count": 0, "organism_organism": 0,
+                "organism_reference": 0, "rows": []}
+
+    type_col = _pick(df, ["interaction_type", "type", "kind"])
+    if type_col is not None and kind:
+        df = df[df[type_col].astype(str) == kind]
+    if len(df) == 0:
+        return {"interaction_count": 0, "organism_organism": 0,
+                "organism_reference": 0, "rows": []}
+
+    def _count(literal):
+        if type_col is None:
+            return 0
+        return int((df[type_col].astype(str) == literal).sum())
+
+    cols = {
+        "type": type_col,
+        "a": _pick(df, ["organism_track_id", "entity1_id", "track_id"]),
+        "b": _pick(df, ["partner_track_id", "entity2_id"]),
+        "reference": _pick(df, ["reference_id", "nest", "nest_id"]),
+        "duration": _pick(df, ["duration_seconds", "duration_sec", "duration"]),
+        "start": _pick(df, ["start_frame", "frame_start", "frame"]),
+    }
+    rows = []
+    for _, r in df.iterrows():
+        row = {}
+        for key, col in cols.items():
+            if col is not None:
+                row[key] = _as_native(r[col])
+        rows.append(row)
+    durations = (
+        [float(r["duration"]) for r in rows if r.get("duration") is not None]
+        if cols["duration"] else []
+    )
+    return {
+        "interaction_count": int(len(df)),
+        "organism_organism": _count("organism-to-organism"),
+        "organism_reference": _count("organism-to-reference"),
+        "total_duration_sec": round(sum(durations), 2) if durations else None,
+        "rows": rows,
     }
 
 

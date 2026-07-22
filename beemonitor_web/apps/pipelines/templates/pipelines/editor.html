@@ -42,6 +42,13 @@
   .t-image        { background:#e0e7ff; color:#3730a3; }
   .t-text, .t-data, .t-any { background:#f1f5f9; color:#475569; }
   .pl-arrow { color: #9ca3af; font-size: 11px; }
+  /* Node tags: legacy (pre-module-refactor block) / beta / planned. */
+  .pl-tag { font-size: 8px; text-transform: uppercase; letter-spacing: .03em; font-weight: 600;
+    border: 1px solid currentColor; border-radius: 4px; padding: 0 3px; margin-left: 4px;
+    vertical-align: middle; }
+  .pl-tag-legacy  { color: #6b7280; }
+  .pl-tag-beta    { color: #d97706; }
+  .pl-tag-planned { color: #6b7280; }
   .pl-sink { font-size: 9px; color: #9ca3af; text-transform: uppercase; }
   /* Fixed node width so dropdowns never overflow the node box. */
   .drawflow .drawflow-node { background: #fff; border: 1px solid #d1d5db; border-radius: 8px;
@@ -90,7 +97,7 @@
           <div class="tray-block px-2 py-1.5 rounded border border-gray-100 hover:border-amber-300 hover:bg-amber-50 text-sm"
                draggable="true" data-block="{{ block.type }}" ondblclick="plAddCenter('{{ block.type }}')"
                title="{{ block.description }}">
-            <span>{{ block.icon }} {{ block.display_name }}{% if block.status == "beta" %} <span class="text-[9px] uppercase tracking-wide text-amber-600 border border-amber-300 rounded px-1 align-middle" title="Runs but doesn't produce a full deliverable yet">beta</span>{% endif %}</span>
+            <span>{{ block.icon }} {{ block.display_name }}{% if block.status == "beta" %} <span class="text-[9px] uppercase tracking-wide text-amber-600 border border-amber-300 rounded px-1 align-middle" title="Runs but doesn't produce a full deliverable yet">beta</span>{% elif block.status == "planned" %} <span class="text-[9px] uppercase tracking-wide text-gray-500 border border-gray-300 rounded px-1 align-middle" title="Wired end-to-end in the builder, but the backend that produces its output isn't implemented yet — it will report no results">planned</span>{% endif %}</span>
             <span class="flex items-center gap-1 mt-0.5">
               {% if block.input_type != "none" %}<span class="pl-type t-{{ block.input_type }}">{{ block.input_type }}</span><span class="pl-arrow">→</span>{% endif %}
               {% if block.output_type != "none" %}<span class="pl-type t-{{ block.output_type }}">{{ block.output_type }}</span>{% else %}<span class="pl-sink">▪ output</span>{% endif %}
@@ -163,7 +170,13 @@ function nodeHtml(b, config){
   const inC = typeChip(b.input_type), outC = typeChip(b.output_type);
   const flow = (inC ? inC + ' <span class="pl-arrow">→</span> ' : '')
              + (outC || '<span class="pl-sink">▪ output</span>');
-  return `<div class="pl-node"><div class="pl-head">${b.icon} ${esc(b.display_name)}</div>`
+  // Status/legacy tags on the node itself — a canvas node must say what it is
+  // without the user hovering the palette (legacy blocks aren't in the palette).
+  let tag = '';
+  if(b.hidden) tag = `<span class="pl-tag pl-tag-legacy" title="Superseded by the Detector / MOT / Analyzer modules. Kept so this pipeline still runs; not offered for new pipelines.">legacy</span>`;
+  else if(b.status==='beta') tag = `<span class="pl-tag pl-tag-beta" title="Runs but doesn't produce a full deliverable yet">beta</span>`;
+  else if(b.status==='planned') tag = `<span class="pl-tag pl-tag-planned" title="Wired in the builder, but the backend that produces its output isn't implemented yet">planned</span>`;
+  return `<div class="pl-node"><div class="pl-head">${b.icon} ${esc(b.display_name)}${tag}</div>`
        + `<div class="pl-sub">${flow}</div>`
        + (fields?`<div class="pl-body">${fields}</div>`:'') + `</div>`;
 }

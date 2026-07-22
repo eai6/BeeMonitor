@@ -23,47 +23,73 @@ def _s(step_id, block_type, config=None, inputs=None):
     return step
 
 
+def _detector(reference_source, **extra):
+    """Module 1 config — the detector defaults every template shares."""
+    return {"model_family": "yolo", "confidence": 0.4, "run_scope": "full",
+            "reference_source": reference_source, **extra}
+
+
+_MOT = {"tracker": "beetrack"}
+
+# Every template is the same three modules recombined — that is the point of the
+# abstraction. Titles are load-bearing: ``lessons.py`` resolves each lesson to its
+# template by title, so renaming one orphans a lesson.
 TEMPLATES = [
     {
         "title": "Foraging trips",
-        "description": "Detect the nest/hotel, track bees, and derive foraging-trip events.",
+        "description": "Detect bees against the nest/hotel, track them, and derive "
+                       "foraging-trip events (exit → entry at a nest tube).",
         "steps": [
             _s("v", "input.video"),
-            _s("r", "roi.nest_layout", {"source": "device"}, {"in": "v"}),
-            _s("t", "track.bee", {"confidence": 0.4}, {"video": "v", "rois": "r"}),
-            _s("f", "analyze.foraging_trips", {}, {"tracks": "t"}),
-            _s("o", "output.table", {}, {"in": "f"}),
+            _s("d", "detect.objects", _detector("device_layout"), {"video": "v"}),
+            _s("m", "track.mot", _MOT, {"detections": "d"}),
+            _s("f", "analyze.foraging_trips", {"event_confidence": 0.6}, {"tracks": "m"}),
         ],
     },
     {
         "title": "Flower / ROI visitation",
-        "description": "Track bees and count visits to a drawn region.",
+        "description": "Track insects and count unique visits to a region you draw "
+                       "(a flower, a patch, a nest entrance).",
         "steps": [
             _s("v", "input.video"),
-            _s("r", "roi.draw", {"regions": "[]"}, {"in": "v"}),
-            _s("t", "track.bee", {"confidence": 0.4}, {"video": "v", "rois": "r"}),
-            _s("g", "analyze.visitation", {}, {"tracks": "t"}),
-            _s("o", "output.chart", {"chart_type": "bar"}, {"in": "g"}),
+            _s("d", "detect.objects", _detector("drawn", regions="[]"), {"video": "v"}),
+            _s("m", "track.mot", _MOT, {"detections": "d"}),
+            _s("g", "analyze.visitation", {}, {"tracks": "m"}),
         ],
     },
     {
         "title": "Individual bee IDs",
-        "description": "Track bees and read their colour / QR / number marker IDs per trajectory.",
+        "description": "Track bees and read their colour / QR / number marker IDs "
+                       "per trajectory. The marker decoder is not implemented yet — "
+                       "this template shows the shape of the pipeline.",
         "steps": [
             _s("v", "input.video"),
-            _s("t", "track.bee", {"confidence": 0.4}, {"video": "v"}),
-            _s("m", "identify.marker", {"marker_type": "auto"}, {"in": "t"}),
-            _s("o", "output.table", {}, {"in": "m"}),
+            _s("d", "detect.objects", _detector("none"), {"video": "v"}),
+            _s("m", "track.mot", _MOT, {"detections": "d"}),
+            _s("i", "identify.marker", {"marker_type": "auto"}, {"tracks": "m"}),
         ],
     },
     {
         "title": "Colony activity",
-        "description": "Measure in-nest colony activity (occupancy / motion over time).",
+        "description": "Measure how much insect activity there is over time, without "
+                       "asking who went where.",
         "steps": [
             _s("v", "input.video"),
-            _s("t", "track.bee", {"confidence": 0.4}, {"video": "v"}),
-            _s("a", "analyze.colony_activity", {"metric": "occupancy"}, {"tracks": "t"}),
-            _s("o", "output.table", {}, {"in": "a"}),
+            _s("d", "detect.objects", _detector("device_layout"), {"video": "v"}),
+            _s("m", "track.mot", _MOT, {"detections": "d"}),
+            _s("a", "analyze.detection_count",
+               {"metric": "over_time", "bin_seconds": 5}, {"detections": "m"}),
+        ],
+    },
+    {
+        "title": "Interactions",
+        "description": "Find proximity interactions — insect ↔ insect, and insect ↔ "
+                       "reference object (e.g. a bee at a nest tube).",
+        "steps": [
+            _s("v", "input.video"),
+            _s("d", "detect.objects", _detector("device_layout"), {"video": "v"}),
+            _s("m", "track.mot", _MOT, {"detections": "d"}),
+            _s("x", "analyze.interaction", {"interaction_type": "all"}, {"tracks": "m"}),
         ],
     },
 ]

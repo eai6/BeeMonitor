@@ -282,17 +282,8 @@ def run_on_videos(request):
         videos = list(vqs[:MAX_BATCH] if MAX_BATCH else vqs)
     if not videos:
         return _fail("No videos match the current filter.")
-    batch_id = uuid.uuid4()  # groups this launch for aggregate results
-    launched, invalid = [], 0
-    for video in videos:
-        steps = engine.steps_with_video(pipeline, video.pk)
-        if validate_steps(steps):
-            invalid += 1
-            continue
-        run = PipelineRun.objects.create(pipeline=pipeline, user=request.user,
-                                         batch_id=batch_id)
-        engine.start_run(run, steps=steps)
-        launched.append(video.pk)
+    # Groups this launch for aggregate results (combined CSVs, cross-video trips).
+    batch_id, launched, invalid = engine.launch_batch(pipeline, videos, request.user)
 
     # The GPU steps were created QUEUED. Kick the queue once for the whole batch:
     # spawn up to the global SageMaker cap now, leave the rest QUEUED for the
@@ -503,7 +494,23 @@ _DISPLAY_SKIP = {
 }
 
 
-def _step_display(output, block_type=""):
+def _shows_nest_layout(block_type, config):
+    """Whether a step's card should render the nest/hotel layout table.
+
+    Every GPU job's summary carries ``nest_bboxes`` (the layout it tracked
+    against), so without this scope the 60-row nest table renders on every
+    detect/track step. Show it only where the reference *is* the point: the legacy
+    nest node, or a Detector whose reference is the hotel/nest layout.
+    """
+    if block_type == "detect.nest":
+        return True
+    if block_type == "detect.objects":
+        source = (config or {}).get("reference_source", "device_layout")
+        return source in ("detect", "device_layout")
+    return False
+
+
+def _step_display(output, block_type="", config=None):
     """A review-friendly view of a step's output: scalar metrics + a rows table."""
     if not isinstance(output, dict):
         return {"fields": [], "rows": [], "columns": [], "row_total": 0}
@@ -524,13 +531,11 @@ def _step_display(output, block_type=""):
     # a dict by a variable key).
     cell_rows = [[r.get(c, "") for c in columns] for r in rows[:25]]
 
-    # Nest/hotel layout — ONLY on the Detect Nest / Hotel step. Every GPU job's
-    # summary carries nest_bboxes (the manual layout it tracked against), so
-    # without this scope the 60-row nest table also rendered on Track Bees.
+    # Nest/hotel layout — only where the reference object is the point of the step.
     stats = output.get("summary") or result.get("summary_stats") or {}
     nest_rows = []
     nest_preview_url = ""
-    if block_type == "detect.nest":
+    if _shows_nest_layout(block_type, config):
         nest_rows = [
             {"nest": k, "bbox": ", ".join(str(int(x)) for x in v)}
             for k, v in sorted((stats.get("nest_bboxes") or {}).items())
@@ -570,7 +575,9 @@ def _run_steps(run):
             "state": run.step_state(sid),
             "output": out,
             "cached": bool(out.get("_cached")),
-            "display": _step_display(out, step.get("block_type", "")),
+            "display": _step_display(
+                out, step.get("block_type", ""), step.get("config") or {},
+            ),
         })
     return enriched
 

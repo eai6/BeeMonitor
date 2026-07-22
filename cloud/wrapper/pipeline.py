@@ -33,6 +33,10 @@ class PipelineResult:
     nest_count: int
     events_csv_path: str  # S3 key in processed bucket
     tracking_csv_path: str
+    # Raw per-frame detector output, before track association. Emitted from the
+    # same pass as the tracking CSV (the detections were already in memory), so
+    # "count detections" analyses don't have to infer counts from tracked rows.
+    detections_csv_path: str
     foraging_trips_csv_path: str
     interactions_csv_path: str
     crops_csv_path: str  # per-track crop index (track_id -> crop S3 keys)
@@ -295,6 +299,7 @@ class CloudPipeline:
             nest_count=int(stats.get("total_nests", 0)),
             events_csv_path=result_paths.get("events_csv", ""),
             tracking_csv_path=result_paths.get("tracking_csv", ""),
+            detections_csv_path=result_paths.get("detections_csv", ""),
             foraging_trips_csv_path=result_paths.get("foraging_trips_csv", ""),
             interactions_csv_path=result_paths.get("interactions_csv", ""),
             crops_csv_path=result_paths.get("crops_csv", ""),
@@ -354,7 +359,8 @@ class CloudPipeline:
             job_id=job_id, user_id=user_id,
             total_events=0, entry_count=0, exit_count=0,
             unique_tracks=0, nest_count=len(nest_bboxes),
-            events_csv_path="", tracking_csv_path="", foraging_trips_csv_path="",
+            events_csv_path="", tracking_csv_path="", detections_csv_path="",
+            foraging_trips_csv_path="",
             interactions_csv_path="", crops_csv_path="", annotated_video_path="",
             foraging_trip_count=0, avg_trip_duration_sec=0.0, interaction_count=0,
             summary_stats=stats,
@@ -512,6 +518,13 @@ class CloudPipeline:
             blob_path = f"{prefix}/events.csv"
             self._storage.upload_file(container, blob_path, str(events_files[0]))
             uploaded["events_csv"] = blob_path
+
+        # Raw detections CSV (pre-association detector output)
+        detections_files = list(output_dir.glob("*_detections.csv"))
+        if detections_files:
+            blob_path = f"{prefix}/detections.csv"
+            self._storage.upload_file(container, blob_path, str(detections_files[0]))
+            uploaded["detections_csv"] = blob_path
 
         # Tracking CSV
         tracking_files = list(output_dir.glob(f"*_tracking_results.csv"))

@@ -15,12 +15,13 @@ import copy
 import hashlib
 import json
 import logging
+import uuid
 
 from django.db import transaction
 from django.utils import timezone
 
 from .models import PipelineRun, StepResult
-from .registry import get_block
+from .registry import get_block, validate_steps
 from . import executors
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,32 @@ def steps_with_video(pipeline, video_id):
         if step.get("block_type") == "input.video":
             step.setdefault("config", {})["video_id"] = str(video_id)
     return steps
+
+
+def launch_batch(pipeline, videos, user):
+    """Start one ``PipelineRun`` per video, all sharing a fresh ``batch_id``.
+
+    The single place a pipeline is launched over a set of videos — used by the
+    Processing hub (``pipelines.views.run_on_videos``) and by the per-device
+    scheduler (``apps.devices.scheduling``). GPU steps are created QUEUED; the
+    caller kicks ``analysis.views._drain_queue`` once so the batch drains in waves
+    under the global SageMaker cap instead of flooding the endpoint.
+
+    Returns ``(batch_id, launched_video_ids, invalid_count)``.
+    """
+    batch_id = uuid.uuid4()
+    launched, invalid = [], 0
+    for video in videos:
+        steps = steps_with_video(pipeline, video.pk)
+        if validate_steps(steps):
+            invalid += 1
+            continue
+        run = PipelineRun.objects.create(
+            pipeline=pipeline, user=user, batch_id=batch_id,
+        )
+        start_run(run, steps=steps)
+        launched.append(video.pk)
+    return batch_id, launched, invalid
 
 
 def start_run(run, steps=None):
@@ -296,7 +323,8 @@ def _job_result_summary(job):
         return {}
     fields = (
         "foraging_trip_count", "avg_trip_duration_sec", "foraging_trips_csv_path",
-        "tracking_csv_path", "events_csv_path", "unique_tracks", "entry_count",
+        "tracking_csv_path", "detections_csv_path",
+        "events_csv_path", "unique_tracks", "entry_count",
         "exit_count", "nest_count", "total_events", "interaction_count",
         "interactions_csv_path", "crops_csv_path",
         "annotated_video_path", "summary_stats",

@@ -833,6 +833,10 @@ class BeeTracking:
         
         # Bee identifier (optional)
         self.identifier = identifier
+
+        # Raw pre-association detections from the last process_video call.
+        # Populated there; None until a video has been processed.
+        self.detections_df = None
         
         # Crop saving for identification training
         self.save_crops = save_crops
@@ -1344,7 +1348,15 @@ class BeeTracking:
         
         # Convert results to DataFrame
         import pandas as pd
-        
+
+        # Raw, pre-association detections. Every frame's detector output is
+        # already sitting in `results` (process_frame stores it) and was simply
+        # discarded — the flatten loop below only reads 'tracks'. Building this
+        # costs no extra inference, and it's what "count detections" analyses
+        # actually want: the tracked table drops anything the tracker never
+        # associated into a confirmed track.
+        self.detections_df = self._build_detections_df(results)
+
         # Define clean column list
         columns = ['frame', 'track_id', 'x1', 'y1', 'x2', 'y2', 'cx', 'cy',
                    'confidence', 'source', 'taxon', 'bee_id', 'bee_id_method', 'bee_id_confidence', 'mode']
@@ -1399,5 +1411,46 @@ class BeeTracking:
         
         logger.info(f"Created tracking DataFrame with {len(df)} rows ({len(results)} frames, "
                    f"{len(df['track_id'].unique())} unique tracks)")
-        
+
+        return df
+
+    # Column contract for the detections table (see _build_detections_df).
+    DETECTION_COLUMNS = ['frame', 'x1', 'y1', 'x2', 'y2', 'cx', 'cy',
+                         'confidence', 'source', 'taxon', 'mode']
+
+    def _build_detections_df(self, results):
+        """Flatten every frame's raw detector output into one DataFrame.
+
+        One row per detection per frame, *before* the tracker associates them —
+        so a detection that never became a confirmed track still appears here.
+        Detection entries are the flat lists built in ``process_frame``:
+        ``[x1, y1, x2, y2, confidence, source, taxon]``. Rows are read
+        defensively by position so a detector that emits a shorter list (or a
+        future one that appends fields) doesn't break the export.
+        """
+        import pandas as pd
+
+        rows = []
+        for result in results or []:
+            frame_num = result.get('frame_num')
+            mode = result.get('mode')
+            for det in result.get('detections') or []:
+                if len(det) < 4:
+                    continue
+                x1, y1, x2, y2 = (float(v) for v in det[:4])
+                rows.append({
+                    'frame': frame_num,
+                    'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
+                    'cx': (x1 + x2) / 2.0,
+                    'cy': (y1 + y2) / 2.0,
+                    'confidence': float(det[4]) if len(det) > 4 else 0.0,
+                    'source': det[5] if len(det) > 5 else 'unknown',
+                    'taxon': det[6] if len(det) > 6 else 'bee',
+                    'mode': mode,
+                })
+        if not rows:
+            return pd.DataFrame(columns=self.DETECTION_COLUMNS)
+        df = pd.DataFrame(rows).sort_values('frame').reset_index(drop=True)
+        logger.info(f"Created detections DataFrame with {len(df)} rows "
+                    f"({df['frame'].nunique()} frames with detections)")
         return df

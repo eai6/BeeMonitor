@@ -1211,8 +1211,11 @@ def _merge_chunk_results(job, chunks) -> dict:
         return list(_csv.DictReader(io.StringIO(buf.getvalue().decode("utf-8", "replace"))))
 
     merged_paths = {}
+    # Detections merge through the same path — they carry no track_id, so the
+    # per-chunk id remap below is a no-op for them.
     for kind, key in (("events_csv_path", f"{uid}/{mid}/events.csv"),
-                      ("tracking_csv_path", f"{uid}/{mid}/tracking.csv")):
+                      ("tracking_csv_path", f"{uid}/{mid}/tracking.csv"),
+                      ("detections_csv_path", f"{uid}/{mid}/detections.csv")):
         fieldnames, all_rows = None, []
         for i, res in enumerate(results):
             rows = _read_rows(res.get(kind))
@@ -1242,6 +1245,7 @@ def _merge_chunk_results(job, chunks) -> dict:
         "status": "completed",
         "events_csv_path": merged_paths["events_csv_path"],
         "tracking_csv_path": merged_paths["tracking_csv_path"],
+        "detections_csv_path": merged_paths["detections_csv_path"],
         "foraging_trips_csv_path": "",
         "interactions_csv_path": "",
         "crops_csv_path": "",
@@ -1283,6 +1287,7 @@ def _apply_result_to_job(job, result: dict) -> None:
         defaults={
             "events_csv_path": result.get("events_csv_path", ""),
             "tracking_csv_path": result.get("tracking_csv_path", ""),
+            "detections_csv_path": result.get("detections_csv_path", ""),
             "foraging_trips_csv_path": result.get("foraging_trips_csv_path", ""),
             "interactions_csv_path": result.get("interactions_csv_path", ""),
             "crops_csv_path": result.get("crops_csv_path", ""),

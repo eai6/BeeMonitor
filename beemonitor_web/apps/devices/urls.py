@@ -29,6 +29,7 @@ urlpatterns = [
     path("<int:pk>/bee-confirm/", views.DeviceBeeConfirmView.as_view(), name="bee_confirm"),
     path("<int:pk>/upload-mode/", views.DeviceVideoUploadModeView.as_view(), name="upload_mode"),
     path("<int:pk>/record-settings/", views.DeviceRecordSettingsView.as_view(), name="record_settings"),
+    path("<int:pk>/pipeline-schedule/", views.DevicePipelineScheduleView.as_view(), name="pipeline_schedule"),
     path("<int:pk>/upload-now/", views.DeviceUploadNowView.as_view(), name="upload_now"),
     path("<int:pk>/review-crops/", views.DeviceActivityCropsView.as_view(), name="review_crops"),
     path("<int:pk>/motion-tuning/", views.DeviceMotionTuningView.as_view(), name="motion_tuning"),
