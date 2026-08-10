@@ -310,9 +310,39 @@ cp ~/BeeMonitor/hardware/calibration.sample.json \
 
 ### Step 4: Focus the Camera
 
+Run this **on the Pi's own screen** — it opens a window with the live picture,
+a sharpness readout and a lens slider:
+
 ```bash
 ~/BeeMonitor/hardware/venv/bin/python runFocus.py
 ```
+
+The OwlSight has no focus ring; it focuses electronically, so you drive the
+`LensPosition` control (dioptres = 1/metres) instead of turning anything. Press
+`f` to autofocus, `s` to sweep the whole range and settle on the sharpest spot,
+`z` to check fine focus at sensor pixels, `space` for a still, `q` to quit.
+
+Over SSH there is no window to draw into — use `runFocus.py --no-gui` for the
+same numbers in the terminal, or `--sweep --no-gui` to find focus blind.
+
+**Save it when you're happy.** Press `w` ("Save for recorder", or `--save` in
+`--no-gui`) and the focus and orientation go into `camera.json` next to
+`calibration.json`. `motion/recorder.py` reads that at startup, so the service
+records at the focus you just set — restart it to pick up a change:
+`sudo systemctl restart beemonitor-recorder`. With nothing saved, the recorder
+autofocuses once at startup and holds that position (it never used to focus at
+all, which on a lens module meant recording at whatever position the lens
+powered up in).
+
+**Orientation.** The camera is mounted upside down, so the picture needs a 180°
+turn. That one the ISP does for free as `hflip`+`vflip`, and it applies to
+everything — recorded video, detection frames, stills, crops alike. It is on by
+default (`BEEMONITOR_HFLIP` / `BEEMONITOR_VFLIP`, or `camera.json`). If the
+picture still isn't upright, press `o` to turn it: 90°/270° can only be done in
+software, so runFocus rotates its preview and stills but **the recorder cannot
+follow** — the hardware encoder is fed straight from the ISP, which flips but
+cannot transpose. It logs a warning and records unrotated. Fix a sideways camera
+by turning it in its mount.
 
 **Note:** The camera must be connected when the Pi boots. If it wasn't, reboot:
 

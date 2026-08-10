@@ -73,15 +73,19 @@ cp calibration.sample.json /home/beemonitor/Desktop/cameraOutput/beeHotel/../cal
 
 ### Focus the camera  (~5 min)
 
-Run the focus helper and turn the lens until the preview is sharp on the bee hotel. A blurry lens wrecks both motion detection and calibration.
+Run the focus helper on the Pi's own screen: it opens a live preview with a sharpness readout. The OwlSight has no focus ring — press 'f' to autofocus, or 's' to sweep the lens range and settle on the sharpest position, then 'w' to save it for the recorder. A blurry lens wrecks both motion detection and calibration.
 
 ```bash
 ~/BeeMonitor/hardware/venv/bin/python runFocus.py
 ```
 
-**What you should see:** A live preview; the hotel entrances look crisp. (Verify the camera is detected first: libcamera-hello --list-cameras.)
+**What you should see:** A live preview window; the hotel entrances look crisp and the sharpness number peaks there, and 'w' confirms it saved the focus to camera.json. (Over SSH use --no-gui --sweep --save. Verify the camera is detected first: libcamera-hello --list-cameras.)
 
 > ⚠️ **no cameras available** — Ribbon seated after boot — reseat it and reboot; the camera is only probed at boot.
+
+> ⚠️ **the picture is upside down or sideways** — Press 'o' to turn the preview until it is upright, then 'w' to save. A 180-degree turn is done by the ISP (hflip+vflip) so the recorder honours it too; 90/270 cannot be done at capture time, so turn the camera in its mount instead.
+
+> ⚠️ **recordings are blurry even though the preview was sharp** — You focused but did not save. Press 'w' (or --save) to write camera.json, then: sudo systemctl restart beemonitor-recorder
 
 ### Credentials & tuning  (~5 min)
 

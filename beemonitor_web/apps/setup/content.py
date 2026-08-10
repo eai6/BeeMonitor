@@ -137,17 +137,31 @@ STEPS: list[dict] = [
     # ------------------------------------------------------------ configure
     {
         "id": "camera", "phase": "configure", "title": "Focus the camera",
-        "concept": "Run the focus helper and turn the lens until the preview is "
-                   "sharp on the bee hotel. A blurry lens wrecks both motion "
-                   "detection and calibration.",
+        "concept": "Run the focus helper on the Pi's own screen: it opens a live "
+                   "preview with a sharpness readout. The OwlSight has no focus "
+                   "ring — press 'f' to autofocus, or 's' to sweep the lens range "
+                   "and settle on the sharpest position, then 'w' to save it for "
+                   "the recorder. A blurry lens wrecks both motion detection and "
+                   "calibration.",
         "command": "~/BeeMonitor/hardware/venv/bin/python runFocus.py",
-        "expected": "A live preview; the hotel entrances look crisp. (Verify the "
-                    "camera is detected first: libcamera-hello --list-cameras.)",
+        "expected": "A live preview window; the hotel entrances look crisp and the "
+                    "sharpness number peaks there, and 'w' confirms it saved the "
+                    "focus to camera.json. (Over SSH use --no-gui --sweep --save. "
+                    "Verify the camera is detected first: libcamera-hello "
+                    "--list-cameras.)",
         "verify": None,
         "common_errors": [
             {"symptom": "no cameras available",
              "fix": "Ribbon seated after boot — reseat it and reboot; the camera "
                     "is only probed at boot."},
+            {"symptom": "the picture is upside down or sideways",
+             "fix": "Press 'o' to turn the preview until it is upright, then 'w' to "
+                    "save. A 180-degree turn is done by the ISP (hflip+vflip) so the "
+                    "recorder honours it too; 90/270 cannot be done at capture time, "
+                    "so turn the camera in its mount instead."},
+            {"symptom": "recordings are blurry even though the preview was sharp",
+             "fix": "You focused but did not save. Press 'w' (or --save) to write "
+                    "camera.json, then: sudo systemctl restart beemonitor-recorder"},
         ],
         "minutes": 5, "difficulty": "medium", "optional": False, "applies_to": "both",
     },

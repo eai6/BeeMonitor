@@ -53,6 +53,10 @@ from motion.config import (
     ACTIVITY_FRAMES_FILE, SAVE_ACTIVITY_FRAMES,
     RECORD_SETTINGS_FILE, CONTINUOUS_SEGMENT,
 )
+from motion.camera import (
+    load_profile as load_camera_profile, transform as camera_transform,
+    apply_focus, warn_if_unrotatable, describe as describe_camera, model_of,
+)
 from motion.frames import _main_array_to_bgr
 from motion.roi import _resolve_record_roi
 from motion.overrides import (
@@ -178,12 +182,17 @@ def record() -> None:
     RECORD_DIR.mkdir(parents=True, exist_ok=True)
     WORK_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Orientation and focus come from the per-unit camera profile (camera.json,
+    # written by runFocus.py) over the env defaults — see motion/camera.py.
+    cam_profile = load_camera_profile()
+    warn_if_unrotatable(cam_profile)
+
     cam = Picamera2()
     config = cam.create_video_configuration(
         main={"size": (MAIN_W, MAIN_H)},
         lores={"size": (LORES_W, LORES_H), "format": "YUV420"},
         controls={"FrameRate": FPS},
-        transform=libcamera.Transform(vflip=1, hflip=1),
+        transform=camera_transform(cam_profile),
     )
     cam.configure(config)
 
@@ -204,14 +213,21 @@ def record() -> None:
     cam.start_encoder(encoder)
     cam.start()
 
+    # Focus BEFORE detecting the hotel: on a lens module the frame is only as
+    # sharp as the last thing that set LensPosition, and YOLO on a blurred frame
+    # is exactly how hotel detection ends up falling back to the whole frame.
+    # apply_focus logs what it actually did with the lens.
+    apply_focus(cam, cam_profile)
+
     # Cloud-faithful step 1: detect the hotel and confine detection to it before
     # we start recording. Falls back to the whole frame if detection fails.
     roi = _resolve_record_roi(cam)
 
     log.info(
-        "recorder up: main=%dx%d lores=%dx%d @ %dfps | pre=%.1fs post=%.1fs "
-        "max=%.0fs roi=%s",
-        MAIN_W, MAIN_H, LORES_W, LORES_H, FPS, PRE_ROLL, POST_ROLL, MAX_SEGMENT,
+        "recorder up: %s main=%dx%d lores=%dx%d @ %dfps | %s | pre=%.1fs "
+        "post=%.1fs max=%.0fs roi=%s",
+        model_of(cam) or "camera", MAIN_W, MAIN_H, LORES_W, LORES_H, FPS,
+        describe_camera(cam_profile), PRE_ROLL, POST_ROLL, MAX_SEGMENT,
         roi or "full",
     )
 

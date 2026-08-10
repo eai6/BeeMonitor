@@ -105,8 +105,49 @@ sync_units() {
     fi
 }
 
+# --- camera boot overlay ----------------------------------------------------
+# The Arducam 64MP OwlSight (OV64A40) is not auto-detectable: camera_auto_detect
+# only knows the official Pi sensors, so without an explicit dtoverlay the sensor
+# is invisible and every Picamera2() call raises. Persisting that one line here
+# means a unit provisioned over the wire comes up with a working camera after its
+# next reboot, instead of needing hardware/setup-camera.sh run by hand on site.
+#
+# Deliberately conservative — it never probes and never touches a unit that has a
+# camera story of its own: no runtime probe (that needs the camera free, and the
+# recorder is running), no reboot, and nothing at all unless config.txt is silent
+# about cameras. setup-camera.sh is still the tool for bring-up and diagnosis.
+CAMERA_OVERLAY=ov64a40
+BOOT_CONFIG="${BEEMONITOR_BOOT_CONFIG:-/boot/firmware/config.txt}"
+NO_OVERLAY_MARKER="# BeeMonitor: camera overlay removed by setup-camera.sh --revert"
+
+ensure_camera_overlay() {
+    [ -f "$BOOT_CONFIG" ] || { log "camera: no $BOOT_CONFIG — skipping"; return 0; }
+    if grep -qE "^\s*dtoverlay=${CAMERA_OVERLAY}" "$BOOT_CONFIG"; then
+        return 0  # already there: the normal case, no logging noise
+    fi
+    if grep -qF "$NO_OVERLAY_MARKER" "$BOOT_CONFIG"; then
+        log "camera: overlay was reverted on this unit — leaving it off"
+        return 0
+    fi
+    # Any other camera configuration means this unit is not an OwlSight unit (or
+    # is mid-bring-up). Don't fight it.
+    if grep -qE "^\s*camera_auto_detect=1" "$BOOT_CONFIG" \
+       || grep -qE "^\s*dtoverlay=(imx[0-9]+|ov5647|ov7251|ov9281|arducam)" "$BOOT_CONFIG"; then
+        log "camera: another camera is configured in $BOOT_CONFIG — not adding ${CAMERA_OVERLAY}"
+        return 0
+    fi
+    cp -a "$BOOT_CONFIG" "$BOOT_CONFIG.bak-$(date +%Y%m%d-%H%M%S)" || {
+        log "camera: FAILED to back up $BOOT_CONFIG — not editing it"; return 0; }
+    {
+        printf '\n# Arducam 64MP OwlSight (OV64A40) — BeeMonitor (provision.sh)\n'
+        printf 'dtoverlay=%s\n' "$CAMERA_OVERLAY"
+    } >> "$BOOT_CONFIG" || { log "camera: FAILED to append the overlay"; return 0; }
+    log "camera: added dtoverlay=${CAMERA_OVERLAY} to $BOOT_CONFIG — takes effect on the next reboot"
+}
+
 ensure_minisign
 sync_sudoers
 sync_units
+ensure_camera_overlay
 log "done"
 exit 0

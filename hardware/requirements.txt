@@ -9,4 +9,5 @@
 # SIGILLs. They are installed once at setup and are NOT touched by remote updates
 # (do torch/model changes over WiFi). See hardware/README.md.
 requests        # uploader + telemetry
+pillow          # runFocus.py's Tk preview needs ImageTk, which the apt PIL omits
 ultralytics     # calibration only (pulls torch, which must already be the CPU wheel)

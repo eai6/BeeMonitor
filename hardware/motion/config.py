@@ -38,6 +38,28 @@ LORES_W = _env_int("BEEMONITOR_LORES_W", 640)
 LORES_H = _env_int("BEEMONITOR_LORES_H", 480)
 FPS = _env_int("BEEMONITOR_FPS", 25)
 
+# --- Camera orientation + focus ---------------------------------------------
+# The camera is mounted upside down, so the picture needs a 180-degree turn.
+# That one the ISP CAN do, as a horizontal + vertical flip, which means it costs
+# nothing and every consumer (H.264, detection, stills, crops) sees the same
+# upright frame. HFLIP/VFLIP are that flip; leave them on unless a differently
+# mounted unit needs otherwise.
+HFLIP = _env_bool("BEEMONITOR_HFLIP", True)
+VFLIP = _env_bool("BEEMONITOR_VFLIP", True)
+# A quarter turn is a different story: the ISP can flip but not transpose, so
+# 90/270 has to be done in software, frame by frame. runFocus.py does it for its
+# preview and stills; the recorder does NOT (the hardware encoder is fed by the
+# ISP directly, so the video could not follow) and warns if you ask for it.
+# Fix a sideways camera by turning the camera, not by setting this.
+ROTATE = _env_int("BEEMONITOR_ROTATE", 0) % 360
+# Focus for lens modules like the Arducam OwlSight (OV64A40), in dioptres
+# (1/metres). Empty = autofocus once at startup and hold that. runFocus.py's
+# "save for recorder" button writes the chosen value into camera.json, which
+# wins over this. Fixed focus beats continuous AF here: continuous would hunt
+# on every passing bee and blur the clip we actually want.
+LENS_POSITION = os.environ.get("BEEMONITOR_LENS_POSITION", "").strip()
+AF_RANGE = os.environ.get("BEEMONITOR_AF_RANGE", "normal").strip().lower()
+
 # Clip timing (seconds).
 PRE_ROLL = _env_float("BEEMONITOR_PRE_ROLL", 3.0)
 # Tail kept AFTER motion stops before a clip closes. A short tail cuts clips off
@@ -238,6 +260,10 @@ RECORD_SETTINGS_FILE = CALIB_FILE.parent / "record_settings.json"
 # env ACTIVITY_FRAMES default, so a no-shell unit can stop the 1-few crops/activity
 # remotely (e.g. once on-device bee confirmation is trusted to guard activity).
 ACTIVITY_FRAMES_FILE = CALIB_FILE.parent / "activity_frames.json"
+# Per-unit camera profile: orientation + focus, written by runFocus.py and read
+# by the recorder at startup, so focusing the camera once is all it takes for
+# the recorder to use that focus. Wins over the env defaults above.
+CAMERA_FILE = CALIB_FILE.parent / "camera.json"
 
 
 # --- Bee confirmation (low-DL YOLO filter) --------------------------------
