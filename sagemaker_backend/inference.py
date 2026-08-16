@@ -103,6 +103,9 @@ def predict_fn(payload, pipeline):
             # Device-supplied hotel ROI + nest tubes (normalized); when both are
             # present the run uses them and the nest model is the backup.
             hotel_roi=payload.get("hotel_roi"),
+            # The ROI's traced outline, when the user drew a polygon: tracking is
+            # masked to it, so background inside the bounding box is ignored.
+            hotel_polygon=payload.get("hotel_polygon"),
             nest_layout=payload.get("nest_layout"),
             # False = nest/hotel-only fast path (skip tracking + events).
             run_tracking=bool(payload.get("run_tracking", True)),

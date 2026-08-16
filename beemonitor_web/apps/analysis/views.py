@@ -315,6 +315,8 @@ def _spawn_gpu_job(job_pk: int) -> None:
         # them; the nest model is the backup.
         if job.config.get("hotel_roi"):
             payload["hotel_roi"] = job.config["hotel_roi"]
+        if job.config.get("hotel_polygon"):
+            payload["hotel_polygon"] = job.config["hotel_polygon"]
         if job.config.get("nest_layout"):
             payload["nest_layout"] = job.config["nest_layout"]
         payload["run_tracking"] = bool(job.config.get("run_tracking", True))
@@ -408,6 +410,8 @@ def _spawn_gpu_batch(jobs_data: list, detection_mode: str, confidence: float,
                 vcfg = jd.get("config") or {}
                 if vcfg.get("hotel_roi"):
                     payload["hotel_roi"] = vcfg["hotel_roi"]
+                if vcfg.get("hotel_polygon"):
+                    payload["hotel_polygon"] = vcfg["hotel_polygon"]
                 if vcfg.get("nest_layout"):
                     payload["nest_layout"] = vcfg["nest_layout"]
                 payload["run_tracking"] = bool(vcfg.get("run_tracking", True))
@@ -1386,8 +1390,13 @@ def _video_job_config(base: dict, video, use_device_roi: bool) -> dict:
     if use_device_roi and dev is not None:
         if dev.roi_override:
             cfg["hotel_roi"] = dev.roi_override     # normalized [x1,y1,x2,y2]
+        if dev.roi_polygon:
+            # The traced outline of that same ROI — the worker masks tracking to
+            # it so background inside the bounding box is not analysed.
+            cfg["hotel_polygon"] = dev.roi_polygon  # [[x,y], ...] normalized
         if dev.nest_layout:
-            cfg["nest_layout"] = dev.nest_layout    # [{id, box:[x1,y1,x2,y2]}, ...]
+            # [{id, box:[x1,y1,x2,y2], points?:[[x,y], ...]}, ...]
+            cfg["nest_layout"] = dev.nest_layout
     return cfg
 
 

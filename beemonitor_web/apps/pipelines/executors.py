@@ -102,8 +102,8 @@ def detector_label(step):
 def resolve_reference(step, run, context, index):
     """Resolve a reference node's config into ROI-shaped data.
 
-    Returns the ``{hotel_roi?, nest_layout?, regions?}`` shape ``ops.roi_boxes``
-    already consumes. Deliberately a function of the step's **config** (plus the
+    Returns the ``{hotel_roi?, hotel_polygon?, nest_layout?, regions?}`` shape
+    ``ops.roi_shapes`` already consumes. Deliberately a function of the step's **config** (plus the
     upstream video's device), never of its cached output: ``engine`` caches a GPU
     step's output dict in ``StepResult`` and replays it verbatim on a hit, and
     drawn regions are not part of the hashed job config — so a reference stashed
@@ -143,7 +143,11 @@ def resolve_reference(step, run, context, index):
         }
 
     # "device_layout" — the hotel ROI + nest tubes drawn in the ROI editor.
-    hotel_roi, nest_layout = None, None
+    # hotel_polygon (and a nest's "points") is the traced outline of a shape the
+    # user drew as a polygon; the box is its bounding box, so a consumer that
+    # only reads boxes still works, and one that reads points excludes the
+    # background the box swept in.
+    hotel_roi, hotel_polygon, nest_layout = None, None, None
     video_out = find_artifact("video", run.steps, index, context)
     if video_out:
         try:
@@ -153,12 +157,14 @@ def resolve_reference(step, run, context, index):
             device = getattr(video, "device", None)
             if device is not None:
                 hotel_roi = getattr(device, "roi_override", None)
+                hotel_polygon = getattr(device, "roi_polygon", None)
                 nest_layout = getattr(device, "nest_layout", None)
         except Exception as exc:  # defensive — device linkage is optional
             logger.info("detect.objects: could not read device layout: %s", exc)
     return {
         "artifact": "roi",
         "hotel_roi": hotel_roi,
+        "hotel_polygon": hotel_polygon,
         "nest_layout": nest_layout,
         "source": "device",
     }
@@ -264,7 +270,7 @@ def _exec_roi_nest_layout(step, run, context, inputs, index):
     video_out = find_artifact("video", run.steps, index, context)
     if not video_out:
         return {"error": "No upstream video for the ROI layout."}
-    hotel_roi, nest_layout = None, None
+    hotel_roi, hotel_polygon, nest_layout = None, None, None
     try:
         from apps.videos.models import Video
 
@@ -272,12 +278,14 @@ def _exec_roi_nest_layout(step, run, context, inputs, index):
         device = getattr(video, "device", None)
         if device is not None:
             hotel_roi = getattr(device, "roi_override", None)
+            hotel_polygon = getattr(device, "roi_polygon", None)
             nest_layout = getattr(device, "nest_layout", None)
     except Exception as exc:  # defensive — device linkage is optional
         logger.info("roi.nest_layout: could not read device layout: %s", exc)
     return {
         "artifact": "roi",
         "hotel_roi": hotel_roi,
+        "hotel_polygon": hotel_polygon,
         "nest_layout": nest_layout,
         "source": "device",
     }
@@ -401,7 +409,7 @@ def _exec_analyze_detection_count(step, run, context, inputs, index):
     cfg = step.get("config") or {}
     metric = cfg.get("metric", "total")
     reference = find_reference(run.steps, index, context, run)
-    boxes = ops.roi_boxes(reference)
+    boxes = ops.roi_shapes(reference)
 
     label = _upstream_label(inputs)
 
@@ -501,7 +509,7 @@ def _exec_analyze_visitation(step, run, context, inputs, index):
     up = inputs.get("tracks") or _first_upstream_result(inputs)
     result = (up or {}).get("result", {})
     roi = find_reference(run.steps, index, context, run)
-    boxes = ops.roi_boxes(roi)
+    boxes = ops.roi_shapes(roi)
 
     df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
     tidy = ops.normalized_tracks(df, result) if df is not None else None
@@ -530,7 +538,7 @@ def _exec_analyze_colony_activity(step, run, context, inputs, index):
     result = (up or {}).get("result", {})
     metric = (step.get("config") or {}).get("metric", "occupancy")
     roi = find_reference(run.steps, index, context, run)
-    boxes = ops.roi_boxes(roi)
+    boxes = ops.roi_shapes(roi)
 
     df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
     tidy = ops.normalized_tracks(df, result) if df is not None else None
@@ -964,6 +972,8 @@ def build_detect_and_track_config(step, run, context, index):
     if roi_out:
         if roi_out.get("hotel_roi"):
             config["hotel_roi"] = roi_out["hotel_roi"]
+        if roi_out.get("hotel_polygon"):
+            config["hotel_polygon"] = roi_out["hotel_polygon"]
         if roi_out.get("nest_layout"):
             config["nest_layout"] = roi_out["nest_layout"]
     return {"video_id": video_out["video_id"], "config": config}, None

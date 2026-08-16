@@ -738,6 +738,11 @@ class BeeTracking:
         yolo_model_path: str,
         confidence_threshold: float = 0.25,
         roi: Optional[Tuple[int, int, int, int]] = None,
+        # The ROI traced as a polygon (pixel coords), when the user drew one
+        # instead of dragging a box. The crop stays `roi` (its bounding box);
+        # pixels outside the outline are blanked before detection, so grass, sky
+        # or a neighbouring trap inside that box produce nothing to track.
+        roi_polygon: Optional[list] = None,
         # Adaptive tracker parameters
         max_age_seconds: float = 1.0,
         min_hits_seconds: float = 0.1,
@@ -821,7 +826,13 @@ class BeeTracking:
         
         # ROI
         self.roi = roi
-        
+        self.roi_polygon = list(roi_polygon) if roi_polygon and len(roi_polygon) >= 3 else None
+        self._roi_mask = None          # rasterised polygon, cached per crop size
+        self._roi_mask_shape = None
+        if self.roi_polygon:
+            logger.info(f"ROI polygon active ({len(self.roi_polygon)} corners) — "
+                        "masking background inside the ROI box")
+
         # Video properties (will be set when video is opened)
         self.fps = None
         self.video_width = None
@@ -985,10 +996,34 @@ class BeeTracking:
         else:
             self.background_save_path = None
     
+    def _mask_roi(self, roi_frame: np.ndarray) -> np.ndarray:
+        """Blank the parts of the ROI crop that fall outside the traced outline.
+
+        A no-op unless the ROI was drawn as a polygon. The mask is rasterised
+        once per crop size and reused; points are shifted by the crop origin so
+        they line up whether or not the frame was cropped. Blanked pixels are
+        constant, so the blob detector sees no motion there at all.
+        """
+        if not self.roi_polygon or roi_frame is None or roi_frame.size == 0:
+            return roi_frame
+        shape = roi_frame.shape[:2]
+        if self._roi_mask is None or self._roi_mask_shape != shape:
+            ox, oy = (self.roi[0], self.roi[1]) if self.roi else (0, 0)
+            pts = np.array([[int(x - ox), int(y - oy)] for x, y in self.roi_polygon],
+                           dtype=np.int32)
+            mask = np.zeros(shape, dtype=np.uint8)
+            cv2.fillPoly(mask, [pts], 255)
+            if not mask.any():   # outline doesn't overlap the crop — ignore it
+                logger.warning("ROI polygon does not overlap the ROI crop — ignoring it")
+                self.roi_polygon = None
+                return roi_frame
+            self._roi_mask, self._roi_mask_shape = mask, shape
+        return cv2.bitwise_and(roi_frame, roi_frame, mask=self._roi_mask)
+
     def detect_motion(self, frame: np.ndarray) -> bool:
         """
         Detect if there is motion in the frame.
-        
+
         Args:
             frame: Input frame
             
@@ -1119,7 +1154,11 @@ class BeeTracking:
             roi_frame = frame[y1:y2, x1:x2]
         else:
             roi_frame = frame
-        
+        # ...and, for a traced ROI, blank everything outside the outline so the
+        # background the box still contains can't wake the tracker. Detection
+        # itself stays full-frame (a bee is tracked past the ROI, as before).
+        roi_frame = self._mask_roi(roi_frame)
+
         detections = []
         lookback_results = []  # Results from lookback frames
         
@@ -1274,8 +1313,12 @@ class BeeTracking:
         """
         vis_frame = frame.copy()
         
-        # Draw ROI
-        if self.roi:
+        # Draw ROI — the traced outline when there is one, so the annotated video
+        # shows the region that was actually watched.
+        if self.roi_polygon:
+            cv2.polylines(vis_frame, [np.array(self.roi_polygon, dtype=np.int32)],
+                          True, (0, 255, 0), 2)
+        elif self.roi:
             x1, y1, x2, y2 = self.roi
             cv2.rectangle(vis_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
         

@@ -828,16 +828,21 @@ class VideoSynthesizer:
         size = (self.res_width, self.res_height)
         return cv2.VideoWriter(output_path, fourcc, fps, size)
     
-    def _draw_nest_holes(self, frame: np.ndarray, nests: Dict[str, Tuple]) -> np.ndarray:
-        """Draw nest hole bounding boxes and IDs on frame.
+    def _draw_nest_holes(self, frame: np.ndarray, nests: Dict[str, Tuple],
+                         polygons: Optional[Dict] = None) -> np.ndarray:
+        """Draw nest hole outlines and IDs on frame.
         
         Args:
             frame: Input frame
             nests: Dictionary mapping nest IDs to (x1, y1, x2, y2) coordinates
+            polygons: Optional {nest_id: [(x, y), ...]} traced outlines. A tube
+                drawn as a polygon is outlined as drawn — matching what entry/exit
+                was actually tested against — instead of as its bounding box.
             
         Returns:
             Frame with nest annotations
         """
+        polygons = polygons or {}
         for nest_id, coords in nests.items():
             # Extract ID number. Coerce to str: device-drawn nest tubes use INTEGER
             # ids (nest_layout = [{"id": int, ...}]), and `'_' in <int>` raised
@@ -852,8 +857,15 @@ class VideoSynthesizer:
             x2 = int(x2 + self.nest_padding_x)
             y2 = int(y2 + self.nest_padding_y)
             
-            # Draw rectangle
-            cv2.rectangle(frame, (x1, y1), (x2, y2), self.COLOR_NEST, self.thickness)
+            # Draw the traced outline when there is one, else the padded box.
+            outline = polygons.get(nest_id)
+            if outline is None:
+                outline = polygons.get(str(nest_id))
+            if outline is not None and len(outline) >= 3:
+                cv2.polylines(frame, [np.array(outline, dtype=np.int32)], True,
+                              self.COLOR_NEST, self.thickness)
+            else:
+                cv2.rectangle(frame, (x1, y1), (x2, y2), self.COLOR_NEST, self.thickness)
             
             # Draw ID text
             cv2.putText(
@@ -866,16 +878,23 @@ class VideoSynthesizer:
         
         return frame
     
-    def _draw_hotel_boundary(self, frame: np.ndarray, hotel_roi: Tuple) -> np.ndarray:
+    def _draw_hotel_boundary(self, frame: np.ndarray, hotel_roi: Tuple,
+                             polygon: Optional[List] = None) -> np.ndarray:
         """Draw hotel region of interest boundary.
         
         Args:
             frame: Input frame
             hotel_roi: Hotel bounding box (x1, y1, x2, y2)
+            polygon: Optional traced outline [(x, y), ...] — the region tracking
+                was actually masked to; the box is only its bounding box.
             
         Returns:
             Frame with hotel boundary
         """
+        if polygon is not None and len(polygon) >= 3:
+            cv2.polylines(frame, [np.array(polygon, dtype=np.int32)], True,
+                          self.COLOR_HOTEL, self.thickness)
+            return frame
         x1, y1, x2, y2 = [int(coord) for coord in hotel_roi]
         cv2.rectangle(frame, (x1, y1), (x2, y2), self.COLOR_HOTEL, self.thickness)
         return frame
@@ -1174,7 +1193,9 @@ class VideoSynthesizer:
 
                         # Draw nest holes
                         nests = nest_data.get('nests', {}) if isinstance(nest_data, dict) else {}
-                        frame = self._draw_nest_holes(frame, nests)
+                        nest_polys = (nest_data.get('nest_polygons')
+                                      if isinstance(nest_data, dict) else None)
+                        frame = self._draw_nest_holes(frame, nests, nest_polys)
 
                         # Draw trajectory paths if requested (for annotation mode)
                         if show_trajectories and self.annotation_mode:
@@ -1185,7 +1206,8 @@ class VideoSynthesizer:
 
                         # Draw hotel boundary
                         if isinstance(nest_data, dict) and 'hotel' in nest_data:
-                            frame = self._draw_hotel_boundary(frame, nest_data['hotel'])
+                            frame = self._draw_hotel_boundary(
+                                frame, nest_data['hotel'], nest_data.get('hotel_polygon'))
 
                         # Draw event if present (hold a few frames for visibility)
                         if frame_num in event_dict:
@@ -1249,11 +1271,13 @@ class VideoSynthesizer:
         frame = cv2.resize(frame, (self.res_width, self.res_height))
         
         # Draw nests
-        frame = self._draw_nest_holes(frame, nest_data['nests'])
+        frame = self._draw_nest_holes(frame, nest_data['nests'],
+                                      nest_data.get('nest_polygons'))
         
         # Draw hotel boundary
         if 'hotel' in nest_data:
-            frame = self._draw_hotel_boundary(frame, nest_data['hotel'])
+            frame = self._draw_hotel_boundary(frame, nest_data['hotel'],
+                                              nest_data.get('hotel_polygon'))
         
         # Save
         cv2.imwrite(output_path, frame)

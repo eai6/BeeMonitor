@@ -172,8 +172,17 @@ class Device(models.Model):
 
     # ROI editor (normalized 0..1 coords, resolution-independent):
     #   roi_override = [x1, y1, x2, y2]  — the hotel/motion region, or None (auto)
-    #   nest_layout  = [{"id": int, "box": [x1, y1, x2, y2]}, ...] — manual holes
+    #   roi_polygon  = [[x, y], ...]     — the same region drawn as a polygon, or
+    #                                      None when it is a plain rectangle
+    #   nest_layout  = [{"id": int, "box": [x1, y1, x2, y2],
+    #                    "points": [[x, y], ...] | absent}, ...] — manual holes
+    #
+    # Every shape carries a box: a polygon's ``box`` is its bounding box, so any
+    # consumer that only understands rectangles keeps working unchanged. Consumers
+    # that DO understand polygons (motion gate, analyzer, visitation ops) use the
+    # points to exclude the background the bounding box would have swept in.
     roi_override = models.JSONField(null=True, blank=True)
+    roi_polygon = models.JSONField(null=True, blank=True)
     nest_layout = models.JSONField(default=list, blank=True)
 
     # Daily cap on mover-crop uploads over cellular (BioCLIP feed). Pushed in the
@@ -403,6 +412,8 @@ class Device(models.Model):
             "cellular_crop_daily_cap": crop,
             "motion_tuning": self.motion_tuning_dict() or "auto-calibration (no manual overrides)",
             "hotel_roi": self.roi_override or "auto (no manual ROI set)",
+            "hotel_roi_shape": ("polygon (%d points)" % len(self.roi_polygon)
+                                if self.roi_polygon else "rectangle"),
             "nest_tubes": {"count": len(nests), "layout": nests},
             "wake_schedule": {
                 "spec": self.wake_schedule_dict(),

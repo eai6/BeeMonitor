@@ -215,7 +215,12 @@ class DeviceHeartbeatView(APIView):
                 # Manual motion-tuning overrides (empty = use auto-calibration).
                 "motion_tuning": device.motion_tuning_dict(),
                 # ROI editor outputs (normalized): hotel ROI + nest layout.
+                # roi_polygon is the traced outline of that same ROI when the
+                # user drew one — the device crops to roi_override and masks
+                # everything outside the polygon, so background inside the
+                # bounding box can't trigger a recording. None = plain rectangle.
                 "roi_override": device.roi_override or None,
+                "roi_polygon": device.roi_polygon or None,
                 "nest_layout": device.nest_layout or [],
                 # Daily mover-crop upload cap (None = device default; 0 = stop
                 # crop upload over cellular). The device honours it over its env.

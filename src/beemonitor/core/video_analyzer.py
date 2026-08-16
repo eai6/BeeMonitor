@@ -122,8 +122,12 @@ class BeeMonitor:
             return None
         
         logger.info("Step 2/3: Detecting motion and tracking bees...")
+        # A manual layout may carry the ROI's traced outline ('hotel_polygon',
+        # pixel coords). The crop is still its bounding box; the outline masks the
+        # background inside that box so it never produces detections.
         flat_tracking_df, grouped_tracking_df = self.get_motion_tracking(
-            video_path, nests['hotel'], output_folder, visualize=visualize, detection_mode=detection_mode
+            video_path, nests['hotel'], output_folder, visualize=visualize,
+            detection_mode=detection_mode, hotel_polygon=nests.get('hotel_polygon'),
         )
         
         if flat_tracking_df is None or flat_tracking_df.empty:
@@ -156,7 +160,8 @@ class BeeMonitor:
         nests = detector.get_nests_and_hotel_detections(video_path=video_path)
         return nests
     
-    def get_motion_tracking(self, video_path, hotel_roi, output_folder, visualize=False, detection_mode='yolo'):
+    def get_motion_tracking(self, video_path, hotel_roi, output_folder, visualize=False,
+                            detection_mode='yolo', hotel_polygon=None):
         """Detect motion and track bees using YOLO-only mode (v2.2.1 CONFIG-BASED)."""
         from beemonitor.tracking.bee_tracking import BeeTracking
         from beemonitor.tracking.mot.bee_tracker import BeeTracker
@@ -257,6 +262,7 @@ class BeeMonitor:
             yolo_model_path=self.config.models.tracking,
             confidence_threshold=self.config.tracking.confidence_threshold,
             roi=hotel_roi,
+            roi_polygon=hotel_polygon,
             max_age_seconds=tracker_params['max_age_seconds'],
             min_hits_seconds=tracker_params['min_hits_seconds'],
             max_resurrection_seconds=tracker_params['max_resurrection_seconds'],

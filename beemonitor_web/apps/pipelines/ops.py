@@ -132,37 +132,86 @@ def normalized_tracks(df, summary=None):
     return tidy
 
 
-def roi_boxes(roi_output):
-    """Normalise a roi-step output into a list of 0..1 boxes [(x1,y1,x2,y2), ...]."""
+def _points(raw):
+    """A polygon outline as [(x, y), ...] in 0..1, or None if it isn't one."""
+    if not isinstance(raw, (list, tuple)) or len(raw) < 3:
+        return None
+    out = []
+    for p in raw:
+        try:
+            x, y = (float(v) for v in p)
+        except (TypeError, ValueError):
+            return None
+        out.append((x, y))
+    return out
+
+
+def roi_shapes(roi_output):
+    """Normalise a roi-step output into a list of 0..1 shapes.
+
+    Each shape is ``(box, points)``: the box is always present, and ``points`` is
+    the traced outline when the user drew a polygon rather than a rectangle (then
+    the box is merely its bounding box). Containment tests use the points, so a
+    bee over the grass beside a round trap is not counted as a visit.
+    """
     if not roi_output:
         return []
-    boxes = []
+    shapes = []
 
-    def _add(box):
+    def _add(box, points=None):
         try:
             x1, y1, x2, y2 = [float(v) for v in box]
-            boxes.append((min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)))
         except (TypeError, ValueError):
-            pass
+            return
+        shapes.append(((min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)),
+                       _points(points)))
+
+    def _add_shape(obj):
+        """One {box, points?} dict, or a bare box."""
+        if isinstance(obj, dict):
+            if obj.get("box"):
+                _add(obj["box"], obj.get("points"))
+        elif isinstance(obj, (list, tuple)):
+            _add(obj)
 
     hotel = roi_output.get("hotel_roi")
     if hotel:
-        _add(hotel)
-    layout = roi_output.get("nest_layout") or []
-    for tube in layout:
-        if isinstance(tube, dict) and tube.get("box"):
-            _add(tube["box"])
+        _add(hotel, roi_output.get("hotel_polygon"))
+    for tube in roi_output.get("nest_layout") or []:
+        _add_shape(tube)
     for region in roi_output.get("regions") or []:
-        if isinstance(region, dict) and region.get("box"):
-            _add(region["box"])
-        elif isinstance(region, (list, tuple)):
-            _add(region)
-    return boxes
+        _add_shape(region)
+    return shapes
 
 
-def in_any_box(x, y, boxes):
-    for (x1, y1, x2, y2) in boxes:
-        if x1 <= x <= x2 and y1 <= y <= y2:
+def roi_boxes(roi_output):
+    """Just the bounding boxes of ``roi_shapes`` — for callers that can't do
+    polygons (e.g. anything handing geometry to a box-only API)."""
+    return [box for box, _points in roi_shapes(roi_output)]
+
+
+def _in_polygon(x, y, points):
+    """Ray casting: is (x, y) inside the polygon? Handles concave outlines."""
+    inside = False
+    n = len(points)
+    for i in range(n):
+        xi, yi = points[i]
+        xj, yj = points[i - 1]
+        if (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / (yj - yi) + xi:
+            inside = not inside
+    return inside
+
+
+def in_any_box(x, y, shapes):
+    """Is (x, y) inside any shape? Accepts ``roi_shapes`` output or bare boxes."""
+    for shape in shapes:
+        if len(shape) == 2 and not isinstance(shape[0], (int, float)):
+            (x1, y1, x2, y2), points = shape
+        else:
+            (x1, y1, x2, y2), points = shape, None
+        if not (x1 <= x <= x2 and y1 <= y <= y2):
+            continue          # outside the bounding box — cheap reject
+        if points is None or _in_polygon(x, y, points):
             return True
     return False
 

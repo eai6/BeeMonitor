@@ -640,7 +640,7 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         ctx["latest_image_url"] = _presign_image(image_hb.image_storage_key) if image_hb else None
         # The saved hotel ROI + nest layout, drawn (read-only) over the camera image
         # client-side — the device now sends a CLEAN frame, so the dashboard overlays.
-        ctx["roi_json"] = json.dumps(device.roi_override)
+        ctx["roi_json"] = json.dumps(_roi_shape(device))
         ctx["nests_json"] = json.dumps(device.nest_layout or [])
         sp = metrics.get("storage_pct")
         if sp is None and latest is not None:
@@ -1592,6 +1592,20 @@ def _clamp01(v):
     return max(0.0, min(1.0, float(v)))
 
 
+def _roi_shape(device):
+    """The saved hotel ROI as the ``{box, points}`` shape the overlays draw.
+
+    ``points`` is present only for a polygon ROI; the box is always there, so a
+    reader that ignores points still draws the enclosing rectangle.
+    """
+    if not device.roi_override:
+        return None
+    shape = {"box": device.roi_override}
+    if device.roi_polygon:
+        shape["points"] = device.roi_polygon
+    return shape
+
+
 def _norm_box(b):
     """Validate a normalized [x1,y1,x2,y2]; return it ordered+clamped or None."""
     try:
@@ -1603,6 +1617,55 @@ def _norm_box(b):
     if hi_x - lo_x < 0.01 or hi_y - lo_y < 0.01:  # too small to be real
         return None
     return [round(lo_x, 5), round(lo_y, 5), round(hi_x, 5), round(hi_y, 5)]
+
+
+# A polygon is capped so one pathological shape can't bloat the heartbeat the
+# device polls (roi_polygon rides in every beat).
+MAX_POLYGON_POINTS = 80
+
+
+def _norm_points(points):
+    """Validate a normalized polygon [[x,y], ...]; return it clamped, or None.
+
+    Needs at least 3 points to enclose anything. Points are kept in the drawn
+    order — the shape may be concave, which is the whole point of polygon ROIs.
+    """
+    if not isinstance(points, (list, tuple)):
+        return None
+    out = []
+    for p in points[:MAX_POLYGON_POINTS]:
+        try:
+            x, y = (_clamp01(v) for v in p)
+        except (TypeError, ValueError):
+            return None
+        out.append([round(x, 5), round(y, 5)])
+    if len(out) < 3:
+        return None
+    return out
+
+
+def _norm_shape(raw):
+    """Normalize one drawn shape into ``(box, points)``.
+
+    Accepts a bare ``[x1,y1,x2,y2]`` (legacy rectangle payloads and old saved
+    layouts) or ``{"box": [...], "points": [[x,y], ...]}``. The box is always
+    returned — for a polygon it is recomputed from the points, so the two can
+    never drift — and ``points`` is None for a plain rectangle. Returns
+    ``(None, None)`` when the shape is unusable.
+    """
+    if not raw:
+        return None, None
+    if isinstance(raw, dict):
+        points = _norm_points(raw.get("points"))
+        if points is None:
+            return _norm_box(raw.get("box")), None
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        box = _norm_box([min(xs), min(ys), max(xs), max(ys)])
+        if box is None:  # degenerate polygon (a line, or a speck)
+            return None, None
+        return box, points
+    return _norm_box(raw), None
 
 
 # Curated list for the display-tz dropdown (IANA names). "" = auto (device tz).
@@ -1785,7 +1848,7 @@ class DeviceRoiEditorView(LoginRequiredMixin, View):
         ctx = {
             "device": device,
             "image_url": _presign_image(img_hb.image_storage_key) if img_hb else None,
-            "roi_json": json.dumps(device.roi_override),
+            "roi_json": json.dumps(_roi_shape(device)),
             "nests_json": json.dumps(device.nest_layout or []),
         }
         from django.shortcuts import render
@@ -1798,24 +1861,28 @@ class DeviceRoiEditorView(LoginRequiredMixin, View):
         except ValueError:
             return JsonResponse({"error": "Invalid JSON."}, status=400)
 
-        roi = body.get("roi")
-        roi_override = _norm_box(roi) if roi else None
+        roi_override, roi_polygon = _norm_shape(body.get("roi"))
 
         nests = []
         for n in (body.get("nests") or [])[:200]:
-            box = _norm_box(n.get("box"))
+            box, points = _norm_shape(n if isinstance(n, dict) else None)
             if box is None:
                 continue
             try:
                 nid = int(n.get("id"))
             except (TypeError, ValueError):
                 nid = len(nests) + 1
-            nests.append({"id": nid, "box": box})
+            nest = {"id": nid, "box": box}
+            if points:
+                nest["points"] = points
+            nests.append(nest)
 
         device.roi_override = roi_override
+        device.roi_polygon = roi_polygon
         device.nest_layout = nests
-        device.save(update_fields=["roi_override", "nest_layout"])
-        return JsonResponse({"ok": True, "roi": roi_override, "nests": nests})
+        device.save(update_fields=["roi_override", "roi_polygon", "nest_layout"])
+        return JsonResponse({"ok": True, "roi": roi_override,
+                             "roi_polygon": roi_polygon, "nests": nests})
 
 
 class DeviceLatestImageView(LoginRequiredMixin, View):

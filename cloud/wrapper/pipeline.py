@@ -91,6 +91,7 @@ class CloudPipeline:
         custom_nest_model_path: str = "",
         custom_bee_model_path: str = "",
         hotel_roi=None,
+        hotel_polygon=None,
         nest_layout=None,
         run_tracking: bool = True,
         detector_kind: str = "yolo",
@@ -161,7 +162,8 @@ class CloudPipeline:
         # post-processing — they only need the layout.
         if not run_tracking:
             return self._nest_only(job_id, user_id, video_local, model_paths,
-                                   custom_nest_local, hotel_roi, nest_layout)
+                                   custom_nest_local, hotel_roi, nest_layout,
+                                   hotel_polygon)
 
         # Step 3 — Build config and run analysis
         logger.info("[%s] Running BeeMonitor analysis", job_id)
@@ -177,6 +179,7 @@ class CloudPipeline:
             custom_nest_local=custom_nest_local,
             custom_bee_local=custom_bee_local,
             hotel_roi=hotel_roi,
+            hotel_polygon=hotel_polygon,
             nest_layout=nest_layout,
             recorded_at=recorded_at,
             start_frame=start_frame,
@@ -343,11 +346,13 @@ class CloudPipeline:
     # ------------------------------------------------------------------
 
     def _nest_only(self, job_id, user_id, video_local, model_paths,
-                   custom_nest_local="", hotel_roi=None, nest_layout=None):
+                   custom_nest_local="", hotel_roi=None, nest_layout=None,
+                   hotel_polygon=None):
         """Fast path for run_tracking=False: the device layout if present,
         else NestDetector on the video's early frames. No motion detection,
         tracking model, events, or post-processing."""
-        nests = self._build_manual_nests(video_local, hotel_roi, nest_layout)
+        nests = self._build_manual_nests(video_local, hotel_roi, nest_layout,
+                                         hotel_polygon)
         if nests is None:
             from ultralytics import YOLO
             from beemonitor.core.config import Config
@@ -402,15 +407,29 @@ class CloudPipeline:
         if not ok or frame is None:
             return ""
 
+        import numpy as np
+
+        def outline(points, color, thickness):
+            """Draw a traced outline; returns True when there was one to draw."""
+            if not points or len(points) < 3:
+                return False
+            cv2.polylines(frame, [np.array(points, dtype=np.int32)], True, color, thickness)
+            return True
+
         hotel = (nests or {}).get("hotel")
         if hotel:
             x1, y1, x2, y2 = [int(v) for v in hotel]
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 160, 255), 3)
+            # The preview shows what was actually used: the traced outline when
+            # the ROI is a polygon, its bounding box otherwise.
+            if not outline((nests or {}).get("hotel_polygon"), (0, 160, 255), 3):
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 160, 255), 3)
             cv2.putText(frame, "hotel", (x1, max(24, y1 - 8)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 160, 255), 2)
+        nest_polygons = (nests or {}).get("nest_polygons") or {}
         for nest_id, bbox in ((nests or {}).get("nests") or {}).items():
             x1, y1, x2, y2 = [int(v) for v in bbox]
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 220, 0), 2)
+            if not outline(nest_polygons.get(nest_id), (0, 220, 0), 2):
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 220, 0), 2)
             cv2.putText(frame, str(nest_id), (x1, max(16, y1 - 5)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 220, 0), 2)
 
@@ -433,6 +452,7 @@ class CloudPipeline:
         custom_nest_local: str = "",
         custom_bee_local: str = "",
         hotel_roi=None,
+        hotel_polygon=None,
         nest_layout=None,
         recorded_at: str = "",
         start_frame: int = 0,
@@ -487,7 +507,8 @@ class CloudPipeline:
         # Device-supplied hotel ROI + nest tubes (normalized 0..1) → pixel-space
         # manual_nests so the run uses the human-set layout (model is the backup).
         # Requires BOTH the ROI and the tubes; otherwise fall back to detection.
-        manual_nests = self._build_manual_nests(video_local, hotel_roi, nest_layout)
+        manual_nests = self._build_manual_nests(video_local, hotel_roi, nest_layout,
+                                                hotel_polygon)
 
         from beemonitor import BeeMonitor
 
@@ -502,10 +523,18 @@ class CloudPipeline:
         return result
 
     @staticmethod
-    def _build_manual_nests(video_local: str, hotel_roi, nest_layout):
+    def _build_manual_nests(video_local: str, hotel_roi, nest_layout, hotel_polygon=None):
         """Turn a device's normalized hotel ROI + nest layout into the pixel-space
         ``{'hotel': (x1,y1,x2,y2), 'nests': {id: (x1,y1,x2,y2)}}`` the analyzer
-        consumes. Returns None (→ model detection) unless BOTH are present + valid."""
+        consumes. Returns None (→ model detection) unless BOTH are present + valid.
+
+        Shapes the user traced as polygons also carry their outline, in the same
+        pixel space: ``hotel_polygon`` (a list of points) and ``nest_polygons``
+        ({id: points}). The analyzer masks tracking to the hotel outline and tests
+        nest entry/exit against a nest's outline, so the background a bounding box
+        unavoidably includes is excluded. Rectangles carry no outline and behave
+        exactly as before.
+        """
         if not hotel_roi or not nest_layout:
             return None
         try:
@@ -520,15 +549,38 @@ class CloudPipeline:
             def to_px(box):
                 return (int(box[0] * w), int(box[1] * h), int(box[2] * w), int(box[3] * h))
 
-            nests = {}
+            def poly_px(points):
+                """Normalized [[x,y], ...] -> pixel [(x,y), ...], or None."""
+                if not isinstance(points, (list, tuple)) or len(points) < 3:
+                    return None
+                try:
+                    return [(int(float(p[0]) * w), int(float(p[1]) * h)) for p in points]
+                except (TypeError, ValueError, IndexError):
+                    return None
+
+            nests, nest_polygons = {}, {}
             for item in nest_layout:
                 box = item.get("box")
                 if box and len(box) == 4:
-                    nests[item.get("id")] = to_px(box)
+                    nest_id = item.get("id")
+                    nests[nest_id] = to_px(box)
+                    pts = poly_px(item.get("points"))
+                    if pts:
+                        nest_polygons[nest_id] = pts
             if not nests:
                 return None
-            logger.info("Using device hotel ROI + %d nest tubes (manual layout)", len(nests))
-            return {"hotel": to_px(hotel_roi), "nests": nests}
+            manual = {"hotel": to_px(hotel_roi), "nests": nests}
+            hotel_pts = poly_px(hotel_polygon)
+            if hotel_pts:
+                manual["hotel_polygon"] = hotel_pts
+            if nest_polygons:
+                manual["nest_polygons"] = nest_polygons
+            logger.info("Using device hotel ROI + %d nest tubes (manual layout%s)",
+                        len(nests),
+                        "; polygons: %s hotel, %d nest" % (
+                            "1" if hotel_pts else "0", len(nest_polygons))
+                        if (hotel_pts or nest_polygons) else "")
+            return manual
         except Exception as e:  # never let layout parsing break the run — fall back
             logger.warning("manual_nests build failed (%s) — falling back to detection", e)
             return None
