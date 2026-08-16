@@ -131,6 +131,10 @@ CALIBRATION_FILE = RECORD_DIR.parent / "calibration.json"
 # Dashboard ROI editor outputs (normalized): hotel ROI override + nest layout.
 ROI_OVERRIDE_FILE = RECORD_DIR.parent / "roi_override.json"
 NEST_LAYOUT_FILE = RECORD_DIR.parent / "nest_layout.json"
+# The hotel ROI's traced outline ([[x, y], ...] normalized), when the user drew a
+# polygon instead of a rectangle. roi_override stays its bounding box; the
+# recorder masks motion outside this shape. Absent = rectangular ROI.
+ROI_POLYGON_FILE = RECORD_DIR.parent / "roi_polygon.json"
 # Dashboard-pushed bee-confirmation mode (off|tag|gate); the recorder hot-reloads
 # it over its env default. Lets a no-shell unit be switched between observe (tag)
 # and filter (gate) remotely.
@@ -2021,6 +2025,7 @@ def main() -> int:
                 _apply_device_tz(resp.get("device_tz"))
                 # ...and the ROI-editor outputs (hotel ROI + nest layout).
                 _apply_override_file(ROI_OVERRIDE_FILE, resp.get("roi_override"))
+                _apply_override_file(ROI_POLYGON_FILE, resp.get("roi_polygon"))
                 _apply_override_file(NEST_LAYOUT_FILE, resp.get("nest_layout"))
                 # ...and the desired WittyPi power schedule (validated + clamped
                 # locally; only written to the WittyPi when apply is enabled,

@@ -556,6 +556,16 @@ the "motion fired on N frames" line.
 >    detection to the hotel. If detection fails (no bees/model/ultralytics, empty
 >    result), it **falls back to the whole frame** and keeps recording.
 > 2. **Motion gate (live).** MOG2 runs inside that ROI to gate snippet recording.
+>    A **dashboard ROI wins over detection** (`roi_override.json`, pushed in the
+>    heartbeat). When it was drawn as a **polygon** in the ROI editor, the outline
+>    arrives alongside it (`roi_polygon.json`) and the gate masks everything
+>    outside that shape: the crop is still the outline's bounding box, but grass,
+>    sky or a neighbouring trap inside that box can no longer trigger a recording.
+>    Both files hot-reload — an edit applies within a beat, no restart. Check a
+>    drawn shape against a recorded clip first with
+>    `python3 hardware/motion_replay.py clip.mp4 --roi-polygon roi_polygon.json`,
+>    and verify masking on the unit itself with
+>    `python3 hardware/test_gate_polygon.py`.
 > 3. **Calibration (scheduled, offline).** `bee_tracking.pt` — BeeMonitor's own
 >    bee/wasp detector — measures real bee blob sizes in saved snippets to tune
 >    the MOG2 area window. Every detection is a bee, so no COCO class filter.

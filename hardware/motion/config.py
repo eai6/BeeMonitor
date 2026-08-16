@@ -225,6 +225,11 @@ TUNING_FILE = CALIB_FILE.parent / "motion_tuning.json"
 # nest layout ([{id, box:[x1,y1,x2,y2] normalized}, ...]). telemetry writes them.
 ROI_OVERRIDE_FILE = CALIB_FILE.parent / "roi_override.json"
 NEST_LAYOUT_FILE = CALIB_FILE.parent / "nest_layout.json"
+# The hotel ROI traced as a polygon ([[x, y], ...] normalized), when the user drew
+# one instead of a rectangle. roi_override stays its bounding box (the crop); this
+# masks the background the crop still contains, so grass swaying beside a round
+# subject never reaches the blob detector. Absent = rectangular ROI.
+ROI_POLYGON_FILE = CALIB_FILE.parent / "roi_polygon.json"
 # Dashboard-pushed bee-confirmation mode (off|tag|gate). telemetry.py writes it
 # from the heartbeat; the recorder hot-reloads it over the env default, so a
 # no-shell unit can be switched between observe (tag) and filter (gate) remotely.

@@ -24,6 +24,7 @@ from motion.config import (
 )
 from motion.gate import MotionGate
 from motion.roi import _parse_roi
+from motion.overrides import load_roi_override_lores, load_roi_polygon_lores
 
 
 def _lores_from_bgr(frame_bgr):
@@ -89,7 +90,17 @@ def calibrate(video_paths, model_path: str, force: bool = False) -> int:
         log.error("calibration needs ultralytics (pip install ultralytics)")
         return 2
 
-    roi = _parse_roi()
+    # Gate the calibration clips through the SAME region the recorder gates on,
+    # dashboard ROI first (that is what live blobs are measured in). With a polygon
+    # ROI this matters: a blob learned unmasked would be larger than the one the
+    # live gate ever sees, and the learned area window would sit too high.
+    roi = load_roi_override_lores()
+    roi_polygon = load_roi_polygon_lores() if roi is not None else None
+    if roi is None:
+        roi = _parse_roi()
+    if roi_polygon:
+        log.info("calibration: masking to the dashboard ROI polygon (%d corners)",
+                 len(roi_polygon))
     log.info("calibration: loading YOLO %s (slow on a Pi 4)...", model_path)
     model = YOLO(model_path)
 
@@ -102,7 +113,8 @@ def calibrate(video_paths, model_path: str, force: bool = False) -> int:
             break
         clips_used += 1
         # Fresh background per clip; warm on its first second of frames.
-        gate = MotionGate(roi=roi, min_area=4.0, max_area=1e9, min_blobs=1)
+        gate = MotionGate(roi=roi, polygon=roi_polygon,
+                          min_area=4.0, max_area=1e9, min_blobs=1)
         log.info("calibrating from %s (%d/%d samples so far)",
                  vp.name, len(bee_areas), CALIB_TARGET_SAMPLES)
 

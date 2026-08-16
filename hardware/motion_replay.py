@@ -18,7 +18,9 @@ clip's first frame, scales that hotel box into lores coords, and confines the
 motion gate to it — so a replay uses the *exact same ROI* the field unit would.
 `--roi` overrides with a manual lores box (== BEEMONITOR_ROI); `--full-frame`
 skips detection. If detection is unavailable/fails it falls back to the whole
-frame, same as production.
+frame, same as production. `--roi-polygon roi_polygon.json` additionally masks
+everything outside a traced outline — the same file the dashboard pushes to the
+unit — so a drawn ROI can be checked against a real clip before trusting it.
 
 Detection runs on each frame downscaled to the recorder's lores size (so the
 blob-area thresholds stay valid). Snippets are re-encoded (frame-accurate) from
@@ -26,6 +28,7 @@ the original-resolution file. This validates motion gating + segmentation, not
 the hardware encoder path.
 """
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -99,10 +102,30 @@ def _resolve_roi(video: Path, manual: str | None, full_frame: bool):
     return roi_lores
 
 
+def _load_roi_polygon(path: Path | None):
+    """Lores points from a roi_polygon.json (the file the dashboard pushes).
+
+    Lets a drawn polygon be replayed against a recorded clip before it is trusted
+    in the field: same masking as the recorder, so the snippet list here is what
+    the unit would have recorded.
+    """
+    if path is None:
+        return None
+    try:
+        pts = json.loads(path.read_text())
+    except (OSError, ValueError) as e:
+        raise SystemExit(f"bad --roi-polygon {path}: {e}")
+    if not isinstance(pts, list) or len(pts) < 3:
+        raise SystemExit(f"--roi-polygon {path} needs >= 3 [x, y] points (normalized 0..1)")
+    out = [(int(float(x) * mm.LORES_W), int(float(y) * mm.LORES_H)) for x, y in pts]
+    print(f"  poly: {len(out)} corners from {path.name} (lores coords)")
+    return out
+
+
 def _segments_for(video: Path, roi, warmup_s: float, detect_every: int,
                   pre_roll: float, post_roll: float, max_seg: float,
                   min_area: float, max_area: float, min_blobs: int,
-                  var_threshold: float):
+                  var_threshold: float, polygon=None):
     """Replay the gate over `video`; return (fps, n_frames, segments, stats).
 
     `segments` is [(start_f, end_f, reason)]. `stats` quantifies sensitivity:
@@ -118,8 +141,8 @@ def _segments_for(video: Path, roi, warmup_s: float, detect_every: int,
     pre_frames = int(pre_roll * fps)
     max_frames = int(max_seg * fps)
 
-    gate = mm.MotionGate(roi=roi, var_threshold=var_threshold, min_area=min_area,
-                         max_area=max_area, min_blobs=min_blobs)
+    gate = mm.MotionGate(roi=roi, polygon=polygon, var_threshold=var_threshold,
+                         min_area=min_area, max_area=max_area, min_blobs=min_blobs)
     segments = []
     stats = {"evaluated": 0, "motion_frames": 0, "blob_counts": [], "areas": []}
     encoding = False
@@ -182,7 +205,7 @@ def _segments_for(video: Path, roi, warmup_s: float, detect_every: int,
     return fps, i + 1, segments, stats
 
 
-def _confirm_scan(video: Path, roi, detect_every: int) -> None:
+def _confirm_scan(video: Path, roi, detect_every: int, polygon=None) -> None:
     """Offline bee-confirmation scan — runs the SAME logic the field unit would
     (full-frame YOLO + mover-overlap gate), sampling ~1 frame/sec on motion, and
     reports whether this clip would be CONFIRMED. Validate accuracy + read real
@@ -200,7 +223,7 @@ def _confirm_scan(video: Path, roi, detect_every: int) -> None:
     fps = cap.get(cv2.CAP_PROP_FPS) or mm.FPS
     warmup_frames = int(1.0 * fps)
     sample_every = max(1, int(fps))       # ~1/sec, like FRAME_CAPTURE_INTERVAL
-    gate = mm.MotionGate(roi=roi)
+    gate = mm.MotionGate(roi=roi, polygon=polygon)
     i = -1
     runs = hits = 0
     best = 0.0
@@ -260,6 +283,10 @@ def main() -> int:
     ap.add_argument("--roi", default=None,
                     help="manual ROI 'x1,y1,x2,y2' in lores px (overrides hotel "
                          "detection; same as BEEMONITOR_ROI)")
+    ap.add_argument("--roi-polygon", type=Path, default=None,
+                    help="roi_polygon.json (normalized [[x,y], ...], as the "
+                         "dashboard ROI editor saves it): mask motion outside the "
+                         "traced outline, exactly like the field unit")
     ap.add_argument("--full-frame", action="store_true",
                     help="skip hotel detection and gate on the whole frame")
     # Sensitivity knobs — defaults are the production thresholds; override to sweep.
@@ -294,15 +321,16 @@ def main() -> int:
           f"max={args.max_seg}s")
 
     roi = _resolve_roi(args.video, args.roi, args.full_frame)
+    polygon = _load_roi_polygon(args.roi_polygon)
 
     if args.confirm:
-        _confirm_scan(args.video, roi, args.detect_every)
+        _confirm_scan(args.video, roi, args.detect_every, polygon=polygon)
         return 0
 
     fps, n_frames, segments, stats = _segments_for(
         args.video, roi, args.warmup, args.detect_every,
         args.pre_roll, args.post_roll, args.max_seg,
-        args.min_area, args.max_area, args.min_blobs, args.var)
+        args.min_area, args.max_area, args.min_blobs, args.var, polygon=polygon)
 
     dur = n_frames / fps
     print(f"\nsource: {n_frames} frames @ {fps:.2f}fps = {dur:.2f}s")

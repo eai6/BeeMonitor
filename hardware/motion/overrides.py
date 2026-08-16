@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 
 from motion.config import (
-    log, CALIB_FILE, TUNING_FILE, ROI_OVERRIDE_FILE, NEST_LAYOUT_FILE,
+    log, CALIB_FILE, TUNING_FILE, ROI_OVERRIDE_FILE, ROI_POLYGON_FILE, NEST_LAYOUT_FILE,
     BEE_CONFIRM_MODE_FILE, BEE_CONFIRM_MODE, ACTIVITY_FRAMES_FILE, ACTIVITY_FRAMES,
     ACTIVITY_CROPS_MODE, LORES_W, LORES_H,
     RECORD_SETTINGS_FILE, RECORD_MODE, RECORD_WINDOW, POST_ROLL, MAX_SEGMENT,
@@ -63,6 +63,28 @@ def load_roi_override_lores():
     if box[2] - box[0] < 4 or box[3] - box[1] < 4:
         return None
     return box
+
+
+def load_roi_polygon_lores():
+    """Dashboard hotel-ROI polygon (normalized) -> lores points, or None.
+
+    The dashboard saves a polygon as its bounding box (roi_override, which is the
+    crop) PLUS this outline. Returns a list of at least 3 (x, y) lores points, or
+    None when the ROI is a plain rectangle / the file is unusable — in which case
+    the crop alone is the ROI, exactly as before.
+    """
+    d = _load_json_file(ROI_POLYGON_FILE)
+    if not isinstance(d, list) or len(d) < 3:
+        return None
+    pts = []
+    for p in d:
+        try:
+            x, y = (float(v) for v in p)
+        except (TypeError, ValueError, IndexError):
+            return None
+        pts.append((int(min(1.0, max(0.0, x)) * LORES_W),
+                    int(min(1.0, max(0.0, y)) * LORES_H)))
+    return pts
 
 
 def load_nest_layout():
@@ -193,9 +215,13 @@ def _apply_tuning(gate, tuning) -> bool:
     return applied
 
 
-def _build_gate(roi):
-    """Construct the MotionGate, applying calibration.json + manual overrides."""
-    gate = MotionGate(roi=roi)
+def _build_gate(roi, polygon=None):
+    """Construct the MotionGate, applying calibration.json + manual overrides.
+
+    ``polygon`` (lores points) narrows the rectangular ``roi`` crop to the shape
+    the user actually traced; motion outside it is discarded.
+    """
+    gate = MotionGate(roi=roi, polygon=polygon)
     calib = load_calibration()
     if _apply_calibration(gate, calib):
         log.info("loaded calibration %s: area=[%.0f, %.0f] (from %s bee blobs)",
