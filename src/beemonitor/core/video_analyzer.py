@@ -24,50 +24,12 @@ from ultralytics import YOLO
 import os
 import cv2
 
+from beemonitor.core.analysis_results import AnalysisResults
 from beemonitor.core.config import Config
 import re
 
 logger = logging.getLogger(__name__)
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
-
-# AnalysisResults class remains unchanged - keeping from original file
-class AnalysisResults:
-    """Container for video analysis results."""
-    
-    def __init__(self, events, tracks, nests, video_path, motion_data=None, config=None):
-        self.events = events
-        self.tracks = tracks
-        self.nests = nests
-        self.video_path = video_path
-        self.motion_data = motion_data
-        self.config = config
-    
-    def to_csv(self, output_folder="output", columns=None):
-        Path(output_folder).mkdir(parents=True, exist_ok=True)
-        base_filename = Path(self.video_path).stem
-        events_filename = str(Path(output_folder) / f"{base_filename}_events.csv")
-        
-        if columns is None:
-            self.events.to_csv(events_filename, index=False)
-        else:
-            available_cols = [col for col in columns if col in self.events.columns]
-            self.events[available_cols].to_csv(events_filename, index=False)
-        
-        logger.info(f"Saved {len(self.events)} events to {events_filename}")
-        
-        tracking_filename = str(Path(output_folder) / f"{base_filename}_tracking_results.csv")
-        if self.tracks is not None and isinstance(self.tracks, pd.DataFrame) and not self.tracks.empty:
-            self.tracks.to_csv(tracking_filename, index=False)
-            logger.info(f"Saved {len(self.tracks)} tracking records to {tracking_filename}")
-    
-    def save_video(self, output_folder="output"):
-        from beemonitor.output.video_synthesizer import VideoSynthesizer
-        synthesizer = VideoSynthesizer(self.config)
-        output_path = synthesizer.synthesize(
-            self.video_path, self.events, self.motion_data, self.nests, output_folder
-        )
-        logger.info(f"Saved annotated video to {output_path}")
 
 
 class BeeMonitor:

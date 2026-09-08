@@ -133,5 +133,33 @@ class AnalysisResultsExportTests(unittest.TestCase):
             self.assertFalse((Path(out) / "clip_detections.csv").exists())
 
 
+class AnalysisResultsIdentityTests(unittest.TestCase):
+    """``video_analyzer`` must use the real container, not a copy of it.
+
+    The module used to carry its own older ``AnalysisResults`` whose __init__
+    predated ``detections``. That copy shadowed the canonical class for every
+    caller — including ``analyze_video`` itself, which passes ``detections=``
+    and so died with "unexpected keyword argument" on the GPU worker. The test
+    above imports the canonical class directly, so it could not see the shadow;
+    this one pins the name the analyzer actually resolves.
+    """
+
+    def test_analyzer_resolves_the_canonical_container(self):
+        from beemonitor.core import video_analyzer
+        from beemonitor.core.analysis_results import AnalysisResults
+
+        self.assertIs(video_analyzer.AnalysisResults, AnalysisResults)
+
+    def test_exported_container_accepts_detections(self):
+        import inspect
+
+        import beemonitor
+        from beemonitor.core import AnalysisResults as core_export
+
+        for cls in (beemonitor.AnalysisResults, core_export):
+            params = inspect.signature(cls.__init__).parameters
+            self.assertIn("detections", params)
+
+
 if __name__ == "__main__":
     unittest.main()
