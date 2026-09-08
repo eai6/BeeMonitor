@@ -91,11 +91,13 @@ class DeviceShareVideoAccessTests(TestCase):
         self.assertNotIn("shared-clip", self.client.get(url).content.decode())
 
     def test_processing_hub_hides_run_controls_from_viewer(self):
+        # The sticky run bar is the control gated on `can_manage_any` — its
+        # button reads "Run pipeline" since the workflow-bar rework.
         url = reverse("analysis:processing")
         self.client.force_login(self.manager)
-        self.assertIn("Run analysis", self.client.get(url).content.decode())
+        self.assertIn("Run pipeline", self.client.get(url).content.decode())
         self.client.force_login(self.viewer)
-        self.assertNotIn("Run analysis", self.client.get(url).content.decode())
+        self.assertNotIn("Run pipeline", self.client.get(url).content.decode())
 
     # ---- detail view ---------------------------------------------------
     def test_detail_access(self):

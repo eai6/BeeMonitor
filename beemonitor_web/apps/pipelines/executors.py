@@ -254,10 +254,15 @@ def _exec_input_video(step, run, context, inputs, index):
     video_id = (step.get("config") or {}).get("video_id")
     if not video_id:
         return {"error": "No video selected."}
+    # `manageable` — owned, or on a device shared with the runner as manager.
+    # MUST match the launch-side check (pipelines.views.run_on_videos and
+    # devices.scheduling._videos_for both select with `manageable`); an
+    # owner-only lookup here failed every run on a shared device's videos
+    # AFTER it had already passed validation.
     try:
-        video = Video.objects.get(pk=video_id, user=run.user)
-    except (Video.DoesNotExist, ValueError):
-        return {"error": "Selected video not found."}
+        video = Video.manageable(run.user).get(pk=video_id)
+    except (Video.DoesNotExist, ValueError, TypeError):
+        return {"error": f"Video {video_id} not found, or not yours to analyze."}
     return {
         "artifact": "video",
         "video_id": video.pk,
