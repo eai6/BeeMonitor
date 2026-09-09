@@ -684,7 +684,8 @@ if deploy_endpoint:
 if deploy_sam3:
     sam3_image = pulumi.Output.concat(ecr_repo.repository_url, ":", image_tag)
     sam3_tag_slug = "".join(c for c in image_tag if c.isalnum())[:12] or "latest"
-    sam3_tag_slug = f"{sam3_tag_slug}-u1"  # bump when this config SHAPE changes
+    # -u2: added client_config (one invocation per instance), 2026-09-09.
+    sam3_tag_slug = f"{sam3_tag_slug}-u2"  # bump when this config SHAPE changes
 
     sam3_model = aws.sagemaker.Model(
         "sam3-model",
@@ -724,6 +725,24 @@ if deploy_sam3:
             ),
         ],
         async_inference_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigArgs(
+            # ONE job per instance. This config previously set no client_config
+            # at all, so it took the platform default and packed several SAM 3
+            # jobs onto one g5 — with the app admitting 6 in flight and this
+            # endpoint capped at 2 instances, that meant 3 per box. On
+            # 2026-09-09 that put CPU at 360% of a 400% (4 vCPU) box and 9 of 12
+            # jobs came back "SageMaker could not get a response from the
+            # endpoint": the container could not answer within the window, so
+            # the platform gave up. GPU memory was only 72% and RAM 27% — CPU
+            # was the binding constraint.
+            #
+            # The main endpoint's 3 is justified for YOLO on a T4 ("barely uses
+            # it, mostly CPU/IO"); SAM 3 is a heavy transformer and that
+            # reasoning does not carry over. Throughput comes from
+            # sam3-max-capacity adding instances, each with its own GPU, rather
+            # than from time-slicing one.
+            client_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigClientConfigArgs(
+                max_concurrent_invocations_per_instance=1,
+            ),
             output_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigOutputConfigArgs(
                 s3_output_path=pulumi.Output.concat("s3://", output_bucket.bucket, "/"),
                 # Failure records for SAM 3 TRACKING jobs (the poller reads these
