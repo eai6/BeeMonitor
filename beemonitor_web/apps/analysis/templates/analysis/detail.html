@@ -62,9 +62,44 @@
       <div>
         <p class="text-gray-500">Compute Cost</p>
         <p class="font-medium">${{ job.compute_cost_usd }}</p>
+        <p class="text-xs text-gray-400">
+          {{ job.execution_seconds|floatformat:0 }}s on {{ job.get_gpu_tier_display }}
+          &middot; excl. cold start
+        </p>
       </div>
       {% endif %}
     </div>
+
+    {% if job.stage_seconds %}
+    {# Where the wall clock went. gpu_seconds well below execution_seconds means
+       the run was bound by decode or S3 transfer, not by the GPU. #}
+    <details class="mt-4">
+      <summary class="text-sm text-gray-500 cursor-pointer hover:text-gray-700">
+        Time breakdown
+        {% if job.gpu_seconds %}
+          &mdash; {{ job.gpu_seconds|floatformat:0 }}s on the GPU
+          of {{ job.execution_seconds|floatformat:0 }}s total
+        {% endif %}
+      </summary>
+      <table class="mt-2 text-sm w-full max-w-md">
+        <thead>
+          <tr class="text-gray-500 text-xs text-left">
+            <th class="py-1">Stage</th><th class="py-1 text-right">Seconds</th>
+            <th class="py-1 text-right">Calls</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for stage, t in job.stage_seconds.items %}
+          <tr class="border-t border-gray-100">
+            <td class="py-1">{{ stage }}</td>
+            <td class="py-1 text-right font-medium">{{ t.seconds|floatformat:1 }}</td>
+            <td class="py-1 text-right text-gray-500">{{ t.calls }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% endif %}
 
     {% if job.error_message %}
     <div class="mt-4 bg-red-50 text-red-700 rounded p-3 text-sm">

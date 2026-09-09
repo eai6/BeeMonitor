@@ -197,11 +197,18 @@ class AnalysisJobModelTests(TestCase):
         self.assertEqual(job.status, "processing")
         self.assertEqual(job.config["detection_mode"], "yolo")
 
-    def test_gpu_tiers_defined(self):
+    def test_gpu_tiers_are_display_labels_only(self):
+        """Prices left GPU_TIERS when they stopped being fiction.
+
+        They were Modal per-second rates applied to a tier the user picked
+        rather than the GPU that ran. Cost now lives in apps/analysis/pricing.py
+        and is keyed on the hardware the worker reports.
+        """
         from apps.analysis.models import GPU_TIERS
         self.assertIn("A10G", GPU_TIERS)
         self.assertIn("T4", GPU_TIERS)
-        self.assertIn("cost_per_sec", GPU_TIERS["A10G"])
+        for tier, meta in GPU_TIERS.items():
+            self.assertNotIn("cost_per_sec", meta, f"{tier} still carries a price")
 
 
 # ── Annotation Tests ─────────────────────────────────────────────────

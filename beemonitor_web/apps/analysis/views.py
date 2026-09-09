@@ -28,6 +28,7 @@ from .analytics import (
 )
 from .forms import JobCreateForm
 from .models import Job, JobResult, GPU_TIERS
+from .pricing import price_run
 
 logger = logging.getLogger(__name__)
 
@@ -1334,15 +1335,19 @@ def _apply_result_to_job(job, result: dict) -> None:
         },
     )
 
-    exec_secs = result.get("execution_seconds", 0) or 0
-    credits_used = int(exec_secs)
-    cost_rate = GPU_TIERS.get(job.gpu_tier, {}).get("cost_per_sec", 0.000306)
-    cost_usd = round(exec_secs * cost_rate, 4)
+    # Priced from what the run reports it ran on — see apps/analysis/pricing.py.
+    priced = price_run(result)
+    exec_secs = priced["execution_seconds"]
+    credits_used = priced["credits"]
+    cost_usd = priced["compute_cost_usd"]
 
     Job.objects.filter(pk=job.pk).update(
         status="completed", progress_pct=100,
         completed_at=timezone.now(),
         execution_seconds=exec_secs,
+        gpu_seconds=priced["gpu_seconds"],
+        stage_seconds=priced["stage_seconds"],
+        gpu_tier=priced["gpu_tier"],
         compute_cost_usd=cost_usd,
     )
 
@@ -1430,7 +1435,9 @@ class BatchJobView(LoginRequiredMixin, View):
         confidence = float(request.POST.get("confidence_threshold", 0.25))
         two_mode = request.POST.get("two_mode_tracking", "true") == "true"
         visualize = request.POST.get("visualize", "true") == "true"
-        gpu_tier = request.POST.get("gpu_tier", "A10G")
+        # gpu_tier is NOT read from the request any more: it never reached
+        # SageMaker, so the choice only mis-priced the job. It is stamped from
+        # the hardware the worker reports when the job completes.
         use_device_roi = request.POST.get("use_device_roi") in ("on", "true", "1")
 
         # Tracking runs the whole clip; the new Processing form marks itself
@@ -1536,7 +1543,6 @@ class BatchJobView(LoginRequiredMixin, View):
                 video=video,
                 config=video_configs[video.pk],
                 config_hash=compute_config_hash(video.pk, video_configs[video.pk]),
-                gpu_tier=gpu_tier,
                 status=Job.Status.PROCESSING,
                 started_at=tz.now(),
                 modal_job_id=modal_job_id,
@@ -1557,7 +1563,7 @@ class BatchJobView(LoginRequiredMixin, View):
         )
         thread.start()
 
-        msg = f"Submitted {len(jobs_data)} video(s) on {gpu_tier} GPU."
+        msg = f"Submitted {len(jobs_data)} video(s)."
         if skipped:
             msg += f" Skipped {skipped} already analyzed."
         est_total_credits = len(jobs_data) * est_credits_per_video
