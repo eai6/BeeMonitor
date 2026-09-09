@@ -106,6 +106,45 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
       {% for k, v in f.items %}{% if v and k not in "device,confirmed,from,to,hfrom,hto,q,analysis" %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
       <button type="submit" class="w-full bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded text-sm font-medium">Apply</button>
     </form>
+
+    {% comment %}
+    The run controls live in the rail, under the filters, but belong to the POST
+    form in <main> — form="run-form" binds them across the DOM, since HTML forms
+    cannot nest. Pinned (outside the scrolling filter list) so the pipeline and
+    the count stay visible however far down the grid you are.
+
+    "Apply" above is the FILTER submit; this is a separate action.
+    {% endcomment %}
+    {% if can_manage_any and videos %}
+    <div class="shrink-0 border-t border-gray-200 px-4 py-3 space-y-2 bg-white">
+      <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Pipeline to run</div>
+      <select name="pipeline" form="run-form" class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
+        {% if pipelines %}<optgroup label="Your pipelines">
+          {% for p in pipelines %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}>{{ p.title }}</option>{% endfor %}
+        </optgroup>{% endif %}
+        {% if pipeline_templates %}<optgroup label="Templates">
+          {% for p in pipeline_templates %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}>{{ p.title }}</option>{% endfor %}
+        </optgroup>{% endif %}
+      </select>
+      <p class="text-[11px] text-gray-500 leading-4">
+        <span id="cred-line">Select clips to run</span>
+        <span class="text-gray-400">
+          {% if estimate.sample %}
+            &middot; ~${{ estimate.cost|floatformat:3 }}/clip on {{ estimate.tier }}, from {{ estimate.sample }} past run{{ estimate.sample|pluralize }}
+          {% else %}
+            &middot; no runs yet to estimate from
+          {% endif %}
+        </span>
+      </p>
+      <div class="flex items-center gap-2">
+        <button type="submit" form="run-form" id="run-btn" disabled
+                class="flex-1 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white px-3 py-2 rounded text-sm font-medium">
+          Run pipeline (<span id="sel-count">0</span>)
+        </button>
+        <button type="button" id="clear-sel" class="text-xs text-gray-500 hover:text-gray-700 hidden px-1">Clear</button>
+      </div>
+    </div>
+    {% endif %}
   </aside>
 
   <!-- ── GRID ─────────────────────────────────────────────────────────── -->
@@ -142,17 +181,7 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
           {% endif %}
           <span class="text-xs text-gray-400">{% if video_count > 200 %}Showing 200 most recent — narrow with the filter{% endif %}</span>
         </div>
-        <div class="flex items-center gap-3">
-          <span class="text-xs text-gray-500 hidden sm:inline">Hover to preview · click to open</span>
-          <select name="pipeline" form="run-form" class="border border-gray-300 rounded px-2 py-1.5 text-sm max-w-[15rem]">
-            {% if pipelines %}<optgroup label="Your pipelines">
-              {% for p in pipelines %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}>{{ p.title }}</option>{% endfor %}
-            </optgroup>{% endif %}
-            {% if pipeline_templates %}<optgroup label="Templates">
-              {% for p in pipeline_templates %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}>{{ p.title }}</option>{% endfor %}
-            </optgroup>{% endif %}
-          </select>
-        </div>
+        <span class="text-xs text-gray-500 hidden sm:inline">Hover to preview · click to open</span>
       </div>
 
       <!-- cards -->
@@ -176,10 +205,15 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
                data-detail="{% url 'videos:detail' v.pk %}"
                data-title="{{ v.title|default:'(untitled)' }}">
             <div class="media relative bg-gray-800" style="aspect-ratio: 16/9;">
-              {% if v.thumbnail_key %}
+              {% comment %}
+              Always requested, never gated on thumbnail_key: the endpoint makes
+              the still on first ask for clips that predate the extractor, so the
+              grid fills in as you scroll. onerror hides the <img> for a clip
+              that genuinely has no frame, leaving the play glyph.
+              {% endcomment %}
               <img src="{% url 'videos:thumbnail' v.pk %}" alt="" loading="lazy" decoding="async"
-                   class="absolute inset-0 w-full h-full object-cover">
-              {% endif %}
+                   class="absolute inset-0 w-full h-full object-cover"
+                   onerror="this.remove()">
               <div class="absolute inset-0 flex items-center justify-center pointer-events-none play-glyph">
                 <svg class="w-7 h-7 drop-shadow" viewBox="0 0 24 24" fill="rgba(255,255,255,0.85)"><path d="M8 5v14l11-7z"/></svg>
               </div>
@@ -213,30 +247,6 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
         <div class="h-4"></div>
       </div>
 
-      <!-- run bar -->
-      {% if can_manage_any %}
-      <div class="shrink-0 px-5 py-3 bg-white border-t border-gray-200">
-        <div class="flex items-center justify-between gap-4">
-          <p class="text-xs text-gray-500">
-            <span id="cred-line">Select clips to run</span>
-            <span class="text-gray-400">
-              {% if estimate.sample %}
-                &middot; ~${{ estimate.cost|floatformat:3 }} per clip on {{ estimate.tier }}, from {{ estimate.sample }} past run{{ estimate.sample|pluralize }}
-              {% else %}
-                &middot; no runs yet to estimate from
-              {% endif %}
-            </span>
-          </p>
-          <div class="flex items-center gap-3">
-            <button type="button" id="clear-sel" class="text-xs text-gray-500 hover:text-gray-700 hidden">Clear</button>
-            <button type="submit" id="run-btn" disabled
-                    class="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white px-4 py-1.5 rounded text-sm font-medium whitespace-nowrap">
-              Run pipeline (<span id="sel-count">0</span>)
-            </button>
-          </div>
-        </div>
-      </div>
-      {% endif %}
     </form>
     {% else %}
     <div class="flex-1 flex items-center justify-center p-10">
@@ -254,13 +264,17 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
 <div id="viewer" class="fixed inset-0 z-50 bg-gray-900/70 hidden items-center justify-center p-6">
   <div class="bg-white rounded-xl shadow-2xl w-full max-w-5xl flex flex-col overflow-hidden" style="max-height: 90vh;">
     <div class="flex items-center justify-between gap-4 px-4 py-3 border-b border-gray-200">
+      {% comment %}
+      The clip id is a UUID, so it never leads a card — but it is what you quote
+      in a bug report, so the focused view keeps it reachable, last and muted.
+      Day/time never wrap: they are the clip's identity and must stay on one line
+      however narrow the header gets.
+      {% endcomment %}
       <div class="flex items-baseline gap-2.5 min-w-0">
-        <span id="v-day" class="text-base font-bold text-gray-900"></span>
-        <span id="v-time" class="text-base font-bold text-gray-900"></span>
-        <span id="v-hotel" class="text-xs text-gray-500 truncate"></span>
-        {# The clip id is a UUID, so it never leads a card — but it is what you
-           quote in a bug report, so the focused view keeps it reachable. #}
-        <span id="v-title" class="text-[11px] text-gray-300 truncate"></span>
+        <span id="v-day" class="text-base font-bold text-gray-900 whitespace-nowrap"></span>
+        <span id="v-time" class="text-base font-bold text-gray-900 whitespace-nowrap"></span>
+        <span id="v-hotel" class="text-xs text-gray-500 whitespace-nowrap"></span>
+        <span id="v-title" class="text-[11px] text-gray-300 truncate hidden sm:inline"></span>
       </div>
       <div class="flex items-center gap-2 shrink-0">
         <span id="v-pos" class="text-xs text-gray-500"></span>

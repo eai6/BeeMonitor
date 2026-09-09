@@ -22,10 +22,12 @@
       </div>
     </div>
 
-    {# The GPU picker that stood here was inert: the tier never reached
-       SageMaker, so every job ran on the endpoint's instance regardless, and
-       the only effect of choosing "A100" was a bill 2.85x the true rate. The
-       hardware a job ran on is now reported on its detail page instead. #}
+    {% comment %}
+    The GPU picker that stood here was inert: the tier never reached SageMaker,
+    so every job ran on the endpoint's instance regardless, and the only effect
+    of choosing "A100" was a bill 2.85x the true rate. The hardware a job ran on
+    is now reported on its detail page instead.
+    {% endcomment %}
     <div class="grid grid-cols-2 sm:grid-cols-3 gap-4">
       <!-- Confidence Threshold -->
       <div>

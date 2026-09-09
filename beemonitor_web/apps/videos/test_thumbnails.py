@@ -161,3 +161,73 @@ class ExtractionTests(TestCase):
 
         self.video.refresh_from_db()
         self.assertEqual(self.video.thumbnail_key, "")
+
+
+class OnDemandTests(TestCase):
+    """Clips uploaded before stills existed still get one, without a backfill."""
+
+    def setUp(self):
+        self.user = User.objects.create_user("bob", password="x")
+        self.video = Video.objects.create(
+            user=self.user, title="old clip", storage_key="bob/old.mp4",
+            file_size_bytes=1, status=Video.Status.READY,
+        )
+        self.client.force_login(self.user)
+
+    @staticmethod
+    def _s3():
+        s3 = MagicMock()
+        s3.generate_presigned_url.return_value = "https://example.test/signed.jpg"
+        return s3
+
+    def test_the_endpoint_makes_a_missing_still_on_first_ask(self):
+        cap = FakeCapture()
+        with patch.dict("sys.modules", {"cv2": fake_cv2(cap)}), \
+             patch("config.storage.get_s3_client", return_value=self._s3()):
+            r = self.client.get(f"/videos/{self.video.pk}/thumb/")
+
+        self.assertEqual(r.status_code, 302)
+        self.video.refresh_from_db()
+        self.assertTrue(self.video.thumbnail_key)
+
+    def test_an_existing_still_is_served_without_decoding_again(self):
+        self.video.thumbnail_key = "thumbs/have.jpg"
+        self.video.save(update_fields=["thumbnail_key"])
+        s3 = self._s3()
+
+        with patch("config.storage.get_s3_client", return_value=s3):
+            r = self.client.get(f"/videos/{self.video.pk}/thumb/")
+
+        self.assertEqual(r.status_code, 302)
+        s3.download_file.assert_not_called()
+
+    def test_a_clip_with_no_extractable_frame_404s_rather_than_erroring(self):
+        cap = FakeCapture(opened=False)
+        with patch.dict("sys.modules", {"cv2": fake_cv2(cap)}), \
+             patch("config.storage.get_s3_client", return_value=self._s3()):
+            r = self.client.get(f"/videos/{self.video.pk}/thumb/")
+
+        self.assertEqual(r.status_code, 404)
+
+    def test_a_busy_server_defers_instead_of_queueing(self):
+        """A screen of lazy images must not start 20 decodes at once; the card
+        stays dark and the next scroll past it tries again."""
+        with patch.object(thumbnails._slots, "acquire", return_value=False):
+            self.assertEqual(thumbnails.extract_on_demand(self.video), "")
+
+    def test_a_stranger_cannot_make_the_server_decode_someone_elses_clip(self):
+        stranger = User.objects.create_user("mallory", password="x")
+        self.client.force_login(stranger)
+        s3 = self._s3()
+
+        with patch("config.storage.get_s3_client", return_value=s3):
+            r = self.client.get(f"/videos/{self.video.pk}/thumb/")
+
+        self.assertEqual(r.status_code, 404)
+        s3.download_file.assert_not_called()
+
+    def test_the_stream_endpoint_is_scoped_the_same_way(self):
+        stranger = User.objects.create_user("eve", password="x")
+        self.client.force_login(stranger)
+
+        self.assertEqual(self.client.get(f"/videos/{self.video.pk}/stream/").status_code, 404)

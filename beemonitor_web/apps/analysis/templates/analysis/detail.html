@@ -71,8 +71,10 @@
     </div>
 
     {% if job.stage_seconds %}
-    {# Where the wall clock went. gpu_seconds well below execution_seconds means
-       the run was bound by decode or S3 transfer, not by the GPU. #}
+    {% comment %}
+    Where the wall clock went. gpu_seconds well below execution_seconds means the
+    run was bound by decode or S3 transfer, not by the GPU.
+    {% endcomment %}
     <details class="mt-4">
       <summary class="text-sm text-gray-500 cursor-pointer hover:text-gray-700">
         Time breakdown

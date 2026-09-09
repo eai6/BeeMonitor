@@ -18,6 +18,7 @@ import io
 import logging
 import os
 import tempfile
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,33 @@ SAMPLE_AT_SECONDS = float(os.environ.get("BEEMONITOR_THUMBNAIL_AT", "3.0"))
 # for full frames 200 at a time.
 THUMBNAIL_WIDTH = 560
 JPEG_QUALITY = 78
+
+# Clips uploaded before stills existed have none, and a backfill needs someone
+# to run it — so the grid extracts what it is asked for, on demand, and keeps
+# the result. A page fills in as you scroll and is instant forever after.
+#
+# Bounded, because a screen of 20 lazy <img>s would otherwise start 20
+# simultaneous downloads and decodes on a web dyno. Requests that cannot get a
+# slot promptly give up rather than queue: the card stays dark and the next
+# scroll past it tries again.
+ON_DEMAND = os.environ.get("BEEMONITOR_THUMBNAIL_ON_DEMAND", "1") == "1"
+ON_DEMAND_SLOTS = int(os.environ.get("BEEMONITOR_THUMBNAIL_SLOTS", "3"))
+ON_DEMAND_WAIT_SECONDS = float(os.environ.get("BEEMONITOR_THUMBNAIL_WAIT", "2.0"))
+
+_slots = threading.BoundedSemaphore(ON_DEMAND_SLOTS)
+
+
+def extract_on_demand(video) -> str:
+    """Extract now if a slot is free, else return "" and let the card retry."""
+    if not ON_DEMAND or video.thumbnail_key:
+        return video.thumbnail_key
+    if not _slots.acquire(timeout=ON_DEMAND_WAIT_SECONDS):
+        logger.info("thumbnail: busy, deferring video %s", video.pk)
+        return ""
+    try:
+        return extract_thumbnail(video)
+    finally:
+        _slots.release()
 
 
 def thumbnail_key(blob_path: str) -> str:

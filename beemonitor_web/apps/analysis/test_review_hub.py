@@ -211,3 +211,41 @@ class StatusPillTests(ReviewHubTestCase):
         self.assertIn("bg-green-100 text-green-700", html)
         self.assertIn("bg-blue-100 text-blue-700", html)
         self.assertNotIn("bg-amber-100 text-amber-700", html)
+
+
+class RunControlsInTheRailTests(ReviewHubTestCase):
+    """The pipeline picker and Run live in the rail, bound across the DOM.
+
+    HTML forms cannot nest, so the controls sit inside the rail's markup while
+    belonging to the POST form in <main> via form="run-form". If that attribute
+    is ever dropped, the button silently submits the GET filter form instead —
+    the page would look fine and running would do nothing.
+    """
+
+    def test_the_pipeline_select_belongs_to_the_run_form(self):
+        html = self.client.get(reverse("analysis:processing")).content.decode()
+
+        self.assertIn('name="pipeline" form="run-form"', html)
+
+    def test_the_run_button_belongs_to_the_run_form(self):
+        html = self.client.get(reverse("analysis:processing")).content.decode()
+
+        self.assertIn('type="submit" form="run-form" id="run-btn"', html)
+
+    def test_the_filter_form_keeps_its_own_apply(self):
+        html = self.client.get(reverse("analysis:processing")).content.decode()
+
+        self.assertIn('<form method="get" id="filter-form"', html)
+        self.assertIn(">Apply</button>", html)
+
+    def test_a_viewer_gets_the_filters_but_no_run_controls(self):
+        viewer = User.objects.create_user("carol", password="x")
+        from apps.devices.models import DeviceShare
+        DeviceShare.objects.create(device=self.hotel_a, user=viewer,
+                                   role=DeviceShare.Role.VIEWER)
+        self.client.force_login(viewer)
+
+        html = self.client.get(reverse("analysis:processing")).content.decode()
+
+        self.assertIn('id="filter-form"', html)
+        self.assertNotIn('id="run-btn"', html)

@@ -196,11 +196,17 @@ class VideoThumbnailView(LoginRequiredMixin, View):
 
     def get(self, request, pk):
         video = get_object_or_404(Video.accessible(request.user), pk=pk)
-        if not video.thumbnail_key:
+        key = video.thumbnail_key
+        if not key:
+            # Uploaded before stills existed. Make one now and keep it, so the
+            # grid fills in as it is browsed instead of waiting on a backfill.
+            from .thumbnails import extract_on_demand
+            key = extract_on_demand(video)
+        if not key:
             raise Http404("No still for this clip.")
         from config.storage import get_s3_client
         try:
-            url = get_s3_client().generate_presigned_url("processed", video.thumbnail_key)
+            url = get_s3_client().generate_presigned_url("processed", key)
         except Exception:
             logger.exception("Failed to presign thumbnail for video %s", pk)
             raise Http404("Could not read the still.")
