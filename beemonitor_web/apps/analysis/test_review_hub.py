@@ -392,3 +392,47 @@ class TrackingEndpointRoutingTests(TestCase):
 
         with self.settings(SAGEMAKER_ENDPOINT_NAME="main", SAGEMAKER_SAM3_ENDPOINT_NAME=""):
             self.assertEqual(_tracking_endpoint("yolo"), "main")
+
+
+class ViewerNavigationTests(ReviewHubTestCase):
+    """Stepping through the viewer moves through TIME, not through indices.
+
+    Cards are ordered newest-first, so "previous" by position walks toward newer
+    footage — the opposite of stepping back through a day. The controls are
+    named after time so the mapping cannot be read the wrong way round.
+    """
+
+    def _html(self):
+        return self.client.get(reverse("analysis:processing")).content.decode()
+
+    def test_the_grid_is_newest_first(self):
+        """The premise the navigation depends on."""
+        videos = self.client.get(reverse("analysis:processing")).context["videos"]
+        times = [v.recorded_at for v in videos]
+
+        self.assertEqual(times, sorted(times, reverse=True))
+
+    def test_the_controls_are_labelled_by_time(self):
+        html = self._html()
+
+        self.assertIn("← Earlier", html)
+        self.assertIn("Later →", html)
+        self.assertNotIn("← Prev", html)
+
+    def test_earlier_moves_down_the_newest_first_grid(self):
+        html = self._html()
+
+        self.assertIn("function earlier() { open(at + 1); }", html)
+        self.assertIn("function later() { open(at - 1); }", html)
+
+    def test_left_arrow_goes_back_in_time(self):
+        html = self._html()
+
+        self.assertIn("e.key === 'ArrowLeft' || e.key === 'j'", html)
+        self.assertIn("e.key === 'ArrowRight' || e.key === 'k'", html)
+
+    def test_both_buttons_are_wired_to_the_named_moves(self):
+        html = self._html()
+
+        self.assertIn("getElementById('v-prev').addEventListener('click', earlier)", html)
+        self.assertIn("getElementById('v-next').addEventListener('click', later)", html)

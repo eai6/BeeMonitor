@@ -277,8 +277,14 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
       </div>
       <div class="flex items-center gap-2 shrink-0">
         <span id="v-pos" class="text-xs text-gray-500"></span>
-        <button type="button" id="v-prev" class="border border-gray-300 rounded px-2 py-1 text-xs text-gray-700 hover:bg-gray-50">← Prev</button>
-        <button type="button" id="v-next" class="border border-gray-300 rounded px-2 py-1 text-xs text-gray-700 hover:bg-gray-50">Next →</button>
+        {% comment %}
+         Labelled by TIME, not by grid position. The grid is newest-first, so
+         "previous" by index walks toward newer footage — the opposite of what
+         stepping back through a day means. Earlier/Later cannot be read the
+         wrong way round.
+        {% endcomment %}
+        <button type="button" id="v-prev" class="border border-gray-300 rounded px-2 py-1 text-xs text-gray-700 hover:bg-gray-50">← Earlier</button>
+        <button type="button" id="v-next" class="border border-gray-300 rounded px-2 py-1 text-xs text-gray-700 hover:bg-gray-50">Later →</button>
         <button type="button" id="v-close" class="text-gray-400 hover:text-gray-600 px-1.5 text-lg leading-none">&times;</button>
       </div>
     </div>
@@ -292,7 +298,7 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
       </label>
       <p class="text-[11px] text-gray-400">
         <kbd class="bg-gray-100 border border-gray-300 rounded px-1">Space</kbd> play ·
-        <kbd class="bg-gray-100 border border-gray-300 rounded px-1">J</kbd><kbd class="bg-gray-100 border border-gray-300 rounded px-1">K</kbd> step ·
+        <kbd class="bg-gray-100 border border-gray-300 rounded px-1">←</kbd><kbd class="bg-gray-100 border border-gray-300 rounded px-1">→</kbd> earlier / later ·
         <kbd class="bg-gray-100 border border-gray-300 rounded px-1">X</kbd> select ·
         <kbd class="bg-gray-100 border border-gray-300 rounded px-1">Esc</kbd> close
       </p>
@@ -454,8 +460,13 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
     at = -1;
   }
   document.getElementById('v-close').addEventListener('click', close);
-  document.getElementById('v-prev').addEventListener('click', function () { open(at - 1); });
-  document.getElementById('v-next').addEventListener('click', function () { open(at + 1); });
+  // Cards run newest-first, so the LATER clip is the lower index and the
+  // EARLIER one the higher. Naming the moves after time keeps every caller
+  // (buttons, arrows, vim keys) from having to remember that.
+  function earlier() { open(at + 1); }
+  function later() { open(at - 1); }
+  document.getElementById('v-prev').addEventListener('click', earlier);
+  document.getElementById('v-next').addEventListener('click', later);
   viewer.addEventListener('click', function (e) { if (e.target === viewer) close(); });
   document.getElementById('v-select').addEventListener('change', function () {
     var cb = cards[at] && cards[at].querySelector('.vid-cb');
@@ -465,8 +476,10 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
   document.addEventListener('keydown', function (e) {
     if (viewer.classList.contains('hidden')) return;
     if (e.key === 'Escape') { close(); }
-    else if (e.key === 'j' || e.key === 'J' || e.key === 'ArrowRight') { open(at + 1); }
-    else if (e.key === 'k' || e.key === 'K' || e.key === 'ArrowLeft') { open(at - 1); }
+    // Left goes back in time; j/k follow vim (j = down the grid = earlier),
+    // which lands on the same clip either way.
+    else if (e.key === 'ArrowLeft' || e.key === 'j' || e.key === 'J') { earlier(); }
+    else if (e.key === 'ArrowRight' || e.key === 'k' || e.key === 'K') { later(); }
     else if (e.key === 'x' || e.key === 'X') {
       var cb = cards[at] && cards[at].querySelector('.vid-cb');
       if (cb) { cb.checked = !cb.checked; document.getElementById('v-select').checked = cb.checked; refresh(); }
