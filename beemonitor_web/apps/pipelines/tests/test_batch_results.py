@@ -81,13 +81,14 @@ class BatchPageTestCase(TestCase):
 
     def _run(self, hour, status, error="", tracks=None):
         video = Video.objects.create(
-            user=self.user, device=self.device, title=f"clip{hour}",
-            storage_key=f"alice/{hour}.mp4", file_size_bytes=1,
+            user=self.user, device=self.device,
+            title=f"clip{hour}-{Video.objects.count()}",
+            storage_key=f"alice/{hour}-{Video.objects.count()}.mp4", file_size_bytes=1,
             status=Video.Status.READY,
             recorded_at=datetime(2026, 8, 5, hour, 0, tzinfo=dt_tz.utc))
         job = Job.objects.create(user=self.user, video=video, status=status,
-                                 modal_job_id=f"j{hour}", execution_seconds=120,
-                                 compute_cost_usd="0.0246")
+                                 modal_job_id=f"j{Job.objects.count()}",
+                                 execution_seconds=120, compute_cost_usd="0.0246")
         if tracks is not None:
             JobResult.objects.create(job=job, unique_tracks=tracks,
                                      total_events=tracks // 2,
@@ -276,3 +277,62 @@ class FreshRunTests(BatchPageTestCase):
         run.refresh_from_db()
         self.assertFalse(run.fresh)
 
+
+
+class RunHistoryPagingTests(BatchPageTestCase):
+    """Run history is paginated and filterable.
+
+    It used to render 100 runs beneath every batch ever launched — on an account
+    with a 3,250-video batch that is one scroll with no end, and nothing older
+    than the last hundred is reachable at all.
+    """
+
+    def test_a_page_holds_25_runs_not_everything(self):
+        for h in range(30):
+            self._run(h % 24, "completed", tracks=1)
+
+        page = self.client.get(reverse("pipelines:run_list")).context["page"]
+
+        self.assertEqual(len(page.object_list), 25)
+        self.assertTrue(page.has_next())
+        self.assertEqual(page.paginator.count, 30)
+
+    def test_older_runs_are_reachable(self):
+        for h in range(30):
+            self._run(h % 24, "completed", tracks=1)
+
+        page = self.client.get(reverse("pipelines:run_list"), {"page": 2}).context["page"]
+
+        self.assertEqual(len(page.object_list), 5)
+        self.assertFalse(page.has_next())
+
+    def test_failures_can_be_isolated(self):
+        self._seed_real_batch()
+
+        ctx = self.client.get(reverse("pipelines:run_list"), {"status": "failed"}).context
+
+        self.assertEqual(ctx["page"].paginator.count, 9)
+        self.assertTrue(all(r["run"].status == "failed" for r in ctx["rows"]))
+
+    def test_the_counts_describe_the_whole_history_not_the_page(self):
+        self._seed_real_batch()
+
+        counts = self.client.get(reverse("pipelines:run_list")).context["run_counts"]
+
+        self.assertEqual(counts["all"], 12)
+        self.assertEqual(counts["failed"], 9)
+        self.assertEqual(counts["completed"], 3)
+
+    def test_a_filter_that_matches_nothing_is_not_an_error(self):
+        self._seed_real_batch()
+
+        resp = self.client.get(reverse("pipelines:run_list"), {"status": "running"})
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context["page"].paginator.count, 0)
+
+    def test_only_recent_batches_are_listed(self):
+        """Batches are the index into history; the list stays short enough to read."""
+        ctx = self.client.get(reverse("pipelines:run_list")).context
+
+        self.assertLessEqual(len(ctx["batches"]), 12)

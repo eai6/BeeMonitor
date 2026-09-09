@@ -15,7 +15,7 @@
 
 {% if batches %}
 <div class="mb-6">
-  <h2 class="text-sm font-medium text-gray-500 uppercase mb-2">Batches — aggregate results across videos</h2>
+  <h2 class="text-sm font-medium text-gray-500 uppercase mb-2">Recent batches — aggregate results across videos</h2>
   <div class="bg-white shadow rounded-lg divide-y">
     {% for b in batches %}
     <a href="{% url 'pipelines:batch_detail' batch_id=b.batch_id %}"
@@ -33,6 +33,32 @@
   </div>
 </div>
 {% endif %}
+
+{% comment %}
+Runs are paginated and filterable. This page used to render 100 runs beneath
+every batch ever launched — on an account with a 3,250-video batch that is one
+scroll with no end, and no way to reach anything older than the last hundred.
+Batches are the index; runs are the detail.
+{% endcomment %}
+<div class="flex items-center gap-2 flex-wrap mb-3">
+  <span class="text-sm font-medium text-gray-500 uppercase mr-1">Runs</span>
+  <a href="?{% if pipeline_filter %}pipeline={{ pipeline_filter }}{% endif %}"
+     class="text-xs px-2.5 py-1 rounded-full {% if not status_filter %}bg-amber-600 text-white{% else %}bg-gray-100 text-gray-700 hover:bg-gray-200{% endif %}">All {{ run_counts.all }}</a>
+  <a href="?status=failed{% if pipeline_filter %}&pipeline={{ pipeline_filter }}{% endif %}"
+     class="text-xs px-2.5 py-1 rounded-full {% if status_filter == 'failed' %}bg-red-600 text-white{% else %}bg-gray-100 text-gray-700 hover:bg-gray-200{% endif %}">Failed {{ run_counts.failed }}</a>
+  <a href="?status=running{% if pipeline_filter %}&pipeline={{ pipeline_filter }}{% endif %}"
+     class="text-xs px-2.5 py-1 rounded-full {% if status_filter == 'running' %}bg-blue-600 text-white{% else %}bg-gray-100 text-gray-700 hover:bg-gray-200{% endif %}">Running {{ run_counts.running }}</a>
+  <a href="?status=completed{% if pipeline_filter %}&pipeline={{ pipeline_filter }}{% endif %}"
+     class="text-xs px-2.5 py-1 rounded-full {% if status_filter == 'completed' %}bg-green-700 text-white{% else %}bg-gray-100 text-gray-700 hover:bg-gray-200{% endif %}">Completed {{ run_counts.completed }}</a>
+  <div class="flex-1"></div>
+  <form method="get" class="flex items-center gap-2">
+    {% if status_filter %}<input type="hidden" name="status" value="{{ status_filter }}">{% endif %}
+    <select name="pipeline" onchange="this.form.submit()" class="border border-gray-300 rounded px-2 py-1 text-xs">
+      <option value="">Any pipeline</option>
+      {% for p in pipelines %}<option value="{{ p.pk }}" {% if pipeline_filter == p.pk|stringformat:"s" %}selected{% endif %}>{{ p.title }}</option>{% endfor %}
+    </select>
+  </form>
+</div>
 
 {% if rows %}
 <div class="bg-white shadow rounded-lg divide-y">
@@ -54,9 +80,28 @@
   </a>
   {% endfor %}
 </div>
+
+{% if page.has_other_pages %}
+<div class="flex items-center justify-between mt-3 text-sm">
+  <div>
+    {% if page.has_previous %}
+    <a href="?page={{ page.previous_page_number }}{% if status_filter %}&status={{ status_filter }}{% endif %}{% if pipeline_filter %}&pipeline={{ pipeline_filter }}{% endif %}"
+       class="border border-gray-300 rounded px-3 py-1.5 text-gray-700 hover:bg-gray-50">← Newer</a>
+    {% endif %}
+  </div>
+  <span class="text-xs text-gray-500">Page {{ page.number }} of {{ page.paginator.num_pages }} · {{ page.paginator.count }} run{{ page.paginator.count|pluralize }}</span>
+  <div>
+    {% if page.has_next %}
+    <a href="?page={{ page.next_page_number }}{% if status_filter %}&status={{ status_filter }}{% endif %}{% if pipeline_filter %}&pipeline={{ pipeline_filter }}{% endif %}"
+       class="border border-gray-300 rounded px-3 py-1.5 text-gray-700 hover:bg-gray-50">Older →</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
 {% else %}
 <div class="bg-white rounded-lg border border-dashed border-gray-300 p-8 text-center text-gray-500">
-  No runs yet. <a href="{% url 'analysis:processing' %}" class="text-amber-700 font-medium">Run a pipeline on your videos</a>.
+  {% if status_filter or pipeline_filter %}No runs match this filter. <a href="?" class="text-amber-700 font-medium">Clear it</a>.
+  {% else %}No runs yet. <a href="{% url 'analysis:processing' %}" class="text-amber-700 font-medium">Run a pipeline on your videos</a>.{% endif %}
 </div>
 {% endif %}
 {% endblock %}

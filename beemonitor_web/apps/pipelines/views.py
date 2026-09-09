@@ -318,8 +318,31 @@ def run_list(request):
     """History of the current user's pipeline runs (across pipelines)."""
     # Unstick runs whose jobs already resolved (missed completion notification).
     engine.reconcile_user_runs(request.user)
-    runs = list(PipelineRun.objects.filter(user=request.user)
-                .select_related("pipeline").order_by("-started_at", "-id")[:100])
+    # Paginated, not capped. This page listed 100 runs under every batch ever
+    # launched, on an account with batches of 3,250 — one scroll with no end and
+    # no way to reach anything old. Batches are the index; runs are the detail.
+    run_qs = (PipelineRun.objects.filter(user=request.user)
+              .select_related("pipeline").order_by("-started_at", "-id"))
+    status_filter = request.GET.get("status", "")
+    if status_filter in {"failed", "completed", "running"}:
+        run_qs = run_qs.filter(
+            status=PipelineRun.Status.RUNNING if status_filter == "running"
+            else status_filter)
+    pipeline_filter = request.GET.get("pipeline", "")
+    if pipeline_filter:
+        run_qs = run_qs.filter(pipeline_id=pipeline_filter)
+
+    run_counts = {
+        "all": PipelineRun.objects.filter(user=request.user).count(),
+        "failed": PipelineRun.objects.filter(user=request.user, status="failed").count(),
+        "running": PipelineRun.objects.filter(user=request.user, status="running").count(),
+        "completed": PipelineRun.objects.filter(user=request.user, status="completed").count(),
+    }
+
+    from django.core.paginator import Paginator
+    paginator = Paginator(run_qs, 25)
+    page = paginator.get_page(request.GET.get("page"))
+    runs = list(page.object_list)
 
     # Resolve each run's input video title(s) in one query.
     vid_ids = set()
@@ -361,7 +384,7 @@ def run_list(request):
             started_at=Max("started_at"),
         )
         .filter(count__gt=1)
-        .order_by("-started_at")[:50]
+        .order_by("-started_at")[:12]
     )
     # Attach each batch's pipeline (a batch runs a single pipeline).
     pipe_by_batch = {}
@@ -372,7 +395,13 @@ def run_list(request):
     for b in batch_rows:
         b["pipeline"] = pipes.get(pipe_by_batch.get(b["batch_id"]))
 
-    return render(request, "pipelines/runs.html", {"rows": rows, "batches": batch_rows})
+    return render(request, "pipelines/runs.html", {
+        "rows": rows, "batches": batch_rows,
+        "page": page, "run_counts": run_counts,
+        "status_filter": status_filter,
+        "pipelines": Pipeline.objects.filter(user=request.user, is_template=False).order_by("title"),
+        "pipeline_filter": pipeline_filter,
+    })
 
 
 @login_required
