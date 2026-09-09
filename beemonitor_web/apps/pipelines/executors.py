@@ -514,15 +514,20 @@ def _exec_analyze_visitation(step, run, context, inputs, index):
     up = inputs.get("tracks") or _first_upstream_result(inputs)
     result = (up or {}).get("result", {})
     roi = find_reference(run.steps, index, context, run)
-    boxes = ops.roi_shapes(roi)
+    # References, not bare boxes: the breakdown needs each region's identity.
+    refs = ops.roi_references(roi)
+    # The hotel ROI contains every tube, so counting it as a reference would
+    # double every visit. It is kept only when it is the ONLY thing defined.
+    tubes = [r for r in refs if r["id"] != "hotel"]
+    refs = tubes or refs
 
     df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
     tidy = ops.normalized_tracks(df, result) if df is not None else None
     if tidy is not None:
-        if not boxes:
+        if not refs:
             return {"artifact": "table", "table_kind": "visitation",
                     "note": "No ROI upstream — add an ROI (draw or nest layout) to count visits."}
-        summary = ops.compute_visitation(tidy, boxes, ops.fps_of(result))
+        summary = ops.compute_visitation(tidy, refs, ops.fps_of(result))
         return {"artifact": "table", "table_kind": "visitation", **summary}
 
     # Fallback: no readable tracking CSV (e.g. dev DB) — surface the job summary.

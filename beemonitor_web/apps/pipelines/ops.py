@@ -184,6 +184,86 @@ def roi_shapes(roi_output):
     return shapes
 
 
+def roi_references(roi_output):
+    """The ROI's shapes WITH their identities.
+
+    ``roi_shapes`` returns geometry only, which is why every analyzer built on it
+    can say a track was inside *something* and never inside *which* — and a
+    treatment comparison is exactly the "which" question. This keeps the id the
+    layout already carries.
+
+    Each entry is ``{"id", "label", "box", "points"}``:
+
+    * a nest tube keeps the ``id`` from the device layout ("nest 3");
+    * a drawn region keeps its own ``id``/``name`` when the editor stored one,
+      otherwise its 1-based index ("region 2");
+    * the hotel ROI is its own reference, since a pipeline may count visits to
+      the hotel as a whole.
+
+    Ids are stable within one layout, which is what makes them comparable across
+    clips in a batch. They are not names — nothing in the editor lets a user call
+    one "full UV" yet — so ``label`` is a readable fallback, not a title.
+    """
+    if not roi_output:
+        return []
+
+    refs = []
+
+    def _shape(box, points=None):
+        try:
+            x1, y1, x2, y2 = [float(v) for v in box]
+        except (TypeError, ValueError):
+            return None
+        return ((min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)), _points(points))
+
+    def _add(ref_id, label, box, points=None):
+        shape = _shape(box, points)
+        if shape:
+            refs.append({"id": str(ref_id), "label": label,
+                         "box": shape[0], "points": shape[1]})
+
+    hotel = roi_output.get("hotel_roi")
+    if hotel:
+        _add("hotel", "Hotel", hotel, roi_output.get("hotel_polygon"))
+
+    for n, tube in enumerate(roi_output.get("nest_layout") or [], start=1):
+        if isinstance(tube, dict):
+            tube_id = tube.get("id", n)
+            _add(f"nest_{tube_id}", f"Nest {tube_id}", tube.get("box"), tube.get("points"))
+        else:
+            _add(f"nest_{n}", f"Nest {n}", tube)
+
+    for n, region in enumerate(roi_output.get("regions") or [], start=1):
+        if isinstance(region, dict):
+            # An editor that learns to name regions should put it in `name`;
+            # until then the index is the identity.
+            region_id = region.get("id", n)
+            label = region.get("name") or f"Region {region_id}"
+            _add(f"region_{region_id}", label, region.get("box"), region.get("points"))
+        else:
+            _add(f"region_{n}", f"Region {n}", region)
+
+    return refs
+
+
+def which_reference(x, y, refs):
+    """The FIRST reference containing (x, y), or None.
+
+    The counterpart to ``in_any_box``, which answers only yes/no. First-match
+    rather than all-matches because references can nest — a tube sits inside the
+    hotel ROI — and the tube is the more specific, more useful answer. Ordering
+    from ``roi_references`` puts the hotel first, so callers that want tube-level
+    detail should exclude it rather than rely on order.
+    """
+    for ref in refs:
+        x1, y1, x2, y2 = ref["box"]
+        if not (x1 <= x <= x2 and y1 <= y <= y2):
+            continue
+        if ref["points"] is None or _in_polygon(x, y, ref["points"]):
+            return ref
+    return None
+
+
 def roi_boxes(roi_output):
     """Just the bounding boxes of ``roi_shapes`` — for callers that can't do
     polygons (e.g. anything handing geometry to a box-only API)."""
@@ -226,26 +306,54 @@ def fps_of(summary, default=30.0):
     return default
 
 
-def compute_visitation(tidy, boxes, fps, gap_frames=15):
-    """Count ROI visits per track.
+def compute_visitation(tidy, refs, fps, gap_frames=15):
+    """Count ROI visits per track, AND per reference.
 
-    A *visit* is a contiguous run of in-ROI frames for a track (runs separated by
-    more than ``gap_frames`` out-of-ROI frames count as separate visits). Returns a
-    summary dict + per-track rows.
+    A *visit* is a contiguous run of frames a track spends inside one reference;
+    a gap of more than ``gap_frames`` starts a new visit. Moving from one
+    reference to another also ends a visit — otherwise a bee crossing from tube 3
+    to tube 7 would read as a single long stay in neither.
+
+    Per reference is the point. This used to ask ``in_any_box``, one boolean for
+    every reference at once, so it could say a track visited *something* and
+    never *which* — and "which" is what a treatment comparison is: four flower
+    patches are only interesting compared against each other.
+
+    ``refs`` comes from ``roi_references``. Bare shapes from ``roi_shapes`` are
+    still accepted, and then the per-reference breakdown is by index — old
+    pipelines keep working, they just get numbers for names.
     """
+    refs = _as_references(refs)
     rows = []
+    per_ref = {r["id"]: {"id": r["id"], "label": r["label"], "visits": 0,
+                         "visitors": set(), "dwell_frames": 0} for r in refs}
     total_visits = 0
     dwell_frames_total = 0
+
     for tid, grp in tidy.sort_values("frame").groupby("tid"):
-        inside = [(int(f), in_any_box(x, y, boxes)) for f, x, y in zip(grp["frame"], grp["x"], grp["y"])]
         visits, dwell = 0, 0
-        run_open, last_in = False, None
-        for frame, is_in in inside:
-            if is_in:
-                dwell += 1
-                if not run_open or (last_in is not None and frame - last_in > gap_frames):
-                    visits += 1
-                run_open, last_in = True, frame
+        open_ref, last_frame = None, None
+
+        for frame, x, y in zip(grp["frame"], grp["x"], grp["y"]):
+            frame = int(frame)
+            ref = which_reference(x, y, refs)
+            if ref is None:
+                continue
+
+            bucket = per_ref[ref["id"]]
+            broke = (
+                open_ref is None                                   # first frame inside
+                or open_ref != ref["id"]                            # moved to another reference
+                or (last_frame is not None and frame - last_frame > gap_frames)
+            )
+            if broke:
+                visits += 1
+                bucket["visits"] += 1
+            dwell += 1
+            bucket["dwell_frames"] += 1
+            bucket["visitors"].add(_as_native(tid))
+            open_ref, last_frame = ref["id"], frame
+
         if visits:
             rows.append({
                 "track": _as_native(tid),
@@ -254,12 +362,44 @@ def compute_visitation(tidy, boxes, fps, gap_frames=15):
             })
             total_visits += visits
             dwell_frames_total += dwell
+
+    per_reference = [{
+        "id": b["id"],
+        "label": b["label"],
+        "visits": b["visits"],
+        "visitors": len(b["visitors"]),
+        "dwell_sec": round(b["dwell_frames"] / fps, 2) if fps else None,
+    } for b in per_ref.values()]
+    # Busiest first: the comparison reads top-down. A reference with no visits
+    # stays in the list — "nothing visited the control" is a result, and dropping
+    # it would leave the reader to notice an absence.
+    per_reference.sort(key=lambda r: (-r["visits"], r["id"]))
+
     return {
         "unique_visitors": len(rows),
         "total_visits": total_visits,
         "total_dwell_sec": round(dwell_frames_total / fps, 2) if fps else None,
         "rows": rows,
+        "per_reference": per_reference,
     }
+
+
+def _as_references(refs):
+    """Accept ``roi_references`` dicts, or bare ``roi_shapes`` tuples.
+
+    Callers that predate references pass geometry only; give those an index for
+    an id so the breakdown still works, rather than refusing to compute.
+    """
+    out = []
+    for n, ref in enumerate(refs or [], start=1):
+        if isinstance(ref, dict):
+            out.append(ref)
+            continue
+        box, points = (ref if len(ref) == 2 and not isinstance(ref[0], (int, float))
+                       else (ref, None))
+        out.append({"id": f"region_{n}", "label": f"Region {n}",
+                    "box": tuple(box), "points": points})
+    return out
 
 
 def compute_colony_activity(tidy, boxes, fps, metric="occupancy", bin_sec=5.0):
@@ -425,13 +565,56 @@ def summarize_interactions(df, kind=None):
         [float(r["duration"]) for r in rows if r.get("duration") is not None]
         if cols["duration"] else []
     )
+    # Per reference. Interactions already carry a reference_id, so unlike
+    # visitation this needed exposing rather than computing — the breakdown was
+    # sitting in the rows and no caller ever grouped it.
+    per_ref = {}
+    for row in rows:
+        ref_id = row.get("reference")
+        if ref_id in (None, ""):
+            continue          # an insect-to-insect interaction has no reference
+        bucket = per_ref.setdefault(str(ref_id), {
+            "id": str(ref_id), "label": _reference_label(ref_id),
+            "interactions": 0, "partners": set(), "duration_sec": 0.0,
+        })
+        bucket["interactions"] += 1
+        if row.get("a") is not None:
+            bucket["partners"].add(row["a"])
+        try:
+            bucket["duration_sec"] += float(row.get("duration") or 0)
+        except (TypeError, ValueError):
+            pass
+
+    per_reference = sorted(
+        ({"id": b["id"], "label": b["label"], "interactions": b["interactions"],
+          "partners": len(b["partners"]), "duration_sec": round(b["duration_sec"], 2)}
+         for b in per_ref.values()),
+        key=lambda r: (-r["interactions"], r["id"]),
+    )
+
     return {
         "interaction_count": int(len(df)),
         "organism_organism": _count("organism-to-organism"),
         "organism_reference": _count("organism-to-reference"),
         "total_duration_sec": round(sum(durations), 2) if durations else None,
         "rows": rows,
+        "per_reference": per_reference,
     }
+
+
+def _reference_label(ref_id):
+    """A readable name for a reference id written by the worker.
+
+    The worker writes literals like ``nest_3``; the layout would call that
+    "Nest 3". Keeps the two vocabularies from diverging on screen until the
+    editor can carry a real name.
+    """
+    text = str(ref_id)
+    if text.startswith("nest_"):
+        return f"Nest {text[5:]}"
+    if text.startswith("region_"):
+        return f"Region {text[7:]}"
+    return text
 
 
 def _iou(a, b):
