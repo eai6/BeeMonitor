@@ -112,3 +112,53 @@ def price_run(result: dict) -> dict:
         "credits": int(exec_seconds * CREDITS_PER_GPU_SECOND),
         "instance_type": instance,
     }
+
+
+def estimate_per_video(user, device_ids=None, sample=40) -> dict:
+    """What one more clip is likely to cost, from what past clips actually cost.
+
+    The number this replaces was ``est_credits_per_video = 349``, a hardcoded
+    constant carrying the retired A10G tier — wrong hardware and a made-up
+    average. Completed jobs record ``execution_seconds``, so the estimate can be
+    measured instead: the median of recent runs, with the 25th-75th percentile
+    as the spread. A range, because the spread is real and one number would be
+    false precision.
+
+    Scoped to the same hotels where possible, since a device's clip length and
+    activity drive the cost far more than anything else. Returns ``sample: 0``
+    when there is no history to go on — the caller should say the estimate is
+    provisional rather than print a confident figure.
+    """
+    from .models import Job
+
+    qs = (Job.objects
+          .filter(user=user, status="completed", execution_seconds__gt=0)
+          .order_by("-id"))
+    if device_ids:
+        scoped = qs.filter(video__device_id__in=device_ids)
+        # Fall back to all runs rather than reporting nothing for a new hotel.
+        qs = scoped if scoped.exists() else qs
+
+    seconds = sorted(qs.values_list("execution_seconds", flat=True)[:sample])
+    if not seconds:
+        return {"sample": 0, "seconds": 0.0, "low": 0.0, "high": 0.0,
+                "cost": 0.0, "cost_low": 0.0, "cost_high": 0.0,
+                "instance": DEFAULT_INSTANCE, "tier": tier_for_instance(DEFAULT_INSTANCE)}
+
+    def pct(p):
+        return seconds[min(len(seconds) - 1, int(len(seconds) * p))]
+
+    median, low, high = pct(0.5), pct(0.25), pct(0.75)
+    # Priced at the endpoint's instance: analysis jobs all land on the same one.
+    rate = rate_per_second(DEFAULT_INSTANCE)
+    return {
+        "sample": len(seconds),
+        "seconds": round(median, 1),
+        "low": round(low, 1),
+        "high": round(high, 1),
+        "cost": round(median * rate, 4),
+        "cost_low": round(low * rate, 4),
+        "cost_high": round(high * rate, 4),
+        "instance": DEFAULT_INSTANCE,
+        "tier": tier_for_instance(DEFAULT_INSTANCE),
+    }

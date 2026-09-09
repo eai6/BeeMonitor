@@ -1,0 +1,23 @@
+{% comment %}
+One colour, one meaning — the scheme the review grid follows.
+
+  green  an affirmative result   analyzed, "✓ bee"
+  blue   work in flight          running, queued
+  red    needs a decision        failed
+  grey   absence                 never run, unconfirmed
+
+Blue is here because the palette rename gave "amber" green values, so the old
+`bg-amber-100 text-amber-700` running badge rendered EXACTLY the same as the
+green "analyzed" one — a job still running looked finished. Nothing else in the
+product uses blue, so it cannot collide the same way.
+{% endcomment %}
+{% if status == "completed" %}
+  <a href="{% if job_id %}{% url 'analysis:detail' job_id %}{% else %}#{% endif %}"
+     class="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700">analyzed</a>
+{% elif status == "failed" %}
+  <a href="{% if job_id %}{% url 'analysis:detail' job_id %}{% else %}#{% endif %}"
+     class="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700">failed</a>
+{% elif status == "processing" or status == "queued" %}
+  <a href="{% if job_id %}{% url 'analysis:detail' job_id %}{% else %}#{% endif %}"
+     class="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">running</a>
+{% endif %}

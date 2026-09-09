@@ -1,0 +1,213 @@
+"""The review workspace: multi-hotel filtering, triage, day grouping, estimate.
+
+What these guard is that the page still answers the question it exists for —
+which clips are worth analysing — as the filters get richer.
+"""
+
+from datetime import datetime, timezone as dt_tz
+
+from django.contrib.auth import get_user_model
+from django.test import TestCase
+from django.urls import reverse
+
+from apps.analysis.models import Job
+from apps.analysis.views import apply_video_filters
+from apps.devices.models import Device
+from apps.videos.models import Video
+
+User = get_user_model()
+
+
+def _dt(day, hour):
+    return datetime(2026, 8, day, hour, 30, tzinfo=dt_tz.utc)
+
+
+class ReviewHubTestCase(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user("alice", password="x")
+        self.hotel_a = Device.objects.create(owner=self.user, name="beemonitor3",
+                                             key_hash="h1", prefix="bmk_1")
+        self.hotel_b = Device.objects.create(owner=self.user, name="beemonitor1",
+                                             key_hash="h2", prefix="bmk_2")
+        self.hotel_c = Device.objects.create(owner=self.user, name="hotel-north",
+                                             key_hash="h3", prefix="bmk_3")
+        self.a1 = self._video(self.hotel_a, _dt(3, 13), confirmed=True)
+        self.a2 = self._video(self.hotel_a, _dt(3, 12))
+        self.b1 = self._video(self.hotel_b, _dt(4, 13))
+        self.client.force_login(self.user)
+
+    def _video(self, device, when, confirmed=False):
+        # A real upload writes both: `bee_confirmed` (flat, for filters) and
+        # `bee` (rich, for the badge) — apps/api/uploads.py:205.
+        meta = {"bee_confirmed": bool(confirmed),
+                "bee": {"status": "confirmed" if confirmed else "unconfirmed",
+                        "confidence": 0.54 if confirmed else 0.0}}
+        return Video.objects.create(
+            user=self.user, device=device, title=f"clip-{when:%d%H}",
+            storage_key=f"alice/{when:%d%H}.mp4", file_size_bytes=1,
+            status=Video.Status.READY, recorded_at=when, metadata=meta,
+        )
+
+
+class MultiDeviceFilterTests(ReviewHubTestCase):
+    def test_several_hotels_can_be_reviewed_at_once(self):
+        r = self.client.get(reverse("analysis:processing"),
+                            {"device": [str(self.hotel_a.id), str(self.hotel_b.id)]})
+
+        html = r.content.decode()
+        for v in (self.a1, self.a2, self.b1):
+            self.assertIn(f'data-vid="{v.pk}"', html)
+
+    def test_one_hotel_still_narrows_to_it(self):
+        r = self.client.get(reverse("analysis:processing"), {"device": str(self.hotel_b.id)})
+
+        html = r.content.decode()
+        self.assertIn(f'data-vid="{self.b1.pk}"', html)
+        self.assertNotIn(f'data-vid="{self.a1.pk}"', html)
+
+    def test_a_plain_dict_with_one_device_still_works(self):
+        """The per-device scheduler passes a plain dict, not a QueryDict."""
+        qs = apply_video_filters(Video.objects.all(), {"device": str(self.hotel_a.id)})
+
+        self.assertEqual(set(qs.values_list("pk", flat=True)), {self.a1.pk, self.a2.pk})
+
+    def test_no_device_means_every_hotel(self):
+        qs = apply_video_filters(Video.objects.all(), {})
+
+        self.assertEqual(qs.count(), 3)
+
+
+class HotelCountTests(ReviewHubTestCase):
+    def test_counts_ignore_the_hotel_selection_itself(self):
+        """A count answers 'what would ticking this add', so selecting one
+        hotel must not zero the others."""
+        r = self.client.get(reverse("analysis:processing"), {"device": str(self.hotel_a.id)})
+
+        counts = {row["obj"].name: row["count"] for row in r.context["device_rows"]}
+        self.assertEqual(counts["beemonitor3"], 2)
+        self.assertEqual(counts["beemonitor1"], 1)
+
+    def test_counts_do_respect_the_other_filters(self):
+        r = self.client.get(reverse("analysis:processing"), {"confirmed": "yes"})
+
+        counts = {row["obj"].name: row["count"] for row in r.context["device_rows"]}
+        self.assertEqual(counts["beemonitor3"], 1)
+        self.assertEqual(counts["beemonitor1"], 0)
+
+    def test_an_empty_hotel_is_listed_with_zero_not_hidden(self):
+        r = self.client.get(reverse("analysis:processing"))
+
+        names = [row["obj"].name for row in r.context["device_rows"]]
+        counts = {row["obj"].name: row["count"] for row in r.context["device_rows"]}
+        self.assertIn("hotel-north", names)
+        self.assertEqual(counts["hotel-north"], 0)
+
+    def test_each_hotel_gets_a_distinct_dot(self):
+        r = self.client.get(reverse("analysis:processing"))
+
+        dots = [row["dot"] for row in r.context["device_rows"]]
+        self.assertEqual(len(dots), len(set(dots)))
+
+
+class TriageTests(ReviewHubTestCase):
+    def test_counts_split_confirmed_from_unconfirmed(self):
+        r = self.client.get(reverse("analysis:processing"))
+
+        self.assertEqual(r.context["triage"]["confirmed"], 1)
+        self.assertEqual(r.context["triage"]["unconfirmed"], 2)
+
+    def test_never_analyzed_counts_clips_without_a_completed_job(self):
+        Job.objects.create(user=self.user, video=self.a1, status="completed",
+                           modal_job_id="j1")
+
+        r = self.client.get(reverse("analysis:processing"))
+
+        self.assertEqual(r.context["triage"]["unanalyzed"], 2)
+
+    def test_the_never_analyzed_filter_excludes_finished_clips(self):
+        Job.objects.create(user=self.user, video=self.a1, status="completed",
+                           modal_job_id="j1")
+
+        qs = apply_video_filters(Video.objects.all(), {"analysis": "never"})
+
+        self.assertNotIn(self.a1.pk, set(qs.values_list("pk", flat=True)))
+        self.assertEqual(qs.count(), 2)
+
+    def test_a_failed_job_still_counts_as_never_analyzed(self):
+        Job.objects.create(user=self.user, video=self.a1, status="failed",
+                           modal_job_id="j1")
+
+        qs = apply_video_filters(Video.objects.all(), {"analysis": "never"})
+
+        self.assertIn(self.a1.pk, set(qs.values_list("pk", flat=True)))
+
+
+class DayGroupingTests(ReviewHubTestCase):
+    def test_clips_are_grouped_by_recorded_day_newest_first(self):
+        r = self.client.get(reverse("analysis:processing"))
+
+        days = [g["day"].day for g in r.context["video_days"]]
+        self.assertEqual(days, [4, 3])
+
+    def test_a_group_knows_how_many_hotels_it_spans(self):
+        extra = self._video(self.hotel_b, _dt(3, 14))
+
+        r = self.client.get(reverse("analysis:processing"))
+
+        aug3 = [g for g in r.context["video_days"] if g["day"].day == 3][0]
+        self.assertEqual(len(aug3["hotels"]), 2)
+        self.assertIn(extra, aug3["videos"])
+
+    def test_every_clip_carries_its_hotel_dot(self):
+        r = self.client.get(reverse("analysis:processing"))
+
+        for group in r.context["video_days"]:
+            for video in group["videos"]:
+                self.assertTrue(video.dot.startswith("#"))
+
+
+class EstimateTests(ReviewHubTestCase):
+    def test_no_history_reports_no_sample_rather_than_a_made_up_number(self):
+        r = self.client.get(reverse("analysis:processing"))
+
+        self.assertEqual(r.context["estimate"]["sample"], 0)
+        self.assertEqual(r.context["estimate"]["cost"], 0.0)
+
+    def test_the_estimate_is_the_median_of_real_runs(self):
+        for secs in (60, 90, 120):
+            Job.objects.create(user=self.user, video=self.a1, status="completed",
+                               execution_seconds=secs, modal_job_id=f"j{secs}")
+
+        r = self.client.get(reverse("analysis:processing"))
+        est = r.context["estimate"]
+
+        self.assertEqual(est["sample"], 3)
+        self.assertEqual(est["seconds"], 90.0)
+        self.assertLess(est["cost_low"], est["cost"])
+        self.assertGreater(est["cost_high"], 0)
+
+    def test_unfinished_runs_do_not_skew_it(self):
+        Job.objects.create(user=self.user, video=self.a1, status="completed",
+                           execution_seconds=90, modal_job_id="j1")
+        Job.objects.create(user=self.user, video=self.a2, status="processing",
+                           execution_seconds=0, modal_job_id="j2")
+
+        r = self.client.get(reverse("analysis:processing"))
+
+        self.assertEqual(r.context["estimate"]["sample"], 1)
+
+
+class StatusPillTests(ReviewHubTestCase):
+    def test_running_is_not_the_same_colour_as_analyzed(self):
+        """The palette rename made amber resolve to green, so the old running
+        badge was pixel-identical to the finished one."""
+        Job.objects.create(user=self.user, video=self.a1, status="completed",
+                           modal_job_id="j1")
+        Job.objects.create(user=self.user, video=self.b1, status="processing",
+                           modal_job_id="j2")
+
+        html = self.client.get(reverse("analysis:processing")).content.decode()
+
+        self.assertIn("bg-green-100 text-green-700", html)
+        self.assertIn("bg-blue-100 text-blue-700", html)
+        self.assertNotIn("bg-amber-100 text-amber-700", html)

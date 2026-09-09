@@ -28,7 +28,7 @@ from .analytics import (
 )
 from .forms import JobCreateForm
 from .models import Job, JobResult, GPU_TIERS
-from .pricing import price_run
+from .pricing import estimate_per_video, price_run
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,24 @@ def _unsanitize_site(value: str) -> str:
 
 # GET/POST params the Processing-hub video filter understands.
 VIDEO_FILTER_KEYS = ("device", "site", "year", "month", "day", "hour",
-                     "hfrom", "hto", "from", "to", "q", "confirmed")
+                     "hfrom", "hto", "from", "to", "q", "confirmed", "analysis")
+
+
+def _values(params, key):
+    """Every value for ``key`` — QueryDicts repeat keys, plain dicts don't.
+
+    The hub filters on several hotels at once, so ``device`` arrives repeated.
+    The per-device scheduler passes a plain dict with one value
+    (devices/scheduling.py), and the API a single string, so both shapes have to
+    keep working.
+    """
+    getlist = getattr(params, "getlist", None)
+    if getlist is not None:
+        return [v for v in getlist(key) if v not in (None, "")]
+    value = params.get(key)
+    if value in (None, ""):
+        return []
+    return list(value) if isinstance(value, (list, tuple)) else [value]
 
 
 def apply_video_filters(qs, params):
@@ -66,8 +83,11 @@ def apply_video_filters(qs, params):
     q = (params.get("q") or "").strip()
     if q:
         qs = qs.filter(title__icontains=q)
-    if params.get("device"):
-        qs = qs.filter(device_id=params.get("device"))
+    devices = _values(params, "device")
+    if devices:
+        # Several hotels at once: clips interleave by time so the same hour can
+        # be compared across them.
+        qs = qs.filter(device_id__in=devices)
     if params.get("site"):
         qs = qs.filter(site_name=_unsanitize_site(params.get("site")))
     for field in ("year", "month", "day", "hour"):
@@ -114,6 +134,17 @@ def apply_video_filters(qs, params):
         dt = _parse_dt(params.get("to"))
         if dt:
             qs = qs.filter(recorded_at__lte=dt)
+
+    # "Not yet analyzed" — the review question a run usually answers, and the
+    # one thing the hub could show but never filter on.
+    analysis = params.get("analysis")
+    if analysis:
+        from .models import Job
+        done = Job.objects.filter(status="completed").values("video_id")
+        if analysis == "never":
+            qs = qs.exclude(pk__in=done)
+        elif analysis == "done":
+            qs = qs.filter(pk__in=done)
 
     confirmed = params.get("confirmed")
     if confirmed == "yes":
@@ -628,6 +659,12 @@ class JobCancelAllView(LoginRequiredMixin, View):
         return redirect("analysis:processing")
 
 
+# Per-hotel dot colours for the review grid. Distinct hues at similar
+# lightness so no hotel reads as more important than another; brand green first
+# because a single-hotel view should look like the rest of the product.
+DEVICE_DOTS = ["#16a34a", "#b45309", "#0e7490", "#7c3aed", "#be123c", "#4d7c0f"]
+
+
 class ProcessingHubView(LoginRequiredMixin, View):
     """Phase 0 'Processing' hub — the home of video processing.
 
@@ -642,7 +679,8 @@ class ProcessingHubView(LoginRequiredMixin, View):
 
     def get(self, request):
         from urllib.parse import urlencode
-        from django.db.models import OuterRef, Subquery
+        from django.db.models import Count, OuterRef, Subquery
+        from django.http import QueryDict
         from apps.devices.models import Device
         from apps.training.models import CustomModel
         from apps.pipelines.models import Pipeline
@@ -656,6 +694,9 @@ class ProcessingHubView(LoginRequiredMixin, View):
         # the CSV download links; apply_video_filters does the actual filtering
         # (shared with the pipeline "run on all filtered" path).
         f = {k: request.GET.get(k, "") for k in VIDEO_FILTER_KEYS}
+        # `device` is multi-valued now — several hotels reviewed side by side.
+        selected_devices = _values(request.GET, "device")
+        f["device"] = selected_devices
         qs = apply_video_filters(qs, request.GET)
 
         latest = (Job.objects.filter(video=OuterRef("pk"))
@@ -670,6 +711,45 @@ class ProcessingHubView(LoginRequiredMixin, View):
 
         devices = list(Device.accessible(request.user).order_by("name"))
         roi_devices = [d.name for d in devices if d.roi_override and d.nest_layout]
+
+        # Per-hotel counts under the OTHER filters, so a count answers "what
+        # would ticking this add" rather than "what is showing now". A hotel
+        # with nothing in range shows 0 instead of vanishing, so you can see it
+        # exists and widen the range.
+        others = QueryDict(request.GET.urlencode(), mutable=True)
+        others.setlist("device", [])
+        without_device = apply_video_filters(user_videos, others)
+        per_device = dict(without_device.exclude(device=None)
+                          # .order_by() clears Video.Meta.ordering — Django folds
+                          # a model's default ordering into the GROUP BY, which
+                          # would count per (device, uploaded_at) and give every
+                          # hotel a count of 1.
+                          .order_by()
+                          .values_list("device_id")
+                          .annotate(n=Count("id"))
+                          .values_list("device_id", "n"))
+        device_rows = [{
+            "obj": d,
+            "count": per_device.get(d.id, 0),
+            "selected": str(d.id) in selected_devices,
+            # Stable per-hotel dot colour: the grid interleaves hotels by time,
+            # so a card needs to say which one it came from at a glance.
+            "dot": DEVICE_DOTS[i % len(DEVICE_DOTS)],
+        } for i, d in enumerate(devices)]
+        dot_by_device = {r["obj"].id: r["dot"] for r in device_rows}
+
+        # Triage counts — the review task is finding the few confirmed clips
+        # among the many, and "never analyzed" is what a run is usually for.
+        # Counted on metadata.bee_confirmed — the same flat bool the `confirmed`
+        # filter uses (apply_video_filters), so a count and the filter it drives
+        # can never disagree. metadata.bee.status is the richer sibling the card
+        # badge reads for taxon/confidence.
+        triage = {
+            "confirmed": qs.filter(metadata__bee_confirmed=True).count(),
+            "unconfirmed": qs.filter(metadata__bee_confirmed=False).count(),
+            "unanalyzed": qs.exclude(
+                pk__in=Job.objects.filter(status="completed").values("video_id")).count(),
+        }
         models = CustomModel.objects.filter(user=request.user, is_active=True)
 
         # Dropdown options from the user's actual videos.
@@ -699,6 +779,19 @@ class ProcessingHubView(LoginRequiredMixin, View):
             .select_related("video").order_by("started_at", "id")
         )
 
+        # Day groups: the grid reads as footage, not as rows, so clips carry a
+        # date heading and their hotel dot.
+        video_days = []
+        for video in videos:
+            video.dot = dot_by_device.get(video.device_id, "#9ca3af")
+            when = video.recorded_at or video.uploaded_at
+            day = when.date() if when else None
+            if not video_days or video_days[-1]["day"] != day:
+                video_days.append({"day": day, "videos": [], "hotels": set()})
+            video_days[-1]["videos"].append(video)
+            if video.device_id:
+                video_days[-1]["hotels"].add(video.device_id)
+
         return render(request, self.template_name, {
             "videos": videos,
             "recent_jobs": recent_jobs,
@@ -714,7 +807,12 @@ class ProcessingHubView(LoginRequiredMixin, View):
             "can_manage_any": Video.manageable(request.user).exists(),
             "custom_nest_models": models.filter(model_type__in=["nest_detection", "custom"]),
             "custom_bee_models": models.filter(model_type__in=["bee_tracking", "custom"]),
-            "est_credits_per_video": 349,
+            "device_rows": device_rows,
+            "triage": triage,
+            "video_days": video_days,
+            # Measured, not a constant: the median of recent runs on these
+            # hotels, priced at the endpoint's real rate (apps/analysis/pricing.py).
+            "estimate": estimate_per_video(request.user, selected_devices),
             # Per-launch cap the run bar shows — mirrors the server enforcement in
             # pipelines.run_on_videos so the button label can't diverge from it.
             # 0/None means "no cap" (the template treats it as unlimited).
