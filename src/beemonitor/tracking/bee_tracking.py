@@ -56,6 +56,20 @@ FRAME_QUEUE_DEPTH = int(os.environ.get("BEEMONITOR_FRAME_QUEUE", "24"))
 _END_OF_FRAMES = object()
 
 
+# The one shape the tracker consumes. BeeTracker.update() and
+# _build_detections_df both read it POSITIONALLY, so the layout is load-bearing
+# and was previously hand-built at three call sites with the format recorded
+# only in a passing comment. One converter, named, so a fourth caller cannot
+# quietly disagree with it.
+TRACKER_ROW_FIELDS = ("x1", "y1", "x2", "y2", "confidence", "source", "taxon")
+
+
+def to_tracker_rows(detections, source="yolo"):
+    """``Detection`` objects -> the positional rows BeeTracker.update expects."""
+    return [list(det.bbox) + [det.confidence, source, det.label]
+            for det in detections]
+
+
 def _decode_into(cap, start_frame, end_frame, frame_queue, stop_event):
     """Decode frames into ``frame_queue`` until EOF or ``end_frame``.
 
@@ -606,18 +620,18 @@ class BeeTracking:
                     self.processing_lookback = True  # Prevent infinite loops
                     logger.debug(f"Processing {len(self.frame_buffer)} lookback frames")
                     
-                    for buf_frame_num, buf_frame in self.frame_buffer:
-                        # Run YOLO on buffered frames
-                        yolo_detections = self.yolo_detector.detect(buf_frame)
-                        
-                        buf_detections = []
-                        for det in yolo_detections:
-                            bbox = det.bbox
-                            conf = det.confidence
-                            taxon = det.label
-                            det_with_source = list(bbox) + [conf, 'yolo', taxon]
-                            buf_detections.append(det_with_source)
-                        
+                    # The buffer's frames all need YOLO and none of their
+                    # detections depend on each other, so this is one batched
+                    # forward pass instead of N. The tracker is still fed one
+                    # frame at a time, in order — only the detector call is
+                    # coalesced, so results are identical.
+                    buffered = list(self.frame_buffer)
+                    batched = self.yolo_detector.detect_batch(
+                        [f for _, f in buffered])
+
+                    for (buf_frame_num, _), yolo_detections in zip(buffered, batched):
+                        buf_detections = to_tracker_rows(yolo_detections)
+
                         # Update tracker with lookback detections
                         if self.tracker is not None:
                             buf_tracks = self.tracker.update(buf_detections, buf_frame_num)
@@ -634,24 +648,13 @@ class BeeTracking:
                 # Now run YOLO on current frame
                 yolo_detections = self.yolo_detector.detect(frame)
                 
-                for det in yolo_detections:
-                    bbox = det.bbox
-                    conf = det.confidence
-                    taxon = det.label
-                    det_with_source = list(bbox) + [conf, 'yolo', taxon]
-                    detections.append(det_with_source)
+                detections.extend(to_tracker_rows(yolo_detections))
         
         else:  # tracking mode
             # Run YOLO on FULL FRAME (allows tracking beyond ROI)
             yolo_detections = self.yolo_detector.detect(frame)
             
-            # Convert to tracking format: [x1, y1, x2, y2, conf, source, taxon]
-            for det in yolo_detections:
-                bbox = det.bbox
-                conf = det.confidence
-                taxon = det.label  # YOLO class label = taxonomic ID
-                det_with_source = list(bbox) + [conf, 'yolo', taxon]
-                detections.append(det_with_source)
+            detections.extend(to_tracker_rows(yolo_detections))
             
             # Check if motion has stopped (ROI only)
             has_motion = self.detect_motion(roi_frame)

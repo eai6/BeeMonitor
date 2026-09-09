@@ -81,20 +81,43 @@ class YOLODetector(BaseDetector):
         Returns:
             List of YOLO detections
         """
+        return self.detect_batch([frame], **kwargs)[0]
+
+    def detect_batch(self, frames: List[np.ndarray], **kwargs) -> List[List[Detection]]:
+        """Detect across several frames in ONE forward pass.
+
+        Returns one detection list PER INPUT FRAME, in order. That separation is
+        the whole reason this is a new method rather than a widened ``detect``:
+        ``detect`` flattens every result into a single list, so handing it a
+        list of frames would silently merge their detections.
+
+        Ultralytics accepts a list and returns one Results per image. Batching
+        amortises the host<->device copies and kernel-launch overhead that
+        dominate at batch 1 — the same argument ``_classify_species`` already
+        makes for the species classifier.
+
+        Callers must batch only frames that genuinely need YOLO. The point is
+        fewer, larger calls, not speculative work.
+        """
+        if not frames:
+            return []
+
         # Override thresholds if provided
         conf = kwargs.get('conf', self.conf_threshold)
         iou = kwargs.get('iou', self.iou_threshold)
         imgsz = kwargs.get('imgsz', self.imgsz)  # Add this
         
         # Run YOLO inference with image size
-        with PROFILER.stage("inference"):
-            results = self.model(frame, conf=conf, iou=iou, imgsz=imgsz, verbose=False)
-        
-        # ... rest stays the same
-        
+        with PROFILER.stage("inference", count=len(frames)):
+            results = self.model(frames, conf=conf, iou=iou, imgsz=imgsz, verbose=False)
+
+        return [self._parse_result(r) for r in results]
+
+    def _parse_result(self, yolo_result) -> List[Detection]:
+        """One Ultralytics Results -> our filtered, relabelled Detection list."""
         detections = []
         
-        for result in results:
+        for result in (yolo_result,):
             boxes = result.boxes
             
             if boxes is None or len(boxes) == 0:
