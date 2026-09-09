@@ -337,6 +337,19 @@ class RunControlsInTheRailTests(ReviewHubTestCase):
 
         self.assertIn('type="submit" form="run-form" id="run-btn"', html)
 
+    def test_the_run_controls_follow_the_filters_in_one_scroll_flow(self):
+        """Narrow to a set of clips, then act on it — the two read as one
+        column, rather than the run block being pushed to the foot of the rail
+        with whatever gap is left between them."""
+        html = self.client.get(reverse("analysis:processing")).content.decode()
+
+        apply_at = html.index(">Apply</button>")
+        picker_at = html.index('name="pipeline" form="run-form"')
+        grid_at = html.index('id="grid-scroll"')
+
+        self.assertLess(apply_at, picker_at, "run controls must come after Apply")
+        self.assertLess(picker_at, grid_at, "run controls must stay in the rail")
+
     def test_the_filter_form_keeps_its_own_apply(self):
         html = self.client.get(reverse("analysis:processing")).content.decode()
 

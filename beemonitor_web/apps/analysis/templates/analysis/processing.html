@@ -29,7 +29,8 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
       </p>
     </div>
 
-    <form method="get" id="filter-form" class="flex-1 overflow-y-auto px-4 py-4 space-y-5">
+    <div class="flex-1 overflow-y-auto">
+    <form method="get" id="filter-form" class="px-4 py-4 space-y-5">
 
       <!-- triage -->
       <div class="space-y-1.5">
@@ -109,15 +110,16 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
     </form>
 
     {% comment %}
-    The run controls live in the rail, under the filters, but belong to the POST
-    form in <main> — form="run-form" binds them across the DOM, since HTML forms
-    cannot nest. Pinned (outside the scrolling filter list) so the pipeline and
-    the count stay visible however far down the grid you are.
+    The run controls sit directly under the filters, in the same scroll flow —
+    you narrow to a set of clips and then act on it, so the two read as one
+    column rather than being separated by whatever space the rail has left.
 
-    "Apply" above is the FILTER submit; this is a separate action.
+    They belong to the POST form in <main>: form="run-form" binds them across
+    the DOM, since HTML forms cannot nest. "Apply" above is the FILTER submit;
+    this is a separate action.
     {% endcomment %}
     {% if can_manage_any and videos %}
-    <div class="shrink-0 border-t border-gray-200 px-4 py-3 space-y-2 bg-white">
+    <div class="border-t border-gray-200 px-4 py-3 space-y-2">
       <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Pipeline to run</div>
       <select name="pipeline" form="run-form" class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
         {% if pipelines %}<optgroup label="Your pipelines">
@@ -144,6 +146,7 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
       </div>
     </div>
     {% endif %}
+    </div>
   </aside>
 
   <!-- ── GRID ─────────────────────────────────────────────────────────── -->
