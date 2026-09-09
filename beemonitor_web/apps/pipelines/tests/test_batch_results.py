@@ -280,59 +280,78 @@ class FreshRunTests(BatchPageTestCase):
 
 
 class RunHistoryPagingTests(BatchPageTestCase):
-    """Run history is paginated and filterable.
+    """History is paginated by LAUNCH, not by run.
 
-    It used to render 100 runs beneath every batch ever launched — on an account
-    with a 3,250-video batch that is one scroll with no end, and nothing older
-    than the last hundred is reachable at all.
+    Paginating runs meant page 3 of a 3,250-clip batch was still that batch,
+    with the previous launch hundreds of pages away. A launch is the unit a
+    person thinks in.
     """
 
-    def test_a_page_holds_25_runs_not_everything(self):
-        for h in range(30):
-            self._run(h % 24, "completed", tracks=1)
+    def _batch(self, batch_id, failed=0, done=0):
+        for _ in range(failed):
+            self._run(9, "failed", CPU_ERROR)
+        for _ in range(done):
+            self._run(9, "completed", tracks=2)
+        PipelineRun.objects.filter(batch_id=self.batch).update(batch_id=batch_id)
+
+    def test_batches_are_the_rows(self):
+        self._seed_real_batch()
+
+        ctx = self.client.get(reverse("pipelines:run_list")).context
+
+        self.assertEqual(len(ctx["batches"]), 1)
+        row = ctx["batches"][0]
+        self.assertEqual(row["count"], 12)
+        self.assertEqual(row["failed"], 9)
+        self.assertEqual(row["done"], 3)
+
+    def test_a_page_holds_20_launches(self):
+        for n in range(25):
+            self._batch(f"11111111-0000-4000-8000-{n:012d}", done=1)
 
         page = self.client.get(reverse("pipelines:run_list")).context["page"]
 
-        self.assertEqual(len(page.object_list), 25)
+        self.assertEqual(len(page.object_list), 20)
         self.assertTrue(page.has_next())
-        self.assertEqual(page.paginator.count, 30)
 
-    def test_older_runs_are_reachable(self):
-        for h in range(30):
-            self._run(h % 24, "completed", tracks=1)
+    def test_older_launches_are_reachable(self):
+        for n in range(25):
+            self._batch(f"22222222-0000-4000-8000-{n:012d}", done=1)
 
         page = self.client.get(reverse("pipelines:run_list"), {"page": 2}).context["page"]
 
         self.assertEqual(len(page.object_list), 5)
-        self.assertFalse(page.has_next())
 
-    def test_failures_can_be_isolated(self):
-        self._seed_real_batch()
+    def test_launches_with_failures_can_be_isolated(self):
+        self._batch("33333333-0000-4000-8000-000000000001", failed=2)
+        self._batch("33333333-0000-4000-8000-000000000002", done=2)
 
         ctx = self.client.get(reverse("pipelines:run_list"), {"status": "failed"}).context
 
-        self.assertEqual(ctx["page"].paginator.count, 9)
-        self.assertTrue(all(r["run"].status == "failed" for r in ctx["rows"]))
-
-    def test_the_counts_describe_the_whole_history_not_the_page(self):
-        self._seed_real_batch()
-
-        counts = self.client.get(reverse("pipelines:run_list")).context["run_counts"]
-
-        self.assertEqual(counts["all"], 12)
-        self.assertEqual(counts["failed"], 9)
-        self.assertEqual(counts["completed"], 3)
+        self.assertEqual(len(ctx["batches"]), 1)
+        self.assertEqual(ctx["batches"][0]["failed"], 2)
 
     def test_a_filter_that_matches_nothing_is_not_an_error(self):
         self._seed_real_batch()
 
-        resp = self.client.get(reverse("pipelines:run_list"), {"status": "running"})
+        resp = self.client.get(reverse("pipelines:run_list"), {"status": "completed"})
 
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.context["page"].paginator.count, 0)
+        self.assertEqual(len(resp.context["batches"]), 0)
 
-    def test_only_recent_batches_are_listed(self):
-        """Batches are the index into history; the list stays short enough to read."""
-        ctx = self.client.get(reverse("pipelines:run_list")).context
+    def test_a_run_with_no_batch_is_still_listed(self):
+        """One-click analysis carries no batch id — a batch-only list would
+        lose it entirely."""
+        run = PipelineRun.objects.create(pipeline=self.pipeline, user=self.user,
+                                         status="completed")
 
-        self.assertLessEqual(len(ctx["batches"]), 12)
+        solo = self.client.get(reverse("pipelines:run_list")).context["solo"]
+
+        self.assertIn(run, solo)
+
+    def test_each_batch_row_knows_its_pipeline(self):
+        self._seed_real_batch()
+
+        row = self.client.get(reverse("pipelines:run_list")).context["batches"][0]
+
+        self.assertEqual(row["pipeline"].title, "Biodiversity Count")

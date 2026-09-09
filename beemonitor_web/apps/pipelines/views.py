@@ -315,78 +315,49 @@ def run_on_videos(request):
 
 @login_required
 def run_list(request):
-    """History of the current user's pipeline runs (across pipelines)."""
+    """History, by LAUNCH rather than by run.
+
+    A launch is the unit a person thinks in: "the 12 clips I ran on Tuesday",
+    not the 12 rows it became. Paginating runs meant page 3 of a 3,250-clip batch
+    was still the same batch, and the launch before it was hundreds of pages
+    away. Batches are paginated now; a batch's own page lists its runs.
+
+    Runs launched on their own (one-click analysis, a single-clip pipeline run)
+    have no batch id, so they are listed separately rather than being lost.
+    """
+    from django.core.paginator import Paginator
+    from django.db.models import Count, F, Max, Q
+
     # Unstick runs whose jobs already resolved (missed completion notification).
     engine.reconcile_user_runs(request.user)
-    # Paginated, not capped. This page listed 100 runs under every batch ever
-    # launched, on an account with batches of 3,250 — one scroll with no end and
-    # no way to reach anything old. Batches are the index; runs are the detail.
-    run_qs = (PipelineRun.objects.filter(user=request.user)
-              .select_related("pipeline").order_by("-started_at", "-id"))
+
+    mine = PipelineRun.objects.filter(user=request.user)
+
+    batch_qs = (mine.exclude(batch_id=None)
+                .values("batch_id")
+                .annotate(
+                    count=Count("id"),
+                    done=Count("id", filter=Q(status=PipelineRun.Status.COMPLETED)),
+                    failed=Count("id", filter=Q(status=PipelineRun.Status.FAILED)),
+                    # Aliasing Max as `started_at` shadows the field, so a
+                    # second aggregate on it cannot resolve. One is enough.
+                    started_at=Max("started_at"),
+                )
+                .order_by("-started_at"))
+
     status_filter = request.GET.get("status", "")
-    if status_filter in {"failed", "completed", "running"}:
-        run_qs = run_qs.filter(
-            status=PipelineRun.Status.RUNNING if status_filter == "running"
-            else status_filter)
-    pipeline_filter = request.GET.get("pipeline", "")
-    if pipeline_filter:
-        run_qs = run_qs.filter(pipeline_id=pipeline_filter)
+    if status_filter == "failed":
+        batch_qs = batch_qs.filter(failed__gt=0)
+    elif status_filter == "running":
+        batch_qs = batch_qs.filter(count__gt=F("done") + F("failed"))
+    elif status_filter == "completed":
+        batch_qs = batch_qs.filter(failed=0).filter(count=F("done"))
 
-    run_counts = {
-        "all": PipelineRun.objects.filter(user=request.user).count(),
-        "failed": PipelineRun.objects.filter(user=request.user, status="failed").count(),
-        "running": PipelineRun.objects.filter(user=request.user, status="running").count(),
-        "completed": PipelineRun.objects.filter(user=request.user, status="completed").count(),
-    }
-
-    from django.core.paginator import Paginator
-    paginator = Paginator(run_qs, 25)
+    paginator = Paginator(batch_qs, 20)
     page = paginator.get_page(request.GET.get("page"))
-    runs = list(page.object_list)
+    batch_rows = list(page.object_list)
 
-    # Resolve each run's input video title(s) in one query.
-    vid_ids = set()
-    for r in runs:
-        for s in (r.steps or []):
-            if s.get("block_type") == "input.video":
-                vid = (s.get("config") or {}).get("video_id")
-                if str(vid).isdigit():
-                    vid_ids.add(int(vid))
-    titles = {}
-    if vid_ids:
-        titles = {str(v.pk): (getattr(v, "title", "") or f"Video {v.pk}")
-                  for v in Video.objects.filter(pk__in=vid_ids)}
-
-    rows = []
-    for r in runs:
-        inputs = [titles.get(str((s.get("config") or {}).get("video_id")))
-                  for s in (r.steps or []) if s.get("block_type") == "input.video"]
-        inputs = [i for i in inputs if i]
-        status_vals = (r.step_status or {}).values()
-        rows.append({
-            "run": r,
-            "input": ", ".join(inputs) or "—",
-            "done": sum(1 for st in status_vals if st == PipelineRun.STEP_DONE),
-            "total": len(r.steps or []),
-        })
-
-    # Batches (multi-video launches) with aggregate results pages. Counts come
-    # from the DB across ALL runs in each batch — NOT the capped recent-runs
-    # window above — so a large batch shows its true size (was capped at ~100).
-    from django.db.models import Count, Max, Q
-    batch_rows = list(
-        PipelineRun.objects.filter(user=request.user).exclude(batch_id=None)
-        .values("batch_id")
-        .annotate(
-            count=Count("id"),
-            done=Count("id", filter=Q(status=PipelineRun.Status.COMPLETED)),
-            failed=Count("id", filter=Q(status=PipelineRun.Status.FAILED)),
-            started_at=Max("started_at"),
-        )
-        .filter(count__gt=1)
-        .order_by("-started_at")[:12]
-    )
-    # Attach each batch's pipeline (a batch runs a single pipeline).
+    # Each batch runs one pipeline; resolve them in a single query.
     pipe_by_batch = {}
     for r in (PipelineRun.objects.filter(batch_id__in=[b["batch_id"] for b in batch_rows])
               .values("batch_id", "pipeline_id").distinct()):
@@ -394,13 +365,22 @@ def run_list(request):
     pipes = {p.pk: p for p in Pipeline.objects.filter(pk__in=set(pipe_by_batch.values()))}
     for b in batch_rows:
         b["pipeline"] = pipes.get(pipe_by_batch.get(b["batch_id"]))
+        b["running"] = b["count"] - b["done"] - b["failed"]
+        b["pct_done"] = round(100 * b["done"] / b["count"]) if b["count"] else 0
+
+    # Runs with no batch — one-click analysis and single-clip pipeline runs.
+    solo = list(mine.filter(batch_id=None).select_related("pipeline")
+                .order_by("-started_at", "-id")[:10])
 
     return render(request, "pipelines/runs.html", {
-        "rows": rows, "batches": batch_rows,
-        "page": page, "run_counts": run_counts,
+        "batches": batch_rows,
+        "page": page,
+        "solo": solo,
         "status_filter": status_filter,
-        "pipelines": Pipeline.objects.filter(user=request.user, is_template=False).order_by("title"),
-        "pipeline_filter": pipeline_filter,
+        "counts": {
+            "all": mine.exclude(batch_id=None).values("batch_id").distinct().count(),
+            "runs": mine.count(),
+        },
     })
 
 
