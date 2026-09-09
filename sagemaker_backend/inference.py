@@ -76,22 +76,24 @@ def predict_fn(payload, pipeline):
     ``task="pre_annotate"`` (sampled-frame YOLO detection that seeds the
     annotation editor). Both reuse the pipeline's models + S3 client.
     """
+    # Per-run stage accounting, reset BEFORE the task dispatch so pre-annotation
+    # and annotation are measured too — they run the same detectors. The
+    # container serves one invocation at a time (async inference), so resetting
+    # here makes "this run" explicit rather than relying on a fresh process.
+    profiler = _profiler()
+    if profiler is not None:
+        profiler.reset()
+
     if payload.get("task") == "pre_annotate":
-        return _pre_annotate(payload, pipeline)
+        return {**_pre_annotate(payload, pipeline), **_timings(profiler)}
     if payload.get("task") == "annotate_video":
-        return _annotate_video(payload, pipeline)
+        return {**_annotate_video(payload, pipeline), **_timings(profiler)}
 
     job_id = payload["job_id"]
     user_id = str(payload["user_id"])
     video_blob_path = payload["video_blob_path"]
 
     started = time.time()
-    # Per-run stage accounting. The container serves one invocation at a time
-    # (async inference), so resetting here makes "this run" explicit rather than
-    # relying on the process being fresh.
-    profiler = _profiler()
-    if profiler is not None:
-        profiler.reset()
     logger.info("predict_fn: job=%s video=%s", job_id, video_blob_path)
 
     try:
@@ -146,7 +148,6 @@ def predict_fn(payload, pipeline):
     out = result.to_dict()
     out["status"] = "completed"
     out["execution_seconds"] = round(time.time() - started, 2)
-    out["device"] = _detect_device()
     out.update(_timings(profiler))
     return out
 
@@ -169,12 +170,15 @@ def _timings(profiler) -> dict:
     the GPU step" and the number the web app prices — as opposed to
     ``execution_seconds``, which also covers S3 transfer, decode and encode.
     """
+    # ``device`` rides along because it is what the web app prices on: the GPU
+    # the container saw, not a tier anyone chose. Reported on every task, so a
+    # SAM 3 run on the g5 is billed at the g5 rate rather than the default.
+    timings = {"device": _detect_device()}
     if profiler is None:
-        return {}
-    return {
-        "gpu_seconds": profiler.seconds("inference"),
-        "stage_seconds": profiler.snapshot(),
-    }
+        return timings
+    timings["gpu_seconds"] = profiler.seconds("inference")
+    timings["stage_seconds"] = profiler.snapshot()
+    return timings
 
 
 def output_fn(prediction, accept):

@@ -21,6 +21,7 @@ from typing import List
 
 import numpy as np
 
+from beemonitor.core.profiling import PROFILER
 from beemonitor.detection.base_detector import BaseDetector, Detection
 
 logger = logging.getLogger(__name__)
@@ -86,15 +87,21 @@ class Sam3Detector(BaseDetector):
         self._ensure_model()
         pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         dets: List[Detection] = []
-        for prompt in self.prompts:
-            for x1, y1, x2, y2, score in self._segment(pil, prompt):
-                dets.append(Detection(
-                    bbox=(x1, y1, x2, y2),
-                    centroid=((x1 + x2) / 2.0, (y1 + y2) / 2.0),
-                    confidence=score,
-                    label=prompt,       # → tracking CSV taxon
-                    source="sam3",
-                ))
+        # Recorded as "inference", same stage name YOLODetector uses, with a
+        # count of one per FRAME rather than per prompt — so calls means frames
+        # whichever detector ran, and the seconds cover every prompt pass for
+        # that frame. Without this a SAM 3 run reported gpu_seconds = 0, which
+        # reads as "the GPU was idle" on the very detector where it is busiest.
+        with PROFILER.stage("inference"):
+            for prompt in self.prompts:
+                for x1, y1, x2, y2, score in self._segment(pil, prompt):
+                    dets.append(Detection(
+                        bbox=(x1, y1, x2, y2),
+                        centroid=((x1 + x2) / 2.0, (y1 + y2) / 2.0),
+                        confidence=score,
+                        label=prompt,       # → tracking CSV taxon
+                        source="sam3",
+                    ))
         # Dedupe overlapping boxes from the per-prompt passes.
         return self.nms(dets, self.iou_threshold)
 

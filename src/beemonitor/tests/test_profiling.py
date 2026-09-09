@@ -104,3 +104,49 @@ class DetectorRecordsInferenceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Sam3RecordsInferenceTests(unittest.TestCase):
+    """SAM 3 must report GPU time under the same stage name as YOLO.
+
+    It is the heavier detector by a wide margin — the reason it gets its own
+    g5 endpoint — so a run that reported gpu_seconds = 0 would read as "the GPU
+    was idle" on precisely the path where it is busiest.
+    """
+
+    def test_detect_records_one_inference_call_per_frame(self):
+        from beemonitor.core.profiling import PROFILER
+        from beemonitor.detection.sam3_detector import Sam3Detector
+
+        detector = Sam3Detector(prompt="bee, wasp")     # two prompts, one frame
+        detector._ensure_model = lambda: None
+        detector._segment = lambda pil, prompt: [(0.0, 0.0, 1.0, 1.0, 0.9)]
+
+        PROFILER.reset()
+        dets = detector.detect(np.zeros((4, 4, 3), np.uint8))
+
+        # calls counts FRAMES, not prompt passes, so the figure means the same
+        # thing whichever detector produced it.
+        self.assertEqual(PROFILER.snapshot()["inference"]["calls"], 1)
+        self.assertTrue(dets)
+        PROFILER.reset()
+
+    def test_both_detectors_report_the_same_stage_name(self):
+        from beemonitor.core.profiling import PROFILER
+        from beemonitor.detection.sam3_detector import Sam3Detector
+        from beemonitor.detection.yolo_detector import YOLODetector
+
+        PROFILER.reset()
+        YOLODetector(DetectorRecordsInferenceTests._FakeModel()).detect(
+            np.zeros((8, 8, 3), np.uint8))
+        yolo_stages = set(PROFILER.snapshot())
+
+        detector = Sam3Detector()
+        detector._ensure_model = lambda: None
+        detector._segment = lambda pil, prompt: []
+        PROFILER.reset()
+        detector.detect(np.zeros((4, 4, 3), np.uint8))
+        sam3_stages = set(PROFILER.snapshot())
+
+        self.assertEqual(yolo_stages, sam3_stages, "stage names must not diverge")
+        PROFILER.reset()
