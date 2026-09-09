@@ -7,6 +7,8 @@ import logging
 from typing import List, Optional, Set
 import numpy as np
 
+from beemonitor.core.profiling import PROFILER
+
 from .base_detector import BaseDetector, Detection
 
 logger = logging.getLogger(__name__)
@@ -85,7 +87,8 @@ class YOLODetector(BaseDetector):
         imgsz = kwargs.get('imgsz', self.imgsz)  # Add this
         
         # Run YOLO inference with image size
-        results = self.model(frame, conf=conf, iou=iou, imgsz=imgsz, verbose=False)
+        with PROFILER.stage("inference"):
+            results = self.model(frame, conf=conf, iou=iou, imgsz=imgsz, verbose=False)
         
         # ... rest stays the same
         

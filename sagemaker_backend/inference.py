@@ -86,6 +86,12 @@ def predict_fn(payload, pipeline):
     video_blob_path = payload["video_blob_path"]
 
     started = time.time()
+    # Per-run stage accounting. The container serves one invocation at a time
+    # (async inference), so resetting here makes "this run" explicit rather than
+    # relying on the process being fresh.
+    profiler = _profiler()
+    if profiler is not None:
+        profiler.reset()
     logger.info("predict_fn: job=%s video=%s", job_id, video_blob_path)
 
     try:
@@ -134,13 +140,41 @@ def predict_fn(payload, pipeline):
             "user_id": user_id,
             "error_message": str(exc),
             "execution_seconds": round(time.time() - started, 2),
+            **_timings(profiler),
         }
 
     out = result.to_dict()
     out["status"] = "completed"
     out["execution_seconds"] = round(time.time() - started, 2)
     out["device"] = _detect_device()
+    out.update(_timings(profiler))
     return out
+
+
+def _profiler():
+    """The analysis library's stage profiler, or None if it isn't importable."""
+    try:
+        from beemonitor.core.profiling import PROFILER
+        return PROFILER
+    except ImportError:  # pragma: no cover - the image always has it
+        return None
+
+
+def _timings(profiler) -> dict:
+    """``gpu_seconds`` + the per-stage breakdown, for cost and for diagnosis.
+
+    ``gpu_seconds`` is wall time around synchronous detector calls, not kernel
+    residency: Ultralytics copies results back to the host before returning, so
+    the call already blocks on the GPU. It is the honest answer to "how long was
+    the GPU step" and the number the web app prices — as opposed to
+    ``execution_seconds``, which also covers S3 transfer, decode and encode.
+    """
+    if profiler is None:
+        return {}
+    return {
+        "gpu_seconds": profiler.seconds("inference"),
+        "stage_seconds": profiler.snapshot(),
+    }
 
 
 def output_fn(prediction, accept):

@@ -28,6 +28,7 @@ from typing import List, Tuple, Optional, Dict, Any
 import logging
 from ultralytics import YOLO
 
+from beemonitor.core.profiling import PROFILER
 from beemonitor.detection.yolo_detector import YOLODetector
 from beemonitor.detection.blob_detector import BlobDetector
 from beemonitor.tracking.mot.bee_tracker import BeeTracker
@@ -726,7 +727,8 @@ class BeeTracking:
         while True:
             if end_frame is not None and frame_num >= end_frame:
                 break
-            ret, frame = cap.read()
+            with PROFILER.stage("decode"):
+                ret, frame = cap.read()
             if not ret:
                 break
 
@@ -744,7 +746,8 @@ class BeeTracking:
             # every annotated frame (~2.7 MB each at 720p) OOM-kills the worker
             # after a few thousand frames.
             if visualize and output_path and 'visualization' in result:
-                out.write(result['visualization'])
+                with PROFILER.stage("encode"):
+                    out.write(result['visualization'])
             result.pop('visualization', None)
 
             results.append(result)
