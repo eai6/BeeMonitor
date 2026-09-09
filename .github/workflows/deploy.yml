@@ -1,8 +1,12 @@
 name: Test & Deploy (AWS)
 
 # What this does:
-#   1. `test`        — Django check + cloud unit tests on every push / PR.
-#   2. `build-push`  — on push to `main` (or a release tag), builds the
+#   1. `test`        — Django system check, the Django app suite, and the cloud
+#                      unit tests on every push / PR.
+#   2. `test-beemonitor` — the analysis library's own suite. Separate job because
+#                      it needs torch + ultralytics (CPU wheels); runs in
+#                      parallel with `test`.
+#   3. `build-push`  — on push to `main` (or a release tag), builds the
 #                      Django container and pushes it to ECR.
 #                      App Runner's auto_deployments_enabled=True watches the
 #                      `:latest` tag and rolls the service on its own — there
@@ -55,11 +59,47 @@ jobs:
           AWS_S3_BUCKET_USER_CONFIGS: smoke-user-configs
         run: python manage.py check
 
+      # The app suite — 394 tests across apps/ plus the root tests.py. Not run
+      # here until 2026-09; that gap is how a broken analyzer import shipped and
+      # stayed green for four commits.
+      - name: Django app tests
+        working-directory: beemonitor_web
+        env:
+          DJANGO_ENV: development
+          AWS_REGION: us-east-1
+          AWS_S3_BUCKET_RAW_VIDEOS: smoke-raw-videos
+          AWS_S3_BUCKET_PROCESSED: smoke-processed
+          AWS_S3_BUCKET_MODELS: smoke-models
+          AWS_S3_BUCKET_USER_CONFIGS: smoke-user-configs
+        run: python manage.py test
+
       - name: Cloud unit tests (moto-backed S3)
         run: python -m pytest cloud/tests/ -v -o "addopts="
 
+  # The BeeMonitor library (src/beemonitor) — detectors, tracker, identification.
+  # Needs torch + ultralytics, so it installs CPU wheels rather than dragging the
+  # ~3 GB CUDA build the inference image uses.
+  test-beemonitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install analysis deps (CPU torch)
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+          pip install ultralytics opencv-python-headless numpy pandas scipy \
+                      scikit-learn filterpy pyyaml tqdm pillow pytest
+
+      - name: BeeMonitor unit tests
+        env:
+          PYTHONPATH: src
+        run: python -m pytest src/beemonitor/tests/ -v -o "addopts="
+
   build-push:
-    needs: test
+    needs: [test, test-beemonitor]
     # Only build/push from main and version tags — PRs run tests only.
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest

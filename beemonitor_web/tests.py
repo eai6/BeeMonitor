@@ -110,27 +110,30 @@ class VideoTests(TestCase):
     def setUp(self):
         self.client, self.user = logged_in_client()
 
-    def test_video_list_loads(self):
+    # videos:list and analysis:list are RedirectViews onto the Processing hub
+    # (videos/urls.py:10, analysis/urls.py:10) — the separate video-list and
+    # analytics pages were consolidated into it. These assertions predate that.
+    def test_video_list_redirects_to_the_hub(self):
         r = self.client.get(reverse("videos:list"))
-        self.assertEqual(r.status_code, 200)
+        self.assertRedirects(r, reverse("analysis:processing"))
 
     def test_video_list_requires_login(self):
         c = Client()
         r = c.get(reverse("videos:list"))
         self.assertEqual(r.status_code, 302)
 
-    def test_video_list_context(self):
-        r = self.client.get(reverse("videos:list"))
+    def test_hub_context(self):
+        r = self.client.get(reverse("videos:list"), follow=True)
         self.assertIn("videos", r.context)
-        self.assertIn("all_video_ids", r.context)
-        self.assertIn("custom_models", r.context)
+        self.assertIn("video_count", r.context)
+        self.assertIn("can_manage_any", r.context)
 
     def test_upload_page_loads(self):
         r = self.client.get(reverse("videos:upload"))
         self.assertEqual(r.status_code, 200)
 
-    def test_video_list_filters(self):
-        r = self.client.get(reverse("videos:list") + "?site=test&year=2024")
+    def test_hub_filters(self):
+        r = self.client.get(reverse("analysis:processing") + "?site=test&year=2024")
         self.assertEqual(r.status_code, 200)
 
 
@@ -141,22 +144,22 @@ class AnalysisTests(TestCase):
     def setUp(self):
         self.client, self.user = logged_in_client()
 
-    def test_analysis_list_redirects_to_analytics(self):
+    def test_analysis_list_redirects_to_the_hub(self):
         r = self.client.get(reverse("analysis:list"))
-        self.assertEqual(r.status_code, 302)  # redirect to analytics
+        self.assertEqual(r.status_code, 302)
 
-    def test_analytics_page_loads(self):
-        r = self.client.get(reverse("analysis:analytics"))
+    def test_hub_page_loads(self):
+        r = self.client.get(reverse("analysis:processing"))
         self.assertEqual(r.status_code, 200)
 
-    def test_analytics_context(self):
-        r = self.client.get(reverse("analysis:analytics"))
-        self.assertIn("summary", r.context)
-        self.assertIn("job_stats", r.context)
-        self.assertIn("processing_jobs", r.context)
+    def test_hub_context(self):
+        r = self.client.get(reverse("analysis:processing"))
+        self.assertIn("recent_jobs", r.context)
+        self.assertIn("active_jobs", r.context)
+        self.assertIn("slots_max", r.context)
 
-    def test_analytics_filters(self):
-        r = self.client.get(reverse("analysis:analytics") + "?site=test&year=2024")
+    def test_hub_filters(self):
+        r = self.client.get(reverse("analysis:processing") + "?site=test&year=2024")
         self.assertEqual(r.status_code, 200)
 
     def test_new_job_page_loads(self):
@@ -354,10 +357,11 @@ class DashboardTests(TestCase):
     def setUp(self):
         self.client, self.user = logged_in_client()
 
-    def test_dashboard_redirects_to_analytics(self):
+    def test_dashboard_redirects_to_devices(self):
+        # The dashboard now lands on the device list, not analytics.
         r = self.client.get(reverse("dashboard:dashboard"))
         self.assertEqual(r.status_code, 302)
-        self.assertIn(reverse("analysis:analytics"), r.url)
+        self.assertIn(reverse("devices:list"), r.url)
 
 
 # ── Navigation Tests ─────────────────────────────────────────────────
@@ -372,7 +376,7 @@ class NavTests(TestCase):
         urls = [
             reverse("dashboard:dashboard"),
             reverse("videos:list"),
-            reverse("analysis:analytics"),
+            reverse("analysis:processing"),
             reverse("annotations:list"),
             reverse("training:list"),
             reverse("sources:list"),
@@ -382,12 +386,12 @@ class NavTests(TestCase):
             r = self.client.get(url)
             self.assertIn(r.status_code, [200, 302], f"Failed: {url} returned {r.status_code}")
 
-    def test_analysis_redirects_to_analytics(self):
+    def test_analysis_redirects_to_the_hub(self):
         r = self.client.get(reverse("analysis:list"))
-        self.assertRedirects(r, reverse("analysis:analytics"))
+        self.assertRedirects(r, reverse("analysis:processing"))
 
     def test_no_developer_in_nav(self):
-        r = self.client.get(reverse("videos:list"))
+        r = self.client.get(reverse("analysis:processing"))
         self.assertNotContains(r, "Developer")
 
 
@@ -630,10 +634,11 @@ class DeviceUIViewTests(TestCase):
         self.assertNotIn("bmk_device_", r3.content.decode(),
                          "raw key must not be re-shown")
 
+    # 403 (not 404) once the device exists — see _device_or_403, devices/views.py:34.
     def test_cannot_revoke_someone_elses_device(self):
         # Alice tries to revoke Bob's device.
         r = self.client.post(reverse("devices:revoke", args=[self.bob_device.pk]))
-        self.assertEqual(r.status_code, 404)
+        self.assertEqual(r.status_code, 403)
         # Bob's device still active.
         self.bob_device.refresh_from_db()
         self.assertTrue(self.bob_device.is_active)
@@ -708,7 +713,7 @@ class CrossUserScopingTests(TestCase):
         )
 
     def test_bob_list_does_not_include_alice_videos(self):
-        r = self.client.get(reverse("videos:list"))
+        r = self.client.get(reverse("videos:list"), follow=True)
         self.assertEqual(r.status_code, 200)
         self.assertNotIn("alice.mp4", r.content.decode())
 
@@ -737,13 +742,17 @@ class CrossUserScopingTests(TestCase):
         self.assertEqual(r.status_code, 404)
 
     # ── Devices ───────────────────────────────────────────────
+    # Device access goes through _device_or_403 (devices/views.py:34), which by
+    # design answers 404 only when the device does not exist and 403 when it
+    # exists but the caller's role is too low. Denial either way; these asserted
+    # the pre-sharing behaviour.
     def test_bob_cannot_revoke_alice_device(self):
         r = self.client.post(reverse("devices:revoke", args=[self.alice_device.pk]))
-        self.assertEqual(r.status_code, 404)
+        self.assertEqual(r.status_code, 403)
 
     def test_bob_cannot_delete_alice_device(self):
         r = self.client.post(reverse("devices:delete", args=[self.alice_device.pk]))
-        self.assertEqual(r.status_code, 404)
+        self.assertEqual(r.status_code, 403)
 
     def test_bob_list_does_not_include_alice_devices(self):
         r = self.client.get(reverse("devices:list"))
