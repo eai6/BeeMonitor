@@ -503,13 +503,23 @@ def _put_inference_payload(job_id: str, payload: dict) -> str:
 
 
 def _tracking_endpoint(detector_kind: str) -> str:
-    """Which endpoint a tracking job runs on. SAM 3 is heavy and needs the
-    A10G/g5 SAM 3 endpoint (the T4/g4dn OOMs); YOLO stays on the default g4dn.
-    Falls back to the default endpoint if the SAM 3 one isn't configured."""
+    """Which endpoint a tracking job runs on.
+
+    SAM 3 is heavy and needs the A10G/g5 SAM 3 endpoint; YOLO stays on the
+    default g4dn. A missing SAM 3 endpoint used to fall back to the default —
+    which silently sent SAM 3 to the T4 that, per this docstring's own warning,
+    OOMs on it. The run burned GPU minutes and failed deep inside inference with
+    an error that said nothing about routing. Refusing at submit says what is
+    actually wrong, and costs nothing.
+    """
     if detector_kind == "sam3":
         sam3 = getattr(settings, "SAGEMAKER_SAM3_ENDPOINT_NAME", "")
-        if sam3:
-            return sam3
+        if not sam3:
+            raise RuntimeError(
+                "SAM 3 needs its own endpoint (A10G/g5) — the default endpoint "
+                "is a T4 and runs out of memory on it. Set "
+                "SAGEMAKER_SAM3_ENDPOINT_NAME, or run this pipeline with YOLO.")
+        return sam3
     return settings.SAGEMAKER_ENDPOINT_NAME
 
 

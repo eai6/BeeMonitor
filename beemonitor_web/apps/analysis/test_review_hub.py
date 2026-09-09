@@ -249,3 +249,41 @@ class RunControlsInTheRailTests(ReviewHubTestCase):
 
         self.assertIn('id="filter-form"', html)
         self.assertNotIn('id="run-btn"', html)
+
+
+class TrackingEndpointRoutingTests(TestCase):
+    """SAM 3 must not silently land on the T4.
+
+    _tracking_endpoint used to fall back to the default endpoint when the SAM 3
+    one was unconfigured — which is exactly what happened in production: the
+    variable was never set on App Runner, so every SAM 3 run went to the g4dn
+    and died deep inside inference with an error that said nothing about
+    routing. Refusing at submit names the actual problem.
+    """
+
+    def test_yolo_uses_the_default_endpoint(self):
+        from apps.analysis.views import _tracking_endpoint
+
+        with self.settings(SAGEMAKER_ENDPOINT_NAME="main", SAGEMAKER_SAM3_ENDPOINT_NAME="sam3"):
+            self.assertEqual(_tracking_endpoint("yolo"), "main")
+
+    def test_sam3_uses_its_own_endpoint(self):
+        from apps.analysis.views import _tracking_endpoint
+
+        with self.settings(SAGEMAKER_ENDPOINT_NAME="main", SAGEMAKER_SAM3_ENDPOINT_NAME="sam3"):
+            self.assertEqual(_tracking_endpoint("sam3"), "sam3")
+
+    def test_sam3_without_its_endpoint_refuses_instead_of_using_the_t4(self):
+        from apps.analysis.views import _tracking_endpoint
+
+        with self.settings(SAGEMAKER_ENDPOINT_NAME="main", SAGEMAKER_SAM3_ENDPOINT_NAME=""):
+            with self.assertRaises(RuntimeError) as caught:
+                _tracking_endpoint("sam3")
+
+        self.assertIn("SAGEMAKER_SAM3_ENDPOINT_NAME", str(caught.exception))
+
+    def test_yolo_is_unaffected_by_a_missing_sam3_endpoint(self):
+        from apps.analysis.views import _tracking_endpoint
+
+        with self.settings(SAGEMAKER_ENDPOINT_NAME="main", SAGEMAKER_SAM3_ENDPOINT_NAME=""):
+            self.assertEqual(_tracking_endpoint("yolo"), "main")

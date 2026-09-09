@@ -821,6 +821,12 @@ if deploy_service:
         # SageMaker (Phase 4) — set by convention; the SM stack owns the names.
         # Blanked when analysis-enabled=false so uploads don't spawn jobs.
         "SAGEMAKER_ENDPOINT_NAME": f"beemonitor-sm-{env}" if analysis_enabled else "",
+        # SAM 3 tracking and pre-annotation route here. Without it
+        # analysis.views._tracking_endpoint falls back to the default endpoint —
+        # a g4dn/T4, which its own docstring says OOMs on SAM 3. The endpoint has
+        # existed since deploy-sam3 was flipped on; this variable did not, so
+        # every SAM 3 run was silently landing on the T4.
+        "SAGEMAKER_SAM3_ENDPOINT_NAME": f"beemonitor-sm-{env}-sam3" if analysis_enabled else "",
         "SAGEMAKER_INPUT_BUCKET": f"beemonitor-sm-{env}-input-{account_id}",
         "SAGEMAKER_OUTPUT_BUCKET": f"beemonitor-sm-{env}-output-{account_id}",
         # Fine-tuning (SageMaker training jobs) — names by convention from the SM
