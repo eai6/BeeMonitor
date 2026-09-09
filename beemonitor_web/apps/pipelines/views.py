@@ -740,6 +740,11 @@ def batch_detail(request, batch_id):
         for r in rows if r["status"] == "failed"
     ])
 
+    # What the pipeline ACTUALLY computed. The trips aggregate below runs
+    # regardless; this is what a Visitation or Interactions pipeline gets
+    # instead of being shown a page about foraging.
+    analyzer_results = aggregate.analyzer_results(runs)
+
     # Cap the IN-PAGE aggregation so a huge batch can't ride the request past
     # App Runner's hard 120s limit (each source may cost an S3 read on a cold
     # cache). The combined-CSV downloads below remain uncapped. Oldest-first
@@ -776,6 +781,9 @@ def batch_detail(request, batch_id):
         # batch OUTCOME (how many ran, what it cost).
         "outcome": outcome,
         "failure_groups": failure_groups,
+        "analyzer_results": analyzer_results,
+        # Trips only earn the page when a trips analyzer ran.
+        "show_trips": any(a["kind"] == "foraging_trips" for a in analyzer_results) or not analyzer_results,
         "can_rerun": any(r.user_id == request.user.id for r in runs),
         "batch_id": batch_id,
         "pipeline": runs[0].pipeline,

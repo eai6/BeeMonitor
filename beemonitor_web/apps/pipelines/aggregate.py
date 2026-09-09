@@ -453,3 +453,159 @@ def batch_summary(rows):
         "failed_video_ids": [r["video"].pk for r in failed if r["video"]],
         "all_video_ids": [r["video"].pk for r in rows if r["video"]],
     }
+
+
+# ── Analyzer-shaped results ──────────────────────────────────────────────────
+# The batch page only ever aggregated foraging trips: it read events CSVs and
+# rendered trips, entries/exits and nest chips whatever the pipeline computed. Run
+# a Visitation pipeline and you got a page about a question you never asked.
+#
+# Each analyzer already tags its output with `table_kind` in run.context. Nothing
+# read it at batch level. These functions merge each kind across the batch's runs,
+# so the page can render what was actually computed.
+
+def analyzer_outputs(run):
+    """Every analyzer output in one run, as ``(kind, output)``.
+
+    Most analyzers tag themselves with ``table_kind``. Foraging trips does not —
+    it predates the table analyzers and returns ``artifact: "events"`` — so it is
+    mapped here rather than left undetectable, which would make a trips pipeline
+    look like it ran no analyzer at all.
+    """
+    out = []
+    for value in (run.context or {}).values():
+        if not isinstance(value, dict):
+            continue
+        kind = value.get("table_kind")
+        if not kind and value.get("artifact") == "events":
+            kind = "foraging_trips"
+        if kind:
+            out.append((kind, value))
+    return out
+
+
+def _merge_per_reference(bucket, rows, count_key):
+    """Add one run's per-reference rows into the batch-wide tally.
+
+    Keyed on the reference id, which is stable within a layout — that is what
+    makes the same tube comparable across clips. Labels come along so the page
+    never has to invent one.
+    """
+    for row in rows or []:
+        ref_id = str(row.get("id", ""))
+        if not ref_id:
+            continue
+        entry = bucket.setdefault(ref_id, {
+            "id": ref_id, "label": row.get("label") or ref_id,
+            count_key: 0, "visitors": 0, "partners": 0, "dwell_sec": 0.0,
+            "duration_sec": 0.0, "clips": 0,
+        })
+        entry[count_key] += row.get(count_key, 0) or 0
+        entry["visitors"] += row.get("visitors", 0) or 0
+        entry["partners"] += row.get("partners", 0) or 0
+        entry["dwell_sec"] += float(row.get("dwell_sec") or 0)
+        entry["duration_sec"] += float(row.get("duration_sec") or 0)
+        if row.get(count_key):
+            entry["clips"] += 1
+    return bucket
+
+
+def aggregate_visitation(outputs):
+    """Visits across the batch, and per reference.
+
+    ``unique_visitors`` is summed rather than deduplicated: track ids are only
+    unique within one clip, so the same bee in two clips is two visitors and
+    there is no way to know otherwise. Stated on the page rather than hidden.
+    """
+    per_ref, totals = {}, {"unique_visitors": 0, "total_visits": 0, "total_dwell_sec": 0.0}
+    for out in outputs:
+        totals["unique_visitors"] += out.get("unique_visitors", 0) or 0
+        totals["total_visits"] += out.get("total_visits", 0) or 0
+        totals["total_dwell_sec"] += float(out.get("total_dwell_sec") or 0)
+        _merge_per_reference(per_ref, out.get("per_reference"), "visits")
+
+    rows = sorted(per_ref.values(), key=lambda r: (-r["visits"], r["id"]))
+    for r in rows:
+        r["dwell_sec"] = round(r["dwell_sec"], 1)
+    totals["total_dwell_sec"] = round(totals["total_dwell_sec"], 1)
+    totals["per_reference"] = rows
+    totals["clips"] = len(outputs)
+    return totals
+
+
+def aggregate_interaction(outputs):
+    per_ref, totals = {}, {"interaction_count": 0, "organism_organism": 0,
+                           "organism_reference": 0, "total_duration_sec": 0.0}
+    for out in outputs:
+        for key in ("interaction_count", "organism_organism", "organism_reference"):
+            totals[key] += out.get(key, 0) or 0
+        totals["total_duration_sec"] += float(out.get("total_duration_sec") or 0)
+        _merge_per_reference(per_ref, out.get("per_reference"), "interactions")
+
+    rows = sorted(per_ref.values(), key=lambda r: (-r["interactions"], r["id"]))
+    for r in rows:
+        r["duration_sec"] = round(r["duration_sec"], 1)
+    totals["total_duration_sec"] = round(totals["total_duration_sec"], 1)
+    totals["per_reference"] = rows
+    totals["clips"] = len(outputs)
+    return totals
+
+
+def aggregate_detection_count(outputs):
+    totals = {"total": 0, "distinct": 0, "clips": len(outputs), "with_any": 0}
+    for out in outputs:
+        rows = out.get("rows") or []
+        total = out.get("total") or sum(r.get("count", 0) or 0 for r in rows)
+        distinct = out.get("distinct") or out.get("distinct_objects") or 0
+        totals["total"] += total or 0
+        totals["distinct"] += distinct or 0
+        if total:
+            totals["with_any"] += 1
+    return totals
+
+
+# Colony activity is deliberately absent: its computation stays, but it does not
+# get a section of its own — a timeline belongs inside whichever analyzer ran.
+AGGREGATORS = {
+    "visitation": aggregate_visitation,
+    "interaction": aggregate_interaction,
+    "detection_count": aggregate_detection_count,
+}
+
+KIND_LABELS = {
+    "foraging_trips": "Foraging trips",
+    "visitation": "Visitation",
+    "interaction": "Interactions",
+    "detection_count": "Detection count",
+}
+
+
+def analyzer_results(runs):
+    """``[{kind, label, summary}]`` for every analyzer this batch actually ran.
+
+    Ordered by how many runs produced each, so the pipeline's main analyzer
+    leads when a graph has more than one.
+    """
+    by_kind = {}
+    for run in runs:
+        for kind, output in analyzer_outputs(run):
+            by_kind.setdefault(kind, []).append(output)
+
+    results = []
+    for kind, outputs in by_kind.items():
+        aggregator = AGGREGATORS.get(kind)
+        if not aggregator:
+            # foraging_trips is rendered by the existing cross-video machinery;
+            # colony_activity deliberately has no section. Both still register
+            # so the page knows which analyzers ran.
+            results.append({"kind": kind, "label": KIND_LABELS.get(kind, kind),
+                            "summary": None, "clips": len(outputs)})
+            continue
+        results.append({
+            "kind": kind,
+            "label": KIND_LABELS.get(kind, kind.replace("_", " ").title()),
+            "summary": aggregator(outputs),
+            "clips": len(outputs),
+        })
+    results.sort(key=lambda r: -r["clips"])
+    return results

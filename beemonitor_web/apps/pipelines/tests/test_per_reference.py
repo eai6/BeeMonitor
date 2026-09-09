@@ -221,3 +221,116 @@ class PerReferenceInteractionTests(unittest.TestCase):
 
         self.assertEqual(out["interaction_count"], 0)
         self.assertEqual(out.get("per_reference", []), [])
+
+
+class AnalyzerResultsTests(unittest.TestCase):
+    """The batch page renders what the pipeline computed.
+
+    It used to read events CSVs and render foraging trips whatever ran, so a
+    Visitation pipeline got a page about a question it never asked.
+    """
+
+    class _Run:
+        def __init__(self, context):
+            self.context = context
+
+    def test_an_analyzer_is_found_by_its_table_kind(self):
+        from apps.pipelines import aggregate
+
+        run = self._Run({"a": {"table_kind": "visitation", "total_visits": 3}})
+
+        self.assertEqual(aggregate.analyzer_outputs(run)[0][0], "visitation")
+
+    def test_foraging_trips_is_found_though_it_has_no_table_kind(self):
+        """It predates the table analyzers and returns artifact: events —
+        undetected, a trips pipeline would look like it ran no analyzer."""
+        from apps.pipelines import aggregate
+
+        run = self._Run({"a": {"artifact": "events", "trips": []}})
+
+        self.assertEqual(aggregate.analyzer_outputs(run)[0][0], "foraging_trips")
+
+    def test_non_dict_context_entries_are_ignored(self):
+        from apps.pipelines import aggregate
+
+        run = self._Run({"a": True, "b": None, "c": {"table_kind": "visitation"}})
+
+        self.assertEqual(len(aggregate.analyzer_outputs(run)), 1)
+
+    def test_visits_are_summed_per_reference_across_clips(self):
+        from apps.pipelines import aggregate
+
+        runs = [
+            self._Run({"a": {"table_kind": "visitation", "total_visits": 3,
+                             "unique_visitors": 2, "total_dwell_sec": 10.0,
+                             "per_reference": [
+                                 {"id": "nest_3", "label": "Nest 3", "visits": 2, "visitors": 2, "dwell_sec": 7.0},
+                                 {"id": "nest_7", "label": "Nest 7", "visits": 1, "visitors": 1, "dwell_sec": 3.0}]}}),
+            self._Run({"a": {"table_kind": "visitation", "total_visits": 2,
+                             "unique_visitors": 1, "total_dwell_sec": 5.0,
+                             "per_reference": [
+                                 {"id": "nest_3", "label": "Nest 3", "visits": 2, "visitors": 1, "dwell_sec": 5.0}]}}),
+        ]
+
+        results = aggregate.analyzer_results(runs)
+        summary = results[0]["summary"]
+
+        by_id = {r["id"]: r for r in summary["per_reference"]}
+        self.assertEqual(summary["total_visits"], 5)
+        self.assertEqual(by_id["nest_3"]["visits"], 4)
+        self.assertEqual(by_id["nest_3"]["clips"], 2)
+        self.assertEqual(by_id["nest_7"]["visits"], 1)
+
+    def test_the_busiest_reference_leads(self):
+        from apps.pipelines import aggregate
+
+        run = self._Run({"a": {"table_kind": "visitation", "per_reference": [
+            {"id": "nest_1", "label": "Nest 1", "visits": 1},
+            {"id": "nest_9", "label": "Nest 9", "visits": 8}]}})
+
+        summary = aggregate.analyzer_results([run])[0]["summary"]
+
+        self.assertEqual(summary["per_reference"][0]["id"], "nest_9")
+
+    def test_interactions_aggregate_per_reference_too(self):
+        from apps.pipelines import aggregate
+
+        runs = [self._Run({"a": {"table_kind": "interaction", "interaction_count": 2,
+                                 "organism_reference": 2, "total_duration_sec": 4.0,
+                                 "per_reference": [{"id": "nest_3", "label": "Nest 3",
+                                                    "interactions": 2, "partners": 2,
+                                                    "duration_sec": 4.0}]}})] * 2
+
+        summary = aggregate.analyzer_results(runs)[0]["summary"]
+
+        self.assertEqual(summary["interaction_count"], 4)
+        self.assertEqual(summary["per_reference"][0]["interactions"], 4)
+
+    def test_colony_activity_gets_no_section(self):
+        """Its computation stays; a timeline belongs inside whichever analyzer
+        ran rather than on a page of its own."""
+        from apps.pipelines import aggregate
+
+        run = self._Run({"a": {"table_kind": "colony_activity", "peak": 4}})
+
+        results = aggregate.analyzer_results([run])
+
+        self.assertEqual(results[0]["kind"], "colony_activity")
+        self.assertIsNone(results[0]["summary"])
+
+    def test_the_analyzer_that_ran_on_most_clips_leads(self):
+        from apps.pipelines import aggregate
+
+        runs = [self._Run({"a": {"table_kind": "visitation", "per_reference": []},
+                           "b": {"table_kind": "interaction", "per_reference": []}}),
+                self._Run({"a": {"table_kind": "visitation", "per_reference": []}})]
+
+        results = aggregate.analyzer_results(runs)
+
+        self.assertEqual(results[0]["kind"], "visitation")
+        self.assertEqual(results[0]["clips"], 2)
+
+    def test_a_batch_with_no_analyzer_output_yields_nothing(self):
+        from apps.pipelines import aggregate
+
+        self.assertEqual(aggregate.analyzer_results([self._Run({})]), [])

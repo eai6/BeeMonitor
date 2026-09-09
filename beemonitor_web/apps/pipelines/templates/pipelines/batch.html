@@ -169,6 +169,98 @@ their reason.
   {% endfor %}
 </div>
 
+{% comment %}
+Results follow the analyzer the pipeline actually ran. Each analyzer tags its
+output with table_kind; the batch page used to ignore that and render foraging
+trips regardless, so a Visitation pipeline got a page about a question it never
+asked.
+{% endcomment %}
+{% for a in analyzer_results %}
+{% if a.summary %}
+<div class="bg-white shadow rounded-lg p-4 mb-6">
+  <div class="flex items-baseline justify-between mb-3">
+    <h2 class="text-sm font-semibold text-gray-900">{{ a.label }}</h2>
+    <span class="text-xs text-gray-400">from {{ a.clips }} clip{{ a.clips|pluralize }}</span>
+  </div>
+
+  {% if a.kind == "visitation" %}
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+    <div><p class="text-2xl font-bold text-gray-900">{{ a.summary.total_visits }}</p><p class="text-xs text-gray-500 uppercase mt-0.5">Visits</p></div>
+    <div><p class="text-2xl font-bold text-gray-900">{{ a.summary.unique_visitors }}</p><p class="text-xs text-gray-500 uppercase mt-0.5">Visitors</p></div>
+    <div><p class="text-2xl font-bold text-gray-900">{{ a.summary.total_dwell_sec|duration_min }}</p><p class="text-xs text-gray-500 uppercase mt-0.5">Total dwell</p></div>
+    <div><p class="text-2xl font-bold text-gray-900">{{ a.summary.per_reference|length }}</p><p class="text-xs text-gray-500 uppercase mt-0.5">References</p></div>
+  </div>
+  {% if a.summary.per_reference %}
+  <table class="w-full text-sm">
+    <thead><tr class="text-[11px] text-gray-500 uppercase">
+      <th class="text-left font-semibold py-1.5">Reference</th>
+      <th class="text-right font-semibold py-1.5">Visits</th>
+      <th class="text-right font-semibold py-1.5">Visitors</th>
+      <th class="text-right font-semibold py-1.5">Dwell</th>
+      <th class="text-right font-semibold py-1.5">Clips</th>
+    </tr></thead>
+    <tbody>
+      {% for r in a.summary.per_reference %}
+      <tr class="border-t border-gray-100 {% if not r.visits %}text-gray-400{% endif %}">
+        <td class="py-1.5">{{ r.label }}</td>
+        <td class="text-right py-1.5 {% if r.visits %}font-medium text-gray-900{% endif %}">{{ r.visits }}</td>
+        <td class="text-right py-1.5">{{ r.visitors }}</td>
+        <td class="text-right py-1.5">{{ r.dwell_sec|duration_min }}</td>
+        <td class="text-right py-1.5">{{ r.clips }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="text-[11px] text-gray-400 mt-2 leading-4">
+    A reference with no visits keeps its row — nothing visiting a control is a
+    result. Visitors are summed across clips: track ids are unique only within a
+    clip, so the same bee seen twice counts twice.
+  </p>
+  {% else %}
+  <p class="text-sm text-gray-500">No references were defined, so visits could not be attributed. Add an ROI or a nest layout upstream.</p>
+  {% endif %}
+
+  {% elif a.kind == "interaction" %}
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+    <div><p class="text-2xl font-bold text-gray-900">{{ a.summary.interaction_count }}</p><p class="text-xs text-gray-500 uppercase mt-0.5">Interactions</p></div>
+    <div><p class="text-2xl font-bold text-gray-900">{{ a.summary.organism_organism }}</p><p class="text-xs text-gray-500 uppercase mt-0.5">Insect ↔ insect</p></div>
+    <div><p class="text-2xl font-bold text-gray-900">{{ a.summary.organism_reference }}</p><p class="text-xs text-gray-500 uppercase mt-0.5">Insect ↔ reference</p></div>
+    <div><p class="text-2xl font-bold text-gray-900">{{ a.summary.total_duration_sec|duration_min }}</p><p class="text-xs text-gray-500 uppercase mt-0.5">Total duration</p></div>
+  </div>
+  {% if a.summary.per_reference %}
+  <table class="w-full text-sm">
+    <thead><tr class="text-[11px] text-gray-500 uppercase">
+      <th class="text-left font-semibold py-1.5">Reference</th>
+      <th class="text-right font-semibold py-1.5">Interactions</th>
+      <th class="text-right font-semibold py-1.5">Partners</th>
+      <th class="text-right font-semibold py-1.5">Duration</th>
+    </tr></thead>
+    <tbody>
+      {% for r in a.summary.per_reference %}
+      <tr class="border-t border-gray-100">
+        <td class="py-1.5">{{ r.label }}</td>
+        <td class="text-right py-1.5 font-medium text-gray-900">{{ r.interactions }}</td>
+        <td class="text-right py-1.5">{{ r.partners }}</td>
+        <td class="text-right py-1.5">{{ r.duration_sec|duration_min }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% elif a.kind == "detection_count" %}
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div><p class="text-2xl font-bold text-gray-900">{{ a.summary.total }}</p><p class="text-xs text-gray-500 uppercase mt-0.5">Detections</p></div>
+    <div><p class="text-2xl font-bold text-gray-900">{{ a.summary.distinct }}</p><p class="text-xs text-gray-500 uppercase mt-0.5">Distinct objects</p></div>
+    <div><p class="text-2xl font-bold text-gray-900">{{ a.summary.with_any }}/{{ a.summary.clips }}</p><p class="text-xs text-gray-500 uppercase mt-0.5">Clips with any</p></div>
+  </div>
+  <p class="text-[11px] text-gray-400 mt-2 leading-4">Detections are raw, before the tracker associates them — the gap to “distinct” is what tracking removed.</p>
+  {% endif %}
+</div>
+{% endif %}
+{% endfor %}
+
+{% if show_trips %}
 {% if sources %}
 <!-- Aggregate summary -->
 <div class="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
@@ -353,6 +445,7 @@ their reason.
   No aggregate results — none of the completed runs produced an events CSV (see the skipped list above).
 </div>
 {% endif %}
+{% endif %}{# show_trips #}
 
 <script>
 // Click a nest chip to filter the trips table to that nest; "show all" clears.
