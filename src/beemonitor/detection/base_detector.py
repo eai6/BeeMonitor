@@ -40,6 +40,21 @@ class BaseDetector(ABC):
     This provides a unified API for detecting objects in images.
     """
     
+    def detect_batch(self, frames: List[np.ndarray], **kwargs) -> List[List[Detection]]:
+        """Detect across several frames, one detection list PER FRAME.
+
+        Part of the interface, not an optimisation, because the tracker calls it:
+        the lookback replay hands over every buffered frame at once. A detector
+        that can genuinely batch overrides this (YOLODetector runs one forward
+        pass); the default loops, which is the behaviour every caller had before
+        batching existed.
+
+        Defined here rather than on each detector because it was NOT: adding
+        detect_batch to YOLODetector alone broke SAM 3 tracking in production
+        with "'Sam3Detector' object has no attribute 'detect_batch'".
+        """
+        return [self.detect(frame, **kwargs) for frame in frames]
+
     @abstractmethod
     def detect(self, frame: np.ndarray, **kwargs) -> List[Detection]:
         """Detect objects in a single frame.

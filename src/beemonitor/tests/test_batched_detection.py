@@ -225,5 +225,68 @@ class LookbackReplayTests(unittest.TestCase):
         self.assertEqual(self.model.batch_sizes, [1])   # the current frame only
 
 
+class DetectorInterfaceTests(unittest.TestCase):
+    """Every detector the tracker can be pointed at must answer detect_batch.
+
+    The tracker's lookback replay calls it, and detector_kind chooses which
+    class is behind that name at runtime. Adding detect_batch to YOLODetector
+    alone broke SAM 3 tracking in production — the step failed with
+    "'Sam3Detector' object has no attribute 'detect_batch'" — so the contract
+    lives on BaseDetector and this test walks every implementation.
+    """
+
+    def _detectors(self):
+        from beemonitor.detection.base_detector import BaseDetector
+        from beemonitor.detection.blob_detector import BlobDetector
+        from beemonitor.detection.sam3_detector import Sam3Detector
+        from beemonitor.detection.sift_detector import SIFTDetector
+        from beemonitor.detection.yolo_detector import YOLODetector
+
+        self.assertTrue(issubclass(Sam3Detector, BaseDetector))
+        return [Sam3Detector, BlobDetector, SIFTDetector, YOLODetector]
+
+    def test_every_detector_exposes_detect_batch(self):
+        for cls in self._detectors():
+            self.assertTrue(hasattr(cls, "detect_batch"), cls.__name__)
+
+    def test_the_default_returns_one_list_per_frame(self):
+        """The fallback must keep frames separate, like the batched override."""
+        from beemonitor.detection.sam3_detector import Sam3Detector
+
+        detector = Sam3Detector(prompt="bee")
+        detector._ensure_model = lambda: None
+        calls = []
+
+        def fake_segment(pil, prompt):
+            # Boxes must not overlap: detect() runs NMS, which would fold
+            # identical ones into a single detection and hide the separation
+            # this test is checking.
+            x = 100.0 * len(calls)
+            calls.append(prompt)
+            return [(x, 0.0, x + 10.0, 10.0, 0.9)]
+
+        detector._segment = fake_segment
+        out = detector.detect_batch([_frame(), _frame(), _frame()])
+
+        self.assertEqual(len(out), 3)
+        self.assertEqual([len(d) for d in out], [1, 1, 1])
+        self.assertEqual([d[0].bbox[0] for d in out], [0.0, 100.0, 200.0])
+
+    def test_an_empty_batch_is_empty_on_the_default_too(self):
+        from beemonitor.detection.blob_detector import BlobDetector
+
+        self.assertEqual(BaseDetectorProbe().detect_batch([]), [])
+
+
+class BaseDetectorProbe:
+    """Minimal concrete detector, to exercise the default straight."""
+
+    from beemonitor.detection.base_detector import BaseDetector as _B
+    detect_batch = _B.detect_batch
+
+    def detect(self, frame, **kwargs):
+        return ["one"]
+
+
 if __name__ == "__main__":
     unittest.main()
