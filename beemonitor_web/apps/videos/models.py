@@ -65,6 +65,11 @@ class Video(models.Model):
     device_delete_requested = models.BooleanField(default=False)
     device_deleted_at = models.DateTimeField(null=True, blank=True)
 
+    # One sampled frame, so the review grid is scannable without playing 200
+    # clips. Key into the `processed` bucket; blank until extracted (older rows,
+    # or a clip whose extraction failed — the grid falls back to a placeholder).
+    thumbnail_key = models.CharField(max_length=500, blank=True)
+
     class Meta:
         ordering = ["-uploaded_at"]
 

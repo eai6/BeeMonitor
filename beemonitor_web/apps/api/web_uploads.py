@@ -183,6 +183,11 @@ class WebUploadCompleteView(APIView):
             site_name=final_site,
         )
 
+        # One sampled still for the review grid — background, so the device (or
+        # the browser) is not held open for a decode.
+        from apps.videos.thumbnails import queue_thumbnail
+        queue_thumbnail(video)
+
         logger.info(
             "Web upload complete: user=%s video=%s key=%s size=%d MB",
             user.pk, video.id, storage_key, file_size_bytes // (1024 * 1024),

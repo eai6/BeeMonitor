@@ -223,6 +223,11 @@ class UploadCompleteView(APIView):
             metadata=metadata,
         )
 
+        # One sampled still for the review grid — background, so the device (or
+        # the browser) is not held open for a decode.
+        from apps.videos.thumbnails import queue_thumbnail
+        queue_thumbnail(video)
+
         logger.info(
             "Pi upload complete: device=%s user=%s video=%s key=%s size=%d MB",
             device.id, device.owner_id, video.id, storage_key,
