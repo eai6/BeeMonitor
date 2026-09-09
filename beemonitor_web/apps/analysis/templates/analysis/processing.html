@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load pricing_extras %}
 {% block title %}Review - BeeMonitor{% endblock %}
 
 {% comment %}
@@ -120,21 +121,19 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
       <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Pipeline to run</div>
       <select name="pipeline" form="run-form" class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
         {% if pipelines %}<optgroup label="Your pipelines">
-          {% for p in pipelines %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}>{{ p.title }}</option>{% endfor %}
+          {% for p in pipelines %}{% with e=pipeline_estimates|get:p.pk %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}
+            data-low="{{ e.cost_low }}" data-high="{{ e.cost_high }}" data-cost="{{ e.cost }}"
+            data-tier="{{ e.tier }}" data-sample="{{ e.sample }}" data-secs="{{ e.seconds }}">{{ p.title }}</option>{% endwith %}{% endfor %}
         </optgroup>{% endif %}
         {% if pipeline_templates %}<optgroup label="Templates">
-          {% for p in pipeline_templates %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}>{{ p.title }}</option>{% endfor %}
+          {% for p in pipeline_templates %}{% with e=pipeline_estimates|get:p.pk %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}
+            data-low="{{ e.cost_low }}" data-high="{{ e.cost_high }}" data-cost="{{ e.cost }}"
+            data-tier="{{ e.tier }}" data-sample="{{ e.sample }}" data-secs="{{ e.seconds }}">{{ p.title }}</option>{% endwith %}{% endfor %}
         </optgroup>{% endif %}
       </select>
       <p class="text-[11px] text-gray-500 leading-4">
         <span id="cred-line">Select clips to run</span>
-        <span class="text-gray-400">
-          {% if estimate.sample %}
-            &middot; ~${{ estimate.cost|floatformat:3 }}/clip on {{ estimate.tier }}, from {{ estimate.sample }} past run{{ estimate.sample|pluralize }}
-          {% else %}
-            &middot; no runs yet to estimate from
-          {% endif %}
-        </span>
+        <span class="text-gray-400" id="per-clip"></span>
       </p>
       <div class="flex items-center gap-2">
         <button type="submit" form="run-form" id="run-btn" disabled
@@ -307,9 +306,27 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
   var cards = Array.prototype.slice.call(document.querySelectorAll('.vid-card'));
   var TOTAL = {{ video_count }};
   var CAP = {{ pipeline_max_batch|default:50000 }} || Infinity;
-  var PER = {{ estimate.cost|default:0 }};
-  var LOW = {{ estimate.cost_low|default:0 }};
-  var HIGH = {{ estimate.cost_high|default:0 }};
+  // The estimate belongs to the SELECTED pipeline, not the page: a SAM 3
+  // pipeline runs on a dearer instance and takes far longer than a YOLO one.
+  var picker = document.querySelector('select[name="pipeline"]');
+  var PER = 0, LOW = 0, HIGH = 0;
+
+  function readEstimate() {
+    var o = picker && picker.options[picker.selectedIndex];
+    PER = o ? parseFloat(o.dataset.cost || 0) : 0;
+    LOW = o ? parseFloat(o.dataset.low || 0) : 0;
+    HIGH = o ? parseFloat(o.dataset.high || 0) : 0;
+    var note = document.getElementById('per-clip');
+    if (!note) return;
+    if (!o || !parseInt(o.dataset.sample || 0, 10)) {
+      note.textContent = ' · no comparable runs yet to estimate from';
+    } else {
+      note.textContent = ' · ~$' + PER.toFixed(3) + '/clip on ' + o.dataset.tier +
+        ' (~' + Math.round(parseFloat(o.dataset.secs || 0)) + 's), from ' +
+        o.dataset.sample + ' past run' + (o.dataset.sample === '1' ? '' : 's');
+    }
+  }
+  if (picker) picker.addEventListener('change', function () { readEstimate(); refresh(); });
 
   // ── selection ───────────────────────────────────────────────────────
   var all = document.getElementById('select-all');
@@ -536,6 +553,7 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
   }
   setInterval(poll, 12000);
 
+  readEstimate();
   refresh();
 })();
 </script>

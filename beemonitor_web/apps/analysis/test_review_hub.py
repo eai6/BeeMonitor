@@ -10,6 +10,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
+from apps.analysis import pricing
 from apps.analysis.models import Job
 from apps.analysis.views import apply_video_filters
 from apps.devices.models import Device
@@ -167,6 +168,22 @@ class DayGroupingTests(ReviewHubTestCase):
 
 
 class EstimateTests(ReviewHubTestCase):
+    """What a run will cost, estimated from COMPARABLE finished runs.
+
+    The first version of this averaged everything in the Job table and priced it
+    all on the T4, which produced ~$0.001 a clip: pre-annotation tasks finish in
+    seconds and dragged the median down, and SAM 3 runs on a 1.9x dearer
+    instance were priced as if they were YOLO.
+    """
+
+    def _job(self, **kw):
+        kw.setdefault("user", self.user)
+        kw.setdefault("video", self.a1)
+        kw.setdefault("status", "completed")
+        kw.setdefault("modal_job_id", f"j{Job.objects.count()}")
+        kw.setdefault("config", {})
+        return Job.objects.create(**kw)
+
     def test_no_history_reports_no_sample_rather_than_a_made_up_number(self):
         r = self.client.get(reverse("analysis:processing"))
 
@@ -175,11 +192,9 @@ class EstimateTests(ReviewHubTestCase):
 
     def test_the_estimate_is_the_median_of_real_runs(self):
         for secs in (60, 90, 120):
-            Job.objects.create(user=self.user, video=self.a1, status="completed",
-                               execution_seconds=secs, modal_job_id=f"j{secs}")
+            self._job(execution_seconds=secs)
 
-        r = self.client.get(reverse("analysis:processing"))
-        est = r.context["estimate"]
+        est = pricing.estimate_per_video(self.user)
 
         self.assertEqual(est["sample"], 3)
         self.assertEqual(est["seconds"], 90.0)
@@ -187,14 +202,104 @@ class EstimateTests(ReviewHubTestCase):
         self.assertGreater(est["cost_high"], 0)
 
     def test_unfinished_runs_do_not_skew_it(self):
+        self._job(execution_seconds=90)
+        self._job(video=self.a2, status="processing", execution_seconds=0)
+
+        self.assertEqual(pricing.estimate_per_video(self.user)["sample"], 1)
+
+    def test_pre_annotation_tasks_are_excluded(self):
+        """They sample a handful of frames — seconds, not minutes — and were
+        what pulled the figure down to a tenth of a cent."""
+        self._job(execution_seconds=300)
+        for _ in range(8):
+            self._job(execution_seconds=4, config={"task": "pre_annotate"})
+
+        est = pricing.estimate_per_video(self.user)
+
+        self.assertEqual(est["sample"], 1)
+        self.assertEqual(est["seconds"], 300.0)
+
+    def test_annotated_video_renders_are_excluded_too(self):
+        self._job(execution_seconds=300)
+        self._job(execution_seconds=6, config={"task": "annotate_video"})
+
+        self.assertEqual(pricing.estimate_per_video(self.user)["sample"], 1)
+
+    def test_sam3_and_yolo_history_do_not_contaminate_each_other(self):
+        self._job(execution_seconds=100, config={"detector_kind": "yolo"})
+        self._job(execution_seconds=900, config={"detector_kind": "sam3"})
+
+        yolo = pricing.estimate_per_video(self.user, detector_kind="yolo")
+        sam3 = pricing.estimate_per_video(self.user, detector_kind="sam3")
+
+        self.assertEqual(yolo["seconds"], 100.0)
+        self.assertEqual(sam3["seconds"], 900.0)
+
+    def test_a_missing_detector_kind_counts_as_yolo(self):
+        self._job(execution_seconds=100)
+
+        self.assertEqual(pricing.estimate_per_video(self.user, detector_kind="yolo")["sample"], 1)
+        self.assertEqual(pricing.estimate_per_video(self.user, detector_kind="sam3")["sample"], 0)
+
+    def test_sam3_is_priced_on_the_g5_not_the_t4(self):
+        """Routing sends SAM 3 to the g5; pricing it on the T4 understates by
+        the ratio of the two rates."""
+        self._job(execution_seconds=100, config={"detector_kind": "sam3"})
+        self._job(execution_seconds=100, config={"detector_kind": "yolo"})
+
+        sam3 = pricing.estimate_per_video(self.user, detector_kind="sam3")
+        yolo = pricing.estimate_per_video(self.user, detector_kind="yolo")
+
+        self.assertEqual(sam3["instance"], "ml.g5.xlarge")
+        self.assertEqual(yolo["instance"], "ml.g4dn.xlarge")
+        self.assertGreater(sam3["cost"], yolo["cost"])
+        self.assertAlmostEqual(sam3["cost"] / yolo["cost"], 1.408 / 0.7364, places=2)
+
+
+class PipelineDetectorTests(TestCase):
+    def test_a_sam3_detect_step_makes_the_pipeline_sam3(self):
+        from apps.pipelines.models import Pipeline
+
+        pl = Pipeline(steps=[{"block_type": "detect.objects",
+                              "config": {"model_family": "sam3"}}])
+
+        self.assertEqual(pricing.pipeline_detector_kind(pl), "sam3")
+
+    def test_the_older_detector_key_is_honoured(self):
+        from apps.pipelines.models import Pipeline
+
+        pl = Pipeline(steps=[{"block_type": "detect.objects",
+                              "config": {"detector": "sam3"}}])
+
+        self.assertEqual(pricing.pipeline_detector_kind(pl), "sam3")
+
+    def test_anything_else_is_yolo(self):
+        from apps.pipelines.models import Pipeline
+
+        for steps in ([], [{"block_type": "input.video", "config": {}}],
+                      [{"block_type": "detect.objects", "config": {}}]):
+            self.assertEqual(pricing.pipeline_detector_kind(Pipeline(steps=steps)), "yolo")
+
+
+class PerPipelineEstimateTests(ReviewHubTestCase):
+    def test_each_pipeline_carries_its_own_estimate(self):
+        from apps.pipelines.models import Pipeline
+
         Job.objects.create(user=self.user, video=self.a1, status="completed",
-                           execution_seconds=90, modal_job_id="j1")
-        Job.objects.create(user=self.user, video=self.a2, status="processing",
-                           execution_seconds=0, modal_job_id="j2")
+                           execution_seconds=100, modal_job_id="jy", config={})
+        Job.objects.create(user=self.user, video=self.a1, status="completed",
+                           execution_seconds=900, modal_job_id="js",
+                           config={"detector_kind": "sam3"})
+        yolo_pl = Pipeline.objects.create(user=self.user, title="Y", steps=[
+            {"block_type": "detect.objects", "config": {"model_family": "yolo"}}])
+        sam3_pl = Pipeline.objects.create(user=self.user, title="S", steps=[
+            {"block_type": "detect.objects", "config": {"model_family": "sam3"}}])
 
-        r = self.client.get(reverse("analysis:processing"))
+        est = self.client.get(reverse("analysis:processing")).context["pipeline_estimates"]
 
-        self.assertEqual(r.context["estimate"]["sample"], 1)
+        self.assertEqual(est[str(yolo_pl.pk)]["seconds"], 100.0)
+        self.assertEqual(est[str(sam3_pl.pk)]["seconds"], 900.0)
+        self.assertGreater(est[str(sam3_pl.pk)]["cost"], est[str(yolo_pl.pk)]["cost"])
 
 
 class StatusPillTests(ReviewHubTestCase):

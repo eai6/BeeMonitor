@@ -114,43 +114,79 @@ def price_run(result: dict) -> dict:
     }
 
 
-def estimate_per_video(user, device_ids=None, sample=40) -> dict:
-    """What one more clip is likely to cost, from what past clips actually cost.
+def instance_for_detector(detector_kind: str) -> str:
+    """Which instance a run of this kind will land on.
+
+    Mirrors analysis.views._tracking_endpoint: SAM 3 goes to the g5, everything
+    else to the default g4dn. An estimate priced on the wrong one is wrong by
+    the ratio of the two rates — 1.9x — before it has even looked at a clock.
+    """
+    return "ml.g5.xlarge" if detector_kind == "sam3" else DEFAULT_INSTANCE
+
+
+def estimate_per_video(user, device_ids=None, detector_kind="yolo", sample=40) -> dict:
+    """What one more clip is likely to cost, from what comparable clips cost.
 
     The number this replaces was ``est_credits_per_video = 349``, a hardcoded
-    constant carrying the retired A10G tier — wrong hardware and a made-up
-    average. Completed jobs record ``execution_seconds``, so the estimate can be
-    measured instead: the median of recent runs, with the 25th-75th percentile
-    as the spread. A range, because the spread is real and one number would be
-    false precision.
+    constant carrying the retired A10G tier. Completed jobs record
+    ``execution_seconds``, so the estimate is measured instead: the median of
+    recent COMPARABLE runs, with the 25th-75th percentile as the spread. A
+    range, because the spread is real and one number would be false precision.
 
-    Scoped to the same hotels where possible, since a device's clip length and
-    activity drive the cost far more than anything else. Returns ``sample: 0``
-    when there is no history to go on — the caller should say the estimate is
-    provisional rather than print a confident figure.
+    "Comparable" is doing the work here, and getting it wrong is how the first
+    version of this produced ~$0.001 a clip:
+
+    * **Same detector.** SAM 3 is a heavy transformer on a dearer instance;
+      averaging it with YOLO describes neither.
+    * **Full analyses only.** ``Job`` also holds ``pre_annotate`` (a handful of
+      sampled frames) and ``annotate_video`` (a render) tasks. Those finish in
+      seconds and dragged the median toward zero.
+    * **Same hotels** where possible, since clip length and activity drive cost
+      more than anything else.
+
+    Returns ``sample: 0`` when there is nothing comparable to go on — the caller
+    should say so rather than print a confident figure.
     """
     from .models import Job
 
     qs = (Job.objects
           .filter(user=user, status="completed", execution_seconds__gt=0)
           .order_by("-id"))
+
+    # Both exclusions go through an explicit id set rather than a direct
+    # ``exclude(config__key=...)``. Excluding on a JSON key compiles to
+    # NOT (json_extract(...) = 'x'), which is NULL — and therefore false — for
+    # every row where the key is ABSENT. So the natural spelling silently drops
+    # exactly the rows it should keep: an analysis job with no detector_kind
+    # (the YOLO default) vanished from its own estimate.
+    tasks = Job.objects.filter(config__has_key="task").values("pk")
+    qs = qs.exclude(pk__in=tasks)  # pre_annotate / annotate_video: a smaller unit of work
+
+    sam3 = Job.objects.filter(config__detector_kind="sam3").values("pk")
+    if detector_kind == "sam3":
+        qs = qs.filter(pk__in=sam3)
+    else:
+        qs = qs.exclude(pk__in=sam3)  # absent detector_kind means YOLO
+
     if device_ids:
         scoped = qs.filter(video__device_id__in=device_ids)
-        # Fall back to all runs rather than reporting nothing for a new hotel.
+        # Fall back to all comparable runs rather than reporting nothing for a
+        # hotel that has not been analysed yet.
         qs = scoped if scoped.exists() else qs
 
+    instance = instance_for_detector(detector_kind)
     seconds = sorted(qs.values_list("execution_seconds", flat=True)[:sample])
     if not seconds:
         return {"sample": 0, "seconds": 0.0, "low": 0.0, "high": 0.0,
                 "cost": 0.0, "cost_low": 0.0, "cost_high": 0.0,
-                "instance": DEFAULT_INSTANCE, "tier": tier_for_instance(DEFAULT_INSTANCE)}
+                "instance": instance, "tier": tier_for_instance(instance),
+                "detector": detector_kind}
 
     def pct(p):
         return seconds[min(len(seconds) - 1, int(len(seconds) * p))]
 
     median, low, high = pct(0.5), pct(0.25), pct(0.75)
-    # Priced at the endpoint's instance: analysis jobs all land on the same one.
-    rate = rate_per_second(DEFAULT_INSTANCE)
+    rate = rate_per_second(instance)
     return {
         "sample": len(seconds),
         "seconds": round(median, 1),
@@ -159,6 +195,25 @@ def estimate_per_video(user, device_ids=None, sample=40) -> dict:
         "cost": round(median * rate, 4),
         "cost_low": round(low * rate, 4),
         "cost_high": round(high * rate, 4),
-        "instance": DEFAULT_INSTANCE,
-        "tier": tier_for_instance(DEFAULT_INSTANCE),
+        "instance": instance,
+        "tier": tier_for_instance(instance),
+        "detector": detector_kind,
     }
+
+
+def pipeline_detector_kind(pipeline) -> str:
+    """Which detector a pipeline's Detect step will use.
+
+    The run bar must price the pipeline you are about to run, not an average of
+    all of them: a SAM 3 pipeline is on a dearer instance AND far slower, so one
+    shared figure is wrong for whichever pipeline you did not pick. Mirrors how
+    executors.py reads the step config (``model_family``, or ``detector``).
+    """
+    for step in (pipeline.steps or []):
+        if step.get("block_type") != "detect.objects":
+            continue
+        cfg = step.get("config") or {}
+        family = str(cfg.get("model_family") or cfg.get("detector") or "yolo").lower()
+        if family == "sam3":
+            return "sam3"
+    return "yolo"
