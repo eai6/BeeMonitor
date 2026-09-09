@@ -453,6 +453,88 @@ def retry_step(request, pk, run_id, step_id):
     return redirect("pipelines:run_detail", pk=pk, run_id=run_id)
 
 
+def analyzer_options(run):
+    """Analyzers this run could be re-analysed with, and the one it used.
+
+    Every analyzer accepts tracks or detections, so a swap is nearly always
+    valid — what matters is that the run HAS a cached GPU result to feed them.
+    Hidden blocks (colony activity) are left out.
+    """
+    from .registry import BLOCK_REGISTRY
+
+    current = next((s.get("block_type") for s in (run.steps or [])
+                    if str(s.get("block_type", "")).startswith("analyze.")), "")
+    options = []
+    for key, block in BLOCK_REGISTRY.items():
+        if block.get("category") != "analyze" or block.get("hidden"):
+            continue
+        options.append({
+            "key": key,
+            "name": block.get("display_name", key),
+            "description": block.get("description", ""),
+            "icon": block.get("icon", ""),
+            "current": key == current,
+        })
+    return current, options
+
+
+@login_required
+@require_POST
+def run_reanalyze(request, pk, run_id):
+    """Re-run this clip with a different analyzer, reusing the tracking.
+
+    Detection and tracking are the expensive part and they do not depend on
+    which analyzer reads them. ``engine._gpu_cache_key`` hashes the clip and the
+    GPU step's own config, so swapping a LOCAL analyzer leaves that key
+    untouched and the cached result is served — the new run finishes in seconds
+    and costs no GPU time.
+
+    That is the same cache that makes a benchmark re-run dishonest unless it
+    passes ``fresh`` (a GPU-side fix would return the old result). Here reuse is
+    exactly what is wanted, so this deliberately does NOT pass it.
+
+    A new run rather than a mutation: the original keeps its answer, so two
+    analyses of one clip can be compared instead of one overwriting the other.
+    """
+    from .registry import BLOCK_REGISTRY
+
+    old = get_object_or_404(PipelineRun, pk=run_id, user=request.user)
+    new_type = request.POST.get("block_type", "")
+    block = BLOCK_REGISTRY.get(new_type)
+    if not block or block.get("category") != "analyze":
+        messages.error(request, "That is not an analyzer.")
+        return redirect("pipelines:run_detail", pk=pk, run_id=run_id)
+
+    steps = copy.deepcopy(old.steps or [])
+    swapped = False
+    for step in steps:
+        if str(step.get("block_type", "")).startswith("analyze."):
+            step["block_type"] = new_type
+            # The old analyzer's config does not transfer — a visitation gap
+            # threshold means nothing to foraging trips. Seed the new block's
+            # defaults so required fields (detection_count's `metric`) are set.
+            step["config"] = {f["name"]: f.get("default")
+                              for f in block.get("config_fields", [])
+                              if f.get("default") is not None}
+            swapped = True
+    if not swapped:
+        messages.error(request, "This run has no analyzer step to swap.")
+        return redirect("pipelines:run_detail", pk=pk, run_id=run_id)
+
+    errors = validate_steps(steps)
+    if errors:
+        messages.error(request, errors[0])
+        return redirect("pipelines:run_detail", pk=pk, run_id=run_id)
+
+    run = PipelineRun.objects.create(pipeline=old.pipeline, user=request.user)
+    engine.start_run(run, steps=steps)          # NOT fresh: reuse is the point
+    messages.success(
+        request,
+        f"Re-analysing with {block.get('display_name', new_type)} — reuses this "
+        "clip's tracking, so it costs no GPU time.")
+    return redirect("pipelines:run_detail", pk=old.pipeline_id, run_id=run.pk)
+
+
 def _viewable_run_or_404(request, run_id):
     """The launcher sees their run; device-share users (viewer/manager) see
     runs on videos of devices shared with them. Write paths (rerun, retry)
@@ -471,10 +553,16 @@ def _viewable_run_or_404(request, run_id):
 @login_required
 def run_detail(request, pk, run_id):
     run = _viewable_run_or_404(request, run_id)
+    current_analyzer, analyzers = analyzer_options(run)
     return render(request, "pipelines/run.html", {
         "pipeline": run.pipeline,
         "run": run,
         "steps": _run_steps(run),
+        "analyzers": analyzers,
+        "current_analyzer": current_analyzer,
+        # Re-analysing needs a cached GPU result to feed the new analyzer, and
+        # only the owner may spend anything on this run's behalf.
+        "can_reanalyze": run.user_id == request.user.id and run.status == "completed",
     })
 
 

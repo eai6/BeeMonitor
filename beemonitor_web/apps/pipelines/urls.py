@@ -25,6 +25,7 @@ urlpatterns = [
     path("<uuid:pk>/run/<uuid:run_id>/", views.run_detail, name="run_detail"),
     path("<uuid:pk>/run/<uuid:run_id>/status/", views.run_status, name="run_status"),
     path("<uuid:pk>/run/<uuid:run_id>/rerun/", views.rerun, name="rerun"),
+    path("<uuid:pk>/run/<uuid:run_id>/reanalyze/", views.run_reanalyze, name="run_reanalyze"),
     path("<uuid:pk>/run/<uuid:run_id>/retry/<str:step_id>/", views.retry_step, name="retry_step"),
     path("<uuid:pk>/run/<uuid:run_id>/output/<str:step_id>.csv", views.run_output_csv, name="run_output_csv"),
 ]
