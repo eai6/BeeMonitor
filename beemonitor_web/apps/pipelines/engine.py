@@ -70,7 +70,7 @@ def steps_with_video(pipeline, video_id):
     return steps
 
 
-def launch_batch(pipeline, videos, user):
+def launch_batch(pipeline, videos, user, fresh=False):
     """Start one ``PipelineRun`` per video, all sharing a fresh ``batch_id``.
 
     The single place a pipeline is launched over a set of videos — used by the
@@ -91,23 +91,34 @@ def launch_batch(pipeline, videos, user):
         run = PipelineRun.objects.create(
             pipeline=pipeline, user=user, batch_id=batch_id,
         )
-        start_run(run, steps=steps)
+        start_run(run, steps=steps, fresh=fresh)
         launched.append(video.pk)
     return batch_id, launched, invalid
 
 
-def start_run(run, steps=None):
+def start_run(run, steps=None, fresh=False):
     """Kick a freshly-created run: freeze steps, init status, advance.
 
     ``steps`` overrides the pipeline's steps for this run (e.g. with a specific
     video injected); defaults to the pipeline's saved steps.
+
+    ``fresh`` records that this run must not read the GPU result cache. The
+    cache is keyed on the clip and the job config, NOT on the analyzer build, so
+    a re-run after a GPU-side fix would otherwise return the old result and
+    report success — the fix never exercised, and nothing on screen saying so.
+    Stored on the run rather than passed down, because ``advance_run`` is
+    re-entered later by the poller with no memory of how the run started. It is
+    a FIELD, not a context key: context is iterated as {step_id: output} in
+    several places, and a non-dict value in there breaks them.
     """
     run.steps = steps if steps is not None else (run.pipeline.steps or [])
     run.step_status = {s["id"]: PipelineRun.STEP_PENDING for s in run.steps if s.get("id")}
     run.context = {}
+    run.fresh = fresh
     run.status = PipelineRun.Status.RUNNING
     run.started_at = timezone.now()
-    run.save(update_fields=["steps", "step_status", "context", "status", "started_at"])
+    run.save(update_fields=["steps", "step_status", "context", "status",
+                            "started_at", "fresh"])
     advance_run(run.pk)
 
 
@@ -152,10 +163,11 @@ def advance_run(run_pk):
                 backend = block.get("backend", "local")
 
                 if backend == "gpu":
-                    # Reuse an identical GPU step's cached output (skips SageMaker).
+                    # Reuse an identical GPU step's cached output (skips SageMaker),
+                    # unless this run was launched fresh — see start_run.
                     key = _gpu_cache_key(run, step, context, index)
                     cached = (StepResult.objects.filter(user=run.user, cache_key=key).first()
-                              if key else None)
+                              if key and not run.fresh else None)
                     if cached:
                         out = dict(cached.output)
                         out["_cache_key"] = key

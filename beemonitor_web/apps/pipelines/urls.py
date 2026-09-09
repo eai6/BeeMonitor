@@ -12,6 +12,7 @@ urlpatterns = [
     path("run-on-videos/", views.run_on_videos, name="run_on_videos"),
     path("runs/", views.run_list, name="run_list"),
     path("batch/<uuid:batch_id>/", views.batch_detail, name="batch_detail"),
+    path("batch/<uuid:batch_id>/rerun/", views.batch_rerun, name="batch_rerun"),
     path("batch/<uuid:batch_id>/trips.csv", views.batch_trips_csv, name="batch_trips_csv"),
     path("batch/<uuid:batch_id>/combined/<str:kind>.csv", views.batch_combined_csv, name="batch_combined_csv"),
     path("<uuid:pk>/", views.pipeline_editor, name="editor"),

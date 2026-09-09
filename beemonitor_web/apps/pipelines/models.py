@@ -95,6 +95,11 @@ class PipelineRun(models.Model):
     # step_id -> STEP_* status.
     step_status = models.JSONField(default=dict, blank=True)
     error_message = models.TextField(blank=True)
+    # Launched with the GPU result cache disabled. Set when a batch is re-run to
+    # measure a change: the cache is keyed on the clip and the job config, not
+    # on the analyzer build, so a plain re-run after a GPU-side fix returns the
+    # OLD result and reports success.
+    fresh = models.BooleanField(default=False)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     execution_time_ms = models.IntegerField(null=True, blank=True)

@@ -720,6 +720,17 @@ def batch_detail(request, batch_id):
     sources, skipped = aggregate.collect_sources(runs)
     all_done = all(r.is_terminal for r in runs)
 
+    # Per-run rows + failures grouped by cause. The page used to show a status
+    # pill per run and nothing else, so nine failures of two kinds could only be
+    # triaged by opening nine pages.
+    from . import failures as failure_taxonomy
+    rows = aggregate.batch_rows(runs)
+    outcome = aggregate.batch_summary(rows)
+    failure_groups = failure_taxonomy.group([
+        (r["video"].pk if r["video"] else None, r["error"], r["run"].started_at)
+        for r in rows if r["status"] == "failed"
+    ])
+
     # Cap the IN-PAGE aggregation so a huge batch can't ride the request past
     # App Runner's hard 120s limit (each source may cost an S3 read on a cold
     # cache). The combined-CSV downloads below remain uncapped. Oldest-first
@@ -751,6 +762,12 @@ def batch_detail(request, batch_id):
                for r in runs]
 
     return render(request, "pipelines/batch.html", {
+        "rows": rows,
+        # `summary` is already the aggregate ecology dict — this is the
+        # batch OUTCOME (how many ran, what it cost).
+        "outcome": outcome,
+        "failure_groups": failure_groups,
+        "can_rerun": any(r.user_id == request.user.id for r in runs),
         "batch_id": batch_id,
         "pipeline": runs[0].pipeline,
         "members": members,
@@ -781,6 +798,73 @@ def _csv_response(filename, fieldnames, rows):
 
 
 @login_required
+@login_required
+@require_POST
+def batch_rerun(request, batch_id):
+    """Re-run a batch: all of it, only what failed, or one cause.
+
+    Launches a NEW batch over the same clips and the same pipeline, so the two
+    stay comparable — the old batch keeps its record rather than being
+    overwritten, which is what makes a batch usable as a benchmark.
+
+    ``fresh=1`` skips the GPU result cache. That matters more than it looks: a
+    finished step is cached on a hash of the clip and the job config, NOT on the
+    build that produced it, so re-running after a fix would hand back the old
+    result and report success. Failures were never cached, so "re-run failed" is
+    honest either way; "re-run all" is the one that needs it.
+    """
+    from . import aggregate
+
+    runs = _batch_runs(request, batch_id)
+    mine = [r for r in runs if r.user_id == request.user.id]
+    if not mine:
+        return HttpResponse(status=403)
+
+    rows = aggregate.batch_rows(mine)
+    scope = request.POST.get("scope", "failed")
+    cause_key = request.POST.get("cause", "")
+
+    if scope == "all":
+        wanted = [r for r in rows]
+    elif scope == "cause" and cause_key:
+        from . import failures as failure_taxonomy
+        wanted = [r for r in rows
+                  if r["status"] == "failed"
+                  and failure_taxonomy.classify(r["error"])["key"] == cause_key]
+    else:
+        wanted = [r for r in rows if r["status"] == "failed"]
+
+    video_ids = [r["video"].pk for r in wanted if r["video"]]
+    if not video_ids:
+        messages.warning(request, "Nothing to re-run.")
+        return redirect("pipelines:batch_detail", batch_id=batch_id)
+
+    from apps.videos.models import Video
+    videos = list(Video.manageable(request.user).filter(pk__in=video_ids))
+    if not videos:
+        messages.error(request, "Those clips are no longer yours to run.")
+        return redirect("pipelines:batch_detail", batch_id=batch_id)
+
+    pipeline = mine[0].pipeline
+    fresh = request.POST.get("fresh") == "1"
+    new_batch, launched, invalid = engine.launch_batch(
+        pipeline, videos, request.user, fresh=fresh)
+
+    if launched:
+        try:
+            from apps.analysis.views import _drain_queue
+            _drain_queue()
+        except Exception:
+            logger.exception("inline drain after batch re-run failed")
+
+    msg = f"Re-running {len(launched)} clip(s)"
+    msg += " from scratch." if fresh else ", reusing cached results where nothing changed."
+    if invalid:
+        msg += f" Skipped {invalid}."
+    messages.success(request, msg)
+    return redirect("pipelines:batch_detail", batch_id=new_batch)
+
+
 def batch_trips_csv(request, batch_id):
     from . import aggregate
 

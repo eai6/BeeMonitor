@@ -370,3 +370,87 @@ def trips_csv_rows(trips):
              "exit_time": t["exit_time"].isoformat(),
              "entry_time": t["entry_time"].isoformat()} for t in trips]
     return fieldnames, rows
+
+
+def run_job_id(run):
+    """The GPU job pk this run submitted, from its frozen context."""
+    for out in (run.context or {}).values():
+        job_id = (out or {}).get("job_id")
+        if job_id:
+            return job_id
+    return None
+
+
+def run_error(run):
+    """The message that explains a failed run.
+
+    Prefers the step's own error (the GPU job's text, which names the real
+    cause) over the run-level summary, which is usually just "a step failed".
+    """
+    if run.status != run.Status.FAILED:
+        return ""
+    candidates = []
+    for out in (run.context or {}).values():
+        error = (out or {}).get("error")
+        if error:
+            candidates.append(error)
+    # "Upstream step failed." is a consequence, never the cause — keep it only
+    # if nothing else explains the run.
+    real = [c for c in candidates if "Upstream step failed" not in c]
+    return (real or candidates or [run.error_message or ""])[0]
+
+
+def batch_rows(runs):
+    """One row per run: clip, outcome, what it produced, what it cost.
+
+    The batch page could only say "failed"; a row now carries the reason and
+    the numbers, so a batch reads without opening anything.
+    """
+    from apps.analysis.models import Job, JobResult
+    from apps.videos.models import Video
+
+    video_ids = [v for r in runs if (v := run_video_id(r)) is not None]
+    videos = {v.pk: v for v in Video.objects.filter(pk__in=video_ids).select_related("device")}
+    job_ids = [j for r in runs if (j := run_job_id(r)) is not None]
+    jobs = {j.pk: j for j in Job.objects.filter(pk__in=job_ids)}
+    results = {r.job_id: r for r in JobResult.objects.filter(job_id__in=job_ids)}
+
+    rows = []
+    for run in runs:
+        video = videos.get(run_video_id(run))
+        job = jobs.get(run_job_id(run))
+        result = results.get(job.pk) if job else None
+        rows.append({
+            "run": run,
+            "video": video,
+            "job": job,
+            "result": result,
+            "status": run.status,
+            "error": run_error(run),
+            "when": video.recorded_at if video else None,
+            # Cost is charged whether or not the run produced anything — a
+            # failure that burned GPU time still costs, and that is worth
+            # seeing next to the ones that did not.
+            "cost": float(job.compute_cost_usd) if job and job.compute_cost_usd else 0.0,
+        })
+    rows.sort(key=lambda r: (r["when"] is None, r["when"]), reverse=True)
+    return rows
+
+
+def batch_summary(rows):
+    """Counts and money for the whole batch, including what failures cost."""
+    completed = [r for r in rows if r["status"] == "completed"]
+    failed = [r for r in rows if r["status"] == "failed"]
+    return {
+        "total": len(rows),
+        "completed": len(completed),
+        "failed": len(failed),
+        "running": len(rows) - len(completed) - len(failed),
+        "pct_ok": round(100 * len(completed) / len(rows)) if rows else 0,
+        "cost": round(sum(r["cost"] for r in rows), 4),
+        "cost_failed": round(sum(r["cost"] for r in failed), 4),
+        "gpu_seconds": round(sum(
+            (r["job"].execution_seconds or 0) for r in rows if r["job"]), 1),
+        "failed_video_ids": [r["video"].pk for r in failed if r["video"]],
+        "all_video_ids": [r["video"].pk for r in rows if r["video"]],
+    }

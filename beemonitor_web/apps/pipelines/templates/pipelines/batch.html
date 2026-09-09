@@ -1,13 +1,114 @@
 {% extends "base.html" %}
 {% block title %}Batch Results - BeeMonitor{% endblock %}
 
+{% comment %}
+The batch page used to show a status pill per run and nothing else, so nine
+failures of two kinds could only be triaged by opening nine pages — and there
+was no way to re-run a batch at all.
+
+Now: an outcome summary including what the failures cost, failures grouped by
+cause with a re-run per cause, and per-run rows carrying either their numbers or
+their reason.
+{% endcomment %}
+
+{% load batch_extras %}
 {% block content %}
-<div class="flex justify-between items-center mb-2">
-  <div>
-    <h1 class="text-2xl font-bold text-gray-900">{{ pipeline.title }} — batch results</h1>
-    <p class="text-sm text-gray-500">{{ members|length }} video(s) from this launch, analyzed together{% if sources %} · {{ sources|length }} had events to aggregate{% endif %}. Trips are paired on the absolute timeline, so a bee exiting in one video and returning in another counts as one trip. This page covers only videos launched together — videos run in a separate batch/day have their own page.</p>
+<div class="flex items-start justify-between gap-6 mb-4">
+  <div class="min-w-0">
+    <div class="flex items-baseline gap-2.5 flex-wrap">
+      <h1 class="text-2xl font-bold text-gray-900">{{ pipeline.title }}</h1>
+      <span class="text-xs text-gray-400">batch {{ batch_id|stringformat:"s"|slice:":8" }}{% if rows.0.video.device %} · {{ rows.0.video.device.name }}{% endif %}</span>
+    </div>
+    <p class="text-sm text-gray-500 mt-1">
+      {{ outcome.total }} clip{{ outcome.total|pluralize }}
+      {% if rows.0.run.started_at %}· run {{ rows.0.run.started_at|date:"j M, H:i" }}{% endif %}
+    </p>
   </div>
-  <a href="{% url 'pipelines:run_list' %}" class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">All runs</a>
+  {% if can_rerun %}
+  <div class="flex items-center gap-2 shrink-0">
+    <form method="post" action="{% url 'pipelines:batch_rerun' batch_id=batch_id %}">
+      {% csrf_token %}
+      <input type="hidden" name="scope" value="all">
+      {% comment %}
+      Fresh: the cache is keyed on clip + config, not on the analyzer build, so
+      a plain re-run after a fix would hand back the old result.
+      {% endcomment %}
+      <input type="hidden" name="fresh" value="1">
+      <button type="submit" class="border border-gray-300 bg-white rounded px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50"
+              title="Re-runs every clip from scratch, ignoring cached results — the honest way to measure a change">
+        Re-run all {{ outcome.total }}
+      </button>
+    </form>
+    {% if outcome.failed %}
+    <form method="post" action="{% url 'pipelines:batch_rerun' batch_id=batch_id %}">
+      {% csrf_token %}
+      <input type="hidden" name="scope" value="failed">
+      <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white rounded px-4 py-2 text-sm font-medium">
+        Re-run {{ outcome.failed }} failed
+      </button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-[300px_minmax(0,1fr)] gap-4 mb-6">
+
+  <!-- outcome -->
+  <div class="bg-white shadow rounded-lg p-4">
+    <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-3">Outcome</div>
+    <div class="flex items-baseline gap-2 mb-3">
+      {% if outcome.failed %}<span class="text-3xl font-bold text-red-700 leading-none">{{ outcome.failed }}</span>
+      <span class="text-sm text-gray-500">failed</span>{% endif %}
+      <span class="text-xl font-bold text-green-700 leading-none {% if outcome.failed %}ml-2{% endif %}">{{ outcome.completed }}</span>
+      <span class="text-sm text-gray-500">completed</span>
+    </div>
+    <div class="flex h-2 rounded-full overflow-hidden mb-3.5">
+      <div class="bg-green-600" style="width: {{ outcome.pct_ok }}%"></div>
+      <div class="bg-red-600" style="width: {{ outcome.pct_ok|rsub:100 }}%"></div>
+    </div>
+    <div class="flex justify-between text-xs py-0.5"><span class="text-gray-500">GPU time</span><span class="text-gray-900">{{ outcome.gpu_seconds|duration_min }}</span></div>
+    <div class="flex justify-between text-xs py-0.5"><span class="text-gray-500">Cost</span><span class="text-gray-900">${{ outcome.cost|floatformat:3 }}</span></div>
+    {% if outcome.cost_failed %}
+    <div class="flex justify-between text-xs py-0.5"><span class="text-gray-500">Spent on failures</span><span class="text-red-700">${{ outcome.cost_failed|floatformat:3 }}</span></div>
+    {% endif %}
+  </div>
+
+  <!-- why -->
+  <div class="bg-white shadow rounded-lg p-4">
+    {% if failure_groups %}
+    <div class="flex items-baseline justify-between mb-3">
+      <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Why they failed</div>
+      <span class="text-[11px] text-gray-400">grouped by cause</span>
+    </div>
+    <div class="space-y-2">
+      {% for g in failure_groups %}
+      <div class="border border-red-200 bg-red-50 rounded-md px-3 py-2.5">
+        <div class="flex items-center justify-between gap-3">
+          <div class="flex items-center gap-2 min-w-0 flex-wrap">
+            <span class="text-[11px] font-bold text-white bg-red-600 rounded-full px-2">{{ g.count }}</span>
+            <span class="text-[13px] text-gray-900 font-medium">{{ g.cause.title }}</span>
+            {% if g.fixed %}<span class="text-[11px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700"
+                  title="A fix for this shipped after this run — so re-running is worth doing">fixed since</span>{% endif %}
+          </div>
+          {% if can_rerun and g.video_ids %}
+          <form method="post" action="{% url 'pipelines:batch_rerun' batch_id=batch_id %}" class="shrink-0">
+            {% csrf_token %}
+            <input type="hidden" name="scope" value="cause">
+            <input type="hidden" name="cause" value="{{ g.cause.key }}">
+            <button type="submit" class="text-xs text-amber-700 hover:underline whitespace-nowrap">Re-run these {{ g.count }}</button>
+          </form>
+          {% endif %}
+        </div>
+        <p class="mt-1.5 text-[11px] text-red-900 leading-4">{{ g.cause.detail }} <span class="text-red-700">{{ g.cause.action }}</span></p>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Outcome</div>
+    <p class="text-sm text-gray-500">Every clip in this batch completed.</p>
+    {% endif %}
+  </div>
 </div>
 
 {% if running %}
@@ -16,40 +117,55 @@
 </div>
 {% endif %}
 
-<!-- Member runs -->
-<div class="bg-white shadow rounded-lg p-4 mb-6">
-  <h2 class="text-sm font-medium text-gray-500 uppercase mb-3">Videos in this batch ({{ members|length }})</h2>
-  <div class="divide-y divide-gray-100 max-h-72 overflow-y-auto border border-gray-100 rounded">
-    {% for m in members %}
-    <div class="flex items-center gap-3 py-1.5 px-2 text-sm">
-      <a href="{% url 'pipelines:run_detail' pk=m.run.pipeline_id run_id=m.run.pk %}"
-         class="flex-1 text-gray-800 hover:text-amber-700 hover:underline truncate">{{ m.video }}</a>
-      <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full
-        {% if m.run.status == 'completed' %}bg-green-100 text-green-800
-        {% elif m.run.status == 'failed' %}bg-red-100 text-red-800
-        {% else %}bg-blue-100 text-blue-800 animate-pulse{% endif %}">{{ m.run.get_status_display }}</span>
-    </div>
-    {% endfor %}
+<!-- Per-run rows: the numbers when there are any, the reason when there are not -->
+<div class="bg-white shadow rounded-lg overflow-hidden mb-6">
+  <div class="flex items-center gap-3 px-4 py-2.5 border-b border-gray-200">
+    <span class="text-xs px-2.5 py-1 rounded-full bg-amber-600 text-white">All {{ outcome.total }}</span>
+    {% if outcome.failed %}<span class="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-700">Failed {{ outcome.failed }}</span>{% endif %}
+    <span class="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-700">Completed {{ outcome.completed }}</span>
+    <div class="flex-1"></div>
+    <a href="{% url 'pipelines:batch_combined_csv' batch_id=batch_id kind='events' %}" class="text-xs text-amber-700 hover:underline">Download combined CSV</a>
   </div>
-  {% if agg_capped %}
-  <p class="mt-3 p-3 bg-amber-50 rounded text-xs text-amber-800">
-    Showing the first {{ sources|length }} of {{ agg_total }} videos in the on-page
-    aggregate (large batches are capped to keep this page fast). The
-    <strong>Download Trips / Combined CSV</strong> buttons below still cover the
-    whole batch.
-  </p>
-  {% endif %}
-  {% if skipped %}
-  <details class="mt-3">
-    <summary class="text-xs text-amber-800 cursor-pointer">Not included in the aggregate ({{ skipped|length }}) — no events CSV</summary>
-    <ul class="list-disc list-inside mt-1 p-3 bg-amber-50 rounded text-xs text-amber-800 max-h-48 overflow-y-auto">
-      {% for s in skipped %}<li>{{ s.video }} — {{ s.reason }}</li>{% endfor %}
-    </ul>
-  </details>
-  {% endif %}
+
+  <div class="grid grid-cols-[60px_100px_minmax(0,1fr)_80px_80px_80px_90px] gap-0 px-4 py-2 border-b border-gray-100 text-[11px] font-semibold text-gray-500">
+    <div></div><div>Clip</div><div>Outcome</div>
+    <div class="text-right">Tracks</div><div class="text-right">Events</div><div class="text-right">Trips</div><div class="text-right">Cost</div>
+  </div>
+
+  {% for r in rows %}
+  <div class="grid grid-cols-[60px_100px_minmax(0,1fr)_80px_80px_80px_90px] items-center px-4 py-2 border-b border-gray-100 hover:bg-gray-50">
+    <div>
+      {% if r.video %}
+      <a href="{% url 'videos:detail' r.video.pk %}">
+        <img src="{% url 'videos:thumbnail' r.video.pk %}" alt="" loading="lazy"
+             class="w-12 rounded object-cover" style="aspect-ratio:16/9" onerror="this.remove()">
+      </a>
+      {% endif %}
+    </div>
+    <div class="text-[13px] font-medium text-gray-900">
+      <a href="{% url 'pipelines:run_detail' pk=r.run.pipeline_id run_id=r.run.pk %}" class="hover:underline">
+        {{ r.when|date:"H:i"|default:"—" }}
+      </a>
+    </div>
+    <div class="flex items-center gap-2 min-w-0">
+      {% if r.status == "completed" %}
+        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 shrink-0">completed</span>
+      {% elif r.status == "failed" %}
+        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 shrink-0">failed</span>
+        <span class="text-xs text-gray-500 truncate" title="{{ r.error }}">{{ r.error|failure_title }}</span>
+      {% else %}
+        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 shrink-0">running</span>
+      {% endif %}
+    </div>
+    <div class="text-right text-[13px] {% if r.result %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.result %}{{ r.result.unique_tracks }}{% else %}—{% endif %}</div>
+    <div class="text-right text-[13px] {% if r.result %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.result %}{{ r.result.total_events }}{% else %}—{% endif %}</div>
+    <div class="text-right text-[13px] {% if r.result %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.result %}{{ r.result.foraging_trip_count }}{% else %}—{% endif %}</div>
+    <div class="text-right text-xs text-gray-500">{% if r.cost %}${{ r.cost|floatformat:3 }}{% else %}—{% endif %}</div>
+  </div>
+  {% endfor %}
 </div>
 
-{% if summary %}
+{% if sources %}
 <!-- Aggregate summary -->
 <div class="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
   <div class="bg-white shadow rounded-lg p-4 text-center">
