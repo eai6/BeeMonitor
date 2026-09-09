@@ -428,10 +428,11 @@ def batch_rows(runs):
             "status": run.status,
             "error": run_error(run),
             "when": video.recorded_at if video else None,
-            # Cost is charged whether or not the run produced anything — a
-            # failure that burned GPU time still costs, and that is worth
-            # seeing next to the ones that did not.
-            "cost": float(job.compute_cost_usd) if job and job.compute_cost_usd else 0.0,
+            # GPU time is spent whether or not the run produced anything — a
+            # failure that burned an hour is worth seeing next to one that did
+            # not. Reported as time rather than money: seconds are a fact about
+            # the work; a price is a claim about a rate card that drifts.
+            "gpu_seconds": float(job.execution_seconds) if job and job.execution_seconds else 0.0,
         })
     rows.sort(key=lambda r: (r["when"] is None, r["when"]), reverse=True)
     return rows
@@ -447,10 +448,8 @@ def batch_summary(rows):
         "failed": len(failed),
         "running": len(rows) - len(completed) - len(failed),
         "pct_ok": round(100 * len(completed) / len(rows)) if rows else 0,
-        "cost": round(sum(r["cost"] for r in rows), 4),
-        "cost_failed": round(sum(r["cost"] for r in failed), 4),
-        "gpu_seconds": round(sum(
-            (r["job"].execution_seconds or 0) for r in rows if r["job"]), 1),
+        "gpu_seconds": round(sum(r["gpu_seconds"] for r in rows), 1),
+        "gpu_seconds_failed": round(sum(r["gpu_seconds"] for r in failed), 1),
         "failed_video_ids": [r["video"].pk for r in failed if r["video"]],
         "all_video_ids": [r["video"].pk for r in rows if r["video"]],
     }

@@ -67,10 +67,14 @@ their reason.
       <div class="bg-green-600" style="width: {{ outcome.pct_ok }}%"></div>
       <div class="bg-red-600" style="width: {{ outcome.pct_ok|rsub:100 }}%"></div>
     </div>
+    {% comment %}
+    GPU time, not money. Seconds are a fact about the work; a dollar figure is a
+    claim about a price list that drifts. Time spent on failures is the number
+    worth seeing — it is the work that produced nothing.
+    {% endcomment %}
     <div class="flex justify-between text-xs py-0.5"><span class="text-gray-500">GPU time</span><span class="text-gray-900">{{ outcome.gpu_seconds|duration_min }}</span></div>
-    <div class="flex justify-between text-xs py-0.5"><span class="text-gray-500">Cost</span><span class="text-gray-900">${{ outcome.cost|floatformat:3 }}</span></div>
-    {% if outcome.cost_failed %}
-    <div class="flex justify-between text-xs py-0.5"><span class="text-gray-500">Spent on failures</span><span class="text-red-700">${{ outcome.cost_failed|floatformat:3 }}</span></div>
+    {% if outcome.gpu_seconds_failed %}
+    <div class="flex justify-between text-xs py-0.5"><span class="text-gray-500">Spent on failures</span><span class="text-red-700">{{ outcome.gpu_seconds_failed|duration_min }}</span></div>
     {% endif %}
   </div>
 
@@ -127,13 +131,13 @@ their reason.
     <a href="{% url 'pipelines:batch_combined_csv' batch_id=batch_id kind='events' %}" class="text-xs text-amber-700 hover:underline">Download combined CSV</a>
   </div>
 
-  <div class="grid grid-cols-[60px_100px_minmax(0,1fr)_80px_80px_80px_90px] gap-0 px-4 py-2 border-b border-gray-100 text-[11px] font-semibold text-gray-500">
+  <div class="grid grid-cols-[60px_100px_minmax(0,1fr)_80px_80px_80px_96px] gap-0 px-4 py-2 border-b border-gray-100 text-[11px] font-semibold text-gray-500">
     <div></div><div>Clip</div><div>Outcome</div>
-    <div class="text-right">Tracks</div><div class="text-right">Events</div><div class="text-right">Trips</div><div class="text-right">Cost</div>
+    <div class="text-right">Tracks</div><div class="text-right">Events</div><div class="text-right">Trips</div><div class="text-right">GPU time</div>
   </div>
 
   {% for r in rows %}
-  <div class="grid grid-cols-[60px_100px_minmax(0,1fr)_80px_80px_80px_90px] items-center px-4 py-2 border-b border-gray-100 hover:bg-gray-50">
+  <div class="grid grid-cols-[60px_100px_minmax(0,1fr)_80px_80px_80px_96px] items-center px-4 py-2 border-b border-gray-100 hover:bg-gray-50">
     <div>
       {% if r.video %}
       <a href="{% url 'videos:detail' r.video.pk %}">
@@ -160,7 +164,7 @@ their reason.
     <div class="text-right text-[13px] {% if r.result %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.result %}{{ r.result.unique_tracks }}{% else %}—{% endif %}</div>
     <div class="text-right text-[13px] {% if r.result %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.result %}{{ r.result.total_events }}{% else %}—{% endif %}</div>
     <div class="text-right text-[13px] {% if r.result %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.result %}{{ r.result.foraging_trip_count }}{% else %}—{% endif %}</div>
-    <div class="text-right text-xs text-gray-500">{% if r.cost %}${{ r.cost|floatformat:3 }}{% else %}—{% endif %}</div>
+    <div class="text-right text-xs text-gray-500">{% if r.gpu_seconds %}{{ r.gpu_seconds|duration_min }}{% else %}—{% endif %}</div>
   </div>
   {% endfor %}
 </div>

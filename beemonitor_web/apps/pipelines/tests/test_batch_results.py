@@ -133,16 +133,26 @@ class BatchSummaryTests(BatchPageTestCase):
         self.assertEqual(len(groups), 2)
         self.assertEqual([g["count"] for g in groups], [6, 3])
 
-    def test_what_the_failures_cost_is_reported_separately(self):
-        """A failure that burned GPU time still costs, and that was invisible."""
+    def test_time_spent_on_failures_is_reported_separately(self):
+        """Work that produced nothing still consumed the GPU, and that was
+        invisible. Reported as time, not money — seconds are a fact about the
+        work; a price is a claim about a rate card that drifts."""
         self._seed_real_batch()
 
         outcome = self.client.get(reverse("pipelines:batch_detail",
                                           kwargs={"batch_id": self.batch})).context["outcome"]
 
-        self.assertGreater(outcome["cost_failed"], 0)
-        self.assertLess(outcome["cost_failed"], outcome["cost"])
-        self.assertAlmostEqual(outcome["cost_failed"], 0.0246 * 9, places=3)
+        self.assertEqual(outcome["gpu_seconds_failed"], 120 * 9)
+        self.assertEqual(outcome["gpu_seconds"], 120 * 12)
+
+    def test_no_money_appears_on_the_batch_page(self):
+        self._seed_real_batch()
+
+        html = self.client.get(reverse("pipelines:batch_detail",
+                                       kwargs={"batch_id": self.batch})).content.decode()
+
+        self.assertNotIn("Cost</", html)
+        self.assertNotIn("$0.", html)
 
     def test_a_completed_row_carries_its_numbers_and_a_failed_row_its_reason(self):
         self._seed_real_batch()

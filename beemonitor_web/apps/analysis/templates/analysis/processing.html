@@ -123,19 +123,20 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
       <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Pipeline to run</div>
       <select name="pipeline" form="run-form" class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
         {% if pipelines %}<optgroup label="Your pipelines">
-          {% for p in pipelines %}{% with e=pipeline_estimates|get:p.pk %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}
-            data-low="{{ e.cost_low }}" data-high="{{ e.cost_high }}" data-cost="{{ e.cost }}"
-            data-tier="{{ e.tier }}" data-sample="{{ e.sample }}" data-secs="{{ e.seconds }}">{{ p.title }}</option>{% endwith %}{% endfor %}
+          {% for p in pipelines %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}>{{ p.title }}</option>{% endfor %}
         </optgroup>{% endif %}
         {% if pipeline_templates %}<optgroup label="Templates">
-          {% for p in pipeline_templates %}{% with e=pipeline_estimates|get:p.pk %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}
-            data-low="{{ e.cost_low }}" data-high="{{ e.cost_high }}" data-cost="{{ e.cost }}"
-            data-tier="{{ e.tier }}" data-sample="{{ e.sample }}" data-secs="{{ e.seconds }}">{{ p.title }}</option>{% endwith %}{% endfor %}
+          {% for p in pipeline_templates %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}>{{ p.title }}</option>{% endfor %}
         </optgroup>{% endif %}
       </select>
+      {% comment %}
+      No cost estimate before a run. What a clip costs is only knowable after it
+      has run, and a projection presented up front reads as a promise — the
+      figure it replaced was a hardcoded constant that had gone stale without
+      anyone noticing. Finished runs report their real GPU time instead.
+      {% endcomment %}
       <p class="text-[11px] text-gray-500 leading-4">
         <span id="cred-line">Select clips to run</span>
-        <span class="text-gray-400" id="per-clip"></span>
       </p>
       <div class="flex items-center gap-2">
         <button type="submit" form="run-form" id="run-btn" disabled
@@ -315,28 +316,6 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
   var cards = Array.prototype.slice.call(document.querySelectorAll('.vid-card'));
   var TOTAL = {{ video_count }};
   var CAP = {{ pipeline_max_batch|default:50000 }} || Infinity;
-  // The estimate belongs to the SELECTED pipeline, not the page: a SAM 3
-  // pipeline runs on a dearer instance and takes far longer than a YOLO one.
-  var picker = document.querySelector('select[name="pipeline"]');
-  var PER = 0, LOW = 0, HIGH = 0;
-
-  function readEstimate() {
-    var o = picker && picker.options[picker.selectedIndex];
-    PER = o ? parseFloat(o.dataset.cost || 0) : 0;
-    LOW = o ? parseFloat(o.dataset.low || 0) : 0;
-    HIGH = o ? parseFloat(o.dataset.high || 0) : 0;
-    var note = document.getElementById('per-clip');
-    if (!note) return;
-    if (!o || !parseInt(o.dataset.sample || 0, 10)) {
-      note.textContent = ' · no comparable runs yet to estimate from';
-    } else {
-      note.textContent = ' · ~$' + PER.toFixed(3) + '/clip on ' + o.dataset.tier +
-        ' (~' + Math.round(parseFloat(o.dataset.secs || 0)) + 's), from ' +
-        o.dataset.sample + ' past run' + (o.dataset.sample === '1' ? '' : 's');
-    }
-  }
-  if (picker) picker.addEventListener('change', function () { readEstimate(); refresh(); });
-
   // ── selection ───────────────────────────────────────────────────────
   var all = document.getElementById('select-all');
   var btn = document.getElementById('run-btn');
@@ -347,7 +326,6 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
   var flag = document.getElementById('all-filtered-flag');
 
   function boxes() { return Array.prototype.slice.call(document.querySelectorAll('.vid-cb')); }
-  function money(v) { return '$' + (v < 1 ? v.toFixed(2) : v.toFixed(1)); }
 
   function paintCard(cb) {
     var card = cb.closest('.vid-card');
@@ -367,12 +345,10 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
     if (clearSel) clearSel.classList.toggle('hidden', n === 0);
     if (credLine) {
       if (!n) { credLine.textContent = 'Select clips to run'; }
-      else if (PER > 0) {
+      else {
         credLine.innerHTML = '<span class="text-gray-900 font-medium">' + n.toLocaleString() +
-          ' clip' + (n === 1 ? '' : 's') + ' → ' + money(n * LOW) + '–' + money(n * HIGH) + '</span>' +
+          ' clip' + (n === 1 ? '' : 's') + ' selected</span>' +
           (useAll && TOTAL > CAP ? ' — capped at ' + CAP.toLocaleString() : '');
-      } else {
-        credLine.textContent = n.toLocaleString() + ' clip' + (n === 1 ? '' : 's') + ' selected';
       }
     }
     if (!useAll && all) all.checked = checked > 0 && checked === boxes().length;
@@ -569,7 +545,6 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
   }
   setInterval(poll, 12000);
 
-  readEstimate();
   refresh();
 })();
 </script>

@@ -28,7 +28,7 @@ from .analytics import (
 )
 from .forms import JobCreateForm
 from .models import Job, JobResult, GPU_TIERS
-from .pricing import estimate_per_video, pipeline_detector_kind, price_run
+from .pricing import price_run
 
 logger = logging.getLogger(__name__)
 
@@ -789,18 +789,6 @@ class ProcessingHubView(LoginRequiredMixin, View):
             .select_related("video").order_by("started_at", "id")
         )
 
-        # One estimate per pipeline, keyed by pk, so the run bar can follow the
-        # picker without a round trip.
-        all_pipelines = list(Pipeline.objects.filter(user=request.user, is_template=False)) + \
-            list(Pipeline.objects.filter(is_template=True))
-        pipeline_estimates = {
-            str(pl.pk): estimate_per_video(
-                request.user, selected_devices, pipeline_detector_kind(pl))
-            for pl in all_pipelines
-        }
-        default_pipeline_pk = request.GET.get("pipeline") or (
-            str(all_pipelines[0].pk) if all_pipelines else "")
-
         # Day groups: the grid reads as footage, not as rows, so clips carry a
         # date heading and their hotel dot.
         video_days = []
@@ -832,14 +820,6 @@ class ProcessingHubView(LoginRequiredMixin, View):
             "device_rows": device_rows,
             "triage": triage,
             "video_days": video_days,
-            # Measured, not a constant: the median of recent COMPARABLE runs on
-            # these hotels, priced at the instance that kind of run lands on
-            # (apps/analysis/pricing.py). Per pipeline, because a SAM 3 pipeline
-            # costs ~1.9x more per second and runs far slower than a YOLO one —
-            # a single shared figure is wrong for whichever you did not pick.
-            "estimate": pipeline_estimates.get(default_pipeline_pk) or estimate_per_video(
-                request.user, selected_devices),
-            "pipeline_estimates": pipeline_estimates,
             # Per-launch cap the run bar shows — mirrors the server enforcement in
             # pipelines.run_on_videos so the button label can't diverge from it.
             # 0/None means "no cap" (the template treats it as unlimited).
