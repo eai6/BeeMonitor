@@ -28,12 +28,114 @@ from typing import List, Tuple, Optional, Dict, Any
 import logging
 from ultralytics import YOLO
 
+import os
+import queue
+import threading
+
 from beemonitor.core.profiling import PROFILER
 from beemonitor.detection.yolo_detector import YOLODetector
 from beemonitor.detection.blob_detector import BlobDetector
 from beemonitor.tracking.mot.bee_tracker import BeeTracker
 
 logger = logging.getLogger(__name__)
+
+
+# How many frames the reader thread may run ahead of the tracker.
+#
+# Decode is CPU and inference is GPU; run serially they alternate and neither
+# saturates — a measured run showed one of four vCPUs pinned with the GPU
+# memory at 28%. A bounded queue overlaps them. Bounded, because a 1080p BGR
+# frame is ~6 MB: the default depth costs ~150 MB, unbounded costs the video.
+#
+# 0 disables the thread and decodes inline. That is the original path, kept
+# because it is what the equivalence test compares the threaded one against.
+FRAME_QUEUE_DEPTH = int(os.environ.get("BEEMONITOR_FRAME_QUEUE", "24"))
+
+# Sentinel posted by the reader when there are no more frames. A distinct object
+# rather than None so it can never be confused with a decode result.
+_END_OF_FRAMES = object()
+
+
+def _decode_into(cap, start_frame, end_frame, frame_queue, stop_event):
+    """Decode frames into ``frame_queue`` until EOF or ``end_frame``.
+
+    Runs on the reader thread. Every exit path — clean, stopped, or raised —
+    posts exactly one sentinel, so the consumer can never block forever. Puts
+    use a timeout rather than blocking outright so a consumer that has gone away
+    cannot wedge this thread against a full queue.
+    """
+    frame_num = start_frame
+    try:
+        while not stop_event.is_set():
+            if end_frame is not None and frame_num >= end_frame:
+                break
+            with PROFILER.stage("decode"):
+                ret, frame = cap.read()
+            if not ret:
+                break
+            while not stop_event.is_set():
+                try:
+                    frame_queue.put((frame_num, frame), timeout=0.5)
+                    break
+                except queue.Full:
+                    continue
+            frame_num += 1
+    except Exception:
+        logger.exception("Frame reader failed at frame %s", frame_num)
+    finally:
+        while True:
+            try:
+                frame_queue.put(_END_OF_FRAMES, timeout=0.5)
+                break
+            except queue.Full:
+                if stop_event.is_set():
+                    break
+
+
+def _iter_frames(cap, start_frame, end_frame):
+    """``(frame_num, frame)`` in order, decoded ahead on a reader thread.
+
+    Order is exactly the serial loop's: one frame at a time, none skipped. Only
+    *when* the decode happens changes, so process_frame, the tracker and the
+    MOG2 background model — all of which are stateful and order-dependent —
+    cannot tell the difference.
+    """
+    if FRAME_QUEUE_DEPTH <= 0:
+        frame_num = start_frame
+        while end_frame is None or frame_num < end_frame:
+            with PROFILER.stage("decode"):
+                ret, frame = cap.read()
+            if not ret:
+                return
+            yield frame_num, frame
+            frame_num += 1
+        return
+
+    frame_queue = queue.Queue(maxsize=FRAME_QUEUE_DEPTH)
+    stop_event = threading.Event()
+    reader = threading.Thread(
+        target=_decode_into,
+        args=(cap, start_frame, end_frame, frame_queue, stop_event),
+        name="beemonitor-frame-reader",
+        daemon=True,
+    )
+    reader.start()
+    try:
+        while True:
+            item = frame_queue.get()
+            if item is _END_OF_FRAMES:
+                return
+            yield item
+    finally:
+        # Covers the consumer raising, or a caller abandoning the generator:
+        # tell the reader to stop, then drain so it is never blocked on a put.
+        stop_event.set()
+        while reader.is_alive():
+            try:
+                frame_queue.get(timeout=0.1)
+            except queue.Empty:
+                pass
+        reader.join(timeout=5.0)
 
 
 class BeeTracking:
@@ -722,16 +824,10 @@ class BeeTracking:
             )
 
         results = []
-        frame_num = start_frame
+        frames_read = 0
 
-        while True:
-            if end_frame is not None and frame_num >= end_frame:
-                break
-            with PROFILER.stage("decode"):
-                ret, frame = cap.read()
-            if not ret:
-                break
-
+        for frame_num, frame in _iter_frames(cap, start_frame, end_frame):
+            frames_read += 1
             # Process frame
             result = self.process_frame(frame, frame_num, visualize=visualize)
             
@@ -752,16 +848,14 @@ class BeeTracking:
 
             results.append(result)
 
-            frame_num += 1
-            
-            if frame_num % 100 == 0:
-                logger.info(f"Processed {frame_num} frames")
-        
+            if frames_read % 100 == 0:
+                logger.info(f"Processed {frames_read} frames")
+
         cap.release()
         if visualize and output_path:
             out.release()
         
-        logger.info(f"Processed {frame_num} frames total")
+        logger.info(f"Processed {frames_read} frames total")
         
         # Log crop saving summary
         if self.save_crops and self.track_crop_counts:
