@@ -16,17 +16,35 @@ def source(**paths):
 
 class AvailableDownloadTests(SimpleTestCase):
     def test_only_tables_something_actually_wrote_are_offered(self):
-        sources = [source(tracking_csv_path="t.csv", events_csv_path="e.csv")]
+        sources = [source(detections_csv_path="d.csv")]
 
         kinds = [d["kind"] for d in aggregate.available_downloads(sources)]
 
-        self.assertEqual(kinds, ["tracking", "events"])
+        self.assertEqual(kinds, ["detections"])
+
+    def test_the_primitives_are_offered_wherever_there_is_tracking(self):
+        """Events and interactions are a pure function of the tracking table
+        and the reference geometry, so they can be computed at download time
+        even for a batch analysed before the primitives existed."""
+        sources = [source(tracking_csv_path="t.csv")]
+
+        kinds = [d["kind"] for d in aggregate.available_downloads(sources)]
+
+        self.assertEqual(kinds, ["tracking", "events", "interactions"])
 
     def test_a_batch_that_wrote_everything_offers_all_four(self):
         sources = [source(detections_csv_path="d.csv", tracking_csv_path="t.csv",
                           events_csv_path="e.csv", interactions_csv_path="i.csv")]
 
         self.assertEqual(len(aggregate.available_downloads(sources)), 4)
+
+    def test_a_batch_with_no_tracking_offers_no_primitives(self):
+        sources = [source(detections_csv_path="d.csv")]
+
+        kinds = [d["kind"] for d in aggregate.available_downloads(sources)]
+
+        self.assertNotIn("interactions", kinds)
+        self.assertNotIn("events", kinds)
 
     def test_a_button_that_would_download_nothing_is_not_shown(self):
         # A button returning an empty CSV reads as a bug rather than as a
@@ -42,7 +60,6 @@ class AvailableDownloadTests(SimpleTestCase):
         by_kind = {d["kind"]: d for d in aggregate.available_downloads(sources)}
 
         self.assertEqual(by_kind["tracking"]["clips"], 2)
-        self.assertEqual(by_kind["events"]["clips"], 1)
 
     def test_every_offered_kind_is_one_the_download_view_accepts(self):
         """The template builds URLs from these, so a typo would 404 in prod."""

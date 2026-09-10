@@ -436,6 +436,42 @@ def _proximity_radius(step):
         return ops.DEFAULT_PROXIMITY
 
 
+def recompute_primitive(run, kind):
+    """Events or interactions for a run whose analyzer never produced them.
+
+    A batch analysed before the primitives existed has no ``events`` or
+    ``interactions`` rows in its context — only whatever its retired analyzer
+    stored — so an export would have to fall back to the worker's own CSV, and
+    that is the file with the centroid-distance bug.
+
+    Nothing about the answer requires a re-run, though: the tracking table and
+    the reference geometry are both already saved, and the primitives are a
+    pure function of them. This recomputes at export time so an old batch
+    exports the same rows a fresh one would, without touching the GPU.
+
+    Returns [] when the run has no readable tracking table.
+    """
+    from . import aggregate
+
+    result = aggregate.run_gpu_result(run)
+    if not result.get("tracking_csv_path"):
+        return []
+
+    steps = list(run.steps or [])
+    # Resolve the reference the way the analyzer would have: from the analyzer's
+    # own position in the graph, so an explicit `rois` edge still wins.
+    index = next((i for i in range(len(steps) - 1, -1, -1)
+                  if str(steps[i].get("block_type", "")).startswith("analyze.")),
+                 max(len(steps) - 1, 0))
+    step = steps[index] if steps else {}
+    inputs = {"tracks": {"result": result, "label": ""}}
+
+    executor = (_exec_analyze_events if kind == "events"
+                else _exec_analyze_interactions)
+    out = executor(step, run, run.context or {}, inputs, index)
+    return out.get("rows") or []
+
+
 def _exec_analyze_events(step, run, context, inputs, index):
     """Primitive 1 — every boundary crossing in the clip.
 

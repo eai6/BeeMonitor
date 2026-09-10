@@ -193,14 +193,21 @@ def available_downloads(sources, runs=()):
         for kind, out in analyzer_outputs(run):
             if kind in PRIMITIVE_KINDS and (out.get("rows") or []):
                 analyzed.add(kind)
+    # Both primitives are a pure function of the tracking table and the
+    # reference geometry, so a batch with tracking can always export them —
+    # recomputed at download time for runs that predate the analyzers.
+    if any((s.get("result") or {}).get("tracking_csv_path") for s in sources):
+        analyzed.update(PRIMITIVE_KINDS)
 
     out = []
     for kind, path_key, label, hint in BASE_TABLES:
         clips = sum(1 for s in sources if (s.get("result") or {}).get(path_key))
         if kind in analyzed:
-            out.append({"kind": kind, "label": label, "clips": len(runs),
+            out.append({"kind": kind, "label": label,
+                        "clips": len(runs) or clips,
                         "analyzed": True,
-                        "hint": hint + " Computed by this pipeline's analyzer."})
+                        "hint": hint + " Computed from this batch's tracking, "
+                                       "not the worker's raw file."})
         elif clips:
             out.append({"kind": kind, "label": label, "hint": hint,
                         "clips": clips, "analyzed": False})
@@ -278,7 +285,16 @@ def primitive_csv(runs, kind):
             continue
         outputs = [out for k, out in analyzer_outputs(run) if k == kind]
         if not outputs:
-            continue
+            # Analysed before the primitives existed. The tracking table and the
+            # reference geometry are both saved, and the primitives are a pure
+            # function of them — so recompute rather than falling back to the
+            # worker's CSV, which is the file with the centroid-distance bug.
+            from . import executors
+
+            rows = executors.recompute_primitive(run, kind)
+            if not rows:
+                continue
+            outputs = [{"rows": rows}]
         result = run_gpu_result(run)
         fps = max(fps_with_source(result, video)[0], 1.0)
         src = {"video": video, "title": video.title or f"Video {video.pk}",
