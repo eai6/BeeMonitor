@@ -16,7 +16,10 @@
     </div>
   </div>
   <div class="flex gap-2">
+    <a href="{% url 'annotations:people' project.pk %}" class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">People</a>
+    {% if can_assign %}
     <a href="{% url 'annotations:settings' project.pk %}" class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Settings</a>
+    {% endif %}
     <a href="{% url 'annotations:list' %}" class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Back</a>
   </div>
 </div>
@@ -50,6 +53,43 @@
 <!-- Workflow — one step per row. The two forms used to share a flex row, which
      put two identical "Every Nth / Max frames" pairs side by side meaning
      different things, with explanatory prose wedged between the controls. -->
+{% if my_role and my_role != "owner" %}
+{% comment %}
+  What a collaborator opens the project to see: their own workload, and one
+  click into the editor. The stages below are still there — knowing where the
+  project stands is useful — but this is the thing they came for.
+{% endcomment %}
+<div class="bg-white shadow rounded-lg mb-4 overflow-hidden border-l-4 border-amber-500">
+  <div class="flex items-center gap-5 px-4 py-3 flex-wrap">
+    <div>
+      <div class="text-[10.5px] text-gray-500 uppercase tracking-wide">Your work</div>
+      <div class="text-sm text-gray-900 mt-0.5">
+        {% if my_clips %}
+        <b>{{ my_clips }}</b> clip{{ my_clips|pluralize }} assigned to you
+        {% else %}
+        Nothing assigned to you yet
+        {% endif %}
+        <span class="text-gray-400">&middot; you are {{ my_role }} on this project</span>
+      </div>
+    </div>
+    <div class="ml-auto flex items-center gap-2 flex-wrap">
+      {% if my_clips %}
+      <a href="?assignee=me" class="text-[12px] px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-50">Show mine</a>
+      {% endif %}
+      {% if unassigned_count and can_annotate %}
+      <a href="?assignee=none" class="text-[12px] px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-50">
+        Unassigned pool ({{ unassigned_count }})
+      </a>
+      {% endif %}
+      {% if my_clips and can_annotate %}
+      <a href="{% url 'annotations:editor' project.pk %}"
+         class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-1.5 rounded text-[12.5px] font-semibold">Start annotating &rarr;</a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {% comment %}
   Where things stand — a filter, not a sequence.
 
@@ -285,6 +325,31 @@
     </form>
   </div>
 
+  {% if members|length > 1 or my_clips %}
+  {% comment %}
+    Who is doing what, as a filter. Assignment is per clip, so "show me
+    jill.m's" and "show me what nobody has taken" are the two questions that
+    actually come up while handing work out.
+  {% endcomment %}
+  <div class="flex items-center gap-2 px-4 py-2.5 border-b border-gray-200 flex-wrap">
+    <span class="text-[10.5px] text-gray-500 uppercase tracking-wide">Assigned to</span>
+    <a href="?" class="text-[11.5px] px-2.5 py-1 rounded-full border {% if not assignee %}border-amber-600 bg-amber-50 text-amber-800 font-semibold{% else %}border-gray-300 text-gray-700 hover:bg-gray-50{% endif %}">Anyone</a>
+    {% for m in members %}
+    <a href="?assignee={{ m.user.pk }}"
+       class="flex items-center gap-1.5 text-[11.5px] pl-1 pr-2.5 py-1 rounded-full border {% if assignee == m.user.pk|stringformat:'s' %}border-amber-600 bg-amber-50{% else %}border-gray-300 hover:bg-gray-50{% endif %}">
+      <span class="w-4 h-4 rounded-full text-white text-[8px] font-bold flex items-center justify-center"
+            style="background: {{ m.dot }}">{{ m.user.username|slice:":1"|upper }}</span>
+      <span class="text-gray-700">{% if m.is_you %}you{% else %}{{ m.user.username }}{% endif %} &middot; {{ m.count }}</span>
+    </a>
+    {% endfor %}
+    <a href="?assignee=none"
+       class="text-[11.5px] px-2.5 py-1 rounded-full border {% if assignee == 'none' %}border-amber-600 bg-amber-50 text-amber-800 font-semibold{% else %}border-gray-300 text-gray-700 hover:bg-gray-50{% endif %}">
+      unassigned &middot; {{ unassigned_count }}
+    </a>
+    <a href="{% url 'annotations:people' project.pk %}" class="ml-auto text-[11.5px] text-amber-700 hover:underline">People &amp; sharing &rarr;</a>
+  </div>
+  {% endif %}
+
   {% comment %}
     One form, two destinations. The checkboxes used to bind to the auto-label
     form alone, so "Sample selected (N)" relabelled the button and then sampled
@@ -305,6 +370,12 @@
       <button type="button" data-pick="none" class="pick text-[11.5px] px-2.5 py-1 rounded-full text-gray-500 hover:underline">Clear</button>
 
       <div class="ml-auto flex items-center gap-2">
+        {% comment %}
+          Only a manager may sample or auto-label, so only a manager is offered
+          them. A button that 404s is worse than an absent one — it reads as a
+          broken page rather than as a permission you do not have.
+        {% endcomment %}
+        {% if can_assign %}
         <button type="submit" formaction="{% url 'annotations:sample_frames' project.pk %}"
                 class="text-[12.5px] px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 whitespace-nowrap">
           Sample <span class="clip-n">all</span>
@@ -315,6 +386,31 @@
           Auto-label <span class="clip-n">all</span>
           <span class="text-[9.5px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full ml-0.5">GPU</span>
         </button>
+        {% endif %}
+        {% if can_assign and members|length > 1 %}
+        {% comment %}
+          Picking several people deals the clips out round-robin instead of
+          giving them all to one — hand-picking twenty clips is not something
+          to make anyone do twice.
+        {% endcomment %}
+        <select name="assignee" multiple size="1" form="clip-form"
+                class="border border-gray-300 rounded px-2 py-1.5 text-[12px] max-w-[168px]"
+                title="Pick one person to assign to, or several to split evenly">
+          {% for m in members %}
+          <option value="{{ m.user.pk }}">{% if m.is_you %}you{% else %}{{ m.user.username }}{% endif %}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" formaction="{% url 'annotations:assign' project.pk %}"
+                class="text-[12.5px] px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 whitespace-nowrap">
+          Assign <span class="clip-n">all</span>
+        </button>
+        {% elif can_annotate %}
+        <button type="submit" formaction="{% url 'annotations:claim' project.pk %}"
+                class="text-[12.5px] px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 whitespace-nowrap"
+                title="Take these clips from the unassigned pool">
+          Take <span class="clip-n">all</span>
+        </button>
+        {% endif %}
         <a href="{% url 'annotations:editor' project.pk %}"
            class="bg-amber-600 hover:bg-amber-700 text-white px-3.5 py-1.5 rounded text-[12.5px] font-semibold whitespace-nowrap">Annotate &rarr;</a>
       </div>
@@ -325,11 +421,19 @@
       all" on a 59-clip project is one click and roughly 17,000 GPU frames, and
       the button never said so.
     {% endcomment %}
+    {% if can_assign %}
     <p id="clip-scope" class="px-4 py-2 border-b border-gray-200 text-[11.5px] text-gray-500"></p>
+    {% endif %}
+
+    <div class="grid grid-cols-[20px_54px_minmax(0,1fr)_132px_104px_128px_78px] gap-3 px-4 py-2
+                border-b border-gray-200 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">
+      <div></div><div></div><div>Clip</div><div>Progress</div><div>State</div>
+      <div>Assigned to</div><div class="text-right">Recorded</div>
+    </div>
 
     <div class="divide-y divide-gray-100 max-h-[32rem] overflow-y-auto">
       {% for item in video_data %}
-      <div class="clip-row grid grid-cols-[20px_54px_minmax(0,1fr)_140px_112px_86px] gap-3 items-center px-4 py-2 hover:bg-gray-50"
+      <div class="clip-row grid grid-cols-[20px_54px_minmax(0,1fr)_132px_104px_128px_78px] gap-3 items-center px-4 py-2 hover:bg-gray-50"
            data-stage="{{ item.progress.stage }}">
         <input type="checkbox" name="video_ids" value="{{ item.video.pk }}"
                class="clip-cb rounded border-gray-300">
@@ -364,6 +468,17 @@
             {% elif item.progress.stage == 'sampled' %}bg-blue-100 text-blue-800
             {% elif item.progress.stage == 'failed' %}bg-red-100 text-red-700
             {% else %}bg-gray-100 text-gray-600{% endif %}">{{ item.progress.stage_label }}</span>
+        </div>
+        <div class="text-[11px] truncate">
+          {% if item.holder %}
+          <span class="inline-flex items-center gap-1.5">
+            <span class="w-3.5 h-3.5 rounded-full text-white text-[7.5px] font-bold flex items-center justify-center shrink-0"
+                  style="background: {{ item.holder_dot }}">{{ item.holder.user.username|slice:":1"|upper }}</span>
+            <span class="text-gray-600 truncate">{% if item.mine %}you{% else %}{{ item.holder.user.username }}{% endif %}</span>
+          </span>
+          {% else %}
+          <span class="text-gray-300 italic">unassigned</span>
+          {% endif %}
         </div>
         <div class="text-[10.5px] text-gray-400 text-right whitespace-nowrap">
           {% if item.video.recorded_at %}{{ item.video.recorded_at|date:"j M, H:i" }}{% else %}—{% endif %}
@@ -422,6 +537,7 @@
     var frames = 0;
     (n ? sel.map(function (b) { return b.closest('.clip-row'); }) : rows)
       .forEach(function (r) { if (r) frames += 1; });
+    if (!scope) return;
     scope.innerHTML =
       'Sampling reads ' + clips + ' clip' + (clips === 1 ? '' : 's') +
       ' on the server CPU. Auto-label runs SAM 3 on a GPU for every sampled frame in ' +
@@ -552,7 +668,10 @@
 <!-- No annotations yet -->
 <div class="bg-white shadow rounded-lg p-12 text-center">
   <p class="text-gray-500 mb-2">No annotations yet.</p>
-  <p class="text-sm text-gray-400">Clips are sampled when you add them. Open one to draw boxes, or use Auto-label above for a first pass.</p>
+  <p class="text-sm text-gray-400">
+    {% if can_assign %}Clips are sampled when you add them. Open one to draw boxes, or use Auto-label above for a first pass.
+    {% else %}Open a clip assigned to you to start drawing boxes.{% endif %}
+  </p>
   {% if video_data %}
   <div class="mt-4 space-y-1">
     {% for item in video_data %}

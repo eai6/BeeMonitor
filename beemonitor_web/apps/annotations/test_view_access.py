@@ -208,3 +208,226 @@ class TrainingOnSharedProjectTests(ViewAccessTestCase):
         form = TrainingCreateForm(user=self.stranger)
 
         self.assertNotIn(self.project, form.fields["project"].queryset)
+
+
+class PeoplePageTests(ViewAccessTestCase):
+    def url(self):
+        return reverse("annotations:people", args=[self.project.pk])
+
+    def test_everyone_on_the_project_can_see_who_else_is(self):
+        """Knowing who else is working on it is part of working on it."""
+        for role in self.people:
+            self.assertEqual(self.status(role, self.url()), 200, role)
+
+    def test_a_stranger_cannot(self):
+        self.assertEqual(self.status(self.stranger, self.url()), 404)
+
+    def test_only_the_owner_gets_the_controls(self):
+        self.as_("manager")
+        manager_view = self.client.get(self.url()).content.decode()
+        self.as_("owner")
+        owner_view = self.client.get(self.url()).content.decode()
+
+        invite = reverse("annotations:share_invite", args=[self.project.pk])
+        self.assertNotIn(invite, manager_view)
+        self.assertIn(invite, owner_view)
+
+    def test_only_the_owner_may_invite(self):
+        url = reverse("annotations:share_invite", args=[self.project.pk])
+
+        self.assertEqual(self.status("manager", url, "post",
+                                     data={"who": "stranger"}), 404)
+        self.assertFalse(self.project.shares.filter(user=self.stranger).exists())
+
+    def test_the_owner_can_invite_by_username(self):
+        self.as_("owner")
+
+        self.client.post(reverse("annotations:share_invite", args=[self.project.pk]),
+                         {"who": "stranger", "role": "annotator"})
+
+        self.assertEqual(self.project.role_for(self.stranger), "annotator")
+
+    def test_inviting_an_unknown_account_says_so_rather_than_failing_quietly(self):
+        self.as_("owner")
+
+        resp = self.client.post(
+            reverse("annotations:share_invite", args=[self.project.pk]),
+            {"who": "nobody@example.com"}, follow=True)
+
+        self.assertIn("No account matches", " ".join(
+            str(m) for m in resp.context["messages"]))
+
+    def test_removing_someone_returns_their_clips_to_the_pool(self):
+        """The work is the project's, not theirs — it must not vanish with them."""
+        ClipAssignment.objects.create(project=self.project, video=self.video,
+                                      user=self.people["annotator"])
+        share = self.project.shares.get(user=self.people["annotator"])
+        self.as_("owner")
+
+        self.client.post(reverse("annotations:share_update", args=[self.project.pk]),
+                         {"share_id": share.pk, "remove": "1"})
+
+        self.assertFalse(self.project.shares.filter(pk=share.pk).exists())
+        self.assertFalse(self.project.assignments.exists())
+        self.assertTrue(Annotation.objects.filter(project=self.project).exists())
+
+
+class AssignmentViewTests(ViewAccessTestCase):
+    def test_only_a_manager_may_assign(self):
+        url = reverse("annotations:assign", args=[self.project.pk])
+
+        self.assertEqual(self.status("reviewer", url, "post", data={
+            "video_ids": [self.video.pk],
+            "assignee": [self.people["annotator"].pk]}), 404)
+        self.assertFalse(self.project.assignments.exists())
+
+    def test_a_manager_can_hand_a_clip_out(self):
+        self.as_("manager")
+
+        self.client.post(reverse("annotations:assign", args=[self.project.pk]),
+                         {"video_ids": [self.video.pk],
+                          "assignee": [self.people["annotator"].pk]})
+
+        self.assertEqual(self.project.assignments.get().user,
+                         self.people["annotator"])
+
+    def test_assigning_to_somebody_not_on_the_project_is_refused(self):
+        """Otherwise the assignment names someone who cannot open it."""
+        self.as_("manager")
+
+        self.client.post(reverse("annotations:assign", args=[self.project.pk]),
+                         {"video_ids": [self.video.pk],
+                          "assignee": [self.stranger.pk]})
+
+        self.assertFalse(self.project.assignments.filter(user=self.stranger).exists())
+
+    def test_an_annotator_can_take_an_unassigned_clip(self):
+        self.as_("annotator")
+
+        self.client.post(reverse("annotations:claim", args=[self.project.pk]),
+                         {"video_ids": [self.video.pk]})
+
+        self.assertEqual(self.project.assignments.get().user,
+                         self.people["annotator"])
+
+    def test_taking_a_clip_someone_else_holds_is_refused_and_reported(self):
+        ClipAssignment.objects.create(project=self.project, video=self.video,
+                                      user=self.people["reviewer"])
+        self.as_("annotator")
+
+        resp = self.client.post(reverse("annotations:claim", args=[self.project.pk]),
+                                {"video_ids": [self.video.pk]}, follow=True)
+
+        self.assertEqual(self.project.assignments.get().user,
+                         self.people["reviewer"])
+        self.assertIn("already taken", " ".join(
+            str(m) for m in resp.context["messages"]))
+
+    def test_a_viewer_cannot_take_clips(self):
+        self.assertEqual(
+            self.status("viewer", reverse("annotations:claim", args=[self.project.pk]),
+                        "post", data={"video_ids": [self.video.pk]}), 404)
+
+    def test_the_list_can_be_filtered_to_one_person(self):
+        ClipAssignment.objects.create(project=self.project, video=self.video,
+                                      user=self.people["annotator"])
+        self.as_("owner")
+        url = reverse("annotations:detail", args=[self.project.pk])
+
+        mine = self.client.get(url, {"assignee": self.people["annotator"].pk})
+        nobody = self.client.get(url, {"assignee": "none"})
+
+        self.assertIn(f'name="video_ids" value="{self.video.pk}"',
+                      mine.content.decode())
+        self.assertNotIn(f'name="video_ids" value="{self.video.pk}"',
+                         nobody.content.decode())
+
+
+class CollaboratorViewTests(ViewAccessTestCase):
+    """What a collaborator opens the project to see."""
+
+    def html(self, who, **params):
+        self.as_(who)
+        return self.client.get(
+            reverse("annotations:detail", args=[self.project.pk]),
+            params).content.decode()
+
+    def test_a_collaborator_sees_their_own_workload(self):
+        ClipAssignment.objects.create(project=self.project, video=self.video,
+                                      user=self.people["annotator"])
+
+        html = self.html("annotator")
+
+        self.assertIn("Your work", html)
+        self.assertIn("Start annotating", html)
+
+    def test_the_owner_does_not_get_the_strip(self):
+        """It is the collaborator's view of a project they do not run."""
+        self.assertNotIn("Your work", self.html("owner"))
+
+    def test_show_mine_narrows_to_their_clips(self):
+        theirs = self.video
+        others = Video.objects.create(user=self.owner, title="o",
+                                      storage_key="va/o.mp4", file_size_bytes=1,
+                                      status=Video.Status.READY)
+        self.project.videos.add(others)
+        ClipAssignment.objects.create(project=self.project, video=theirs,
+                                      user=self.people["annotator"])
+        ClipAssignment.objects.create(project=self.project, video=others,
+                                      user=self.people["reviewer"])
+
+        html = self.html("annotator", assignee="me")
+
+        self.assertIn(f'name="video_ids" value="{theirs.pk}"', html)
+        self.assertNotIn(f'name="video_ids" value="{others.pk}"', html)
+
+    def test_a_viewer_is_not_offered_the_pool(self):
+        """A viewer cannot annotate, so taking work would be a dead end."""
+        html = self.html("viewer")
+
+        self.assertNotIn("Unassigned pool", html)
+
+    def test_a_collaborator_does_not_get_the_gpu_controls(self):
+        """A button that 404s reads as a broken page, not as a permission you
+        do not have."""
+        html = self.html("annotator")
+
+        self.assertNotIn(
+            reverse("annotations:pre_annotate", args=[self.project.pk]), html)
+        self.assertNotIn(
+            reverse("annotations:sample_frames", args=[self.project.pk]), html)
+
+    def test_a_manager_does(self):
+        html = self.html("manager")
+
+        self.assertIn(
+            reverse("annotations:pre_annotate", args=[self.project.pk]), html)
+
+
+class ProjectListTests(ViewAccessTestCase):
+    def html(self, who):
+        self.as_(who)
+        return self.client.get(reverse("annotations:list")).content.decode()
+
+    def test_a_shared_project_says_whose_it_is_and_what_you_are(self):
+        html = self.html("annotator")
+
+        self.assertIn("shared by owner", html)
+        self.assertIn("annotator", html)
+
+    def test_your_own_project_is_not_labelled_as_shared(self):
+        self.assertNotIn("shared by", self.html("owner"))
+
+    def test_a_collaborator_is_not_offered_delete(self):
+        """The row must not carry a control that would 404 — or worse, look
+        like it might work."""
+        delete = reverse("annotations:delete", args=[self.project.pk])
+
+        self.assertNotIn(delete, self.html("reviewer"))
+        self.assertIn(delete, self.html("owner"))
+
+    def test_a_manager_may_still_reach_settings(self):
+        settings_url = reverse("annotations:settings", args=[self.project.pk])
+
+        self.assertIn(settings_url, self.html("manager"))
+        self.assertNotIn(settings_url, self.html("annotator"))

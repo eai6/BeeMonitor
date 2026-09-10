@@ -71,7 +71,20 @@ class ProjectListView(LoginRequiredMixin, ListView):
 
     def get_queryset(self):
         # Shared projects belong in the list, or an invitation goes nowhere.
-        return AnnotationProject.accessible(self.request.user)
+        return AnnotationProject.accessible(self.request.user).select_related("user")
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        # A shared project has to say whose it is and what you may do in it —
+        # otherwise the list mixes yours with other people's and reads as if
+        # you own all of them.
+        me = self.request.user
+        roles = {s.project_id: s.role for s in
+                 me.shared_projects.all()} if me.is_authenticated else {}
+        for project in ctx["projects"]:
+            project.my_role = "owner" if project.user_id == me.id else roles.get(project.pk)
+            project.shared_by = None if project.my_role == "owner" else project.user
+        return ctx
 
 
 class ProjectCreateView(LoginRequiredMixin, CreateView):
@@ -331,11 +344,59 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
                 wanted = progress_mod.filter_ids(states, len(counted), stage)
                 filtered = [v for v in filtered if v.pk in wanted]
 
+        # Who is doing which clip. One query for the whole project; the rows
+        # carry it so the list can filter, colour and reassign without more.
+        from . import assignments as assign_mod
+
+        holders = assign_mod.by_video(self.object)
+        assignee = (self.request.GET.get("assignee") or "").strip()
+        if assignee == "none":
+            filtered = [v for v in filtered if v.pk not in holders]
+        elif assignee == "me":
+            filtered = [v for v in filtered
+                        if holders.get(v.pk)
+                        and holders[v.pk].user_id == self.request.user.id]
+        elif assignee.isdigit():
+            filtered = [v for v in filtered
+                        if holders.get(v.pk)
+                        and holders[v.pk].user_id == int(assignee)]
+
         VIDEO_LIST_CAP = 500
         shown = progress_mod.decorate(filtered[:VIDEO_LIST_CAP], states, failed_ids)
         ctx["video_data"] = [{"video": v, "annotation_count": v.annotation_count,
-                              "progress": v.progress}
+                              "progress": v.progress,
+                              "holder": holders.get(v.pk),
+                              "holder_dot": person_colour(
+                                  holders[v.pk].user_id) if v.pk in holders else "",
+                              "mine": (v.pk in holders
+                                       and holders[v.pk].user_id == self.request.user.id)}
                              for v in shown]
+
+        # Everyone on the project, for the "assigned to" filter and the assign
+        # control. Counts come from the same map, so the strip and the rows can
+        # never disagree.
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        member_ids = [self.object.user_id] + list(
+            self.object.shares.values_list("user_id", flat=True))
+        held = {}
+        for a in holders.values():
+            held[a.user_id] = held.get(a.user_id, 0) + 1
+        members = {u.pk: u for u in User.objects.filter(pk__in=member_ids)}
+        ctx["members"] = [{
+            "user": members[uid], "dot": person_colour(uid),
+            "count": held.get(uid, 0),
+            "is_you": uid == self.request.user.id,
+        } for uid in member_ids if uid in members]
+        ctx["assignee"] = assignee
+        ctx["unassigned_count"] = sum(
+            1 for v in counted if v.pk not in holders)
+        ctx["my_role"] = self.object.role_for(self.request.user)
+        ctx["can_assign"] = self.object.allows(self.request.user, "manager")
+        ctx["can_annotate"] = self.object.allows(self.request.user, "annotator")
+        ctx["my_clips"] = sum(1 for a in holders.values()
+                              if a.user_id == self.request.user.id)
         ctx["stage"] = stage
         ctx["progress"] = progress_mod.summary(
             self.object, states, len(counted), failed_ids)
@@ -513,6 +574,196 @@ class RemoveVideoView(LoginRequiredMixin, View):
             Annotation.objects.filter(project=project, video_id=video_id).delete()
             messages.info(request, "Video removed from the project.")
         return redirect("annotations:detail", pk=pk)
+
+
+# Stable per-person colours, so the same face is the same colour on the people
+# page, the clip list and every assignment chip.
+PERSON_DOTS = ["#16a34a", "#b45309", "#0e7490", "#7c3aed", "#be123c", "#4d7c0f",
+               "#0369a1", "#a16207"]
+
+
+def person_colour(user_id):
+    return PERSON_DOTS[(user_id or 0) % len(PERSON_DOTS)]
+
+
+class ProjectPeopleView(LoginRequiredMixin, TemplateView):
+    """Who is on this project, what they may do, and how far along they are.
+
+    Readable by everyone on the project — knowing who else is working on it is
+    part of working on it — while every control is owner-only.
+    """
+
+    template_name = "annotations/people.html"
+
+    def get_context_data(self, **kwargs):
+        from . import assignments as assign_mod
+        from .models import ProjectShare
+
+        ctx = super().get_context_data(**kwargs)
+        project = get_object_or_404(
+            AnnotationProject.accessible(self.request.user), pk=kwargs["pk"])
+
+        loads = {w["user_id"]: w for w in assign_mod.workloads(project)}
+        people = [{
+            "user": project.user, "role": "owner", "role_label": "Owner",
+            "dot": person_colour(project.user_id),
+            "is_you": project.user_id == self.request.user.id,
+            "share": None, "load": loads.get(project.user_id),
+        }]
+        for share in project.shares.select_related("user").all():
+            people.append({
+                "user": share.user, "role": share.role,
+                "dot": person_colour(share.user_id),
+                "role_label": share.get_role_display(),
+                "is_you": share.user_id == self.request.user.id,
+                "share": share, "load": loads.get(share.user_id),
+            })
+
+        ctx.update({
+            "project": project,
+            "people": people,
+            "roles": ProjectShare.Role.choices,
+            "can_manage_people": project.user_id == self.request.user.id,
+            "unassigned_count": assign_mod.unassigned(project).count(),
+            "my_role": project.role_for(self.request.user),
+        })
+        return ctx
+
+
+class ShareInviteView(LoginRequiredMixin, View):
+    """Add a person to the project. Owner only."""
+
+    def post(self, request, pk):
+        from django.contrib import messages
+        from django.contrib.auth import get_user_model
+        from django.shortcuts import redirect
+
+        from .models import ProjectShare
+
+        project = get_object_or_404(AnnotationProject.owned(request.user), pk=pk)
+        who = (request.POST.get("who") or "").strip()
+        role = request.POST.get("role") or ProjectShare.Role.ANNOTATOR
+
+        User = get_user_model()
+        user = (User.objects.filter(username__iexact=who).first()
+                or User.objects.filter(email__iexact=who).first())
+        if user is None:
+            messages.error(request, f"No account matches “{who}”.")
+        elif user.id == project.user_id:
+            messages.info(request, "You already own this project.")
+        elif role not in dict(ProjectShare.Role.choices):
+            messages.error(request, "Unknown role.")
+        else:
+            share, created = ProjectShare.objects.update_or_create(
+                project=project, user=user,
+                defaults={"role": role, "created_by": request.user})
+            messages.success(
+                request,
+                f"{'Added' if created else 'Updated'} {user.username} as "
+                f"{share.get_role_display().split('—')[0].strip().lower()}.")
+        return redirect("annotations:people", pk=pk)
+
+
+class ShareUpdateView(LoginRequiredMixin, View):
+    """Change someone's role, or remove them. Owner only."""
+
+    def post(self, request, pk):
+        from django.contrib import messages
+        from django.shortcuts import redirect
+
+        from .models import ProjectShare
+
+        project = get_object_or_404(AnnotationProject.owned(request.user), pk=pk)
+        share = get_object_or_404(ProjectShare, project=project,
+                                  pk=request.POST.get("share_id"))
+
+        if request.POST.get("remove"):
+            # Their assignments go back to the pool rather than vanishing with
+            # them — the work is the project's, not theirs.
+            freed = project.assignments.filter(user=share.user).delete()[0]
+            name = share.user.username
+            share.delete()
+            messages.info(
+                request,
+                f"Removed {name}." + (f" {freed} clip(s) returned to the "
+                                      "unassigned pool." if freed else ""))
+        else:
+            role = request.POST.get("role")
+            if role in dict(ProjectShare.Role.choices):
+                share.role = role
+                share.save(update_fields=["role"])
+                messages.success(request, f"{share.user.username} is now a "
+                                          f"{role}.")
+        return redirect("annotations:people", pk=pk)
+
+
+class AssignClipsView(LoginRequiredMixin, View):
+    """Hand clips out, or deal them round-robin. Manager and above."""
+
+    def post(self, request, pk):
+        from django.contrib import messages
+        from django.contrib.auth import get_user_model
+        from django.shortcuts import redirect
+
+        from . import assignments as assign_mod
+
+        project = get_object_or_404(AnnotationProject.manageable(request.user), pk=pk)
+        video_ids = [int(v) for v in request.POST.getlist("video_ids") if str(v).isdigit()]
+        if not video_ids:
+            messages.warning(request, "No clips selected.")
+            return redirect("annotations:detail", pk=pk)
+
+        User = get_user_model()
+        targets = User.objects.filter(pk__in=request.POST.getlist("assignee"))
+        # Only people who are actually on the project, or the assignment names
+        # someone who cannot open it.
+        allowed = {project.user_id} | set(
+            project.shares.values_list("user_id", flat=True))
+        targets = [u for u in targets if u.id in allowed]
+
+        if not targets:
+            freed = project.assignments.filter(video_id__in=video_ids).delete()[0]
+            messages.info(request, f"Returned {freed} clip(s) to the pool.")
+        elif len(targets) == 1:
+            moved = assign_mod.assign(project, video_ids, targets[0], by=request.user)
+            messages.success(request,
+                             f"Assigned {moved} clip(s) to {targets[0].username}.")
+        else:
+            tally = assign_mod.distribute(project, video_ids, targets, by=request.user)
+            spread = ", ".join(f"{u.username} {tally.get(u.id, 0)}" for u in targets)
+            messages.success(request, f"Split {len(video_ids)} clip(s): {spread}.")
+        return redirect(request.POST.get("next") or f"/annotations/{pk}/")
+
+
+class ClaimClipsView(LoginRequiredMixin, View):
+    """Take clips from the unassigned pool, or give your own back."""
+
+    def post(self, request, pk):
+        from django.contrib import messages
+        from django.shortcuts import redirect
+
+        from . import assignments as assign_mod
+
+        project = get_object_or_404(AnnotationProject.annotatable(request.user), pk=pk)
+        video_ids = [int(v) for v in request.POST.getlist("video_ids") if str(v).isdigit()]
+        releasing = bool(request.POST.get("release"))
+
+        done = 0
+        for vid in video_ids:
+            if releasing:
+                done += 1 if assign_mod.release(project, vid, request.user) else 0
+            else:
+                done += 1 if assign_mod.claim(project, vid, request.user) else 0
+
+        if releasing:
+            messages.info(request, f"Returned {done} clip(s) to the pool.")
+        else:
+            messages.success(request, f"Took {done} clip(s).")
+            if done < len(video_ids):
+                messages.warning(
+                    request,
+                    f"{len(video_ids) - done} were already taken by someone else.")
+        return redirect(request.POST.get("next") or f"/annotations/{pk}/")
 
 
 class AddVideosWorkspaceView(LoginRequiredMixin, TemplateView):
