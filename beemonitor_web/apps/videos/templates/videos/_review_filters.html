@@ -1,0 +1,90 @@
+{% comment %}
+  The review filter set — hotels, time of day, dates, triage, search.
+
+  Shared by the Processing hub (which clips to analyse) and an annotation
+  project's clip picker (which clips to label), because it is the same
+  question. The host page supplies the <form> and whatever it does with a
+  selection; this is only the controls.
+
+  Context: f, opts, device_rows, triage, and `filter_action` for the reset link.
+{% endcomment %}
+<!-- triage -->
+      <div class="space-y-1.5">
+        <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Triage</div>
+        <label class="flex items-center justify-between px-2 py-1.5 rounded cursor-pointer {% if f.confirmed == 'yes' %}bg-amber-50 border border-amber-200{% else %}hover:bg-gray-50{% endif %}">
+          <span class="text-[13px] {% if f.confirmed == 'yes' %}text-amber-800 font-medium{% else %}text-gray-700{% endif %}">Confirmed bee</span>
+          <span class="text-[11px] {% if f.confirmed == 'yes' %}text-amber-700 bg-amber-100 px-1.5 rounded-full{% else %}text-gray-500{% endif %}">{{ triage.confirmed }}</span>
+          <input type="radio" name="confirmed" value="yes" class="hidden" {% if f.confirmed == 'yes' %}checked{% endif %} onchange="this.form.submit()">
+        </label>
+        <label class="flex items-center justify-between px-2 py-1.5 rounded cursor-pointer {% if f.confirmed == 'no' %}bg-amber-50 border border-amber-200{% else %}hover:bg-gray-50{% endif %}">
+          <span class="text-[13px] text-gray-700">Unconfirmed</span>
+          <span class="text-[11px] text-gray-500">{{ triage.unconfirmed }}</span>
+          <input type="radio" name="confirmed" value="no" class="hidden" {% if f.confirmed == 'no' %}checked{% endif %} onchange="this.form.submit()">
+        </label>
+        <label class="flex items-center justify-between px-2 py-1.5 rounded cursor-pointer {% if f.confirmed == 'untagged' %}bg-amber-50 border border-amber-200{% else %}hover:bg-gray-50{% endif %}">
+          <span class="text-[13px] text-gray-700" title="The device never tagged these either way — web uploads, and clips that predate on-device confirmation.">Not tagged</span>
+          <span class="text-[11px] text-gray-500">{{ triage.untagged }}</span>
+          <input type="radio" name="confirmed" value="untagged" class="hidden" {% if f.confirmed == 'untagged' %}checked{% endif %} onchange="this.form.submit()">
+        </label>
+        <label class="flex items-center justify-between px-2 py-1.5 rounded cursor-pointer {% if f.analysis == 'never' %}bg-amber-50 border border-amber-200{% else %}hover:bg-gray-50{% endif %}">
+          <span class="text-[13px] text-gray-700">Not yet analyzed</span>
+          <span class="text-[11px] text-gray-500">{{ triage.unanalyzed }}</span>
+          <input type="checkbox" name="analysis" value="never" class="hidden" {% if f.analysis == 'never' %}checked{% endif %} onchange="this.form.submit()">
+        </label>
+        {% if f.confirmed %}<button type="submit" name="confirmed" value="" class="text-[11px] text-gray-400 hover:text-gray-600 px-2">Any confirmation</button>{% endif %}
+      </div>
+
+      <!-- hotels: multi-select -->
+      <div class="space-y-1.5">
+        <div class="flex items-baseline justify-between">
+          <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Bee hotels</div>
+          <button type="button" id="hotels-all" class="text-[11px] text-amber-700 hover:underline">All</button>
+        </div>
+        <div class="space-y-px">
+          {% for row in device_rows %}
+          <label class="flex items-center gap-2.5 px-2 py-1.5 rounded cursor-pointer {% if row.selected %}bg-amber-50{% else %}hover:bg-gray-50{% endif %}">
+            <input type="checkbox" name="device" value="{{ row.obj.id }}" class="dev-cb rounded border-gray-300 shrink-0"
+                   {% if row.selected %}checked{% endif %} onchange="this.form.submit()">
+            <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background: {% if row.count %}{{ row.dot }}{% else %}#d1d5db{% endif %}"></span>
+            <span class="flex-1 text-[13px] truncate {% if row.count %}text-gray-900{% else %}text-gray-400{% endif %}">{{ row.obj.name }}</span>
+            <span class="text-[11px] {% if row.count %}text-gray-500{% else %}text-gray-400{% endif %}">{{ row.count }}</span>
+          </label>
+          {% empty %}
+          <p class="text-xs text-gray-400 px-2">No bee hotels yet.</p>
+          {% endfor %}
+        </div>
+        {% if f.device|length > 1 %}
+        <p class="text-[11px] text-gray-400 leading-4">Clips interleave by time; the dot on each card says which hotel it came from.</p>
+        {% endif %}
+      </div>
+
+      <!-- recorded -->
+      <div class="space-y-1.5">
+        <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Recorded</div>
+        <div class="grid grid-cols-2 gap-1.5">
+          <input type="datetime-local" name="from" value="{{ f.from }}" class="border border-gray-300 rounded px-2 py-1.5 text-xs" onchange="this.form.submit()">
+          <input type="datetime-local" name="to" value="{{ f.to }}" class="border border-gray-300 rounded px-2 py-1.5 text-xs" onchange="this.form.submit()">
+        </div>
+        <div class="flex items-center gap-1.5 pt-0.5">
+          <span class="text-xs text-gray-500 shrink-0">Daily</span>
+          <select name="hfrom" class="flex-1 border border-gray-300 rounded px-1.5 py-1.5 text-xs" onchange="this.form.submit()">
+            <option value="">—</option>
+            {% for h in opts.hours24 %}<option value="{{ h }}" {% if f.hfrom == h|stringformat:"s" %}selected{% endif %}>{{ h|stringformat:"02d" }}:00</option>{% endfor %}
+          </select>
+          <span class="text-xs text-gray-400">–</span>
+          <select name="hto" class="flex-1 border border-gray-300 rounded px-1.5 py-1.5 text-xs" onchange="this.form.submit()">
+            <option value="">—</option>
+            {% for h in opts.hours24 %}<option value="{{ h }}" {% if f.hto == h|stringformat:"s" %}selected{% endif %}>{{ h|stringformat:"02d" }}:00</option>{% endfor %}
+          </select>
+        </div>
+        <p class="text-[11px] text-gray-400 leading-4">Same hours every day in the range — e.g. midday foraging across a week.</p>
+      </div>
+
+      <!-- search -->
+      <div class="space-y-1.5">
+        <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Search</div>
+        <input name="q" value="{{ f.q }}" placeholder="Clip id…" class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
+      </div>
+
+      {% for k, v in f.items %}{% if v and k not in "device,confirmed,from,to,hfrom,hto,q,analysis" %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
+      <button type="submit" class="w-full bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded text-sm font-medium">Apply</button>

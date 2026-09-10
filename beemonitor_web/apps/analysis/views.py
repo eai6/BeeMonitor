@@ -32,136 +32,17 @@ from .pricing import price_run
 
 logger = logging.getLogger(__name__)
 
-_NATALIES_RE = re.compile(r"natalies?", re.IGNORECASE)
-_SITEA_RE = re.compile(r"SiteA", re.IGNORECASE)
-
-
-def _sanitize_site(value: str) -> str:
-    """Replace occurrences of 'natalies' with 'SiteA' in display strings."""
-    if not value:
-        return value
-    return _NATALIES_RE.sub("SiteA", value)
-
-
-def _unsanitize_site(value: str) -> str:
-    """Reverse-map 'SiteA' back to 'natalies' for DB queries."""
-    if not value:
-        return value
-    return _SITEA_RE.sub("natalies", value)
-
-
-# GET/POST params the Processing-hub video filter understands.
-VIDEO_FILTER_KEYS = ("device", "site", "year", "month", "day", "hour",
-                     "hfrom", "hto", "from", "to", "q", "confirmed", "analysis")
-
-
-def _values(params, key):
-    """Every value for ``key`` — QueryDicts repeat keys, plain dicts don't.
-
-    The hub filters on several hotels at once, so ``device`` arrives repeated.
-    The per-device scheduler passes a plain dict with one value
-    (devices/scheduling.py), and the API a single string, so both shapes have to
-    keep working.
-    """
-    getlist = getattr(params, "getlist", None)
-    if getlist is not None:
-        return [v for v in getlist(key) if v not in (None, "")]
-    value = params.get(key)
-    if value in (None, ""):
-        return []
-    return list(value) if isinstance(value, (list, tuple)) else [value]
-
-
-def apply_video_filters(qs, params):
-    """Apply the Processing-hub video filters to a Video queryset. ``params`` is
-    any dict-like with .get() (a GET or POST QueryDict). Shared by the hub list
-    and the pipeline "run on all filtered videos" path so they never diverge."""
-    from datetime import datetime, time
-    from django.utils import timezone as _tz
-    from django.utils.dateparse import parse_date, parse_datetime
-
-    q = (params.get("q") or "").strip()
-    if q:
-        qs = qs.filter(title__icontains=q)
-    devices = _values(params, "device")
-    if devices:
-        # Several hotels at once: clips interleave by time so the same hour can
-        # be compared across them.
-        qs = qs.filter(device_id__in=devices)
-    if params.get("site"):
-        qs = qs.filter(site_name=_unsanitize_site(params.get("site")))
-    for field in ("year", "month", "day", "hour"):
-        val = params.get(field)
-        if val:
-            try:
-                qs = qs.filter(**{field: int(val)})
-            except (ValueError, TypeError):
-                pass
-
-    # Daily time-of-day window: videos recorded between hfrom:00 (inclusive)
-    # and hto:00 (exclusive) EVERY day — combine with from/to for "6–7 pm each
-    # day across June". hfrom > hto wraps past midnight (e.g. 22 → 4).
-    try:
-        hfrom = int(params.get("hfrom")) if params.get("hfrom") not in (None, "") else None
-        hto = int(params.get("hto")) if params.get("hto") not in (None, "") else None
-    except (ValueError, TypeError):
-        hfrom = hto = None
-    if hfrom is not None or hto is not None:
-        lo = hfrom if hfrom is not None else 0
-        hi = hto if hto is not None else 24
-        if lo < hi:
-            qs = qs.filter(hour__gte=lo, hour__lt=hi)
-        elif lo > hi:  # wraps past midnight
-            from django.db.models import Q as _Q
-            qs = qs.filter(_Q(hour__gte=lo) | _Q(hour__lt=hi))
-        # lo == hi selects nothing meaningful -> ignore (treat as no window)
-
-    def _parse_dt(s):
-        dt = parse_datetime(s)
-        if dt is None:
-            d = parse_date(s)
-            if d:
-                dt = datetime.combine(d, time.min)
-        if dt and _tz.is_naive(dt):
-            dt = _tz.make_aware(dt, _tz.get_current_timezone())
-        return dt
-
-    if params.get("from"):
-        dt = _parse_dt(params.get("from"))
-        if dt:
-            qs = qs.filter(recorded_at__gte=dt)
-    if params.get("to"):
-        dt = _parse_dt(params.get("to"))
-        if dt:
-            qs = qs.filter(recorded_at__lte=dt)
-
-    # "Not yet analyzed" — the review question a run usually answers, and the
-    # one thing the hub could show but never filter on.
-    analysis = params.get("analysis")
-    if analysis:
-        from .models import Job
-        done = Job.objects.filter(status="completed").values("video_id")
-        if analysis == "never":
-            qs = qs.exclude(pk__in=done)
-        elif analysis == "done":
-            qs = qs.filter(pk__in=done)
-
-    confirmed = params.get("confirmed")
-    if confirmed == "yes":
-        qs = qs.filter(metadata__bee_confirmed=True)
-    elif confirmed == "no":
-        qs = qs.filter(metadata__bee_confirmed=False)
-    elif confirmed == "untagged":
-        # Neither True nor False — the key is absent. Written as an explicit
-        # exclusion of the two tagged sets rather than `exclude(key=...)`,
-        # which drops absent-key rows under SQL NULL semantics and would
-        # return nothing at all here.
-        tagged = qs.model.objects.filter(
-            pk__in=qs.values("pk")).filter(
-            metadata__bee_confirmed__in=[True, False]).values("pk")
-        qs = qs.exclude(pk__in=tagged)
-    return qs
-
+# The video filter and the review workspace live in apps.videos.workspace, so
+# the annotation project's clip picker uses the same one rather than growing a
+# second, subtly different copy. Re-exported here because the hub, the pipeline
+# runner, the API and the tests all import them from this module.
+from apps.videos.workspace import (  # noqa: F401
+    VIDEO_FILTER_KEYS,
+    _sanitize_site,
+    _unsanitize_site,
+    _values,
+    apply_video_filters,
+)
 
 def _generate_presigned_url(blob_path: str, container: str = "processed") -> str:
     """Time-limited URL for a blob in S3. Empty string on any error."""
@@ -685,7 +566,8 @@ class JobCancelAllView(LoginRequiredMixin, View):
 # Per-hotel dot colours for the review grid. Distinct hues at similar
 # lightness so no hotel reads as more important than another; brand green first
 # because a single-hotel view should look like the rest of the product.
-DEVICE_DOTS = ["#16a34a", "#b45309", "#0e7490", "#7c3aed", "#be123c", "#4d7c0f"]
+from apps.videos import workspace  # noqa: E402
+from apps.videos.workspace import DEVICE_DOTS  # noqa: E402,F401
 
 
 class ProcessingHubView(LoginRequiredMixin, View):
@@ -751,15 +633,8 @@ class ProcessingHubView(LoginRequiredMixin, View):
                           .values_list("device_id")
                           .annotate(n=Count("id"))
                           .values_list("device_id", "n"))
-        device_rows = [{
-            "obj": d,
-            "count": per_device.get(d.id, 0),
-            "selected": str(d.id) in selected_devices,
-            # Stable per-hotel dot colour: the grid interleaves hotels by time,
-            # so a card needs to say which one it came from at a glance.
-            "dot": DEVICE_DOTS[i % len(DEVICE_DOTS)],
-        } for i, d in enumerate(devices)]
-        dot_by_device = {r["obj"].id: r["dot"] for r in device_rows}
+        device_rows = workspace.device_rows(devices, selected_devices, per_device)
+        dot_by_device = workspace.dots_by_device(device_rows)
 
         # Triage counts — the review task is finding the few confirmed clips
         # among the many, and "never analyzed" is what a run is usually for.
@@ -783,17 +658,7 @@ class ProcessingHubView(LoginRequiredMixin, View):
         models = CustomModel.objects.filter(user=request.user, is_active=True)
 
         # Dropdown options from the user's actual videos.
-        opts = {
-            "sites": sorted({_sanitize_site(s) for s in
-                             user_videos.exclude(site_name="").values_list("site_name", flat=True)}),
-            "years": sorted(set(user_videos.exclude(year=None).values_list("year", flat=True))),
-            "months": sorted(set(user_videos.exclude(month=None).values_list("month", flat=True))),
-            "days": sorted(set(user_videos.exclude(day=None).values_list("day", flat=True))),
-            "hours": sorted(set(user_videos.exclude(hour=None).values_list("hour", flat=True))),
-            # Full clock for the daily time-of-day window (unlike "hours",
-            # which only lists hours that actually have videos).
-            "hours24": list(range(24)),
-        }
+        opts = workspace.filter_options(user_videos)
         # Query string for the CSV downloads — the download views filter on these.
         dl = {k: f[k] for k in ("device", "site", "year", "month", "day", "hour",
                                 "hfrom", "hto", "confirmed", "from", "to") if f[k]}
@@ -809,18 +674,7 @@ class ProcessingHubView(LoginRequiredMixin, View):
             .select_related("video").order_by("started_at", "id")
         )
 
-        # Day groups: the grid reads as footage, not as rows, so clips carry a
-        # date heading and their hotel dot.
-        video_days = []
-        for video in videos:
-            video.dot = dot_by_device.get(video.device_id, "#9ca3af")
-            when = video.recorded_at or video.uploaded_at
-            day = when.date() if when else None
-            if not video_days or video_days[-1]["day"] != day:
-                video_days.append({"day": day, "videos": [], "hotels": set()})
-            video_days[-1]["videos"].append(video)
-            if video.device_id:
-                video_days[-1]["hotels"].add(video.device_id)
+        video_days = workspace.group_by_day(videos, dot_by_device)
 
         return render(request, self.template_name, {
             "videos": videos,
