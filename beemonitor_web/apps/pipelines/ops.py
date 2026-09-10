@@ -739,7 +739,32 @@ def filter_by_label(df, label):
     wanted = {p.strip().lower() for p in str(label).split(",") if p.strip()}
     if not wanted:
         return df
-    return df[df[col].astype(str).str.strip().str.lower().isin(wanted)]
+
+    have = df[col].astype(str).str.strip().str.lower()
+    kept = df[have.isin(wanted)]
+    if len(kept):
+        return kept
+
+    # Nothing matched. Two very different situations wear the same result:
+    #
+    #  * the clip genuinely contains none of that class — a table holding bees
+    #    and nests, asked for wasps. Returning nothing is the honest answer.
+    #  * the detector labels its output with a different word than the Detect
+    #    node was configured with — a table entirely of "insect", asked for
+    #    "bee". Returning nothing there empties the whole analysis: the tracks
+    #    vanish, normalized_tracks sees an empty frame, every analyzer reports
+    #    "tracking CSV not available", and it reads as a quiet clip.
+    #
+    # A single-class table cannot be disambiguated by the filter, so it is the
+    # second case: pass it through and say so.
+    distinct = set(have.unique())
+    if len(distinct) == 1:
+        logger.warning(
+            "label filter: table is entirely %r but this branch asks for %r — "
+            "passing it through; the Detect node's class and the detector's "
+            "own labels disagree", next(iter(distinct)), sorted(wanted))
+        return df
+    return kept
 
 
 def boxes_for_label(df, label, max_boxes=200):
