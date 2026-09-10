@@ -346,6 +346,16 @@ def aggregate_trips(sources, min_sec=DEFAULT_MIN_SEC, max_sec=DEFAULT_MAX_SEC, e
                         "exit_track_id": last_exit["track_id"],
                         "entry_track_id": ev["track_id"],
                         "is_cross_video": last_exit["video"] != ev["video"],
+                        # Whether the bee that came back is demonstrably the one
+                        # that left. Track ids are unique only within one clip,
+                        # so this can only ever be true within a clip; a
+                        # cross-video pairing is an inference from timing and
+                        # nest alone. Both kinds are still reported — the point
+                        # is that the page can tell them apart instead of
+                        # presenting the assumption as an observation.
+                        "same_track": (last_exit["video"] == ev["video"]
+                                       and str(last_exit["track_id"]) != ""
+                                       and str(last_exit["track_id"]) == str(ev["track_id"])),
                     })
                 last_exit = None
 
@@ -354,9 +364,14 @@ def aggregate_trips(sources, min_sec=DEFAULT_MIN_SEC, max_sec=DEFAULT_MAX_SEC, e
     per_nest = {}
     for t in trips:
         per_nest[t["nest"]] = per_nest.get(t["nest"], 0) + 1
+    confirmed_trips = sum(1 for t in trips if t["same_track"])
     summary = {
         "total_trips": len(trips),
         "cross_video_trips": sum(1 for t in trips if t["is_cross_video"]),
+        # Split so a hotel with several active tubes cannot quietly report
+        # manufactured trips as observed ones.
+        "confirmed_trips": confirmed_trips,
+        "inferred_trips": len(trips) - confirmed_trips,
         "total_events": len(events),
         "avg_duration_sec": round(sum(durations) / len(durations), 1) if durations else 0,
         "min_duration_sec": min(durations) if durations else 0,
@@ -370,7 +385,7 @@ def trips_csv_rows(trips):
     """(fieldnames, rows) for downloading the aggregated trips as CSV."""
     fieldnames = ["nest", "exit_time", "entry_time", "duration_sec",
                   "exit_video", "entry_video", "exit_track_id", "entry_track_id",
-                  "is_cross_video"]
+                  "is_cross_video", "same_track"]
     rows = [{**t,
              "exit_time": t["exit_time"].isoformat(),
              "entry_time": t["entry_time"].isoformat()} for t in trips]

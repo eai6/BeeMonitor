@@ -294,6 +294,12 @@ asked.
   <div class="bg-white shadow rounded-lg p-4 text-center">
     <p class="text-2xl font-bold text-gray-900">{{ summary.total_trips }}</p>
     <p class="text-xs text-gray-500 uppercase mt-1">Foraging Trips</p>
+    {% if summary.inferred_trips %}
+    <p class="text-[11px] text-amber-700 mt-1"
+       title="A trip is confirmed when the same track id left and returned, which is only decidable within one clip. The rest are paired on nest and timing alone — if two bees use the same tube, some of those pairings are not real trips.">
+      {{ summary.confirmed_trips }} confirmed &middot; {{ summary.inferred_trips }} inferred
+    </p>
+    {% endif %}
   </div>
   <div class="bg-white shadow rounded-lg p-4 text-center">
     <p class="text-2xl font-bold text-amber-600">{{ summary.cross_video_trips }}</p>
