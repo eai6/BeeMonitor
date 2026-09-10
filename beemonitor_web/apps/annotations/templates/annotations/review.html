@@ -8,12 +8,6 @@
     <h1 class="text-2xl font-bold text-gray-900">Review: {{ project.name }}</h1>
     <p class="text-gray-500 text-sm mt-1">{{ total_count }} annotated frame{{ total_count|pluralize }}</p>
   </div>
-  <div class="flex gap-2">
-    <a href="{% url 'annotations:detail' project.pk %}"
-       class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">
-      Back to Project
-    </a>
-  </div>
 </div>
 
 <!-- Filter Bar -->
@@ -138,9 +132,6 @@
   </svg>
   <p class="text-gray-500 mb-1">No annotations found.</p>
   <p class="text-sm text-gray-400">Use the annotation editor to create annotations, or run AI Pre-annotate on your videos.</p>
-  <a href="{% url 'annotations:detail' project.pk %}" class="inline-block mt-4 text-amber-600 hover:underline text-sm font-medium">
-    Back to Project
-  </a>
 </div>
 {% endif %}
 {% endblock %}

@@ -7,7 +7,6 @@
     <h1 class="text-xl font-bold text-gray-900">Annotation Editor</h1>
     <p class="text-sm text-gray-500">{{ project.name }}{% if video %} / {{ video.title }}{% endif %}</p>
   </div>
-  <a href="{% url 'annotations:detail' project.pk %}" class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Back to Project</a>
 </div>
 
 {% if not video %}

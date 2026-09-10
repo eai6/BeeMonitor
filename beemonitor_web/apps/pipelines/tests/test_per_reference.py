@@ -257,40 +257,56 @@ class AnalyzerResultsTests(unittest.TestCase):
 
         self.assertEqual(len(aggregate.analyzer_outputs(run)), 1)
 
-    def test_visits_are_summed_per_reference_across_clips(self):
+    def test_episodes_are_summed_per_reference_across_clips(self):
+        """A visit is an insect-to-reference interaction, so this is the
+        visitation roll-up — read off the primitive rather than off a second
+        analyzer that could disagree with it."""
         from apps.pipelines import aggregate
 
         runs = [
-            self._Run({"a": {"table_kind": "visitation", "total_visits": 3,
-                             "unique_visitors": 2, "total_dwell_sec": 10.0,
+            self._Run({"a": {"table_kind": "interactions", "interaction_count": 3,
+                             "organism_reference": 3, "total_duration_sec": 10.0,
                              "per_reference": [
-                                 {"id": "nest_3", "label": "Nest 3", "visits": 2, "visitors": 2, "dwell_sec": 7.0},
-                                 {"id": "nest_7", "label": "Nest 7", "visits": 1, "visitors": 1, "dwell_sec": 3.0}]}}),
-            self._Run({"a": {"table_kind": "visitation", "total_visits": 2,
-                             "unique_visitors": 1, "total_dwell_sec": 5.0,
+                                 {"id": "nest_3", "label": "Nest 3", "interactions": 2, "partners": 2, "duration_sec": 7.0},
+                                 {"id": "nest_7", "label": "Nest 7", "interactions": 1, "partners": 1, "duration_sec": 3.0}]}}),
+            self._Run({"a": {"table_kind": "interactions", "interaction_count": 2,
+                             "organism_reference": 2, "total_duration_sec": 5.0,
                              "per_reference": [
-                                 {"id": "nest_3", "label": "Nest 3", "visits": 2, "visitors": 1, "dwell_sec": 5.0}]}}),
+                                 {"id": "nest_3", "label": "Nest 3", "interactions": 2, "partners": 1, "duration_sec": 5.0}]}}),
         ]
 
         results = aggregate.analyzer_results(runs)
         summary = results[0]["summary"]
 
         by_id = {r["id"]: r for r in summary["per_reference"]}
-        self.assertEqual(summary["total_visits"], 5)
-        self.assertEqual(by_id["nest_3"]["visits"], 4)
+        self.assertEqual(summary["organism_reference"], 5)
+        self.assertEqual(by_id["nest_3"]["interactions"], 4)
         self.assertEqual(by_id["nest_3"]["clips"], 2)
-        self.assertEqual(by_id["nest_7"]["visits"], 1)
+        self.assertEqual(by_id["nest_7"]["interactions"], 1)
 
     def test_the_busiest_reference_leads(self):
         from apps.pipelines import aggregate
 
-        run = self._Run({"a": {"table_kind": "visitation", "per_reference": [
-            {"id": "nest_1", "label": "Nest 1", "visits": 1},
-            {"id": "nest_9", "label": "Nest 9", "visits": 8}]}})
+        run = self._Run({"a": {"table_kind": "interactions", "per_reference": [
+            {"id": "nest_1", "label": "Nest 1", "interactions": 1},
+            {"id": "nest_9", "label": "Nest 9", "interactions": 8}]}})
 
         summary = aggregate.analyzer_results([run])[0]["summary"]
 
         self.assertEqual(summary["per_reference"][0]["id"], "nest_9")
+
+    def test_the_retired_visitation_kind_no_longer_renders_a_panel(self):
+        """A visit IS an insect-to-reference interaction. Its own panel was a
+        second, worse answer to a question Interactions already answers — and
+        on a pipeline with no references it showed four zeros and an apology."""
+        from apps.pipelines import aggregate
+
+        run = self._Run({"a": {"table_kind": "visitation", "total_visits": 3}})
+
+        result = aggregate.analyzer_results([run])[0]
+
+        self.assertEqual(result["kind"], "visitation")
+        self.assertIsNone(result["summary"])
 
     def test_interactions_aggregate_per_reference_too(self):
         from apps.pipelines import aggregate

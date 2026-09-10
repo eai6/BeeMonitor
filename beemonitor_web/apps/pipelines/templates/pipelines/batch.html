@@ -52,35 +52,41 @@ their reason.
   {% endif %}
 </div>
 
-{% if can_rerun and outcome.completed and reanalyzers %}
+{% if can_rerun and rerun_videos %}
 {% comment %}
-  Asking a different question of a finished batch. Detection and tracking do not
-  depend on which analyzer reads them, and the GPU cache is keyed on the clip
-  plus the GPU step's own config — so swapping a local analyzer is served
-  entirely from cache. Free, and worth saying so on the button.
+  Run these same clips through a different pipeline. Not an analyzer swap: a
+  different pipeline may detect a different class, prompt differently or use a
+  different reference, and those are the choices worth revisiting. Whether it
+  costs GPU time depends on whether the new pipeline's detect/track config
+  matches — the cache is keyed on that, not on the pipeline — so the copy says
+  "may" rather than promising either way.
 {% endcomment %}
 <div class="bg-white shadow rounded-lg p-4 mb-6">
-  <div class="flex items-baseline justify-between gap-4 flex-wrap">
-    <div>
-      <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Ask a different question</div>
-      <p class="text-xs text-gray-500 mt-1">
-        Re-reads the tracking these {{ outcome.completed }} clip{{ outcome.completed|pluralize }}
-        already produced. No GPU time, no re-detection — and this batch keeps its own results.
-      </p>
+  <form method="post" action="{% url 'pipelines:run_on_videos' %}"
+        class="flex items-end gap-3 flex-wrap">
+    {% csrf_token %}
+    {% for vid in rerun_videos %}<input type="hidden" name="video_ids" value="{{ vid }}">{% endfor %}
+    <div class="min-w-[240px]">
+      <label for="rerun-pipeline" class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
+        Run these {{ rerun_videos|length }} clip{{ rerun_videos|length|pluralize }} through another pipeline
+      </label>
+      <select name="pipeline" id="rerun-pipeline"
+              class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
+        {% for p in rerun_pipelines %}
+        <option value="{{ p.pk }}">{{ p.title }}{% if p.is_template %} (template){% endif %}</option>
+        {% endfor %}
+      </select>
     </div>
-    <div class="flex items-center gap-2 flex-wrap">
-      {% for a in reanalyzers %}
-      <form method="post" action="{% url 'pipelines:batch_reanalyze' batch_id=batch_id %}">
-        {% csrf_token %}
-        <input type="hidden" name="block_type" value="{{ a.key }}">
-        <button type="submit" title="{{ a.description }}"
-                class="text-xs px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 hover:border-amber-400 whitespace-nowrap">
-          {{ a.icon }} {{ a.name }}
-        </button>
-      </form>
-      {% endfor %}
-    </div>
-  </div>
+    <button type="submit"
+            class="bg-amber-600 hover:bg-amber-700 text-white rounded px-4 py-2 text-sm font-medium">
+      Run
+    </button>
+    <p class="text-xs text-gray-500 flex-1 min-w-[220px]">
+      Starts a new batch over the same clips; this one keeps its results. Detection
+      and tracking are reused where the new pipeline asks for the same thing, so a
+      pipeline that only differs downstream costs no GPU time.
+    </p>
+  </form>
 </div>
 {% endif %}
 
@@ -176,13 +182,22 @@ their reason.
     </div>
   </div>
 
-  <div class="grid grid-cols-[60px_100px_minmax(0,1fr)_80px_80px_80px_96px] gap-0 px-4 py-2 border-b border-gray-100 text-[11px] font-semibold text-gray-500">
+  {% comment %}
+    The base measurements, not derived answers. Trips used to have a column, so
+    a Detection Count batch rendered a column of zeros for a question it never
+    asked — and a Visitation batch had nowhere to show what it did measure.
+    Tracks, events and interactions are what every pipeline produces; trips,
+    visits and dwell are reads over them, and the reader can do their own.
+  {% endcomment %}
+  <div class="grid grid-cols-[60px_100px_minmax(0,1fr)_80px_80px_96px_80px_88px] gap-0 px-4 py-2 border-b border-gray-100 text-[11px] font-semibold text-gray-500">
     <div></div><div>Clip</div><div>Outcome</div>
-    <div class="text-right">Tracks</div><div class="text-right">Events</div><div class="text-right">Trips</div><div class="text-right">GPU time</div>
+    <div class="text-right">Tracks</div><div class="text-right">Events</div>
+    <div class="text-right">Interactions</div>
+    <div class="text-right">Length</div><div class="text-right">GPU time</div>
   </div>
 
   {% for r in rows %}
-  <div class="grid grid-cols-[60px_100px_minmax(0,1fr)_80px_80px_80px_96px] items-center px-4 py-2 border-b border-gray-100 hover:bg-gray-50">
+  <div class="grid grid-cols-[60px_100px_minmax(0,1fr)_80px_80px_96px_80px_88px] items-center px-4 py-2 border-b border-gray-100 hover:bg-gray-50">
     {% comment %}
       Both the still and the time open this clip's own results — the videos,
       the per-clip numbers and its four CSVs. That page is what "open the clip"
@@ -215,7 +230,8 @@ their reason.
     </div>
     <div class="text-right text-[13px] {% if r.result %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.result %}{{ r.result.unique_tracks }}{% else %}—{% endif %}</div>
     <div class="text-right text-[13px] {% if r.result %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.result %}{{ r.result.total_events }}{% else %}—{% endif %}</div>
-    <div class="text-right text-[13px] {% if r.result %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.result %}{{ r.result.foraging_trip_count }}{% else %}—{% endif %}</div>
+    <div class="text-right text-[13px] {% if r.result %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.result %}{{ r.result.interaction_count }}{% else %}—{% endif %}</div>
+    <div class="text-right text-xs text-gray-500">{% if r.video.duration_seconds %}{{ r.video.duration_seconds|duration_min }}{% else %}—{% endif %}</div>
     <div class="text-right text-xs text-gray-500">{% if r.gpu_seconds %}{{ r.gpu_seconds|duration_min }}{% else %}—{% endif %}</div>
   </div>
   {% endfor %}
@@ -262,44 +278,7 @@ asked.
   </div>
   {% endif %}
 
-  {% if a.kind == "visitation" %}
-  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-    <div><p class="text-2xl font-bold text-gray-900">{{ a.summary.total_visits }}</p><p class="text-xs text-gray-500 uppercase mt-0.5">Visits</p></div>
-    <div><p class="text-2xl font-bold text-gray-900">{{ a.summary.unique_visitors }}</p><p class="text-xs text-gray-500 uppercase mt-0.5">Visitors</p></div>
-    <div><p class="text-2xl font-bold text-gray-900">{{ a.summary.total_dwell_sec|duration_min }}</p><p class="text-xs text-gray-500 uppercase mt-0.5">Total dwell</p></div>
-    <div><p class="text-2xl font-bold text-gray-900">{{ a.summary.per_reference|length }}</p><p class="text-xs text-gray-500 uppercase mt-0.5">References</p></div>
-  </div>
-  {% if a.summary.per_reference %}
-  <table class="w-full text-sm">
-    <thead><tr class="text-[11px] text-gray-500 uppercase">
-      <th class="text-left font-semibold py-1.5">Reference</th>
-      <th class="text-right font-semibold py-1.5">Visits</th>
-      <th class="text-right font-semibold py-1.5">Visitors</th>
-      <th class="text-right font-semibold py-1.5">Dwell</th>
-      <th class="text-right font-semibold py-1.5">Clips</th>
-    </tr></thead>
-    <tbody>
-      {% for r in a.summary.per_reference %}
-      <tr class="border-t border-gray-100 {% if not r.visits %}text-gray-400{% endif %}">
-        <td class="py-1.5">{{ r.label }}</td>
-        <td class="text-right py-1.5 {% if r.visits %}font-medium text-gray-900{% endif %}">{{ r.visits }}</td>
-        <td class="text-right py-1.5">{{ r.visitors }}</td>
-        <td class="text-right py-1.5">{{ r.dwell_sec|duration_min }}</td>
-        <td class="text-right py-1.5">{{ r.clips }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  <p class="text-[11px] text-gray-400 mt-2 leading-4">
-    A reference with no visits keeps its row — nothing visiting a control is a
-    result. Visitors are summed across clips: track ids are unique only within a
-    clip, so the same bee seen twice counts twice.
-  </p>
-  {% else %}
-  <p class="text-sm text-gray-500">No references were defined, so visits could not be attributed. Add an ROI or a nest layout upstream.</p>
-  {% endif %}
-
-  {% elif a.kind == "interaction" %}
+  {% if a.kind == "interaction" %}
   <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
     <div><p class="text-2xl font-bold text-gray-900">{{ a.summary.interaction_count }}</p><p class="text-xs text-gray-500 uppercase mt-0.5">Interactions</p></div>
     <div><p class="text-2xl font-bold text-gray-900">{{ a.summary.organism_organism }}</p><p class="text-xs text-gray-500 uppercase mt-0.5">Insect ↔ insect</p></div>

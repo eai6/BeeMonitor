@@ -4,7 +4,6 @@
 
 {% block content %}
 <div class="flex items-center justify-between mb-6">
-  <a href="{% url 'videos:list' %}" class="text-sm text-amber-600 hover:underline">&larr; Back to Videos</a>
   <div class="flex items-center gap-2 text-sm">
     {% if prev_video %}
     <a href="{% url 'videos:detail' prev_video.pk %}" title="{{ prev_video.recorded_at|date:'Y-m-d H:i' }}"

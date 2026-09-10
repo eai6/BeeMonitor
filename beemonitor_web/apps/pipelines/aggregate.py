@@ -676,10 +676,12 @@ AGGREGATORS = {
     # The primitives.
     "events": aggregate_events,
     "interactions": aggregate_interactions,
-    # Retired analyzers. Kept so historical runs — whose context still carries
-    # these table_kinds — render exactly as they did rather than turning into
-    # blank panels on a page the user has already read.
-    "visitation": aggregate_visitation,
+    # Retired analyzers. `visitation` deliberately has NO aggregator: a visit
+    # is an insect-to-reference interaction, so its panel was a second, worse
+    # answer to a question the Interactions panel already answers — and on a
+    # pipeline with no references it rendered four zeros and an apology.
+    # Historical runs still list the analyzer they used; they just don't get a
+    # panel of their own.
     "interaction": aggregate_interaction,
     "detection_count": aggregate_detection_count,
 }

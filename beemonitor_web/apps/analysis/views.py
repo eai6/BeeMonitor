@@ -1822,24 +1822,28 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         ctx["tracking_data"] = _load_csv_from_storage(tracking_path)
         ctx["interactions_data"] = _load_csv_from_storage(interactions_path)
 
-        # Data-driven stat tiles: core tracking counts always, plus derived
-        # analyses only when they ran (so the page reflects the actual pipeline).
+        # The base measurements this clip produced, not derived answers.
+        # Entries/Exits/Nests/Trips were four ways of slicing the event table,
+        # and on a pipeline that measured none of them they were four zeros —
+        # which reads as "nothing happened" rather than "nothing was asked".
+        # Trips and visits are reads over these; the reader can do their own.
+        from apps.pipelines.templatetags.batch_extras import duration_min
+
         stats = result.summary_stats or {}
         tiles = [
-            {"label": "Unique Tracks", "value": result.unique_tracks, "color": "text-blue-600"},
-            {"label": "Total Events", "value": result.total_events, "color": "text-gray-900"},
-            {"label": "Entries", "value": result.entry_count, "color": "text-green-600"},
-            {"label": "Exits", "value": result.exit_count, "color": "text-red-600"},
+            {"label": "Tracks", "value": result.unique_tracks, "color": "text-blue-600"},
+            {"label": "Events", "value": result.total_events, "color": "text-gray-900"},
+            {"label": "Interactions", "value": result.interaction_count,
+             "color": "text-purple-600"},
         ]
-        if result.nest_count or stats.get("nest_bboxes"):
-            n = result.nest_count or len(stats.get("nest_bboxes") or {})
-            tiles.append({"label": "Nests", "value": n, "color": "text-amber-600"})
-        if result.foraging_trip_count:
-            tiles.append({"label": "Foraging Trips", "value": result.foraging_trip_count,
-                          "color": "text-amber-700"})
-        if result.interaction_count:
-            tiles.append({"label": "Interactions", "value": result.interaction_count,
-                          "color": "text-purple-600"})
+        if job.video.duration_seconds:
+            tiles.append({"label": "Length",
+                          "value": duration_min(job.video.duration_seconds),
+                          "color": "text-gray-900"})
+        if job.execution_seconds:
+            tiles.append({"label": "GPU time",
+                          "value": duration_min(job.execution_seconds),
+                          "color": "text-gray-500"})
         ctx["stat_tiles"] = tiles
 
         # Per-track crops (for later species ID): presign each track's crop keys.

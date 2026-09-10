@@ -6,7 +6,6 @@
   <div>
     <h1 class="text-xl font-bold text-gray-900">{{ pipeline.title }}</h1>
     <div class="flex items-center gap-3">
-      <a href="{% url 'pipelines:editor' pk=pipeline.pk %}" class="text-xs text-gray-400 hover:text-gray-600">← Back to editor</a>
       <a href="{% url 'pipelines:run_list' %}" class="text-xs text-gray-400 hover:text-gray-600">Run history</a>
     </div>
   </div>

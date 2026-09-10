@@ -75,7 +75,7 @@ def steps_with_video(pipeline, video_id):
     return steps_with_video_steps(pipeline.steps, video_id)
 
 
-def launch_batch(pipeline, videos, user, fresh=False, steps=None):
+def launch_batch(pipeline, videos, user, fresh=False):
     """Start one ``PipelineRun`` per video, all sharing a fresh ``batch_id``.
 
     The single place a pipeline is launched over a set of videos — used by the
@@ -84,17 +84,12 @@ def launch_batch(pipeline, videos, user, fresh=False, steps=None):
     caller kicks ``analysis.views._drain_queue`` once so the batch drains in waves
     under the global SageMaker cap instead of flooding the endpoint.
 
-    ``steps`` overrides the pipeline's own graph for this launch — used by batch
-    re-analysis, which swaps the analyzer without touching the saved pipeline.
-    The video id is still stamped per clip, so one override serves the batch.
-
     Returns ``(batch_id, launched_video_ids, invalid_count)``.
     """
     batch_id = uuid.uuid4()
     launched, invalid = [], 0
     for video in videos:
-        steps_for_video = (steps_with_video_steps(steps, video.pk) if steps
-                           else steps_with_video(pipeline, video.pk))
+        steps_for_video = steps_with_video(pipeline, video.pk)
         if validate_steps(steps_for_video):
             invalid += 1
             continue

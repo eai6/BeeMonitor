@@ -14,6 +14,7 @@ import uuid
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.db.models import Q
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -846,10 +847,15 @@ def batch_detail(request, batch_id):
     _backfill_interactions_paths(sources)
     downloads = aggregate.available_downloads(sources)
 
-    # Analyzers this finished batch could be re-read with, minus whichever it
-    # already ran — offering a swap to what you are looking at is noise.
-    current_analyzer, _opts = analyzer_options(runs[0]) if runs else ("", [])
-    reanalyzers = [o for o in _opts if not o["current"] and not o.get("retired")]
+    # Running these same clips through a different pipeline. Offered instead of
+    # an analyzer swap: a different pipeline may detect a different class,
+    # prompt differently or use a different reference, and those are the
+    # choices actually worth revisiting on a finished batch.
+    rerun_videos = sorted({r["video"].pk for r in rows if r["video"]})
+    rerun_pipelines = (Pipeline.objects
+                       .filter(Q(user=request.user) | Q(is_template=True))
+                       .exclude(pk=runs[0].pipeline_id if runs else None)
+                       .order_by("-is_template", "title"))
 
     # Cap the IN-PAGE aggregation so a huge batch can't ride the request past
     # App Runner's hard 120s limit (each source may cost an S3 read on a cold
@@ -889,7 +895,8 @@ def batch_detail(request, batch_id):
         "failure_groups": failure_groups,
         "analyzer_results": analyzer_results,
         "downloads": downloads,
-        "reanalyzers": reanalyzers,
+        "rerun_videos": rerun_videos,
+        "rerun_pipelines": rerun_pipelines,
         # Trips only earn the page when a trips analyzer ran.
         # Trips are a read over the events table — pair exit(nest) with the
         # next enter(nest) — so an Events pipeline gets the trip panel too, not
@@ -988,90 +995,6 @@ def batch_rerun(request, batch_id):
 
     msg = f"Re-running {len(launched)} clip(s)"
     msg += " from scratch." if fresh else ", reusing cached results where nothing changed."
-    if invalid:
-        msg += f" Skipped {invalid}."
-    messages.success(request, msg)
-    return redirect("pipelines:batch_detail", batch_id=new_batch)
-
-
-@login_required
-@require_POST
-def batch_reanalyze(request, batch_id):
-    """Re-run a whole batch with a different analyzer, reusing the tracking.
-
-    The batch counterpart to ``run_reanalyze``. Detection and tracking are the
-    expensive part and they do not depend on which analyzer reads them:
-    ``engine._gpu_cache_key`` hashes the clip and the GPU step's own config, so
-    swapping a LOCAL analyzer leaves that key untouched and every clip is served
-    from cache. A twelve-clip batch re-analyses in seconds and costs no GPU time.
-
-    Without this the only way to move a finished batch onto a new analyzer was
-    to open each run and swap it one at a time.
-
-    Deliberately NOT fresh: reuse is the entire point here, unlike
-    ``batch_rerun``, where reuse would hand back a pre-fix result and call it a
-    success.
-    """
-    from . import aggregate
-    from .registry import BLOCK_REGISTRY
-
-    runs = _batch_runs(request, batch_id)
-    mine = [r for r in runs if r.user_id == request.user.id]
-    if not mine:
-        return HttpResponse(status=403)
-
-    new_type = request.POST.get("block_type", "")
-    block = BLOCK_REGISTRY.get(new_type)
-    if not block or block.get("category") != "analyze":
-        messages.error(request, "That is not an analyzer.")
-        return redirect("pipelines:batch_detail", batch_id=batch_id)
-
-    # Only clips that actually produced a GPU result can be re-analysed —
-    # a failed run has no tracking to read, so re-analysing it would just fail
-    # again for the same reason. Those need batch_rerun instead.
-    rows = aggregate.batch_rows(mine)
-    usable = [r for r in rows if r["status"] == "completed" and r["video"]]
-    if not usable:
-        messages.warning(request, "No completed clips in this batch to re-analyse. "
-                                  "Re-run the failures first.")
-        return redirect("pipelines:batch_detail", batch_id=batch_id)
-
-    steps = copy.deepcopy(usable[0]["run"].steps or [])
-    swapped = False
-    for step in steps:
-        if str(step.get("block_type", "")).startswith("analyze."):
-            step["block_type"] = new_type
-            # The old analyzer's config does not transfer — a visitation gap
-            # threshold means nothing to detection counts. Seed the new block's
-            # defaults so required fields are set.
-            step["config"] = {f["name"]: f.get("default")
-                              for f in block.get("config_fields", [])
-                              if f.get("default") is not None}
-            swapped = True
-    if not swapped:
-        messages.error(request, "These runs have no analyzer step to swap.")
-        return redirect("pipelines:batch_detail", batch_id=batch_id)
-
-    from apps.videos.models import Video
-    video_ids = [r["video"].pk for r in usable]
-    videos = list(Video.manageable(request.user).filter(pk__in=video_ids))
-    if not videos:
-        messages.error(request, "Those clips are no longer yours to run.")
-        return redirect("pipelines:batch_detail", batch_id=batch_id)
-
-    new_batch, launched, invalid = engine.launch_batch(
-        usable[0]["run"].pipeline, videos, request.user, steps=steps)
-
-    if launched:
-        try:
-            from apps.analysis.views import _drain_queue
-            _drain_queue()
-        except Exception:
-            logger.exception("inline drain after batch re-analysis failed")
-
-    msg = (f"Re-analysing {len(launched)} clip(s) with "
-           f"{block.get('display_name', new_type)} — reuses each clip's tracking, "
-           "so it costs no GPU time.")
     if invalid:
         msg += f" Skipped {invalid}."
     messages.success(request, msg)
