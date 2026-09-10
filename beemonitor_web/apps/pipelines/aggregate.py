@@ -76,7 +76,8 @@ def collect_sources(runs):
     from apps.videos.models import Video
 
     video_ids = [vid for r in runs if (vid := run_video_id(r)) is not None]
-    videos = {v.pk: v for v in Video.objects.filter(pk__in=video_ids)}
+    videos = {v.pk: v for v in
+              Video.objects.filter(pk__in=video_ids).select_related("device")}
 
     sources, skipped = [], []
     for run in runs:
@@ -189,11 +190,36 @@ def available_downloads(sources):
     return out
 
 
+# Provenance columns on every combined export. A batch can span devices and
+# sites, and a row that cannot say where it came from is not analysable: you
+# cannot compare a treatment against a control if the two are indistinguishable
+# once concatenated. Written ahead of the source columns so they are the first
+# thing a spreadsheet or an R session sees.
+PROVENANCE_FIELDS = ["video_title", "video_recorded_at", "absolute_time",
+                     "device_id", "device_name", "site_name", "location"]
+
+
+def _provenance(src):
+    """Where one clip's rows came from: which clip, which device, which site."""
+    video = src.get("video")
+    device = getattr(video, "device", None)
+    return {
+        "video_title": src["title"],
+        "video_recorded_at": src["recorded_at"].isoformat(),
+        "device_id": getattr(device, "id", "") or "",
+        "device_name": getattr(device, "name", "") or "",
+        # The clip's own site wins: a device can be moved between sites, and the
+        # clip records where it actually was.
+        "site_name": getattr(video, "site_name", "") or "",
+        "location": getattr(device, "location", "") or "",
+    }
+
+
 def combined_csv(sources, path_key):
-    """Concatenate each source's CSV (events or tracking), prepending
-    video_title / video_recorded_at / absolute_time columns. Returns
-    (fieldnames, row_iterator); fieldnames is None when nothing was readable."""
-    extra = ["video_title", "video_recorded_at", "absolute_time"]
+    """Concatenate each source's CSV, prepending provenance + absolute time.
+
+    Returns (fieldnames, rows); fieldnames is None when nothing was readable.
+    """
     fieldnames = None
     all_rows = []
     for src in sources:
@@ -204,18 +230,16 @@ def combined_csv(sources, path_key):
         if not rows:
             continue
         if fieldnames is None:
-            fieldnames = extra + [c for c in rows[0].keys()]
+            fieldnames = PROVENANCE_FIELDS + [c for c in rows[0].keys()]
+        provenance = _provenance(src)
         for row in rows:
             frame = _frame_number(row)
             abs_time = (
                 src["recorded_at"] + timedelta(seconds=frame / src["fps"])
                 if frame is not None else None
             )
-            out = {
-                "video_title": src["title"],
-                "video_recorded_at": src["recorded_at"].isoformat(),
-                "absolute_time": abs_time.isoformat() if abs_time else "",
-            }
+            out = dict(provenance)
+            out["absolute_time"] = abs_time.isoformat() if abs_time else ""
             out.update(row)
             all_rows.append(out)
     return fieldnames, all_rows

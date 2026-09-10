@@ -200,3 +200,70 @@ class LengthSelfHealTests(TestCase):
         self._batch_of(PROBES_PER_RENDER + 5)
 
         self.assertEqual(self._load().call_count, PROBES_PER_RENDER)
+
+
+class CombinedCsvProvenanceTests(TestCase):
+    """A concatenated row must say where it came from.
+
+    A batch can span devices and sites. Once every clip's rows are stacked into
+    one file, a row that cannot name its device or site is not analysable — you
+    cannot compare a treatment against a control if the two are
+    indistinguishable in the export.
+    """
+
+    def setUp(self):
+        from apps.devices.models import Device
+
+        self.user = User.objects.create_user("prov", password="x")
+        self.device = Device.objects.create(
+            owner=self.user, name="BeeMonitor4", key_hash="hp2", prefix="bmk_p2",
+            location="north hedgerow")
+        self.video = Video.objects.create(
+            user=self.user, device=self.device, title="clip",
+            storage_key="prov/c.mp4", file_size_bytes=1,
+            status=Video.Status.READY, recorded_at=timezone.now(),
+            site_name="Meadow A")
+
+    def _source(self):
+        from apps.pipelines import aggregate
+        return {"video": self.video, "title": "clip",
+                "recorded_at": self.video.recorded_at, "fps": 25.0,
+                "result": {}}
+
+    def test_every_row_carries_device_site_and_location(self):
+        from apps.pipelines import aggregate
+
+        row = aggregate._provenance(self._source())
+
+        self.assertEqual(row["device_name"], "BeeMonitor4")
+        self.assertEqual(row["device_id"], self.device.id)
+        self.assertEqual(row["site_name"], "Meadow A")
+        self.assertEqual(row["location"], "north hedgerow")
+
+    def test_provenance_leads_the_column_order(self):
+        from apps.pipelines import aggregate
+
+        self.assertEqual(aggregate.PROVENANCE_FIELDS[:3],
+                         ["video_title", "video_recorded_at", "absolute_time"])
+        for field in ("device_id", "device_name", "site_name", "location"):
+            self.assertIn(field, aggregate.PROVENANCE_FIELDS)
+
+    def test_a_clip_with_no_device_still_exports_cleanly(self):
+        from apps.pipelines import aggregate
+
+        self.video.device = None
+        src = self._source()
+
+        row = aggregate._provenance(src)
+
+        self.assertEqual(row["device_name"], "")
+        self.assertEqual(row["location"], "")
+        self.assertEqual(row["site_name"], "Meadow A")
+
+    def test_the_clips_own_site_is_used_not_the_devices_location(self):
+        """A device can be moved between sites; the clip records where it was."""
+        from apps.pipelines import aggregate
+
+        row = aggregate._provenance(self._source())
+
+        self.assertNotEqual(row["site_name"], row["location"])

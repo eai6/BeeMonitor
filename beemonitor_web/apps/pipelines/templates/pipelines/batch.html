@@ -279,66 +279,6 @@ their reason.
   The batch page reports what was measured; the CSVs carry it out.
 {% endcomment %}
 
-<script>
-// Click a nest chip to filter the trips table to that nest; "show all" clears.
-(function () {
-  var tbody = document.getElementById('trips-tbody');
-  if (!tbody) return;
-  var note = document.getElementById('nest-filter-note');
-  var clearBtn = document.getElementById('clear-nest');
-  var countEl = document.getElementById('trips-count');
-  var rows = Array.prototype.slice.call(tbody.querySelectorAll('.trip-row'));
-  var total = rows.length;
-  // Events log (optional) filtered by the same nest.
-  var evBody = document.getElementById('events-tbody');
-  var evRows = evBody ? Array.prototype.slice.call(evBody.querySelectorAll('.event-row')) : [];
-  var evTotal = evRows.length;
-  var evCount = document.getElementById('events-count');
-  var evNote = document.getElementById('ev-nest-note');
-  function filterRows(list, nest) {
-    var shown = 0;
-    list.forEach(function (r) {
-      var on = !nest || r.getAttribute('data-nest') === nest;
-      r.style.display = on ? '' : 'none';
-      if (on) shown++;
-    });
-    return shown;
-  }
-  function apply(nest) {
-    var shown = filterRows(rows, nest);
-    if (nest) {
-      note.textContent = '· nest ' + nest + ' (' + shown + ')';
-      note.classList.remove('hidden'); clearBtn.classList.remove('hidden');
-    } else {
-      note.classList.add('hidden'); clearBtn.classList.add('hidden');
-    }
-    countEl.textContent = (nest ? shown : total) + ' trip(s)';
-    if (evRows.length) {
-      var evShown = filterRows(evRows, nest);
-      evCount.textContent = (nest ? evShown : evTotal) + ' event(s)';
-      if (nest) { evNote.textContent = '· nest ' + nest; evNote.classList.remove('hidden'); }
-      else { evNote.classList.add('hidden'); }
-    }
-  }
-  document.querySelectorAll('.nest-chip').forEach(function (chip) {
-    chip.addEventListener('click', function () {
-      apply(chip.getAttribute('data-nest'));
-      document.querySelectorAll('.nest-chip').forEach(function (c) {
-        c.classList.toggle('bg-amber-200', c === chip);
-        c.classList.toggle('bg-gray-100', c !== chip);
-      });
-      document.getElementById('trips-tbody').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-  });
-  if (clearBtn) clearBtn.addEventListener('click', function () {
-    apply(null);
-    document.querySelectorAll('.nest-chip').forEach(function (c) {
-      c.classList.add('bg-gray-100'); c.classList.remove('bg-amber-200');
-    });
-  });
-})();
-</script>
-
 {% if running %}
 <script>
 // Poll the job checker (it detects finished SageMaker jobs and advances the

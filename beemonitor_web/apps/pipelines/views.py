@@ -840,11 +840,6 @@ def batch_detail(request, batch_id):
         for r in rows if r["status"] == "failed"
     ])
 
-    # What the pipeline ACTUALLY computed. The trips aggregate below runs
-    # regardless; this is what a Visitation or Interactions pipeline gets
-    # instead of being shown a page about foraging.
-    analyzer_results = aggregate.analyzer_results(runs)
-
     # The base tables this batch can hand back, combined across its clips. Only
     # the ones something actually wrote: a button that downloads nothing looks
     # like a bug rather than a missing pipeline step.
@@ -878,68 +873,23 @@ def batch_detail(request, batch_id):
                        .exclude(pk=runs[0].pipeline_id if runs else None)
                        .order_by("-is_template", "title"))
 
-    # Cap the IN-PAGE aggregation so a huge batch can't ride the request past
-    # App Runner's hard 120s limit (each source may cost an S3 read on a cold
-    # cache). The combined-CSV downloads below remain uncapped. Oldest-first
-    # order is preserved; the page shows what was left out.
-    AGG_CAP = 300
-    agg_total = len(sources)
-    if agg_total > AGG_CAP:
-        sources = sources[:AGG_CAP]
-
-    min_sec, max_sec = _trip_bounds(request)
-    events = aggregate.collect_events(sources) if sources else []
-    trips, summary = (aggregate.aggregate_trips(sources, min_sec, max_sec, events=events)
-                      if sources else ([], None))
-    charts = aggregate.activity_charts(events, trips) if sources else {}
-    # Individual Exit/Entry events (per-nest drill-down table), newest first.
-    event_rows = sorted(
-        ({"nest": e["nest"], "action": e["action"], "time": e["time"],
-          "video": e["video"], "video_pk": e.get("video_pk")} for e in events),
-        key=lambda e: e["time"], reverse=True,
-    )
-
-    # Per-run rows (title + status) for the members table.
-    from apps.videos.models import Video
-    vid_ids = [v for r in runs if (v := aggregate.run_video_id(r)) is not None]
-    titles = {v.pk: (v.title or f"Video {v.pk}")
-              for v in Video.objects.filter(pk__in=vid_ids)}
-    members = [{"run": r,
-                "video": titles.get(aggregate.run_video_id(r), "—")}
-               for r in runs]
+    # No cross-video aggregation here any more. The page used to pair trips and
+    # build activity charts on every load — up to 300 clips' events CSVs read
+    # from S3 — for panels that are now gone. Trips are a read over the events
+    # table, and the table is a download.
 
     return render(request, "pipelines/batch.html", {
         "rows": rows,
-        # `summary` is already the aggregate ecology dict — this is the
-        # batch OUTCOME (how many ran, what it cost).
         "outcome": outcome,
         "failure_groups": failure_groups,
-        "analyzer_results": analyzer_results,
         "downloads": downloads,
         "rerun_videos": rerun_videos,
         "rerun_pipelines": rerun_pipelines,
-        # Trips only earn the page when a trips analyzer ran.
-        # Trips are a read over the events table — pair exit(nest) with the
-        # next enter(nest) — so an Events pipeline gets the trip panel too, not
-        # only the retired Foraging Trips block that used to be its own analyzer.
-        "show_trips": any(a["kind"] in ("events", "foraging_trips")
-                          for a in analyzer_results) or not analyzer_results,
         "can_rerun": any(r.user_id == request.user.id for r in runs),
         "batch_id": batch_id,
         "pipeline": runs[0].pipeline,
-        "members": members,
-        "all_done": all_done,
         "running": sum(1 for r in runs if not r.is_terminal),
         "sources": sources,
-        "skipped": skipped,
-        "trips": trips,
-        "events": event_rows,
-        "summary": summary,
-        "charts": charts,
-        "agg_total": agg_total,
-        "agg_capped": agg_total > AGG_CAP,
-        "min_sec": min_sec,
-        "max_sec": max_sec,
     })
 
 
