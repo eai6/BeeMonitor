@@ -44,3 +44,32 @@ class CoverageTests(SimpleTestCase):
 
         self.assertEqual(cov["missing"], 0)
         self.assertTrue(cov["complete"])
+
+
+class TripPanelVisibilityTests(SimpleTestCase):
+    """Trips are a read over events, so an Events pipeline still gets them.
+
+    The panel used to key off the Foraging Trips *block*. With that block
+    retired, a pipeline built on the Events primitive would have silently lost
+    the trip section — the one thing it exists to produce.
+    """
+
+    @staticmethod
+    def _show(kinds):
+        results = [{"kind": k} for k in kinds]
+        return any(a["kind"] in ("events", "foraging_trips") for a in results) or not results
+
+    def test_an_events_pipeline_shows_trips(self):
+        self.assertTrue(self._show(["events"]))
+
+    def test_a_legacy_foraging_pipeline_still_shows_trips(self):
+        self.assertTrue(self._show(["foraging_trips"]))
+
+    def test_a_detection_count_pipeline_does_not(self):
+        self.assertFalse(self._show(["detection_count"]))
+
+    def test_an_interactions_only_pipeline_does_not(self):
+        self.assertFalse(self._show(["interactions"]))
+
+    def test_a_batch_with_no_analyzer_output_falls_back_to_showing_them(self):
+        self.assertTrue(self._show([]))

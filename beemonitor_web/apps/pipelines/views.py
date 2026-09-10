@@ -878,7 +878,11 @@ def batch_detail(request, batch_id):
         "failure_groups": failure_groups,
         "analyzer_results": analyzer_results,
         # Trips only earn the page when a trips analyzer ran.
-        "show_trips": any(a["kind"] == "foraging_trips" for a in analyzer_results) or not analyzer_results,
+        # Trips are a read over the events table — pair exit(nest) with the
+        # next enter(nest) — so an Events pipeline gets the trip panel too, not
+        # only the retired Foraging Trips block that used to be its own analyzer.
+        "show_trips": any(a["kind"] in ("events", "foraging_trips")
+                          for a in analyzer_results) or not analyzer_results,
         "can_rerun": any(r.user_id == request.user.id for r in runs),
         "batch_id": batch_id,
         "pipeline": runs[0].pipeline,
