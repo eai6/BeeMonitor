@@ -52,45 +52,12 @@ their reason.
   {% endif %}
 </div>
 
-{% if can_rerun and rerun_videos %}
 {% comment %}
-  Run these same clips through a different pipeline. Not an analyzer swap: a
-  different pipeline may detect a different class, prompt differently or use a
-  different reference, and those are the choices worth revisiting. Whether it
-  costs GPU time depends on whether the new pipeline's detect/track config
-  matches — the cache is keyed on that, not on the pipeline — so the copy says
-  "may" rather than promising either way.
+  Outcome sits beside what you would do next rather than alone in a 300px
+  column with the rest of the row empty. When something failed the failure
+  breakdown earns that space instead, and the re-run control moves below.
 {% endcomment %}
-<div class="bg-white shadow rounded-lg p-4 mb-6">
-  <form method="post" action="{% url 'pipelines:run_on_videos' %}"
-        class="flex items-end gap-3 flex-wrap">
-    {% csrf_token %}
-    {% for vid in rerun_videos %}<input type="hidden" name="video_ids" value="{{ vid }}">{% endfor %}
-    <div class="min-w-[240px]">
-      <label for="rerun-pipeline" class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
-        Run these {{ rerun_videos|length }} clip{{ rerun_videos|length|pluralize }} through another pipeline
-      </label>
-      <select name="pipeline" id="rerun-pipeline"
-              class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
-        {% for p in rerun_pipelines %}
-        <option value="{{ p.pk }}">{{ p.title }}{% if p.is_template %} (template){% endif %}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <button type="submit"
-            class="bg-amber-600 hover:bg-amber-700 text-white rounded px-4 py-2 text-sm font-medium">
-      Run
-    </button>
-    <p class="text-xs text-gray-500 flex-1 min-w-[220px]">
-      Starts a new batch over the same clips; this one keeps its results. Detection
-      and tracking are reused where the new pipeline asks for the same thing, so a
-      pipeline that only differs downstream costs no GPU time.
-    </p>
-  </form>
-</div>
-{% endif %}
-
-<div class="grid grid-cols-1 {% if failure_groups %}lg:grid-cols-[300px_minmax(0,1fr)]{% else %}lg:grid-cols-[300px]{% endif %} gap-4 mb-6">
+<div class="grid grid-cols-1 lg:grid-cols-[300px_minmax(0,1fr)] gap-4 mb-6">
 
   <!-- outcome -->
   <div class="bg-white shadow rounded-lg p-4">
@@ -152,7 +119,66 @@ their reason.
     </div>
   </div>
   {% endif %}
+  {% if can_rerun and rerun_videos and not failure_groups %}
+  <div class="bg-white shadow rounded-lg p-4">
+  <form method="post" action="{% url 'pipelines:run_on_videos' %}"
+        class="flex items-end gap-3 flex-wrap">
+    {% csrf_token %}
+    {% for vid in rerun_videos %}<input type="hidden" name="video_ids" value="{{ vid }}">{% endfor %}
+    <div class="min-w-[240px]">
+      <label for="rerun-pipeline" class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
+        Run these {{ rerun_videos|length }} clip{{ rerun_videos|length|pluralize }} through another pipeline
+      </label>
+      <select name="pipeline" id="rerun-pipeline"
+              class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
+        {% for p in rerun_pipelines %}
+        <option value="{{ p.pk }}">{{ p.title }}{% if p.is_template %} (template){% endif %}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit"
+            class="bg-amber-600 hover:bg-amber-700 text-white rounded px-4 py-2 text-sm font-medium">
+      Run
+    </button>
+    <p class="text-xs text-gray-500 flex-1 min-w-[220px]">
+      Starts a new batch over the same clips; this one keeps its results. Detection
+      and tracking are reused where the new pipeline asks for the same thing, so a
+      pipeline that only differs downstream costs no GPU time.
+    </p>
+  </form>
+  </div>
+  {% endif %}
 </div>
+
+{% if can_rerun and rerun_videos and failure_groups %}
+<div class="bg-white shadow rounded-lg p-4 mb-6">
+  <form method="post" action="{% url 'pipelines:run_on_videos' %}"
+        class="flex items-end gap-3 flex-wrap">
+    {% csrf_token %}
+    {% for vid in rerun_videos %}<input type="hidden" name="video_ids" value="{{ vid }}">{% endfor %}
+    <div class="min-w-[240px]">
+      <label for="rerun-pipeline" class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
+        Run these {{ rerun_videos|length }} clip{{ rerun_videos|length|pluralize }} through another pipeline
+      </label>
+      <select name="pipeline" id="rerun-pipeline"
+              class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
+        {% for p in rerun_pipelines %}
+        <option value="{{ p.pk }}">{{ p.title }}{% if p.is_template %} (template){% endif %}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit"
+            class="bg-amber-600 hover:bg-amber-700 text-white rounded px-4 py-2 text-sm font-medium">
+      Run
+    </button>
+    <p class="text-xs text-gray-500 flex-1 min-w-[220px]">
+      Starts a new batch over the same clips; this one keeps its results. Detection
+      and tracking are reused where the new pipeline asks for the same thing, so a
+      pipeline that only differs downstream costs no GPU time.
+    </p>
+  </form>
+</div>
+{% endif %}
 
 {% if running %}
 <div class="bg-blue-50 border border-blue-200 rounded p-3 mb-4 text-sm text-blue-800">

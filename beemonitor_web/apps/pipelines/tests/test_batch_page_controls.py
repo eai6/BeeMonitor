@@ -373,3 +373,61 @@ class PrimitiveExportTests(TestCase):
 
         by_kind = {d["kind"]: d for d in resp.context["downloads"]}
         self.assertTrue(by_kind["interactions"]["analyzed"])
+
+
+class OutcomeRowLayoutTests(TestCase):
+    """Outcome shares its row instead of leaving it two-thirds empty.
+
+    With the failure card gone on a clean batch, the outcome panel sat alone in
+    a 300px column with the rest of the row blank.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user("ol", password="x")
+        self.client.force_login(self.user)
+        self.pipeline = Pipeline.objects.create(user=self.user, title="P")
+        Pipeline.objects.create(user=self.user, title="Another")
+        self.batch_id = "4d5e6f88-0000-4000-8000-00000000cd12"
+
+    def _run(self, status="completed", error=""):
+        video = Video.objects.create(
+            user=self.user, title="c", storage_key=f"ol/{status}.mp4",
+            file_size_bytes=1, status=Video.Status.READY,
+            recorded_at=timezone.now())
+        return PipelineRun.objects.create(
+            pipeline=self.pipeline, user=self.user, batch_id=self.batch_id,
+            status=status, error_message=error,
+            steps=[{"id": "v", "block_type": "input.video",
+                    "config": {"video_id": str(video.pk)}}],
+            context={"v": {"artifact": "video", "video_id": video.pk}})
+
+    def _html(self):
+        return self.client.get(reverse(
+            "pipelines:batch_detail",
+            kwargs={"batch_id": self.batch_id})).content.decode()
+
+    def test_the_rerun_control_shares_the_outcome_row_on_a_clean_batch(self):
+        self._run()
+        html = self._html()
+
+        grid = html.index("lg:grid-cols-[300px")
+        table = html.index('id="clip-viewer"')
+        self.assertLess(grid, html.index('id="rerun-pipeline"'))
+        self.assertLess(html.index('id="rerun-pipeline"'), table)
+
+    def test_it_is_rendered_exactly_once(self):
+        """Both placements guarded, or the page shows two Run buttons."""
+        self._run()
+
+        self.assertEqual(self._html().count('id="rerun-pipeline"'), 1)
+
+    def test_when_something_failed_the_breakdown_takes_that_space(self):
+        self._run()
+        self._run(status="failed", error="boom")
+
+        html = self._html()
+
+        self.assertIn("Why they failed", html)
+        self.assertEqual(html.count('id="rerun-pipeline"'), 1)
+        # Failure panel is in the row; the re-run control moved below it.
+        self.assertLess(html.index("Why they failed"), html.index('id="rerun-pipeline"'))
