@@ -159,6 +159,36 @@ def _frame_number(row):
     return None
 
 
+# The base tables a batch can hand back — the primitives everything else is
+# derived from. Order is the order a person reads them in: what was seen, what
+# it was, where it went, who it met.
+BASE_TABLES = (
+    ("detections", "detections_csv_path", "Detections",
+     "Every raw detection, before the tracker associated them into trajectories."),
+    ("tracking", "tracking_csv_path", "Tracking",
+     "One row per track per frame — the trajectories everything else is read from."),
+    ("events", "events_csv_path", "Events",
+     "Entry/exit crossings, with the frame and the thing crossed into."),
+    ("interactions", "interactions_csv_path", "Interactions",
+     "Episodes of two things together, with durations."),
+)
+
+
+def available_downloads(sources):
+    """The base tables this batch actually produced, as template rows.
+
+    Offering a download that returns nothing is worse than not offering it: the
+    user cannot tell a missing pipeline step from a broken button. Only tables
+    at least one completed clip wrote are listed.
+    """
+    out = []
+    for kind, path_key, label, hint in BASE_TABLES:
+        clips = sum(1 for s in sources if (s.get("result") or {}).get(path_key))
+        if clips:
+            out.append({"kind": kind, "label": label, "hint": hint, "clips": clips})
+    return out
+
+
 def combined_csv(sources, path_key):
     """Concatenate each source's CSV (events or tracking), prepending
     video_title / video_recorded_at / absolute_time columns. Returns

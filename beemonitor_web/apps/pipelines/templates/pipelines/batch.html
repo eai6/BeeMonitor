@@ -128,7 +128,20 @@ their reason.
     {% if outcome.failed %}<span class="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-700">Failed {{ outcome.failed }}</span>{% endif %}
     <span class="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-700">Completed {{ outcome.completed }}</span>
     <div class="flex-1"></div>
-    <a href="{% url 'pipelines:batch_combined_csv' batch_id=batch_id kind='events' %}" class="text-xs text-amber-700 hover:underline">Download combined CSV</a>
+    {% comment %}
+      The base tables, every clip in the batch concatenated and stamped with
+      video title + absolute time. These are the primitives everything else is
+      derived from, so they are what a downstream script or an R session wants
+      -- not the rolled-up summary above it.
+    {% endcomment %}
+    <div class="flex items-center gap-1.5">
+      <span class="text-[11px] text-gray-400 mr-0.5">Download batch data</span>
+      {% for d in downloads %}
+      <a href="{% url 'pipelines:batch_combined_csv' batch_id=batch_id kind=d.kind %}"
+         title="{{ d.hint }}"
+         class="text-[11px] px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 hover:border-amber-400 whitespace-nowrap">{{ d.label }}</a>
+      {% endfor %}
+    </div>
   </div>
 
   <div class="grid grid-cols-[60px_100px_minmax(0,1fr)_80px_80px_80px_96px] gap-0 px-4 py-2 border-b border-gray-100 text-[11px] font-semibold text-gray-500">
@@ -138,16 +151,23 @@ their reason.
 
   {% for r in rows %}
   <div class="grid grid-cols-[60px_100px_minmax(0,1fr)_80px_80px_80px_96px] items-center px-4 py-2 border-b border-gray-100 hover:bg-gray-50">
+    {% comment %}
+      Both the still and the time open this clip's own results — the videos,
+      the per-clip numbers and its four CSVs. That page is what "open the clip"
+      means; a run that never produced a job has no results to open, so it
+      falls back to the run's own page.
+    {% endcomment %}
     <div>
       {% if r.video %}
-      <a href="{% url 'videos:detail' r.video.pk %}">
+      <a href="{% if r.job %}{% url 'analysis:results' r.job.pk %}{% else %}{% url 'pipelines:run_detail' pk=r.run.pipeline_id run_id=r.run.pk %}{% endif %}">
         <img src="{% url 'videos:thumbnail' r.video.pk %}" alt="" loading="lazy"
              class="w-12 rounded object-cover" style="aspect-ratio:16/9" onerror="this.remove()">
       </a>
       {% endif %}
     </div>
     <div class="text-[13px] font-medium text-gray-900">
-      <a href="{% url 'pipelines:run_detail' pk=r.run.pipeline_id run_id=r.run.pk %}" class="hover:underline">
+      <a href="{% if r.job %}{% url 'analysis:results' r.job.pk %}{% else %}{% url 'pipelines:run_detail' pk=r.run.pipeline_id run_id=r.run.pk %}{% endif %}"
+         class="hover:underline" title="Open this clip's data">
         {{ r.when|date:"H:i"|default:"—" }}
       </a>
     </div>

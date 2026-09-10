@@ -840,6 +840,12 @@ def batch_detail(request, batch_id):
     # instead of being shown a page about foraging.
     analyzer_results = aggregate.analyzer_results(runs)
 
+    # The base tables this batch can hand back, combined across its clips. Only
+    # the ones something actually wrote: a button that downloads nothing looks
+    # like a bug rather than a missing pipeline step.
+    _backfill_interactions_paths(sources)
+    downloads = aggregate.available_downloads(sources)
+
     # Cap the IN-PAGE aggregation so a huge batch can't ride the request past
     # App Runner's hard 120s limit (each source may cost an S3 read on a cold
     # cache). The combined-CSV downloads below remain uncapped. Oldest-first
@@ -877,6 +883,7 @@ def batch_detail(request, batch_id):
         "outcome": outcome,
         "failure_groups": failure_groups,
         "analyzer_results": analyzer_results,
+        "downloads": downloads,
         # Trips only earn the page when a trips analyzer ran.
         # Trips are a read over the events table — pair exit(nest) with the
         # next enter(nest) — so an Events pipeline gets the trip panel too, not
@@ -1026,7 +1033,8 @@ def batch_combined_csv(request, batch_id, kind):
 
     path_key = {"events": "events_csv_path",
                 "tracking": "tracking_csv_path",
-                "interactions": "interactions_csv_path"}.get(kind)
+                "interactions": "interactions_csv_path",
+                "detections": "detections_csv_path"}.get(kind)
     if not path_key:
         raise Http404("Unknown CSV kind.")
     runs = _batch_runs(request, batch_id)
