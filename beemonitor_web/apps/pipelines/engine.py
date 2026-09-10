@@ -57,20 +57,25 @@ def _persist_step_result(user, cache_key, block_type, output):
     )
 
 
+def steps_with_video_steps(steps, video_id):
+    """A copy of ``steps`` with every ``input.video`` step bound to a video."""
+    out = copy.deepcopy(steps or [])
+    for step in out:
+        if step.get("block_type") == "input.video":
+            step.setdefault("config", {})["video_id"] = str(video_id)
+    return out
+
+
 def steps_with_video(pipeline, video_id):
     """A copy of a pipeline's steps with every ``input.video`` step bound to a video.
 
     Lets one pipeline run across many videos (e.g. from the Processing hub) by
     injecting each video into the input step at launch time.
     """
-    steps = copy.deepcopy(pipeline.steps or [])
-    for step in steps:
-        if step.get("block_type") == "input.video":
-            step.setdefault("config", {})["video_id"] = str(video_id)
-    return steps
+    return steps_with_video_steps(pipeline.steps, video_id)
 
 
-def launch_batch(pipeline, videos, user, fresh=False):
+def launch_batch(pipeline, videos, user, fresh=False, steps=None):
     """Start one ``PipelineRun`` per video, all sharing a fresh ``batch_id``.
 
     The single place a pipeline is launched over a set of videos — used by the
@@ -79,19 +84,24 @@ def launch_batch(pipeline, videos, user, fresh=False):
     caller kicks ``analysis.views._drain_queue`` once so the batch drains in waves
     under the global SageMaker cap instead of flooding the endpoint.
 
+    ``steps`` overrides the pipeline's own graph for this launch — used by batch
+    re-analysis, which swaps the analyzer without touching the saved pipeline.
+    The video id is still stamped per clip, so one override serves the batch.
+
     Returns ``(batch_id, launched_video_ids, invalid_count)``.
     """
     batch_id = uuid.uuid4()
     launched, invalid = [], 0
     for video in videos:
-        steps = steps_with_video(pipeline, video.pk)
-        if validate_steps(steps):
+        steps_for_video = (steps_with_video_steps(steps, video.pk) if steps
+                           else steps_with_video(pipeline, video.pk))
+        if validate_steps(steps_for_video):
             invalid += 1
             continue
         run = PipelineRun.objects.create(
             pipeline=pipeline, user=user, batch_id=batch_id,
         )
-        start_run(run, steps=steps, fresh=fresh)
+        start_run(run, steps=steps_for_video, fresh=fresh)
         launched.append(video.pk)
     return batch_id, launched, invalid
 

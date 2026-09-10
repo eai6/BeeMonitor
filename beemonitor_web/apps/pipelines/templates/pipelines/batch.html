@@ -52,6 +52,38 @@ their reason.
   {% endif %}
 </div>
 
+{% if can_rerun and outcome.completed and reanalyzers %}
+{% comment %}
+  Asking a different question of a finished batch. Detection and tracking do not
+  depend on which analyzer reads them, and the GPU cache is keyed on the clip
+  plus the GPU step's own config — so swapping a local analyzer is served
+  entirely from cache. Free, and worth saying so on the button.
+{% endcomment %}
+<div class="bg-white shadow rounded-lg p-4 mb-6">
+  <div class="flex items-baseline justify-between gap-4 flex-wrap">
+    <div>
+      <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Ask a different question</div>
+      <p class="text-xs text-gray-500 mt-1">
+        Re-reads the tracking these {{ outcome.completed }} clip{{ outcome.completed|pluralize }}
+        already produced. No GPU time, no re-detection — and this batch keeps its own results.
+      </p>
+    </div>
+    <div class="flex items-center gap-2 flex-wrap">
+      {% for a in reanalyzers %}
+      <form method="post" action="{% url 'pipelines:batch_reanalyze' batch_id=batch_id %}">
+        {% csrf_token %}
+        <input type="hidden" name="block_type" value="{{ a.key }}">
+        <button type="submit" title="{{ a.description }}"
+                class="text-xs px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 hover:border-amber-400 whitespace-nowrap">
+          {{ a.icon }} {{ a.name }}
+        </button>
+      </form>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <div class="grid grid-cols-1 lg:grid-cols-[300px_minmax(0,1fr)] gap-4 mb-6">
 
   <!-- outcome -->
