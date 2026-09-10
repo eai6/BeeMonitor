@@ -147,22 +147,42 @@ def normalized_tracks(df, summary=None):
     tidy.columns = ["tid", "frame", "x", "y"]
     tidy = tidy.dropna(subset=["tid", "x", "y"])
 
-    # Normalise coords: if values look like pixels (max > 1.5), divide by frame
-    # dims (from summary) or by the observed max as a last resort.
-    def _norm(series, dim_keys):
-        m = float(series.abs().max() or 0)
-        if m <= 1.5:
-            return series  # already fractional
-        dim = None
-        for k in dim_keys:
-            if summary and summary.get(k):
-                dim = float(summary[k]); break
-        if not dim:
-            dim = m
-        return series / dim
+    # Normalise pixel coordinates against the FRAME, never against the tracks.
+    #
+    # This used to fall back to the observed max when no frame size was known,
+    # which silently rescales every clip by its own activity: a bee at (700,620)
+    # in a 1920x1080 frame is at (0.365, 0.574) — the top-left flower — but
+    # divided by the extent of its own track it lands at (0.974, 0.970), the
+    # bottom-right one. References are in true frame fractions, so every episode
+    # was attributed to whichever box the distortion happened to land in. That
+    # is why a clip whose activity was plainly in flower 1 reported nest_4.
+    #
+    # Returning None instead is the honest answer: without the frame size these
+    # coordinates cannot be placed against anything, and a wrong placement is
+    # far worse than a missing one.
+    def _dim(keys):
+        for k in keys:
+            try:
+                value = float((summary or {}).get(k) or 0)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+        return None
 
-    tidy["x"] = _norm(tidy["x"], ["frame_width", "width", "res_width", "video_width"])
-    tidy["y"] = _norm(tidy["y"], ["frame_height", "height", "res_height", "video_height"])
+    for axis, keys in (("x", ["frame_width", "width", "res_width", "video_width"]),
+                       ("y", ["frame_height", "height", "res_height", "video_height"])):
+        extent = float(tidy[axis].abs().max() or 0)
+        if extent <= 1.5:
+            continue                       # already fractional
+        dim = _dim(keys)
+        if not dim:
+            logger.warning(
+                "tracking table is in pixels but the frame size is unknown — "
+                "refusing to place tracks rather than scaling them by their own "
+                "extent")
+            return None
+        tidy[axis] = tidy[axis] / dim
     return tidy
 
 

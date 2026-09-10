@@ -379,6 +379,10 @@ def _analysis_inputs(step, run, context, inputs, index):
 
     up = inputs.get("tracks") or _first_upstream_result(inputs)
     result = (up or {}).get("result", {})
+
+    video = _run_video(run)
+    scale = _frame_scale(run, result, video)
+
     roi = find_reference(run.steps, index, context, run)
     refs = ops.roi_references(roi)
     ref_source = "graph"
@@ -389,14 +393,8 @@ def _analysis_inputs(step, run, context, inputs, index):
         # nothing local ever read them, so such a pipeline reported "0
         # references, 0 visits" while its job page said it had found four
         # nests.
-        video = _run_video(run)
-        # The worker reports those boxes in pixels, so without the clip's frame
-        # size they cannot be placed against the tracks at all — and a clip
-        # whose size we never measured would silently yield no references.
-        if video is not None:
-            from apps.videos.thumbnails import ensure_dimensions
-
-            ensure_dimensions(video)
+        # The worker reports those boxes in pixels too, placed by the same
+        # frame size measured above.
         refs = ops.detected_references(result, video)
         ref_source = "detected" if refs else "none"
     # The hotel ROI contains every tube, so counting it as a reference would
@@ -405,9 +403,32 @@ def _analysis_inputs(step, run, context, inputs, index):
     refs = tubes or refs
 
     df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
-    tidy = ops.normalized_tracks(df, result) if df is not None else None
-    fps, fps_source = ops.fps_with_source(result)
+    tidy = ops.normalized_tracks(df, scale) if df is not None else None
+    fps, fps_source = ops.fps_with_source(result, video)
     return tidy, refs, result, fps, fps_source, ref_source
+
+
+def _frame_scale(run, result, video=None):
+    """Summary dict for ``normalized_tracks``, carrying the clip's frame size.
+
+    The frame size is what turns a pixel coordinate into a position, and the
+    worker never reports it — so it comes from the video row, measured at
+    ingest and probed now for clips that predate that. Without it tracks cannot
+    be placed against a reference at all, and scaling them by their own extent
+    (what this used to fall back to) puts every clip's activity wherever that
+    clip happened to be busiest.
+    """
+    if video is None:
+        video = _run_video(run)
+    if video is not None:
+        from apps.videos.thumbnails import ensure_dimensions
+
+        ensure_dimensions(video)
+    scale = dict((result or {}).get("summary_stats") or {})
+    if video is not None and video.width and video.height:
+        scale.setdefault("frame_width", video.width)
+        scale.setdefault("frame_height", video.height)
+    return scale
 
 
 def _run_video(run):
@@ -681,7 +702,8 @@ def _exec_analyze_detection_count(step, run, context, inputs, index):
                 "raw-detection export, so detections the tracker discarded are "
                 "not included. Re-run it to count raw detections.")
 
-    tidy = ops.normalized_tracks(df, result) if df is not None else None
+    tidy = (ops.normalized_tracks(df, _frame_scale(run, result))
+            if df is not None else None)
     if tidy is not None:
         fps, fps_source = ops.fps_with_source(result)
         if metric == "over_time":
@@ -767,7 +789,8 @@ def _exec_analyze_colony_activity(step, run, context, inputs, index):
     boxes = ops.roi_shapes(roi)
 
     df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
-    tidy = ops.normalized_tracks(df, result) if df is not None else None
+    tidy = (ops.normalized_tracks(df, _frame_scale(run, result))
+            if df is not None else None)
     if tidy is not None:
         fps, fps_source = ops.fps_with_source(result)
         series = ops.compute_colony_activity(tidy, boxes, fps, metric=metric)
