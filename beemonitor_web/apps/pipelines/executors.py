@@ -389,7 +389,15 @@ def _analysis_inputs(step, run, context, inputs, index):
         # nothing local ever read them, so such a pipeline reported "0
         # references, 0 visits" while its job page said it had found four
         # nests.
-        refs = ops.detected_references(result, _run_video(run))
+        video = _run_video(run)
+        # The worker reports those boxes in pixels, so without the clip's frame
+        # size they cannot be placed against the tracks at all — and a clip
+        # whose size we never measured would silently yield no references.
+        if video is not None:
+            from apps.videos.thumbnails import ensure_dimensions
+
+            ensure_dimensions(video)
+        refs = ops.detected_references(result, video)
         ref_source = "detected" if refs else "none"
     # The hotel ROI contains every tube, so counting it as a reference would
     # double every episode. It is kept only when it is the ONLY thing defined.

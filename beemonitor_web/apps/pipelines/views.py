@@ -1023,15 +1023,23 @@ def batch_combined_csv(request, batch_id, kind):
         raise Http404("Unknown CSV kind.")
     runs = _batch_runs(request, batch_id)
 
-    # Prefer what the pipeline's own analyzers computed. The worker's
-    # interactions CSV matches an insect to a reference by centroid distance
-    # under a flat 50 px, so a bee inside a large flower never appears in it —
-    # exporting that made the download disagree with the annotated video.
+    # Events and interactions come from the analyzers, recomputed if need be.
+    # They must NOT silently fall back to the worker's own file: that one
+    # matches an insect to a reference by centroid distance under a flat 50 px,
+    # so a bee inside a large flower never appears in it, and a download that
+    # quietly hands back a different answer is worse than one that fails.
     if kind in aggregate.PRIMITIVE_KINDS:
         fieldnames, rows = aggregate.primitive_csv(runs, kind)
         if fieldnames:
             return _csv_response(f"{kind}_batch_{str(batch_id)[:8]}.csv",
                                  fieldnames, rows)
+        messages.warning(
+            request,
+            f"No {kind} could be computed for this batch. That usually means no "
+            "reference reached the analyzer — draw an ROI, use the device nest "
+            "layout, or wire a Detect node for the reference class into it. The "
+            "Tracking CSV is unaffected.")
+        return redirect("pipelines:batch_detail", batch_id=batch_id)
 
     sources, _ = aggregate.collect_sources(runs)
     if path_key == "interactions_csv_path":

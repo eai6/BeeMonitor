@@ -129,3 +129,56 @@ class ExportRecomputeTests(TestCase):
         run.context["m"]["result"]["tracking_csv_path"] = ""
 
         self.assertEqual(executors.recompute_primitive(run, "interactions"), [])
+
+
+class NoSilentFallbackTests(TestCase):
+    """A download must never hand back a different answer than it promises.
+
+    The Interactions button falling through to the worker's CSV meant the user
+    got the centroid-distance file — the one the primitives exist to replace —
+    with nothing on screen to say so.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user("nf", password="x")
+        self.client.force_login(self.user)
+        self.pipeline = Pipeline.objects.create(user=self.user, title="P")
+        self.batch_id = "2c3d4e55-0000-4000-8000-00000000ff01"
+        video = Video.objects.create(
+            user=self.user, title="c", storage_key="nf/c.mp4", file_size_bytes=1,
+            status=Video.Status.READY, recorded_at=timezone.now())
+        PipelineRun.objects.create(
+            pipeline=self.pipeline, user=self.user, batch_id=self.batch_id,
+            status="completed",
+            steps=[{"id": "v", "block_type": "input.video",
+                    "config": {"video_id": str(video.pk)}}],
+            # A worker interactions CSV exists — the tempting wrong answer.
+            context={"v": {"artifact": "video", "video_id": video.pk},
+                     "m": {"artifact": "tracks",
+                           "result": {"interactions_csv_path": "worker.csv",
+                                      "events_csv_path": "e.csv"}}})
+
+    def test_it_refuses_rather_than_serving_the_workers_file(self):
+        resp = self.client.get(reverse(
+            "pipelines:batch_combined_csv",
+            kwargs={"batch_id": self.batch_id, "kind": "interactions"}))
+
+        self.assertEqual(resp.status_code, 302)
+        self.assertNotIn("text/csv", resp.get("Content-Type", ""))
+
+    def test_it_says_what_is_missing(self):
+        resp = self.client.get(reverse(
+            "pipelines:batch_combined_csv",
+            kwargs={"batch_id": self.batch_id, "kind": "interactions"}),
+            follow=True)
+
+        text = " ".join(str(m) for m in resp.context["messages"])
+        self.assertIn("reference", text.lower())
+
+    def test_tracking_still_falls_back_to_the_stored_csv(self):
+        """Only the two primitives are computed; tracking IS the worker's file."""
+        resp = self.client.get(reverse(
+            "pipelines:batch_combined_csv",
+            kwargs={"batch_id": self.batch_id, "kind": "tracking"}))
+
+        self.assertEqual(resp.status_code, 302)   # no readable CSV in this fixture

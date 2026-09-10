@@ -54,6 +54,27 @@ def _needs_probe(video) -> bool:
     return not (getattr(video, "fps", None) and getattr(video, "duration_seconds", None))
 
 
+def ensure_dimensions(video) -> bool:
+    """Make sure this clip's frame size is known, probing now if it is not.
+
+    Synchronous on purpose: the callers are analysis and export, where the
+    frame size decides whether an answer can be computed at all — the worker
+    reports reference boxes in pixels, and without the frame size they cannot
+    be placed against tracks. One S3 read, once per clip for the life of the
+    row, is a fair price for the difference between a result and no result.
+    """
+    if getattr(video, "width", None) and getattr(video, "height", None):
+        return True
+    if not (getattr(video, "storage_key", "") or ""):
+        return False
+    try:
+        extract_thumbnail(video, force=False)
+    except Exception:
+        logger.exception("probe: could not measure video %s", video.pk)
+        return False
+    return bool(video.width and video.height)
+
+
 def probe_on_demand(video) -> None:
     """Fill in a clip's measured properties in the background, if a slot is free.
 
