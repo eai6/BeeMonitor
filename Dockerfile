@@ -17,9 +17,15 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq-dev gcc \
         libglib2.0-0 \
+        ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 # libglib2.0-0: opencv-python-headless still links libgthread/glib on slim,
 # so `import cv2` needs it even though the headless build drops the GUI libs.
+# ffmpeg (with ffprobe): the annotated-video proxy re-encodes to H.264 for the
+# browser. The worker writes its overlay with OpenCV's "mp4v" fourcc — MPEG-4
+# Part 2, which Chrome and Safari will not play — so without these binaries
+# every playback downloaded the whole video, failed both subprocess calls, and
+# redirected to a file the browser could not decode.
 
 # Install Python deps first so they cache across code changes.
 COPY beemonitor_web/requirements/ /app/beemonitor_web/requirements/

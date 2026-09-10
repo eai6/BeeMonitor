@@ -8,8 +8,10 @@ back to S3 with suffix ``_h264.mp4``, and redirects to a presigned URL.
 
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
+from functools import lru_cache
 
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.http import Http404, HttpResponseRedirect
@@ -20,6 +22,24 @@ from config.storage import get_s3_client
 from .models import Job, JobResult
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=2)
+def _tool_on_path(name: str) -> bool:
+    """Whether an external binary exists, resolved once per process.
+
+    A missing ffmpeg is a deployment defect, not a property of the video — the
+    same distinction ops._read_csv draws for a missing pandas. It is worth
+    knowing BEFORE the work starts: without this check the view downloaded the
+    whole annotated video, failed both subprocess calls, and redirected to the
+    original anyway, so every playback paid for a download that could not
+    change the outcome.
+    """
+    found = shutil.which(name) is not None
+    if not found:
+        logger.error("%s is not installed in this image — annotated video cannot "
+                     "be re-encoded for the browser", name)
+    return found
 
 
 def _generate_presigned_url(blob_path: str, container: str = "processed") -> str:
@@ -75,8 +95,12 @@ def _is_h264(file_path: str) -> bool:
         )
         codec = result.stdout.strip().lower()
         return codec == "h264"
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        logger.warning("ffprobe check failed (will re-encode to be safe): %s", e)
+    except FileNotFoundError:
+        logger.error("ffprobe is not installed in this image — cannot read the "
+                     "codec, assuming it needs re-encoding")
+        return False
+    except subprocess.TimeoutExpired as e:
+        logger.warning("ffprobe check timed out (will re-encode to be safe): %s", e)
         return False
 
 
@@ -103,8 +127,12 @@ def _reencode_to_h264(input_path: str, output_path: str) -> bool:
             logger.error("ffmpeg re-encode failed: %s", result.stderr)
             return False
         return True
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        logger.error("ffmpeg re-encode error: %s", e)
+    except FileNotFoundError:
+        logger.error("ffmpeg is not installed in this image — a deployment "
+                     "defect, not a problem with this clip")
+        return False
+    except subprocess.TimeoutExpired as e:
+        logger.error("ffmpeg re-encode timed out: %s", e)
         return False
 
 
@@ -155,6 +183,14 @@ class VideoProxyView(LoginRequiredMixin, View):
             sas_url = _generate_presigned_url(h264_path, container)
             if sas_url:
                 return HttpResponseRedirect(sas_url)
+
+        # Nothing downstream can work without the binaries, and the fallback
+        # below is the same redirect we would reach after a full download.
+        if not (_tool_on_path("ffmpeg") and _tool_on_path("ffprobe")):
+            sas_url = _generate_presigned_url(annotated_path, container)
+            if sas_url:
+                return HttpResponseRedirect(sas_url)
+            raise Http404("Annotated video cannot be served: ffmpeg is missing.")
 
         # Step 2: Download the original annotated video
         with tempfile.TemporaryDirectory() as tmpdir:
