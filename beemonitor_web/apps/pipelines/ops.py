@@ -349,78 +349,108 @@ def fps_of(summary=None, video=None, default=DEFAULT_FPS):
     return fps_with_source(summary, video, default)[0]
 
 
-def compute_visitation(tidy, refs, fps, gap_frames=15):
-    """Count ROI visits per track, AND per reference.
+def compute_episodes(tidy, refs, gap_frames=15):
+    """Contiguous spells each track spends inside each reference.
 
-    A *visit* is a contiguous run of frames a track spends inside one reference;
-    a gap of more than ``gap_frames`` starts a new visit. Moving from one
-    reference to another also ends a visit — otherwise a bee crossing from tube 3
+    An *episode* is a run of frames one track stays inside one reference; a gap
+    of more than ``gap_frames`` starts a new one. Moving from one reference to
+    another also ends the current episode — otherwise a bee crossing from tube 3
     to tube 7 would read as a single long stay in neither.
 
-    Per reference is the point. This used to ask ``in_any_box``, one boolean for
-    every reference at once, so it could say a track visited *something* and
-    never *which* — and "which" is what a treatment comparison is: four flower
-    patches are only interesting compared against each other.
+    This is the single geometric pass the whole analyze layer stands on. A visit
+    is an episode; an interaction with a reference is an episode; the enter and
+    exit events are an episode's two ends. Computing it once is what lets those
+    three stop being three code paths that can disagree about the same clip.
+
+    Episodes are returned in frame order and carry frames, not seconds: the
+    frame rate is applied by the projections, so there is exactly one place a
+    rate can be wrong (see ``fps_with_source``).
 
     ``refs`` comes from ``roi_references``. Bare shapes from ``roi_shapes`` are
-    still accepted, and then the per-reference breakdown is by index — old
-    pipelines keep working, they just get numbers for names.
+    still accepted, and then references are identified by index — old pipelines
+    keep working, they just get numbers for names.
     """
     refs = _as_references(refs)
-    rows = []
-    per_ref = {r["id"]: {"id": r["id"], "label": r["label"], "visits": 0,
-                         "visitors": set(), "dwell_frames": 0} for r in refs}
-    total_visits = 0
-    dwell_frames_total = 0
+    labels = {r["id"]: r["label"] for r in refs}
+    episodes = []
 
     for tid, grp in tidy.sort_values("frame").groupby("tid"):
-        visits, dwell = 0, 0
-        open_ref, last_frame = None, None
-
+        open_ep = None
         for frame, x, y in zip(grp["frame"], grp["x"], grp["y"]):
             frame = int(frame)
             ref = which_reference(x, y, refs)
             if ref is None:
                 continue
-
-            bucket = per_ref[ref["id"]]
             broke = (
-                open_ref is None                                   # first frame inside
-                or open_ref != ref["id"]                            # moved to another reference
-                or (last_frame is not None and frame - last_frame > gap_frames)
+                open_ep is None
+                or open_ep["reference"] != ref["id"]
+                or frame - open_ep["end_frame"] > gap_frames
             )
             if broke:
-                visits += 1
-                bucket["visits"] += 1
-            dwell += 1
-            bucket["dwell_frames"] += 1
-            bucket["visitors"].add(_as_native(tid))
-            open_ref, last_frame = ref["id"], frame
+                open_ep = {
+                    "track": _as_native(tid),
+                    "reference": ref["id"],
+                    "reference_label": labels.get(ref["id"], ref["id"]),
+                    "start_frame": frame,
+                    "end_frame": frame,
+                    "frames": 0,
+                }
+                episodes.append(open_ep)
+            open_ep["end_frame"] = frame
+            open_ep["frames"] += 1
 
-        if visits:
-            rows.append({
-                "track": _as_native(tid),
-                "visits": visits,
-                "dwell_sec": round(dwell / fps, 2) if fps else None,
-            })
-            total_visits += visits
-            dwell_frames_total += dwell
+    episodes.sort(key=lambda e: (e["start_frame"], str(e["reference"])))
+    return episodes
 
-    per_reference = [{
-        "id": b["id"],
-        "label": b["label"],
-        "visits": b["visits"],
-        "visitors": len(b["visitors"]),
-        "dwell_sec": round(b["dwell_frames"] / fps, 2) if fps else None,
-    } for b in per_ref.values()]
-    # Busiest first: the comparison reads top-down. A reference with no visits
-    # stays in the list — "nothing visited the control" is a result, and dropping
-    # it would leave the reader to notice an absence.
-    per_reference.sort(key=lambda r: (-r["visits"], r["id"]))
+
+def compute_visitation(tidy, refs, fps, gap_frames=15):
+    """Visit counts per track and per reference, rolled up from the episodes.
+
+    Kept as-is in shape so pipelines and batch pages built on it keep rendering
+    identically; the counting now happens over ``compute_episodes`` rather than
+    in a second traversal of its own.
+
+    A reference with no visits stays in the breakdown — "nothing visited the
+    control" is a result, and dropping the row would leave the reader to notice
+    an absence.
+    """
+    refs = _as_references(refs)
+    episodes = compute_episodes(tidy, refs, gap_frames=gap_frames)
+
+    per_ref = {r["id"]: {"id": r["id"], "label": r["label"], "visits": 0,
+                         "visitors": set(), "dwell_frames": 0} for r in refs}
+    per_track = {}
+    for ep in episodes:
+        bucket = per_ref.setdefault(ep["reference"], {
+            "id": ep["reference"], "label": ep["reference_label"],
+            "visits": 0, "visitors": set(), "dwell_frames": 0})
+        bucket["visits"] += 1
+        bucket["visitors"].add(ep["track"])
+        bucket["dwell_frames"] += ep["frames"]
+
+        track = per_track.setdefault(ep["track"], {"visits": 0, "dwell_frames": 0})
+        track["visits"] += 1
+        track["dwell_frames"] += ep["frames"]
+
+    rows = sorted(
+        ({"track": tid, "visits": t["visits"],
+          "dwell_sec": round(t["dwell_frames"] / fps, 2) if fps else None}
+         for tid, t in per_track.items()),
+        key=lambda r: str(r["track"]),
+    )
+
+    per_reference = sorted(
+        ({"id": b["id"], "label": b["label"], "visits": b["visits"],
+          "visitors": len(b["visitors"]),
+          "dwell_sec": round(b["dwell_frames"] / fps, 2) if fps else None}
+         for b in per_ref.values()),
+        key=lambda r: (-r["visits"], str(r["id"])),
+    )
+    dwell_frames_total = sum(ep["frames"] for ep in episodes)
 
     return {
         "unique_visitors": len(rows),
-        "total_visits": total_visits,
+        "total_visits": len(episodes),
         "total_dwell_sec": round(dwell_frames_total / fps, 2) if fps else None,
         "rows": rows,
         "per_reference": per_reference,
