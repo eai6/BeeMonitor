@@ -606,7 +606,9 @@ def _launch_gpu(payload, video, mid):
         cp["visualize"] = False  # a merged annotated video isn't supported
         input_uri = _put_inference_payload(cp["job_id"], cp)
         out_uri, fail_uri = _invoke_endpoint_async(cp["job_id"], input_uri, endpoint)
-        chunks.append({"i": i, "output_uri": out_uri,
+        # start_frame is kept so the merge knows where the seams are and can
+        # rejoin tracks the boundary cut in half.
+        chunks.append({"i": i, "output_uri": out_uri, "start_frame": start,
                        "failure_uri": fail_uri, "result": None})
     logger.info("job %s: video %.0fs chunked into %d invocations",
                 mid, float(video.duration_seconds or 0), len(chunks))
@@ -1325,9 +1327,12 @@ def _merge_chunk_results(job, chunks) -> dict:
 
     from config.storage import get_s3_client
 
+    from apps.analysis import chunk_stitch
+
     s3c = get_s3_client()
     uid, mid = str(job.user_id), job.modal_job_id
     results = [ch["result"] for ch in chunks]
+    merged_track_count = None
 
     def _read_rows(path):
         if not path:
@@ -1339,6 +1344,11 @@ def _merge_chunk_results(job, chunks) -> dict:
             logger.warning("chunk csv read failed (%s): %s", path, e)
             return []
         return list(_csv.DictReader(io.StringIO(buf.getvalue().decode("utf-8", "replace"))))
+
+    # Absolute start frame of each chunk after the first — the seams a track
+    # can be cut at.
+    boundaries = [int(ch["start_frame"]) for ch in chunks[1:]
+                  if str(ch.get("start_frame", "")).lstrip("-").isdigit()]
 
     merged_paths = {}
     # Detections merge through the same path — they carry no track_id, so the
@@ -1355,6 +1365,12 @@ def _merge_chunk_results(job, chunks) -> dict:
                 if "track_id" in row:
                     row["track_id"] = _remap_chunk_track_id(row.get("track_id"), i)
                 all_rows.append(row)
+        if kind == "tracking_csv_path" and all_rows:
+            # Each chunk restarts its tracker, so a bee mid-flight at a seam
+            # arrives as two namespaced ids. Rejoin them before anything counts
+            # or times them.
+            chunk_stitch.stitch(all_rows, boundaries)
+            merged_track_count = chunk_stitch.distinct_track_count(all_rows)
         if fieldnames:
             out = io.StringIO()
             w = _csv.DictWriter(out, fieldnames=fieldnames, extrasaction="ignore")
@@ -1371,6 +1387,10 @@ def _merge_chunk_results(job, chunks) -> dict:
         return sum(int(r.get(k) or 0) for r in results)
 
     stats0 = (results[0].get("summary_stats") or {}) if results else {}
+    merged_nest_bboxes = {}
+    for res in results:
+        for nest_id, bbox in ((res.get("summary_stats") or {}).get("nest_bboxes") or {}).items():
+            merged_nest_bboxes.setdefault(str(nest_id), bbox)
     return {
         "status": "completed",
         "events_csv_path": merged_paths["events_csv_path"],
@@ -1383,14 +1403,22 @@ def _merge_chunk_results(job, chunks) -> dict:
         "total_events": _sum("total_events"),
         "entry_count": _sum("entry_count"),
         "exit_count": _sum("exit_count"),
-        "unique_tracks": _sum("unique_tracks"),
-        "nest_count": max((int(r.get("nest_count") or 0) for r in results), default=0),
+        # Counted on the stitched rows. Summing each chunk's own figure counts
+        # every bee that crossed a seam once per chunk it appeared in.
+        "unique_tracks": (merged_track_count if merged_track_count is not None
+                          else _sum("unique_tracks")),
+        "nest_count": len(merged_nest_bboxes) or max(
+            (int(r.get("nest_count") or 0) for r in results), default=0),
         "foraging_trip_count": _sum("foraging_trip_count"),
         "avg_trip_duration_sec": None,
         "interaction_count": _sum("interaction_count"),
         "summary_stats": {
             "video_fps": stats0.get("video_fps"),
             "chunked": len(chunks),
+            # The nests a chunk saw are the nests the whole video has: union
+            # them rather than dropping the geometry the ROI work depends on.
+            "nest_bboxes": merged_nest_bboxes,
+            "total_nests": len(merged_nest_bboxes),
             "note": "merged from chunked invocations; annotated video, "
                     "interactions and per-track crops are unavailable for chunked runs",
         },
