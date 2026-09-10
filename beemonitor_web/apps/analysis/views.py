@@ -1682,9 +1682,8 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
             ctx["detections_csv_url"] = _generate_presigned_url(
                 result.detections_csv_path)
 
-        # Load CSV data for display in tables. Tracking is the worker's own
-        # file because for tracking the worker's file IS the answer.
-        ctx["events_data"] = _load_csv_from_storage(events_path)
+        # Tracking is the worker's own file because for tracking the worker's
+        # file IS the answer.
         ctx["tracking_data"] = _load_csv_from_storage(tracking_path)
 
         # Events and interactions are computed, not read. Rendering the
@@ -1698,9 +1697,17 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         interaction_rows = pipeline_executors.primitives_for_job(job, "interactions")
         ctx["interactions_data"] = _rows_as_table(
             interaction_rows, primitives.INTERACTION_FIELDS)
-        event_rows = pipeline_executors.primitives_for_job(job, "events")
-        if event_rows:
-            ctx["events_data"] = _rows_as_table(event_rows, primitives.EVENT_FIELDS)
+        # Events are computed unconditionally, the same as interactions. They
+        # used to fall back to the worker's events CSV whenever the analyzers
+        # produced nothing, while the Events CSV button beside the table stayed
+        # computed — so in exactly that case the table showed rows the download
+        # did not contain. The fallback was not even adding anything: the
+        # analyzer already folds the worker's own nest events into its output
+        # (events_from_gpu), so an empty computed table means there was nothing
+        # to show.
+        ctx["events_data"] = _rows_as_table(
+            pipeline_executors.primitives_for_job(job, "events"),
+            primitives.EVENT_FIELDS)
 
         # The base measurements this clip produced, not derived answers.
         # Entries/Exits/Nests/Trips were four ways of slicing the event table,
@@ -1710,10 +1717,18 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         from apps.pipelines.templatetags.batch_extras import duration_min
 
         stats = result.summary_stats or {}
+        # The tiles count the tables on this page. They used to read
+        # JobResult.total_events and JobResult.interaction_count — the worker's
+        # own counters — so a clip could head a 38-row events table with
+        # "Events 0", and the tile disagreed with both the table under it and
+        # the CSV beside it. Tracks stays the worker's figure because the
+        # tracking table IS the worker's file.
         tiles = [
             {"label": "Tracks", "value": result.unique_tracks, "color": "text-blue-600"},
-            {"label": "Events", "value": result.total_events, "color": "text-gray-900"},
-            {"label": "Interactions", "value": result.interaction_count,
+            {"label": "Events", "value": (ctx.get("events_data") or {}).get("total", 0),
+             "color": "text-gray-900"},
+            {"label": "Interactions",
+             "value": (ctx.get("interactions_data") or {}).get("total", 0),
              "color": "text-purple-600"},
         ]
         if job.video.duration_seconds:

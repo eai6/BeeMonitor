@@ -13,7 +13,7 @@ time columns prepended.
 import csv
 import io
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 
 from apps.pipelines.ops import DEFAULT_FPS, fps_with_source  # noqa: F401  (re-exported)
 
@@ -58,12 +58,27 @@ def run_video_id(run):
 
 
 def run_gpu_result(run):
-    """The detect/track step's JobResult summary dict stored in run.context."""
+    """The detect/track step's JobResult summary dict stored in run.context.
+
+    A result carrying tracks wins, because in a detect -> track pipeline the
+    detect step's own result would otherwise shadow it. A detection-only result
+    is the fallback rather than nothing: this used to recognise tracks and
+    events only, so a detect-only batch looked resultless and its Detections
+    download was never offered.
+    """
+    fallback = {}
     for out in (run.context or {}).values():
         result = (out or {}).get("result") or {}
         if result.get("events_csv_path") or result.get("tracking_csv_path"):
             return result
-    return {}
+        if not fallback and any(result.get(key) for _k, key, _l, _h in BASE_TABLES):
+            fallback = result
+    return fallback
+
+
+# Sort sentinel: clips with no timestamp go last without ever being compared
+# against None.
+_EPOCH = datetime(1970, 1, 1, tzinfo=dt_timezone.utc)
 
 
 def collect_sources(runs):
@@ -91,15 +106,17 @@ def collect_sources(runs):
             skipped.append({"video": title, "reason": f"run {run.status}"})
             continue
         result = run_gpu_result(run)
-        if not result.get("events_csv_path"):
-            skipped.append({"video": title, "reason": "no events CSV in run output"})
+        # Any base table is enough to join. This used to demand an events CSV,
+        # from when events was the only download — so a detection or tracking
+        # pipeline contributed nothing to the Detections and Tracking buttons
+        # that were later added beside it, and the page offered no button at all
+        # for data it was holding.
+        if not any(result.get(k) for _kind, k, _l, _h in BASE_TABLES):
+            skipped.append({"video": title, "reason": "no CSV in run output"})
             continue
-        if not video.recorded_at:
-            skipped.append({
-                "video": title,
-                "reason": "no recorded-at timestamp — can't place it on the day's timeline",
-            })
-            continue
+        # A clip with no timestamp still measured what it measured. It used to be
+        # dropped from every download for want of a timeline position, which
+        # silently shrank the export; it now joins with an empty timestamp.
         stats = result.get("summary_stats") or {}
         # One resolver for every derived duration in the system — this used to
         # read a "fps" key the backend never writes, so it always fell through
@@ -114,7 +131,7 @@ def collect_sources(runs):
             "fps": max(float(fps), 1.0),
             "fps_source": fps_source,
         })
-    sources.sort(key=lambda s: s["recorded_at"])
+    sources.sort(key=lambda s: (s["recorded_at"] is None, s["recorded_at"] or _EPOCH))
     return sources, skipped
 
 
@@ -229,7 +246,8 @@ def _provenance(src):
     device = getattr(video, "device", None)
     return {
         "video_title": src["title"],
-        "video_recorded_at": src["recorded_at"].isoformat(),
+        "video_recorded_at": (src["recorded_at"].isoformat()
+                              if src["recorded_at"] else ""),
         "device_id": getattr(device, "id", "") or "",
         "device_name": getattr(device, "name", "") or "",
         # The clip's own site wins: a device can be moved between sites, and the
@@ -281,7 +299,7 @@ def primitive_csv(runs, kind):
     all_rows = []
     for run in runs:
         video = videos.get(run_video_id(run))
-        if video is None or not video.recorded_at:
+        if video is None:
             continue
         outputs = [out for k, out in analyzer_outputs(run) if k == kind]
         if not outputs:
@@ -307,7 +325,7 @@ def primitive_csv(runs, kind):
                 merged = dict(provenance)
                 merged["absolute_time"] = (
                     (video.recorded_at + timedelta(seconds=float(frame) / fps)).isoformat()
-                    if isinstance(frame, (int, float)) else "")
+                    if video.recorded_at and isinstance(frame, (int, float)) else "")
                 merged.update(row)
                 all_rows.append(merged)
 
@@ -337,7 +355,7 @@ def combined_csv(sources, path_key):
             frame = _frame_number(row)
             abs_time = (
                 src["recorded_at"] + timedelta(seconds=frame / src["fps"])
-                if frame is not None else None
+                if frame is not None and src["recorded_at"] else None
             )
             out = dict(provenance)
             out["absolute_time"] = abs_time.isoformat() if abs_time else ""
@@ -357,7 +375,8 @@ def collect_events(sources):
     """
     events = []
     for src in sources:
-        for row in read_processed_csv(src["result"]["events_csv_path"], use_cache=True):
+        for row in read_processed_csv(src["result"].get("events_csv_path") or "",
+                                      use_cache=True):
             action = (row.get("action") or "").strip()
             nest = row.get("nest", "")
             frame = _frame_number(row)
@@ -600,6 +619,9 @@ def batch_rows(runs):
             "video": video,
             "job": job,
             "result": result,
+            # What the analyzers measured, so the row agrees with the clip's own
+            # page and with this batch's CSV downloads.
+            "primitives": primitive_counts(run),
             "status": run.status,
             "error": run_error(run),
             "when": video.recorded_at if video else None,
@@ -657,6 +679,38 @@ def analyzer_outputs(run):
         if kind:
             out.append((kind, value))
     return out
+
+
+# The key each primitive's analyzer reports its own total under. Reading the
+# analyzer's count rather than len(rows) keeps this free: the number is already
+# in run.context, saved when the analyzer ran.
+_PRIMITIVE_COUNT_KEYS = {"events": "event_count", "interactions": "interaction_count"}
+
+
+def primitive_counts(run):
+    """What this run's own analyzers measured, per primitive.
+
+    The batch table printed ``JobResult.total_events`` and
+    ``JobResult.interaction_count`` — the WORKER's counters — while the table
+    and the CSV for the same clip carried the analyzers' computed rows. The
+    worker matches an insect to a reference by centroid distance under a flat
+    50 px, so the two legitimately disagree, and the batch said one thing while
+    every download said another.
+
+    ``None``, not zero, when this pipeline ran no analyzer for that primitive.
+    Zero is a measurement; printing it for a question the batch never asked is
+    the column of zeros this page already refuses to render elsewhere.
+    """
+    counts = dict.fromkeys(_PRIMITIVE_COUNT_KEYS, None)
+    for kind, out in analyzer_outputs(run):
+        key = _PRIMITIVE_COUNT_KEYS.get(kind)
+        if key is None:
+            continue
+        total = out.get(key)
+        if total is None:
+            total = len(out.get("rows") or [])
+        counts[kind] = (counts[kind] or 0) + int(total)
+    return counts
 
 
 def _merge_per_reference(bucket, rows, count_key):

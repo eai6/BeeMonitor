@@ -846,6 +846,12 @@ def batch_detail(request, batch_id):
     _backfill_interactions_paths(sources)
     downloads = aggregate.available_downloads(sources, runs)
 
+    # What the downloads leave out. collect_sources has always returned this and
+    # the page has always thrown it away, so a clip that could not join an export
+    # vanished from it with nothing on screen to say so — and a download that is
+    # quietly missing clips is worse than one that says which.
+    skipped_sources = skipped
+
     # Whether a reference reached the analyzer decided every count on this page
     # and was visible nowhere.
     references = aggregate.reference_summary(runs, rows)
@@ -895,6 +901,7 @@ def batch_detail(request, batch_id):
         "pipeline": runs[0].pipeline,
         "running": sum(1 for r in runs if not r.is_terminal),
         "sources": sources,
+        "skipped_sources": skipped_sources,
     })
 
 

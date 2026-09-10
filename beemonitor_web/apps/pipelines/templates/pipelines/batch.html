@@ -227,6 +227,18 @@ their reason.
   </div>
 
   {% comment %}
+    What the downloads leave out. A clip that cannot join an export used to
+    disappear from it with nothing on screen to say so, which made a short CSV
+    look like a short batch.
+  {% endcomment %}
+  {% if skipped_sources %}
+  <div class="px-4 py-1.5 border-b border-gray-200 bg-amber-50 text-[11px] text-amber-900">
+    {{ skipped_sources|length }} clip{{ skipped_sources|pluralize }} not in the downloads above:
+    {% for s in skipped_sources %}{{ s.video }} ({{ s.reason }}){% if not forloop.last %}; {% endif %}{% endfor %}
+  </div>
+  {% endif %}
+
+  {% comment %}
     The base measurements, not derived answers. Trips used to have a column, so
     a Detection Count batch rendered a column of zeros for a question it never
     asked — and a Visitation batch had nowhere to show what it did measure.
@@ -321,8 +333,18 @@ their reason.
       {% endif %}
     </div>
     <div class="text-right text-[13px] {% if r.result %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.result %}{{ r.result.unique_tracks }}{% else %}—{% endif %}</div>
-    <div class="text-right text-[13px] {% if r.result %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.result %}{{ r.result.total_events }}{% else %}—{% endif %}</div>
-    <div class="text-right text-[13px] {% if r.result %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.result %}{{ r.result.interaction_count }}{% else %}—{% endif %}</div>
+    {% comment %}
+      Events and interactions come from this run's analyzers, the same source as
+      the clip's own page and this batch's CSV downloads — not from the worker's
+      stored counters, which match an insect to a reference by centroid distance
+      under a flat 50 px and so disagree with every table we render. A dash
+      means this pipeline ran no analyzer for that primitive; zero would claim
+      it measured none.
+    {% endcomment %}
+    <div class="text-right text-[13px] {% if r.primitives.events is None %}text-gray-300{% else %}text-gray-900{% endif %}"
+         {% if r.primitives.events is None %}title="This pipeline ran no events analyzer"{% endif %}>{% if r.primitives.events is None %}—{% else %}{{ r.primitives.events }}{% endif %}</div>
+    <div class="text-right text-[13px] {% if r.primitives.interactions is None %}text-gray-300{% else %}text-gray-900{% endif %}"
+         {% if r.primitives.interactions is None %}title="This pipeline ran no interactions analyzer"{% endif %}>{% if r.primitives.interactions is None %}—{% else %}{{ r.primitives.interactions }}{% endif %}</div>
     <div class="text-right text-xs text-gray-500">{% if r.video.duration_seconds %}{{ r.video.duration_seconds|duration_min }}{% else %}—{% endif %}</div>
     <div class="text-right text-xs text-gray-500">{% if r.gpu_seconds %}{{ r.gpu_seconds|duration_min }}{% else %}—{% endif %}</div>
   </div>
