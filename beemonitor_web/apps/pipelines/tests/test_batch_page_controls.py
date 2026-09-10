@@ -586,3 +586,49 @@ class FullResultsLinkTests(TestCase):
         html = self._html()
 
         self.assertNotIn("crops &amp; CSVs", html)
+
+
+class SharedViewerTests(TestCase):
+    """Both grids get the same player, from one file.
+
+    Scanning footage to decide what to run and scanning it to decide what to
+    label are the same act — and the second is where the training sample gets
+    chosen, so it needs the better tool at least as much.
+    """
+
+    def setUp(self):
+        from apps.annotations.models import AnnotationProject
+
+        self.user = User.objects.create_user("sv", password="x")
+        self.client.force_login(self.user)
+        self.project = AnnotationProject.objects.create(user=self.user, name="P")
+        Video.objects.create(user=self.user, title="c", storage_key="sv/c.mp4",
+                             file_size_bytes=1, status=Video.Status.READY,
+                             recorded_at=timezone.now())
+
+    def test_the_hub_and_the_picker_both_carry_the_player(self):
+        hub = self.client.get(reverse("analysis:processing")).content.decode()
+        picker = self.client.get(reverse("annotations:add_videos_page",
+                                         args=[self.project.pk])).content.decode()
+
+        for html in (hub, picker):
+            self.assertIn('id="v-player"', html)
+            self.assertIn("Earlier", html)
+            self.assertIn("Later", html)
+
+    def test_each_page_names_what_selecting_means_there(self):
+        hub = self.client.get(reverse("analysis:processing")).content.decode()
+        picker = self.client.get(reverse("annotations:add_videos_page",
+                                         args=[self.project.pk])).content.decode()
+
+        self.assertIn("Select for this run", hub)
+        self.assertIn("Add this clip to the project", picker)
+
+    def test_the_player_is_declared_exactly_once_per_page(self):
+        """Two copies of the markup would leave duplicate element ids and the
+        second player would silently never receive a source."""
+        for url in (reverse("analysis:processing"),
+                    reverse("annotations:add_videos_page", args=[self.project.pk])):
+            html = self.client.get(url).content.decode()
+            self.assertEqual(html.count('id="v-player"'), 1, url)
+            self.assertEqual(html.count('id="viewer"'), 1, url)
