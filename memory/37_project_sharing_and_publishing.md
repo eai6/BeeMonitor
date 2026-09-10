@@ -1,6 +1,7 @@
 # 37 — Sharing annotation projects, and publishing them
 
-**Status:** audit complete, plan for execution.
+**Status:** mockups reviewed and approved, building.
+Canvas: https://claude.ai/code/artifact/96d31aa5-6b48-480f-acb6-2cfe70e6074c
 
 ## Two things, usually conflated
 
@@ -124,3 +125,55 @@ size afterwards, the model did not change and must not appear to have.
   copy breaks if the original is deleted — so a published project's frames must
   outlive its deletion, or copies must duplicate the objects. Decide before
   shipping Phase 3, not after.
+
+
+---
+
+## Assignment (added after the mockups)
+
+Collaboration needs more than access: it needs **who is doing which clips**.
+
+`ClipAssignment(project, video, user, assigned_at, assigned_by)`, unique on
+(project, video) — a clip has at most one owner of the work.
+
+**Per clip, not per frame.** A clip is a coherent scene: one hotel, one stretch
+of time. Two people labelling the same clip keep re-deciding the same judgement
+calls, and "who labelled this" stops having an answer. Splitting by clip makes
+each person's work independently reviewable.
+
+**An annotator works only what is assigned to them** — by someone else, or by
+themselves out of the unassigned pool. Claiming creates an assignment like any
+other, so every labelled clip has a record of who took it and when. Nothing is
+stranded when a collaborator stops, and nobody is idle waiting to be given
+work, but no work happens off the books either.
+
+**Assignment can auto-distribute.** "Split the unassigned evenly between these
+people" is one button and the common case; hand-picking 21 clips is not
+something to make anyone do twice.
+
+## Roles, revised
+
+Five ranks, still linear — the property that makes `DeviceShare` easy to reason
+about and hard to get subtly wrong:
+
+    viewer(1) < annotator(2) < reviewer(3) < manager(4) < owner(5)
+
+| role | can |
+|---|---|
+| **viewer** | see frames, boxes, stats; export |
+| **annotator** | + draw and edit boxes on clips assigned to them; claim from the pool |
+| **reviewer** | + mark frames reviewed, on **any** clip, not only their own |
+| **manager** | + add clips, sample, auto-label, edit classes, assign work |
+| **owner** | + delete the project, manage people, publish |
+
+`reviewer` is the checking role, and it sits above `annotator` deliberately:
+someone who spots a bad box while reviewing should be able to fix it rather
+than file a complaint. What distinguishes them is *scope* — an annotator is
+confined to their own assignments, a reviewer sees and signs off on everyone's.
+
+## What a collaborator's page is
+
+Their own workload, four numbers, and one button into the editor at the first
+unlabelled frame of their first unfinished clip. No GPU controls, no project
+settings, no footage. The common case is one click from opening the project to
+drawing a box.
