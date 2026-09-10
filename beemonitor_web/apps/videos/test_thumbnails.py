@@ -23,6 +23,8 @@ class FakeCapture:
     CAP_PROP_FPS = 5
     CAP_PROP_FRAME_COUNT = 7
     CAP_PROP_POS_FRAMES = 1
+    CAP_PROP_FRAME_WIDTH = 3
+    CAP_PROP_FRAME_HEIGHT = 4
 
     def __init__(self, fps=25.0, total=300, opened=True, readable_from=0):
         self._fps, self._total, self._opened = fps, total, opened
@@ -36,7 +38,9 @@ class FakeCapture:
 
     def get(self, prop):
         return {self.CAP_PROP_FPS: self._fps,
-                self.CAP_PROP_FRAME_COUNT: self._total}.get(prop, 0)
+                self.CAP_PROP_FRAME_COUNT: self._total,
+                self.CAP_PROP_FRAME_WIDTH: 1920,
+                self.CAP_PROP_FRAME_HEIGHT: 1080}.get(prop, 0)
 
     def set(self, prop, value):
         self.seeks.append(int(value))
@@ -57,6 +61,8 @@ def fake_cv2(capture):
     cv2.CAP_PROP_FPS = FakeCapture.CAP_PROP_FPS
     cv2.CAP_PROP_FRAME_COUNT = FakeCapture.CAP_PROP_FRAME_COUNT
     cv2.CAP_PROP_POS_FRAMES = FakeCapture.CAP_PROP_POS_FRAMES
+    cv2.CAP_PROP_FRAME_WIDTH = FakeCapture.CAP_PROP_FRAME_WIDTH
+    cv2.CAP_PROP_FRAME_HEIGHT = FakeCapture.CAP_PROP_FRAME_HEIGHT
     cv2.VideoCapture.return_value = capture
     cv2.resize.side_effect = lambda frame, size, interpolation=None: frame
     cv2.imencode.return_value = (True, MagicMock(tobytes=lambda: b"jpeg"))
@@ -67,7 +73,7 @@ class FrameChoiceTests(TestCase):
     def test_samples_at_the_pre_roll_mark_not_frame_zero(self):
         cap = FakeCapture(fps=25.0, total=300)
 
-        frame = thumbnails._grab_frame(fake_cv2(cap), "clip.mp4")
+        frame, _props = thumbnails._grab_frame(fake_cv2(cap), "clip.mp4")
 
         self.assertIsNotNone(frame)
         # 3.0 s x 25 fps — the moment motion was detected, not the empty
@@ -94,14 +100,14 @@ class FrameChoiceTests(TestCase):
         cap._readable_from = 1  # frame 0 readable only via the final fallback
         cv2 = fake_cv2(cap)
 
-        frame = thumbnails._grab_frame(cv2, "clip.mp4")
+        frame, _props = thumbnails._grab_frame(cv2, "clip.mp4")
 
         self.assertIsNotNone(frame)
 
     def test_an_unopenable_file_yields_nothing(self):
         cap = FakeCapture(opened=False)
 
-        self.assertIsNone(thumbnails._grab_frame(fake_cv2(cap), "clip.mp4"))
+        self.assertEqual(thumbnails._grab_frame(fake_cv2(cap), "clip.mp4"), (None, {}))
 
     def test_the_capture_is_always_released(self):
         cap = FakeCapture()

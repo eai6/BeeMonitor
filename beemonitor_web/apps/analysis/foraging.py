@@ -27,7 +27,7 @@ from datetime import datetime, timedelta, timezone as dt_timezone
 from django.utils import timezone
 
 from apps.analysis.models import DailyForagingSummary, Job, JobResult
-from apps.pipelines import aggregate
+from apps.pipelines import aggregate, ops
 
 logger = logging.getLogger(__name__)
 
@@ -85,13 +85,14 @@ def day_sources(user_id, site_name, device_id, day):
             continue
         seen.add(v.pk)  # latest completed analysis per video
         stats = jr.summary_stats or {}
-        fps = v.fps or stats.get("video_fps") or stats.get("fps") or aggregate.DEFAULT_FPS
+        fps, fps_source = ops.fps_with_source(stats, v)
         sources.append({
             "title": v.title or f"Video {v.pk}",
             "video": v,
             "result": {"events_csv_path": jr.events_csv_path},
             "recorded_at": v.recorded_at,
             "fps": max(float(fps), 1.0),
+            "fps_source": fps_source,
         })
     sources.sort(key=lambda s: s["recorded_at"])
     return sources

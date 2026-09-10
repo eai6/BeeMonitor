@@ -104,8 +104,11 @@ class VideoViewSet(viewsets.ModelViewSet):
             storage_key=blob_path,
             file_size_bytes=video_file.size,
             status=Video.Status.READY,
+            # Left None when the name carries no timestamp: aggregation already
+            # skips those honestly rather than placing them on a wrong day.
             recorded_at=recorded_at,
             site_name=final_site,
+            metadata={"recorded_at_source": "filename" if recorded_at else "unknown"},
         )
 
         return Response(VideoSerializer(video).data, status=status.HTTP_201_CREATED)

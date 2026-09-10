@@ -348,14 +348,15 @@ class UploadCompleteAPIView(APIView):
             if device is None:
                 return Response({"detail": "Unknown device."}, status=400)
 
-        parsed_site, parsed_recorded_at = Video.parse_timestamp_from_filename(filename)
+        parsed_site, _parsed_recorded_at = Video.parse_timestamp_from_filename(filename)
         final_site = site_name_override or (device.location if device else "") or parsed_site or ""
-        final_recorded_at = parsed_recorded_at or timezone.now().astimezone(dt_timezone.utc)
+        final_recorded_at, recorded_at_source = Video.resolve_recorded_at(None, filename)
 
         video = Video.objects.create(
             user=user, device=device, title=title, storage_key=storage_key,
             file_size_bytes=file_size_bytes, status=Video.Status.READY,
             recorded_at=final_recorded_at, site_name=final_site,
+            metadata={"recorded_at_source": recorded_at_source},
         )
         logger.info("API upload complete: user=%s video=%s key=%s", user.pk, video.id, storage_key)
         return Response({

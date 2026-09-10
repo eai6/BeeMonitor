@@ -190,12 +190,20 @@ class UploadCompleteView(APIView):
         if not title:
             title = PurePosixPath(storage_key).stem
 
-        parsed_site, parsed_recorded_at = Video.parse_timestamp_from_filename(
+        parsed_site, _parsed_recorded_at = Video.parse_timestamp_from_filename(
             PurePosixPath(storage_key).name,
         )
-        final_recorded_at = recorded_at or parsed_recorded_at or timezone.now()
+        final_recorded_at, recorded_at_source = Video.resolve_recorded_at(
+            recorded_at, PurePosixPath(storage_key).name)
 
-        metadata = {"device_id": device.id, "device_name": device.name}
+        metadata = {
+            "device_id": device.id,
+            "device_name": device.name,
+            # Which of the three sources the timestamp came from, so a clip
+            # stamped with its upload time (an offline backlog flushed on
+            # reconnect) is not mistaken for a measured recording time.
+            "recorded_at_source": recorded_at_source,
+        }
         # On-device YOLO bee-confirmation verdict (hardware `motion/confirm.py`).
         # ALL clips upload; this tag lets the dashboard flag clips the device
         # couldn't confirm as a bee and gate the expensive automated video

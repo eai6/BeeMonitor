@@ -167,6 +167,38 @@ class Video(models.Model):
 
         return "", None
 
+    @staticmethod
+    def resolve_recorded_at(explicit, filename=""):
+        """``(recorded_at, source)`` from the best available evidence.
+
+        Three sources of very different quality used to collapse into one field
+        with no record of which was used:
+
+        - ``"device"``  — an ISO timestamp the recorder sent. Trustworthy.
+        - ``"filename"`` — parsed from the clip's name. Trustworthy.
+        - ``"upload_time"`` — wall-clock at ingest. **Not a recording time.**
+          A device that buffered a backlog offline and flushed it on reconnect
+          stamps every clip with the flush time, so they land on the wrong day
+          in every time series while looking exactly like good data.
+
+        Callers store the source alongside the value so aggregation can treat
+        ``upload_time`` as unknown rather than as fact.
+        """
+        from django.utils import timezone as _tz
+
+        if explicit:
+            return explicit, "device"
+        if filename:
+            _site, parsed = Video.parse_timestamp_from_filename(filename)
+            if parsed:
+                return parsed, "filename"
+        return _tz.now().astimezone(dt_timezone.utc), "upload_time"
+
+    @property
+    def recorded_at_is_measured(self) -> bool:
+        """False when the timestamp is really the upload time (see above)."""
+        return (self.metadata or {}).get("recorded_at_source") != "upload_time"
+
     def save(self, *args, **kwargs):
         """Auto-fill year/month/day/hour from recorded_at if available."""
         if self.recorded_at:

@@ -567,13 +567,15 @@ def _chunk_ranges(video, detector_kind):
     can never truncate the tail."""
     import math
 
+    from apps.pipelines import ops
+
     if os.environ.get("BEEMONITOR_CHUNK_TRACKING") != "1":
         return None
     limit = _CHUNK_LIMIT_SECONDS["sam3" if detector_kind == "sam3" else "yolo"]
     dur = float(getattr(video, "duration_seconds", 0) or 0)
     if dur <= limit:
         return None  # fits one invocation (also: unknown duration -> unchunked)
-    fps = float(getattr(video, "fps", 0) or 30.0)
+    fps = ops.fps_of(video=video)
     total_frames = int(dur * fps)
     n = math.ceil(dur / limit)
     per = math.ceil(total_frames / n)

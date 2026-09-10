@@ -296,14 +296,52 @@ def in_any_box(x, y, shapes):
     return False
 
 
-def fps_of(summary, default=30.0):
-    for k in ("fps", "video_fps", "frame_rate"):
-        if summary and summary.get(k):
+# The rate assumed when a clip records none. It is deliberately a module
+# constant and not an inline literal: a guessed frame rate silently rescales
+# every duration in the system, so there is exactly one place it can come from.
+DEFAULT_FPS = 30.0
+
+# Keys the GPU backend has used for the frame rate over the life of the
+# project. ``video_fps`` is what ``cloud/wrapper/pipeline.py`` writes today;
+# the others are older runs still in the database.
+_FPS_KEYS = ("video_fps", "fps", "frame_rate")
+
+
+def fps_with_source(summary=None, video=None, default=DEFAULT_FPS):
+    """Resolve a clip's frame rate and say where the number came from.
+
+    Returns ``(fps, source)`` where source is ``"video"`` (measured from the
+    file at ingest), ``"analysis"`` (reported by the GPU run) or ``"assumed"``
+    (nothing recorded one — the caller should disclose this rather than
+    present the derived seconds as measured).
+
+    Precedence puts the video row first: it is measured from the container by
+    ``videos.thumbnails``, whereas the analysis value is whatever OpenCV
+    reported on the GPU host for a copy of the same file.
+    """
+    measured = None
+    try:
+        measured = float(getattr(video, "fps", None) or 0) or None
+    except (TypeError, ValueError):
+        measured = None
+    if measured and measured > 0:
+        return measured, "video"
+
+    for key in _FPS_KEYS:
+        if summary and summary.get(key):
             try:
-                return float(summary[k])
+                value = float(summary[key])
             except (TypeError, ValueError):
-                pass
-    return default
+                continue
+            if value > 0:
+                return value, "analysis"
+
+    return float(default), "assumed"
+
+
+def fps_of(summary=None, video=None, default=DEFAULT_FPS):
+    """The frame rate alone, for callers with nothing to disclose it to."""
+    return fps_with_source(summary, video, default)[0]
 
 
 def compute_visitation(tidy, refs, fps, gap_frames=15):

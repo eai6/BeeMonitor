@@ -15,11 +15,12 @@ import io
 import logging
 from datetime import timedelta
 
+from apps.pipelines.ops import DEFAULT_FPS, fps_with_source  # noqa: F401  (re-exported)
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_MIN_SEC = 10.0
 DEFAULT_MAX_SEC = 7200.0
-DEFAULT_FPS = 30.0
 
 # Widest pairing bounds. Summaries store trips paired at these so any narrower
 # user bounds are a pure read-time filter on duration (pairing consumes the
@@ -99,7 +100,10 @@ def collect_sources(runs):
             })
             continue
         stats = result.get("summary_stats") or {}
-        fps = video.fps or stats.get("fps") or DEFAULT_FPS
+        # One resolver for every derived duration in the system — this used to
+        # read a "fps" key the backend never writes, so it always fell through
+        # to 30 while the run page used the real 25.
+        fps, fps_source = fps_with_source(stats, video)
         sources.append({
             "run": run,
             "video": video,
@@ -107,6 +111,7 @@ def collect_sources(runs):
             "result": result,
             "recorded_at": video.recorded_at,
             "fps": max(float(fps), 1.0),
+            "fps_source": fps_source,
         })
     sources.sort(key=lambda s: s["recorded_at"])
     return sources, skipped

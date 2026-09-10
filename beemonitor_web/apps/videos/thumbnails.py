@@ -86,7 +86,11 @@ def extract_thumbnail(video, *, force: bool = False) -> str:
     tmp.close()
     try:
         s3.download_file("raw-videos", blob_path, tmp.name)
-        frame = _grab_frame(cv2, tmp.name)
+        frame, props = _grab_frame(cv2, tmp.name)
+        # Persist first: a clip whose frame rate we now know is worth recording
+        # even when no frame renders, since durations depend on it and the
+        # still does not.
+        _store_props(video, props)
         if frame is None:
             logger.info("thumbnail: no decodable frame in video %s", video.pk)
             return ""
@@ -113,18 +117,34 @@ def extract_thumbnail(video, *, force: bool = False) -> str:
 
 
 def _grab_frame(cv2, path: str):
-    """The frame at SAMPLE_AT_SECONDS, falling back toward the start.
+    """``(frame, props)`` — the still, plus what the container says about itself.
 
-    A clip shorter than the pre-roll (or one whose seek fails) still gets a
-    still: we fall back to the midpoint, then to the very first frame, rather
-    than returning nothing.
+    The frame is the one at SAMPLE_AT_SECONDS, falling back toward the start: a
+    clip shorter than the pre-roll (or one whose seek fails) still gets a still
+    via the midpoint, then the very first frame, rather than nothing.
+
+    ``props`` carries ``fps``, ``duration_seconds``, ``width`` and ``height``,
+    omitting any the container did not report. These come free — the capture is
+    already open and the frame rate is already read to place the sample — and
+    they are the only measurement of a clip's real frame rate the system takes.
+    Without them every frame→seconds conversion falls back to an assumption.
     """
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
-        return None
+        return None, {}
     try:
         fps = cap.get(cv2.CAP_PROP_FPS) or 0
         total = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+        props = {}
+        if fps > 0:
+            props["fps"] = round(float(fps), 3)
+            if total > 0:
+                props["duration_seconds"] = round(float(total) / float(fps), 2)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        if width > 0 and height > 0:
+            props["width"], props["height"] = width, height
+
         targets = []
         if fps > 0:
             targets.append(int(SAMPLE_AT_SECONDS * fps))
@@ -139,10 +159,27 @@ def _grab_frame(cv2, path: str):
                 cap.set(cv2.CAP_PROP_POS_FRAMES, target)
             ok, frame = cap.read()
             if ok and frame is not None:
-                return frame
-        return None
+                return frame, props
+        return None, props
     finally:
         cap.release()
+
+
+def _store_props(video, props: dict) -> None:
+    """Write measured container properties onto the row, filling blanks only.
+
+    An existing value is left alone: the field may have been corrected by hand,
+    and a probe is not authoritative enough to overwrite that.
+    """
+    fields = [f for f, value in props.items()
+              if value and not getattr(video, f, None) and hasattr(video, f)]
+    if not fields:
+        return
+    for f in fields:
+        setattr(video, f, props[f])
+    video.save(update_fields=fields)
+    logger.info("probe: video %s recorded %s", video.pk,
+                ", ".join(f"{f}={props[f]}" for f in fields))
 
 
 def _downscale(cv2, frame):
