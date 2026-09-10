@@ -38,26 +38,55 @@ def _pick(df, candidates):
 
 
 def _read_csv(path):
-    """Read a CSV at ``path`` (s3:// or local) into a DataFrame, or None."""
+    """Read a CSV into a DataFrame, or None.
+
+    Accepts the three spellings a path arrives in: an ``s3://bucket/key`` URL, a
+    local file (tests, dev), and — the one that matters in production — a bare
+    key into the *processed* bucket, which is what every JobResult stores.
+
+    That last case used to fall through to ``pd.read_csv("1/abc/tracking.csv")``,
+    which is a relative filename that does not exist, so every local analyzer
+    quietly took its "tracking CSV not available" branch and reported the job
+    summary instead of analysing anything. It looked like a data condition; it
+    was a plumbing bug.
+    """
     if not path:
         return None
     try:
         import pandas as pd
     except ImportError:
-        logger.warning("pandas unavailable — cannot post-process tracking CSV")
+        # A deployment defect, not a property of the clip: without pandas none
+        # of the analyzers can run at all. Loud, so it cannot hide as "no data".
+        logger.error("pandas is not installed in this image — no analyzer can "
+                     "post-process a tracking table")
         return None
+
+    from io import BytesIO
+
     try:
         if path.startswith("s3://"):
-            import boto3
             from urllib.parse import urlparse
-            from io import BytesIO
+
+            import boto3
             from django.conf import settings
 
             parsed = urlparse(path)
             s3 = boto3.client("s3", region_name=getattr(settings, "AWS_REGION", "us-east-1"))
             body = s3.get_object(Bucket=parsed.netloc, Key=parsed.path.lstrip("/"))["Body"].read()
             return pd.read_csv(BytesIO(body))
-        return pd.read_csv(path)
+
+        import os
+
+        if os.path.exists(path):
+            return pd.read_csv(path)
+
+        # A key in the processed bucket — the same place aggregate reads from.
+        from config.storage import get_s3_client
+
+        buf = BytesIO()
+        get_s3_client().download_to_stream("processed", path, buf)
+        buf.seek(0)
+        return pd.read_csv(buf)
     except Exception as exc:
         logger.info("Could not read CSV %s: %s", path, exc)
         return None
