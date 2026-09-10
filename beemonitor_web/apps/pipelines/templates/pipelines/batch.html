@@ -77,6 +77,23 @@ their reason.
     claim about a price list that drifts. Time spent on failures is the number
     worth seeing — it is the work that produced nothing.
     {% endcomment %}
+    {% comment %}
+      Whether a reference reached the analyzer decided every count on this page
+      and used to be visible nowhere — a batch could report zero visits on
+      footage full of them and look no different from a quiet day.
+    {% endcomment %}
+    <div class="flex justify-between text-xs py-0.5">
+      <span class="text-gray-500">References</span>
+      {% if references.source == "graph" %}
+      <span class="text-gray-900" title="From the pipeline's own reference node — a drawn ROI or the device's nest layout.">{{ references.count }} defined</span>
+      {% elif references.source == "detected" %}
+      <span class="text-gray-900" title="None defined in the pipeline, so the analyzer used what the detector found.">{{ references.count }} detected</span>
+      {% elif references.unplaceable %}
+      <span class="text-amber-700" title="The detector found these, but they are in pixels and this clip's frame size was never measured, so they cannot be placed against the tracks. Open a clip once, or run backfill_video_props, and they will be used.">{{ references.unplaceable }} unusable</span>
+      {% else %}
+      <span class="text-amber-700" title="No visits or reference interactions can be attributed. Draw an ROI, use the device nest layout, or wire a Detect node for the reference class into the analyzer.">none</span>
+      {% endif %}
+    </div>
     <div class="flex justify-between text-xs py-0.5"><span class="text-gray-500">GPU time</span><span class="text-gray-900">{{ outcome.gpu_seconds|duration_min }}</span></div>
     {% if outcome.gpu_seconds_failed %}
     <div class="flex justify-between text-xs py-0.5"><span class="text-gray-500">Spent on failures</span><span class="text-red-700">{{ outcome.gpu_seconds_failed|duration_min }}</span></div>

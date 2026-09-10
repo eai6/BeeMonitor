@@ -846,6 +846,10 @@ def batch_detail(request, batch_id):
     _backfill_interactions_paths(sources)
     downloads = aggregate.available_downloads(sources, runs)
 
+    # Whether a reference reached the analyzer decided every count on this page
+    # and was visible nowhere.
+    references = aggregate.reference_summary(runs, rows)
+
     # Running these same clips through a different pipeline. Offered instead of
     # an analyzer swap: a different pipeline may detect a different class,
     # prompt differently or use a different reference, and those are the
@@ -883,6 +887,7 @@ def batch_detail(request, batch_id):
         "outcome": outcome,
         "failure_groups": failure_groups,
         "downloads": downloads,
+        "references": references,
         "rerun_videos": rerun_videos,
         "rerun_pipelines": rerun_pipelines,
         "can_rerun": any(r.user_id == request.user.id for r in runs),

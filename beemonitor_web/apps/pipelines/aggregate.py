@@ -821,6 +821,51 @@ KIND_LABELS = {
 }
 
 
+def reference_summary(runs, rows):
+    """What geometry the analyzers had to work with — the batch's blind spot.
+
+    Whether a reference reached the analyzer decided everything downstream and
+    was visible nowhere: a batch could report zero visits on footage full of
+    them and look no different from a batch where nothing happened.
+
+    Reads only what is already loaded — the graph's own geometry and the
+    worker's detected boxes — so it costs no S3 and no probe. ``unplaceable``
+    is the case that actually bit: the worker found reference boxes, but they
+    are in pixels and the clip's frame size was never measured, so they cannot
+    be placed against the tracks.
+    """
+    from . import executors, ops
+
+    if not runs:
+        return {"count": 0, "source": "none", "unplaceable": 0}
+
+    run = next((r for r in runs if r.status == r.Status.COMPLETED), runs[0])
+    steps = list(run.steps or [])
+    index = next((i for i in range(len(steps) - 1, -1, -1)
+                  if str(steps[i].get("block_type", "")).startswith("analyze.")),
+                 max(len(steps) - 1, 0))
+    try:
+        roi = executors.find_reference(steps, index, run.context or {}, run)
+    except Exception:                      # a half-built graph must not 500 the page
+        logger.exception("reference summary: could not resolve the graph reference")
+        roi = {}
+    refs = [r for r in ops.roi_references(roi) if r["id"] != "hotel"] \
+        or ops.roi_references(roi)
+    if refs:
+        return {"count": len(refs), "source": "graph", "unplaceable": 0}
+
+    # Nothing in the graph: what did the detector find?
+    video = next((row["video"] for row in rows
+                  if row["run"].pk == run.pk and row["video"]), None)
+    result = run_gpu_result(run)
+    detected = ops.detected_references(result, video)
+    if detected:
+        return {"count": len(detected), "source": "detected", "unplaceable": 0}
+
+    boxes = (result.get("summary_stats") or {}).get("nest_bboxes") or {}
+    return {"count": 0, "source": "none", "unplaceable": len(boxes)}
+
+
 def coverage_of(outputs, attempted):
     """How much of the batch a total actually speaks for.
 

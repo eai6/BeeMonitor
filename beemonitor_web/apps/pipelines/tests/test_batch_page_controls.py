@@ -431,3 +431,103 @@ class OutcomeRowLayoutTests(TestCase):
         self.assertEqual(html.count('id="rerun-pipeline"'), 1)
         # Failure panel is in the row; the re-run control moved below it.
         self.assertLess(html.index("Why they failed"), html.index('id="rerun-pipeline"'))
+
+
+class ReferenceSummaryTests(TestCase):
+    """The batch's blind spot, made visible.
+
+    Whether a reference reached the analyzer decided every count on the page.
+    A batch could report zero visits on footage full of them and look no
+    different from a batch where nothing happened.
+    """
+
+    def setUp(self):
+        from apps.devices.models import Device
+
+        self.user = User.objects.create_user("rs", password="x")
+        self.client.force_login(self.user)
+        self.device = Device.objects.create(
+            owner=self.user, name="d", key_hash="hrs", prefix="bmk_rs",
+            roi_override=[0.0, 0.0, 0.6, 0.6],
+            nest_layout=[{"id": 1, "box": [0.1, 0.1, 0.3, 0.3]},
+                         {"id": 2, "box": [0.4, 0.4, 0.5, 0.5]}])
+        self.pipeline = Pipeline.objects.create(user=self.user, title="P")
+        self.batch_id = "6a7b8c99-0000-4000-8000-00000000ab34"
+
+    def _run(self, *, with_layout, stats=None, width=None):
+        video = Video.objects.create(
+            user=self.user, device=self.device, title="c",
+            storage_key=f"rs/{with_layout}{width}.mp4", file_size_bytes=1,
+            status=Video.Status.READY, recorded_at=timezone.now(),
+            width=width, height=1080 if width else None)
+        steps = [{"id": "v", "block_type": "input.video",
+                  "config": {"video_id": str(video.pk)}},
+                 {"id": "m", "block_type": "track.mot", "config": {},
+                  "inputs": {"detections": "v"}}]
+        if with_layout:
+            steps.append({"id": "r", "block_type": "reference.layout",
+                          "config": {"source": "device_layout"},
+                          "inputs": {"video": "v"}})
+        steps.append({"id": "a", "block_type": "analyze.interactions",
+                      "config": {},
+                      "inputs": {"tracks": "m", **({"rois": "r"} if with_layout else {})}})
+        PipelineRun.objects.create(
+            pipeline=self.pipeline, user=self.user, batch_id=self.batch_id,
+            status="completed", steps=steps,
+            context={"v": {"artifact": "video", "video_id": video.pk},
+                     "m": {"artifact": "tracks",
+                           "result": {"tracking_csv_path": "t.csv",
+                                      "summary_stats": stats or {}}}})
+
+    def _refs(self):
+        return self.client.get(reverse(
+            "pipelines:batch_detail",
+            kwargs={"batch_id": self.batch_id})).context["references"]
+
+    def test_a_defined_layout_is_reported_as_defined(self):
+        self._run(with_layout=True)
+
+        refs = self._refs()
+
+        self.assertEqual(refs["source"], "graph")
+        self.assertEqual(refs["count"], 2)
+
+    def test_detected_boxes_are_reported_when_nothing_is_defined(self):
+        self._run(with_layout=False, width=1920,
+                  stats={"nest_bboxes": {"1": [192, 108, 576, 324]}})
+
+        refs = self._refs()
+
+        self.assertEqual(refs["source"], "detected")
+        self.assertEqual(refs["count"], 1)
+
+    def test_boxes_we_cannot_place_are_called_out_not_counted(self):
+        """The exact case that made the Interactions export fall back: the
+        detector found them, but with no frame size they cannot be placed."""
+        self._run(with_layout=False, width=None,
+                  stats={"nest_bboxes": {"1": [192, 108, 576, 324],
+                                         "2": [960, 540, 1152, 648]}})
+
+        refs = self._refs()
+
+        self.assertEqual(refs["source"], "none")
+        self.assertEqual(refs["count"], 0)
+        self.assertEqual(refs["unplaceable"], 2)
+
+    def test_nothing_anywhere_reads_as_none(self):
+        self._run(with_layout=False)
+
+        refs = self._refs()
+
+        self.assertEqual(refs["source"], "none")
+        self.assertEqual(refs["unplaceable"], 0)
+
+    def test_the_count_is_shown_on_the_page(self):
+        self._run(with_layout=True)
+
+        html = self.client.get(reverse(
+            "pipelines:batch_detail",
+            kwargs={"batch_id": self.batch_id})).content.decode()
+
+        self.assertIn("References", html)
+        self.assertIn("2 defined", html)
