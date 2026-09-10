@@ -65,3 +65,72 @@ class LabelFilterTests(SimpleTestCase):
         df = ops.filter_by_label(rows(*(["insect"] * 5)), "bee")
 
         self.assertIsNotNone(ops.normalized_tracks(df, {}))
+
+
+class TaxonAgnosticTests(SimpleTestCase):
+    """Renaming a class must move rows between branches, not empty one.
+
+    The Detect node carries the class the user configured; the tracking table
+    carries the class the detector emitted. Those drift — a detector retrained
+    to say "insect" instead of "bee", a node renamed to a species. The pipeline
+    has to keep working across that.
+    """
+
+    def test_an_exact_match_is_reported_as_exact(self):
+        taxa, how = ops.resolve_taxa(rows("bee", "flower"), "bee")
+
+        self.assertEqual((taxa, how), ({"bee"}, "exact"))
+
+    def test_the_subject_branch_is_whatever_the_reference_branch_is_not(self):
+        """The detector says 'insect'; the node says 'bee'. A sibling Detect
+        node claims 'flower', so the rest of the table is this branch."""
+        taxa, how = ops.resolve_taxa(rows("insect", "flower"), "bee",
+                                     exclude=["flower"])
+
+        self.assertEqual((taxa, how), ({"insect"}, "role"))
+
+    def test_role_resolution_survives_renaming_the_subject_class(self):
+        for detector_says in ("insect", "apis", "osmia bicornis", "arthropod"):
+            taxa, how = ops.resolve_taxa(rows(detector_says, "flower"), "bee",
+                                         exclude=["flower"])
+            self.assertEqual(taxa, {detector_says}, detector_says)
+            self.assertEqual(how, "role")
+
+    def test_role_resolution_survives_renaming_the_reference_class(self):
+        taxa, how = ops.resolve_taxa(rows("insect", "petal"), "bee",
+                                     exclude=["petal"])
+
+        self.assertEqual((taxa, how), ({"insect"}, "role"))
+
+    def test_a_single_class_table_needs_no_sibling_to_resolve(self):
+        taxa, how = ops.resolve_taxa(rows("insect", "insect"), "bee")
+
+        self.assertEqual((taxa, how), ({"insect"}, "only"))
+
+    def test_a_genuinely_absent_class_is_still_reported_absent(self):
+        """Two classes, neither is a wasp, and no sibling claim disambiguates.
+        Handing back bees here would be worse than an empty answer."""
+        taxa, how = ops.resolve_taxa(rows("bee", "flower"), "wasp")
+
+        self.assertEqual((taxa, how), (set(), "absent"))
+
+    def test_a_sibling_claim_that_matches_nothing_does_not_resolve_by_role(self):
+        """If the excluded class is not in the table either, the exclusion says
+        nothing about which rows are ours."""
+        taxa, how = ops.resolve_taxa(rows("bee", "flower"), "wasp",
+                                     exclude=["beetle"])
+
+        self.assertEqual(how, "absent")
+
+    def test_an_unconfigured_branch_takes_everything(self):
+        taxa, how = ops.resolve_taxa(rows("bee", "flower"), "")
+
+        self.assertIsNone(taxa)
+
+    def test_the_filter_and_the_resolver_agree(self):
+        df = rows("insect", "flower", "insect")
+
+        kept = ops.filter_by_label(df, "bee", exclude=["flower"])
+
+        self.assertEqual(len(kept), 2)
+        self.assertEqual(set(kept["taxon"]), {"insect"})

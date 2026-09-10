@@ -402,10 +402,21 @@ def _analysis_inputs(step, run, context, inputs, index):
     tubes = [r for r in refs if r["id"] != "hotel"]
     refs = tubes or refs
 
-    df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
+    # What the reference branch claims, so the subject branch can be "the rest"
+    # when the detector's own class names differ from the configured ones. That
+    # is what makes the pipeline taxon-agnostic: renaming a class moves rows
+    # between branches by role, it does not empty one.
+    raw = ops.load_tracking_df(result)
+    taxa, taxa_how = ops.resolve_taxa(raw, _upstream_label(inputs),
+                                      exclude=[(roi or {}).get("label")])
+    df = ops.filter_by_label(raw, _upstream_label(inputs),
+                             exclude=[(roi or {}).get("label")])
     tidy = ops.normalized_tracks(df, scale) if df is not None else None
     fps, fps_source = ops.fps_with_source(result, video)
-    return tidy, refs, result, fps, fps_source, ref_source
+    return tidy, refs, result, fps, fps_source, ref_source, {
+        "taxa": sorted(taxa) if taxa else ([] if taxa == set() else None),
+        "how": taxa_how,
+    }
 
 
 def _frame_scale(run, result, video=None):
@@ -581,7 +592,7 @@ def _exec_analyze_events(step, run, context, inputs, index):
     """
     from . import ops, primitives
 
-    tidy, refs, result, fps, fps_source, ref_source = _analysis_inputs(
+    tidy, refs, result, fps, fps_source, ref_source, taxa = _analysis_inputs(
         step, run, context, inputs, index)
 
     rows = primitives.events_from_gpu(ops.load_events_df(result), fps)
@@ -595,6 +606,7 @@ def _exec_analyze_events(step, run, context, inputs, index):
         "artifact": "events", "table_kind": "events",
         "fps": fps, "fps_source": fps_source,
         "reference_source": ref_source, "reference_count": len(refs),
+        "taxa": taxa["taxa"], "taxa_source": taxa["how"],
         "csv": result.get("events_csv_path", ""),
         **primitives.summarize_events(rows),
     }
@@ -619,7 +631,7 @@ def _exec_analyze_interactions(step, run, context, inputs, index):
     """
     from . import ops, primitives
 
-    tidy, refs, result, fps, fps_source, ref_source = _analysis_inputs(
+    tidy, refs, result, fps, fps_source, ref_source, taxa = _analysis_inputs(
         step, run, context, inputs, index)
     want = (step.get("config") or {}).get("interaction_type", "all")
 
@@ -663,6 +675,7 @@ def _exec_analyze_interactions(step, run, context, inputs, index):
         "artifact": "table", "table_kind": "interactions",
         "fps": fps, "fps_source": fps_source,
         "reference_source": ref_source, "reference_count": len(refs),
+        "taxa": taxa["taxa"], "taxa_source": taxa["how"],
         "csv": result.get("interactions_csv_path", ""),
         **primitives.summarize_interactions(rows),
     }
@@ -821,7 +834,7 @@ def _exec_analyze_visitation(step, run, context, inputs, index):
     reference fallback without having to be rewired."""
     from . import ops
 
-    tidy, refs, result, fps, fps_source, ref_source = _analysis_inputs(
+    tidy, refs, result, fps, fps_source, ref_source, _taxa = _analysis_inputs(
         step, run, context, inputs, index)
     if tidy is not None:
         if not refs:

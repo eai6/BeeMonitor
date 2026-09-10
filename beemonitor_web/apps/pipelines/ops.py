@@ -722,49 +722,74 @@ def compute_colony_activity(tidy, boxes, fps, metric="occupancy", bin_sec=5.0):
     }
 
 
-def filter_by_label(df, label):
-    """Keep only rows whose taxon matches ``label`` (case-insensitive).
+def resolve_taxa(df, wanted, exclude=()):
+    """Which taxa in ``df`` belong to this branch. Returns ``(taxa, how)``.
 
-    This is what makes one GPU pass serve several Detect nodes: every node reads
-    the same table and takes its own class. An empty label means "no filter", and
-    a table with no taxon column is passed through unchanged rather than emptied —
-    older results predate the column, and silently returning nothing would look
-    like "no detections" instead of "can't tell".
+    A pipeline must not break because the detector calls the animal something
+    other than the node was configured with. The configured class is a
+    *preference*, resolved against the labels the table actually carries:
+
+    * ``"exact"``  — the configured class is in the table. Nothing to decide.
+    * ``"role"``   — it is not, but a sibling branch claims another class, so
+      this branch is what remains. A Detect(flower) node on the reference port
+      tells us the rest of the table is the subject, whatever it is called.
+    * ``"only"``   — it is not, and the table holds a single class. There is
+      nothing to separate, so that class is this branch.
+    * ``"absent"`` — several classes exist, none is the wanted one, and no
+      sibling claim narrows it down. Genuinely nothing here, and saying so
+      beats handing back bees when the question was wasps.
+
+    ``taxa`` of None means "take everything"; an empty set means "take nothing".
     """
-    if df is None or len(df) == 0 or not label:
-        return df
+    if df is None or len(df) == 0:
+        return None, "exact"
     col = _pick(df, ["taxon", "label", "class", "class_name"])
     if col is None:
-        return df
-    wanted = {p.strip().lower() for p in str(label).split(",") if p.strip()}
+        # Older results predate the column. Returning nothing would read as
+        # "no detections" instead of "can't tell".
+        return None, "exact"
+
+    wanted = {p.strip().lower() for p in str(wanted or "").split(",") if p.strip()}
     if not wanted:
-        return df
+        return None, "exact"
 
-    have = df[col].astype(str).str.strip().str.lower()
-    kept = df[have.isin(wanted)]
-    if len(kept):
-        return kept
+    have = set(df[col].astype(str).str.strip().str.lower().unique())
+    hit = wanted & have
+    if hit:
+        return hit, "exact"
 
-    # Nothing matched. Two very different situations wear the same result:
-    #
-    #  * the clip genuinely contains none of that class — a table holding bees
-    #    and nests, asked for wasps. Returning nothing is the honest answer.
-    #  * the detector labels its output with a different word than the Detect
-    #    node was configured with — a table entirely of "insect", asked for
-    #    "bee". Returning nothing there empties the whole analysis: the tracks
-    #    vanish, normalized_tracks sees an empty frame, every analyzer reports
-    #    "tracking CSV not available", and it reads as a quiet clip.
-    #
-    # A single-class table cannot be disambiguated by the filter, so it is the
-    # second case: pass it through and say so.
-    distinct = set(have.unique())
-    if len(distinct) == 1:
-        logger.warning(
-            "label filter: table is entirely %r but this branch asks for %r — "
-            "passing it through; the Detect node's class and the detector's "
-            "own labels disagree", next(iter(distinct)), sorted(wanted))
+    claimed = {p.strip().lower()
+               for label in (exclude or []) if label
+               for p in str(label).split(",") if p.strip()}
+    remainder = have - claimed
+    if (claimed & have) and remainder:
+        logger.info("label filter: %s not in the table; taking %s by role "
+                    "(%s claimed by another branch)", sorted(wanted),
+                    sorted(remainder), sorted(claimed & have))
+        return remainder, "role"
+
+    if len(have) == 1:
+        logger.info("label filter: table is entirely %s but this branch asks "
+                    "for %s — taking it", sorted(have), sorted(wanted))
+        return have, "only"
+
+    return set(), "absent"
+
+
+def filter_by_label(df, label, exclude=()):
+    """Keep only the rows belonging to this branch.
+
+    One GPU pass serves several Detect nodes, so "which rows are mine" has to be
+    decided somehow — but it must not be decided by a literal string the user
+    typed, or renaming a class silently empties every analyzer downstream of it.
+    ``resolve_taxa`` explains how the answer is reached.
+    """
+    taxa, _how = resolve_taxa(df, label, exclude)
+    if taxa is None:
         return df
-    return kept
+    col = _pick(df, ["taxon", "label", "class", "class_name"])
+    return df if col is None else df[
+        df[col].astype(str).str.strip().str.lower().isin(taxa)]
 
 
 def boxes_for_label(df, label, max_boxes=200):
