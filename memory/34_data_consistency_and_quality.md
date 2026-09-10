@@ -1,6 +1,7 @@
 # 34 — Data consistency & quality of analysis and visualisation
 
-**Status:** audit complete, plan for execution
+**Status:** Phases A and B shipped (`ceeb51b`, `a4a0a5c`, `d466359`, `c532c8a`).
+One operational step outstanding — see "What still needs doing" at the end.
 **Supersedes cost work.** Nothing in here is about $ or GPU throughput. The
 CPU-thread cap (`6a16579`) stays committed-but-undeployed; that is a separate
 thread and is not touched by any of this.
@@ -174,3 +175,57 @@ annotated video and crops; it does not mention the nest data.
   re-learned in Finding 5. Prefer explicit id sets or three-way counts.
 - **Ship honesty before cleverness.** Disclosing that visitors are summed
   beat implementing re-ID. Findings 3 and 4 follow the same rule.
+
+
+---
+
+## What actually shipped, and one thing it changed
+
+Finding 1 was **worse than the audit found**. The four drifting call sites were
+real, but so was a fifth failure they masked: the executors pass the whole GPU
+result to `ops.fps_of`, and `PipelineResult.to_dict()` is a plain `asdict()`, so
+`video_fps` sits nested under `summary_stats`. The resolver only checked the top
+level, found nothing, and assumed 30 for **every analyzer** — visitation dwell,
+colony-activity bins, detection windows — not just the batch page. The resolver
+now descends one level.
+
+Shipped:
+
+- `ops.fps_with_source()` — one resolver, reports `video` / `analysis` /
+  `assumed`; every call site through it; descends into `summary_stats`.
+- Ingest measures `fps`, `duration_seconds`, `width`, `height` in the decode
+  `videos.thumbnails` already performs. No extra I/O.
+- `backfill_video_props` for the existing library.
+- `recorded_at_source` at all four create sites; `Video.resolve_recorded_at`.
+- `analysis.chunk_stitch` — rejoins tracks cut by a chunk seam (greedy
+  best-IoU, a few frames of slack); `unique_tracks` counted from stitched rows;
+  `nest_bboxes` unioned instead of dropped; chunks record `start_frame`.
+- `aggregate.coverage_of()` — attempted / analysed / missing / assumed-fps,
+  rendered on the batch page as "from 3 of 12 clips (25%)" plus a note that
+  partial totals are a floor.
+- Trips split into `confirmed_trips` (same track id, same clip) and
+  `inferred_trips`; `same_track` in the CSV export.
+- Third triage bucket ("Not tagged") with a matching filter.
+
+569 tests pass, up from 530.
+
+## What still needs doing
+
+1. **Run the backfill against production** — nothing measured is retroactive:
+
+   ```
+   python manage.py backfill_video_props --dry-run --limit 20   # see the rates
+   python manage.py backfill_video_props
+   ```
+
+   It downloads each clip once, so use `--limit` on a large library. Until it
+   runs, existing clips keep resolving through the analysis value (correct where
+   a run recorded one) or the assumed default (now disclosed on the page).
+
+2. **Re-run the benchmark batch** after the backfill, so the durations on it are
+   computed at the measured rate. `batch_rerun` with the `fresh` flag already
+   exists for exactly this.
+
+3. **Not attempted, deliberately:** cross-clip visitor dedup. Track ids are
+   unique only within a decode, so recognising the same bee in two clips needs
+   re-identification. The honest disclosure stays in place instead.
