@@ -137,9 +137,10 @@ class ExtractionTests(TestCase):
         self.assertEqual(self.video.thumbnail_key, key)
         s3.upload_stream.assert_called_once()
 
-    def test_an_existing_thumbnail_is_not_re_extracted(self):
+    def test_a_fully_known_clip_is_not_touched_again(self):
         self.video.thumbnail_key = "thumbs/already.jpg"
-        self.video.save(update_fields=["thumbnail_key"])
+        self.video.fps, self.video.duration_seconds = 25.0, 12.0
+        self.video.save(update_fields=["thumbnail_key", "fps", "duration_seconds"])
         s3 = MagicMock()
 
         with patch("config.storage.get_s3_client", return_value=s3):
@@ -147,6 +148,38 @@ class ExtractionTests(TestCase):
 
         self.assertEqual(key, "thumbs/already.jpg")
         s3.download_file.assert_not_called()
+
+    def test_a_clip_with_a_still_but_no_measurements_is_still_probed(self):
+        """Having a thumbnail used to mean never learning the clip's length.
+
+        Every clip uploaded before the property probe existed has a still and
+        no fps or duration, so the early return made "unknown length" permanent
+        — which is why the batch page could not say how long anything was.
+        """
+        self.video.thumbnail_key = "thumbs/already.jpg"
+        self.video.save(update_fields=["thumbnail_key"])
+        s3 = MagicMock()
+
+        with patch.dict("sys.modules", {"cv2": fake_cv2(FakeCapture())}), \
+             patch("config.storage.get_s3_client", return_value=s3):
+            thumbnails.extract_thumbnail(self.video)
+
+        s3.download_file.assert_called_once()
+        self.video.refresh_from_db()
+        self.assertEqual(self.video.fps, 25.0)
+        self.assertEqual(self.video.duration_seconds, 12.0)
+
+    def test_probing_an_existing_still_does_not_re_upload_it(self):
+        self.video.thumbnail_key = "thumbs/already.jpg"
+        self.video.save(update_fields=["thumbnail_key"])
+        s3 = MagicMock()
+
+        with patch.dict("sys.modules", {"cv2": fake_cv2(FakeCapture())}), \
+             patch("config.storage.get_s3_client", return_value=s3):
+            key = thumbnails.extract_thumbnail(self.video)
+
+        self.assertEqual(key, "thumbs/already.jpg")
+        s3.upload_stream.assert_not_called()
 
     def test_a_clip_still_in_an_external_bucket_is_skipped(self):
         self.video.storage_key = "s3://someone-elses/clip.mp4"

@@ -45,9 +45,44 @@ ON_DEMAND_WAIT_SECONDS = float(os.environ.get("BEEMONITOR_THUMBNAIL_WAIT", "2.0"
 _slots = threading.BoundedSemaphore(ON_DEMAND_SLOTS)
 
 
+def _needs_probe(video) -> bool:
+    """True when we still don't know this clip's own basic properties.
+
+    Frame rate and duration are read from the container, so "we don't know how
+    long the video is" is a gap we can always close — not a limitation.
+    """
+    return not (getattr(video, "fps", None) and getattr(video, "duration_seconds", None))
+
+
+def probe_on_demand(video) -> None:
+    """Fill in a clip's measured properties in the background, if a slot is free.
+
+    Pages that want a clip's length call this when it is missing; the value
+    appears on a later load rather than blocking this one. Best-effort by
+    design — one S3 read, bounded by the same semaphore as thumbnails, and a
+    clip whose file cannot be read simply stays unknown.
+    """
+    import threading
+
+    if not _needs_probe(video) or not (video.storage_key or ""):
+        return
+
+    def _run():
+        if not _slots.acquire(timeout=0):
+            return                       # busy: a later page load will retry
+        try:
+            extract_thumbnail(video, force=False)
+        except Exception:
+            logger.exception("probe: failed for video %s", video.pk)
+        finally:
+            _slots.release()
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
 def extract_on_demand(video) -> str:
     """Extract now if a slot is free, else return "" and let the card retry."""
-    if not ON_DEMAND or video.thumbnail_key:
+    if not ON_DEMAND or (video.thumbnail_key and not _needs_probe(video)):
         return video.thumbnail_key
     if not _slots.acquire(timeout=ON_DEMAND_WAIT_SECONDS):
         logger.info("thumbnail: busy, deferring video %s", video.pk)
@@ -69,7 +104,10 @@ def extract_thumbnail(video, *, force: bool = False) -> str:
     Never raises: a clip without a usable still is a cosmetic loss, not a
     failed upload. Callers may fire this inline or from a worker.
     """
-    if video.thumbnail_key and not force:
+    # A clip may already have its still but predate the property probe, so the
+    # early return is conditional on BOTH being done — otherwise "we have a
+    # thumbnail" silently means "we will never learn this clip's length".
+    if video.thumbnail_key and not force and not _needs_probe(video):
         return video.thumbnail_key
 
     blob_path = video.storage_key or ""
@@ -94,6 +132,9 @@ def extract_thumbnail(video, *, force: bool = False) -> str:
         if frame is None:
             logger.info("thumbnail: no decodable frame in video %s", video.pk)
             return ""
+
+        if video.thumbnail_key and not force:
+            return video.thumbnail_key   # probed above; the still is already stored
 
         frame = _downscale(cv2, frame)
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])

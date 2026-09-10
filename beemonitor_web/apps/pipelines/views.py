@@ -815,6 +815,10 @@ def _trip_bounds(request):
         request.GET.get("min_sec"), request.GET.get("max_sec"))
 
 
+# How many clips may be probed for their measured properties per page render.
+PROBES_PER_RENDER = 8
+
+
 @login_required
 def batch_detail(request, batch_id):
     """Aggregate results for runs launched together: per-run status, combined
@@ -852,6 +856,23 @@ def batch_detail(request, batch_id):
     # prompt differently or use a different reference, and those are the
     # choices actually worth revisiting on a finished batch.
     rerun_videos = sorted({r["video"].pk for r in rows if r["video"]})
+
+    # A clip's length comes from its own file, so "unknown" is a gap we can
+    # close rather than a fact about the clip. Anything still missing is probed
+    # in the background and fills in on a later load.
+    #
+    # Capped per render: a 3,000-clip batch would otherwise spawn 3,000 threads
+    # that almost all immediately give up on the semaphore. A few per load
+    # drains a backlog over a handful of visits without ever being a spike, and
+    # `backfill_video_props` remains the way to do the whole library at once.
+    from apps.videos.thumbnails import probe_on_demand
+    probes = 0
+    for row in rows:
+        if probes >= PROBES_PER_RENDER:
+            break
+        if row["video"] and not row["video"].duration_seconds:
+            probe_on_demand(row["video"])
+            probes += 1
     rerun_pipelines = (Pipeline.objects
                        .filter(Q(user=request.user) | Q(is_template=True))
                        .exclude(pk=runs[0].pipeline_id if runs else None)
