@@ -465,6 +465,76 @@ def _proximity_radius(step):
         return ops.DEFAULT_PROXIMITY
 
 
+def _run_for_job(job):
+    """The PipelineRun that spawned this job, if one did.
+
+    There is no back-reference from Job, and the run records the job id inside
+    its context JSON. Narrowed to runs contemporaneous with the job — the run
+    that submitted it started moments before — so this stays a small scan
+    rather than every run the user ever launched.
+    """
+    from datetime import timedelta
+
+    from . import aggregate
+    from .models import PipelineRun
+
+    when = job.created_at
+    if not when:
+        return None
+    nearby = (PipelineRun.objects
+              .filter(user_id=job.user_id,
+                      started_at__gte=when - timedelta(days=1),
+                      started_at__lte=when + timedelta(days=1))
+              .order_by("-started_at")[:400])
+    for run in nearby:
+        if aggregate.run_job_id(run) == job.pk:
+            return run
+    return None
+
+
+def primitives_for_job(job, kind):
+    """Events or interactions for one job, however it was launched.
+
+    The per-clip results page shows a job, not a run, and used to render the
+    worker's own interactions CSV — so it disagreed with the batch export,
+    which computes the primitives. Two tables of the same clip saying different
+    things is worse than either being wrong on its own.
+
+    Prefers the real run, so a drawn ROI or a device layout is honoured. Falls
+    back to a synthetic one carrying just this job's result and video, which
+    resolves references from the detector's own boxes.
+    """
+    from .models import PipelineRun
+
+    result = getattr(job, "result", None)
+    if result is None:
+        return []
+
+    run = _run_for_job(job)
+    if run is None:
+        payload = {f: getattr(result, f, None) for f in (
+            "events_csv_path", "tracking_csv_path", "detections_csv_path",
+            "interactions_csv_path", "summary_stats", "unique_tracks",
+            "entry_count", "exit_count", "total_events", "interaction_count")}
+        run = PipelineRun(user_id=job.user_id)
+        # A reference.layout step so the clip's own hotel geometry is used —
+        # that is what a pipeline on this device would have resolved. When the
+        # device has no saved layout it resolves to nothing and the detector's
+        # own boxes take over, which is the right order of preference either
+        # way: the user's geometry is intent, a detection is a guess.
+        run.steps = [
+            {"id": "v", "block_type": "input.video",
+             "config": {"video_id": str(job.video_id)}},
+            {"id": "r", "block_type": "reference.layout",
+             "config": {"source": "device_layout"}, "inputs": {"video": "v"}},
+            {"id": "a", "block_type": "analyze.interactions", "config": {},
+             "inputs": {"tracks": "m", "rois": "r"}},
+        ]
+        run.context = {"v": {"artifact": "video", "video_id": job.video_id},
+                       "m": {"artifact": "tracks", "result": payload}}
+    return recompute_primitive(run, kind)
+
+
 def recompute_primitive(run, kind):
     """Events or interactions for a run whose analyzer never produced them.
 

@@ -10,6 +10,7 @@ from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
+from django.http import Http404, HttpResponse
 from django.views import View
 from django.views.generic import DetailView, FormView, ListView, TemplateView
 
@@ -1671,10 +1672,25 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         if foraging_path:
             ctx["foraging_csv_url"] = _generate_presigned_url(foraging_path)
 
-        # Load CSV data for display in tables
+        # Load CSV data for display in tables. Tracking is the worker's own
+        # file because for tracking the worker's file IS the answer.
         ctx["events_data"] = _load_csv_from_storage(events_path)
         ctx["tracking_data"] = _load_csv_from_storage(tracking_path)
-        ctx["interactions_data"] = _load_csv_from_storage(interactions_path)
+
+        # Events and interactions are computed, not read. Rendering the
+        # worker's interactions CSV here made this page disagree with the batch
+        # export of the same clip — and the worker matches an insect to a
+        # reference by centroid distance under a flat 50 px, so a bee inside a
+        # large flower is in neither its table nor this one.
+        from apps.pipelines import executors as pipeline_executors
+        from apps.pipelines import primitives
+
+        interaction_rows = pipeline_executors.primitives_for_job(job, "interactions")
+        ctx["interactions_data"] = _rows_as_table(
+            interaction_rows, primitives.INTERACTION_FIELDS)
+        event_rows = pipeline_executors.primitives_for_job(job, "events")
+        if event_rows:
+            ctx["events_data"] = _rows_as_table(event_rows, primitives.EVENT_FIELDS)
 
         # The base measurements this clip produced, not derived answers.
         # Entries/Exits/Nests/Trips were four ways of slicing the event table,
@@ -2391,6 +2407,64 @@ def _fetch_weather_data(start_date: str, end_date: str, lat: float = 40.79, lon:
     except Exception as e:
         logger.warning("Weather fetch failed: %s", e)
         return {"hourly": [], "daily": []}
+
+
+class JobPrimitiveCsvView(LoginRequiredMixin, View):
+    """The computed events/interactions for one clip, as CSV.
+
+    The page's own download used to hand back the worker's file while the table
+    above it showed the computed rows — the same clip, two different answers,
+    one click apart.
+    """
+
+    def get(self, request, pk, kind):
+        import csv as _csv
+
+        from apps.pipelines import executors as pipeline_executors
+        from apps.pipelines import primitives
+
+        if kind not in ("events", "interactions"):
+            raise Http404("Unknown table.")
+        job = get_object_or_404(Job, pk=pk)
+        if job.user_id != request.user.id and not Video.accessible(
+                request.user).filter(pk=job.video_id).exists():
+            raise Http404("No such job.")
+
+        rows = pipeline_executors.primitives_for_job(job, kind)
+        fields = (primitives.EVENT_FIELDS if kind == "events"
+                  else primitives.INTERACTION_FIELDS)
+        table = _rows_as_table(rows, fields)
+
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = (
+            f'attachment; filename="{kind}_job_{job.pk}.csv"')
+        writer = _csv.writer(response)
+        writer.writerow(table["headers"])
+        writer.writerows(table["rows"])
+        return response
+
+
+def _rows_as_table(rows, preferred_fields=()):
+    """Computed rows in the shape the CSV tables already render.
+
+    Columns follow the primitive's declared order, then anything an analyzer
+    added (b_label, min_distance) — dropping those on screen would make the
+    page show less than the download of the same thing.
+    """
+    if not rows:
+        return {"headers": [], "rows": [], "total": 0}
+    headers = [f for f in preferred_fields if any(f in r for r in rows)]
+    headers += [k for r in rows for k in r if k not in headers]
+    seen, ordered = set(), []
+    for h in headers:
+        if h not in seen:
+            seen.add(h)
+            ordered.append(h)
+    return {
+        "headers": ordered,
+        "rows": [[("" if r.get(h) is None else r.get(h)) for h in ordered] for r in rows],
+        "total": len(rows),
+    }
 
 
 def _load_csv_from_storage(blob_path: str, container: str = "processed") -> dict:
