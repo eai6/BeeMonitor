@@ -1074,9 +1074,7 @@ def _resolve_custom_models(cfg, run, config):
             model_pk = int(raw)
         except (TypeError, ValueError):
             return f"Invalid {label} model selection on this node."
-        cm = CustomModel.objects.filter(
-            pk=model_pk, user=run.user, is_active=True,
-        ).exclude(storage_key="").first()
+        cm = CustomModel.usable(run.user).filter(pk=model_pk).first()
         if not cm:
             return f"The selected {label} model is unavailable (removed or deactivated)."
         config[config_key] = cm.storage_key

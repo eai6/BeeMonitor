@@ -123,6 +123,36 @@ class CustomModel(models.Model):
     classes = models.JSONField(default=list)
     metrics = models.JSONField(default=dict, blank=True)
 
+    # ── Publishing ───────────────────────────────────────────────────────
+    class Visibility(models.TextChoices):
+        PRIVATE = "private", "Private"
+        PUBLIC = "public", "Public — anyone can use it in a pipeline"
+
+    visibility = models.CharField(
+        max_length=10, choices=Visibility.choices, default=Visibility.PRIVATE,
+    )
+    published_at = models.DateTimeField(null=True, blank=True)
+
+    @staticmethod
+    def usable(user):
+        """Models this user may run: their own, or anyone's published one.
+
+        Publishing a model is pointless if nobody can select it — the weights
+        already live in a bucket the workers read, so "public" means usable.
+        """
+        return CustomModel.objects.filter(
+            models.Q(user=user) | models.Q(visibility="public"),
+            is_active=True, status=CustomModel.Status.READY,
+        ).exclude(storage_key="").distinct()
+    # What the model was trained on, frozen at publish time. A model is an
+    # artefact of the data it saw: if the source project doubles afterwards the
+    # model did not change, and its card must not appear to say otherwise.
+    trained_on = models.JSONField(
+        default=dict, blank=True,
+        help_text="Project name, frame/box counts, hotels and hours at the time "
+                  "of training. A snapshot, never a live lookup.",
+    )
+
     class Status(models.TextChoices):
         READY = "ready", "Ready"
         TRAINING = "training", "Training"

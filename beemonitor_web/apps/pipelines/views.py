@@ -114,9 +114,9 @@ def pipeline_editor(request, pk):
         for v in _user_videos(request)
     ]
     from apps.training.models import CustomModel
-    ready_models = CustomModel.objects.filter(
-        user=request.user, is_active=True, status=CustomModel.Status.READY,
-    ).exclude(storage_key="")
+    # Published models included: the weights are already in a bucket the
+    # workers read, so publishing one is only meaningful if it can be selected.
+    ready_models = CustomModel.usable(request.user)
     # Same type filters as the New Analysis form's model selects.
     bee_models = [
         {"id": str(m.pk), "name": m.name}

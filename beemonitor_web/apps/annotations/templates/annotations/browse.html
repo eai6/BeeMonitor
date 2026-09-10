@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Shared publicly - BeeMonitor{% endblock %}
+
+{% comment %}
+  Datasets are copied, models are used — a dataset you build on has to be yours
+  to change, a model is an artefact you point a pipeline at.
+
+  Every card says what the thing COVERS, not just how big it is. 1,800 frames
+  from two hotels before lunch and 1,800 spread over four hotels and a full day
+  train very different models, and the frame count cannot tell them apart.
+{% endcomment %}
+
+{% block content %}
+<h1 class="text-2xl font-bold text-gray-900">Shared publicly</h1>
+<p class="text-sm text-gray-500 mt-1 mb-5 max-w-3xl leading-6">
+  Datasets and models other people have published. Take a copy of a dataset to build
+  on it, or select a model in your own pipeline — nothing you do here changes the
+  original.
+</p>
+
+<div class="flex gap-1.5 mb-4">
+  <a href="?tab=datasets" class="text-[12.5px] px-3.5 py-1.5 rounded-full border {% if tab != 'models' %}bg-amber-600 border-amber-600 text-white font-semibold{% else %}border-gray-300 text-gray-700 hover:bg-gray-50{% endif %}">Datasets {{ dataset_count }}</a>
+  <a href="?tab=models" class="text-[12.5px] px-3.5 py-1.5 rounded-full border {% if tab == 'models' %}bg-amber-600 border-amber-600 text-white font-semibold{% else %}border-gray-300 text-gray-700 hover:bg-gray-50{% endif %}">Models {{ model_count }}</a>
+</div>
+
+{% if tab != "models" %}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+  {% for d in datasets %}
+  <div class="bg-white shadow rounded-lg overflow-hidden">
+    <div class="p-4">
+      <h3 class="text-[15px] font-bold text-gray-900">{{ d.project.name }}</h3>
+      <p class="text-[11.5px] text-gray-500 mt-0.5">
+        {{ d.project.user.username }}{% if d.mine %} <span class="text-gray-400">(you)</span>{% endif %}
+        {% if d.project.published_at %} &middot; published {{ d.project.published_at|date:"j M Y" }}{% endif %}
+      </p>
+      {% if d.project.description %}
+      <p class="text-[12.5px] text-gray-600 mt-2 leading-5">{{ d.project.description|truncatechars:160 }}</p>
+      {% endif %}
+
+      <div class="flex flex-wrap gap-1 mt-2.5">
+        {% for c in d.summary.classes %}
+        <span class="text-[10.5px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full">{{ c }}</span>
+        {% endfor %}
+      </div>
+
+      <div class="flex gap-5 mt-3">
+        <div><b class="block text-base font-bold leading-tight">{{ d.summary.frames }}</b><span class="text-[10px] text-gray-500 uppercase tracking-wide">Frames</span></div>
+        <div><b class="block text-base font-bold leading-tight">{{ d.summary.boxes }}</b><span class="text-[10px] text-gray-500 uppercase tracking-wide">Boxes</span></div>
+        <div><b class="block text-base font-bold leading-tight">{{ d.summary.clips }}</b><span class="text-[10px] text-gray-500 uppercase tracking-wide">Clips</span></div>
+        <div><b class="block text-base font-bold leading-tight">{{ d.summary.devices }}</b><span class="text-[10px] text-gray-500 uppercase tracking-wide">Hotels</span></div>
+      </div>
+
+      {% if d.summary.hours %}
+      {% comment %}
+        How varied the data is, without saying where any of it was recorded —
+        the useful half and the safe half of the same fact.
+      {% endcomment %}
+      <p class="text-[11px] text-gray-400 mt-2.5">
+        Recorded between {{ d.summary.hours|first|stringformat:"02d" }}:00 and
+        {{ d.summary.hours|last|stringformat:"02d" }}:00
+        &middot; {{ d.summary.hours|length }} hour{{ d.summary.hours|length|pluralize }} of the day covered
+      </p>
+      {% endif %}
+    </div>
+    <div class="flex items-center gap-2 px-4 py-2.5 border-t border-gray-200">
+      <form method="post" action="{% url 'annotations:copy' d.project.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-3.5 py-1.5 rounded text-[12.5px] font-semibold">Take a copy</button>
+      </form>
+      {% if d.mine %}
+      <a href="{% url 'annotations:detail' d.project.pk %}" class="text-[12px] px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-50">Open</a>
+      {% endif %}
+      <span class="ml-auto text-[10.5px] text-gray-400">
+        {% if d.project.publish_metadata %}includes recording times{% else %}no site or time metadata{% endif %}
+      </span>
+    </div>
+  </div>
+  {% empty %}
+  <p class="text-sm text-gray-400">Nothing published yet.</p>
+  {% endfor %}
+</div>
+
+{% else %}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+  {% for m in models %}
+  <div class="bg-white shadow rounded-lg overflow-hidden">
+    <div class="p-4">
+      <h3 class="text-[15px] font-bold text-gray-900">
+        {{ m.name }}
+        <span class="text-[9.5px] font-bold bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full align-middle">{{ m.base_model|upper }}</span>
+      </h3>
+      <p class="text-[11.5px] text-gray-500 mt-0.5">
+        {{ m.user.username }}{% if m.published_at %} &middot; published {{ m.published_at|date:"j M Y" }}{% endif %}
+      </p>
+      <div class="flex flex-wrap gap-1 mt-2.5">
+        {% for c in m.classes %}
+        <span class="text-[10.5px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full">{{ c }}</span>
+        {% endfor %}
+      </div>
+
+      {% comment %}
+        The provenance is a SNAPSHOT taken at training time. A model is an
+        artefact of the data it saw: if the source project has doubled since,
+        the model did not change and its card must not appear to say otherwise.
+      {% endcomment %}
+      {% if m.trained_on %}
+      <p class="text-[11.5px] text-gray-500 mt-3 leading-5">
+        Trained on <b class="text-gray-700">{{ m.trained_on.project|default:"a project" }}</b>
+        as it stood on {{ m.trained_on.date|default:"the training date" }}
+        {% if m.trained_on.frames %}— {{ m.trained_on.frames }} frames{% endif %}
+        {% if m.trained_on.devices %} across {{ m.trained_on.devices }} hotel{{ m.trained_on.devices|pluralize }}{% endif %}.
+      </p>
+      {% endif %}
+    </div>
+    <div class="flex items-center gap-2 px-4 py-2.5 border-t border-gray-200">
+      <a href="{% url 'training:model_detail' m.pk %}" class="text-[12px] px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-50">Details</a>
+      <span class="ml-auto text-[10.5px] text-gray-400">{{ m.get_model_type_display }}</span>
+    </div>
+  </div>
+  {% empty %}
+  <p class="text-sm text-gray-400">No models published yet.</p>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

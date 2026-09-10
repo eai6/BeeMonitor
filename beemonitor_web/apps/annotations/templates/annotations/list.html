@@ -4,6 +4,7 @@
 {% block content %}
 <div class="flex justify-between items-center mb-6">
   <h1 class="text-2xl font-bold text-gray-900">Annotation Projects</h1>
+<a href="{% url 'annotations:browse' %}" class="text-sm text-amber-700 hover:underline">Shared publicly &rarr;</a>
   <a href="{% url 'annotations:create' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">New Project</a>
 </div>
 

@@ -12,6 +12,7 @@ urlpatterns = [
     path("models/", views.CustomModelListView.as_view(), name="models"),
     path("models/upload/", views.UploadModelView.as_view(), name="upload_model"),
     path("models/<int:pk>/", views.CustomModelDetailView.as_view(), name="model_detail"),
+    path("models/<int:pk>/publish/", views.PublishModelView.as_view(), name="model_publish"),
     # Domain-drift detection (DINOv3 on the SAM 3 endpoint) removed 2026-07-14
     # to cut g5 GPU spend; auto-adaptation stays (SAM 3 relabel + fine-tune).
     path("adapt/", views.AdaptationDashboardView.as_view(), name="adaptation"),

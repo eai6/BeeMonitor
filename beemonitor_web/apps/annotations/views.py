@@ -586,6 +586,94 @@ def person_colour(user_id):
     return PERSON_DOTS[(user_id or 0) % len(PERSON_DOTS)]
 
 
+class PublicBrowseView(LoginRequiredMixin, TemplateView):
+    """Datasets and models other people have published.
+
+    Datasets are COPIED, models are USED — a dataset you build on has to be
+    yours to change, a model is an artefact you point a pipeline at.
+    """
+
+    template_name = "annotations/browse.html"
+
+    def get_context_data(self, **kwargs):
+        from apps.training.models import CustomModel
+
+        from . import publishing
+
+        ctx = super().get_context_data(**kwargs)
+        tab = self.request.GET.get("tab") or "datasets"
+
+        datasets = []
+        for project in AnnotationProject.public()[:60]:
+            datasets.append({
+                "project": project,
+                "summary": publishing.summary(project),
+                "mine": project.user_id == self.request.user.id,
+            })
+
+        models = (CustomModel.objects
+                  .filter(visibility=CustomModel.Visibility.PUBLIC)
+                  .select_related("user").order_by("-published_at", "-id")[:60])
+
+        ctx.update({
+            "tab": tab,
+            "datasets": datasets,
+            "models": models,
+            "dataset_count": AnnotationProject.public().count(),
+            "model_count": CustomModel.objects.filter(
+                visibility=CustomModel.Visibility.PUBLIC).count(),
+        })
+        return ctx
+
+
+class PublishProjectView(LoginRequiredMixin, View):
+    """Publish or unpublish. Owner only — it is their data being offered."""
+
+    def post(self, request, pk):
+        from django.contrib import messages
+        from django.shortcuts import redirect
+
+        from . import publishing
+
+        project = get_object_or_404(AnnotationProject.owned(request.user), pk=pk)
+        if request.POST.get("visibility") == "public":
+            publishing.publish(
+                project, include_metadata=bool(request.POST.get("include_metadata")))
+            messages.success(
+                request,
+                "Published. Anyone signed in can now view it and take a copy — "
+                + ("recording times and site names are included."
+                   if project.publish_metadata
+                   else "recording times and site names are withheld."))
+        else:
+            publishing.unpublish(project)
+            messages.info(
+                request,
+                "No longer listed. Copies people already took are unaffected.")
+        return redirect("annotations:people", pk=pk)
+
+
+class CopyProjectView(LoginRequiredMixin, View):
+    """Take a copy of a published dataset into your own account."""
+
+    def post(self, request, pk):
+        from django.contrib import messages
+        from django.shortcuts import redirect
+
+        from . import publishing
+
+        source = get_object_or_404(
+            AnnotationProject, pk=pk,
+            visibility=AnnotationProject.Visibility.PUBLIC)
+        copy = publishing.copy_for(source, request.user,
+                                   name=(request.POST.get("name") or "").strip() or None)
+        messages.success(
+            request,
+            f"Copied “{source.name}” — {copy.annotations.count()} frame(s) are "
+            "yours to change. The original is untouched.")
+        return redirect("annotations:detail", pk=copy.pk)
+
+
 class ProjectPeopleView(LoginRequiredMixin, TemplateView):
     """Who is on this project, what they may do, and how far along they are.
 

@@ -571,6 +571,10 @@ def poll_training_jobs(user=None) -> dict:
                     "metrics": metrics,
                     "status": CustomModel.Status.READY,
                     "is_active": True,
+                    # Frozen provenance. A model is an artefact of the data it
+                    # saw: if the project doubles afterwards the model did not
+                    # change, so this is a snapshot and never a live lookup.
+                    "trained_on": _training_snapshot(job),
                 },
             )
             logger.info("[poll] job=%s COMPLETED -> CustomModel (%s)", job.pk, storage_key)
@@ -606,6 +610,30 @@ class CustomModelListView(LoginRequiredMixin, ListView):
 
     def get_queryset(self):
         return CustomModel.objects.filter(user=self.request.user).select_related("training_job")
+
+
+class PublishModelView(LoginRequiredMixin, View):
+    """Publish or withdraw a trained model. Owner only."""
+
+    def post(self, request, pk):
+        from django.contrib import messages
+        from django.shortcuts import get_object_or_404, redirect
+        from django.utils import timezone as _tz
+
+        model = get_object_or_404(CustomModel, pk=pk, user=request.user)
+        if request.POST.get("visibility") == "public":
+            model.visibility = CustomModel.Visibility.PUBLIC
+            model.published_at = model.published_at or _tz.now()
+            messages.success(
+                request,
+                f"“{model.name}” is public — anyone can select it in a pipeline. "
+                "Its card shows the data it was trained on, as it stood then.")
+        else:
+            model.visibility = CustomModel.Visibility.PRIVATE
+            messages.info(request, f"“{model.name}” is no longer listed. "
+                                   "Pipelines already using it keep working.")
+        model.save(update_fields=["visibility", "published_at"])
+        return redirect("training:model_detail", pk=pk)
 
 
 class CustomModelDetailView(LoginRequiredMixin, DetailView):
@@ -664,6 +692,37 @@ class UploadModelView(LoginRequiredMixin, FormView):
         logger.info("[upload] CustomModel created for user=%s name='%s'", self.request.user.pk, name)
         messages.success(self.request, f"Model '{name}' uploaded successfully.")
         return redirect("training:models")
+
+
+def _training_snapshot(job):
+    """What the project contained when this job trained on it.
+
+    Kept as a snapshot because a model's card must describe the data the model
+    actually saw. Reading the project live would silently restate the model's
+    coverage every time someone added a clip to the source.
+    """
+    from django.db.models import Count, Q
+    from django.utils import timezone as _tz
+
+    from apps.annotations.models import Annotation
+
+    project = job.project
+    if project is None:
+        return {}
+    rows = (Annotation.objects.filter(project=project).exclude(sampled_only=True)
+            .order_by().aggregate(frames=Count("id", filter=~Q(boxes=[]))))
+    videos = project.videos.all()
+    hours = sorted({v.hour for v in videos if v.hour is not None})
+    return {
+        "project": project.name,
+        "project_id": project.pk,
+        "date": _tz.now().date().isoformat(),
+        "frames": rows["frames"] or 0,
+        "clips": videos.count(),
+        "devices": videos.exclude(device=None).values("device_id").distinct().count(),
+        "hours": hours,
+        "classes": list(job.class_subset or project.classes or []),
+    }
 
 
 # --- Domain-drift detection (memory/25, P2c) --------------------------------

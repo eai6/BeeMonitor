@@ -1,6 +1,6 @@
 # 37 — Sharing annotation projects, and publishing them
 
-**Status:** mockups reviewed and approved, building.
+**Status:** built — phases 1-4 shipped.
 Canvas: https://claude.ai/code/artifact/96d31aa5-6b48-480f-acb6-2cfe70e6074c
 
 ## Two things, usually conflated
@@ -177,3 +177,72 @@ Their own workload, four numbers, and one button into the editor at the first
 unlabelled frame of their first unfinished clip. No GPU controls, no project
 settings, no footage. The common case is one click from opening the project to
 drawing a box.
+
+
+---
+
+## What shipped
+
+**Phase 1 — model and rules.** `ProjectShare` (viewer < annotator < reviewer <
+manager < owner, linear), `ClipAssignment` (per clip, unique per project), and
+four access scopes. Rules pinned as properties before any view was converted,
+because the failure mode is silent.
+
+**Phase 2 — the views.** ~20 owner-only lookups converted, each to the level
+that view needs. Three video lookups filtered on ownership and would have made
+every collaborator see an empty editor; they now require the clip to be in the
+project.
+
+**Phase 3 — the pages.** People page, per-clip assignment with round-robin
+distribution, claim-from-pool, and a collaborator's own landing view.
+
+**Phase 4 — publishing.** `visibility` on projects and models, a public browse,
+and copy-a-project.
+
+## Decisions taken during the build
+
+**Copies reference the original frames.** Confirmed safe first: deleting a
+project only cascades rows, and video deletion cleans raw video and job CSVs but
+never `frame_image_path`. So the JPEGs outlive both and a copy cannot break.
+The trade is orphaned frames accumulating in the processed bucket — a storage
+leak that already existed and is worth a sweeper eventually.
+
+**A copy does not attach the source clips.** A copy is a dataset — frames and
+boxes. Attaching the videos would hand over footage the copier was never
+shared, which is the property the whole sharing model protects.
+
+**A copy is not marked reviewed.** Carrying the flag over would claim someone
+signed off work they have never seen.
+
+**Attribution survives deletion.** `copied_from` is SET_NULL and
+`copied_from_name` is a string, so a copy that outlives its source still says
+where it came from.
+
+**Model provenance is frozen at training time.** `trained_on` is a snapshot —
+project name, frame count, clips, devices, hours. Reading it live would let a
+model trained on two hotels start claiming four the moment the project grew.
+
+**A public model is usable, not just visible.** `CustomModel.usable(user)`
+covers own-plus-published, and both the pipeline picker and the executor go
+through it; the weights already live in a bucket the workers read.
+
+## Found on the way
+
+**Dataset export was broken for everyone.** `ExportProjectView.get` re-imported
+`io` forty lines below its own `io.BytesIO()`, binding the name local for the
+whole function. `test_shadowed_imports` now walks every module for that
+pattern.
+
+**Three places offered what the rules refuse** — Sample/Auto-label rendered for
+everyone and 404'd; the project list offered Edit and Delete on other people's
+projects; the empty state told collaborators to use Auto-label. Gating the view
+is the security fix, gating the control is the usability one, and only the
+first is obvious while writing the view.
+
+## Still open
+
+- Orphaned frame objects are never swept from the processed bucket.
+- Public projects have no coverage map on their card yet (plan item 10) — the
+  device x hour grid from the picker would go straight in.
+- Nothing rate-limits copying, and a copy of a large project bulk-creates one
+  row per frame.

@@ -21,11 +21,57 @@ class AnnotationProject(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # ── Publishing ───────────────────────────────────────────────────────
+    class Visibility(models.TextChoices):
+        PRIVATE = "private", "Private — only people you share it with"
+        PUBLIC = "public", "Public — anyone can view and take a copy"
+
+    visibility = models.CharField(
+        max_length=10, choices=Visibility.choices, default=Visibility.PRIVATE,
+    )
+    published_at = models.DateTimeField(null=True, blank=True)
+    # Field metadata is off by default. Frames and boxes are the dataset;
+    # device, site and recording times are a field site's movement log, and
+    # publishing them should be a decision made once, knowingly.
+    publish_metadata = models.BooleanField(default=False)
+    # Where this project came from, when it is a copy of a public one. Kept as
+    # SET_NULL so the attribution survives the original being deleted — a copy
+    # that outlives its source should still say where it came from.
+    copied_from = models.ForeignKey(
+        "self", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="copies",
+    )
+    copied_from_name = models.CharField(max_length=200, blank=True)
+
     class Meta:
         ordering = ["-created_at"]
 
     def __str__(self):
         return self.name
+
+    @property
+    def is_public(self) -> bool:
+        return self.visibility == self.Visibility.PUBLIC
+
+    @staticmethod
+    def public():
+        """Everything published, newest first."""
+        return (AnnotationProject.objects
+                .filter(visibility=AnnotationProject.Visibility.PUBLIC)
+                .select_related("user").order_by("-published_at", "-created_at"))
+
+    @staticmethod
+    def readable(user):
+        """What this user may open: theirs, shared with them, or published.
+
+        The read scope for pages that serve public work as well as private —
+        ``accessible`` stays the private-only one so no existing caller widens
+        by accident.
+        """
+        return AnnotationProject.objects.filter(
+            models.Q(user=user) | models.Q(shares__user=user)
+            | models.Q(visibility=AnnotationProject.Visibility.PUBLIC)
+        ).distinct()
 
     # ── Access ───────────────────────────────────────────────────────────
     # Four scopes, each named after what it PERMITS, so a view picks the one
