@@ -1672,6 +1672,16 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         if foraging_path:
             ctx["foraging_csv_url"] = _generate_presigned_url(foraging_path)
 
+        # Raw detector output, before the tracker associated boxes into tracks.
+        # Offered only when the result recorded a path: unlike tracking, a run
+        # can legitimately produce no detections file, and presigning never
+        # checks existence — a constructed fallback would hand back a button
+        # that 404s, which reads as a broken download rather than a step that
+        # was never run.
+        if result.detections_csv_path:
+            ctx["detections_csv_url"] = _generate_presigned_url(
+                result.detections_csv_path)
+
         # Load CSV data for display in tables. Tracking is the worker's own
         # file because for tracking the worker's file IS the answer.
         ctx["events_data"] = _load_csv_from_storage(events_path)
