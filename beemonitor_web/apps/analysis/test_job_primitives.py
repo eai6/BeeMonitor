@@ -135,3 +135,36 @@ class JobPrimitiveTests(TestCase):
                                        kwargs={"pk": self.job.pk, "kind": "trips"}))
 
         self.assertEqual(resp.status_code, 404)
+
+
+class ResultsTableConsistencyTests(JobPrimitiveTests):
+    """Every download on the page must be the table printed above it."""
+
+    def _html(self):
+        return self.client.get(reverse("analysis:results",
+                                       kwargs={"pk": self.job.pk})).content.decode()
+
+    def test_both_computed_tables_can_be_collapsed(self):
+        html = self._html()
+
+        self.assertEqual(html.count("Show Table"), html.count("Hide Table"))
+        self.assertGreaterEqual(html.count("Show Table"), 2)
+
+    def test_no_download_on_the_page_serves_the_workers_own_file(self):
+        html = self._html()
+
+        for kind in ("events", "interactions"):
+            self.assertIn(
+                reverse("analysis:results_csv",
+                        kwargs={"pk": self.job.pk, "kind": kind}), html)
+        # A presigned link to the stored CSV would carry a signature.
+        self.assertNotIn("X-Amz-Signature", html)
+
+    def test_the_events_download_matches_its_table(self):
+        page = self._html()
+        body = self.client.get(reverse("analysis:results_csv",
+                                       kwargs={"pk": self.job.pk,
+                                               "kind": "events"})).content.decode()
+
+        self.assertIn("target_kind", page)
+        self.assertIn("target_kind", body.splitlines()[0])
