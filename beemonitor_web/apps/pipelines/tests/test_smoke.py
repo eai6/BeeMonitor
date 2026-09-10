@@ -48,12 +48,13 @@ class SmokeTests(TestCase):
                                  file_size_bytes=1, status=Video.Status.READY)
         proj.videos.add(v)
         html = self.client.get(f"/annotations/{proj.pk}/").content.decode()
-        # Step numbers now live in the headings, not the button labels.
-        self.assertIn(">Sample frames<", html)
-        self.assertIn("Auto-label all (GPU)", html)
-        # The cheap and expensive paths must stay distinguishable at a glance.
-        self.assertIn("No GPU", html)
-        self.assertIn("Uses GPU", html)
+        # Both actions live on the clip list they act on, not in a numbered bar.
+        self.assertIn("Sample <span", html)
+        self.assertIn("Auto-label <span", html)
+        # The cheap and the expensive path must stay distinguishable at a glance,
+        # and the expensive one must say what it is about to touch.
+        self.assertIn("GPU", html)
+        self.assertIn("runs sam 3 on a gpu", html.lower())
 
     def test_lessons_pages_render(self):
         self.assertEqual(self.client.get("/pipelines/lessons/").status_code, 200)

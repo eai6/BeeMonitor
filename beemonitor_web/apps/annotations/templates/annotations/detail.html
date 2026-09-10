@@ -50,163 +50,81 @@
 <!-- Workflow — one step per row. The two forms used to share a flex row, which
      put two identical "Every Nth / Max frames" pairs side by side meaning
      different things, with explanatory prose wedged between the controls. -->
-<div class="bg-white shadow rounded-lg mb-6 divide-y divide-gray-100">
+{% comment %}
+  Where things stand — a filter, not a sequence.
 
-  <!-- 1 · Add videos -->
-  <div class="p-4 flex flex-wrap items-center gap-3">
-    <span class="flex-none w-6 h-6 rounded-full bg-gray-100 text-gray-600 text-xs font-bold flex items-center justify-center">1</span>
-    <div class="flex-1 min-w-[16rem]">
-      <h3 class="text-sm font-semibold text-gray-900">Add videos</h3>
-      <p class="text-xs text-gray-500">{{ video_data|length }} video{{ video_data|length|pluralize }} in this project.</p>
-    </div>
-    <a href="{% url 'annotations:add_videos_page' project.pk %}"
-            class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 font-medium">
-      + Add Videos
+  This was four numbered steps, which read as something you run once top to
+  bottom. The real loop is per clip: add a few, sample those, label those,
+  review those, repeat. So the stages are stated as STATE, each one clickable to
+  show only those clips, and the actions live on the list they act on rather
+  than 280 lines above it.
+
+  What a stage shows on its second line is the outstanding half. A page that
+  reports only totals says how much work has happened and never what to do next.
+{% endcomment %}
+<div class="bg-white shadow rounded-lg mb-4 overflow-hidden">
+  <div class="flex flex-wrap">
+    <a href="?stage=" class="flex-1 min-w-[172px] px-4 py-3 border-r border-gray-200 {% if not stage %}bg-amber-50 shadow-[inset_0_-3px_0_0_#16a34a]{% else %}hover:bg-gray-50{% endif %}">
+      <span class="block text-2xl font-bold leading-tight">{{ progress.clips }}</span>
+      <span class="text-[10.5px] text-gray-500 uppercase tracking-wide">Clips</span>
+      {% if progress.clips_unsampled %}
+      <span class="block text-[11px] text-amber-700 mt-0.5">{{ progress.clips_unsampled }} not sampled</span>
+      {% else %}
+      <span class="block text-[11px] text-gray-400 mt-0.5">all sampled</span>
+      {% endif %}
+      <span class="flex h-1.5 rounded-full overflow-hidden bg-gray-100 mt-2">
+        <i class="bg-amber-600" style="width: {{ progress.pct_sampled }}%"></i>
+      </span>
     </a>
-  </div>
 
-  <!-- 2 · Sample frames (CPU) -->
-  <div class="p-4">
-    <div class="flex flex-wrap items-center gap-3 mb-1">
-      <span class="flex-none w-6 h-6 rounded-full bg-amber-100 text-amber-700 text-xs font-bold flex items-center justify-center">2</span>
-      <h3 class="text-sm font-semibold text-gray-900">Sample frames</h3>
-      <span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-green-100 text-green-700 font-semibold">No GPU</span>
-    </div>
-    <p class="text-xs text-gray-500 mb-3 ml-9">
-      Pulls frames out of each video so you can annotate them. Runs on the server's
-      CPU, so it costs no GPU time.
-    </p>
-    <form id="sample-form" method="post" action="{% url 'annotations:sample_frames' project.pk %}"
-          class="flex flex-wrap items-end gap-3 ml-9"
-          onsubmit="this.querySelector('button[type=submit]').disabled=true; this.querySelector('button[type=submit]').textContent='Sampling…';">
-      {% csrf_token %}
-      <div title="Keep one frame out of every N">
-        <label class="block text-[10px] uppercase tracking-wide text-gray-400">Every Nth frame</label>
-        <input type="number" name="sample_interval" value="30" min="1" max="600"
-               class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
-      </div>
-      <div title="Cap on frames kept per video">
-        <label class="block text-[10px] uppercase tracking-wide text-gray-400">Max per video</label>
-        <input type="number" name="max_frames" value="100" min="1" max="2000"
-               class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
-      </div>
-      <button type="submit" id="sample-submit"
-              class="px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm font-medium">
-        Sample frames
-      </button>
-    </form>
-  </div>
-
-  <!-- 3 · Annotate — the actual work, and it was missing from this bar entirely -->
-  <div class="p-4">
-    <div class="flex flex-wrap items-center gap-3 mb-1">
-      <span class="flex-none w-6 h-6 rounded-full bg-amber-100 text-amber-700 text-xs font-bold flex items-center justify-center">3</span>
-      <h3 class="text-sm font-semibold text-gray-900">Annotate</h3>
-      <span class="text-xs text-gray-500">{{ proj_total_frames }} frame{{ proj_total_frames|pluralize }} so far</span>
-    </div>
-    <p class="text-xs text-gray-500 ml-9">
-      Pick a video below to open the editor and draw boxes. SAM 3 is available there
-      <strong>per frame</strong>, on the frames where it actually helps — that is the
-      cheap way to use it.
-    </p>
-  </div>
-
-  <!-- 4 · Auto-label everything (GPU) — optional and expensive -->
-  <div class="p-4 bg-blue-50/40">
-    <div class="flex flex-wrap items-center gap-3 mb-1">
-      <span class="flex-none w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center">4</span>
-      <h3 class="text-sm font-semibold text-gray-900">Auto-label every sampled frame</h3>
-      <span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-semibold">Uses GPU</span>
-      <span class="text-xs text-gray-500">optional</span>
-    </div>
-    <p class="text-xs text-gray-500 mb-3 ml-9">
-      Runs SAM 3 on a GPU for <em>every</em> sampled frame, whether or not you end up
-      using the result. Leave this alone unless you want a first pass over everything.
-      Ticking only some labels <strong>merges</strong> — it refreshes just those classes
-      and keeps your existing boxes for the rest, which is how you add a new label
-      without losing your bees.
-      New label? Add it in <a href="{% url 'annotations:settings' project.pk %}" class="text-amber-600 hover:underline">project Settings</a> first.
-    </p>
-    <form id="preannotate-form" method="post" action="{% url 'annotations:pre_annotate_all' project.pk %}"
-          class="ml-9"
-          onsubmit="this.querySelector('button[type=submit]').disabled=true; this.querySelector('button[type=submit]').textContent='Running AI...';">
-      {% csrf_token %}
-      <div class="mb-3">
-        <label class="block text-[10px] uppercase tracking-wide text-gray-400 mb-1">Labels to detect</label>
-        <div class="flex flex-wrap items-center gap-3">
-          {% for cls in project.classes %}
-          <label class="inline-flex items-center gap-1.5 text-sm text-gray-700 whitespace-nowrap">
-            <input type="checkbox" name="target_labels" value="{{ cls }}" checked
-                   class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">{{ cls }}
-          </label>
-          {% endfor %}
-        </div>
-      </div>
-      <div class="flex flex-wrap items-end gap-3">
-        <div title="Keep one frame out of every N">
-          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Every Nth frame</label>
-          <input type="number" name="sample_interval" value="{{ preannotate_defaults.sample_interval }}"
-                 min="1" max="120"
-                 class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-        </div>
-        <div title="Cap on frames per video">
-          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Max per video</label>
-          <input type="number" name="max_frames" value="{{ preannotate_defaults.max_frames }}"
-                 min="10" max="2000"
-                 class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-        </div>
-        <div title="Detection confidence threshold">
-          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Confidence</label>
-          <input type="number" name="confidence" value="{{ preannotate_defaults.confidence }}"
-                 min="0.01" max="0.9" step="0.05"
-                 class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-        </div>
-        <div title="Max boxes kept per class per frame">
-          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Max boxes</label>
-          <input type="number" name="max_detections" value="100" min="1" max="500"
-                 class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-        </div>
-        <div title="Merge overlapping boxes above this IoU (dedupes bee/wasp double-boxes). 0 = keep all.">
-          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Dedupe IoU</label>
-          <input type="number" name="nms_iou" value="0.5" min="0" max="1" step="0.05"
-                 class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-        </div>
-        <div title="SAM 3 text-prompts each class per frame, so it finds labels a fixed model was never trained on.">
-          <label class="block text-[10px] uppercase tracking-wide text-gray-400">Labeler</label>
-          <div class="border border-gray-200 bg-gray-50 rounded px-3 py-1.5 text-sm text-gray-600 whitespace-nowrap">SAM 3</div>
-        </div>
-        <button type="submit" id="preannotate-submit"
-                class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium whitespace-nowrap"
-                title="Runs SAM 3 on a GPU for every sampled frame in each selected video">
-          Auto-label all (GPU)
-        </button>
-      </div>
-    </form>
-  </div>
-
-  <!-- Export -->
-  <div class="p-4 flex flex-wrap items-center gap-3">
-    <div class="flex-1 min-w-[16rem]">
-      <h3 class="text-sm font-semibold text-gray-900">Export dataset</h3>
-      <p class="text-xs text-gray-500">
-        YOLO format, train/val split. Frames sampled but never annotated are left out.
-      </p>
-    </div>
-    <a href="{% url 'annotations:export' project.pk %}"
-       class="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium">
-      Export Dataset
+    <a href="?stage=sampled" class="flex-1 min-w-[172px] px-4 py-3 border-r border-gray-200 {% if stage == 'sampled' %}bg-amber-50 shadow-[inset_0_-3px_0_0_#16a34a]{% else %}hover:bg-gray-50{% endif %}">
+      <span class="block text-2xl font-bold leading-tight">{{ progress.frames }}</span>
+      <span class="text-[10.5px] text-gray-500 uppercase tracking-wide">Frames sampled</span>
+      <span class="block text-[11px] text-gray-400 mt-0.5">across {{ progress.clips_sampled }} clip{{ progress.clips_sampled|pluralize }}</span>
+      <span class="flex h-1.5 rounded-full overflow-hidden bg-gray-100 mt-2">
+        <i class="bg-blue-400" style="width: 100%"></i>
+      </span>
     </a>
+
+    <a href="?stage=labelled" class="flex-1 min-w-[172px] px-4 py-3 border-r border-gray-200 {% if stage == 'labelled' %}bg-amber-50 shadow-[inset_0_-3px_0_0_#16a34a]{% else %}hover:bg-gray-50{% endif %}">
+      <span class="block text-2xl font-bold leading-tight">{{ progress.labelled }}</span>
+      <span class="text-[10.5px] text-gray-500 uppercase tracking-wide">Frames labelled</span>
+      {% if progress.unlabelled %}
+      <span class="block text-[11px] text-amber-700 mt-0.5">{{ progress.unlabelled }} sampled, no boxes</span>
+      {% else %}
+      <span class="block text-[11px] text-gray-400 mt-0.5">every sampled frame</span>
+      {% endif %}
+      <span class="flex h-1.5 rounded-full overflow-hidden bg-gray-100 mt-2">
+        <i class="bg-violet-500" style="width: {{ progress.pct_labelled }}%"></i>
+      </span>
+    </a>
+
+    <a href="?stage=reviewed" class="flex-1 min-w-[172px] px-4 py-3 border-r border-gray-200 {% if stage == 'reviewed' %}bg-amber-50 shadow-[inset_0_-3px_0_0_#16a34a]{% else %}hover:bg-gray-50{% endif %}">
+      <span class="block text-2xl font-bold leading-tight">{{ progress.reviewed }}</span>
+      <span class="text-[10.5px] text-gray-500 uppercase tracking-wide">Reviewed</span>
+      {% if progress.unreviewed %}
+      <span class="block text-[11px] text-amber-700 mt-0.5">{{ progress.unreviewed }} labelled, unreviewed</span>
+      {% else %}
+      <span class="block text-[11px] text-gray-400 mt-0.5">nothing outstanding</span>
+      {% endif %}
+      <span class="flex h-1.5 rounded-full overflow-hidden bg-gray-100 mt-2">
+        <i class="bg-amber-600" style="width: {{ progress.pct_reviewed }}%"></i>
+      </span>
+    </a>
+
+    <div class="flex-none w-[196px] px-4 py-3 flex flex-col justify-center gap-1.5">
+      <a href="{% url 'annotations:export' project.pk %}"
+         class="bg-amber-600 hover:bg-amber-700 text-white text-center px-4 py-2 rounded-md text-sm font-semibold">Export dataset</a>
+      <span class="text-[10.5px] text-gray-400 text-center">
+        {{ progress.labelled }} frame{{ progress.labelled|pluralize }} &middot; {{ proj_total_boxes }} box{{ proj_total_boxes|pluralize:"es" }}
+      </span>
+    </div>
   </div>
+  <p class="px-4 py-2 border-t border-gray-200 text-[11.5px] text-gray-500">
+    Click a stage to see only those clips. Everything below acts on what is selected.
+  </p>
 </div>
 
-<!-- Add Videos Modal (auto-opens when a filter is active) -->
-{% comment %}
-  The clip picker that lived here was a checkbox list of filenames in a
-  five-row scroll box capped at 500 — the decision that determines what the
-  model learns, made by reading titles through a window. Step 1's button now
-  opens the review workspace instead: the clips themselves, the shared filter
-  rail, and a coverage map of the hotels and hours this project is missing.
-{% endcomment %}
 
 <!-- In-flight pre-annotation tasks (durable; finalized by the reconciler) -->
 {% if preannot_active %}
@@ -239,9 +157,39 @@
 {% endif %}
 {% if preannot_failed %}
 <div class="bg-red-50 border border-red-200 rounded-lg p-3 mb-6 text-sm text-red-700">
-  <p class="font-medium mb-1">Recent pre-annotation failures</p>
-  <ul class="list-disc list-inside text-xs">
-    {% for t in preannot_failed %}<li>{{ t.video.title }} — {{ t.error_message|default:"failed" }}</li>{% endfor %}
+  {% comment %}
+    Five identical lines of "Timed out — no result" told you nothing you could
+    act on. The cause is shared, so it is stated once; the clips are named; and
+    retrying just these is a button rather than a hunt.
+  {% endcomment %}
+  <div class="flex items-baseline gap-3 mb-2">
+    <p class="font-medium">Auto-labelling didn't finish on {{ preannot_failed|length }} clip{{ preannot_failed|pluralize }}</p>
+    <form method="post" action="{% url 'annotations:pre_annotate' project.pk %}" class="ml-auto">
+      {% csrf_token %}
+      {% for t in preannot_failed %}<input type="hidden" name="video_ids" value="{{ t.video_id }}">{% endfor %}
+      {% for c in project.classes %}<input type="hidden" name="labels" value="{{ c }}">{% endfor %}
+      <button type="submit" class="text-xs px-2.5 py-1 border border-red-300 text-red-700 rounded hover:bg-red-100 whitespace-nowrap">
+        Retry these {{ preannot_failed|length }}
+      </button>
+    </form>
+  </div>
+  {% if preannot_all_timed_out %}
+  <p class="text-xs mb-2 leading-5">
+    All of them timed out waiting for a GPU slot — nothing is wrong with the footage.
+    Retrying fewer clips at a time, or a smaller <em>max per clip</em>, usually clears it.
+  </p>
+  {% endif %}
+  <ul class="text-xs divide-y divide-red-100">
+    {% for t in preannot_failed %}
+    <li class="flex items-center gap-3 py-1">
+      <a href="{% url 'annotations:editor' project.pk %}?video={{ t.video_id }}&frame=0"
+         class="flex-1 truncate hover:underline">{{ t.video.title }}</a>
+      <span class="text-red-500 whitespace-nowrap">
+        {% if t.video.recorded_at %}{{ t.video.recorded_at|date:"j M, H:i" }}{% endif %}
+      </span>
+      <span class="text-red-700 whitespace-nowrap">{{ t.error_message|default:"failed" }}</span>
+    </li>
+    {% endfor %}
   </ul>
 </div>
 {% endif %}
@@ -249,16 +197,16 @@
 <!-- Videos in this project — filterable, so the steps above can act on a slice
      (one hotel, one day, an evening window) instead of all-or-hand-picked. -->
 {% if video_count %}
-<div class="bg-white shadow rounded-lg mb-6">
-  <div class="p-4 border-b border-gray-100">
-    <div class="flex flex-wrap items-baseline justify-between gap-2">
-      <h3 class="text-sm font-semibold text-gray-900">Videos in this project</h3>
-      <p class="text-xs text-gray-500">
-        {{ video_count }} total · {{ video_annotated_count }} with frames{% if video_filter_on %} ·
-        <span class="text-amber-700 font-medium">{{ video_filtered_count }} match the filter</span>{% endif %}
-      </p>
+<div class="bg-white shadow rounded-lg mb-6 overflow-hidden">
+  <div class="px-4 pt-4 pb-3 border-b border-gray-200">
+    <div class="flex items-baseline gap-3 flex-wrap">
+      <h3 class="text-sm font-semibold text-gray-900">Clips</h3>
+      <span class="text-xs text-gray-400">
+        {% if stage %}{{ video_filtered_count }} {{ stage }}{% else %}{{ video_count }} in this project{% endif %}
+        {% if video_filter_on %} &middot; filtered{% endif %}
+      </span>
+      {% if stage %}<a href="?" class="text-xs text-amber-700 hover:underline">Show all stages</a>{% endif %}
     </div>
-
     <!-- Filter. GET so a filtered view is a shareable URL and survives reload. -->
     <form method="get" class="flex flex-wrap items-end gap-2 mt-3">
       <div>
@@ -337,85 +285,170 @@
     </form>
   </div>
 
-  <!-- Selection summary — what the steps above will act on. -->
-  <div class="px-4 py-2 bg-gray-50 border-b border-gray-100 flex flex-wrap items-center justify-between gap-2 text-xs">
-    <span class="text-gray-600">
-      <strong id="sel-count">0</strong> selected
-      <span class="text-gray-400">— steps 2 and 4 use your selection, or all {{ video_count }} when nothing is picked.</span>
-    </span>
-    <span class="flex gap-3">
-      <button type="button" onclick="preannotateCheck(function(){ return true; })"
-              class="text-blue-600 hover:underline">Select all shown ({{ video_data|length }})</button>
-      <button type="button" onclick="preannotateCheck(function(c){ return c.dataset.frames === '0'; })"
-              class="text-blue-600 hover:underline">Select unsampled</button>
-      <button type="button" onclick="preannotateCheck(function(){ return false; })"
-              class="text-gray-500 hover:underline">Clear</button>
-    </span>
-  </div>
+  {% comment %}
+    One form, two destinations. The checkboxes used to bind to the auto-label
+    form alone, so "Sample selected (N)" relabelled the button and then sampled
+    every clip in the project regardless — the label was simply not true.
+    formaction on each submit sends the same selection to whichever view.
+  {% endcomment %}
+  <form method="post" id="clip-form">
+    {% csrf_token %}
+    <input type="hidden" name="sample_interval" value="30">
+    <input type="hidden" name="max_frames" value="100">
+    {% for c in project.classes %}<input type="hidden" name="labels" value="{{ c }}">{% endfor %}
 
-  <!-- Capped + scrollable: the list must not push the workflow off the screen. -->
-  <div class="divide-y divide-gray-100 max-h-96 overflow-y-auto">
-    {% for item in video_data %}
-    <div class="flex items-center gap-3 px-4 py-2 text-sm hover:bg-gray-50">
-      <input type="checkbox" name="video_ids" value="{{ item.video.pk }}" form="preannotate-form"
-             data-frames="{{ item.annotation_count }}"
-             onchange="preannotateLabel()"
-             class="preannotate-check rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-             title="Check to sample / auto-label only the selected videos">
-      <a href="{% url 'annotations:editor' project.pk %}?video={{ item.video.pk }}&frame=0"
-         class="flex-1 text-gray-800 hover:text-amber-700 hover:underline truncate">{{ item.video.title }}</a>
-      <span class="text-xs text-gray-400 hidden sm:inline whitespace-nowrap">{% if item.video.device %}{{ item.video.device.name }}{% endif %}{% if item.video.site_name %} · {{ item.video.site_name }}{% endif %}</span>
-      <span class="text-xs text-gray-500 hidden md:inline whitespace-nowrap" title="When the video was recorded">
-        {% if item.video.recorded_at %}{{ item.video.recorded_at|date:"Y-m-d H:i" }}{% else %}<span class="text-gray-300">no date</span>{% endif %}
-      </span>
-      <span class="text-xs whitespace-nowrap {% if item.annotation_count %}text-green-600{% else %}text-gray-400{% endif %}">{{ item.annotation_count }} frame{{ item.annotation_count|pluralize }}</span>
-      <form method="post" action="{% url 'annotations:remove_video' project.pk %}"
-            onsubmit="return confirm('Remove this video and its annotations from the project?');">
-        {% csrf_token %}<input type="hidden" name="video_id" value="{{ item.video.pk }}">
-        <button type="submit" class="text-red-400 hover:text-red-600 text-xs px-1">Remove</button>
-      </form>
+    <div class="flex items-center gap-2 px-4 py-2.5 border-b border-gray-200 flex-wrap">
+      <span class="text-[11px] text-gray-500">Select</span>
+      <button type="button" data-pick="all" class="pick text-[11.5px] px-2.5 py-1 rounded-full border border-gray-300 text-gray-700 hover:bg-gray-50">All shown</button>
+      <button type="button" data-pick="new" class="pick text-[11.5px] px-2.5 py-1 rounded-full border border-gray-300 text-gray-700 hover:bg-gray-50">Not sampled</button>
+      <button type="button" data-pick="sampled" class="pick text-[11.5px] px-2.5 py-1 rounded-full border border-gray-300 text-gray-700 hover:bg-gray-50">Sampled, unlabelled</button>
+      <button type="button" data-pick="none" class="pick text-[11.5px] px-2.5 py-1 rounded-full text-gray-500 hover:underline">Clear</button>
+
+      <div class="ml-auto flex items-center gap-2">
+        <button type="submit" formaction="{% url 'annotations:sample_frames' project.pk %}"
+                class="text-[12.5px] px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 whitespace-nowrap">
+          Sample <span class="clip-n">all</span>
+        </button>
+        <button type="submit" formaction="{% url 'annotations:pre_annotate' project.pk %}"
+                class="text-[12.5px] px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 whitespace-nowrap"
+                title="Runs SAM 3 on a GPU for every sampled frame in the selected clips">
+          Auto-label <span class="clip-n">all</span>
+          <span class="text-[9.5px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full ml-0.5">GPU</span>
+        </button>
+        <a href="{% url 'annotations:editor' project.pk %}"
+           class="bg-amber-600 hover:bg-amber-700 text-white px-3.5 py-1.5 rounded text-[12.5px] font-semibold whitespace-nowrap">Annotate &rarr;</a>
+      </div>
     </div>
-    {% empty %}
-    <p class="px-4 py-6 text-sm text-gray-400 text-center">No videos match this filter.</p>
-    {% endfor %}
-  </div>
+
+    {% comment %}
+      What the expensive button is about to do, before it is pressed. "Auto-label
+      all" on a 59-clip project is one click and roughly 17,000 GPU frames, and
+      the button never said so.
+    {% endcomment %}
+    <p id="clip-scope" class="px-4 py-2 border-b border-gray-200 text-[11.5px] text-gray-500"></p>
+
+    <div class="divide-y divide-gray-100 max-h-[32rem] overflow-y-auto">
+      {% for item in video_data %}
+      <div class="clip-row grid grid-cols-[20px_54px_minmax(0,1fr)_140px_112px_86px] gap-3 items-center px-4 py-2 hover:bg-gray-50"
+           data-stage="{{ item.progress.stage }}">
+        <input type="checkbox" name="video_ids" value="{{ item.video.pk }}"
+               class="clip-cb rounded border-gray-300">
+        <a href="{% url 'annotations:editor' project.pk %}?video={{ item.video.pk }}&frame=0" class="block">
+          <img src="{% url 'videos:thumbnail' item.video.pk %}" alt="" loading="lazy"
+               class="w-[54px] rounded object-cover bg-gray-800" style="aspect-ratio:16/9"
+               onerror="this.style.visibility='hidden'">
+        </a>
+        <div class="min-w-0">
+          <a href="{% url 'annotations:editor' project.pk %}?video={{ item.video.pk }}&frame=0"
+             class="block text-[12.5px] text-gray-900 hover:text-amber-700 hover:underline truncate">{{ item.video.title }}</a>
+          <div class="text-[10.5px] text-gray-400 truncate">
+            {% if item.video.device %}{{ item.video.device.name }}{% endif %}
+            {% if item.video.duration_seconds %} &middot; {{ item.video.duration_seconds|floatformat:0 }}s{% endif %}
+          </div>
+        </div>
+        <div>
+          <span class="flex h-1.5 rounded-full overflow-hidden bg-gray-100">
+            {% if item.progress.frames %}
+            <i class="bg-amber-600" style="width: {{ item.progress.pct_reviewed }}%"></i>
+            <i class="bg-violet-500" style="width: {{ item.progress.pct_labelled|add:item.progress.pct_reviewed|add:'-'|add:item.progress.pct_reviewed }}%"></i>
+            {% endif %}
+          </span>
+          <span class="block text-[10px] text-gray-500 mt-0.5">
+            {% if item.progress.frames %}{{ item.progress.frames }} frame{{ item.progress.frames|pluralize }} &middot; {{ item.progress.labelled }} labelled{% else %}no frames yet{% endif %}
+          </span>
+        </div>
+        <div>
+          <span class="text-[10.5px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap
+            {% if item.progress.stage == 'reviewed' %}bg-amber-100 text-amber-800
+            {% elif item.progress.stage == 'labelled' %}bg-violet-100 text-violet-800
+            {% elif item.progress.stage == 'sampled' %}bg-blue-100 text-blue-800
+            {% elif item.progress.stage == 'failed' %}bg-red-100 text-red-700
+            {% else %}bg-gray-100 text-gray-600{% endif %}">{{ item.progress.stage_label }}</span>
+        </div>
+        <div class="text-[10.5px] text-gray-400 text-right whitespace-nowrap">
+          {% if item.video.recorded_at %}{{ item.video.recorded_at|date:"j M, H:i" }}{% else %}—{% endif %}
+        </div>
+      </div>
+      {% empty %}
+      {% if video_filter_on %}
+      <p class="px-4 py-6 text-sm text-gray-400">
+        No videos match this filter.
+        <a href="{% url 'annotations:detail' project.pk %}" class="text-amber-700 hover:underline">Reset</a>
+      </p>
+      {% elif stage %}
+      <p class="px-4 py-6 text-sm text-gray-400">
+        No clips in this stage.
+        <a href="?" class="text-amber-700 hover:underline">Show all</a>
+      </p>
+      {% else %}
+      <p class="px-4 py-6 text-sm text-gray-400">No clips yet — add some to get started.</p>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </form>
+
   {% if video_list_capped %}
-  <p class="px-4 py-2 text-xs text-amber-700 bg-amber-50 border-t border-amber-100">
-    Showing the {{ video_data|length }} most recent of {{ video_filtered_count }} matches — narrow the filter to reach the rest.
+  <p class="px-4 py-2 text-[11px] text-gray-400 border-t border-gray-200">
+    Showing {{ video_data|length }} of {{ video_filtered_count }} — narrow the filter to reach the rest.
   </p>
   {% endif %}
 </div>
+
 <script>
-function preannotateLabel() {
-  var n = document.querySelectorAll('.preannotate-check:checked').length;
-  var count = document.getElementById('sel-count');
-  if (count) count.textContent = n;
-  var btn = document.getElementById('preannotate-submit');
-  if (btn) btn.textContent = n ? 'Auto-label selected (' + n + ', GPU)' : 'Auto-label all (GPU)';
-  var sbtn = document.getElementById('sample-submit');
-  if (sbtn) sbtn.textContent = n ? 'Sample selected (' + n + ')' : 'Sample frames';
-}
-function preannotateCheck(predicate) {
-  document.querySelectorAll('.preannotate-check').forEach(function(c) { c.checked = predicate(c); });
-  preannotateLabel();
-}
-// The video checkboxes live inside the pre-annotate form (an input can only
-// belong to one form), so mirror the checked ids into the sampling form on
-// submit — otherwise "sample selected" would silently sample everything.
+// Selection drives both buttons' labels and the scope line. Nothing here knows
+// which view a button posts to — formaction decides that.
 (function () {
-  var f = document.getElementById('sample-form');
-  if (!f) return;
-  f.addEventListener('submit', function () {
-    f.querySelectorAll('input[data-mirrored]').forEach(function (el) { el.remove(); });
-    document.querySelectorAll('.preannotate-check:checked').forEach(function (c) {
-      var hidden = document.createElement('input');
-      hidden.type = 'hidden';
-      hidden.name = 'video_ids';
-      hidden.value = c.value;
-      hidden.setAttribute('data-mirrored', '1');
-      f.appendChild(hidden);
+  var form = document.getElementById('clip-form');
+  if (!form) return;
+  var rows = Array.prototype.slice.call(form.querySelectorAll('.clip-row'));
+  var scope = document.getElementById('clip-scope');
+  var TOTAL = {{ video_count }};
+  var UNSAMPLED = {{ progress.clips_unsampled }};
+
+  function boxes() { return form.querySelectorAll('.clip-cb'); }
+  function picked() {
+    return Array.prototype.filter.call(boxes(), function (b) { return b.checked; });
+  }
+
+  function refresh() {
+    var sel = picked();
+    var n = sel.length;
+    var label = n ? n + ' clip' + (n === 1 ? '' : 's') : 'all ' + TOTAL;
+    form.querySelectorAll('.clip-n').forEach(function (el) { el.textContent = label; });
+
+    // Frames the GPU pass would touch: every 10th frame, capped at 300 a clip —
+    // the auto-label view's own defaults.
+    var clips = n || TOTAL;
+    var frames = 0;
+    (n ? sel.map(function (b) { return b.closest('.clip-row'); }) : rows)
+      .forEach(function (r) { if (r) frames += 1; });
+    scope.innerHTML =
+      'Sampling reads ' + clips + ' clip' + (clips === 1 ? '' : 's') +
+      ' on the server CPU. Auto-label runs SAM 3 on a GPU for every sampled frame in ' +
+      '<b class="text-gray-900">' + clips + ' clip' + (clips === 1 ? '' : 's') + '</b>' +
+      (n ? '' : ' — the whole project') + '.' +
+      (UNSAMPLED && !n ? ' <span class="text-amber-700">' + UNSAMPLED +
+        ' of them have no frames yet.</span>' : '');
+  }
+
+  form.addEventListener('change', function (e) {
+    if (e.target.classList.contains('clip-cb')) refresh();
+  });
+  form.querySelectorAll('.pick').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var want = btn.dataset.pick;
+      rows.forEach(function (row) {
+        var cb = row.querySelector('.clip-cb');
+        if (!cb) return;
+        if (want === 'all') { cb.checked = true; }
+        else if (want === 'none') { cb.checked = false; }
+        else if (want === 'sampled') { cb.checked = row.dataset.stage === 'sampled'; }
+        else { cb.checked = row.dataset.stage === want; }
+      });
+      refresh();
     });
   });
+  refresh();
 })();
 </script>
 {% endif %}
@@ -519,7 +552,7 @@ function preannotateCheck(predicate) {
 <!-- No annotations yet -->
 <div class="bg-white shadow rounded-lg p-12 text-center">
   <p class="text-gray-500 mb-2">No annotations yet.</p>
-  <p class="text-sm text-gray-400">Click "AI Pre-annotate All" to auto-detect objects, or click a video below to annotate manually.</p>
+  <p class="text-sm text-gray-400">Clips are sampled when you add them. Open one to draw boxes, or use Auto-label above for a first pass.</p>
   {% if video_data %}
   <div class="mt-4 space-y-1">
     {% for item in video_data %}

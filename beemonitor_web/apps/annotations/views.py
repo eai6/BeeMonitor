@@ -240,6 +240,10 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         )
         ctx["preannot_active"] = active
         ctx["preannot_failed"] = recent_failed
+        # One shared cause is worth stating once, above the list, instead of
+        # repeating it on every line and leaving the reader to notice.
+        ctx["preannot_all_timed_out"] = bool(recent_failed) and all(
+            "timed out" in (t.error_message or "").lower() for t in recent_failed)
 
         from django.db.models import Count, Q as _Q
 
@@ -303,10 +307,32 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         filtered.sort(key=lambda v: (v.recorded_at is None, v.recorded_at, v.pk),
                       reverse=True)
 
+        # Where each clip has actually got to. One aggregate, not a count per
+        # clip — and the stage is what the page filters and acts on.
+        from . import progress as progress_mod
+
+        failed_ids = {t.video_id for t in ctx.get("preannot_failed") or []}
+        states = progress_mod.per_video(self.object, failed_ids)
+        stage = (self.request.GET.get("stage") or "").strip()
+        if stage in progress_mod.STAGE_LABELS:
+            if stage == "new":
+                # These clips have no annotation rows to aggregate, so they are
+                # the ones the aggregate never saw.
+                filtered = [v for v in filtered
+                            if not states.get(v.pk, {}).get("frames")
+                            and v.pk not in failed_ids]
+            else:
+                wanted = progress_mod.filter_ids(states, len(counted), stage)
+                filtered = [v for v in filtered if v.pk in wanted]
+
         VIDEO_LIST_CAP = 500
-        shown = filtered[:VIDEO_LIST_CAP]
-        ctx["video_data"] = [{"video": v, "annotation_count": v.annotation_count}
+        shown = progress_mod.decorate(filtered[:VIDEO_LIST_CAP], states, failed_ids)
+        ctx["video_data"] = [{"video": v, "annotation_count": v.annotation_count,
+                              "progress": v.progress}
                              for v in shown]
+        ctx["stage"] = stage
+        ctx["progress"] = progress_mod.summary(
+            self.object, states, len(counted), failed_ids)
         ctx["video_filter"] = vf
         ctx["video_filter_on"] = any(vf.values())
         ctx["video_filtered_count"] = len(filtered)
@@ -589,13 +615,31 @@ class AddVideosView(LoginRequiredMixin, View):
         # Accessible, not owned: the picker lists clips from shared devices, so
         # restricting the add to owned ones silently drops half a selection.
         videos = Video.accessible(request.user).filter(pk__in=video_ids)
-        added = 0
+        added_videos = []
         for video in videos:
             if not project.videos.filter(pk=video.pk).exists():
                 project.videos.add(video)
-                added += 1
+                added_videos.append(video)
+        added = len(added_videos)
 
-        messages.success(request, f"Added {added} video(s) to project.")
+        # Sample them straight away. Adding a clip and then remembering to
+        # sample it were two steps that always ran together, and forgetting the
+        # second left the clip looking added-but-empty with nothing saying why.
+        # Re-sampling with different knobs stays available on the project page.
+        from . import sampling
+        from .models import FrameSamplingTask
+
+        params = sampling.clamp_params({})
+        for video in added_videos:
+            task = FrameSamplingTask.objects.create(
+                user=request.user, project=project, video=video, params=params)
+            sampling.spawn_sampling_async(task.pk)
+
+        messages.success(
+            request,
+            f"Added {added} clip(s) and started sampling them — up to "
+            f"{params['max_frames']} frames each, every "
+            f"{params['sample_interval']} frames. Frames appear as they finish.")
         return redirect("annotations:detail", pk=pk)
 
 
