@@ -72,9 +72,11 @@
   <div class="flex items-center gap-2">
     <a href="{% url 'pipelines:open_in_colab' pk=pipeline.pk %}" target="_blank" rel="noopener" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-md text-sm font-medium" title="Open a live, runnable notebook in Google Colab">▶ Open in Colab</a>
     <span id="pl-dirty" class="hidden text-xs text-amber-600" title="You have unsaved changes">● unsaved</span>
-    {# Running happens on the Processing page, where clips are chosen: a run
-       launched from here has no video selected, so it could only ever fail or
-       silently pick one for you. The editor's job is the graph. #}
+    {% comment %}
+      Running happens on the Processing page, where clips are chosen: a run
+      launched from here has no video selected, so it could only ever fail or
+      silently pick one for you. The editor's job is the graph.
+    {% endcomment %}
     <button type="button" onclick="plSave()" class="bg-amber-600 hover:bg-amber-700 text-white px-5 py-2 rounded-md text-sm font-semibold">💾 Save</button>
   </div>
 </div>
