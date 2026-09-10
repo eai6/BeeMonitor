@@ -399,6 +399,19 @@ def _gap_frames(step, default=15):
         return default
 
 
+def _proximity_radius(step):
+    """Insect-to-insect radius, config'd as a percent of frame width."""
+    from . import ops
+
+    raw = (step.get("config") or {}).get("proximity_percent")
+    if raw in (None, ""):
+        return ops.DEFAULT_PROXIMITY
+    try:
+        return max(float(raw), 0.0) / 100.0
+    except (TypeError, ValueError):
+        return ops.DEFAULT_PROXIMITY
+
+
 def _exec_analyze_events(step, run, context, inputs, index):
     """Primitive 1 — every boundary crossing in the clip.
 
@@ -448,14 +461,34 @@ def _exec_analyze_interactions(step, run, context, inputs, index):
         step, run, context, inputs, index)
     want = (step.get("config") or {}).get("interaction_type", "all")
 
+    gap = _gap_frames(step)
     rows = primitives.interactions_from_gpu(ops.load_interactions_df(result), fps)
-    # The worker also emits its own organism-to-reference rows against detected
-    # nests. When the user defined references, theirs are the answer and the
-    # worker's would double-count the same episodes.
-    if tidy is not None and refs:
-        rows = [r for r in rows if r["b_kind"] != primitives.REFERENCE]
-        episodes = ops.compute_episodes(tidy, refs, gap_frames=_gap_frames(step))
-        rows = primitives.interactions_from_episodes(episodes, fps) + rows
+
+    if tidy is not None:
+        # Both halves are computed here when the tracks are readable, so the
+        # whole table honours one gap tolerance and one set of thresholds. The
+        # worker's rows are the fallback for jobs whose tracking CSV is gone.
+        #
+        # This is also a correctness fix, not just tidiness: the worker matches
+        # an insect to a reference by centroid-to-centroid distance under a flat
+        # 50 px, which discards the reference's size entirely. A bee sitting on
+        # the edge of a 400 px flower is 200 px from its centre and was simply
+        # never recorded — visibly inside the box in the annotated video, absent
+        # from the table. compute_episodes asks containment instead.
+        local = []
+        if refs:
+            local += primitives.interactions_from_episodes(
+                ops.compute_episodes(tidy, refs, gap_frames=gap), fps)
+        local += primitives.interactions_from_proximity(
+            ops.compute_proximity_episodes(
+                tidy, radius=_proximity_radius(step), gap_frames=gap,
+                aspect=ops.frame_aspect(result.get("summary_stats") or result)),
+            fps)
+        # Keep only what the local pass could not produce: reference rows when
+        # no reference was defined, and nothing else.
+        keep_gpu = [r for r in rows
+                    if r["b_kind"] == primitives.REFERENCE and not refs]
+        rows = local + keep_gpu
 
     if want == "organism_organism":
         rows = [r for r in rows if r["b_kind"] == primitives.ORGANISM]

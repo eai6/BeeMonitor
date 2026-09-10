@@ -521,6 +521,20 @@ BLOCK_REGISTRY = {
                 "default": 15,
                 "choices": None,
             },
+            {
+                # Insect-to-insect only. Insect-to-reference asks containment,
+                # which needs no radius — a bee is inside the flower or it is
+                # not. Expressed as a percent of frame width so the same
+                # setting means the same real distance at any resolution; a
+                # pixel count silently changes meaning between a 1080p clip
+                # and a 4K one.
+                "name": "proximity_percent",
+                "label": "Insect ↔ insect radius (% of frame width)",
+                "field_type": "number",
+                "required": False,
+                "default": 5,
+                "choices": None,
+            },
         ],
     },
     "analyze.foraging_trips": {

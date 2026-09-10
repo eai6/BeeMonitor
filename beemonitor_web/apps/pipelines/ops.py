@@ -408,6 +408,105 @@ def compute_episodes(tidy, refs, gap_frames=15):
     return episodes
 
 
+# Proximity radius as a fraction of FRAME WIDTH, not pixels.
+#
+# The worker's InteractionAnalyzer uses a flat 50 px, which means the same
+# setting describes a different real distance at every resolution — and after
+# the tracks are normalised to 0..1 there are no pixels left to compare against
+# anyway. A fraction of the frame is the only threshold that means the same
+# thing on a 1080p clip and a 4K one.
+#
+# 5% of frame width is roughly two body lengths for a bee filling ~2% of the
+# frame: close enough to be an encounter, not so close that only overlapping
+# boxes qualify.
+DEFAULT_PROXIMITY = 0.05
+
+# Frames with more tracks than this are skipped for pairwise proximity: the
+# work is quadratic, and a frame with hundreds of detections is a detector
+# failure rather than a swarm worth measuring.
+_MAX_PAIRWISE_TRACKS = 200
+
+
+def frame_aspect(summary=None, default=16 / 9):
+    """Frame width ÷ height, for un-squashing normalised coordinates.
+
+    ``normalized_tracks`` divides x by width and y by height *separately*, so a
+    circle in pixel space becomes an ellipse in normalised space. Scaling y back
+    by the aspect ratio restores a true Euclidean distance, expressed in
+    fractions of frame width.
+    """
+    for w_key, h_key in (("frame_width", "frame_height"), ("width", "height"),
+                         ("res_width", "res_height"), ("video_width", "video_height")):
+        w = (summary or {}).get(w_key)
+        h = (summary or {}).get(h_key)
+        try:
+            if w and h and float(h) > 0:
+                return float(w) / float(h)
+        except (TypeError, ValueError):
+            continue
+    return default
+
+
+def compute_proximity_episodes(tidy, radius=DEFAULT_PROXIMITY, gap_frames=15,
+                               aspect=16 / 9):
+    """Contiguous spells two tracks spend within ``radius`` of each other.
+
+    The organism-to-organism half of the interaction table. Unlike containment
+    in a reference, a distance threshold genuinely is the right model here —
+    two bees have no boundary to be inside of — but the threshold has to be
+    resolution-independent to mean anything, hence a fraction of frame width
+    rather than a pixel count.
+
+    Returns episodes shaped like ``compute_episodes``' output, so both halves of
+    the table are built the same way and honour the same gap tolerance.
+    """
+    import numpy as np
+
+    if tidy is None or len(tidy) == 0 or radius <= 0:
+        return []
+
+    open_eps = {}
+    episodes = []
+    for frame, grp in tidy.sort_values("frame").groupby("frame"):
+        frame = int(frame)
+        if len(grp) < 2 or len(grp) > _MAX_PAIRWISE_TRACKS:
+            continue
+        ids = list(grp["tid"])
+        # y is scaled back up by the aspect ratio so both axes are in units of
+        # frame width and the distance below is a real circle.
+        pts = np.column_stack([
+            np.asarray(grp["x"], dtype=float),
+            np.asarray(grp["y"], dtype=float) / float(aspect or 1.0),
+        ])
+        deltas = pts[:, None, :] - pts[None, :, :]
+        dists = np.sqrt((deltas ** 2).sum(axis=-1))
+
+        close_i, close_j = np.where(dists <= radius)
+        for i, j in zip(close_i, close_j):
+            if i >= j:
+                continue  # each unordered pair once
+            a, b = _as_native(ids[i]), _as_native(ids[j])
+            key = (str(a), str(b)) if str(a) <= str(b) else (str(b), str(a))
+            open_ep = open_eps.get(key)
+            if open_ep is None or frame - open_ep["end_frame"] > gap_frames:
+                open_ep = {
+                    "track": a if key[0] == str(a) else b,
+                    "partner": b if key[0] == str(a) else a,
+                    "start_frame": frame,
+                    "end_frame": frame,
+                    "frames": 0,
+                    "min_distance": float(dists[i, j]),
+                }
+                open_eps[key] = open_ep
+                episodes.append(open_ep)
+            open_ep["end_frame"] = frame
+            open_ep["frames"] += 1
+            open_ep["min_distance"] = min(open_ep["min_distance"], float(dists[i, j]))
+
+    episodes.sort(key=lambda e: (e["start_frame"], str(e["track"]), str(e["partner"])))
+    return episodes
+
+
 def compute_visitation(tidy, refs, fps, gap_frames=15):
     """Visit counts per track and per reference, rolled up from the episodes.
 

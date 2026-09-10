@@ -186,3 +186,90 @@ class PrimitivesAgreeTests(PrimitiveBlockTestCase):
         self.assertEqual(visitation["total_visits"], interactions["organism_reference"])
         self.assertEqual(visitation["total_dwell_sec"],
                          round(sum(r["duration_sec"] for r in interactions["rows"]), 2))
+
+
+# Two bees flying together well away from any reference, plus the big-flower
+# case the worker's centroid rule could never see.
+PAIR_ROWS = (
+    [{"frame": f, "track_id": 5, "cx": 0.70, "cy": 0.50} for f in range(0, 30)]
+    + [{"frame": f, "track_id": 6, "cx": 0.72, "cy": 0.50} for f in range(0, 30)]
+)
+
+
+class ProximityBlockTests(PrimitiveBlockTestCase):
+    def setUp(self):
+        super().setUp()
+        self.pair_csv = _write_csv(PAIR_ROWS, "pair_tracking.csv")
+
+    def _execute_with(self, csv_path, config=None):
+        steps = self._steps("analyze.interactions", config)
+        run = PipelineRun.objects.create(pipeline=self.pipeline, user=self.user)
+        run.steps = steps
+        run.context = {
+            "v": {"artifact": "video", "video_id": self.video.pk},
+            "m": {"artifact": "tracks", "result": {
+                "tracking_csv_path": csv_path,
+                "summary_stats": {"video_fps": 25.0,
+                                  "frame_width": 1920, "frame_height": 1080},
+            }},
+        }
+        return executors.LOCAL_EXECUTORS["analyze.interactions"](
+            steps[4], run, run.context, {"tracks": run.context["m"]}, 4)
+
+    def test_two_bees_flying_together_are_recorded(self):
+        out = self._execute_with(self.pair_csv)
+
+        self.assertEqual(out["organism_organism"], 1)
+        self.assertEqual(out["rows"][0]["relation"], "proximity")
+
+    def test_a_tighter_radius_stops_seeing_them(self):
+        # They are 0.02 of frame width apart.
+        out = self._execute_with(self.pair_csv, {"proximity_percent": 1})
+
+        self.assertEqual(out["organism_organism"], 0)
+
+    def test_the_radius_is_read_as_a_percent_not_a_fraction(self):
+        wide = self._execute_with(self.pair_csv, {"proximity_percent": 5})
+        self.assertEqual(wide["organism_organism"], 1)
+
+    def test_junk_in_the_radius_field_falls_back_to_the_default(self):
+        out = self._execute_with(self.pair_csv, {"proximity_percent": "wide"})
+
+        self.assertEqual(out["organism_organism"], 1)
+
+
+class ContainmentBeatsCentroidDistanceTests(PrimitiveBlockTestCase):
+    """The bug this replaces: a bee on a big flower was never recorded.
+
+    The worker matches an insect to a reference by centroid-to-centroid
+    distance under a flat 50 px, discarding the reference's size. On a 1920-wide
+    frame a bee resting on the edge of a 400 px flower sits ~200 px from its
+    centre — visibly inside the box in the annotated video, and absent from the
+    interactions table. Containment does not care how big the flower is.
+    """
+
+    def test_a_bee_at_the_edge_of_a_large_reference_still_counts(self):
+        # The device layout tube spans 0.1-0.3, so its centre is (0.2, 0.2).
+        # This track sits at (0.29, 0.29): inside, but far from the centre —
+        # 0.09 of frame width, ~173 px on a 1920 frame, well past a 50 px rule.
+        edge_rows = [{"frame": f, "track_id": 3, "cx": 0.29, "cy": 0.29}
+                     for f in range(20)]
+        csv_path = _write_csv(edge_rows, "edge_tracking.csv")
+
+        steps = self._steps("analyze.interactions")
+        run = PipelineRun.objects.create(pipeline=self.pipeline, user=self.user)
+        run.steps = steps
+        run.context = {
+            "v": {"artifact": "video", "video_id": self.video.pk},
+            "m": {"artifact": "tracks", "result": {
+                "tracking_csv_path": csv_path,
+                "summary_stats": {"video_fps": 25.0,
+                                  "frame_width": 1920, "frame_height": 1080},
+            }},
+        }
+        out = executors.LOCAL_EXECUTORS["analyze.interactions"](
+            steps[4], run, run.context, {"tracks": run.context["m"]}, 4)
+
+        self.assertEqual(out["organism_reference"], 1)
+        self.assertEqual(out["rows"][0]["relation"], "inside")
+        self.assertEqual(out["rows"][0]["duration_sec"], 0.8)

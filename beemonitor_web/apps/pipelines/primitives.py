@@ -32,7 +32,7 @@ EVENT_FIELDS = ("frame", "time_sec", "subject", "subject_kind",
 
 INTERACTION_FIELDS = ("start_frame", "end_frame", "start_sec", "end_sec",
                       "duration_sec", "a", "a_kind", "b", "b_kind",
-                      "relation", "source")
+                      "relation", "min_distance", "source")
 
 ENTER, EXIT = "enter", "exit"
 ORGANISM, REFERENCE = "organism", "reference"
@@ -106,6 +106,34 @@ def interactions_from_episodes(episodes, fps, source=DERIVED):
             "source": source,
         })
     rows.sort(key=lambda r: (r["start_frame"], str(r["a"])))
+    return rows
+
+
+def interactions_from_proximity(episodes, fps, source=DERIVED):
+    """Each pairwise proximity spell as one organism-to-organism interaction.
+
+    ``min_distance`` rides along in fractions of frame width: it is the whole
+    reason the threshold is resolution-independent, so a reader can see how
+    close the pair actually came rather than only that they passed a cutoff.
+    """
+    rows = []
+    for ep in episodes or []:
+        start, end = int(ep["start_frame"]), int(ep["end_frame"])
+        rows.append({
+            "start_frame": start,
+            "end_frame": end,
+            "start_sec": _sec(start, fps),
+            "end_sec": _sec(end, fps),
+            "duration_sec": round(ep["frames"] / float(fps), 3) if fps else None,
+            "a": ep["track"],
+            "a_kind": ORGANISM,
+            "b": ep["partner"],
+            "b_kind": ORGANISM,
+            "relation": PROXIMITY,
+            "min_distance": round(ep.get("min_distance", 0.0), 4),
+            "source": source,
+        })
+    rows.sort(key=lambda r: (r["start_frame"], str(r["a"]), str(r["b"])))
     return rows
 
 

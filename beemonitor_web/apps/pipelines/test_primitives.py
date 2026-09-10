@@ -210,3 +210,106 @@ class RollupTests(SimpleTestCase):
         self.assertEqual(summary["organism_organism"], 1)
         self.assertEqual(summary["total_duration_sec"], 2.5)
         self.assertEqual(summary["per_reference"][0]["id"], "tube_1")
+
+
+class ProximityTests(SimpleTestCase):
+    """Insect-to-insect is the one place a distance threshold IS the model.
+
+    The worker used a flat 50 px, which means a different real distance at
+    every resolution — and after normalisation there are no pixels left to
+    compare against. These pin the frame-relative replacement.
+    """
+
+    def test_two_tracks_side_by_side_are_one_episode(self):
+        tidy = tracks(*([(1, f, 0.50, 0.50) for f in range(10)]
+                        + [(2, f, 0.52, 0.50) for f in range(10)]))
+
+        episodes = ops.compute_proximity_episodes(tidy, radius=0.05)
+
+        self.assertEqual(len(episodes), 1)
+        self.assertEqual(episodes[0]["frames"], 10)
+
+    def test_tracks_further_apart_than_the_radius_never_meet(self):
+        tidy = tracks(*([(1, f, 0.1, 0.5) for f in range(10)]
+                        + [(2, f, 0.9, 0.5) for f in range(10)]))
+
+        self.assertEqual(ops.compute_proximity_episodes(tidy, radius=0.05), [])
+
+    def test_a_lone_track_has_nobody_to_interact_with(self):
+        tidy = tracks(*[(1, f, 0.5, 0.5) for f in range(10)])
+
+        self.assertEqual(ops.compute_proximity_episodes(tidy, radius=0.5), [])
+
+    def test_each_unordered_pair_is_counted_once_not_twice(self):
+        tidy = tracks((1, 0, 0.50, 0.50), (2, 0, 0.51, 0.50))
+
+        episodes = ops.compute_proximity_episodes(tidy, radius=0.05)
+
+        self.assertEqual(len(episodes), 1)
+
+    def test_three_tracks_together_give_three_pairs(self):
+        tidy = tracks((1, 0, 0.50, 0.50), (2, 0, 0.51, 0.50), (3, 0, 0.50, 0.51))
+
+        self.assertEqual(len(ops.compute_proximity_episodes(tidy, radius=0.05)), 3)
+
+    def test_the_radius_is_a_circle_not_an_ellipse(self):
+        """Normalisation divides x by width and y by height separately, so
+        without the aspect correction a vertical gap counts as much smaller
+        than the same real distance horizontally."""
+        # 0.04 apart in normalised y on a 16:9 frame is 0.0225 of frame width.
+        vertical = tracks((1, 0, 0.5, 0.50), (2, 0, 0.5, 0.54))
+
+        near = ops.compute_proximity_episodes(vertical, radius=0.03, aspect=16 / 9)
+        far = ops.compute_proximity_episodes(vertical, radius=0.02, aspect=16 / 9)
+
+        self.assertEqual(len(near), 1)   # 0.0225 < 0.03
+        self.assertEqual(far, [])        # 0.0225 > 0.02
+
+    def test_a_separation_splits_the_encounter_in_two(self):
+        tidy = tracks(*([(1, f, 0.50, 0.5) for f in range(60)]
+                        + [(2, f, 0.51, 0.5) for f in range(5)]
+                        + [(2, f, 0.90, 0.5) for f in range(5, 50)]
+                        + [(2, f, 0.51, 0.5) for f in range(50, 60)]))
+
+        episodes = ops.compute_proximity_episodes(tidy, radius=0.05, gap_frames=15)
+
+        self.assertEqual(len(episodes), 2)
+
+    def test_the_closest_approach_is_reported(self):
+        tidy = tracks((1, 0, 0.50, 0.5), (2, 0, 0.54, 0.5),
+                      (1, 1, 0.50, 0.5), (2, 1, 0.51, 0.5))
+
+        episodes = ops.compute_proximity_episodes(tidy, radius=0.05)
+
+        self.assertAlmostEqual(episodes[0]["min_distance"], 0.01, places=6)
+
+    def test_the_rows_are_organism_to_organism_with_a_distance(self):
+        tidy = tracks((1, 0, 0.50, 0.5), (2, 0, 0.51, 0.5))
+        episodes = ops.compute_proximity_episodes(tidy, radius=0.05)
+
+        rows = primitives.interactions_from_proximity(episodes, fps=25.0)
+
+        self.assertEqual(rows[0]["b_kind"], "organism")
+        self.assertEqual(rows[0]["relation"], "proximity")
+        self.assertIn("min_distance", rows[0])
+
+    def test_a_zero_radius_measures_nothing_rather_than_everything(self):
+        tidy = tracks((1, 0, 0.5, 0.5), (2, 0, 0.5, 0.5))
+
+        self.assertEqual(ops.compute_proximity_episodes(tidy, radius=0), [])
+
+
+class FrameAspectTests(SimpleTestCase):
+    def test_dimensions_from_the_summary_are_used(self):
+        self.assertAlmostEqual(ops.frame_aspect({"frame_width": 1920,
+                                                 "frame_height": 1080}), 16 / 9)
+
+    def test_the_alternative_key_spellings_are_understood(self):
+        self.assertAlmostEqual(ops.frame_aspect({"width": 640, "height": 480}), 4 / 3)
+
+    def test_a_summary_without_dimensions_falls_back_to_widescreen(self):
+        self.assertAlmostEqual(ops.frame_aspect({}), 16 / 9)
+        self.assertAlmostEqual(ops.frame_aspect(None), 16 / 9)
+
+    def test_a_zero_height_does_not_divide_by_zero(self):
+        self.assertAlmostEqual(ops.frame_aspect({"width": 100, "height": 0}), 16 / 9)
