@@ -8,6 +8,7 @@ a large flower appears in neither.
 """
 
 import csv
+import re
 import tempfile
 from pathlib import Path
 
@@ -151,14 +152,25 @@ class ResultsTableConsistencyTests(JobPrimitiveTests):
         self.assertGreaterEqual(html.count("Show Table"), 2)
 
     def test_no_download_on_the_page_serves_the_workers_own_file(self):
+        """Events and interactions must point at the computed endpoints.
+
+        This used to assert no "X-Amz-Signature" anywhere in the page, which
+        only held while presigning was failing: with working credentials the
+        page legitimately signs the original video, the annotated video and the
+        Tracking CSV — and for tracking the worker's file IS the answer. So the
+        check is now about the two tables that are computed, not the whole page.
+        """
         html = self._html()
 
         for kind in ("events", "interactions"):
             self.assertIn(
                 reverse("analysis:results_csv",
                         kwargs={"pk": self.job.pk, "kind": kind}), html)
-        # A presigned link to the stored CSV would carry a signature.
-        self.assertNotIn("X-Amz-Signature", html)
+        # No signed link may point at a stored events/interactions CSV.
+        for href in re.findall(r'href="([^"]+)"', html):
+            if "X-Amz-Signature" in href:
+                self.assertNotIn("events.csv", href)
+                self.assertNotIn("interactions.csv", href)
 
     def test_the_events_download_matches_its_table(self):
         page = self._html()

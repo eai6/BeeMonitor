@@ -131,6 +131,14 @@ their reason.
           {% endif %}
         </div>
         <p class="mt-1.5 text-[11px] text-red-900 leading-4">{{ g.cause.detail }} <span class="text-red-700">{{ g.cause.action }}</span></p>
+        {% comment %}
+          The recorded text, for the bucket that nothing matched. Its detail line
+          has always promised this and the panel never rendered it, so the only
+          place an unclassified failure could be read was a row's hover title.
+        {% endcomment %}
+        {% if g.cause.show_sample and g.sample %}
+        <p class="mt-1 text-[11px] font-mono text-red-800 bg-red-100 rounded px-2 py-1 break-words">{{ g.sample }}</p>
+        {% endif %}
       </div>
       {% endfor %}
     </div>

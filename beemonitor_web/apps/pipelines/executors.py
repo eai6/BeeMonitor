@@ -347,17 +347,42 @@ def _exec_mot(step, run, context, inputs, index):
     if up.get("error"):
         return {"error": "The upstream detector step failed."}
     result = up.get("result") or {}
-    if not result.get("tracking_csv_path"):
-        return {
-            "error": "No detections to track. The upstream Detector produced no "
-                     "tracking data — set its Run scope to 'Objects + reference' "
-                     "if it is currently 'Reference only'.",
-        }
     # Carry the upstream Detect node's class forward. Several Detect nodes share
     # one GPU result, so "which rows are mine" is decided by label, and every
     # downstream analyzer needs to inherit that answer rather than re-deriving it.
     detector = _upstream_detector(run.steps, index) if run is not None else None
     label = detector_label(detector) if detector else ""
+
+    if not result.get("tracking_csv_path"):
+        # Only a detector we can positively see was asked for objects earns the
+        # empty-clip reading. A reference-only scope, a legacy nest-only block,
+        # or a graph we cannot inspect all keep the original error: guessing
+        # "empty clip" for a misconfigured pipeline would hide the misconfiguration
+        # behind empty tables, which is the harder bug to find.
+        if detector is None or not _run_tracking_for(detector):
+            return {
+                "error": "No detections to track. The upstream Detector produced no "
+                         "tracking data — set its Run scope to 'Objects + reference' "
+                         "if it is currently 'Reference only'.",
+            }
+        # The detector ran the full pass and found nothing, and the worker writes
+        # no tracking CSV when it has nothing to write (files_uploaded: {}). That
+        # is a measurement, not a failure: an empty clip is the commonest thing in
+        # field footage, and failing the run for it turned "19 clips had no bees"
+        # into "19 failures to triage" — while each clip's own page said its job
+        # completed. The run now completes with zero rows, which is the answer.
+        return {
+            "artifact": "tracks",
+            "result": result,
+            "job_id": up.get("job_id"),
+            "tracker": (step.get("config") or {}).get("tracker", "beetrack"),
+            "label": label,
+            "unique_tracks": 0,
+            "empty": True,
+            "note": "The detector found nothing in this clip — no tracks to "
+                    "analyse. Downstream tables are empty because the clip is, "
+                    "not because the run failed.",
+        }
     return {
         "artifact": "tracks",
         "result": result,

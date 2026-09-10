@@ -44,6 +44,46 @@ CAUSES = [
         "fixed_at": datetime(2026, 9, 9, 21, 0, tzinfo=timezone.utc),
     },
     {
+        "key": "no_detections",
+        "match": ("No detections to track",),
+        "title": "The detector was set to reference only",
+        "detail": (
+            "The Detect node was asked for references and nothing else, so there "
+            "was no tracking data for the MOT step to name. A clip the detector "
+            "simply found nothing in no longer fails — that completes with zero "
+            "rows."
+        ),
+        "action": "Set the Detect node's Run scope to 'Objects + reference', then re-run.",
+        "fixed_at": datetime(2026, 9, 10, 23, 0, tzinfo=timezone.utc),
+    },
+    {
+        "key": "container_failure",
+        "match": ("SageMaker inference failed",),
+        "title": "The container failed mid-clip",
+        "detail": (
+            "The analyzer raised inside the GPU container; the text after the "
+            "colon is the container's own failure payload."
+        ),
+        "action": "Re-run once. If it repeats on the same clip, the clip is the cause.",
+    },
+    {
+        "key": "gpu_job_failed",
+        "match": ("GPU job failed.",),
+        "title": "The GPU job failed without saying why",
+        "detail": (
+            "The job reached a failed state carrying no message — nothing was "
+            "recorded to explain it, which is itself the finding."
+        ),
+        "action": "Re-run; if it repeats, check the endpoint logs for that job id.",
+    },
+    {
+        "key": "job_vanished",
+        "match": ("no longer exists",),
+        "title": "The step's analysis job is gone",
+        "detail": "The job row was deleted while the run was still waiting on it.",
+        "action": "Re-run — it will spawn a fresh job.",
+    },
+    {
         "key": "never_reached_gpu",
         "match": ("Never reached the GPU",),
         "title": "The request never reached the GPU",
@@ -88,8 +128,13 @@ CAUSES = [
 UNKNOWN = {
     "key": "unknown",
     "title": "Failed for another reason",
-    "detail": "No cause matched this message — the text is shown as recorded.",
-    "action": "Open the run to see the full error.",
+    "detail": "No cause matched this message, so it is shown as recorded:",
+    "action": "",
+    # The panel renders `sample` for this cause only. It used to promise the
+    # recorded text and show nothing, which is how a whole class of failure
+    # ("No detections to track" — 18 of 19 on one batch) stayed invisible for as
+    # long as it did: the only place the text appeared was a row's hover title.
+    "show_sample": True,
 }
 
 
