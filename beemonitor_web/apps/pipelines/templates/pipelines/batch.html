@@ -247,6 +247,15 @@ their reason.
         <span id="cv-pos" class="text-[11px] text-gray-400 whitespace-nowrap"></span>
       </div>
       <div class="flex items-center gap-1.5">
+        {% comment %}
+          The inline viewer answers "what does this clip look like"; the full
+          page answers "what else is in it" — per-track crops, the raw CSVs,
+          the species table. Reviewing in place should not mean losing the way
+          through to it.
+        {% endcomment %}
+        <a id="cv-results" href="#" hidden
+           class="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white whitespace-nowrap"
+           title="Crops, CSVs and the full per-clip breakdown">Full results ↗</a>
         <button type="button" id="cv-toggle" hidden
                 class="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white"></button>
         <button type="button" id="cv-prev"
@@ -305,6 +314,11 @@ their reason.
       {% else %}
         <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 shrink-0">running</span>
       {% endif %}
+      {% if r.job %}
+      <a href="{% url 'analysis:results' r.job.pk %}"
+         class="text-[11px] text-amber-700 hover:underline shrink-0 ml-auto"
+         title="Per-track crops, the raw CSVs and the full breakdown for this clip">crops &amp; CSVs →</a>
+      {% endif %}
     </div>
     <div class="text-right text-[13px] {% if r.result %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.result %}{{ r.result.unique_tracks }}{% else %}—{% endif %}</div>
     <div class="text-right text-[13px] {% if r.result %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.result %}{{ r.result.total_events }}{% else %}—{% endif %}</div>
@@ -347,6 +361,7 @@ setTimeout(function(){
   var pos    = document.getElementById('cv-pos');
   var note   = document.getElementById('cv-note');
   var toggle = document.getElementById('cv-toggle');
+  var resultsLink = document.getElementById('cv-results');
   var rows   = Array.prototype.slice.call(document.querySelectorAll('.clip-row[data-original]'));
   var at = -1;
   var showAnnotated = true;
@@ -373,6 +388,10 @@ setTimeout(function(){
     note.textContent = annotated
       ? (useAnnotated ? 'Annotated — boxes and track IDs drawn by the run.' : 'Original clip, as recorded.')
       : 'This run rendered no annotated video, so this is the original clip.';
+
+    var results = row.getAttribute('data-results');
+    resultsLink.hidden = !results;
+    if (results) resultsLink.setAttribute('href', results);
 
     rows.forEach(function (r) { r.classList.remove('bg-amber-50'); });
     row.classList.add('bg-amber-50');

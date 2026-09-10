@@ -531,3 +531,58 @@ class ReferenceSummaryTests(TestCase):
 
         self.assertIn("References", html)
         self.assertIn("2 defined", html)
+
+
+class FullResultsLinkTests(TestCase):
+    """The way through to a clip's full page must not be lost.
+
+    Rows used to navigate to the per-job results page. Opening the inline
+    viewer instead made review faster but took away the route to per-track
+    crops, the raw CSVs and the species table, which live only on that page.
+    """
+
+    def setUp(self):
+        from apps.analysis.models import Job
+
+        self.user = User.objects.create_user("fr", password="x")
+        self.client.force_login(self.user)
+        self.pipeline = Pipeline.objects.create(user=self.user, title="P")
+        self.batch_id = "0a1b2c33-0000-4000-8000-00000000dd77"
+        self.video = Video.objects.create(
+            user=self.user, title="c", storage_key="fr/c.mp4", file_size_bytes=1,
+            status=Video.Status.READY, recorded_at=timezone.now())
+        self.job = Job.objects.create(user=self.user, video=self.video,
+                                      status="completed")
+        PipelineRun.objects.create(
+            pipeline=self.pipeline, user=self.user, batch_id=self.batch_id,
+            status="completed",
+            steps=[{"id": "v", "block_type": "input.video",
+                    "config": {"video_id": str(self.video.pk)}}],
+            context={"v": {"artifact": "video", "video_id": self.video.pk},
+                     "t": {"job_id": self.job.pk,
+                           "result": {"events_csv_path": "e.csv"}}})
+
+    def _html(self):
+        return self.client.get(reverse(
+            "pipelines:batch_detail",
+            kwargs={"batch_id": self.batch_id})).content.decode()
+
+    def test_each_row_links_to_its_clips_full_results(self):
+        html = self._html()
+
+        self.assertIn(reverse("analysis:results", kwargs={"pk": self.job.pk}), html)
+        self.assertIn("crops &amp; CSVs", html)
+
+    def test_the_viewer_carries_the_link_too(self):
+        html = self._html()
+
+        self.assertIn('id="cv-results"', html)
+        self.assertIn("data-results=", html)
+
+    def test_a_run_that_never_produced_a_job_offers_no_dead_link(self):
+        PipelineRun.objects.filter(batch_id=self.batch_id).update(
+            context={"v": {"artifact": "video", "video_id": self.video.pk}})
+
+        html = self._html()
+
+        self.assertNotIn("crops &amp; CSVs", html)
