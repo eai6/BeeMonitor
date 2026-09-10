@@ -957,8 +957,12 @@ def build_detect_and_track_config(step, run, context, index):
         # Informational for the worker + part of the cache key, so adding or
         # renaming a class re-runs rather than serving a stale result.
         "detect_labels": labels,
-        # Annotated video is opt-in (off = much faster, needed for long clips).
-        "visualize": str(cfg.get("annotated_video", "")).lower() in ("1", "true", "on", "yes"),
+        # Never render the overlay video. It roughly doubled runtime, could time
+        # out long clips on its own, and was unavailable for chunked runs
+        # anyway — the merge cannot stitch one. Pinned False rather than read
+        # from config so pipelines saved while the option existed don't keep
+        # paying for it.
+        "visualize": False,
         # Selected on the downstream MOT node; inert on the worker for now.
         "tracker": _pipeline_tracker(step, run.steps),
     }

@@ -286,18 +286,6 @@ BLOCK_REGISTRY = {
                 "choices": None,
             },
             {
-                # Rendering the overlay roughly doubles runtime; off by default.
-                "name": "annotated_video",
-                "label": "Annotated video",
-                "field_type": "select",
-                "required": False,
-                "default": "off",
-                "choices": [
-                    {"value": "off", "label": "Off (faster)"},
-                    {"value": "on", "label": "On (render overlay video)"},
-                ],
-            },
-            {
                 # Static things — nest tubes, flowers — don't move, so watching
                 # every frame buys nothing. A 10-min clip is ~18,000 frames;
                 # 20 samples is 0.1% of the work for the same answer. Sampled
@@ -454,19 +442,6 @@ BLOCK_REGISTRY = {
                 "default": "",
                 "choices": None,
                 "show_if": {"field": "detector", "value": "yolo"},
-            },
-            {
-                # Rendering the annotated video roughly doubles runtime and can
-                # time out long clips; off by default. CSVs/trips don't need it.
-                "name": "annotated_video",
-                "label": "Annotated video",
-                "field_type": "select",
-                "required": False,
-                "default": "off",
-                "choices": [
-                    {"value": "off", "label": "Off (faster)"},
-                    {"value": "on", "label": "On (render overlay video)"},
-                ],
             },
         ],
     },
