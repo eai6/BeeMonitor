@@ -230,9 +230,26 @@ class ProjectDeleteView(LoginRequiredMixin, View):
 
 
 class ProjectDetailView(LoginRequiredMixin, DetailView):
+    """The project's clips, and — at ``/review/`` — its annotated frames.
+
+    Both halves are rendered from one context builder because they always were:
+    the frame grid lived at the bottom of the clip workspace, under the stage
+    tiles, the failures, the filters, the assignment controls, the selection
+    actions and a table of every clip. Choosing what to annotate and checking
+    what came back are different sittings with different filters, so they are
+    now different pages — but splitting the view as well would have meant
+    maintaining two context builders, and the one that already existed for this
+    (ReviewView) had drifted out of the URL conf without anyone noticing.
+    """
+
     model = AnnotationProject
     template_name = "annotations/detail.html"
     context_object_name = "project"
+    #: Set by the ``review`` URL. Same data, the other half of the template.
+    review = False
+
+    def get_template_names(self):
+        return ["annotations/review.html"] if self.review else [self.template_name]
 
     def get_queryset(self):
         # Reading the project. Every write path below names its own level.
@@ -1785,79 +1802,6 @@ class FrameImageView(LoginRequiredMixin, View):
         except Exception as e:
             logger.error("FrameImageView extract error: %s", e, exc_info=True)
             return HttpResponse(status=500)
-
-
-class ReviewView(LoginRequiredMixin, TemplateView):
-    """Visual annotation review page (Roboflow-style grid of annotated frames)."""
-    template_name = "annotations/review.html"
-
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        project = get_object_or_404(
-            AnnotationProject.accessible(self.request.user), pk=self.kwargs["pk"])
-
-        # Filters from query params
-        video_filter = self.request.GET.get("video", "")
-        class_filter = self.request.GET.get("cls", "")
-        page_num = int(self.request.GET.get("page", 1))
-
-        annotations_qs = project.annotations.select_related("video").order_by(
-            "video__title", "frame_number"
-        )
-
-        if video_filter:
-            annotations_qs = annotations_qs.filter(video__pk=video_filter)
-
-        # Materialise and apply class filter (boxes is JSON, so filter in Python)
-        all_anns = list(annotations_qs[:2000])  # Cap for safety
-
-        if class_filter:
-            filtered = []
-            for ann in all_anns:
-                classes_in_ann = {b.get("class", "") for b in (ann.boxes or [])}
-                if class_filter in classes_in_ann:
-                    filtered.append(ann)
-            all_anns = filtered
-
-        # Build annotation card data
-        ann_data = []
-        for ann in all_anns:
-            boxes = ann.boxes or []
-            class_names = sorted(set(b.get("class", "unknown") for b in boxes)) if boxes else []
-            ann_data.append({
-                "video": ann.video,
-                "video_pk": ann.video.pk,
-                "frame_number": ann.frame_number,
-                "box_count": len(boxes),
-                "class_names": class_names,
-            })
-
-        # Pagination (50 per page)
-        per_page = 50
-        total = len(ann_data)
-        total_pages = max(1, (total + per_page - 1) // per_page)
-        page_num = max(1, min(page_num, total_pages))
-        start = (page_num - 1) * per_page
-        end = start + per_page
-        page_anns = ann_data[start:end]
-
-        ctx["project"] = project
-        ctx["annotations"] = page_anns
-        ctx["total_count"] = total
-        ctx["page"] = page_num
-        ctx["total_pages"] = total_pages
-        ctx["has_prev"] = page_num > 1
-        ctx["has_next"] = page_num < total_pages
-        ctx["prev_page"] = page_num - 1
-        ctx["next_page"] = page_num + 1
-
-        # Filter options
-        ctx["videos"] = project.videos.all().order_by("title")
-        ctx["classes"] = project.classes
-        ctx["current_video"] = video_filter
-        ctx["current_class"] = class_filter
-
-        return ctx
 
 
 class ExportProjectView(LoginRequiredMixin, View):

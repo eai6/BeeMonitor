@@ -35,5 +35,6 @@ urlpatterns = [
     path("<int:pk>/export/", views.ExportProjectView.as_view(), name="export"),
     path("<int:pk>/frame/", views.FrameImageView.as_view(), name="frame_image"),
     # Review redirects to detail (review is now integrated into project page + editor)
-    path("<int:pk>/review/", views.ProjectDetailView.as_view(), name="review"),
+    # Same view, the other template — see ProjectDetailView.review.
+    path("<int:pk>/review/", views.ProjectDetailView.as_view(review=True), name="review"),
 ]
