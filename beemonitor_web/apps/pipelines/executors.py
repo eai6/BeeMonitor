@@ -381,6 +381,16 @@ def _analysis_inputs(step, run, context, inputs, index):
     result = (up or {}).get("result", {})
     roi = find_reference(run.steps, index, context, run)
     refs = ops.roi_references(roi)
+    ref_source = "graph"
+    if not refs:
+        # Nothing drawn or wired — but the detector may have FOUND the
+        # references (a pipeline whose reference class is detected rather than
+        # drawn: flowers on a board). Those boxes sit in the job's summary and
+        # nothing local ever read them, so such a pipeline reported "0
+        # references, 0 visits" while its job page said it had found four
+        # nests.
+        refs = ops.detected_references(result, _run_video(run))
+        ref_source = "detected" if refs else "none"
     # The hotel ROI contains every tube, so counting it as a reference would
     # double every episode. It is kept only when it is the ONLY thing defined.
     tubes = [r for r in refs if r["id"] != "hotel"]
@@ -389,7 +399,21 @@ def _analysis_inputs(step, run, context, inputs, index):
     df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
     tidy = ops.normalized_tracks(df, result) if df is not None else None
     fps, fps_source = ops.fps_with_source(result)
-    return tidy, refs, result, fps, fps_source
+    return tidy, refs, result, fps, fps_source, ref_source
+
+
+def _run_video(run):
+    """The Video row this run was launched on, or None.
+
+    Needed because detected reference boxes are in pixels and the frame size
+    that normalises them was measured at ingest onto the video row.
+    """
+    from apps.videos.models import Video
+
+    from . import aggregate
+
+    vid = aggregate.run_video_id(run)
+    return Video.objects.filter(pk=vid).first() if vid else None
 
 
 def _gap_frames(step, default=15):
@@ -422,7 +446,7 @@ def _exec_analyze_events(step, run, context, inputs, index):
     """
     from . import ops, primitives
 
-    tidy, refs, result, fps, fps_source = _analysis_inputs(
+    tidy, refs, result, fps, fps_source, ref_source = _analysis_inputs(
         step, run, context, inputs, index)
 
     rows = primitives.events_from_gpu(ops.load_events_df(result), fps)
@@ -435,6 +459,7 @@ def _exec_analyze_events(step, run, context, inputs, index):
     out = {
         "artifact": "events", "table_kind": "events",
         "fps": fps, "fps_source": fps_source,
+        "reference_source": ref_source, "reference_count": len(refs),
         "csv": result.get("events_csv_path", ""),
         **primitives.summarize_events(rows),
     }
@@ -442,8 +467,10 @@ def _exec_analyze_events(step, run, context, inputs, index):
         out["note"] = ("No readable tracking table — only the worker's own nest "
                        "events are listed.")
     elif not refs:
-        out["note"] = ("No reference upstream, so only the worker's nest events "
-                       "are listed. Add a reference to record crossings of it.")
+        out["note"] = ("No reference upstream and none detected, so only the "
+                       "worker's own nest events are listed. Draw an ROI, use the "
+                       "device nest layout, or wire a Detect node for the "
+                       "reference class into the analyzer.")
     return out
 
 
@@ -457,7 +484,7 @@ def _exec_analyze_interactions(step, run, context, inputs, index):
     """
     from . import ops, primitives
 
-    tidy, refs, result, fps, fps_source = _analysis_inputs(
+    tidy, refs, result, fps, fps_source, ref_source = _analysis_inputs(
         step, run, context, inputs, index)
     want = (step.get("config") or {}).get("interaction_type", "all")
 
@@ -500,6 +527,7 @@ def _exec_analyze_interactions(step, run, context, inputs, index):
     out = {
         "artifact": "table", "table_kind": "interactions",
         "fps": fps, "fps_source": fps_source,
+        "reference_source": ref_source, "reference_count": len(refs),
         "csv": result.get("interactions_csv_path", ""),
         **primitives.summarize_interactions(rows),
     }
@@ -652,30 +680,27 @@ def _exec_analyze_foraging_trips(step, run, context, inputs, index):
 
 
 def _exec_analyze_visitation(step, run, context, inputs, index):
+    """Retired — kept runnable, and now sharing the primitives' reference
+    resolution so an existing Visitation pipeline benefits from the detected-
+    reference fallback without having to be rewired."""
     from . import ops
 
-    up = inputs.get("tracks") or _first_upstream_result(inputs)
-    result = (up or {}).get("result", {})
-    roi = find_reference(run.steps, index, context, run)
-    # References, not bare boxes: the breakdown needs each region's identity.
-    refs = ops.roi_references(roi)
-    # The hotel ROI contains every tube, so counting it as a reference would
-    # double every visit. It is kept only when it is the ONLY thing defined.
-    tubes = [r for r in refs if r["id"] != "hotel"]
-    refs = tubes or refs
-
-    df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
-    tidy = ops.normalized_tracks(df, result) if df is not None else None
+    tidy, refs, result, fps, fps_source, ref_source = _analysis_inputs(
+        step, run, context, inputs, index)
     if tidy is not None:
         if not refs:
             return {"artifact": "table", "table_kind": "visitation",
-                    "note": "No ROI upstream — add an ROI (draw or nest layout) to count visits."}
-        fps, fps_source = ops.fps_with_source(result)
+                    "reference_source": ref_source,
+                    "note": "No reference upstream, and the detector found none — "
+                            "draw an ROI, use the device nest layout, or wire a "
+                            "Detect node for the reference class into the analyzer."}
         summary = ops.compute_visitation(tidy, refs, fps)
         # Carried so the page can say "dwell times assume 30 fps" instead of
         # presenting a guessed rate as a measurement.
         return {"artifact": "table", "table_kind": "visitation",
-                "fps": fps, "fps_source": fps_source, **summary}
+                "fps": fps, "fps_source": fps_source,
+                "reference_source": ref_source, "reference_count": len(refs),
+                **summary}
 
     # Fallback: no readable tracking CSV (e.g. dev DB) — surface the job summary.
     return {

@@ -40,6 +40,11 @@ class Video(models.Model):
     duration_seconds = models.FloatField(null=True, blank=True)
     resolution = models.CharField(max_length=20, blank=True)
     fps = models.FloatField(null=True, blank=True)
+    # Frame size in pixels, measured from the container at ingest. Needed to
+    # normalise anything the worker reports in pixels — detected reference
+    # boxes, most importantly — into the 0..1 space the tracks live in.
+    width = models.PositiveIntegerField(null=True, blank=True)
+    height = models.PositiveIntegerField(null=True, blank=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)
     status = models.CharField(
         max_length=20,

@@ -251,6 +251,70 @@ def roi_references(roi_output):
     return refs
 
 
+def detected_references(job_result, video=None):
+    """References the DETECTOR found, when the graph defines none.
+
+    The worker writes the nest/reference boxes it detected into
+    ``summary_stats["nest_bboxes"]``, and until now nothing local ever read
+    them. A pipeline whose reference class is *detected* rather than drawn —
+    flowers on a board, say — therefore ran its analyzers against an empty
+    reference list and reported "0 references, 0 visits" while the job page
+    cheerfully said it had found four nests. The geometry was there; nobody
+    handed it over.
+
+    These are PIXEL coordinates (the annotator draws them straight onto the
+    frame), whereas references must be normalised 0..1 to match the tracks. The
+    frame size comes from the video row — measured at ingest — falling back to
+    the summary, and when neither knows we return nothing rather than emit
+    references at the wrong scale.
+    """
+    stats = (job_result or {}).get("summary_stats") or {}
+    boxes = stats.get("nest_bboxes") or {}
+    hotel = stats.get("hotel_bbox")
+    if not boxes and not hotel:
+        return []
+
+    width = height = None
+    for source, w_key, h_key in ((video, "width", "height"),
+                                 (stats, "frame_width", "frame_height"),
+                                 (stats, "width", "height")):
+        w = getattr(source, w_key, None) if video is source else (source or {}).get(w_key)
+        h = getattr(source, h_key, None) if video is source else (source or {}).get(h_key)
+        try:
+            if w and h and float(w) > 0 and float(h) > 0:
+                width, height = float(w), float(h)
+                break
+        except (TypeError, ValueError):
+            continue
+
+    def _norm(box):
+        try:
+            x1, y1, x2, y2 = [float(v) for v in box]
+        except (TypeError, ValueError):
+            return None
+        if max(abs(x1), abs(y1), abs(x2), abs(y2)) > 1.5:
+            if not width:
+                return None              # pixels with no frame size: refuse to guess
+            x1, y1, x2, y2 = x1 / width, y1 / height, x2 / width, y2 / height
+        # Ordered like roi_references does: containment tests read x1 <= x <= x2,
+        # so a box given corner-reversed would match nothing at all.
+        return (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
+
+    refs = []
+    for box_id, box in boxes.items():
+        shape = _norm(box)
+        if shape:
+            refs.append({"id": f"nest_{box_id}", "label": _reference_label(box_id),
+                         "box": shape, "points": None})
+    if hotel and not refs:
+        # Only when nothing finer was found — the hotel contains every tube, so
+        # counting both would double every episode.
+        shape = _norm(hotel)
+        if shape:
+            refs.append({"id": "hotel", "label": "Hotel", "box": shape, "points": None})
+    return refs
+
+
 def which_reference(x, y, refs):
     """The FIRST reference containing (x, y), or None.
 

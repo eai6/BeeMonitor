@@ -273,3 +273,66 @@ class ContainmentBeatsCentroidDistanceTests(PrimitiveBlockTestCase):
         self.assertEqual(out["organism_reference"], 1)
         self.assertEqual(out["rows"][0]["relation"], "inside")
         self.assertEqual(out["rows"][0]["duration_sec"], 0.8)
+
+
+class DetectedReferenceFallbackTests(PrimitiveBlockTestCase):
+    """The Biodiversity Count case: flowers were detected, never handed over.
+
+    That batch's job page said "Nests 4" and its batch page said "0 REFERENCES
+    — no references were defined". The pipeline has no reference node because
+    its references are *detected*, not drawn; the worker wrote them to
+    summary_stats["nest_bboxes"] and no local analyzer read that key.
+    """
+
+    def _execute_without_reference_node(self, block_type, result_extra):
+        steps = self._steps(block_type)
+        del steps[3]                      # no reference.layout node at all
+        result = {
+            "tracking_csv_path": self.tracking_csv,
+            "summary_stats": {"video_fps": 25.0, **result_extra},
+        }
+        run = PipelineRun.objects.create(pipeline=self.pipeline, user=self.user)
+        run.steps = steps
+        run.context = {"v": {"artifact": "video", "video_id": self.video.pk},
+                       "m": {"artifact": "tracks", "result": result}}
+        return executors.LOCAL_EXECUTORS[block_type](
+            steps[3], run, run.context, {"tracks": run.context["m"]}, 3)
+
+    def setUp(self):
+        super().setUp()
+        # Frame size measured at ingest — what normalises the worker's pixels.
+        self.video.width, self.video.height = 1920, 1080
+        self.video.save(update_fields=["width", "height"])
+        # The worker's detected flower, in pixels, covering the tracks at ~0.2.
+        self.detected = {"nest_bboxes": {"1": [192, 108, 576, 324]}}
+
+    def test_interactions_now_find_the_detected_flowers(self):
+        out = self._execute_without_reference_node("analyze.interactions", self.detected)
+
+        self.assertEqual(out["reference_source"], "detected")
+        self.assertEqual(out["reference_count"], 1)
+        self.assertEqual(out["organism_reference"], 2)
+
+    def test_events_now_record_crossings_of_them(self):
+        out = self._execute_without_reference_node("analyze.events", self.detected)
+
+        self.assertEqual(out["reference_source"], "detected")
+        self.assertEqual(out["enter_count"], 2)
+
+    def test_the_retired_visitation_block_benefits_without_rewiring(self):
+        out = self._execute_without_reference_node("analyze.visitation", self.detected)
+
+        self.assertEqual(out["reference_source"], "detected")
+        self.assertEqual(out["total_visits"], 2)
+
+    def test_a_graph_reference_still_wins_over_a_detected_one(self):
+        # The user's own geometry is intent; a detection is a guess.
+        out = self._execute("analyze.interactions")
+
+        self.assertEqual(out["reference_source"], "graph")
+
+    def test_when_nothing_is_defined_or_detected_it_says_so(self):
+        out = self._execute_without_reference_node("analyze.visitation", {})
+
+        self.assertEqual(out["reference_source"], "none")
+        self.assertIn("note", out)
