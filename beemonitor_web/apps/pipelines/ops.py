@@ -68,6 +68,11 @@ def load_tracking_df(job_result):
     return _read_csv((job_result or {}).get("tracking_csv_path") or "")
 
 
+def load_events_df(job_result):
+    """Read the job's ``events_csv_path`` (worker Entry/Exit) into a DataFrame."""
+    return _read_csv((job_result or {}).get("events_csv_path") or "")
+
+
 def load_interactions_df(job_result):
     """Read the job's ``interactions_csv_path`` into a pandas DataFrame or None."""
     return _read_csv((job_result or {}).get("interactions_csv_path") or "")

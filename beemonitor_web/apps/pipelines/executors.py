@@ -368,6 +368,113 @@ def _exec_mot(step, run, context, inputs, index):
     }
 
 
+def _analysis_inputs(step, run, context, inputs, index):
+    """The pieces every primitive analyzer needs: tidy tracks, refs, fps.
+
+    Returns ``(tidy, refs, result, fps, fps_source)``; ``tidy`` is None when
+    there is no readable tracking CSV, which callers report rather than treat
+    as "nothing happened".
+    """
+    from . import ops
+
+    up = inputs.get("tracks") or _first_upstream_result(inputs)
+    result = (up or {}).get("result", {})
+    roi = find_reference(run.steps, index, context, run)
+    refs = ops.roi_references(roi)
+    # The hotel ROI contains every tube, so counting it as a reference would
+    # double every episode. It is kept only when it is the ONLY thing defined.
+    tubes = [r for r in refs if r["id"] != "hotel"]
+    refs = tubes or refs
+
+    df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
+    tidy = ops.normalized_tracks(df, result) if df is not None else None
+    fps, fps_source = ops.fps_with_source(result)
+    return tidy, refs, result, fps, fps_source
+
+
+def _gap_frames(step, default=15):
+    try:
+        return max(int(float((step.get("config") or {}).get("gap_frames", default))), 0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _exec_analyze_events(step, run, context, inputs, index):
+    """Primitive 1 — every boundary crossing in the clip.
+
+    Two sources, one table: crossings of the user's references, derived from the
+    episode pass, and the worker's own Entry/Exit classifications against nests
+    it detected. Both normalise into the Event schema and each row says which it
+    came from, so neither can quietly stand in for the other.
+    """
+    from . import ops, primitives
+
+    tidy, refs, result, fps, fps_source = _analysis_inputs(
+        step, run, context, inputs, index)
+
+    rows = primitives.events_from_gpu(ops.load_events_df(result), fps)
+    if tidy is not None and refs:
+        episodes = ops.compute_episodes(tidy, refs, gap_frames=_gap_frames(step))
+        rows = primitives.events_from_episodes(episodes, fps) + rows
+        rows.sort(key=lambda r: (r["frame"], r["action"], str(r["subject"])))
+    primitives.label_references(rows, refs, key="target")
+
+    out = {
+        "artifact": "events", "table_kind": "events",
+        "fps": fps, "fps_source": fps_source,
+        "csv": result.get("events_csv_path", ""),
+        **primitives.summarize_events(rows),
+    }
+    if tidy is None:
+        out["note"] = ("No readable tracking table — only the worker's own nest "
+                       "events are listed.")
+    elif not refs:
+        out["note"] = ("No reference upstream, so only the worker's nest events "
+                       "are listed. Add a reference to record crossings of it.")
+    return out
+
+
+def _exec_analyze_interactions(step, run, context, inputs, index):
+    """Primitive 2 — every episode of two things being together.
+
+    Insect-to-reference episodes come from the local pass over the user's ROI;
+    insect-to-insect proximity comes from the worker, which computes it while
+    the tracks are already in memory. A visit is simply an insect-to-reference
+    row, which is why Visitation Count is no longer a block of its own.
+    """
+    from . import ops, primitives
+
+    tidy, refs, result, fps, fps_source = _analysis_inputs(
+        step, run, context, inputs, index)
+    want = (step.get("config") or {}).get("interaction_type", "all")
+
+    rows = primitives.interactions_from_gpu(ops.load_interactions_df(result), fps)
+    # The worker also emits its own organism-to-reference rows against detected
+    # nests. When the user defined references, theirs are the answer and the
+    # worker's would double-count the same episodes.
+    if tidy is not None and refs:
+        rows = [r for r in rows if r["b_kind"] != primitives.REFERENCE]
+        episodes = ops.compute_episodes(tidy, refs, gap_frames=_gap_frames(step))
+        rows = primitives.interactions_from_episodes(episodes, fps) + rows
+
+    if want == "organism_organism":
+        rows = [r for r in rows if r["b_kind"] == primitives.ORGANISM]
+    elif want == "organism_reference":
+        rows = [r for r in rows if r["b_kind"] == primitives.REFERENCE]
+    rows.sort(key=lambda r: (r["start_frame"] is None, r["start_frame"], str(r["a"])))
+    primitives.label_references(rows, refs, key="b")
+
+    out = {
+        "artifact": "table", "table_kind": "interactions",
+        "fps": fps, "fps_source": fps_source,
+        "csv": result.get("interactions_csv_path", ""),
+        **primitives.summarize_interactions(rows),
+    }
+    if tidy is None and not rows:
+        out["note"] = "No readable tracking or interactions table for this job."
+    return out
+
+
 def _exec_analyze_interaction(step, run, context, inputs, index):
     """Module 3 — proximity interactions, computed on the GPU during tracking."""
     from . import ops
@@ -668,12 +775,14 @@ LOCAL_EXECUTORS = {
         "artifact": "roi", "source": (s.get("config") or {}).get("source", "device_layout"),
     },
     "track.mot": _exec_mot,
-    "analyze.interaction": _exec_analyze_interaction,
+    "analyze.events": _exec_analyze_events,
+    "analyze.interactions": _exec_analyze_interactions,
     "analyze.detection_count": _exec_analyze_detection_count,
     # ── Legacy (still runnable; not in the palette) ──
     "input.image_set": lambda s, r, c, i, idx: {"artifact": "frames", "source": (s.get("config") or {}).get("source", "device_crops")},
     "roi.nest_layout": _exec_roi_nest_layout,
     "roi.draw": _exec_roi_draw,
+    "analyze.interaction": _exec_analyze_interaction,
     "analyze.foraging_trips": _exec_analyze_foraging_trips,
     "analyze.visitation": _exec_analyze_visitation,
     "analyze.colony_activity": _exec_analyze_colony_activity,
@@ -897,12 +1006,18 @@ def _pipeline_tracker(step, steps):
     return "beetrack"
 
 
+# Blocks that carry the Entry/Exit classifier cutoff. Events are computed
+# during tracking, so the Track step reads it from whichever analyzer is
+# downstream — the Events primitive, or the retired Foraging Trips node on
+# pipelines saved before it.
+_EVENT_CONFIDENCE_BLOCKS = ("analyze.events", "analyze.foraging_trips")
+
+
 def _pipeline_event_confidence(step, steps):
-    """Entry/Exit event-classifier cutoff, read from a downstream Foraging Trips
-    node (events are computed during tracking, so the Track step needs it).
-    Defaults to 0.6 when no foraging node is downstream."""
+    """Entry/Exit event-classifier cutoff, from a downstream Events node.
+    Defaults to 0.6 when no such node is downstream."""
     for s in downstream_ids(step.get("id"), steps):
-        if s.get("block_type") == "analyze.foraging_trips":
+        if s.get("block_type") in _EVENT_CONFIDENCE_BLOCKS:
             try:
                 return float((s.get("config") or {}).get("event_confidence", 0.6) or 0.6)
             except (TypeError, ValueError):

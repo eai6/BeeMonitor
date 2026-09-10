@@ -586,13 +586,77 @@ def aggregate_detection_count(outputs):
 
 # Colony activity is deliberately absent: its computation stays, but it does not
 # get a section of its own — a timeline belongs inside whichever analyzer ran.
+def aggregate_events(outputs):
+    """Boundary crossings across the batch, and per target.
+
+    ``subjects`` is summed rather than deduplicated for the same reason
+    visitors are: track ids are unique only within one clip. Stated on the page
+    rather than hidden.
+    """
+    per_ref, totals = {}, {"event_count": 0, "enter_count": 0,
+                           "exit_count": 0, "subjects": 0}
+    for out in outputs:
+        for key in ("event_count", "enter_count", "exit_count", "subjects"):
+            totals[key] += out.get(key, 0) or 0
+        for row in out.get("per_reference") or []:
+            ref_id = str(row.get("id", ""))
+            if not ref_id:
+                continue
+            entry = per_ref.setdefault(ref_id, {
+                "id": ref_id, "label": row.get("label") or ref_id,
+                "kind": row.get("kind", "reference"),
+                "events": 0, "enter": 0, "exit": 0, "subjects": 0, "clips": 0,
+            })
+            for key in ("events", "enter", "exit", "subjects"):
+                entry[key] += row.get(key, 0) or 0
+            if row.get("events"):
+                entry["clips"] += 1
+
+    totals["per_reference"] = sorted(
+        per_ref.values(), key=lambda r: (-r["events"], r["id"]))
+    totals["clips"] = len(outputs)
+    return totals
+
+
+def aggregate_interactions(outputs):
+    """Interaction episodes across the batch, and per reference.
+
+    The insect-to-reference count *is* the batch's visitation count — a visit
+    is an insect interacting with a reference — so the page reports it from
+    here rather than from a separate analyzer that could disagree.
+    """
+    per_ref, totals = {}, {"interaction_count": 0, "organism_organism": 0,
+                           "organism_reference": 0, "total_duration_sec": 0.0}
+    for out in outputs:
+        for key in ("interaction_count", "organism_organism", "organism_reference"):
+            totals[key] += out.get(key, 0) or 0
+        totals["total_duration_sec"] += float(out.get("total_duration_sec") or 0)
+        _merge_per_reference(per_ref, out.get("per_reference"), "interactions")
+
+    rows = sorted(per_ref.values(), key=lambda r: (-r["interactions"], r["id"]))
+    for r in rows:
+        r["duration_sec"] = round(r["duration_sec"], 1)
+    totals["total_duration_sec"] = round(totals["total_duration_sec"], 1)
+    totals["per_reference"] = rows
+    totals["clips"] = len(outputs)
+    return totals
+
+
 AGGREGATORS = {
+    # The primitives.
+    "events": aggregate_events,
+    "interactions": aggregate_interactions,
+    # Retired analyzers. Kept so historical runs — whose context still carries
+    # these table_kinds — render exactly as they did rather than turning into
+    # blank panels on a page the user has already read.
     "visitation": aggregate_visitation,
     "interaction": aggregate_interaction,
     "detection_count": aggregate_detection_count,
 }
 
 KIND_LABELS = {
+    "events": "Events",
+    "interactions": "Interactions",
     "foraging_trips": "Foraging trips",
     "visitation": "Visitation",
     "interaction": "Interactions",

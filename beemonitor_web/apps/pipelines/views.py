@@ -458,7 +458,10 @@ def analyzer_options(run):
 
     Every analyzer accepts tracks or detections, so a swap is nearly always
     valid — what matters is that the run HAS a cached GPU result to feed them.
-    Hidden blocks (colony activity) are left out.
+    Hidden blocks are left out as swap *targets*, but the run's own analyzer is
+    always listed even when it has been retired: a run built on Visitation
+    Count still has to be able to say that is what it did, or the page offers
+    three alternatives to nothing in particular.
     """
     from .registry import BLOCK_REGISTRY
 
@@ -466,7 +469,9 @@ def analyzer_options(run):
                     if str(s.get("block_type", "")).startswith("analyze.")), "")
     options = []
     for key, block in BLOCK_REGISTRY.items():
-        if block.get("category") != "analyze" or block.get("hidden"):
+        if block.get("category") != "analyze":
+            continue
+        if block.get("hidden") and key != current:
             continue
         options.append({
             "key": key,
@@ -474,6 +479,8 @@ def analyzer_options(run):
             "description": block.get("description", ""),
             "icon": block.get("icon", ""),
             "current": key == current,
+            # A retired analyzer can be kept but not chosen afresh.
+            "retired": bool(block.get("hidden")),
         })
     return current, options
 

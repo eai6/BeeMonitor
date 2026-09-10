@@ -58,8 +58,28 @@ class OptionsTests(ReanalyzeTestCase):
 
         self.assertEqual(current, "analyze.visitation")
         keys = {o["key"] for o in options}
-        self.assertIn("analyze.foraging_trips", keys)
-        self.assertIn("analyze.interaction", keys)
+        self.assertIn("analyze.events", keys)
+        self.assertIn("analyze.interactions", keys)
+
+    def test_a_retired_analyzer_is_still_named_but_flagged(self):
+        """A run built on Visitation Count has to be able to say so."""
+        from apps.pipelines.views import analyzer_options
+
+        _, options = analyzer_options(self.run)
+
+        retired = [o for o in options if o["key"] == "analyze.visitation"]
+        self.assertEqual(len(retired), 1)
+        self.assertTrue(retired[0]["retired"])
+        self.assertTrue(retired[0]["current"])
+
+    def test_retired_analyzers_are_not_offered_as_fresh_swaps(self):
+        from apps.pipelines.views import analyzer_options
+
+        _, options = analyzer_options(self.run)
+
+        swaps = {o["key"] for o in options if not o["current"]}
+        self.assertNotIn("analyze.foraging_trips", swaps)
+        self.assertNotIn("analyze.interaction", swaps)
 
     def test_the_current_analyzer_is_marked_not_offered_as_a_swap(self):
         from apps.pipelines.views import analyzer_options

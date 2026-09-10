@@ -447,6 +447,82 @@ BLOCK_REGISTRY = {
     },
 
     # ── Analyze ───────────────────────────────────────────────────────────────
+    # Two primitives, not four questions. An Event is a boundary crossing; an
+    # Interaction is an episode of proximity or contact. Foraging trips,
+    # visitation counts and dwell times are reads over those two tables — see
+    # memory/35. The question-shaped blocks below them still run, so no saved
+    # pipeline breaks, but they are not offered for new work.
+    "analyze.events": {
+        "display_name": "Events",
+        "description": "When something entered or exited something — a nest tube, "
+                       "a drawn region, a flower. One row per crossing, with the "
+                       "frame, the subject and what it crossed into.",
+        "category": "analyze",
+        "icon": "🚪",
+        "input_type": "tracks",
+        "accepts": ["tracks", "detections"],
+        "output_type": "events",
+        "backend": "local",
+        "config_fields": [
+            {
+                # Detectors drop frames. Without tolerance a single missed
+                # frame reads as an exit followed immediately by a re-entry,
+                # which doubles every event count.
+                "name": "gap_frames",
+                "label": "Gap tolerance (frames)",
+                "field_type": "number",
+                "required": False,
+                "default": 15,
+                "choices": None,
+            },
+            {
+                # Cutoff for the worker's Entry/Exit classifier, which runs
+                # during tracking — so the Track step reads this from here.
+                # 0.6 = best F1; lower (0.3-0.4) keeps more real events at some
+                # noise cost.
+                "name": "event_confidence",
+                "label": "Event Confidence",
+                "field_type": "number",
+                "required": False,
+                "default": 0.6,
+                "choices": None,
+            },
+        ],
+    },
+    "analyze.interactions": {
+        "display_name": "Interactions",
+        "description": "When two things were together, and for how long — insect "
+                       "with insect, or insect with a reference (which is what a "
+                       "visit is). One row per episode, with its duration.",
+        "category": "analyze",
+        "icon": "🤝",
+        "input_type": "tracks",
+        "accepts": ["tracks", "detections"],
+        "output_type": "table",
+        "backend": "local",
+        "config_fields": [
+            {
+                "name": "interaction_type",
+                "label": "Interaction type",
+                "field_type": "select",
+                "required": False,
+                "default": "all",
+                "choices": [
+                    {"value": "all", "label": "All"},
+                    {"value": "organism_organism", "label": "Insect ↔ insect"},
+                    {"value": "organism_reference", "label": "Insect ↔ reference (visits)"},
+                ],
+            },
+            {
+                "name": "gap_frames",
+                "label": "Gap tolerance (frames)",
+                "field_type": "number",
+                "required": False,
+                "default": 15,
+                "choices": None,
+            },
+        ],
+    },
     "analyze.foraging_trips": {
         "display_name": "Foraging Trips",
         "description": "Derive foraging-trip events (Exit→Entry) from tracks + the "
@@ -810,6 +886,12 @@ _LEGACY_BLOCKS = (
     "roi.nest_layout", "roi.draw",
     "detect.nest", "detect.bee", "track.bee",
     "analyze.colony_activity",
+    # Superseded by analyze.events + analyze.interactions (2026-09). Each was a
+    # question rather than a measurement, so every new question meant another
+    # block, another aggregator and another panel. They still execute — and now
+    # compute through the primitives, so a re-run of an old pipeline agrees with
+    # a new one on the same clip.
+    "analyze.foraging_trips", "analyze.visitation", "analyze.interaction",
     "filter.roi", "filter.confidence", "filter.taxon", "filter.time",
     "output.table", "output.chart", "output.summary", "output.dataset",
 )
@@ -883,6 +965,12 @@ _MULTI_INPUT_PORTS = {
     "detect.objects":          [{"name": "video", "type": "video"}],
     "reference.layout":        [{"name": "video", "type": "video"}],
     "track.mot":               [{"name": "detections", "type": "detections"}],
+    "analyze.events":          [{"name": "tracks", "type": "tracks",
+                                 "accepts": ["tracks", "detections"]},
+                                _REFERENCE_PORT],
+    "analyze.interactions":    [{"name": "tracks", "type": "tracks",
+                                 "accepts": ["tracks", "detections"]},
+                                _REFERENCE_PORT],
     "analyze.interaction":     [{"name": "tracks", "type": "tracks",
                                  "accepts": ["tracks", "detections"]},
                                 _REFERENCE_PORT],
