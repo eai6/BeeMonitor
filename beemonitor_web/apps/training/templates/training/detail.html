@@ -180,6 +180,15 @@
 {% endif %}
 
 <!-- Val-set predictions: best.pt rendered on held-out frames -->
+{% if val_predictions_expired %}
+<div class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-sm font-medium text-gray-500 uppercase mb-1">Validation Predictions</h2>
+  <p class="text-xs text-gray-500">The rendered prediction frames for this run are no longer
+  stored — earlier training jobs wrote them to a staging bucket that clears after 7 days. The
+  metrics above are unaffected; re-running training on the same project will produce a new set.</p>
+</div>
+{% endif %}
+
 {% if val_predictions %}
 <div class="bg-white shadow rounded-lg p-6 mb-6">
   <h2 class="text-sm font-medium text-gray-500 uppercase mb-1">Validation Predictions</h2>

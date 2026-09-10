@@ -45,6 +45,70 @@ def _boto3(service: str):
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
+# Which bucket a val-prediction key lives in is decided by its prefix, not by
+# configuration. The training container used to drop these frames in the
+# SageMaker output bucket, and that bucket carries a blanket 7-day expiration
+# (infra/aws-sagemaker: `_make_bucket(..., expire_days=7)`, prefix "") because
+# it was built for transient request/result JSON. The keys are recorded in
+# TrainingJob.metrics forever, so every model older than a week rendered a
+# gallery of tiles whose images all 404 — the browser showed the alt text, so
+# each frame appeared as its filename twice. New jobs write them beside best.pt
+# in the models bucket, which has no lifecycle rule and is versioned.
+_VAL_PRED_PREFIXES = (("custom/", "AWS_S3_BUCKET_MODELS"),
+                      ("training/", "SAGEMAKER_OUTPUT_BUCKET"))
+
+
+def _val_prediction_images(keys, job_pk=None):
+    """Presigned URLs for the val-set prediction frames that still exist.
+
+    Returns ``(images, expired)``. ``expired`` is True when the job recorded
+    previews but none of the objects are there any more: the page has to say
+    so, because a grid of broken images reads as a bug in the model page
+    rather than as a retention window that has passed.
+    """
+    by_bucket = {}
+    for key in keys:
+        bucket = next((getattr(settings, attr, "")
+                       for prefix, attr in _VAL_PRED_PREFIXES
+                       if key.startswith(prefix)), "")
+        if bucket:
+            by_bucket.setdefault(bucket, []).append(key)
+
+    images = []
+    try:
+        s3 = _boto3("s3")
+        for bucket, bucket_keys in by_bucket.items():
+            # One LIST per directory rather than a HEAD per frame: a job
+            # uploads up to 60 of these and they share a single prefix.
+            present = set()
+            for folder in {k.rsplit("/", 1)[0] + "/" for k in bucket_keys}:
+                token = None
+                while True:
+                    page = s3.list_objects_v2(
+                        **{"Bucket": bucket, "Prefix": folder,
+                           **({"ContinuationToken": token} if token else {})})
+                    present.update(o["Key"] for o in page.get("Contents", ()))
+                    token = page.get("NextContinuationToken")
+                    if not token:
+                        break
+            for key in bucket_keys:
+                if key not in present:
+                    continue
+                images.append({
+                    "name": key.rsplit("/", 1)[-1],
+                    "url": s3.generate_presigned_url(
+                        "get_object",
+                        Params={"Bucket": bucket, "Key": key},
+                        ExpiresIn=3600),
+                })
+    except Exception as e:
+        logger.warning("[train:%s] listing val predictions failed: %s", job_pk, e)
+        # Unknown, not gone — claiming expiry on an S3 hiccup would be a lie.
+        return [], False
+
+    return images, not images
+
+
 def _yolo_label_subset(ann, name_to_new_id: dict) -> str:
     """YOLO label lines for only the boxes whose class is in the subset,
     renumbered to the compact 0..k ids in ``name_to_new_id`` (keyed by class
@@ -431,25 +495,11 @@ class TrainingDetailView(LoginRequiredMixin, DetailView):
             ctx["custom_model"] = None
 
         # Rendered best.pt predictions on the held-out val split (uploaded by
-        # the training container); presign so the gallery can show them.
+        # the training container); presign the ones that still exist.
         pred_keys = (self.object.metrics or {}).get("val_predictions") or []
         if pred_keys:
-            try:
-                s3 = _boto3("s3")
-                ctx["val_predictions"] = [
-                    {
-                        "name": key.rsplit("/", 1)[-1],
-                        "url": s3.generate_presigned_url(
-                            "get_object",
-                            Params={"Bucket": settings.SAGEMAKER_OUTPUT_BUCKET, "Key": key},
-                            ExpiresIn=3600,
-                        ),
-                    }
-                    for key in pred_keys
-                ]
-            except Exception as e:
-                logger.warning("[train:%s] presigning val predictions failed: %s",
-                               self.object.pk, e)
+            ctx["val_predictions"], ctx["val_predictions_expired"] = (
+                _val_prediction_images(pred_keys, self.object.pk))
 
         # Per-epoch metric curves (present on jobs trained after the container
         # update that emits epoch_metrics).

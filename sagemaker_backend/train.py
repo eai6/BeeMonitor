@@ -237,10 +237,16 @@ def _epoch_metrics() -> tuple[list, "int | None"]:
 _VAL_PRED_CAP = 60  # rendered val-set prediction images uploaded per job
 
 
-def _save_val_predictions(best: Path, ds_dir: Path, job_id: str) -> list[str]:
+def _save_val_predictions(best: Path, ds_dir: Path, model_key: str) -> list[str]:
     """Run best.pt on the val split, render the predicted boxes onto the
-    images, and upload them to the output bucket so the web app can show how
-    the model actually behaves on held-out frames. Returns the S3 keys."""
+    images, and upload them so the web app can show how the model actually
+    behaves on held-out frames. Returns the S3 keys.
+
+    These go to the MODELS bucket, beside best.pt, because they are evidence
+    about that specific weights file and should outlive it by exactly as long.
+    They used to go to the SageMaker output bucket, which expires everything
+    after 7 days -- that bucket exists for transient request/result JSON -- so
+    every model older than a week showed a gallery of broken images."""
     from ultralytics import YOLO
 
     val_dir = ds_dir / "images" / "val"
@@ -253,10 +259,13 @@ def _save_val_predictions(best: Path, ds_dir: Path, job_id: str) -> list[str]:
     if len(rendered) > _VAL_PRED_CAP:
         log(f"val predictions: uploading {_VAL_PRED_CAP} of {len(rendered)} rendered frames")
         rendered = rendered[:_VAL_PRED_CAP]
+    # Derived from model_key (custom/<user>/<job>/best.pt) so the previews can
+    # never drift away from the weights they describe.
+    prefix = model_key.rsplit("/", 1)[0] + "/val_preds"
     keys = []
     for f in rendered:
-        key = f"training/{job_id}/val_preds/{f.name}"
-        _s3.upload_file(str(f), OUTPUT_BUCKET, key)
+        key = f"{prefix}/{f.name}"
+        _s3.upload_file(str(f), MODELS_BUCKET, key)
         keys.append(key)
     log(f"uploaded {len(keys)} val prediction images")
     return keys
@@ -280,7 +289,7 @@ def main() -> int:
         # Best-effort: rendered predictions on the val set for the web UI.
         val_pred_keys: list[str] = []
         try:
-            val_pred_keys = _save_val_predictions(out["best"], ds_dir, manifest["job_id"])
+            val_pred_keys = _save_val_predictions(out["best"], ds_dir, model_key)
         except Exception as e:  # noqa: BLE001 - never fail the job over previews
             log(f"val prediction rendering failed (non-fatal): {e}")
 
