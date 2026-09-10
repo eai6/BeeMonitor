@@ -35,6 +35,50 @@ logger = logging.getLogger("beemonitor.handler")
 JSON_CONTENT_TYPE = "application/json"
 
 
+# How many CPU threads one invocation may fan out to.
+#
+# OpenCV and torch both size their pools to the MACHINE by default, which is the
+# wrong unit here: the container serves several invocations in one process, so
+# each job's decode and resize can claim every core and they contend. On
+# 2026-09-09 a batch put CPU at 360% of a 400% box and SageMaker gave up waiting
+# for the container — nine of twelve clips died of it, not of anything wrong
+# with the clips.
+#
+# Capacity was cut to one job per instance, which fixed the batch; a single job
+# still peaked at 251% of 400%, because Phase 4 gave decode its own thread and
+# nothing bounds the pools underneath it. Two per instance is 500% of 400% at
+# that rate, so packing stays impossible until this is bounded.
+#
+# 2 leaves headroom on a 4-vCPU box for the reader thread and — the part that
+# actually failed — for gunicorn to answer /ping while a job runs.
+CPU_THREADS = int(os.environ.get("BEEMONITOR_CPU_THREADS", "2"))
+
+
+def _limit_cpu_threads():
+    """Bound the OpenCV and torch thread pools, once per container.
+
+    Best-effort: a container that cannot set these should still serve. Neither
+    library is required to be present for the module to import — the web image
+    has no torch — so both are guarded.
+    """
+    if CPU_THREADS <= 0:
+        logger.info("cpu threads: unbounded (BEEMONITOR_CPU_THREADS=%s)", CPU_THREADS)
+        return
+    try:
+        import cv2
+        cv2.setNumThreads(CPU_THREADS)
+    except Exception:
+        logger.warning("cpu threads: could not cap OpenCV", exc_info=True)
+    try:
+        import torch
+        # Intra-op only. Inter-op governs how many operators run in parallel and
+        # is not the thing oversubscribing here.
+        torch.set_num_threads(CPU_THREADS)
+    except Exception:
+        logger.warning("cpu threads: could not cap torch", exc_info=True)
+    logger.info("cpu threads: OpenCV and torch capped at %s", CPU_THREADS)
+
+
 def model_fn(model_dir=None):
     """Build the CloudPipeline once per container.
 
@@ -45,6 +89,7 @@ def model_fn(model_dir=None):
     (~50 MB) on the very first invocation, not by container boot.
     """
     logger.info("model_fn: building CloudPipeline (model_dir=%s)", model_dir)
+    _limit_cpu_threads()
     # Imports here (not at module top) so the SageMaker contract module is
     # importable on the CPU dev box for tests where torch+cuda aren't present.
     from cloud.wrapper.pipeline import CloudPipeline

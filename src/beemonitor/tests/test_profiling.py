@@ -243,3 +243,59 @@ class Sam3ConcurrentLoadTests(unittest.TestCase):
         self.assertIs(a._model, b._model)
         self.assertEqual(a.prompts, ["bee"])
         self.assertEqual(b.prompts, ["hoverfly", "beetle"])
+
+
+class CpuThreadCapTests(unittest.TestCase):
+    """One invocation must not claim every core.
+
+    OpenCV and torch size their pools to the MACHINE, which is the wrong unit
+    when a container serves several invocations in one process. That is what put
+    CPU at 360% of a 400% box and made SageMaker give up waiting for the
+    container — nine of twelve clips in one batch.
+    """
+
+    def _handler(self):
+        import importlib
+        import sys
+        sys.path.insert(0, ".")
+        return importlib.import_module("sagemaker_backend.inference")
+
+    def test_both_pools_are_capped(self):
+        from unittest.mock import MagicMock, patch
+
+        inf = self._handler()
+        cv2, torch = MagicMock(), MagicMock()
+        with patch.dict("sys.modules", {"cv2": cv2, "torch": torch}):
+            inf._limit_cpu_threads()
+
+        cv2.setNumThreads.assert_called_once_with(inf.CPU_THREADS)
+        torch.set_num_threads.assert_called_once_with(inf.CPU_THREADS)
+
+    def test_the_default_leaves_headroom_on_a_four_vcpu_box(self):
+        """Two jobs at the cap must still leave a thread for /ping — starving
+        that check is the failure this exists to prevent."""
+        inf = self._handler()
+
+        self.assertGreaterEqual(inf.CPU_THREADS, 1)
+        self.assertLessEqual(inf.CPU_THREADS, 2)
+
+    def test_zero_means_unbounded_and_touches_nothing(self):
+        from unittest.mock import MagicMock, patch
+
+        inf = self._handler()
+        cv2, torch = MagicMock(), MagicMock()
+        with patch.object(inf, "CPU_THREADS", 0), \
+             patch.dict("sys.modules", {"cv2": cv2, "torch": torch}):
+            inf._limit_cpu_threads()
+
+        cv2.setNumThreads.assert_not_called()
+        torch.set_num_threads.assert_not_called()
+
+    def test_a_missing_library_does_not_stop_the_container_serving(self):
+        from unittest.mock import MagicMock, patch
+
+        inf = self._handler()
+        cv2 = MagicMock()
+        cv2.setNumThreads.side_effect = RuntimeError("no OpenCV here")
+        with patch.dict("sys.modules", {"cv2": cv2, "torch": MagicMock()}):
+            inf._limit_cpu_threads()      # must not raise
