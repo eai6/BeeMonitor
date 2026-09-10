@@ -1,0 +1,63 @@
+{% comment %}
+  Device x hour-of-day. The colour that matters is the dashed red one: footage
+  exists for that hotel at that hour and none of it is annotated. That state was
+  invisible before — a project missing a whole hotel looked exactly like a
+  project that had covered everything.
+{% endcomment %}
+<div class="bg-white border-b border-gray-200 px-5 py-3.5 shrink-0">
+  <div class="flex items-baseline gap-3 mb-2.5">
+    <h2 class="text-[13px] font-semibold text-gray-900">Coverage</h2>
+    <span class="text-[11px] text-gray-400">
+      {{ coverage.in_project }} clip{{ coverage.in_project|pluralize }} annotated
+      {% if coverage.gaps %}&middot; <span class="text-red-700">{{ coverage.gaps }} hotel-hour{{ coverage.gaps|pluralize }} with footage and nothing labelled</span>{% endif %}
+    </span>
+    <div class="flex-1"></div>
+    <div class="flex items-center gap-2">
+      <span class="text-[11px] text-gray-500">Balance:</span>
+      <input id="draft-per" type="number" min="1" max="10" value="2"
+             class="w-12 border border-gray-300 rounded px-1.5 py-1 text-[11px]" title="Clips per empty hotel-hour">
+      <button type="button" id="draft-btn"
+              data-url="{% url 'annotations:add_videos_draft' project.pk %}"
+              class="text-[11px] px-2.5 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 hover:border-amber-400 whitespace-nowrap"
+              title="Pre-select an even spread across the hotels and hours this project is missing. A starting point — you still look at each clip.">Draft a spread</button>
+    </div>
+  </div>
+
+  <div class="overflow-x-auto">
+    <table class="border-separate" style="border-spacing:3px">
+      <tr>
+        <th></th>
+        {% for h in coverage.hours %}
+        <th class="text-[10px] text-gray-400 font-semibold pb-1" style="width:30px">{{ h|stringformat:"02d" }}</th>
+        {% endfor %}
+      </tr>
+      {% for row in coverage.rows %}
+      <tr>
+        <td class="text-[11px] text-right pr-2 whitespace-nowrap text-gray-700">
+          <span class="inline-block w-2 h-2 rounded-full mr-1.5" style="background: {{ row.dot }}"></span>{{ row.device.name }}
+        </td>
+        {% for c in row.cells %}
+        <td>
+          {% if c.state == "none" %}
+          <div class="rounded text-center text-[10px] leading-6 bg-gray-50 text-gray-300" style="width:30px;height:26px"
+               title="No footage recorded">&middot;</div>
+          {% elif c.state == "gap" %}
+          <div class="rounded text-center text-[10px] leading-6 font-semibold bg-red-50 text-red-700 border border-dashed border-red-300" style="width:30px;height:26px"
+               title="{{ c.available }} clip{{ c.available|pluralize }} recorded, none annotated">0</div>
+          {% else %}
+          <div class="rounded text-center text-[10px] leading-6 font-semibold {% if c.state == 'c1' %}bg-amber-50 text-amber-800{% elif c.state == 'c2' %}bg-amber-100 text-amber-800{% elif c.state == 'c3' %}bg-amber-200 text-amber-800{% else %}bg-amber-400 text-green-950{% endif %}" style="width:30px;height:26px"
+               title="{{ c.n }} in project of {{ c.available }} available">{{ c.n }}</div>
+          {% endif %}
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  {% if coverage.findings %}
+  <div class="mt-2.5 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-[11.5px] text-amber-900 leading-5">
+    {% for line in coverage.findings %}<p>{{ line }}</p>{% endfor %}
+  </div>
+  {% endif %}
+</div>

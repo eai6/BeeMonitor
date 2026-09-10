@@ -59,10 +59,10 @@
       <h3 class="text-sm font-semibold text-gray-900">Add videos</h3>
       <p class="text-xs text-gray-500">{{ video_data|length }} video{{ video_data|length|pluralize }} in this project.</p>
     </div>
-    <button type="button" onclick="document.getElementById('addVideosModal').classList.toggle('hidden')"
+    <a href="{% url 'annotations:add_videos_page' project.pk %}"
             class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 font-medium">
       + Add Videos
-    </button>
+    </a>
   </div>
 
   <!-- 2 · Sample frames (CPU) -->
@@ -200,78 +200,13 @@
 </div>
 
 <!-- Add Videos Modal (auto-opens when a filter is active) -->
-<div id="addVideosModal" class="{% if not available_filter_on %}hidden{% endif %} bg-white shadow rounded-lg p-6 mb-6">
-  <div class="flex justify-between items-center mb-3">
-    <h3 class="text-sm font-medium text-gray-700">Add Videos to Project</h3>
-    <button type="button" onclick="document.getElementById('addVideosModal').classList.add('hidden')"
-            class="text-gray-400 hover:text-gray-600 text-sm">Close</button>
-  </div>
-
-  <!-- Server-side filters (device · site · year · search) — same as Processing;
-       reaches every device/location, not just the first page. -->
-  <form method="get" class="flex flex-wrap items-center gap-2 mb-3">
-    <select name="av_device" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-      <option value="">All bee hotels</option>
-      {% for d in available_devices %}
-      <option value="{{ d.pk }}" {% if available_filter.device == d.pk|stringformat:"s" %}selected{% endif %}>{{ d.name }}</option>
-      {% endfor %}
-    </select>
-    <select name="av_confirmed" class="border border-gray-300 rounded px-2 py-1.5 text-sm" title="On-device bee confirmation">
-      <option value="">Any confirmation</option>
-      <option value="yes" {% if available_filter.confirmed == "yes" %}selected{% endif %}>✓ Confirmed bee</option>
-      <option value="no" {% if available_filter.confirmed == "no" %}selected{% endif %}>Unconfirmed</option>
-    </select>
-    {% if available_opts.sites %}
-    <select name="av_site" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-      <option value="">All sites</option>
-      {% for s in available_opts.sites %}<option value="{{ s }}" {% if available_filter.site == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
-    </select>
-    {% endif %}
-    <select name="av_year" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-      <option value="">Year</option>
-      {% for y in available_opts.years %}<option value="{{ y }}" {% if available_filter.year == y|stringformat:"s" %}selected{% endif %}>{{ y }}</option>{% endfor %}
-    </select>
-    <select name="av_month" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-      <option value="">Month</option>
-      {% for m in available_opts.months %}<option value="{{ m }}" {% if available_filter.month == m|stringformat:"s" %}selected{% endif %}>{{ m }}</option>{% endfor %}
-    </select>
-    <select name="av_day" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-      <option value="">Day</option>
-      {% for d in available_opts.days %}<option value="{{ d }}" {% if available_filter.day == d|stringformat:"s" %}selected{% endif %}>{{ d }}</option>{% endfor %}
-    </select>
-    <select name="av_hour" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-      <option value="">Hour</option>
-      {% for h in available_opts.hours %}<option value="{{ h }}" {% if available_filter.hour == h|stringformat:"s" %}selected{% endif %}>{{ h }}:00</option>{% endfor %}
-    </select>
-    <input name="av_q" value="{{ available_filter.q }}" placeholder="Search title…"
-           class="border border-gray-300 rounded px-3 py-1.5 text-sm">
-    <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded text-sm border border-gray-300">Filter</button>
-    {% if available_filter_on %}
-    <a href="{% url 'annotations:detail' project.pk %}" class="text-sm text-amber-600 hover:underline">Clear</a>
-    {% endif %}
-    <span class="text-xs text-gray-400 ml-auto">{{ available_count }} match(es){% if available_count > 500 %} · showing 500, narrow further{% endif %}</span>
-  </form>
-
-  <!-- Selection + add -->
-  <form method="post" action="{% url 'annotations:add_videos' project.pk %}">
-    {% csrf_token %}
-    <label class="flex items-center gap-2 text-sm text-gray-500 mb-2">
-      <input type="checkbox" id="add-select-all" class="rounded border-gray-300"> Select all shown
-    </label>
-    <div class="max-h-60 overflow-y-auto border border-gray-200 rounded p-2 mb-3">
-      {% for video in available_videos %}
-      <label class="flex items-center gap-2 py-0.5 text-sm">
-        <input type="checkbox" name="video_ids" value="{{ video.pk }}" class="rounded border-gray-300 add-video-cb">
-        <span class="flex-1">{{ video.title }}</span>
-        <span class="text-xs text-gray-400">{% if video.device %}{{ video.device.name }}{% endif %}{% if video.site_name %} · {{ video.site_name }}{% endif %}{% if video.recorded_at %} · {{ video.recorded_at|date:"Y-m-d" }}{% endif %}</span>
-      </label>
-      {% empty %}
-      <p class="text-xs text-gray-400 py-2">No videos match — adjust the filter.</p>
-      {% endfor %}
-    </div>
-    <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-1.5 rounded text-sm font-medium">Add Selected</button>
-  </form>
-</div>
+{% comment %}
+  The clip picker that lived here was a checkbox list of filenames in a
+  five-row scroll box capped at 500 — the decision that determines what the
+  model learns, made by reading titles through a window. Step 1's button now
+  opens the review workspace instead: the clips themselves, the shared filter
+  rail, and a coverage map of the hotels and hours this project is missing.
+{% endcomment %}
 
 <!-- In-flight pre-annotation tasks (durable; finalized by the reconciler) -->
 {% if preannot_active %}

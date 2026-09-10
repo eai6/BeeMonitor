@@ -2,8 +2,10 @@
   The day-grouped clip grid: stills, hotel dots, hover-to-preview, a checkbox
   per card. Shared by the Processing hub and an annotation project's picker.
 
-  Context: video_days (from workspace.group_by_day), can_select, and an
-  optional card_status_template for the page-specific corner of each card.
+  Context: video_days (from workspace.group_by_day); can_select, which decides
+  whether a card carries a checkbox at all — a read-only viewer on the hub has
+  nothing to run, and both hosts must say so explicitly rather than the include
+  guessing from a name only one of them sets.
 {% endcomment %}
 {% for group in video_days %}
         <div class="flex items-center gap-2.5 mb-2.5 {% if not forloop.first %}mt-6{% endif %}">
@@ -36,7 +38,7 @@
               <div class="absolute inset-0 flex items-center justify-center pointer-events-none play-glyph">
                 <svg class="w-7 h-7 drop-shadow" viewBox="0 0 24 24" fill="rgba(255,255,255,0.85)"><path d="M8 5v14l11-7z"/></svg>
               </div>
-              {% if can_manage_any %}
+              {% if can_select %}
               <input type="checkbox" name="video_ids" value="{{ v.pk }}" id="cb-{{ v.pk }}"
                      class="vid-cb absolute top-1.5 left-1.5 rounded border-gray-300 z-10">
               {% endif %}

@@ -6,7 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
-from django.urls import reverse_lazy
+from django.db import models
+from django.urls import reverse, reverse_lazy
 from django.views import View
 from django.views.generic import CreateView, DetailView, ListView, TemplateView, UpdateView
 
@@ -323,48 +324,11 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
             "days": sorted({v.day for v in counted if v.day}),
         }
 
-        # Available videos to add — the SAME comprehensive filter as the Processing
-        # page (device · confirmation · site · year · month · day · hour · search),
-        # over all accessible videos (own + shared), so every hotel/location/time is
-        # reachable — not just the first page.
-        existing_ids = set(videos.values_list("pk", flat=True))
-        all_user = Video.accessible(self.request.user)
-        available = all_user.exclude(pk__in=existing_ids)
-
-        af = {k: self.request.GET.get("av_" + k, "").strip()
-              for k in ("q", "device", "site", "year", "month", "day", "hour", "confirmed")}
-        if af["q"]:
-            available = available.filter(title__icontains=af["q"])
-        if af["device"]:
-            available = available.filter(device_id=af["device"])
-        if af["site"]:
-            available = available.filter(site_name=_unsanitize_site(af["site"]))
-        for field in ("year", "month", "day", "hour"):
-            if af[field]:
-                try:
-                    available = available.filter(**{field: int(af[field])})
-                except (ValueError, TypeError):
-                    pass
-        if af["confirmed"] == "yes":
-            available = available.filter(metadata__bee_confirmed=True)
-        elif af["confirmed"] == "no":
-            available = available.filter(metadata__bee_confirmed=False)
-        available = available.select_related("device").order_by("-recorded_at", "-id")
-
-        ctx["available_videos"] = available[:500]
-        ctx["available_count"] = available.count()
-        ctx["available_filter"] = af
-        ctx["available_filter_on"] = any(af.values())
-        ctx["available_devices"] = Device.accessible(self.request.user).order_by("name")
-        # Options from ALL accessible videos so nothing is hidden.
-        ctx["available_opts"] = {
-            "sites": sorted({_sanitize_site(s) for s in
-                             all_user.exclude(site_name="").values_list("site_name", flat=True)}),
-            "years": sorted(set(all_user.exclude(year=None).values_list("year", flat=True))),
-            "months": sorted(set(all_user.exclude(month=None).values_list("month", flat=True))),
-            "days": sorted(set(all_user.exclude(day=None).values_list("day", flat=True))),
-            "hours": sorted(set(all_user.exclude(hour=None).values_list("hour", flat=True))),
-        }
+        # The clip picker moved to AddVideosWorkspaceView, which uses the
+        # shared workspace filter. What stood here was a second, hand-rolled
+        # copy — title/device/site/year/month/day/confirmed — that had already
+        # drifted from apply_video_filters: no multi-hotel selection, no
+        # time-of-day window, no date range, no "not yet analysed".
 
         # Build combined frame grid with filters
         filter_video = self.request.GET.get("video", "")
@@ -517,6 +481,96 @@ class RemoveVideoView(LoginRequiredMixin, View):
         return redirect("annotations:detail", pk=pk)
 
 
+class AddVideosWorkspaceView(LoginRequiredMixin, TemplateView):
+    """Choosing clips to annotate, in the interface built for choosing clips.
+
+    The picker used to be a checkbox list of filenames in a five-row scroll box
+    capped at 500 — the decision that determines what the model learns, made by
+    reading titles through a window. This is the Processing hub's rail and grid,
+    shared rather than copied, plus the coverage map that says whether the
+    sample is lopsided.
+    """
+
+    template_name = "annotations/add_videos.html"
+
+    def get_context_data(self, **kwargs):
+        from apps.devices.models import Device
+        from apps.videos import workspace
+        from apps.videos.models import Video
+
+        from . import coverage as coverage_mod
+
+        ctx = super().get_context_data(**kwargs)
+        project = get_object_or_404(AnnotationProject, pk=kwargs["pk"],
+                                    user=self.request.user)
+        params = self.request.GET
+
+        accessible = Video.accessible(self.request.user)
+        qs = workspace.apply_video_filters(accessible, params)
+        in_project = set(project.videos.values_list("pk", flat=True))
+
+        devices = Device.accessible(self.request.user).order_by("name")
+        per_device = dict(
+            qs.exclude(device=None).order_by()
+            .values_list("device_id").annotate(models.Count("id")))
+        rows = workspace.device_rows(devices, workspace._values(params, "device"),
+                                     per_device)
+        dots = workspace.dots_by_device(rows)
+
+        # Clips already in the project stay in the grid, marked. Hiding them is
+        # what makes over-sampling one hotel invisible — the same reason a
+        # reference with zero visits keeps its row.
+        membership = (params.get("member") or "").strip()
+        if membership == "in":
+            qs = qs.filter(pk__in=in_project)
+        elif membership == "out":
+            qs = qs.exclude(pk__in=in_project)
+
+        videos = list(qs.select_related("device")
+                      .order_by("-recorded_at", "-uploaded_at", "-id")[:200])
+        for v in videos:
+            v.in_project = v.pk in in_project
+
+        ctx.update({
+            "project": project,
+            "f": workspace.current_filter(params),
+            "opts": workspace.filter_options(accessible),
+            "device_rows": rows,
+            "video_days": workspace.group_by_day(videos, dots),
+            "video_count": qs.count(),
+            "available_total": accessible.count(),
+            "in_project_count": len(in_project),
+            "member": membership,
+            "member_choices": (("", "Show all"), ("out", "Not yet added"),
+                               ("in", "Already added")),
+            "coverage": coverage_mod.build(
+                workspace.apply_video_filters(accessible, params),
+                project.videos.all(), devices, dots),
+            "card_status_template": "annotations/_card_membership.html",
+            "filter_action": reverse("annotations:add_videos_page", args=[project.pk]),
+        })
+        return ctx
+
+
+class AddVideosDraftView(LoginRequiredMixin, View):
+    """Pre-select a balanced spread across the hotels and hours the project lacks."""
+
+    def get(self, request, pk):
+        from apps.videos import workspace
+        from apps.videos.models import Video
+
+        from . import coverage as coverage_mod
+
+        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        qs = workspace.apply_video_filters(Video.accessible(request.user), request.GET)
+        try:
+            per_cell = max(1, min(int(request.GET.get("per_cell") or 2), 10))
+        except (TypeError, ValueError):
+            per_cell = 2
+        picks = coverage_mod.draft(qs, project.videos.all(), per_cell=per_cell)
+        return JsonResponse({"video_ids": picks, "count": len(picks)})
+
+
 class AddVideosView(LoginRequiredMixin, View):
     """Add selected videos to an annotation project."""
 
@@ -532,7 +586,9 @@ class AddVideosView(LoginRequiredMixin, View):
             return redirect("annotations:detail", pk=pk)
 
         from apps.videos.models import Video
-        videos = Video.objects.filter(user=request.user, pk__in=video_ids)
+        # Accessible, not owned: the picker lists clips from shared devices, so
+        # restricting the add to owned ones silently drops half a selection.
+        videos = Video.accessible(request.user).filter(pk__in=video_ids)
         added = 0
         for video in videos:
             if not project.videos.filter(pk=video.pk).exists():

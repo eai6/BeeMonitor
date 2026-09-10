@@ -114,7 +114,7 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
 
       <!-- cards -->
       <div class="flex-1 overflow-y-auto px-5 pt-4" id="grid-scroll">
-        {% include "videos/_review_grid.html" %}
+        {% include "videos/_review_grid.html" with can_select=can_manage_any %}
         <div class="h-4"></div>
       </div>
 
