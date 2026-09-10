@@ -326,7 +326,7 @@ class TrainingCreateView(LoginRequiredMixin, CreateView):
         # chosen project without a round-trip.
         ctx["project_classes_json"] = _json.dumps({
             str(p.pk): (p.classes or [])
-            for p in AnnotationProject.objects.filter(user=self.request.user)
+            for p in AnnotationProject.accessible(self.request.user)
         })
         return ctx
 

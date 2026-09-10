@@ -70,7 +70,8 @@ class ProjectListView(LoginRequiredMixin, ListView):
     paginate_by = 20
 
     def get_queryset(self):
-        return AnnotationProject.objects.filter(user=self.request.user)
+        # Shared projects belong in the list, or an invitation goes nowhere.
+        return AnnotationProject.accessible(self.request.user)
 
 
 class ProjectCreateView(LoginRequiredMixin, CreateView):
@@ -95,7 +96,9 @@ class ProjectUpdateView(LoginRequiredMixin, UpdateView):
     template_name = "annotations/settings.html"
 
     def get_queryset(self):
-        return AnnotationProject.objects.filter(user=self.request.user)
+        # Editing the name, description and class list restructures the
+        # project — a labeller changing classes mid-run invalidates finished work.
+        return AnnotationProject.manageable(self.request.user)
 
     def get_initial(self):
         initial = super().get_initial()
@@ -204,7 +207,9 @@ class ProjectDeleteView(LoginRequiredMixin, View):
         from django.shortcuts import redirect
         from django.contrib import messages
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Deleting is the owner's alone.
+        project = get_object_or_404(
+            AnnotationProject.owned(request.user), pk=pk)
         name = project.name
         project.delete()
         messages.info(request, f"Deleted project '{name}' and its annotations.")
@@ -217,7 +222,8 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
     context_object_name = "project"
 
     def get_queryset(self):
-        return AnnotationProject.objects.filter(user=self.request.user)
+        # Reading the project. Every write path below names its own level.
+        return AnnotationProject.accessible(self.request.user)
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -498,7 +504,9 @@ class RemoveVideoView(LoginRequiredMixin, View):
         from django.shortcuts import redirect
         from django.contrib import messages
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Removing a clip discards anyone's work on it.
+        project = get_object_or_404(
+            AnnotationProject.manageable(request.user), pk=pk)
         video_id = request.POST.get("video_id")
         if video_id:
             project.videos.remove(video_id)
@@ -527,8 +535,9 @@ class AddVideosWorkspaceView(LoginRequiredMixin, TemplateView):
         from . import coverage as coverage_mod
 
         ctx = super().get_context_data(**kwargs)
-        project = get_object_or_404(AnnotationProject, pk=kwargs["pk"],
-                                    user=self.request.user)
+        # Adding clips restructures the project and spends decode time.
+        project = get_object_or_404(
+            AnnotationProject.manageable(self.request.user), pk=kwargs["pk"])
         params = self.request.GET
 
         accessible = Video.accessible(self.request.user)
@@ -587,7 +596,9 @@ class AddVideosDraftView(LoginRequiredMixin, View):
 
         from . import coverage as coverage_mod
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Part of adding clips.
+        project = get_object_or_404(
+            AnnotationProject.manageable(request.user), pk=pk)
         qs = workspace.apply_video_filters(Video.accessible(request.user), request.GET)
         try:
             per_cell = max(1, min(int(request.GET.get("per_cell") or 2), 10))
@@ -604,7 +615,9 @@ class AddVideosView(LoginRequiredMixin, View):
         from django.shortcuts import redirect
         from django.contrib import messages
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Adding clips restructures the project.
+        project = get_object_or_404(
+            AnnotationProject.manageable(request.user), pk=pk)
         video_ids = request.POST.getlist("video_ids")
 
         if not video_ids:
@@ -649,9 +662,10 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
     def get(self, request, *args, **kwargs):
         """Return JSON for AJAX frame navigation, HTML for normal page load."""
         if request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.GET.get("format") == "json":
+            # Opening the editor is reading; SaveAnnotationView decides who
+            # may actually draw, and on which clip.
             project = get_object_or_404(
-                AnnotationProject, pk=self.kwargs["pk"], user=request.user
-            )
+                AnnotationProject.accessible(request.user), pk=self.kwargs["pk"])
             video_id = request.GET.get("video")
             frame_number = int(request.GET.get("frame", 0))
             boxes = []
@@ -671,8 +685,8 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
         ctx = super().get_context_data(**kwargs)
         try:
             project = get_object_or_404(
-                AnnotationProject, pk=self.kwargs["pk"], user=self.request.user
-            )
+                AnnotationProject.accessible(self.request.user),
+                pk=self.kwargs["pk"])
         except Exception as e:
             logger.error("Editor: project lookup failed: %s", e)
             raise
@@ -784,12 +798,17 @@ class TransferVideoView(LoginRequiredMixin, View):
         from django.shortcuts import redirect
         from django.contrib import messages
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Moving a clip between projects.
+        project = get_object_or_404(
+            AnnotationProject.manageable(request.user), pk=pk)
         video_id = request.POST.get("video_id")
         frame = request.POST.get("frame", 0)
 
         from apps.videos.models import Video
-        video = get_object_or_404(Video, pk=video_id, user=request.user)
+        # The clip has to be in this project. Filtering on ownership instead
+        # would make every manager on a shared project unable to touch clips
+        # the owner added — which is all of them.
+        video = get_object_or_404(project.videos.all(), pk=video_id)
 
         if not video.storage_key.startswith("s3://"):
             messages.info(request, "Video is already in storage.")
@@ -808,9 +827,10 @@ class TransferVideoView(LoginRequiredMixin, View):
 
 class SaveAnnotationView(LoginRequiredMixin, View):
     def post(self, request, pk):
+        # Drawing. The per-clip check below narrows it further: an annotator
+        # works only what is assigned to them.
         project = get_object_or_404(
-            AnnotationProject, pk=pk, user=request.user
-        )
+            AnnotationProject.annotatable(request.user), pk=pk)
         try:
             data = json.loads(request.body)
         except json.JSONDecodeError:
@@ -824,6 +844,16 @@ class SaveAnnotationView(LoginRequiredMixin, View):
             return JsonResponse({"error": "video_id and frame_number are required"}, status=400)
 
         video = get_object_or_404(project.videos, pk=video_id)
+
+        # The rule that actually confines an annotator: they draw on the clips
+        # assigned to them, by someone else or by themselves out of the pool.
+        # Reviewers and above are not confined that way, because checking other
+        # people's work is the job.
+        if not project.may_annotate_video(request.user, video.pk):
+            return JsonResponse(
+                {"error": "This clip is not assigned to you. Claim it from the "
+                          "unassigned pool, or ask for it to be assigned."},
+                status=403)
 
         # A human saving in the editor = a human review.
         from django.utils import timezone
@@ -1196,9 +1226,12 @@ class PreAnnotateView(LoginRequiredMixin, View):
         from django.shortcuts import redirect
         from django.contrib import messages
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Spends GPU.
+        project = get_object_or_404(
+            AnnotationProject.manageable(request.user), pk=pk)
         from apps.videos.models import Video
-        video = get_object_or_404(Video, pk=request.POST.get("video_id"), user=request.user)
+        video = get_object_or_404(project.videos.all(),
+                                  pk=request.POST.get("video_id"))
 
         task = _create_preannotation_task(request, project, video)
         spawn_preannotation_async(task.pk)
@@ -1244,7 +1277,9 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
         from django.shortcuts import redirect
         from django.contrib import messages
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Spends GPU, on every sampled frame.
+        project = get_object_or_404(
+            AnnotationProject.manageable(request.user), pk=pk)
         videos = project.videos.all()
         video_ids = request.POST.getlist("video_ids")
         if video_ids:
@@ -1293,7 +1328,9 @@ class CancelPreAnnotationView(LoginRequiredMixin, View):
 
         from .models import PreAnnotationTask
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Cancelling other people's GPU work.
+        project = get_object_or_404(
+            AnnotationProject.manageable(request.user), pk=pk)
         active = PreAnnotationTask.objects.filter(
             project=project, user=request.user,
             status__in=[PreAnnotationTask.Status.QUEUED, PreAnnotationTask.Status.PROCESSING],
@@ -1320,13 +1357,16 @@ class FrameImageView(LoginRequiredMixin, View):
         frame_number = int(request.GET.get("frame", 0))
         draw_boxes = request.GET.get("boxes", "false") == "true"
 
-        from apps.videos.models import Video
-        video = get_object_or_404(Video, pk=video_id, user=request.user)
+        # This is the hinge. Check ownership and shares silently do not work —
+        # a collaborator sees an empty editor. Check nothing and every project's
+        # frames leak. The rule is: the project must be readable by this user,
+        # and the clip must be in it.
+        project = get_object_or_404(AnnotationProject.accessible(request.user), pk=pk)
+        video = get_object_or_404(project.videos.all(), pk=video_id)
 
-        ann = None
         try:
-            project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
-            ann = Annotation.objects.get(project=project, video=video, frame_number=frame_number)
+            ann = Annotation.objects.get(project=project, video=video,
+                                         frame_number=frame_number)
         except Annotation.DoesNotExist:
             ann = None
 
@@ -1415,8 +1455,7 @@ class ReviewView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         project = get_object_or_404(
-            AnnotationProject, pk=self.kwargs["pk"], user=self.request.user
-        )
+            AnnotationProject.accessible(self.request.user), pk=self.kwargs["pk"])
 
         # Filters from query params
         video_filter = self.request.GET.get("video", "")
@@ -1486,9 +1525,9 @@ class ExportProjectView(LoginRequiredMixin, View):
     """Export YOLO dataset with images extracted from videos."""
 
     def get(self, request, pk):
+        # A viewer may export: the dataset is what sharing is for.
         project = get_object_or_404(
-            AnnotationProject, pk=pk, user=request.user
-        )
+            AnnotationProject.accessible(request.user), pk=pk)
         # Same rule as the training payload: un-annotated sampled frames are
         # navigation placeholders, not labelled data.
         annotations = (project.annotations.exclude(sampled_only=True)
@@ -1540,7 +1579,10 @@ class ExportProjectView(LoginRequiredMixin, View):
                 img_bytes = None
                 if ann.frame_image_path:
                     try:
-                        import io
+                        # `io` is imported at module level. Re-importing it here
+                        # made the name local to this whole method, so the
+                        # io.BytesIO() forty lines above raised UnboundLocalError
+                        # and export failed for everyone, every time.
                         b = io.BytesIO()
                         s3.download_to_stream("processed", ann.frame_image_path, b)
                         img_bytes = b.getvalue()
@@ -1597,7 +1639,10 @@ class PreAnnotateFrameView(LoginRequiredMixin, View):
         from django.conf import settings
         from .models import PreAnnotationTask
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # One frame in the editor: an annotation aid, bounded, and how
+        # labelling is actually done.
+        project = get_object_or_404(
+            AnnotationProject.annotatable(request.user), pk=pk)
         if not getattr(settings, "SAGEMAKER_SAM3_ENDPOINT_NAME", ""):
             return JsonResponse({"error": "SAM 3 endpoint isn't configured on this server."},
                                 status=400)
@@ -1648,7 +1693,9 @@ class PreAnnotateFrameStatusView(LoginRequiredMixin, View):
 
         from .models import PreAnnotationTask
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Polling the above.
+        project = get_object_or_404(
+            AnnotationProject.annotatable(request.user), pk=pk)
         task = get_object_or_404(PreAnnotationTask, pk=request.GET.get("task"),
                                  project=project, user=request.user)
         if task.status == PreAnnotationTask.Status.FAILED:
@@ -1717,7 +1764,9 @@ class SampleFramesView(LoginRequiredMixin, View):
         from . import sampling
         from .models import FrameSamplingTask
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Decodes every clip; a labeller must not start it.
+        project = get_object_or_404(
+            AnnotationProject.manageable(request.user), pk=pk)
         videos = project.videos.all()
         video_ids = request.POST.getlist("video_ids") or (
             [request.POST["video_id"]] if request.POST.get("video_id") else []
@@ -1758,7 +1807,9 @@ class CancelSamplingView(LoginRequiredMixin, View):
 
         from .models import FrameSamplingTask
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Cancelling other people's work.
+        project = get_object_or_404(
+            AnnotationProject.manageable(request.user), pk=pk)
         cancelled = FrameSamplingTask.objects.filter(
             project=project,
             status__in=[FrameSamplingTask.Status.QUEUED,
