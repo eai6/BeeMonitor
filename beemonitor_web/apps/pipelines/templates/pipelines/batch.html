@@ -178,7 +178,7 @@ their reason.
       {% for d in downloads %}
       <a href="{% url 'pipelines:batch_combined_csv' batch_id=batch_id kind=d.kind %}"
          title="{{ d.hint }}"
-         class="text-[11px] px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 hover:border-amber-400 whitespace-nowrap">{{ d.label }}</a>
+         class="text-[11px] px-2 py-1 rounded border {% if d.analyzed %}border-amber-300 bg-amber-50 text-amber-800{% else %}border-gray-300 text-gray-700{% endif %} hover:bg-gray-50 hover:border-amber-400 whitespace-nowrap">{{ d.label }}</a>
       {% endfor %}
     </div>
   </div>

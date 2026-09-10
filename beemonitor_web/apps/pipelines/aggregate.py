@@ -175,18 +175,35 @@ BASE_TABLES = (
 )
 
 
-def available_downloads(sources):
+def available_downloads(sources, runs=()):
     """The base tables this batch actually produced, as template rows.
 
     Offering a download that returns nothing is worse than not offering it: the
     user cannot tell a missing pipeline step from a broken button. Only tables
-    at least one completed clip wrote are listed.
+    something actually wrote are listed.
+
+    ``analyzed`` marks the two the pipeline's own analyzers computed. Those
+    downloads carry the analyzers' answer rather than the worker's raw file,
+    which matters because the two disagree: the worker matches an insect to a
+    reference by centroid distance under a flat 50 px and misses anything
+    sitting inside a large one.
     """
+    analyzed = set()
+    for run in runs:
+        for kind, out in analyzer_outputs(run):
+            if kind in PRIMITIVE_KINDS and (out.get("rows") or []):
+                analyzed.add(kind)
+
     out = []
     for kind, path_key, label, hint in BASE_TABLES:
         clips = sum(1 for s in sources if (s.get("result") or {}).get(path_key))
-        if clips:
-            out.append({"kind": kind, "label": label, "hint": hint, "clips": clips})
+        if kind in analyzed:
+            out.append({"kind": kind, "label": label, "clips": len(runs),
+                        "analyzed": True,
+                        "hint": hint + " Computed by this pipeline's analyzer."})
+        elif clips:
+            out.append({"kind": kind, "label": label, "hint": hint,
+                        "clips": clips, "analyzed": False})
     return out
 
 
@@ -213,6 +230,74 @@ def _provenance(src):
         "site_name": getattr(video, "site_name", "") or "",
         "location": getattr(device, "location", "") or "",
     }
+
+
+# Primitive tables the pipeline's own analyzers computed, keyed by the
+# table_kind they tag themselves with.
+PRIMITIVE_KINDS = {"events": "events", "interactions": "interactions"}
+
+
+def _primitive_fieldnames(kind, rows):
+    from . import primitives
+
+    base = (primitives.EVENT_FIELDS if kind == "events"
+            else primitives.INTERACTION_FIELDS)
+    # Analyzers add columns the schema does not fix (b_label, min_distance);
+    # keep them, in first-seen order, rather than dropping data on export.
+    extra = []
+    for row in rows:
+        for key in row:
+            if key not in base and key not in extra and key not in PROVENANCE_FIELDS:
+                extra.append(key)
+    return PROVENANCE_FIELDS + list(base) + extra
+
+
+def primitive_csv(runs, kind):
+    """(fieldnames, rows) for the events/interactions the ANALYZERS computed.
+
+    Not the worker's own CSV. That one matches an insect to a reference by
+    centroid-to-centroid distance under a flat 50 px, which throws the
+    reference's size away: a bee resting inside a 400 px flower sits ~200 px
+    from its centre and is never recorded. Exporting it meant the download
+    disagreed with the annotated video the user was looking at.
+
+    The analyzers ask containment instead, and their rows live in run.context.
+    Returns (None, []) when no run in the batch produced this primitive — the
+    caller then falls back to the worker's file rather than offering nothing.
+    """
+    from apps.videos.models import Video
+
+    video_ids = [vid for r in runs if (vid := run_video_id(r)) is not None]
+    videos = {v.pk: v for v in
+              Video.objects.filter(pk__in=video_ids).select_related("device")}
+
+    all_rows = []
+    for run in runs:
+        video = videos.get(run_video_id(run))
+        if video is None or not video.recorded_at:
+            continue
+        outputs = [out for k, out in analyzer_outputs(run) if k == kind]
+        if not outputs:
+            continue
+        result = run_gpu_result(run)
+        fps = max(fps_with_source(result, video)[0], 1.0)
+        src = {"video": video, "title": video.title or f"Video {video.pk}",
+               "recorded_at": video.recorded_at}
+        provenance = _provenance(src)
+
+        for out in outputs:
+            for row in out.get("rows") or []:
+                frame = row.get("frame", row.get("start_frame"))
+                merged = dict(provenance)
+                merged["absolute_time"] = (
+                    (video.recorded_at + timedelta(seconds=float(frame) / fps)).isoformat()
+                    if isinstance(frame, (int, float)) else "")
+                merged.update(row)
+                all_rows.append(merged)
+
+    if not all_rows:
+        return None, []
+    return _primitive_fieldnames(kind, all_rows), all_rows
 
 
 def combined_csv(sources, path_key):

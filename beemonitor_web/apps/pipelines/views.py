@@ -844,7 +844,7 @@ def batch_detail(request, batch_id):
     # the ones something actually wrote: a button that downloads nothing looks
     # like a bug rather than a missing pipeline step.
     _backfill_interactions_paths(sources)
-    downloads = aggregate.available_downloads(sources)
+    downloads = aggregate.available_downloads(sources, runs)
 
     # Running these same clips through a different pipeline. Offered instead of
     # an analyzer swap: a different pipeline may detect a different class,
@@ -1022,6 +1022,17 @@ def batch_combined_csv(request, batch_id, kind):
     if not path_key:
         raise Http404("Unknown CSV kind.")
     runs = _batch_runs(request, batch_id)
+
+    # Prefer what the pipeline's own analyzers computed. The worker's
+    # interactions CSV matches an insect to a reference by centroid distance
+    # under a flat 50 px, so a bee inside a large flower never appears in it —
+    # exporting that made the download disagree with the annotated video.
+    if kind in aggregate.PRIMITIVE_KINDS:
+        fieldnames, rows = aggregate.primitive_csv(runs, kind)
+        if fieldnames:
+            return _csv_response(f"{kind}_batch_{str(batch_id)[:8]}.csv",
+                                 fieldnames, rows)
+
     sources, _ = aggregate.collect_sources(runs)
     if path_key == "interactions_csv_path":
         _backfill_interactions_paths(sources)

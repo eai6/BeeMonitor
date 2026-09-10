@@ -267,3 +267,109 @@ class CombinedCsvProvenanceTests(TestCase):
         row = aggregate._provenance(self._source())
 
         self.assertNotEqual(row["site_name"], row["location"])
+
+
+class PrimitiveExportTests(TestCase):
+    """The export must agree with the annotated video the user is watching.
+
+    The Interactions download shipped the WORKER's interactions.csv, which
+    matches an insect to a reference by centroid-to-centroid distance under a
+    flat 50 px. A bee resting inside a 400 px flower sits ~200 px from its
+    centre, so it appeared in the video with a box around it and not at all in
+    the file. The analyzers ask containment; their rows are what gets exported.
+    """
+
+    def setUp(self):
+        from apps.devices.models import Device
+
+        self.user = User.objects.create_user("pe", password="x")
+        self.client.force_login(self.user)
+        self.device = Device.objects.create(owner=self.user, name="beemonitor3",
+                                            key_hash="hpe", prefix="bmk_pe")
+        self.pipeline = Pipeline.objects.create(user=self.user, title="P")
+        self.batch_id = "5e6f7a88-0000-4000-8000-0000000055ab"
+        self.video = Video.objects.create(
+            user=self.user, device=self.device, title="clip",
+            storage_key="pe/c.mp4", file_size_bytes=1, status=Video.Status.READY,
+            recorded_at=timezone.now(), site_name="Meadow A", fps=25.0)
+
+    def _run_with(self, output):
+        return PipelineRun.objects.create(
+            pipeline=self.pipeline, user=self.user, batch_id=self.batch_id,
+            status="completed",
+            steps=[{"id": "v", "block_type": "input.video",
+                    "config": {"video_id": str(self.video.pk)}}],
+            context={"v": {"artifact": "video", "video_id": self.video.pk},
+                     "a": output})
+
+    INTERACTION = {
+        "artifact": "table", "table_kind": "interactions",
+        "rows": [{"start_frame": 100, "end_frame": 200, "duration_sec": 4.0,
+                  "a": 4, "a_kind": "organism", "b": "nest_1",
+                  "b_kind": "reference", "relation": "inside",
+                  "source": "derived"}],
+    }
+
+    def _download(self, kind):
+        return self.client.get(reverse(
+            "pipelines:batch_combined_csv",
+            kwargs={"batch_id": self.batch_id, "kind": kind})).content.decode()
+
+    def test_the_analyzers_reference_interactions_reach_the_export(self):
+        self._run_with(self.INTERACTION)
+
+        body = self._download("interactions")
+
+        self.assertIn("organism", body)
+        self.assertIn("nest_1", body)
+        self.assertIn("inside", body)
+
+    def test_exported_rows_carry_provenance_and_absolute_time(self):
+        self._run_with(self.INTERACTION)
+
+        header, first = self._download("interactions").splitlines()[:2]
+
+        self.assertTrue(header.startswith("video_title,video_recorded_at,absolute_time"))
+        self.assertIn("beemonitor3", first)
+        self.assertIn("Meadow A", first)
+
+    def test_absolute_time_uses_the_clips_real_frame_rate(self):
+        self._run_with(self.INTERACTION)
+
+        row = self._download("interactions").splitlines()[1]
+
+        # frame 100 at 25 fps = 4s after the recording started.
+        expected = (self.video.recorded_at
+                    + __import__("datetime").timedelta(seconds=4.0)).isoformat()
+        self.assertIn(expected, row)
+
+    def test_columns_the_schema_does_not_fix_are_kept_not_dropped(self):
+        out = dict(self.INTERACTION)
+        out["rows"] = [{**self.INTERACTION["rows"][0], "b_label": "Tube 1",
+                        "min_distance": 0.02}]
+        self._run_with(out)
+
+        header = self._download("interactions").splitlines()[0]
+
+        self.assertIn("b_label", header)
+        self.assertIn("min_distance", header)
+
+    def test_events_export_the_same_way(self):
+        self._run_with({"artifact": "events", "table_kind": "events",
+                        "rows": [{"frame": 50, "subject": 4, "action": "enter",
+                                  "target": "nest_1", "target_kind": "reference",
+                                  "source": "derived"}]})
+
+        body = self._download("events")
+
+        self.assertIn("enter", body)
+        self.assertIn("nest_1", body)
+
+    def test_the_analyzer_table_is_flagged_on_the_page(self):
+        self._run_with(self.INTERACTION)
+
+        resp = self.client.get(reverse("pipelines:batch_detail",
+                                       kwargs={"batch_id": self.batch_id}))
+
+        by_kind = {d["kind"]: d for d in resp.context["downloads"]}
+        self.assertTrue(by_kind["interactions"]["analyzed"])
