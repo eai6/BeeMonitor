@@ -585,8 +585,31 @@ KIND_LABELS = {
 }
 
 
+def coverage_of(outputs, attempted):
+    """How much of the batch a total actually speaks for.
+
+    Every aggregate used to report ``clips = len(outputs)`` — the clips that
+    *succeeded*. A day where 9 of 12 runs failed rendered as a clean 3-clip day
+    with nothing to say the other 75% of the footage is missing. A total
+    without a denominator is not a usable number.
+
+    ``assumed_fps`` counts the clips whose durations rest on a guessed frame
+    rate rather than a measured one (see ``ops.fps_with_source``).
+    """
+    analysed = len(outputs)
+    assumed = sum(1 for o in outputs if (o or {}).get("fps_source") == "assumed")
+    return {
+        "attempted": attempted,
+        "analysed": analysed,
+        "missing": max(attempted - analysed, 0),
+        "pct": round(100 * analysed / attempted) if attempted else 0,
+        "complete": analysed >= attempted,
+        "assumed_fps": assumed,
+    }
+
+
 def analyzer_results(runs):
-    """``[{kind, label, summary}]`` for every analyzer this batch actually ran.
+    """``[{kind, label, summary, coverage}]`` for every analyzer this batch ran.
 
     Ordered by how many runs produced each, so the pipeline's main analyzer
     leads when a graph has more than one.
@@ -596,21 +619,22 @@ def analyzer_results(runs):
         for kind, output in analyzer_outputs(run):
             by_kind.setdefault(kind, []).append(output)
 
+    attempted = len(runs)
     results = []
     for kind, outputs in by_kind.items():
         aggregator = AGGREGATORS.get(kind)
-        if not aggregator:
+        entry = {
+            "kind": kind,
+            "label": KIND_LABELS.get(kind, kind.replace("_", " ").title()),
             # foraging_trips is rendered by the existing cross-video machinery;
             # colony_activity deliberately has no section. Both still register
             # so the page knows which analyzers ran.
-            results.append({"kind": kind, "label": KIND_LABELS.get(kind, kind),
-                            "summary": None, "clips": len(outputs)})
-            continue
-        results.append({
-            "kind": kind,
-            "label": KIND_LABELS.get(kind, kind.replace("_", " ").title()),
-            "summary": aggregator(outputs),
+            "summary": aggregator(outputs) if aggregator else None,
             "clips": len(outputs),
-        })
+            "coverage": coverage_of(outputs, attempted),
+        }
+        if not aggregator:
+            entry["label"] = KIND_LABELS.get(kind, kind)
+        results.append(entry)
     results.sort(key=lambda r: -r["clips"])
     return results

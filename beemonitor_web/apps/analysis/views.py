@@ -151,6 +151,15 @@ def apply_video_filters(qs, params):
         qs = qs.filter(metadata__bee_confirmed=True)
     elif confirmed == "no":
         qs = qs.filter(metadata__bee_confirmed=False)
+    elif confirmed == "untagged":
+        # Neither True nor False — the key is absent. Written as an explicit
+        # exclusion of the two tagged sets rather than `exclude(key=...)`,
+        # which drops absent-key rows under SQL NULL semantics and would
+        # return nothing at all here.
+        tagged = qs.model.objects.filter(
+            pk__in=qs.values("pk")).filter(
+            metadata__bee_confirmed__in=[True, False]).values("pk")
+        qs = qs.exclude(pk__in=tagged)
     return qs
 
 
@@ -758,9 +767,16 @@ class ProcessingHubView(LoginRequiredMixin, View):
         # filter uses (apply_video_filters), so a count and the filter it drives
         # can never disagree. metadata.bee.status is the richer sibling the card
         # badge reads for taxon/confidence.
+        confirmed = qs.filter(metadata__bee_confirmed=True).count()
+        unconfirmed = qs.filter(metadata__bee_confirmed=False).count()
         triage = {
-            "confirmed": qs.filter(metadata__bee_confirmed=True).count(),
-            "unconfirmed": qs.filter(metadata__bee_confirmed=False).count(),
+            "confirmed": confirmed,
+            "unconfirmed": unconfirmed,
+            # Clips the device never tagged either way — every web upload, and
+            # everything that predates on-device confirmation. Without this the
+            # two buckets above silently fail to add up to the library and the
+            # page looks broken.
+            "untagged": max(qs.count() - confirmed - unconfirmed, 0),
             "unanalyzed": qs.exclude(
                 pk__in=Job.objects.filter(status="completed").values("video_id")).count(),
         }

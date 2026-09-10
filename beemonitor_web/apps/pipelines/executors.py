@@ -448,6 +448,7 @@ def _exec_analyze_detection_count(step, run, context, inputs, index):
             note = (f"Most common per-frame count across "
                     f"{summary['frames_sampled']} sampled frame(s); "
                     f"{summary.get('frames_agreeing', 0)} frame(s) agreed.")
+        # No frame rate here: this branch counts sampled frames, not time.
         return {"artifact": "table", "table_kind": "detection_count",
                 "metric": metric, "note": note, **summary}
 
@@ -470,7 +471,7 @@ def _exec_analyze_detection_count(step, run, context, inputs, index):
 
     tidy = ops.normalized_tracks(df, result) if df is not None else None
     if tidy is not None:
-        fps = ops.fps_of(result)
+        fps, fps_source = ops.fps_with_source(result)
         if metric == "over_time":
             try:
                 bin_sec = float(cfg.get("bin_seconds", 5) or 5)
@@ -480,12 +481,14 @@ def _exec_analyze_detection_count(step, run, context, inputs, index):
                 tidy, boxes, fps, metric="motion", bin_sec=bin_sec,
             )
             return {"artifact": "table", "table_kind": "detection_count",
-                    "metric": metric, "note": note, **series}
+                    "metric": metric, "note": note,
+                    "fps": fps, "fps_source": fps_source, **series}
         summary = ops.compute_detection_counts(
             tidy, boxes, fps, per_frame=(metric == "per_frame"), count_tracks=not raw,
         )
         return {"artifact": "table", "table_kind": "detection_count",
-                "metric": metric, "note": note, **summary}
+                "metric": metric, "note": note,
+                "fps": fps, "fps_source": fps_source, **summary}
 
     return {
         "artifact": "table", "table_kind": "detection_count",
@@ -527,8 +530,12 @@ def _exec_analyze_visitation(step, run, context, inputs, index):
         if not refs:
             return {"artifact": "table", "table_kind": "visitation",
                     "note": "No ROI upstream — add an ROI (draw or nest layout) to count visits."}
-        summary = ops.compute_visitation(tidy, refs, ops.fps_of(result))
-        return {"artifact": "table", "table_kind": "visitation", **summary}
+        fps, fps_source = ops.fps_with_source(result)
+        summary = ops.compute_visitation(tidy, refs, fps)
+        # Carried so the page can say "dwell times assume 30 fps" instead of
+        # presenting a guessed rate as a measurement.
+        return {"artifact": "table", "table_kind": "visitation",
+                "fps": fps, "fps_source": fps_source, **summary}
 
     # Fallback: no readable tracking CSV (e.g. dev DB) — surface the job summary.
     return {
@@ -553,8 +560,10 @@ def _exec_analyze_colony_activity(step, run, context, inputs, index):
     df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
     tidy = ops.normalized_tracks(df, result) if df is not None else None
     if tidy is not None:
-        series = ops.compute_colony_activity(tidy, boxes, ops.fps_of(result), metric=metric)
-        return {"artifact": "table", "table_kind": "colony_activity", **series}
+        fps, fps_source = ops.fps_with_source(result)
+        series = ops.compute_colony_activity(tidy, boxes, fps, metric=metric)
+        return {"artifact": "table", "table_kind": "colony_activity",
+                "fps": fps, "fps_source": fps_source, **series}
     return {
         "artifact": "table",
         "table_kind": "colony_activity",

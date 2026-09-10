@@ -327,14 +327,19 @@ def fps_with_source(summary=None, video=None, default=DEFAULT_FPS):
     if measured and measured > 0:
         return measured, "video"
 
-    for key in _FPS_KEYS:
-        if summary and summary.get(key):
-            try:
-                value = float(summary[key])
-            except (TypeError, ValueError):
-                continue
-            if value > 0:
-                return value, "analysis"
+    # Callers pass either the GPU result dict or the summary_stats inside it.
+    # PipelineResult.to_dict() is a plain asdict(), so the frame rate lives one
+    # level down under "summary_stats" — a resolver that only checked the top
+    # level found nothing and quietly assumed 30 for every analyzer.
+    for scope in (summary, (summary or {}).get("summary_stats")):
+        for key in _FPS_KEYS:
+            if scope and scope.get(key):
+                try:
+                    value = float(scope[key])
+                except (TypeError, ValueError):
+                    continue
+                if value > 0:
+                    return value, "analysis"
 
     return float(default), "assumed"
 

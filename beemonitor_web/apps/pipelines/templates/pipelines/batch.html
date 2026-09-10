@@ -180,8 +180,35 @@ asked.
 <div class="bg-white shadow rounded-lg p-4 mb-6">
   <div class="flex items-baseline justify-between mb-3">
     <h2 class="text-sm font-semibold text-gray-900">{{ a.label }}</h2>
-    <span class="text-xs text-gray-400">from {{ a.clips }} clip{{ a.clips|pluralize }}</span>
+    {% if a.coverage.complete %}
+    <span class="text-xs text-gray-400">from all {{ a.coverage.attempted }} clip{{ a.coverage.attempted|pluralize }}</span>
+    {% else %}
+    <span class="text-xs font-medium text-amber-700">
+      from {{ a.coverage.analysed }} of {{ a.coverage.attempted }} clips ({{ a.coverage.pct }}%)
+    </span>
+    {% endif %}
   </div>
+
+  {% if not a.coverage.complete or a.coverage.assumed_fps %}
+  <div class="mb-3 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 space-y-1">
+    {% if not a.coverage.complete %}
+    <p>
+      <span class="font-semibold">Partial coverage.</span>
+      {{ a.coverage.missing }} of {{ a.coverage.attempted }} clip{{ a.coverage.attempted|pluralize }}
+      produced no result, so every total below is a floor, not the day's activity.
+      Re-run the failures to close the gap.
+    </p>
+    {% endif %}
+    {% if a.coverage.assumed_fps %}
+    <p>
+      <span class="font-semibold">Assumed frame rate.</span>
+      {{ a.coverage.assumed_fps }} clip{{ a.coverage.assumed_fps|pluralize }} recorded no frame
+      rate, so durations there assume 30 fps. Run
+      <code class="font-mono">backfill_video_props</code> to measure them.
+    </p>
+    {% endif %}
+  </div>
+  {% endif %}
 
   {% if a.kind == "visitation" %}
   <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">

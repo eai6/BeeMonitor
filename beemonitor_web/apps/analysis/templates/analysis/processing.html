@@ -45,6 +45,11 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
           <span class="text-[11px] text-gray-500">{{ triage.unconfirmed }}</span>
           <input type="radio" name="confirmed" value="no" class="hidden" {% if f.confirmed == 'no' %}checked{% endif %} onchange="this.form.submit()">
         </label>
+        <label class="flex items-center justify-between px-2 py-1.5 rounded cursor-pointer {% if f.confirmed == 'untagged' %}bg-amber-50 border border-amber-200{% else %}hover:bg-gray-50{% endif %}">
+          <span class="text-[13px] text-gray-700" title="The device never tagged these either way — web uploads, and clips that predate on-device confirmation.">Not tagged</span>
+          <span class="text-[11px] text-gray-500">{{ triage.untagged }}</span>
+          <input type="radio" name="confirmed" value="untagged" class="hidden" {% if f.confirmed == 'untagged' %}checked{% endif %} onchange="this.form.submit()">
+        </label>
         <label class="flex items-center justify-between px-2 py-1.5 rounded cursor-pointer {% if f.analysis == 'never' %}bg-amber-50 border border-amber-200{% else %}hover:bg-gray-50{% endif %}">
           <span class="text-[13px] text-gray-700">Not yet analyzed</span>
           <span class="text-[11px] text-gray-500">{{ triage.unanalyzed }}</span>

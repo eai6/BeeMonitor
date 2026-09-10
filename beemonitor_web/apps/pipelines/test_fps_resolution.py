@@ -95,3 +95,31 @@ class CollectSourcesFpsTests(TestCase):
         sources, _skipped = aggregate.collect_sources([run])
 
         self.assertEqual(sources[0]["fps_source"], "assumed")
+
+
+class NestedSummaryTests(TestCase):
+    """The executors pass the whole GPU result, not the summary inside it.
+
+    ``PipelineResult.to_dict()`` is a plain ``asdict()``, so ``video_fps`` sits
+    one level down under ``summary_stats``. A resolver that only looked at the
+    top level found nothing and assumed 30 for every analyzer — visitation
+    dwell times, colony-activity bins and detection windows included.
+    """
+
+    def test_a_whole_result_dict_resolves_the_nested_rate(self):
+        result = {"events_csv_path": "e.csv", "unique_tracks": 4,
+                  "summary_stats": {"video_fps": 25.0}}
+
+        self.assertEqual(ops.fps_with_source(result), (25.0, "analysis"))
+
+    def test_a_bare_summary_dict_still_resolves(self):
+        self.assertEqual(ops.fps_with_source({"video_fps": 25.0}), (25.0, "analysis"))
+
+    def test_a_top_level_rate_beats_the_nested_one(self):
+        result = {"video_fps": 25.0, "summary_stats": {"video_fps": 30.0}}
+
+        self.assertEqual(ops.fps_of(result), 25.0)
+
+    def test_a_result_with_no_rate_anywhere_is_still_assumed(self):
+        self.assertEqual(
+            ops.fps_with_source({"summary_stats": {}})[1], "assumed")
