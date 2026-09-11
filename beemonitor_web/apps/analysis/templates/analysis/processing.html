@@ -51,11 +51,6 @@
       <option value="{{ d.pk }}" {% if f.device == d.pk|stringformat:"s" %}selected{% endif %}>{{ d.name }}</option>
       {% endfor %}
     </select>
-    <select name="confirmed" class="border border-gray-300 rounded px-2 py-1.5 text-sm" title="On-device bee confirmation">
-      <option value="">Any confirmation</option>
-      <option value="yes" {% if f.confirmed == "yes" %}selected{% endif %}>✓ Confirmed bee</option>
-      <option value="no" {% if f.confirmed == "no" %}selected{% endif %}>Unconfirmed</option>
-    </select>
     {% if opts.sites %}
     <select name="site" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
       <option value="">All sites</option>
@@ -154,13 +149,6 @@
         <div class="flex-1 min-w-0">
           <div class="text-sm text-gray-900 flex items-center gap-1.5 min-w-0">
             <a href="{% url 'videos:detail' v.pk %}" class="truncate text-amber-700 hover:underline font-medium" title="View this video">{{ v.title|default:"(untitled)" }}</a>
-            {% if v.metadata.bee.status == "confirmed" %}
-            <span class="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700"
-                  title="On-device: confirmed bee{% if v.metadata.bee.confidence %} · conf {{ v.metadata.bee.confidence }}{% endif %}{% if v.metadata.bee.taxon %} · {{ v.metadata.bee.taxon }}{% endif %}">✓ bee{% if v.metadata.bee.confidence %} {% widthratio v.metadata.bee.confidence 1 100 %}%{% endif %}</span>
-            {% elif v.metadata.bee.status == "unconfirmed" %}
-            <span class="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500"
-                  title="On-device: not confirmed as a bee — recorded + uploaded, but not counted as activity">unconfirmed</span>
-            {% endif %}
           </div>
           <div class="text-xs text-gray-400">{% if v.device %}{{ v.device.name }} · {% endif %}{{ v.recorded_at|default:v.uploaded_at|date:"Y-m-d H:i" }}</div>
         </div>

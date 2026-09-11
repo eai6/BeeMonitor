@@ -32,8 +32,6 @@ snippet length) before trusting it in the field, then tighten thresholds.
 
 from __future__ import annotations
 
-import json
-import os
 import threading
 import time
 import uuid
@@ -49,7 +47,7 @@ from motion.config import (
     CALIB_FILE, TUNING_FILE, ROI_OVERRIDE_FILE,
     CALIB_RELOAD_SECONDS, OVERRIDE_RELOAD_SECONDS,
     TELEMETRY_IMAGE_INTERVAL, TELEMETRY_QUEUE,
-    FRAME_MAX_CANDIDATES, FRAME_CAPTURE_INTERVAL, BEE_CONFIRM_MODE_FILE,
+    FRAME_MAX_CANDIDATES, FRAME_CAPTURE_INTERVAL,
     ACTIVITY_FRAMES_FILE, SAVE_ACTIVITY_FRAMES,
     RECORD_SETTINGS_FILE, CONTINUOUS_SEGMENT,
 )
@@ -61,7 +59,7 @@ from motion.frames import _main_array_to_bgr
 from motion.roi import _resolve_record_roi
 from motion.overrides import (
     _build_gate, load_calibration, _apply_calibration,
-    load_tuning, _apply_tuning, load_roi_override_lores, load_bee_confirm_mode,
+    load_tuning, _apply_tuning, load_roi_override_lores,
     load_activity_crops_mode, load_record_settings,
 )
 from motion.remux import _remux, _snippet_paths
@@ -70,7 +68,6 @@ from motion.activity_frames import (
     _largest_blob, _mover_crop, _flush_activity_frames,
     _encode_source, _save_activity_archive,
 )
-from motion.confirm import BeeConfirmer, CONFIRMED, UNCONFIRMED, DISABLED
 
 # picamera2 only exists on the Pi. Keep the import soft so the module can be
 # imported off-device (e.g. for linting); record() requires it.
@@ -91,72 +88,6 @@ def _handle_signal(signum, frame):  # noqa: ARG001
     global _running
     log.info("signal %s received, finalising current segment then exiting", signum)
     _running = False
-
-
-def _should_send_crops(crops_mode, status) -> bool:
-    """Whether to ship a finished activity's crops, given the dashboard crop mode
-    and the bee-confirmation verdict:
-      all       — every activity
-      confirmed — only confirmed bees; DISABLED means no confirmer ran (nothing to
-                  reject), so send. UNCONFIRMED/PENDING are dropped.
-      off       — never (and sampling is already gated off upstream)
-    """
-    if crops_mode == "off":
-        return False
-    if crops_mode == "all":
-        return True
-    return status == CONFIRMED or status == DISABLED  # "confirmed"
-
-
-def _write_clip_tag(mp4_path, status, confidence, taxon, runs, mode) -> None:
-    """Write the per-clip bee-confirmation tag next to the .mp4 (atomic).
-
-    ``<stem>.bee.json`` rides with the uploaded clip so telemetry counts only
-    confirmed activities and the cloud can flag/route. Best-effort; never raises.
-    """
-    if mp4_path is None:
-        return
-    tag = {
-        "confirm_status": status,
-        "bee_confidence": round(float(confidence), 4),
-        "taxon": taxon,
-        "confirm_runs": int(runs),
-        "mode": mode,
-    }
-    try:
-        # `<clip>.mp4.bee.json` — sits beside the clip (uploader idiom, like
-        # `.uploaded`/`.usb`) so it ships with the upload and the cloud can flag it.
-        out = mp4_path.with_suffix(mp4_path.suffix + ".bee.json")
-        tmp = out.with_name(out.name + ".part")
-        tmp.write_text(json.dumps(tag))
-        os.replace(tmp, out)
-    except OSError as e:  # pragma: no cover - disk hiccup mustn't crash recording
-        log.warning("could not write clip tag for %s: %s", getattr(mp4_path, "name", "?"), e)
-    # Cheap O(1) markers for telemetry's per-hour histograms (no JSON read per
-    # clip every beat). In `gate` mode: a rejected clip gets `.unconfirmed` (still
-    # recorded + uploaded, not counted as bee activity); a positively-confirmed
-    # bee gets `.confirmed` (a strict subset, so the dashboard's "Confirmed" filter
-    # can show on-card bees before upload without counting untagged clips). Off/
-    # disabled clips get neither (untagged). Keep the two markers mutually exclusive.
-    try:
-        unconf = mp4_path.with_suffix(mp4_path.suffix + ".unconfirmed")
-        conf = mp4_path.with_suffix(mp4_path.suffix + ".confirmed")
-        if mode == "gate" and status == UNCONFIRMED:
-            unconf.touch()
-            if conf.exists():
-                conf.unlink()
-        elif mode == "gate" and status == CONFIRMED:
-            conf.touch()
-            if unconf.exists():
-                unconf.unlink()  # late confirm — promote it
-        else:
-            # off / disabled / pending → untagged: clear any stale markers.
-            if unconf.exists():
-                unconf.unlink()
-            if conf.exists():
-                conf.unlink()
-    except OSError:
-        pass
 
 
 def _in_record_window(window) -> bool:
@@ -232,9 +163,6 @@ def record() -> None:
     )
 
     gate = _build_gate(roi)
-    # Async YOLO bee-confirmation. Initial mode = dashboard push (if any) else env;
-    # switchable at runtime via the override-reload tick below.
-    confirmer = BeeConfirmer(mode=load_bee_confirm_mode())
     remux_pool = []  # list of threading.Thread for in-flight remuxes
 
     def _spawn_remux(h264_path: Path, mp4_path: Path):
@@ -255,7 +183,6 @@ def record() -> None:
     act_started = 0.0
     act_cands: list = []
     act_last_cap = 0.0
-    act_confirm_submits = 0   # full frames handed to the confirmer this activity
 
     # Per-segment / rolling stats for tuning.
     triggers = 0
@@ -273,10 +200,7 @@ def record() -> None:
     calib_mtime = CALIB_FILE.stat().st_mtime if CALIB_FILE.exists() else 0.0
     tuning_mtime = TUNING_FILE.stat().st_mtime if TUNING_FILE.exists() else 0.0
     roi_ov_mtime = ROI_OVERRIDE_FILE.stat().st_mtime if ROI_OVERRIDE_FILE.exists() else 0.0
-    bee_mode_mtime = BEE_CONFIRM_MODE_FILE.stat().st_mtime if BEE_CONFIRM_MODE_FILE.exists() else 0.0
-    # Dashboard-pushed crop mode: all|confirmed|off (env ACTIVITY_CROPS_MODE is the
-    # fallback). act_frames_on gates sampling (mode != off); crops_mode also decides,
-    # per verdict, whether a finished activity's crops are sent (see _should_send_crops).
+    # Dashboard-pushed crop mode: all|off (env ACTIVITY_CROPS_MODE is the fallback).
     crops_mode = load_activity_crops_mode()
     act_frames_on = crops_mode != "off"
     act_frames_mtime = ACTIVITY_FRAMES_FILE.stat().st_mtime if ACTIVITY_FRAMES_FILE.exists() else 0.0
@@ -296,21 +220,20 @@ def record() -> None:
 
     def _open_segment(now_mono: float, reason: str):
         nonlocal encoding, seg_start, cur_h264, cur_mp4, triggers
-        nonlocal act_uid, act_started, act_cands, act_last_cap, act_confirm_submits
+        nonlocal act_uid, act_started, act_cands, act_last_cap
         cur_h264, cur_mp4 = _snippet_paths(datetime.now())
         circ.fileoutput = str(cur_h264)
         circ.start()
         encoding = True
         seg_start = now_mono
         triggers += 1
-        # Start a fresh activity (used by both crop sampling and bee confirmation).
-        # The short random suffix keeps the uid unique even if two clips open in
-        # the same wall-clock second (e.g. a max-len rotation that reopens).
+        # Start a fresh activity (crop sampling). The short random suffix keeps the
+        # uid unique even if two clips open in the same wall-clock second (e.g. a
+        # max-len rotation that reopens).
         act_uid = f"{cur_mp4.stem}-{uuid.uuid4().hex[:4]}"
         act_started = time.time()
         act_cands = []
         act_last_cap = 0.0
-        act_confirm_submits = 0
         log.info("clip START (%s) -> %s", reason, cur_mp4.name)
 
     def _close_segment(now_mono: float, reason: str):
@@ -324,16 +247,9 @@ def record() -> None:
         mp4 = cur_mp4
         _spawn_remux(cur_h264, cur_mp4)
         cur_h264 = cur_mp4 = None
-        if confirmer.active and act_uid:
-            # Defer: the clip is already recorded; the verdict (async) decides the
-            # tag + whether to count it + whether to send its crops. Finalised in
-            # the drain handler in the main loop.
-            confirmer.register_close(
-                act_uid, {"mp4": mp4, "started": act_started, "crops": act_cands},
-                now_mono)
-        elif act_frames_on and act_uid:
-            # No confirmation (mode=off or inert). Archive durably (crop + source
-            # frame, WiFi-uploaded) and send all crops over cellular.
+        if act_frames_on and act_uid:
+            # Archive durably (crop + source frame, WiFi-uploaded) and send the
+            # crops over cellular.
             _save_activity_archive(mp4, act_uid, act_started, act_cands)
             _flush_activity_frames(act_uid, act_started, act_cands)
         act_uid = None
@@ -376,39 +292,29 @@ def record() -> None:
                     _open_segment(now_mono, "motion")
 
             # While a clip is open, grab a full main still (the costly bit) at most
-            # once every FRAME_CAPTURE_INTERVAL, capped per clip — and feed that ONE
-            # capture to BOTH consumers: crop sampling (cloud BioCLIP) and bee
-            # confirmation (YOLO). The confirmer submit is fire-and-forget (async),
-            # so a 1–3 s inference never delays capture or drops a fast bee.
+            # once every FRAME_CAPTURE_INTERVAL, capped per clip, for crop sampling
+            # (cloud BioCLIP).
             want_crop = act_frames_on and len(act_cands) < FRAME_MAX_CANDIDATES
-            want_confirm = (confirmer.active and act_uid is not None
-                            and act_confirm_submits < FRAME_MAX_CANDIDATES
-                            and not confirmer.is_confirmed(act_uid))
-            if (encoding and motion and gate.last_blobs
-                    and (want_crop or want_confirm)
+            if (encoding and motion and gate.last_blobs and want_crop
                     and (now_mono - act_last_cap) >= FRAME_CAPTURE_INTERVAL):
                 try:
                     main_bgr = _main_array_to_bgr(cam.capture_array("main"))
-                    if want_confirm:
-                        confirmer.submit(act_uid, main_bgr, gate.last_blobs, gate.roi)
-                        act_confirm_submits += 1
-                    if want_crop:
-                        blob = _largest_blob(gate.last_blobs)
-                        if blob is not None:
-                            sample = _mover_crop(main_bgr, blob, gate.roi)
-                            if sample is not None:
-                                jpg, bbox, wh = sample
-                                cand = {
-                                    "jpg": jpg, "bbox": bbox, "wh": wh,
-                                    "area": float(blob[4]), "captured_at": time.time(),
-                                }
-                                # Keep the full source frame the crop came from, so
-                                # the durable archive can save it (uploaded over WiFi).
-                                if SAVE_ACTIVITY_FRAMES:
-                                    src = _encode_source(main_bgr)
-                                    if src is not None:
-                                        cand["src_jpg"], cand["src_wh"] = src
-                                act_cands.append(cand)
+                    blob = _largest_blob(gate.last_blobs)
+                    if blob is not None:
+                        sample = _mover_crop(main_bgr, blob, gate.roi)
+                        if sample is not None:
+                            jpg, bbox, wh = sample
+                            cand = {
+                                "jpg": jpg, "bbox": bbox, "wh": wh,
+                                "area": float(blob[4]), "captured_at": time.time(),
+                            }
+                            # Keep the full source frame the crop came from, so
+                            # the durable archive can save it (uploaded over WiFi).
+                            if SAVE_ACTIVITY_FRAMES:
+                                src = _encode_source(main_bgr)
+                                if src is not None:
+                                    cand["src_jpg"], cand["src_wh"] = src
+                            act_cands.append(cand)
                     act_last_cap = now_mono
                 except Exception as e:  # never crash recording over a sample
                     log.warning("activity frame capture failed: %s", e)
@@ -434,24 +340,6 @@ def record() -> None:
                 # Normal close: no motion for the (dashboard-tunable) clip tail.
                 elif (now_mono - last_motion) >= rec_post_roll:
                     _close_segment(now_mono, "idle")
-
-            # Resolve finished bee-confirmation verdicts (async, off the hot path):
-            # finalise each closed clip's tag and, per mode, send or suppress its
-            # crops. The video is already recorded + remuxed regardless.
-            if confirmer.active:
-                for r in confirmer.drain_resolved(now_mono):
-                    p = r["payload"] or {}
-                    _write_clip_tag(p.get("mp4"), r["status"], r["confidence"],
-                                    r["taxon"], r["runs"], confirmer.mode)
-                    # Durable archive for EVERY sampled activity (crop + source
-                    # frame, WiFi-uploaded) so nothing is lost regardless of the
-                    # cellular send decision below.
-                    _save_activity_archive(p.get("mp4"), r["uid"],
-                                           p.get("started", 0.0), p.get("crops"))
-                    # The dashboard crop mode decides which verdicts get their crops
-                    # shipped over cellular (all | confirmed | off).
-                    if _should_send_crops(crops_mode, r["status"]) and p.get("crops"):
-                        _flush_activity_frames(r["uid"], p.get("started", 0.0), p["crops"])
 
             # Periodic background-model rebuild. Deferred while a clip is open so
             # an active capture isn't cut short; fires as soon as the scene idles.
@@ -511,16 +399,7 @@ def record() -> None:
                         log.info("applied ROI override %s — re-warming %.1fs",
                                  new_roi, WARMUP_SECONDS)
                     roi_ov_mtime = rm
-                # Live bee-confirmation mode switch (off|tag|gate) from the dashboard.
-                try:
-                    bm = (BEE_CONFIRM_MODE_FILE.stat().st_mtime
-                          if BEE_CONFIRM_MODE_FILE.exists() else 0.0)
-                except OSError:
-                    bm = bee_mode_mtime
-                if bm != bee_mode_mtime:
-                    confirmer.set_mode(load_bee_confirm_mode())
-                    bee_mode_mtime = bm
-                # Live crop mode (all|confirmed|off) from the dashboard.
+                # Live crop mode (all|off) from the dashboard.
                 try:
                     am = (ACTIVITY_FRAMES_FILE.stat().st_mtime
                           if ACTIVITY_FRAMES_FILE.exists() else 0.0)
@@ -573,11 +452,6 @@ def record() -> None:
                 msg = ("stats: %d clips in last %.0f min, %.1fs recorded (%.1f%% duty)"
                        % (triggers, mins, total_clip_time,
                           100.0 * total_clip_time / (now_mono - last_stats_log)))
-                if confirmer.active:
-                    cs = confirmer.stats()
-                    msg += (" | confirm: %d ok %d no, %d inferences @ %.0fms avg"
-                            % (cs["confirmed"], cs["unconfirmed"], cs["inferences"],
-                               cs["mean_ms"]))
                 log.info("%s", msg)
                 triggers = 0
                 total_clip_time = 0.0
@@ -586,18 +460,6 @@ def record() -> None:
     finally:
         if encoding:
             _close_segment(time.monotonic(), "shutdown")
-        # Resolve any verdicts that already settled; pending ones fail closed
-        # (the clip is recorded + uploaded, just untagged-confirmed).
-        if confirmer.active:
-            for r in confirmer.drain_resolved(time.monotonic()):
-                p = r["payload"] or {}
-                _write_clip_tag(p.get("mp4"), r["status"], r["confidence"],
-                                r["taxon"], r["runs"], confirmer.mode)
-                _save_activity_archive(p.get("mp4"), r["uid"],
-                                       p.get("started", 0.0), p.get("crops"))
-                if _should_send_crops(crops_mode, r["status"]) and p.get("crops"):
-                    _flush_activity_frames(r["uid"], p.get("started", 0.0), p["crops"])
-        confirmer.stop()
         try:
             cam.stop()
             cam.stop_encoder()

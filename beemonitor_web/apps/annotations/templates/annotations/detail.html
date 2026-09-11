@@ -216,11 +216,6 @@
       <option value="{{ d.pk }}" {% if available_filter.device == d.pk|stringformat:"s" %}selected{% endif %}>{{ d.name }}</option>
       {% endfor %}
     </select>
-    <select name="av_confirmed" class="border border-gray-300 rounded px-2 py-1.5 text-sm" title="On-device bee confirmation">
-      <option value="">Any confirmation</option>
-      <option value="yes" {% if available_filter.confirmed == "yes" %}selected{% endif %}>✓ Confirmed bee</option>
-      <option value="no" {% if available_filter.confirmed == "no" %}selected{% endif %}>Unconfirmed</option>
-    </select>
     {% if available_opts.sites %}
     <select name="av_site" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
       <option value="">All sites</option>

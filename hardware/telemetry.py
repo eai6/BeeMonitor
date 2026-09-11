@@ -131,10 +131,6 @@ CALIBRATION_FILE = RECORD_DIR.parent / "calibration.json"
 # Dashboard ROI editor outputs (normalized): hotel ROI override + nest layout.
 ROI_OVERRIDE_FILE = RECORD_DIR.parent / "roi_override.json"
 NEST_LAYOUT_FILE = RECORD_DIR.parent / "nest_layout.json"
-# Dashboard-pushed bee-confirmation mode (off|tag|gate); the recorder hot-reloads
-# it over its env default. Lets a no-shell unit be switched between observe (tag)
-# and filter (gate) remotely.
-BEE_CONFIRM_MODE_FILE = RECORD_DIR.parent / "bee_confirm_mode.json"
 # Dashboard-pushed crop-upload toggle the recorder hot-reloads ({"enabled": bool}).
 # Off = stop sampling/sending BioCLIP review crops over cellular (the recorder
 # stops sampling, so no SD/CPU/cellular spend). Same dir as the mode file above.
@@ -419,17 +415,6 @@ def _video_stats(window_seconds: int) -> dict:
     # of the files on disk — unaffected by mtime changes or service restarts.
     # Bounded to ~8 days to cover the dashboard's 7d view without a huge payload.
     by_hour: dict = {}
-    # Complement of by_hour: clips the on-device YOLO marked NOT a bee
-    # (`<clip>.mp4.unconfirmed`, gate mode only). Lets the dashboard show
-    # unconfirmed (shadow/non-bee) activity before it uploads over WiFi.
-    unconfirmed_by_hour: dict = {}
-    # Strict-confirmed subset: clips the on-device YOLO POSITIVELY confirmed a bee
-    # (`<clip>.mp4.confirmed`, gate mode only). `by_hour` above is confirmed +
-    # untagged (it only excludes `.unconfirmed`), so it can't be made strict; this
-    # histogram lets the dashboard's "Confirmed" filter show on-card confirmed bees
-    # before upload without counting untagged clips. Older clips (pre-marker) are
-    # absent here — the cloud falls back to uploaded bee_confirmed=True for those.
-    confirmed_by_hour: dict = {}
     hist_cutoff = now - 8 * 86400
     cur_key = time.strftime("%Y-%m-%dT%H", time.localtime(now))
     if RECORD_DIR.is_dir():
@@ -442,24 +427,11 @@ def _video_stats(window_seconds: int) -> dict:
             recordings_bytes += st.st_size  # footprint of ALL clips on the card
             if st.st_mtime > newest:
                 newest = st.st_mtime
-            # Bee confirmation (gate mode): a clip the on-device YOLO couldn't
-            # confirm is marked `<clip>.mp4.unconfirmed`. It still records +
-            # uploads (counted in total/pending/bytes), but is NOT counted as a
-            # bee ACTIVITY — so the dashboard/telemetry activity proxy isn't
-            # inflated by shadows. Untagged clips (off mode / confirmed) count.
-            is_activity = not mp4.with_suffix(mp4.suffix + ".unconfirmed").exists()
-            # Positive confirm marker (gate mode only): a strict subset of activity.
-            is_confirmed = mp4.with_suffix(mp4.suffix + ".confirmed").exists()
-            if is_activity and st.st_mtime >= now - window_seconds:
+            if st.st_mtime >= now - window_seconds:
                 recent += 1
             if st.st_mtime >= hist_cutoff:
                 key = _clip_hour_key(mp4.name, st.st_mtime)
-                if is_activity:
-                    by_hour[key] = by_hour.get(key, 0) + 1
-                else:
-                    unconfirmed_by_hour[key] = unconfirmed_by_hour.get(key, 0) + 1
-                if is_confirmed:
-                    confirmed_by_hour[key] = confirmed_by_hour.get(key, 0) + 1
+                by_hour[key] = by_hour.get(key, 0) + 1
             if not mp4.with_suffix(mp4.suffix + ".uploaded").exists():
                 pending += 1
                 pending_bytes += st.st_size
@@ -474,8 +446,6 @@ def _video_stats(window_seconds: int) -> dict:
         "snippets_last_period": recent,
         "newest_mtime": newest,
         "activity_by_hour": by_hour,
-        "unconfirmed_by_hour": unconfirmed_by_hour,
-        "confirmed_by_hour": confirmed_by_hour,
         "clips_this_hour": by_hour.get(cur_key, 0),
     }
 
@@ -828,8 +798,6 @@ def collect_metrics() -> dict:
     # updates the moment a clip is recorded, not when it's uploaded.
     m["clips_this_hour"] = vs["clips_this_hour"]
     m["activity_by_hour"] = vs["activity_by_hour"]
-    m["unconfirmed_by_hour"] = vs["unconfirmed_by_hour"]
-    m["confirmed_by_hour"] = vs["confirmed_by_hour"]
     # Learned bee-blob-area window (read-only) so the dashboard can show what the
     # auto-calibrate job produced on this device — invisible otherwise.
     cal = _read_motion_calibration()
@@ -1024,27 +992,6 @@ def _apply_frame_cap(value) -> None:
         log.warning("could not write frame cap: %s", e)
 
 
-def _apply_bee_mode(value) -> None:
-    """Persist a dashboard-pushed bee-confirmation mode (off|tag|gate) to the file
-    the recorder hot-reloads. Ignores absent/invalid values so a cloud that
-    doesn't send the field never clobbers a locally-set mode."""
-    if not isinstance(value, str):
-        return
-    mode = value.strip().lower()
-    if mode not in ("off", "tag", "gate"):
-        return
-    try:
-        new = json.dumps({"mode": mode}, sort_keys=True)
-        cur = (BEE_CONFIRM_MODE_FILE.read_text().strip()
-               if BEE_CONFIRM_MODE_FILE.exists() else "")
-        if new != cur:
-            BEE_CONFIRM_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            BEE_CONFIRM_MODE_FILE.write_text(new)
-            log.info("bee confirm mode set to %s", mode)
-    except OSError as e:
-        log.warning("could not write bee confirm mode: %s", e)
-
-
 def _apply_upload_mode(value) -> None:
     """Persist the dashboard-pushed video upload policy (auto|manual) to the file
     the uploader re-reads each cycle. Ignores absent/invalid values so a cloud
@@ -1110,13 +1057,16 @@ def _apply_record_settings(mode, window, post_roll=None, max_segment=None) -> No
 
 
 def _apply_activity_crops(value) -> None:
-    """Persist the dashboard's 3-way crop mode (all|confirmed|off) to the file the
-    recorder hot-reloads. Ignores absent/invalid values so a cloud that doesn't send
-    the field never clobbers a locally-set mode."""
+    """Persist the dashboard's crop mode (all|off) to the file the recorder
+    hot-reloads. Ignores absent/invalid values so a cloud that doesn't send the
+    field never clobbers a locally-set mode. The legacy "confirmed" value (from the
+    removed on-device bee confirmer) is normalised to "all"."""
     if not isinstance(value, str):
         return
     mode = value.strip().lower()
-    if mode not in ("all", "confirmed", "off"):
+    if mode == "confirmed":  # legacy: bee confirmation removed
+        mode = "all"
+    if mode not in ("all", "off"):
         return
     try:
         new = json.dumps({"mode": mode}, sort_keys=True)
@@ -1132,11 +1082,11 @@ def _apply_activity_crops(value) -> None:
 
 def _apply_activity_frames(value) -> None:
     """Legacy back-compat: an old cloud that sends only the `activity_frames` bool.
-    Translate it into the new mode file (True -> confirmed, False -> off). Ignores
+    Translate it into the new mode file (True -> all, False -> off). Ignores
     absent/non-bool values so it never clobbers a mode set via _apply_activity_crops."""
     if not isinstance(value, bool):
         return
-    _apply_activity_crops("confirmed" if value else "off")
+    _apply_activity_crops("all" if value else "off")
 
 
 def _drain_activity_frames() -> None:
@@ -1997,8 +1947,6 @@ def main() -> int:
                 _apply_motion_tuning(resp.get("motion_tuning"))
                 # ...and a dashboard-pushed crop daily cap (0 = stop crop upload).
                 _apply_frame_cap(resp.get("frame_daily_cap"))
-                # ...and the bee-confirmation mode (off|tag|gate).
-                _apply_bee_mode(resp.get("bee_confirm_mode"))
                 # ...and the video upload policy (auto|manual).
                 _apply_upload_mode(resp.get("video_upload_mode"))
                 # ...and the recording mode + hour window. Key-presence guard:
@@ -2009,8 +1957,8 @@ def main() -> int:
                                            resp.get("record_window"),
                                            resp.get("record_post_roll"),
                                            resp.get("record_max_segment"))
-                # ...and the crop mode (all|confirmed|off). Prefer the new 3-way
-                # string; fall back to the legacy bool for older clouds.
+                # ...and the crop mode (all|off). Prefer the mode string; fall back
+                # to the legacy bool for older clouds.
                 if "activity_crops" in resp:
                     _apply_activity_crops(resp.get("activity_crops"))
                 else:

@@ -26,7 +26,6 @@ urlpatterns = [
     path("<int:pk>/usb-transfer/", views.DeviceUsbTransferView.as_view(), name="usb_transfer"),
     path("<int:pk>/usb-eject/", views.DeviceUsbEjectView.as_view(), name="usb_eject"),
     path("<int:pk>/telemetry-rate/", views.DeviceTelemetryRateView.as_view(), name="telemetry_rate"),
-    path("<int:pk>/bee-confirm/", views.DeviceBeeConfirmView.as_view(), name="bee_confirm"),
     path("<int:pk>/upload-mode/", views.DeviceVideoUploadModeView.as_view(), name="upload_mode"),
     path("<int:pk>/record-settings/", views.DeviceRecordSettingsView.as_view(), name="record_settings"),
     path("<int:pk>/pipeline-schedule/", views.DevicePipelineScheduleView.as_view(), name="pipeline_schedule"),

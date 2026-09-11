@@ -332,7 +332,7 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         available = all_user.exclude(pk__in=existing_ids)
 
         af = {k: self.request.GET.get("av_" + k, "").strip()
-              for k in ("q", "device", "site", "year", "month", "day", "hour", "confirmed")}
+              for k in ("q", "device", "site", "year", "month", "day", "hour")}
         if af["q"]:
             available = available.filter(title__icontains=af["q"])
         if af["device"]:
@@ -345,10 +345,6 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
                     available = available.filter(**{field: int(af[field])})
                 except (ValueError, TypeError):
                     pass
-        if af["confirmed"] == "yes":
-            available = available.filter(metadata__bee_confirmed=True)
-        elif af["confirmed"] == "no":
-            available = available.filter(metadata__bee_confirmed=False)
         available = available.select_related("device").order_by("-recorded_at", "-id")
 
         ctx["available_videos"] = available[:500]

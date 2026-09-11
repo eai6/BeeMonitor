@@ -13,7 +13,7 @@ import json
 
 from motion.config import (
     log, CALIB_FILE, TUNING_FILE, ROI_OVERRIDE_FILE, NEST_LAYOUT_FILE,
-    BEE_CONFIRM_MODE_FILE, BEE_CONFIRM_MODE, ACTIVITY_FRAMES_FILE, ACTIVITY_FRAMES,
+    ACTIVITY_FRAMES_FILE, ACTIVITY_FRAMES,
     ACTIVITY_CROPS_MODE, LORES_W, LORES_H,
     RECORD_SETTINGS_FILE, RECORD_MODE, RECORD_WINDOW, POST_ROLL, MAX_SEGMENT,
 )
@@ -81,30 +81,23 @@ def load_nest_layout():
     return out
 
 
-def load_bee_confirm_mode() -> str:
-    """Effective bee-confirmation mode: a dashboard-pushed value (bee_confirm_mode
-    .json) wins over the env default, so a no-shell unit can be switched between
-    off/tag/gate remotely. Falls back to the env BEE_CONFIRM_MODE."""
-    d = _load_json_file(BEE_CONFIRM_MODE_FILE)
-    if isinstance(d, dict):
-        m = str(d.get("mode", "")).strip().lower()
-        if m in ("off", "tag", "gate"):
-            return m
-    return BEE_CONFIRM_MODE
-
-
 def load_activity_crops_mode() -> str:
-    """Which activities to sample/send crops for: 'all' | 'confirmed' | 'off'.
+    """Which activities to sample/send crops for: 'all' | 'off'.
+
     A dashboard-pushed value (activity_frames.json {"mode": ...}) wins over the env
     ACTIVITY_CROPS_MODE default, so a no-shell unit can switch remotely. Falls back
-    to the legacy {"enabled": bool} key (old clouds) then the env default."""
+    to the legacy {"enabled": bool} key (old clouds) then the env default. The
+    legacy "confirmed" value (from the removed on-device bee confirmer) maps to
+    "all": with no confirmer, no activity is ever rejected."""
     d = _load_json_file(ACTIVITY_FRAMES_FILE)
     if isinstance(d, dict):
         m = str(d.get("mode", "")).strip().lower()
-        if m in ("all", "confirmed", "off"):
+        if m == "confirmed":  # legacy: bee confirmation removed
+            return "all"
+        if m in ("all", "off"):
             return m
         if "enabled" in d:  # legacy bool toggle
-            return "confirmed" if bool(d["enabled"]) else "off"
+            return "all" if bool(d["enabled"]) else "off"
     return ACTIVITY_CROPS_MODE
 
 

@@ -39,6 +39,5 @@ from motion.calibrate import (  # noqa: F401
     calibrate, _find_snippets, _calibration_fresh, _iter_video_frames,
     _lores_from_bgr, _bbox_overlap,
 )
-from motion.confirm import BeeConfirmer  # noqa: F401
 from motion.recorder import record, _handle_signal, HAVE_PICAMERA2  # noqa: F401
 from motion.cli import main  # noqa: F401

@@ -98,18 +98,18 @@ TELEMETRY_IMAGE_HEIGHT = _env_int("BEEMONITOR_TELEMETRY_IMAGE_HEIGHT", 720)
 # unaffected. See memory/15_monitoring_agent_design.md.
 ACTIVITY_FRAMES = _env_bool("BEEMONITOR_ACTIVITY_FRAMES", True)
 # Which activities to sample/send crops for (BioCLIP review):
-#   all       — every activity, confirmed or not (max data for cloud tagging)
-#   confirmed — only activities the on-device bee-confirmer accepted (default;
-#               with confirmation off, nothing is rejected so it sends all)
-#   off       — sample/send nothing (no SD/CPU/cellular spend)
+#   all — every recorded activity (default)
+#   off — sample/send nothing (no SD/CPU/cellular spend)
 # A dashboard-pushed value wins over this env default (see overrides.py). The env
 # default tracks ACTIVITY_FRAMES so the lite profile's BEEMONITOR_ACTIVITY_FRAMES=
-# false still means "off" out of the box.
+# false still means "off" out of the box. The legacy third value "confirmed" (the
+# removed on-device bee confirmer) is accepted and means "all" — old clouds still
+# push it.
 ACTIVITY_CROPS_MODE = os.environ.get(
     "BEEMONITOR_ACTIVITY_CROPS_MODE",
-    "confirmed" if ACTIVITY_FRAMES else "off").strip().lower()
-if ACTIVITY_CROPS_MODE not in ("all", "confirmed", "off"):
-    ACTIVITY_CROPS_MODE = "confirmed"
+    "all" if ACTIVITY_FRAMES else "off").strip().lower()
+if ACTIVITY_CROPS_MODE not in ("all", "off"):
+    ACTIVITY_CROPS_MODE = "all"
 ACTIVITY_FRAMES_QUEUE = Path(os.environ.get(
     "BEEMONITOR_ACTIVITY_FRAMES_QUEUE", str(RECORD_DIR.parent / "activity_frames")))
 # How many crops to keep + queue per activity (the strongest-motion ones).
@@ -126,8 +126,8 @@ FRAME_MAX_SIDE = _env_int("BEEMONITOR_FRAME_MAX_SIDE", 384)
 # Durable on-disk archive of activity crops + the full SOURCE FRAME each crop was
 # cut from, saved under <day>/frames/ next to the clip (like the videos) and
 # uploaded over WiFi by the uploader — so no activity data is lost even when crops
-# aren't sent over cellular (unconfirmed, cap hit, link down). On whenever sampling
-# is on (crop mode != off).
+# aren't sent over cellular (cap hit, link down). On whenever sampling is on
+# (crop mode != off).
 SAVE_ACTIVITY_FRAMES = _env_bool("BEEMONITOR_SAVE_ACTIVITY_FRAMES", True)
 # The source frame is downscaled to this longest side before JPEG — full scene
 # context for review/training, but not the raw sensor res (keeps SD + WiFi sane).
@@ -199,9 +199,9 @@ HOTEL_SETTLE_SECONDS = _env_float("BEEMONITOR_HOTEL_SETTLE", 2.0)
 CALIB_FILE = Path(os.environ.get(
     "BEEMONITOR_CALIB_FILE", str(RECORD_DIR.parent / "calibration.json")))
 YOLO_MODEL = os.environ.get("BEEMONITOR_YOLO_MODEL", str(MODELS_DIR / "bee_tracking.pt"))
-# Calibration-only YOLO confidence (used solely in calibrate.py, NOT the on-device
-# bee confirmer). Raised to 0.5 so low-confidence false positives (shadows, leaves,
-# debris) don't get measured as "bees" and skew the learned blob-area window.
+# Calibration-only YOLO confidence (used solely in calibrate.py — the recorder
+# itself never runs YOLO). Raised to 0.5 so low-confidence false positives (shadows,
+# leaves, debris) don't get measured as "bees" and skew the learned blob-area window.
 YOLO_CONF = _env_float("BEEMONITOR_YOLO_CONF", 0.5)
 # Stop once we've measured this many confirmed-bee blobs across snippets.
 # MIN_SAMPLES is the floor below which we refuse to overwrite a calibration —
@@ -247,10 +247,6 @@ TUNING_FILE = CALIB_FILE.parent / "motion_tuning.json"
 # nest layout ([{id, box:[x1,y1,x2,y2] normalized}, ...]). telemetry writes them.
 ROI_OVERRIDE_FILE = CALIB_FILE.parent / "roi_override.json"
 NEST_LAYOUT_FILE = CALIB_FILE.parent / "nest_layout.json"
-# Dashboard-pushed bee-confirmation mode (off|tag|gate). telemetry.py writes it
-# from the heartbeat; the recorder hot-reloads it over the env default, so a
-# no-shell unit can be switched between observe (tag) and filter (gate) remotely.
-BEE_CONFIRM_MODE_FILE = CALIB_FILE.parent / "bee_confirm_mode.json"
 # Dashboard-pushed recording settings ({"mode": "motion"|"continuous",
 # "window": {"start": H, "end": H} | null}). telemetry.py writes it from the
 # heartbeat; the recorder hot-reloads it over the env defaults above.
@@ -258,49 +254,12 @@ RECORD_SETTINGS_FILE = CALIB_FILE.parent / "record_settings.json"
 # Dashboard-pushed toggle for sampling/sending BioCLIP review crops over cellular.
 # telemetry.py writes it from the heartbeat; the recorder hot-reloads it over the
 # env ACTIVITY_FRAMES default, so a no-shell unit can stop the 1-few crops/activity
-# remotely (e.g. once on-device bee confirmation is trusted to guard activity).
+# remotely (e.g. to protect a tight cellular budget).
 ACTIVITY_FRAMES_FILE = CALIB_FILE.parent / "activity_frames.json"
 # Per-unit camera profile: orientation + focus, written by runFocus.py and read
 # by the recorder at startup, so focusing the camera once is all it takes for
 # the recorder to use that focus. Wins over the env defaults above.
 CAMERA_FILE = CALIB_FILE.parent / "camera.json"
-
-
-# --- Bee confirmation (low-DL YOLO filter) --------------------------------
-# Confirm motion is actually a bee with bee_tracking.pt on a few full frames per
-# activity (async, off the capture hot path). See memory/17_bee_confirmation_design.
-# Mode:
-#   off  — no confirmation (record + count + send crops as before)
-#   tag  — run YOLO, tag the clip + crops with the verdict, but still count + send
-#   gate — (default) unconfirmed activities are not counted (telemetry) and their
-#          crops are not sent (cellular/BioCLIP); the clip is still recorded +
-#          uploaded, tagged, so nothing is lost.
-BEE_CONFIRM_MODE = os.environ.get("BEEMONITOR_BEE_CONFIRM_MODE", "gate").strip().lower()
-# Whole-frame bee detector — same weights as cloud/calibration (reuse YOLO_MODEL).
-BEE_CONFIRM_MODEL = os.environ.get("BEEMONITOR_BEE_CONFIRM_MODEL", YOLO_MODEL)
-# Raised to 0.5 so clips aren't tagged as containing a bee on weak/false detections
-# (shadows, debris). Higher = fewer false "confirmed" tags, at the cost of possibly
-# missing a faint real bee. Matches the calibration YOLO_CONF for consistency.
-BEE_CONFIRM_CONF = _env_float("BEEMONITOR_BEE_CONFIRM_CONF", 0.5)
-# Native whole-frame inference size; do NOT shrink — small bees need the resolution.
-BEE_CONFIRM_IMGSZ = _env_int("BEEMONITOR_BEE_CONFIRM_IMGSZ", 640)
-# Mover-overlapping bee detections needed to confirm an activity.
-BEE_CONFIRM_MIN_CONFIRMATIONS = max(1, _env_int("BEEMONITOR_BEE_CONFIRM_MIN_CONFIRMATIONS", 1))
-# Tolerance (lores px) when matching a YOLO bee box to the MOG2 mover blob: the
-# mover box is inflated by this much before the overlap test, so a bee whose
-# detection box is *near* the motion (body vs wing-motion offset, slight lag)
-# still confirms. 0 = strict overlap. A large gap (bee resting while something
-# else moves elsewhere in frame) stays unconfirmed.
-BEE_CONFIRM_OVERLAP_PAD = max(0, _env_int("BEEMONITOR_BEE_CONFIRM_OVERLAP_PAD", 40))
-# Negative budget: after this many no-bee frames an activity is marked unconfirmed.
-BEE_CONFIRM_MAX_RUNS = max(1, _env_int("BEEMONITOR_BEE_CONFIRM_MAX_RUNS", 3))
-# Keep inference from starving the capture loop on the 4-core Pi.
-BEE_CONFIRM_TORCH_THREADS = max(1, _env_int("BEEMONITOR_BEE_CONFIRM_TORCH_THREADS", 1))
-# Bounded work queue; drop oldest on overflow (never back-pressure the recorder).
-BEE_CONFIRM_QUEUE_MAX = max(1, _env_int("BEEMONITOR_BEE_CONFIRM_QUEUE_MAX", 8))
-# A closed activity with no verdict by this long fails closed (uncounted, crops
-# un-sent) — safe because the clip is already recorded + tagged.
-BEE_CONFIRM_VERDICT_TIMEOUT = _env_float("BEEMONITOR_BEE_CONFIRM_VERDICT_TIMEOUT", 20.0)
 
 
 logging.basicConfig(

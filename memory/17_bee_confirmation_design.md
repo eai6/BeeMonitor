@@ -1,6 +1,20 @@
 # BeeMonitor — On-Device Bee Confirmation (low-DL motion filter)
 
-**Status:** IMPLEMENTED 2026-06-14 (device + cloud). Device: `motion/confirm.py`,
+> **REMOVED 2026-09-10.** This feature is gone from both device and cloud.
+> Motion-triggered clips are now recorded and uploaded as-is, with no on-device
+> YOLO verdict. Removed: `motion/confirm.py`, the recorder hooks, the
+> `BEE_CONFIRM_*` config, `bee_confirm_mode.json` + its heartbeat push,
+> the `.bee.json` / `.unconfirmed` / `.confirmed` clip sidecars, the
+> `unconfirmed_by_hour` / `confirmed_by_hour` telemetry histograms,
+> `Device.bee_confirm_mode`, `Video.metadata.bee*`, and every dashboard filter
+> built on them (devices migration 0028 drops the field and strips the stale
+> metadata). Kept: the offline `--calibrate` YOLO pass (`motion/calibrate.py`)
+> and the startup hotel/nest ROI detector (`motion/roi.py`) — different features.
+>
+> The design below is retained as a record of what was built and why. Do not
+> treat it as current.
+
+**Status (historical):** IMPLEMENTED 2026-06-14 (device + cloud). Device: `motion/confirm.py`,
 recorder hooks, config knobs, telemetry count gate via `.unconfirmed` marker,
 uploader `bee`-tag carry, `motion_replay --confirm`. Cloud: `/uploads/complete`
 stores the `bee` tag on `Video.metadata` (`bee_confirmed` bool + `bee` sub-dict);

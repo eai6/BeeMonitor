@@ -51,7 +51,7 @@ def _unsanitize_site(value: str) -> str:
 
 # GET/POST params the Processing-hub video filter understands.
 VIDEO_FILTER_KEYS = ("device", "site", "year", "month", "day", "hour",
-                     "hfrom", "hto", "from", "to", "q", "confirmed")
+                     "hfrom", "hto", "from", "to", "q")
 
 
 def apply_video_filters(qs, params):
@@ -114,11 +114,6 @@ def apply_video_filters(qs, params):
         if dt:
             qs = qs.filter(recorded_at__lte=dt)
 
-    confirmed = params.get("confirmed")
-    if confirmed == "yes":
-        qs = qs.filter(metadata__bee_confirmed=True)
-    elif confirmed == "no":
-        qs = qs.filter(metadata__bee_confirmed=False)
     return qs
 
 
@@ -681,7 +676,7 @@ class ProcessingHubView(LoginRequiredMixin, View):
         }
         # Query string for the CSV downloads — the download views filter on these.
         dl = {k: f[k] for k in ("device", "site", "year", "month", "day", "hour",
-                                "hfrom", "hto", "confirmed", "from", "to") if f[k]}
+                                "hfrom", "hto", "from", "to") if f[k]}
         download_qs = ("?" + urlencode(dl)) if dl else ""
 
         # Everything currently in flight, with GPU-slot usage — cancellable to
@@ -1580,11 +1575,6 @@ class DownloadSpeciesCSVView(LoginRequiredMixin, View):
         device = request.GET.get("device", "")
         if device:
             qs = qs.filter(device_id=device)
-        confirmed = request.GET.get("confirmed", "")
-        if confirmed == "yes":
-            qs = qs.filter(video__metadata__bee_confirmed=True)
-        elif confirmed == "no":
-            qs = qs.filter(video__metadata__bee_confirmed=False)
 
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = 'attachment; filename="beemonitor_species.csv"'
@@ -1778,7 +1768,6 @@ class _FilteredJobsMixin:
         day = request.GET.get("day", "")
         hour = request.GET.get("hour", "")
         device = request.GET.get("device", "")
-        confirmed = request.GET.get("confirmed", "")
         dfrom = request.GET.get("from", "")
         dto = request.GET.get("to", "")
 
@@ -1791,10 +1780,6 @@ class _FilteredJobsMixin:
 
         if device:
             qs = qs.filter(job__video__device_id=device)
-        if confirmed == "yes":
-            qs = qs.filter(job__video__metadata__bee_confirmed=True)
-        elif confirmed == "no":
-            qs = qs.filter(job__video__metadata__bee_confirmed=False)
         if site:
             qs = qs.filter(job__video__site_name=_unsanitize_site(site))
         if year:

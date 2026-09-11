@@ -183,29 +183,14 @@ class Device(models.Model):
 
     # Which activities the device samples + sends BioCLIP "review" crops for (1-few
     # per activity) over cellular. Pushed in the heartbeat; the recorder hot-reloads
-    # it. "all" = every activity (max data for cloud tagging, incl. unconfirmed/
-    # shadow motion); "confirmed" = only on-device-confirmed bees (default, lowest
-    # cellular/compute); "off" = stop sampling entirely (no SD/CPU/cellular spend).
+    # it. "all" = every recorded activity (default); "off" = stop sampling entirely
+    # (no SD/CPU/cellular spend).
     ACTIVITY_CROP_MODES = [
         ("all", "All activity — send every crop"),
-        ("confirmed", "Confirmed only — send confirmed-bee crops"),
         ("off", "Off — don't send crops"),
     ]
     activity_crops_mode = models.CharField(
-        max_length=10, default="confirmed", choices=ACTIVITY_CROP_MODES)
-
-    # On-device YOLO bee-confirmation mode, pushed in the heartbeat (the recorder
-    # hot-reloads it over its env default). "" = device default; off = no
-    # confirmation; tag = observe/label without suppressing; gate = filter
-    # (unconfirmed clips aren't counted as activity + crops not sent).
-    BEE_CONFIRM_MODES = [
-        ("", "Default (unit's env setting)"),
-        ("off", "Off — track all activity"),
-        ("tag", "Observe — label only"),
-        ("gate", "Filter — drop unconfirmed"),
-    ]
-    bee_confirm_mode = models.CharField(
-        max_length=8, blank=True, default="", choices=BEE_CONFIRM_MODES)
+        max_length=10, default="all", choices=ACTIVITY_CROP_MODES)
 
     # Hardware id (Pi serial), set during zero-touch enrollment so re-enrolling
     # the same physical unit maps back to the same Device instead of duplicating.
@@ -382,8 +367,6 @@ class Device(models.Model):
         else:
             crop = f"{cap} crops/day"
 
-        bee_mode = self.bee_confirm_mode or ""
-        bee_label = dict(self.BEE_CONFIRM_MODES).get(bee_mode, bee_mode)
         nests = self.nest_layout if isinstance(self.nest_layout, list) else []
 
         return {
@@ -394,10 +377,8 @@ class Device(models.Model):
                 "seconds": self.telemetry_interval_seconds,
                 "label": self.telemetry_interval_label,
             },
-            "bee_confirmation_mode": {"value": bee_mode or "(default)", "meaning": bee_label},
             "review_crops_over_cellular": {
-                "all": "all activity (every crop sent, incl. unconfirmed)",
-                "confirmed": "confirmed bees only",
+                "all": "all activity (every crop sent)",
                 "off": "off — not sampling/sending BioCLIP review crops",
             }.get(self.activity_crops_mode, self.activity_crops_mode),
             "cellular_crop_daily_cap": crop,

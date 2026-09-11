@@ -944,11 +944,6 @@
         {% endfor %}
       </select>
       {% endif %}
-      <div class="flex gap-1" title="Filter by the on-device bee-confirmation verdict">
-        {% for f in activity_confirm_filters %}
-          <button type="button" data-confirmed="{{ f.key }}" class="act-confirm-btn px-2 py-1 rounded {% if f.key == activity_confirmed %}bg-amber-600 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-gray-200{% endif %}">{{ f.label }}</button>
-        {% endfor %}
-      </div>
       <div class="flex gap-1">
         {% for r in activity_ranges %}
           <a href="?range={{ r.key }}" data-range="{{ r.key }}" class="act-range-btn px-2 py-1 rounded {% if r.key == activity_range and not activity_custom %}bg-amber-600 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-gray-200{% endif %}">{{ r.label }}</a>
@@ -1133,7 +1128,6 @@
 (function () {
   // When loaded in custom mode, keep a sane preset fallback so "Clear" works.
   var RANGE = "{% if activity_custom %}7d{% else %}{{ activity_range }}{% endif %}";
-  var CONFIRMED = "{{ activity_confirmed }}";  // all | confirmed | unconfirmed
   var IS_ACTIVE = {{ device.is_active|yesno:"true,false" }};
   // Custom from–to window (overrides RANGE when both set).
   var START = "{{ activity_start }}";
@@ -1144,12 +1138,11 @@
   var MAX_SEC = "{{ activity_max_sec|floatformat:0 }}";
 
   // The query the chart/table/poll all use: a custom window when active,
-  // otherwise the preset range. Confirmation filter + trip bounds ride along.
+  // otherwise the preset range. Trip bounds ride along.
   function activityQuery() {
     var base = (CUSTOM && START && END)
       ? 'start=' + encodeURIComponent(START) + '&end=' + encodeURIComponent(END)
       : 'range=' + encodeURIComponent(RANGE);
-    base += '&confirmed=' + encodeURIComponent(CONFIRMED);
     if (MIN_SEC !== '') base += '&min_sec=' + encodeURIComponent(MIN_SEC);
     if (MAX_SEC !== '') base += '&max_sec=' + encodeURIComponent(MAX_SEC);
     return base;
@@ -1305,7 +1298,7 @@
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     var spanLabel = (CUSTOM && START && END) ? (START + '_' + END) : RANGE;
-    a.download = 'activity_device{{ device.pk }}_' + (window._actGran || 'hour') + '_' + spanLabel + '_' + CONFIRMED + '.csv';
+    a.download = 'activity_device{{ device.pk }}_' + (window._actGran || 'hour') + '_' + spanLabel + '.csv';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(a.href);
   });
@@ -1505,25 +1498,6 @@
     if (rl) rl.textContent = RANGE;
     syncActivityUrl();
     poll(true);
-  });
-
-  // All / Confirmed / Unconfirmed filter — same in-place refresh as the range
-  // buttons, threaded through the poll as ?confirmed=.
-  document.querySelectorAll('.act-confirm-btn').forEach(function (btn) {
-    btn.addEventListener('click', function (e) {
-      e.preventDefault();
-      CONFIRMED = btn.getAttribute('data-confirmed');
-      document.querySelectorAll('.act-confirm-btn').forEach(function (b) {
-        var on = b === btn;
-        b.classList.toggle('bg-amber-600', on);
-        b.classList.toggle('text-white', on);
-        b.classList.toggle('bg-gray-100', !on);
-        b.classList.toggle('text-gray-600', !on);
-        b.classList.toggle('hover:bg-gray-200', !on);
-      });
-      syncActivityUrl();
-      poll(true);  // refetch with the new filter -> rebuilds chart AND table
-    });
   });
 
   // Trip-duration bounds: applying on change refreshes chart + table in place,

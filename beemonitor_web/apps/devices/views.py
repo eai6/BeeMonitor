@@ -96,11 +96,7 @@ def _activity_this_hour(device) -> int:
     start_loc = now_loc.replace(minute=0, second=0, microsecond=0)
     # clip true_utc >= start  <=>  recorded_at - pi_off >= start  <=>  recorded_at >= start + pi_off
     thresh = start_loc.astimezone(dt_timezone.utc) + pi_off
-    # Bee ACTIVITY excludes clips the on-device confirmation marked NOT a bee
-    # (metadata.bee_confirmed=False). They still upload + count for storage, but
-    # not as activity. Untagged clips (off-mode / pre-confirmation) still count.
-    cloud = (Video.objects.filter(device=device, recorded_at__gte=thresh)
-             .exclude(metadata__bee_confirmed=False).count())
+    cloud = Video.objects.filter(device=device, recorded_at__gte=thresh).count()
     # The device's on-card count is for the Pi's clock hour; only use it when the
     # display tz currently matches the Pi's offset (else it's a different hour).
     latest = device.heartbeats.first()
@@ -379,26 +375,13 @@ def _parse_custom_range(start, end, zone):
     return start_loc, end_loc
 
 
-def _build_activity_series(device, range_key: str, confirmed: str = "all",
+def _build_activity_series(device, range_key: str,
                            start=None, end=None, min_sec=None, max_sec=None) -> dict:
     """Snippets per clock-hour/day in the device's DISPLAY timezone. Combines
     uploaded clips (recorded_at) with the device's on-card histogram, converting
     each to its true instant then to the display tz. Shared by page + poll.
-
-    `confirmed` filters by the on-device bee-confirmation verdict:
-      - "all"         every clip (confirmed + unconfirmed + untagged)
-      - "confirmed"   only clips explicitly confirmed a bee (uploaded
-                      bee_confirmed=True, matching the Processing page's "Confirmed
-                      bee" filter) plus, for on-card preview, the firmware's strict
-                      `confirmed_by_hour` histogram. The loose `activity_by_hour`
-                      (confirmed + untagged) is NOT used here. Untagged clips fall
-                      under "all" only.
-      - "unconfirmed" only clips the device marked NOT a bee (bee_confirmed=False)
     """
     from apps.videos.models import Video
-
-    if confirmed not in ("all", "confirmed", "unconfirmed"):
-        confirmed = "all"
     zone, zone_name = _display_zone(device)
     pi_off = timedelta(minutes=device.tz_offset_min or 0)
     now_loc = timezone.now().astimezone(zone)
@@ -430,16 +413,8 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all",
         return b.strftime("%Y-%m-%d"), b
 
     counts, key_dt = {}, {}
-    # Filter uploaded clips by the device's bee-confirmation verdict. "confirmed"
-    # = explicitly confirmed a bee (bee_confirmed=True), matching the Processing
-    # page; "unconfirmed" = marked NOT a bee (False); "all" counts everything
-    # (incl. untagged clips, which belong to neither confirmed nor unconfirmed).
     qs = Video.objects.filter(device=device, recorded_at__isnull=False,
                               recorded_at__gte=since, recorded_at__lte=until)
-    if confirmed == "confirmed":
-        qs = qs.filter(metadata__bee_confirmed=True)
-    elif confirmed == "unconfirmed":
-        qs = qs.filter(metadata__bee_confirmed=False)
     for ra in qs.values_list("recorded_at", flat=True):
         loc = _true_utc(ra, pi_off).astimezone(zone)
         if loc < start_loc or loc > upper_loc:
@@ -449,39 +424,14 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all",
         key_dt[k] = b
 
     # Device on-card histogram (creation-based) for hour ranges — clips on the
-    # card show before they upload. Keys are the Pi's wall-clock hour. The Pi
-    # reports confirmed (`activity_by_hour`) and unconfirmed (`unconfirmed_by_hour`)
-    # side by side; merge whichever the filter asks for ("all" = their per-hour sum).
-    #
-    # `activity_by_hour` counts confirmed + UNTAGGED clips (it only excludes the
-    # `.unconfirmed` marker), so it's used for "all" but NOT for "confirmed". The
-    # firmware also reports `confirmed_by_hour` — a strict subset (positively
-    # confirmed bees, `.confirmed` marker) — which the "confirmed" filter uses so
-    # the on-card preview is accurate. Devices on older firmware don't send it, so
-    # "confirmed" then falls back to uploaded bee_confirmed=True videos only (still
-    # exact, just no pre-upload preview). `unconfirmed_by_hour` is strict
-    # (== bee_confirmed=False), so the "unconfirmed" filter keeps its histogram.
+    # card show before they upload. Keys are the Pi's wall-clock hour.
     if gran == "hour":
         latest = device.heartbeats.first()
         metrics = (latest.metrics or {}) if latest else {}
-        conf_hist = metrics.get("activity_by_hour")
-        strict_hist = metrics.get("confirmed_by_hour")
-        unconf_hist = metrics.get("unconfirmed_by_hour")
+        by_hour = metrics.get("activity_by_hour")
         hist = {}
-        if confirmed == "all" and isinstance(conf_hist, dict):
-            for hk, c in conf_hist.items():
-                try:
-                    hist[hk] = hist.get(hk, 0) + int(c)
-                except (ValueError, TypeError):
-                    continue
-        if confirmed == "confirmed" and isinstance(strict_hist, dict):
-            for hk, c in strict_hist.items():
-                try:
-                    hist[hk] = hist.get(hk, 0) + int(c)
-                except (ValueError, TypeError):
-                    continue
-        if confirmed in ("all", "unconfirmed") and isinstance(unconf_hist, dict):
-            for hk, c in unconf_hist.items():
+        if isinstance(by_hour, dict):
+            for hk, c in by_hour.items():
                 try:
                     hist[hk] = hist.get(hk, 0) + int(c)
                 except (ValueError, TypeError):
@@ -530,10 +480,6 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all",
         job__video__device=device,
         job__video__recorded_at__gte=since,
         job__video__recorded_at__lte=until)
-    if confirmed == "confirmed":
-        jr_qs = jr_qs.filter(job__video__metadata__bee_confirmed=True)
-    elif confirmed == "unconfirmed":
-        jr_qs = jr_qs.filter(job__video__metadata__bee_confirmed=False)
     jr = (jr_qs.order_by("job__video_id", "-job__id")
           .values("job__video_id", "job__video__recorded_at", "entry_count", "exit_count"))
     for row in jr:
@@ -586,12 +532,6 @@ def _build_activity_series(device, range_key: str, confirmed: str = "all",
         "activity_range": range_key,
         "activity_ranges": [{"key": k, "label": k} for k in _ACTIVITY_RANGES],
         "activity_gran": gran,
-        "activity_confirmed": confirmed,
-        "activity_confirm_filters": [
-            {"key": "all", "label": "All"},
-            {"key": "confirmed", "label": "Confirmed"},
-            {"key": "unconfirmed", "label": "Unconfirmed"},
-        ],
         "weather_enabled": weather_enabled,
         "display_tz": zone_name,
         # Echo the active custom window (blank when a preset is in use) so the
@@ -711,7 +651,6 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         # `start`/`end` (YYYY-MM-DD) define a custom window that overrides `range`.
         ctx.update(_build_activity_series(
             device, self.request.GET.get("range", "7d"),
-            self.request.GET.get("confirmed", "all"),
             start=self.request.GET.get("start"),
             end=self.request.GET.get("end"),
             min_sec=self.request.GET.get("min_sec"),
@@ -1328,53 +1267,12 @@ class DeviceTelemetryRateView(LoginRequiredMixin, View):
         return redirect("devices:detail", pk=pk)
 
 
-class DeviceBeeConfirmView(LoginRequiredMixin, View):
-    """Turn on-device bee confirmation on/off (or observe-only) from the dashboard.
-
-    off  = track all activity (no model loaded);
-    tag  = run the model + label clips, but still count + send everything;
-    gate = filter — unconfirmed clips aren't counted and their crops aren't sent
-           (the clip is still recorded + uploaded either way, so nothing is lost).
-    "" = use the unit's env default. The device adopts the change within seconds.
-
-    The dashboard card was removed from the device page (2026-07) — running YOLO on
-    the device is parked, not abandoned. This endpoint, the model field and the
-    heartbeat push all stay wired, so the mode is still settable from the Django
-    admin and still reported by ``Device.remote_config_summary()``.
-    """
-
-    VALID = {"", "off", "tag", "gate"}
-
-    def post(self, request, pk):
-        device = _device_or_403(request.user, pk, "manager")
-        is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
-        mode = (request.POST.get("mode") or "").strip().lower()
-        if mode not in self.VALID:
-            if is_ajax:
-                return JsonResponse({"error": "Invalid bee-confirmation mode."}, status=400)
-            messages.error(request, "Invalid bee-confirmation mode.")
-            return redirect("devices:detail", pk=pk)
-        device.bee_confirm_mode = mode
-        device.save(update_fields=["bee_confirm_mode"])
-        label = dict(device.BEE_CONFIRM_MODES).get(mode, mode)
-        if is_ajax:
-            return JsonResponse({"ok": True, "mode": mode, "label": label})
-        messages.success(
-            request,
-            f"Bee confirmation set to “{label}”. The device will adopt it on its "
-            "next check-in.",
-        )
-        return redirect("devices:detail", pk=pk)
-
-
 class DeviceActivityCropsView(LoginRequiredMixin, View):
     """Set which activities the device sends BioCLIP "review" crops for, over cellular.
 
-    all       = sample + upload a crop for every activity (incl. unconfirmed/shadow
-                motion) — max data for cloud taxonomic tagging.
-    confirmed = only activities the on-device bee-confirmer accepted (default; lowest
-                cellular + compute).
-    off       = stop sampling entirely on the recorder (no SD/CPU/cellular spend).
+    all = sample + upload a crop for every recorded activity — max data for cloud
+          taxonomic tagging.
+    off = stop sampling entirely on the recorder (no SD/CPU/cellular spend).
     The device adopts the change on its next check-in.
 
     The dashboard card was removed from the device page (2026-07) — sending crops over
@@ -1383,7 +1281,7 @@ class DeviceActivityCropsView(LoginRequiredMixin, View):
     Django admin and still reported by ``Device.remote_config_summary()``.
     """
 
-    VALID = {"all", "confirmed", "off"}
+    VALID = {"all", "off"}
 
     def post(self, request, pk):
         device = _device_or_403(request.user, pk, "manager")
@@ -1484,7 +1382,6 @@ class DeviceStatusView(LoginRequiredMixin, View):
         activity = None
         if request.GET.get("chart") == "1":
             activity = _build_activity_series(device, request.GET.get("range", "7d"),
-                                              request.GET.get("confirmed", "all"),
                                               start=request.GET.get("start"),
                                               end=request.GET.get("end"),
                                               min_sec=request.GET.get("min_sec"),
@@ -1535,7 +1432,6 @@ class DeviceStatusView(LoginRequiredMixin, View):
             "telemetry_interval_label": device.telemetry_interval_label,
             **({"activity_series": activity["activity_series"],
                 "activity_gran": activity["activity_gran"],
-                "activity_confirmed": activity["activity_confirmed"],
                 "weather_enabled": activity["weather_enabled"]}
                if activity is not None else {}),
         })

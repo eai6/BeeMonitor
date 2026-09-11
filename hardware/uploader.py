@@ -240,18 +240,6 @@ def _put_to_s3(presigned_url: str, file_path: Path, content_type: str) -> None:
         raise RuntimeError(f"S3 PUT -> {r.status_code}: {r.text[:300]}")
 
 
-def _read_bee_tag(file_path: Path) -> "dict | None":
-    """The recorder's bee-confirmation tag (`<clip>.mp4.bee.json`), if present.
-
-    Rides with the clip so the cloud can flag unconfirmed clips and skip the
-    expensive automated video analysis on them. ALL clips upload regardless."""
-    try:
-        return json.loads(
-            file_path.with_suffix(file_path.suffix + ".bee.json").read_text())
-    except (OSError, ValueError):
-        return None
-
-
 def _upload_one(file_path: Path) -> None:
     """End-to-end upload of a single .mp4. Touches .uploaded on success."""
     size = file_path.stat().st_size
@@ -276,17 +264,12 @@ def _upload_one(file_path: Path) -> None:
     # 2. Stream the bytes to S3.
     _put_to_s3(upload_url, file_path, content_type)
 
-    # 3. Tell Django the PUT succeeded (carrying the bee-confirmation tag, if any,
-    #    so the cloud can flag the clip + gate its own automated analysis).
-    complete_payload = {
+    # 3. Tell Django the PUT succeeded.
+    complete = _api_post("/api/v1/uploads/complete", {
         "storage_key": storage_key,
         "file_size_bytes": size,
         "recorded_at": recorded_at.isoformat(),
-    }
-    bee = _read_bee_tag(file_path)
-    if bee:
-        complete_payload["bee"] = bee
-    complete = _api_post("/api/v1/uploads/complete", complete_payload)
+    })
 
     # 4. Mark as done so we never re-upload.
     file_path.with_suffix(file_path.suffix + ".uploaded").write_text(
