@@ -183,6 +183,16 @@ def normalized_tracks(df, summary=None):
                 "extent")
             return None
         tidy[axis] = tidy[axis] / dim
+
+    # One position per track per frame — which is what "tidy" claims and what
+    # every consumer assumes. The worker's tracking CSV can carry more than one
+    # row for the same (frame, track): two overlapping detections handed the
+    # same id. Left in, those rows are two points a few ten-thousandths apart,
+    # and the proximity pass paired them with each other and reported track 1
+    # interacting with track 1. They also inflate containment: compute_episodes
+    # counts frames, so a duplicated frame counts twice and the episode reads
+    # twice as long as it was.
+    tidy = tidy.drop_duplicates(subset=["frame", "tid"], keep="first")
     return tidy
 
 
@@ -599,6 +609,11 @@ def compute_proximity_episodes(tidy, radius=DEFAULT_PROXIMITY, gap_frames=15,
             if i >= j:
                 continue  # each unordered pair once
             a, b = _as_native(ids[i]), _as_native(ids[j])
+            # i != j only means "different rows". A track is not in proximity to
+            # itself, whatever the table says, so this holds even if a malformed
+            # tracking CSV gets past the dedupe upstream.
+            if str(a) == str(b):
+                continue
             key = (str(a), str(b)) if str(a) <= str(b) else (str(b), str(a))
             open_ep = open_eps.get(key)
             if open_ep is None or frame - open_ep["end_frame"] > gap_frames:
