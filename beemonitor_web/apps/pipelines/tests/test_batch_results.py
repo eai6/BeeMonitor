@@ -54,11 +54,29 @@ class ClassifyTests(TestCase):
         before = datetime(2026, 9, 9, 1, 0, tzinfo=dt_tz.utc)
         after = datetime(2026, 9, 10, 1, 0, tzinfo=dt_tz.utc)
 
-        self.assertTrue(failures.group([(1, CPU_ERROR, before)])[0]["fixed"])
-        self.assertFalse(failures.group([(1, CPU_ERROR, after)])[0]["fixed"])
+        self.assertTrue(failures.group([(1, SAM3_ERROR, before)])[0]["fixed"])
+        self.assertFalse(failures.group([(1, SAM3_ERROR, after)])[0]["fixed"])
         # One recent failure is enough to withdraw the claim.
-        mixed = failures.group([(1, CPU_ERROR, before), (2, CPU_ERROR, after)])
+        mixed = failures.group([(1, SAM3_ERROR, before), (2, SAM3_ERROR, after)])
         self.assertFalse(mixed[0]["fixed"])
+
+    def test_the_cpu_cause_claims_no_fix(self):
+        """It carried one, and the fix it described was never deployed.
+
+        The old text said "one job per instance now, across four instances" —
+        that is the SAM 3 endpoint's config. The video endpoint still packs
+        three invocations onto a four-vCPU box, and the change that would stop
+        one job claiming the cores (6a16579) sits behind an image tag Pulumi
+        has not been moved to. A "fixed since" badge on a page where the
+        failure just happened again is worse than no badge.
+        """
+        recent = datetime(2026, 9, 10, 23, 59, tzinfo=dt_tz.utc)
+
+        group = failures.group([(1, CPU_ERROR, recent)])[0]
+
+        self.assertEqual(group["cause"]["key"], "endpoint_unresponsive")
+        self.assertFalse(group["fixed"])
+        self.assertNotIn("fixed_at", group["cause"])
 
     def test_upstream_is_never_mistaken_for_a_cause(self):
         """It is the consequence of another step dying, not a reason itself."""

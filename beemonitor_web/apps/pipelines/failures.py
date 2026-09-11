@@ -25,12 +25,23 @@ CAUSES = [
         "match": ("could not get a response",),
         "title": "The endpoint ran out of CPU",
         "detail": (
-            "SageMaker gave up waiting for the container. Several jobs were "
-            "sharing one instance and its CPUs were fully committed, so nothing "
-            "could answer in time. Nothing was wrong with the clip."
+            "SageMaker gave up waiting for the container. The video endpoint "
+            "packs three invocations onto one ml.g4dn.xlarge — four vCPUs — and "
+            "tracking is mostly CPU, so three at once can commit the box and "
+            "nothing answers in time. Autoscaling only adds an instance once the "
+            "backlog per instance reaches five, so the crowding gets worse "
+            "before it gets better. Nothing was wrong with the clip."
         ),
-        "action": "Re-run — one job per instance now, across four instances.",
-        "fixed_at": datetime(2026, 9, 9, 21, 0, tzinfo=timezone.utc),
+        "action": "Re-run; a batch submitted all at once hits this on the ramp "
+                  "from zero instances.",
+        # NOT marked fixed. It said "one job per instance now, across four
+        # instances" and carried a fixed_at of 2026-09-09 — but that describes
+        # the SAM 3 endpoint (max_concurrent_invocations_per_instance=1), not
+        # this one, which still runs three. The real remedy, capping the CPU
+        # pools so one job cannot claim the box (6a16579), is committed and NOT
+        # deployed: infra/aws-sagemaker/Pulumi.dev.yaml pins image-tag 155d53c,
+        # which predates it. Claiming "fixed since" on a page where the failure
+        # just happened again is worse than saying nothing.
     },
     {
         "key": "sam3_import_race",
