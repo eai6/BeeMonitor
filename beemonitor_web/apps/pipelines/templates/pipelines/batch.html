@@ -17,7 +17,13 @@ their reason.
   <div class="min-w-0">
     <div class="flex items-baseline gap-2.5 flex-wrap">
       <h1 class="text-2xl font-bold text-gray-900">{{ pipeline.title }}</h1>
-      <span class="text-xs text-gray-400">batch {{ batch_id|stringformat:"s"|slice:":8" }}{% if rows.0.video.device %} · {{ rows.0.video.device.name }}{% endif %}</span>
+      {% comment %}
+        Every device in the batch, not the first row's wearing the whole batch's
+        name. A batch is a set of clips and nothing stops them coming from
+        several units, so naming one was a guess that was silently wrong
+        whenever it spanned more than one.
+      {% endcomment %}
+      <span class="text-xs text-gray-400">batch {{ batch_id|stringformat:"s"|slice:":8" }}{% for d in batch_devices %} · <a href="{% url 'devices:detail' d.pk %}" class="hover:underline hover:text-amber-700">{{ d.name }}</a>{% if d.location %} <span class="text-gray-300">({{ d.location }})</span>{% endif %}{% endfor %}</span>
     </div>
     <p class="text-sm text-gray-500 mt-1">
       {{ outcome.total }} clip{{ outcome.total|pluralize }}
@@ -291,7 +297,7 @@ their reason.
     <p id="cv-note" class="px-4 py-1.5 text-[11px] text-gray-400"></p>
   </div>
 
-  <div class="grid grid-cols-[60px_100px_minmax(0,1fr)_80px_80px_96px_80px_88px] gap-0 px-4 py-2 border-b border-gray-100 text-[11px] font-semibold text-gray-500">
+  <div class="grid grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_96px_80px_88px] gap-0 px-4 py-2 border-b border-gray-100 text-[11px] font-semibold text-gray-500">
     <div></div><div>Clip</div><div>Outcome</div>
     <div class="text-right">Tracks</div><div class="text-right">Events</div>
     <div class="text-right">Interactions</div>
@@ -299,8 +305,8 @@ their reason.
   </div>
 
   {% for r in rows %}
-  <div class="clip-row grid grid-cols-[60px_100px_minmax(0,1fr)_80px_80px_96px_80px_88px] items-center px-4 py-2 border-b border-gray-100 hover:bg-gray-50"
-       {% if r.video %}data-title="{{ r.when|date:"j M, H:i"|default:"clip" }}"
+  <div class="clip-row grid grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_96px_80px_88px] items-center px-4 py-2 border-b border-gray-100 hover:bg-gray-50"
+       {% if r.video %}data-title="{{ r.when|date:"j M, H:i"|default:"clip" }}{% if r.video.device %} · {{ r.video.device.name }}{% endif %}"
        data-original="{% url 'videos:stream' r.video.pk %}"
        {% if r.result.annotated_video_path %}data-annotated="{% url 'analysis:video_proxy' r.job.pk %}"{% endif %}
        {% if r.job %}data-results="{% url 'analysis:results' r.job.pk %}"{% endif %}
@@ -319,11 +325,17 @@ their reason.
       </button>
       {% endif %}
     </div>
-    <div class="text-[13px] font-medium text-gray-900">
+    {% comment %}
+      The device under the time: a batch can span units, and "which unit was
+      this" is the first thing you need before trusting a row — or before
+      watching the clip in the viewer above.
+    {% endcomment %}
+    <div class="text-[13px] font-medium text-gray-900 min-w-0">
       {% if r.video %}
-      <button type="button" class="cv-open hover:underline text-left" title="Watch this clip">
+      <button type="button" class="cv-open hover:underline text-left block truncate w-full" title="Watch this clip">
         {{ r.when|date:"H:i"|default:"—" }}
       </button>
+      {% if r.video.device %}<span class="block text-[10px] text-gray-400 truncate" title="{{ r.video.device.name }}">{{ r.video.device.name }}</span>{% endif %}
       {% else %}—{% endif %}
     </div>
     <div class="flex items-center gap-2 min-w-0">

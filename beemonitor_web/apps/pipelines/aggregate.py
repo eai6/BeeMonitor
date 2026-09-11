@@ -635,6 +635,29 @@ def batch_rows(runs):
     return rows
 
 
+def batch_devices(rows):
+    """The distinct devices this batch's clips came from, in row order.
+
+    The header used to print ``rows.0.video.device.name`` — the FIRST clip's
+    device, labelled as if it were the batch's. A batch is a set of clips, and
+    nothing stops those clips coming from several units, so that header was a
+    guess that happened to be right whenever a batch was single-device and
+    silently wrong when it was not. Which unit a result came from is the first
+    thing you need to trust it.
+    """
+    seen, out = set(), []
+    for row in rows:
+        device = getattr(row.get("video"), "device", None)
+        name = (getattr(device, "name", "") or "").strip()
+        key = getattr(device, "pk", None) or name
+        if device is None or not name or key in seen:
+            continue
+        seen.add(key)
+        out.append({"pk": device.pk, "name": name,
+                    "location": (device.location or "").strip()})
+    return out
+
+
 def batch_summary(rows):
     """Counts and money for the whole batch, including what failures cost."""
     completed = [r for r in rows if r["status"] == "completed"]

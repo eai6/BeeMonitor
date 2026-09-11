@@ -1939,6 +1939,16 @@ def main() -> int:
     last_cleanup = 0.0
     while _running:
         try:
+            # Re-pin every beat, not just at startup. NetworkManager gives a
+            # newly-added connection a metric that can be WORSE than the 700
+            # cellular-up.sh pins wwan0 at, so a device can be associated with a
+            # WiFi network and still route everything over the modem — paying
+            # for metered data while the dashboard, correctly, says "cellular".
+            # Joining through our own command re-pinned it; joining any other
+            # way (nmcli on the device, a saved network coming back, a phone
+            # hotspot) did not, and nothing corrected it until a restart. The
+            # call is cheap: it early-returns once the metric is already right.
+            _prefer_wifi_route()
             resp = send_beat()
             if resp:
                 _cache_location(resp.get("location"))  # keep the USB-folder label fresh

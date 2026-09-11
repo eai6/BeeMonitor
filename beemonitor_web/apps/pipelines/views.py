@@ -835,6 +835,9 @@ def batch_detail(request, batch_id):
     from . import failures as failure_taxonomy
     rows = aggregate.batch_rows(runs)
     outcome = aggregate.batch_summary(rows)
+    # Which units these clips came from. A batch can span devices, so this is a
+    # list, not the first row's device wearing the whole batch's name.
+    batch_devices = aggregate.batch_devices(rows)
     failure_groups = failure_taxonomy.group([
         (r["video"].pk if r["video"] else None, r["error"], r["run"].started_at)
         for r in rows if r["status"] == "failed"
@@ -902,6 +905,7 @@ def batch_detail(request, batch_id):
         "running": sum(1 for r in runs if not r.is_terminal),
         "sources": sources,
         "skipped_sources": skipped_sources,
+        "batch_devices": batch_devices,
     })
 
 

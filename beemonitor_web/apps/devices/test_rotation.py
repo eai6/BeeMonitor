@@ -35,14 +35,28 @@ class RotationFlagTests(TestCase):
     def test_it_is_off_by_default(self):
         self.assertFalse(self.device.rotate_180)
 
+    def _player_page(self):
+        """The clip page with a presigned URL, so the <video> block renders.
+
+        Patched rather than live: the player is gated on a successful presign,
+        so without this the test passes only while AWS credentials happen to be
+        valid — it went green yesterday and red this morning when the SSO token
+        expired, which is a property of the laptop, not of the code.
+        """
+        with patch("config.storage.S3StorageClient.generate_presigned_url",
+                   return_value="https://signed.test/clip.mp4"):
+            return self.client.get(
+                reverse("videos:detail", kwargs={"pk": self.video.pk})
+            ).content.decode()
+
     def test_the_player_turns_only_when_the_device_says_so(self):
-        url = reverse("videos:detail", kwargs={"pk": self.video.pk})
-        self.assertNotIn("rotate-180", self.client.get(url).content.decode())
+        self.assertIn("<video", self._player_page())   # the block is rendering
+        self.assertNotIn("rotate-180", self._player_page())
 
         self.device.rotate_180 = True
         self.device.save()
 
-        self.assertIn("rotate-180", self.client.get(url).content.decode())
+        self.assertIn("rotate-180", self._player_page())
 
     def test_flipping_it_clears_cached_stills_so_they_regenerate(self):
         """A thumbnail is keyed on the blob path, so it would never re-render."""

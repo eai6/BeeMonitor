@@ -129,10 +129,17 @@
       <div class="bg-white shadow rounded-lg p-4">
         <div class="text-xs text-gray-500 uppercase tracking-wide">Services</div>
         <div class="mt-2 space-y-1 text-sm" id="m-services">
+          {% comment %}
+            The note is what stops "Cellular" with a green dot reading as "this
+            device is on cellular". The dot only ever meant the unit is running,
+            which is the normal state on a device sitting on WiFi with a modem
+            fitted — it stays up so the link is there the moment WiFi is not.
+          {% endcomment %}
           {% for s in services %}
           <div class="flex items-center gap-2">
-            <span class="w-1.5 h-1.5 rounded-full {% if s.ok %}bg-green-500{% else %}bg-gray-300{% endif %}"></span>
+            <span class="w-1.5 h-1.5 rounded-full {% if s.warn %}bg-amber-500{% elif s.ok %}bg-green-500{% else %}bg-gray-300{% endif %}"></span>
             <span class="text-gray-600">{{ s.label }}</span>
+            {% if s.note %}<span class="text-xs {% if s.warn %}text-amber-700{% else %}text-gray-400{% endif %}">· {{ s.note }}</span>{% endif %}
           </div>
           {% endfor %}
         </div>
@@ -1370,9 +1377,20 @@
           } else rec.innerHTML = '';
         }
         var sv = document.getElementById('m-services');
-        if (sv && d.services) {
-          sv.innerHTML = [['Recorder', d.services.recorder], ['Uploader', d.services.uploader], ['Cellular', d.services.cellular]]
-            .map(function (n) { return '<div class="flex items-center gap-2">' + dot(n[1]) + '<span class="text-gray-600">' + n[0] + '</span></div>'; }).join('');
+        // service_rows carries the note ("standby" / "carrying traffic"), so the
+        // live card says the same thing the server-rendered one does.
+        if (sv && d.service_rows) {
+          sv.innerHTML = d.service_rows.map(function (r) {
+            var d2 = r.warn
+              ? '<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>'
+              : dot(r.ok);
+            var note = r.note
+              ? ' <span class="text-xs ' + (r.warn ? 'text-amber-700' : 'text-gray-400')
+                + '">\u00b7 ' + r.note + '</span>'
+              : '';
+            return '<div class="flex items-center gap-2">' + d2
+              + '<span class="text-gray-600">' + r.label + '</span>' + note + '</div>';
+          }).join('');
         }
         var wf = document.getElementById('m-wifi');
         if (wf) {

@@ -545,6 +545,37 @@ def _build_activity_series(device, range_key: str,
     }
 
 
+def _service_rows(metrics: dict) -> list:
+    """The services card: one row per unit, and what "running" means for it.
+
+    A green dot beside "Cellular" was read as "this device is on cellular" —
+    reasonably, since that is what it looks like. It only ever meant that
+    cellular.service is up, which is the normal, correct state on a device
+    sitting on WiFi with a modem fitted: the unit stays running so the link is
+    there the moment WiFi is not.
+
+    So the cellular row now says which of those it is. The route is the
+    authority (active_transport reads `ip route get`), not the unit's state.
+    """
+    cell_up = bool(metrics.get("cellular_active"))
+    transport = (metrics.get("active_transport") or "").strip()
+    if not cell_up:
+        cell_note, carrying = "off", False
+    elif transport == "cellular":
+        cell_note, carrying = "carrying traffic", True
+    elif transport:
+        cell_note, carrying = "standby", False
+    else:
+        # No beat has reported a route yet, so "standby" would be a guess.
+        cell_note, carrying = "ready", False
+    return [
+        {"label": "Recorder", "ok": bool(metrics.get("recorder_active"))},
+        {"label": "Uploader", "ok": bool(metrics.get("uploader_active"))},
+        {"label": "Cellular", "ok": cell_up, "note": cell_note,
+         "warn": carrying},
+    ]
+
+
 class DeviceDetailView(LoginRequiredMixin, DetailView):
     """Per-device dashboard: latest health beat, image timeline, its videos."""
 
@@ -586,11 +617,7 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         if sp is None and latest is not None:
             sp = latest.storage_pct
         ctx["storage_pct"] = sp
-        ctx["services"] = [
-            {"label": "Recorder", "ok": bool(metrics.get("recorder_active"))},
-            {"label": "Uploader", "ok": bool(metrics.get("uploader_active"))},
-            {"label": "Cellular", "ok": bool(metrics.get("cellular_active"))},
-        ]
+        ctx["services"] = _service_rows(metrics)
         # Telemetry rate control (manager+) + which link the last beat rode.
         from .models import TELEMETRY_INTERVAL_CHOICES
         ctx["telemetry_interval_choices"] = TELEMETRY_INTERVAL_CHOICES
@@ -1409,6 +1436,7 @@ class DeviceStatusView(LoginRequiredMixin, View):
                 "uploader": bool(metrics.get("uploader_active")),
                 "cellular": bool(metrics.get("cellular_active")),
             },
+            "service_rows": _service_rows(metrics),
             "wifi_enabled": metrics.get("wifi_enabled"),
             "wifi_ssid": metrics.get("wifi_ssid"),
             "wifi_scan": metrics.get("wifi_scan") or [],
