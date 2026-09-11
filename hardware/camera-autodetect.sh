@@ -30,10 +30,16 @@
 # overlay cannot be unloaded at runtime, which is exactly why step 3 exists and
 # why the pin has to go before anything else gets a look.
 #
-# NEVER loops: repairs are counted in the state file and stop at MAX_REPAIRS,
-# and the counter resets the moment a camera is found. Set
+# NEVER loops: the repairs that cost a reboot (3 and 4) are counted in the state
+# file and stop at MAX_REPAIRS, and the counter resets the moment a camera is
+# found. Step 2 is outside that budget — it reboots nothing and reverts itself,
+# so it keeps trying on every boot even after the ladder has given up. Set
 # BEEMONITOR_CAMERA_AUTOREBOOT=0 to make steps 3 and 4 edit config.txt but
 # leave the reboot to you.
+#
+# Steps 3 and 4 only alternate if the step-3 edit actually lands, so it is
+# verified by re-reading config.txt and no reboot is spent unless the pin is
+# really gone.
 #
 # Usage:
 #   sudo hardware/camera-autodetect.sh               # detect + repair (boot path)
@@ -145,16 +151,11 @@ if [ "$mode" = probe ]; then
   exit 0
 fi
 
-repairs=$(state_get repairs); repairs=${repairs:-0}
-if [ "$repairs" -ge "$MAX_REPAIRS" ]; then
-  bad "no camera after $repairs repair attempts — stopping so this cannot loop"
-  warn "this looks like a hardware fault: check the ribbon, then"
-  warn "  hardware/setup-camera.sh --probe-only    # is the sensor even alive?"
-  warn "  hardware/camera-autodetect.sh --reset    # to try the ladder again"
-  exit 0
-fi
-
 # --- 2. runtime overlay: cheapest repair, nothing persistent ----------------
+# Deliberately ahead of the repair budget below: this needs no reboot and undoes
+# itself when it does not bind, so there is nothing to ration. Behind the gate, a
+# unit parked at MAX_REPAIRS stopped attempting the one repair that costs
+# nothing — the budget, spent on rebooting steps, silenced the cheap one too.
 step "Trying the sensors auto-detect cannot see (runtime, no reboot)"
 for entry in "${RUNTIME_CANDIDATES[@]}"; do
   ov="${entry%%|*}"; params="${entry#*|}"
@@ -178,6 +179,16 @@ for entry in "${RUNTIME_CANDIDATES[@]}"; do
   dtoverlay -r "$ov" 2>/dev/null
 done
 
+# --- repair budget: rations only the steps below, which each cost a reboot ---
+repairs=$(state_get repairs); repairs=${repairs:-0}
+if [ "$repairs" -ge "$MAX_REPAIRS" ]; then
+  bad "no camera after $repairs reboot-repairs — stopping so this cannot loop"
+  warn "the runtime overlay above still runs every boot; the rest needs a hand:"
+  warn "  hardware/setup-camera.sh --probe-only    # is the sensor even alive?"
+  warn "  hardware/camera-autodetect.sh --reset    # to try the ladder again"
+  exit 0
+fi
+
 # --- 3/4. persistent repairs, alternating so we converge --------------------
 [ -w "$CFG" ] || { bad "$CFG not writable — run as root"; exit 0; }
 pinned=$(grep -E "$PIN_RE" "$CFG" 2>/dev/null)
@@ -189,11 +200,26 @@ if [ -n "$pinned" ]; then
   step "Unpinning the wrong sensor and handing the boot to auto-detect"
   echo "$pinned" | sed 's/^/       /'
   backup_cfg || exit 0
-  sed -i -E "s|^(\s*)(dtoverlay=(ov[0-9a-z]+|imx[0-9]+|arducam).*)|\1# \2  # BeeMonitor: unpinned by camera-autodetect.sh|" "$CFG"
+  # '@' delimiter, not '|': the pattern needs '|' for its own alternation, and
+  # a '|' delimiter ends the pattern at the first one, so sed rejects the whole
+  # expression. This script runs without `set -e` on purpose, so that rejection
+  # was silent — the pin survived, this branch was re-taken every boot, and the
+  # ladder never got as far as the pin step that would have worked.
+  sed -i -E "s@^(\s*)(dtoverlay=(ov[0-9a-z]+|imx[0-9]+|arducam).*)@\1# \2  # BeeMonitor: unpinned by camera-autodetect.sh@" "$CFG" \
+    || { bad "unpin edit failed — $CFG left as it was"; exit 0; }
   if grep -qE "^\s*camera_auto_detect=" "$CFG"; then
-    sed -i -E "s|^(\s*)camera_auto_detect=.*|\1camera_auto_detect=1|" "$CFG"
+    sed -i -E "s@^(\s*)camera_auto_detect=.*@\1camera_auto_detect=1@" "$CFG" \
+      || { bad "camera_auto_detect edit failed"; exit 0; }
   else
     printf '\n# BeeMonitor: detect whichever sensor is fitted (camera-autodetect.sh)\ncamera_auto_detect=1\n' >> "$CFG"
+  fi
+  # A reboot is only worth spending on an edit that actually landed. Re-read the
+  # file rather than trusting the exit status: this is the step whose silent
+  # no-op cost four boots and the whole repair budget.
+  if grep -qE "$PIN_RE" "$CFG"; then
+    bad "pin still present after the edit — not rebooting"
+    grep -nE "$PIN_RE" "$CFG" | sed 's/^/       /'
+    exit 0
   fi
   pass "camera_auto_detect=1, previous pin commented out"
   request_reboot "unpinned a sensor that was blocking detection"
