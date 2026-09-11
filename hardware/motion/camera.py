@@ -17,7 +17,9 @@ The profile lives in camera.json beside calibration.json — written by
 runFocus.py when you press "save for recorder", read here at startup. Env
 defaults (BEEMONITOR_HFLIP / VFLIP / ROTATE / LENS_POSITION / AF_RANGE) apply
 when the file has nothing to say, matching how the other JSON contracts in
-motion/ layer over config.py.
+motion/ layer over config.py. The flips are the one knob with no fixed default:
+left unset they follow the sensor model (see UPRIGHT_MODELS), because whether
+the picture needs turning over is a property of which module is fitted.
 """
 
 from __future__ import annotations
@@ -35,6 +37,41 @@ from motion.config import (
 FOCUSABLE_MODELS = ("ov64a40",)
 AF_TIMEOUT = 12.0
 
+# Modules whose native readout is already the right way up in our enclosure.
+# The older modules sit upside down and need the ISP's 180 (hflip+vflip); the
+# Arducam OwlSight does not, and applying it anyway records everything
+# inverted — which is what happened when the OwlSight inherited the old
+# module's default. Anything not listed keeps the 180, so a unit still on the
+# old camera is unaffected.
+UPRIGHT_MODELS = ("ov64a40",)
+
+
+def detect_model() -> str:
+    """Sensor model ('ov64a40'), lowercased, WITHOUT opening the camera.
+
+    global_camera_info() only enumerates, so this is safe at import time and
+    while the recorder already holds the camera — which is what lets runFocus.py
+    and the recorder arrive at the same default. '' when picamera2 is missing
+    (off-device) or no camera is attached.
+    """
+    try:
+        from picamera2 import Picamera2
+        info = Picamera2.global_camera_info()
+    except Exception:
+        return ""
+    if not info:
+        return ""
+    return str(info[0].get("Model", "")).lower()
+
+
+def default_flip(model=None) -> bool:
+    """Whether this module needs the ISP's 180. An unknown model keeps the 180:
+    that is what every unit in the field before the OwlSight wanted, so a failed
+    enumeration degrades to the old behaviour rather than to a new one."""
+    if model is None:
+        model = detect_model()
+    return model not in UPRIGHT_MODELS
+
 
 def load_profile() -> dict:
     """Merged camera profile: camera.json over the env defaults.
@@ -43,9 +80,10 @@ def load_profile() -> dict:
     None = autofocus at startup), af_range ('normal'|'macro'|'full').
     Never raises — an unreadable or half-written profile falls back to env.
     """
+    flip = default_flip()
     profile = {
-        "hflip": bool(HFLIP),
-        "vflip": bool(VFLIP),
+        "hflip": flip if HFLIP is None else bool(HFLIP),
+        "vflip": flip if VFLIP is None else bool(VFLIP),
         "rotate": ROTATE % 360,
         "lens": float(LENS_POSITION) if _is_number(LENS_POSITION) else None,
         "af_range": AF_RANGE if AF_RANGE in ("normal", "macro", "full") else "normal",

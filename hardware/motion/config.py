@@ -21,6 +21,15 @@ def _env_float(name: str, default: float) -> float:
 def _env_bool(name: str, default: bool) -> bool:
     return os.environ.get(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
 
+def _env_bool_opt(name: str):
+    """None when unset, so a caller can tell "not configured" from "off" and
+    supply its own default. Used by the flips, whose default depends on which
+    sensor module is fitted."""
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return None
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
 
 # Where finished .mp4 snippets land — keep == uploader's BEEMONITOR_RECORD_DIR.
 RECORD_DIR = Path(os.environ.get(
@@ -39,13 +48,17 @@ LORES_H = _env_int("BEEMONITOR_LORES_H", 480)
 FPS = _env_int("BEEMONITOR_FPS", 25)
 
 # --- Camera orientation + focus ---------------------------------------------
-# The camera is mounted upside down, so the picture needs a 180-degree turn.
-# That one the ISP CAN do, as a horizontal + vertical flip, which means it costs
-# nothing and every consumer (H.264, detection, stills, crops) sees the same
-# upright frame. HFLIP/VFLIP are that flip; leave them on unless a differently
-# mounted unit needs otherwise.
-HFLIP = _env_bool("BEEMONITOR_HFLIP", True)
-VFLIP = _env_bool("BEEMONITOR_VFLIP", True)
+# Whether the picture needs a 180-degree turn depends on the module fitted, so
+# the default is decided from the sensor model in motion/camera.py rather than
+# baked in here. The turn itself the ISP CAN do, as a horizontal + vertical
+# flip, which costs nothing and means every consumer (H.264, detection, stills,
+# crops) sees the same upright frame. Set these only to override that choice:
+#
+#   BEEMONITOR_HFLIP=0 BEEMONITOR_VFLIP=0   # this module is already upright
+#
+# Unset (the normal case) = let the sensor model decide.
+HFLIP = _env_bool_opt("BEEMONITOR_HFLIP")
+VFLIP = _env_bool_opt("BEEMONITOR_VFLIP")
 # A quarter turn is a different story: the ISP can flip but not transpose, so
 # 90/270 has to be done in software, frame by frame. runFocus.py does it for its
 # preview and stills; the recorder does NOT (the hardware encoder is fed by the
