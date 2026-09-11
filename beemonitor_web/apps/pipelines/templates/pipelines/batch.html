@@ -1,14 +1,209 @@
 {% extends "base.html" %}
 {% block title %}Batch Results - BeeMonitor{% endblock %}
 
+{% comment %}
+The batch page used to show a status pill per run and nothing else, so nine
+failures of two kinds could only be triaged by opening nine pages — and there
+was no way to re-run a batch at all.
+
+Now: an outcome summary including what the failures cost, failures grouped by
+cause with a re-run per cause, and per-run rows carrying either their numbers or
+their reason.
+{% endcomment %}
+
+{% load batch_extras %}
 {% block content %}
-<div class="flex justify-between items-center mb-2">
-  <div>
-    <h1 class="text-2xl font-bold text-gray-900">{{ pipeline.title }} — batch results</h1>
-    <p class="text-sm text-gray-500">{{ members|length }} video(s) from this launch, analyzed together{% if sources %} · {{ sources|length }} had events to aggregate{% endif %}. Trips are paired on the absolute timeline, so a bee exiting in one video and returning in another counts as one trip. This page covers only videos launched together — videos run in a separate batch/day have their own page.</p>
+<div class="flex items-start justify-between gap-6 mb-4">
+  <div class="min-w-0">
+    <div class="flex items-baseline gap-2.5 flex-wrap">
+      <h1 class="text-2xl font-bold text-gray-900">{{ pipeline.title }}</h1>
+      <span class="text-xs text-gray-400">batch {{ batch_id|stringformat:"s"|slice:":8" }}{% if rows.0.video.device %} · {{ rows.0.video.device.name }}{% endif %}</span>
+    </div>
+    <p class="text-sm text-gray-500 mt-1">
+      {{ outcome.total }} clip{{ outcome.total|pluralize }}
+      {% if rows.0.run.started_at %}· run {{ rows.0.run.started_at|date:"j M, H:i" }}{% endif %}
+    </p>
   </div>
-  <a href="{% url 'pipelines:run_list' %}" class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">All runs</a>
+  {% if can_rerun %}
+  <div class="flex items-center gap-2 shrink-0">
+    <form method="post" action="{% url 'pipelines:batch_rerun' batch_id=batch_id %}">
+      {% csrf_token %}
+      <input type="hidden" name="scope" value="all">
+      {% comment %}
+      Fresh: the cache is keyed on clip + config, not on the analyzer build, so
+      a plain re-run after a fix would hand back the old result.
+      {% endcomment %}
+      <input type="hidden" name="fresh" value="1">
+      <button type="submit" class="border border-gray-300 bg-white rounded px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50"
+              title="Re-runs every clip from scratch, ignoring cached results — the honest way to measure a change">
+        Re-run all {{ outcome.total }}
+      </button>
+    </form>
+    {% if outcome.failed %}
+    <form method="post" action="{% url 'pipelines:batch_rerun' batch_id=batch_id %}">
+      {% csrf_token %}
+      <input type="hidden" name="scope" value="failed">
+      <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white rounded px-4 py-2 text-sm font-medium">
+        Re-run {{ outcome.failed }} failed
+      </button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
 </div>
+
+{% comment %}
+  Outcome sits beside what you would do next rather than alone in a 300px
+  column with the rest of the row empty. When something failed the failure
+  breakdown earns that space instead, and the re-run control moves below.
+{% endcomment %}
+<div class="grid grid-cols-1 lg:grid-cols-[300px_minmax(0,1fr)] gap-4 mb-6">
+
+  <!-- outcome -->
+  <div class="bg-white shadow rounded-lg p-4">
+    <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-3">Outcome</div>
+    <div class="flex items-baseline gap-2 mb-3">
+      {% if outcome.failed %}<span class="text-3xl font-bold text-red-700 leading-none">{{ outcome.failed }}</span>
+      <span class="text-sm text-gray-500">failed</span>{% endif %}
+      <span class="text-xl font-bold text-green-700 leading-none {% if outcome.failed %}ml-2{% endif %}">{{ outcome.completed }}</span>
+      <span class="text-sm text-gray-500">completed</span>
+    </div>
+    <div class="flex h-2 rounded-full overflow-hidden mb-3.5">
+      <div class="bg-green-600" style="width: {{ outcome.pct_ok }}%"></div>
+      <div class="bg-red-600" style="width: {{ outcome.pct_ok|rsub:100 }}%"></div>
+    </div>
+    {% comment %}
+    GPU time, not money. Seconds are a fact about the work; a dollar figure is a
+    claim about a price list that drifts. Time spent on failures is the number
+    worth seeing — it is the work that produced nothing.
+    {% endcomment %}
+    {% comment %}
+      Whether a reference reached the analyzer decided every count on this page
+      and used to be visible nowhere — a batch could report zero visits on
+      footage full of them and look no different from a quiet day.
+    {% endcomment %}
+    <div class="flex justify-between text-xs py-0.5">
+      <span class="text-gray-500">References</span>
+      {% if references.source == "graph" %}
+      <span class="text-gray-900" title="From the pipeline's own reference node — a drawn ROI or the device's nest layout.">{{ references.count }} defined</span>
+      {% elif references.source == "detected" %}
+      <span class="text-gray-900" title="None defined in the pipeline, so the analyzer used what the detector found.">{{ references.count }} detected</span>
+      {% elif references.unplaceable %}
+      <span class="text-amber-700" title="The detector found these, but they are in pixels and this clip's frame size was never measured, so they cannot be placed against the tracks. Open a clip once, or run backfill_video_props, and they will be used.">{{ references.unplaceable }} unusable</span>
+      {% else %}
+      <span class="text-amber-700" title="No visits or reference interactions can be attributed. Draw an ROI, use the device nest layout, or wire a Detect node for the reference class into the analyzer.">none</span>
+      {% endif %}
+    </div>
+    <div class="flex justify-between text-xs py-0.5"><span class="text-gray-500">GPU time</span><span class="text-gray-900">{{ outcome.gpu_seconds|duration_min }}</span></div>
+    {% if outcome.gpu_seconds_failed %}
+    <div class="flex justify-between text-xs py-0.5"><span class="text-gray-500">Spent on failures</span><span class="text-red-700">{{ outcome.gpu_seconds_failed|duration_min }}</span></div>
+    {% endif %}
+  </div>
+
+  {% comment %}
+    Only rendered when something failed. Its else-branch used to say "every clip
+    in this batch completed" — a whole card to repeat what the green bar beside
+    it already shows.
+  {% endcomment %}
+  {% if failure_groups %}
+  <div class="bg-white shadow rounded-lg p-4">
+    <div class="flex items-baseline justify-between mb-3">
+      <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Why they failed</div>
+      <span class="text-[11px] text-gray-400">grouped by cause</span>
+    </div>
+    <div class="space-y-2">
+      {% for g in failure_groups %}
+      <div class="border border-red-200 bg-red-50 rounded-md px-3 py-2.5">
+        <div class="flex items-center justify-between gap-3">
+          <div class="flex items-center gap-2 min-w-0 flex-wrap">
+            <span class="text-[11px] font-bold text-white bg-red-600 rounded-full px-2">{{ g.count }}</span>
+            <span class="text-[13px] text-gray-900 font-medium">{{ g.cause.title }}</span>
+            {% if g.fixed %}<span class="text-[11px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700"
+                  title="A fix for this shipped after this run — so re-running is worth doing">fixed since</span>{% endif %}
+          </div>
+          {% if can_rerun and g.video_ids %}
+          <form method="post" action="{% url 'pipelines:batch_rerun' batch_id=batch_id %}" class="shrink-0">
+            {% csrf_token %}
+            <input type="hidden" name="scope" value="cause">
+            <input type="hidden" name="cause" value="{{ g.cause.key }}">
+            <button type="submit" class="text-xs text-amber-700 hover:underline whitespace-nowrap">Re-run these {{ g.count }}</button>
+          </form>
+          {% endif %}
+        </div>
+        <p class="mt-1.5 text-[11px] text-red-900 leading-4">{{ g.cause.detail }} <span class="text-red-700">{{ g.cause.action }}</span></p>
+        {% comment %}
+          The recorded text, for the bucket that nothing matched. Its detail line
+          has always promised this and the panel never rendered it, so the only
+          place an unclassified failure could be read was a row's hover title.
+        {% endcomment %}
+        {% if g.cause.show_sample and g.sample %}
+        <p class="mt-1 text-[11px] font-mono text-red-800 bg-red-100 rounded px-2 py-1 break-words">{{ g.sample }}</p>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  {% if can_rerun and rerun_videos and not failure_groups %}
+  <div class="bg-white shadow rounded-lg p-4">
+  <form method="post" action="{% url 'pipelines:run_on_videos' %}"
+        class="flex items-end gap-3 flex-wrap">
+    {% csrf_token %}
+    {% for vid in rerun_videos %}<input type="hidden" name="video_ids" value="{{ vid }}">{% endfor %}
+    <div class="min-w-[240px]">
+      <label for="rerun-pipeline" class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
+        Run these {{ rerun_videos|length }} clip{{ rerun_videos|length|pluralize }} through another pipeline
+      </label>
+      <select name="pipeline" id="rerun-pipeline"
+              class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
+        {% for p in rerun_pipelines %}
+        <option value="{{ p.pk }}">{{ p.title }}{% if p.is_template %} (template){% endif %}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit"
+            class="bg-amber-600 hover:bg-amber-700 text-white rounded px-4 py-2 text-sm font-medium">
+      Run
+    </button>
+    <p class="text-xs text-gray-500 flex-1 min-w-[220px]">
+      Starts a new batch over the same clips; this one keeps its results. Detection
+      and tracking are reused where the new pipeline asks for the same thing, so a
+      pipeline that only differs downstream costs no GPU time.
+    </p>
+  </form>
+  </div>
+  {% endif %}
+</div>
+
+{% if can_rerun and rerun_videos and failure_groups %}
+<div class="bg-white shadow rounded-lg p-4 mb-6">
+  <form method="post" action="{% url 'pipelines:run_on_videos' %}"
+        class="flex items-end gap-3 flex-wrap">
+    {% csrf_token %}
+    {% for vid in rerun_videos %}<input type="hidden" name="video_ids" value="{{ vid }}">{% endfor %}
+    <div class="min-w-[240px]">
+      <label for="rerun-pipeline" class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
+        Run these {{ rerun_videos|length }} clip{{ rerun_videos|length|pluralize }} through another pipeline
+      </label>
+      <select name="pipeline" id="rerun-pipeline"
+              class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
+        {% for p in rerun_pipelines %}
+        <option value="{{ p.pk }}">{{ p.title }}{% if p.is_template %} (template){% endif %}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit"
+            class="bg-amber-600 hover:bg-amber-700 text-white rounded px-4 py-2 text-sm font-medium">
+      Run
+    </button>
+    <p class="text-xs text-gray-500 flex-1 min-w-[220px]">
+      Starts a new batch over the same clips; this one keeps its results. Detection
+      and tracking are reused where the new pipeline asks for the same thing, so a
+      pipeline that only differs downstream costs no GPU time.
+    </p>
+  </form>
+</div>
+{% endif %}
 
 {% if running %}
 <div class="bg-blue-50 border border-blue-200 rounded p-3 mb-4 text-sm text-blue-800">
@@ -16,283 +211,161 @@
 </div>
 {% endif %}
 
-<!-- Member runs -->
-<div class="bg-white shadow rounded-lg p-4 mb-6">
-  <h2 class="text-sm font-medium text-gray-500 uppercase mb-3">Videos in this batch ({{ members|length }})</h2>
-  <div class="divide-y divide-gray-100 max-h-72 overflow-y-auto border border-gray-100 rounded">
-    {% for m in members %}
-    <div class="flex items-center gap-3 py-1.5 px-2 text-sm">
-      <a href="{% url 'pipelines:run_detail' pk=m.run.pipeline_id run_id=m.run.pk %}"
-         class="flex-1 text-gray-800 hover:text-amber-700 hover:underline truncate">{{ m.video }}</a>
-      <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full
-        {% if m.run.status == 'completed' %}bg-green-100 text-green-800
-        {% elif m.run.status == 'failed' %}bg-red-100 text-red-800
-        {% else %}bg-blue-100 text-blue-800 animate-pulse{% endif %}">{{ m.run.get_status_display }}</span>
-    </div>
-    {% endfor %}
-  </div>
-  {% if agg_capped %}
-  <p class="mt-3 p-3 bg-amber-50 rounded text-xs text-amber-800">
-    Showing the first {{ sources|length }} of {{ agg_total }} videos in the on-page
-    aggregate (large batches are capped to keep this page fast). The
-    <strong>Download Trips / Combined CSV</strong> buttons below still cover the
-    whole batch.
-  </p>
-  {% endif %}
-  {% if skipped %}
-  <details class="mt-3">
-    <summary class="text-xs text-amber-800 cursor-pointer">Not included in the aggregate ({{ skipped|length }}) — no events CSV</summary>
-    <ul class="list-disc list-inside mt-1 p-3 bg-amber-50 rounded text-xs text-amber-800 max-h-48 overflow-y-auto">
-      {% for s in skipped %}<li>{{ s.video }} — {{ s.reason }}</li>{% endfor %}
-    </ul>
-  </details>
-  {% endif %}
-</div>
-
-{% if summary %}
-<!-- Aggregate summary -->
-<div class="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
-  <div class="bg-white shadow rounded-lg p-4 text-center">
-    <p class="text-2xl font-bold text-gray-900">{{ summary.total_trips }}</p>
-    <p class="text-xs text-gray-500 uppercase mt-1">Foraging Trips</p>
-  </div>
-  <div class="bg-white shadow rounded-lg p-4 text-center">
-    <p class="text-2xl font-bold text-amber-600">{{ summary.cross_video_trips }}</p>
-    <p class="text-xs text-gray-500 uppercase mt-1">Cross-Video Trips</p>
-  </div>
-  <div class="bg-white shadow rounded-lg p-4 text-center">
-    <p class="text-2xl font-bold text-gray-900">{{ summary.avg_duration_sec }}s</p>
-    <p class="text-xs text-gray-500 uppercase mt-1">Avg Duration</p>
-  </div>
-  <div class="bg-white shadow rounded-lg p-4 text-center">
-    <p class="text-2xl font-bold text-red-600">{{ charts.exit_events|default:0 }}</p>
-    <p class="text-xs text-gray-500 uppercase mt-1">Exit Events</p>
-  </div>
-  <div class="bg-white shadow rounded-lg p-4 text-center">
-    <p class="text-2xl font-bold text-green-600">{{ charts.entry_events|default:0 }}</p>
-    <p class="text-xs text-gray-500 uppercase mt-1">Entry Events</p>
-  </div>
-  <div class="bg-white shadow rounded-lg p-4 text-center">
-    <p class="text-2xl font-bold text-gray-900">{{ sources|length }}</p>
-    <p class="text-xs text-gray-500 uppercase mt-1">Videos Aggregated</p>
-  </div>
-</div>
-
-<!-- Downloads + trip-duration bounds -->
-<div class="bg-white shadow rounded-lg p-4 mb-6 flex flex-wrap items-end gap-3">
-  <a href="{% url 'pipelines:batch_trips_csv' batch_id=batch_id %}?min_sec={{ min_sec }}&max_sec={{ max_sec }}"
-     class="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium">Download Trips CSV</a>
-  <a href="{% url 'pipelines:batch_combined_csv' batch_id=batch_id kind='events' %}"
-     class="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium">Combined Events CSV</a>
-  <a href="{% url 'pipelines:batch_combined_csv' batch_id=batch_id kind='tracking' %}"
-     class="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium">Combined Tracking CSV</a>
-  <a href="{% url 'pipelines:batch_combined_csv' batch_id=batch_id kind='interactions' %}"
-     class="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium">Combined Interactions CSV</a>
-  <form method="get" class="flex items-end gap-2 ml-auto">
-    <div title="Ignore trips shorter than this (noise near the nest entrance)">
-      <label class="block text-[10px] uppercase tracking-wide text-gray-400">Min trip (s)</label>
-      <input type="number" name="min_sec" value="{{ min_sec|floatformat:0 }}" min="0"
-             class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm">
-    </div>
-    <div title="Ignore pairings longer than this (likely a missed return)">
-      <label class="block text-[10px] uppercase tracking-wide text-gray-400">Max trip (s)</label>
-      <input type="number" name="max_sec" value="{{ max_sec|floatformat:0 }}" min="1"
-             class="w-24 border border-gray-300 rounded px-2 py-1.5 text-sm">
-    </div>
-    <button type="submit" class="px-3 py-2 bg-gray-100 hover:bg-gray-200 border border-gray-300 rounded text-sm">Recompute</button>
-  </form>
-</div>
-
-<!-- Activity charts (server-computed; CSP-safe inline SVG) -->
-{% if charts.total_events %}{% with ts=charts.ts %}
-<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-  <!-- Foraging events over time (line: exit vs entry) -->
-  <div class="bg-white shadow rounded-lg p-4">
-    <h2 class="text-sm font-medium text-gray-500 uppercase mb-2">Foraging events over time</h2>
-    <div class="overflow-x-auto">
-    <svg viewBox="0 0 {{ ts.w }} {{ ts.h }}" class="w-full" style="min-width:360px" role="img" aria-label="Events over time">
-      <line x1="{{ ts.pad }}" y1="{{ ts.pad }}" x2="{{ ts.pad }}" y2="{{ ts.h|add:'-30' }}" stroke="#e5e7eb"/>
-      <line x1="{{ ts.pad }}" y1="{{ ts.h|add:'-30' }}" x2="{{ ts.w|add:'-30' }}" y2="{{ ts.h|add:'-30' }}" stroke="#e5e7eb"/>
-      <text x="4" y="{{ ts.pad }}" font-size="9" fill="#9ca3af">{{ ts.ev_ymax }}</text>
-      <text x="4" y="{{ ts.h|add:'-30' }}" font-size="9" fill="#9ca3af">0</text>
-      <polyline points="{{ ts.exit_pts }}" fill="none" stroke="#dc2626" stroke-width="1.5" stroke-linejoin="round"/>
-      <polyline points="{{ ts.entry_pts }}" fill="none" stroke="#16a34a" stroke-width="1.5" stroke-linejoin="round"/>
-      {% for xt in ts.xticks %}<text x="{{ xt.x }}" y="{{ ts.h|add:'-12' }}" font-size="8" fill="#9ca3af" text-anchor="middle">{{ xt.label }}</text>{% endfor %}
-    </svg>
-    </div>
-    <div class="flex gap-4 mt-1 text-[11px]">
-      <span class="inline-flex items-center gap-1 text-gray-600"><span class="inline-block w-3 h-[2px]" style="background:#dc2626"></span>Exit ({{ charts.exit_events }})</span>
-      <span class="inline-flex items-center gap-1 text-gray-600"><span class="inline-block w-3 h-[2px]" style="background:#16a34a"></span>Entry ({{ charts.entry_events }})</span>
-    </div>
-  </div>
-
-  <!-- Foraging trips over time (line) -->
-  <div class="bg-white shadow rounded-lg p-4">
-    <h2 class="text-sm font-medium text-gray-500 uppercase mb-2">Foraging trips over time</h2>
-    <div class="overflow-x-auto">
-    <svg viewBox="0 0 {{ ts.w }} {{ ts.h }}" class="w-full" style="min-width:360px" role="img" aria-label="Trips over time">
-      <line x1="{{ ts.pad }}" y1="{{ ts.pad }}" x2="{{ ts.pad }}" y2="{{ ts.h|add:'-30' }}" stroke="#e5e7eb"/>
-      <line x1="{{ ts.pad }}" y1="{{ ts.h|add:'-30' }}" x2="{{ ts.w|add:'-30' }}" y2="{{ ts.h|add:'-30' }}" stroke="#e5e7eb"/>
-      <text x="4" y="{{ ts.pad }}" font-size="9" fill="#9ca3af">{{ ts.trip_ymax }}</text>
-      <text x="4" y="{{ ts.h|add:'-30' }}" font-size="9" fill="#9ca3af">0</text>
-      <polyline points="{{ ts.trips_pts }}" fill="none" stroke="#d97706" stroke-width="1.5" stroke-linejoin="round"/>
-      {% for xt in ts.xticks %}<text x="{{ xt.x }}" y="{{ ts.h|add:'-12' }}" font-size="8" fill="#9ca3af" text-anchor="middle">{{ xt.label }}</text>{% endfor %}
-    </svg>
-    </div>
-    <p class="text-[11px] text-gray-400 mt-1">Foraging trips ({{ ts.total_trips }}) bucketed by exit time.</p>
-  </div>
-
-</div>
-{% endwith %}{% endif %}
-
-<!-- Trips per nest — click a nest to filter the trips table below -->
-{% if summary.trips_per_nest %}
-<div class="bg-white shadow rounded-lg p-4 mb-6">
-  <h2 class="text-sm font-medium text-gray-500 uppercase mb-3">Trips per nest <span class="text-xs normal-case text-gray-400">— click to see that nest's trips</span></h2>
-  <div class="flex flex-wrap gap-2">
-    {% for nest, n in summary.trips_per_nest.items %}
-    <button type="button" class="nest-chip inline-flex items-center px-2.5 py-1 rounded bg-gray-100 hover:bg-amber-100 text-sm text-gray-700" data-nest="{{ nest }}">nest {{ nest }}: <span class="font-semibold ml-1">{{ n }}</span></button>
-    {% endfor %}
-  </div>
-</div>
-{% endif %}
-
-<!-- Trips table -->
+<!-- Per-run rows: the numbers when there are any, the reason when there are not -->
 <div class="bg-white shadow rounded-lg overflow-hidden mb-6">
-  <div class="px-4 py-2 text-xs text-gray-500 border-b border-gray-100 flex items-center gap-2">
-    <span id="trips-count">{{ trips|length }} trip(s)</span>
-    <span id="nest-filter-note" class="hidden text-amber-700"></span>
-    <button type="button" id="clear-nest" class="hidden text-amber-700 underline">show all nests</button>
-    <span class="ml-auto text-gray-400">scroll within the table</span>
+  <div class="flex items-center gap-3 px-4 py-2.5 border-b border-gray-200">
+    <span class="text-xs px-2.5 py-1 rounded-full bg-amber-600 text-white">All {{ outcome.total }}</span>
+    {% if outcome.failed %}<span class="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-700">Failed {{ outcome.failed }}</span>{% endif %}
+    <span class="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-700">Completed {{ outcome.completed }}</span>
+    <div class="flex-1"></div>
+    {% comment %}
+      The base tables, every clip in the batch concatenated and stamped with
+      video title + absolute time. These are the primitives everything else is
+      derived from, so they are what a downstream script or an R session wants
+      -- not the rolled-up summary above it.
+    {% endcomment %}
+    <div class="flex items-center gap-1.5">
+      <span class="text-[11px] text-gray-400 mr-0.5">Download batch data</span>
+      {% for d in downloads %}
+      <a href="{% url 'pipelines:batch_combined_csv' batch_id=batch_id kind=d.kind %}"
+         title="{{ d.hint }}"
+         class="text-[11px] px-2 py-1 rounded border {% if d.analyzed %}border-amber-300 bg-amber-50 text-amber-800{% else %}border-gray-300 text-gray-700{% endif %} hover:bg-gray-50 hover:border-amber-400 whitespace-nowrap">{{ d.label }}</a>
+      {% endfor %}
+    </div>
   </div>
-  <div class="overflow-auto max-h-[32rem]">
-    <table class="min-w-full divide-y divide-gray-200 text-sm">
-      <thead class="bg-gray-50 sticky top-0 z-10">
-        <tr>
-          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Nest</th>
-          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Exit</th>
-          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Return</th>
-          <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Duration</th>
-          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Exit Video</th>
-          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Return Video</th>
-        </tr>
-      </thead>
-      <tbody id="trips-tbody" class="divide-y divide-gray-100">
-        {% for t in trips %}
-        <tr class="trip-row {% if t.is_cross_video %}bg-amber-50{% endif %}" data-nest="{{ t.nest }}" {% if t.is_cross_video %}title="Cross-video trip: exit and return were captured in different recordings"{% endif %}>
-          <td class="px-4 py-2 font-medium">{{ t.nest }}</td>
-          <td class="px-4 py-2 whitespace-nowrap">{{ t.exit_time|date:"M d H:i:s" }}</td>
-          <td class="px-4 py-2 whitespace-nowrap">{{ t.entry_time|date:"M d H:i:s" }}</td>
-          <td class="px-4 py-2 text-right">{{ t.duration_sec }}s</td>
-          <td class="px-4 py-2 truncate max-w-[16rem]">{% if t.exit_video_pk %}<a href="{% url 'videos:detail' t.exit_video_pk %}" class="text-amber-700 hover:underline" title="{{ t.exit_video }}">{{ t.exit_video }}</a>{% else %}<span class="text-gray-500">{{ t.exit_video }}</span>{% endif %}</td>
-          <td class="px-4 py-2 truncate max-w-[16rem]">{% if t.entry_video_pk %}<a href="{% url 'videos:detail' t.entry_video_pk %}" class="{% if t.is_cross_video %}text-amber-700 font-medium{% else %}text-amber-700{% endif %} hover:underline" title="{{ t.entry_video }}">{{ t.entry_video }}</a>{% else %}<span class="text-gray-500">{{ t.entry_video }}</span>{% endif %}</td>
-        </tr>
-        {% empty %}
-        <tr><td colspan="6" class="px-4 py-6 text-center text-gray-400">No trips found in the current duration bounds.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+
+  {% comment %}
+    What the downloads leave out. A clip that cannot join an export used to
+    disappear from it with nothing on screen to say so, which made a short CSV
+    look like a short batch.
+  {% endcomment %}
+  {% if skipped_sources %}
+  <div class="px-4 py-1.5 border-b border-gray-200 bg-amber-50 text-[11px] text-amber-900">
+    {{ skipped_sources|length }} clip{{ skipped_sources|pluralize }} not in the downloads above:
+    {% for s in skipped_sources %}{{ s.video }} ({{ s.reason }}){% if not forloop.last %}; {% endif %}{% endfor %}
   </div>
+  {% endif %}
+
+  {% comment %}
+    The base measurements, not derived answers. Trips used to have a column, so
+    a Detection Count batch rendered a column of zeros for a question it never
+    asked — and a Visitation batch had nowhere to show what it did measure.
+    Tracks, events and interactions are what every pipeline produces; trips,
+    visits and dwell are reads over them, and the reader can do their own.
+  {% endcomment %}
+  {% comment %}
+    Reviewing a clip without leaving the batch. Scanning a day's footage means
+    watching one clip after another, and a round trip to a detail page and back
+    between each turns a minute of review into ten. The sources are lazy: the
+    proxy re-encodes the annotated video on demand and the stream view presigns
+    the original, so opening this page costs nothing until a row is clicked.
+  {% endcomment %}
+  <div id="clip-viewer" hidden class="border-b border-gray-200 bg-gray-900">
+    <div class="flex items-center justify-between px-4 py-2 text-white">
+      <div class="flex items-center gap-3 min-w-0">
+        <span id="cv-title" class="text-sm font-medium truncate"></span>
+        <span id="cv-pos" class="text-[11px] text-gray-400 whitespace-nowrap"></span>
+      </div>
+      <div class="flex items-center gap-1.5">
+        {% comment %}
+          The inline viewer answers "what does this clip look like"; the full
+          page answers "what else is in it" — per-track crops, the raw CSVs,
+          the species table. Reviewing in place should not mean losing the way
+          through to it.
+        {% endcomment %}
+        <a id="cv-results" href="#" hidden
+           class="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white whitespace-nowrap"
+           title="Crops, CSVs and the full per-clip breakdown">Full results ↗</a>
+        <button type="button" id="cv-toggle" hidden
+                class="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white"></button>
+        <button type="button" id="cv-prev"
+                class="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white" title="Earlier clip (←)">← Earlier</button>
+        <button type="button" id="cv-next"
+                class="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white" title="Later clip (→)">Later →</button>
+        <button type="button" id="cv-close"
+                class="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white" title="Close (Esc)">✕</button>
+      </div>
+    </div>
+    <video id="cv-video" controls autoplay muted playsinline
+           class="w-full bg-black" style="max-height:60vh"></video>
+    <p id="cv-note" class="px-4 py-1.5 text-[11px] text-gray-400"></p>
+  </div>
+
+  <div class="grid grid-cols-[60px_100px_minmax(0,1fr)_80px_80px_96px_80px_88px] gap-0 px-4 py-2 border-b border-gray-100 text-[11px] font-semibold text-gray-500">
+    <div></div><div>Clip</div><div>Outcome</div>
+    <div class="text-right">Tracks</div><div class="text-right">Events</div>
+    <div class="text-right">Interactions</div>
+    <div class="text-right">Length</div><div class="text-right">GPU time</div>
+  </div>
+
+  {% for r in rows %}
+  <div class="clip-row grid grid-cols-[60px_100px_minmax(0,1fr)_80px_80px_96px_80px_88px] items-center px-4 py-2 border-b border-gray-100 hover:bg-gray-50"
+       {% if r.video %}data-title="{{ r.when|date:"j M, H:i"|default:"clip" }}"
+       data-original="{% url 'videos:stream' r.video.pk %}"
+       {% if r.result.annotated_video_path %}data-annotated="{% url 'analysis:video_proxy' r.job.pk %}"{% endif %}
+       {% if r.job %}data-results="{% url 'analysis:results' r.job.pk %}"{% endif %}
+       data-rotate="{% if r.video.device.rotate_180 %}1{% endif %}"{% endif %}>
+    {% comment %}
+      Both the still and the time open this clip's own results — the videos,
+      the per-clip numbers and its four CSVs. That page is what "open the clip"
+      means; a run that never produced a job has no results to open, so it
+      falls back to the run's own page.
+    {% endcomment %}
+    <div>
+      {% if r.video %}
+      <button type="button" class="cv-open block" title="Watch this clip">
+        <img src="{% url 'videos:thumbnail' r.video.pk %}" alt="" loading="lazy"
+             class="w-12 rounded object-cover" style="aspect-ratio:16/9" onerror="this.remove()">
+      </button>
+      {% endif %}
+    </div>
+    <div class="text-[13px] font-medium text-gray-900">
+      {% if r.video %}
+      <button type="button" class="cv-open hover:underline text-left" title="Watch this clip">
+        {{ r.when|date:"H:i"|default:"—" }}
+      </button>
+      {% else %}—{% endif %}
+    </div>
+    <div class="flex items-center gap-2 min-w-0">
+      {% if r.status == "completed" %}
+        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 shrink-0">completed</span>
+      {% elif r.status == "failed" %}
+        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 shrink-0">failed</span>
+        <span class="text-xs text-gray-500 truncate" title="{{ r.error }}">{{ r.error|failure_title }}</span>
+      {% else %}
+        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 shrink-0">running</span>
+      {% endif %}
+      {% if r.job %}
+      <a href="{% url 'analysis:results' r.job.pk %}"
+         class="text-[11px] text-amber-700 hover:underline shrink-0 ml-auto"
+         title="Per-track crops, the raw CSVs and the full breakdown for this clip">crops &amp; CSVs →</a>
+      {% endif %}
+    </div>
+    <div class="text-right text-[13px] {% if r.result %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.result %}{{ r.result.unique_tracks }}{% else %}—{% endif %}</div>
+    {% comment %}
+      Events and interactions come from this run's analyzers, the same source as
+      the clip's own page and this batch's CSV downloads — not from the worker's
+      stored counters, which match an insect to a reference by centroid distance
+      under a flat 50 px and so disagree with every table we render. A dash
+      means this pipeline ran no analyzer for that primitive; zero would claim
+      it measured none.
+    {% endcomment %}
+    <div class="text-right text-[13px] {% if r.primitives.events is None %}text-gray-300{% else %}text-gray-900{% endif %}"
+         {% if r.primitives.events is None %}title="This pipeline ran no events analyzer"{% endif %}>{% if r.primitives.events is None %}—{% else %}{{ r.primitives.events }}{% endif %}</div>
+    <div class="text-right text-[13px] {% if r.primitives.interactions is None %}text-gray-300{% else %}text-gray-900{% endif %}"
+         {% if r.primitives.interactions is None %}title="This pipeline ran no interactions analyzer"{% endif %}>{% if r.primitives.interactions is None %}—{% else %}{{ r.primitives.interactions }}{% endif %}</div>
+    <div class="text-right text-xs text-gray-500">{% if r.video.duration_seconds %}{{ r.video.duration_seconds|duration_min }}{% else %}—{% endif %}</div>
+    <div class="text-right text-xs text-gray-500">{% if r.gpu_seconds %}{{ r.gpu_seconds|duration_min }}{% else %}—{% endif %}</div>
+  </div>
+  {% endfor %}
 </div>
 
-<!-- Per-nest events log (every exit/entry, filtered by the same nest chips) -->
-{% if events %}
-<div class="bg-white shadow rounded-lg overflow-hidden mb-6">
-  <div class="px-4 py-2 text-xs text-gray-500 border-b border-gray-100 flex items-center gap-2">
-    <span class="font-medium text-gray-600 uppercase tracking-wide">Events log</span>
-    <span id="events-count">{{ events|length }} event(s)</span>
-    <span id="ev-nest-note" class="hidden text-amber-700"></span>
-    <span class="ml-auto text-gray-400">every exit / entry · click a nest above to filter · scroll within</span>
-  </div>
-  <div class="overflow-auto max-h-[28rem]">
-    <table class="min-w-full divide-y divide-gray-200 text-sm">
-      <thead class="bg-gray-50 sticky top-0 z-10">
-        <tr>
-          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Nest</th>
-          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
-          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Time</th>
-          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Video</th>
-        </tr>
-      </thead>
-      <tbody id="events-tbody" class="divide-y divide-gray-100">
-        {% for e in events %}
-        <tr class="event-row" data-nest="{{ e.nest }}">
-          <td class="px-4 py-2 font-medium">{{ e.nest }}</td>
-          <td class="px-4 py-2"><span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full {% if e.action == 'Exit' %}bg-red-100 text-red-700{% else %}bg-green-100 text-green-700{% endif %}">{{ e.action }}</span></td>
-          <td class="px-4 py-2 whitespace-nowrap">{{ e.time|date:"M d H:i:s" }}</td>
-          <td class="px-4 py-2 truncate max-w-[20rem]">{% if e.video_pk %}<a href="{% url 'videos:detail' e.video_pk %}" class="text-amber-700 hover:underline" title="{{ e.video }}">{{ e.video }}</a>{% else %}<span class="text-gray-500">{{ e.video }}</span>{% endif %}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-{% endif %}
-{% elif all_done %}
-<div class="bg-white shadow rounded-lg p-6 text-sm text-gray-500 mb-6">
-  No aggregate results — none of the completed runs produced an events CSV (see the skipped list above).
-</div>
-{% endif %}
-
-<script>
-// Click a nest chip to filter the trips table to that nest; "show all" clears.
-(function () {
-  var tbody = document.getElementById('trips-tbody');
-  if (!tbody) return;
-  var note = document.getElementById('nest-filter-note');
-  var clearBtn = document.getElementById('clear-nest');
-  var countEl = document.getElementById('trips-count');
-  var rows = Array.prototype.slice.call(tbody.querySelectorAll('.trip-row'));
-  var total = rows.length;
-  // Events log (optional) filtered by the same nest.
-  var evBody = document.getElementById('events-tbody');
-  var evRows = evBody ? Array.prototype.slice.call(evBody.querySelectorAll('.event-row')) : [];
-  var evTotal = evRows.length;
-  var evCount = document.getElementById('events-count');
-  var evNote = document.getElementById('ev-nest-note');
-  function filterRows(list, nest) {
-    var shown = 0;
-    list.forEach(function (r) {
-      var on = !nest || r.getAttribute('data-nest') === nest;
-      r.style.display = on ? '' : 'none';
-      if (on) shown++;
-    });
-    return shown;
-  }
-  function apply(nest) {
-    var shown = filterRows(rows, nest);
-    if (nest) {
-      note.textContent = '· nest ' + nest + ' (' + shown + ')';
-      note.classList.remove('hidden'); clearBtn.classList.remove('hidden');
-    } else {
-      note.classList.add('hidden'); clearBtn.classList.add('hidden');
-    }
-    countEl.textContent = (nest ? shown : total) + ' trip(s)';
-    if (evRows.length) {
-      var evShown = filterRows(evRows, nest);
-      evCount.textContent = (nest ? evShown : evTotal) + ' event(s)';
-      if (nest) { evNote.textContent = '· nest ' + nest; evNote.classList.remove('hidden'); }
-      else { evNote.classList.add('hidden'); }
-    }
-  }
-  document.querySelectorAll('.nest-chip').forEach(function (chip) {
-    chip.addEventListener('click', function () {
-      apply(chip.getAttribute('data-nest'));
-      document.querySelectorAll('.nest-chip').forEach(function (c) {
-        c.classList.toggle('bg-amber-200', c === chip);
-        c.classList.toggle('bg-gray-100', c !== chip);
-      });
-      document.getElementById('trips-tbody').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-  });
-  if (clearBtn) clearBtn.addEventListener('click', function () {
-    apply(null);
-    document.querySelectorAll('.nest-chip').forEach(function (c) {
-      c.classList.add('bg-gray-100'); c.classList.remove('bg-amber-200');
-    });
-  });
-})();
-</script>
+{% comment %}
+  No analyzer panels here. Trips, visits, dwell and entry/exit splits are all
+  reads over the base tables above — and rendering them per-batch meant every
+  pipeline got a page about a question it may never have asked, four zeros deep.
+  The batch page reports what was measured; the CSVs carry it out.
+{% endcomment %}
 
 {% if running %}
 <script>
@@ -306,4 +379,98 @@ setTimeout(function(){
 }, 15000);
 </script>
 {% endif %}
+
+<script>
+// Clip review, inline. Scanning a day's footage is watching one clip after
+// another; a round trip to a detail page between each turns a minute of review
+// into ten. Rows carry their own sources, so this needs no fetch.
+(function () {
+  var viewer = document.getElementById('clip-viewer');
+  if (!viewer) return;
+  var video  = document.getElementById('cv-video');
+  var title  = document.getElementById('cv-title');
+  var pos    = document.getElementById('cv-pos');
+  var note   = document.getElementById('cv-note');
+  var toggle = document.getElementById('cv-toggle');
+  var resultsLink = document.getElementById('cv-results');
+  var rows   = Array.prototype.slice.call(document.querySelectorAll('.clip-row[data-original]'));
+  var at = -1;
+  var showAnnotated = true;
+
+  function render() {
+    var row = rows[at];
+    if (!row) return;
+    var annotated = row.getAttribute('data-annotated');
+    var useAnnotated = showAnnotated && !!annotated;
+    var src = useAnnotated ? annotated : row.getAttribute('data-original');
+
+    if (video.getAttribute('src') !== src) {
+      video.setAttribute('src', src);
+      video.load();
+      var playing = video.play();
+      if (playing && playing.catch) playing.catch(function () {});
+    }
+    // The clip's device may be mounted upside down. Both sources turn together:
+    // the overlay is drawn on the unrotated frames, so its boxes stay put.
+    video.classList.toggle('rotate-180', row.getAttribute('data-rotate') === '1');
+
+    title.textContent = row.getAttribute('data-title') || '';
+    pos.textContent = (at + 1) + ' of ' + rows.length;
+
+    // Only offer the switch when there is something to switch to.
+    toggle.hidden = !annotated;
+    toggle.textContent = useAnnotated ? 'Show original' : 'Show detections';
+    note.textContent = annotated
+      ? (useAnnotated ? 'Annotated — boxes and track IDs drawn by the run.' : 'Original clip, as recorded.')
+      : 'This run rendered no annotated video, so this is the original clip.';
+
+    var results = row.getAttribute('data-results');
+    resultsLink.hidden = !results;
+    if (results) resultsLink.setAttribute('href', results);
+
+    rows.forEach(function (r) { r.classList.remove('bg-amber-50'); });
+    row.classList.add('bg-amber-50');
+  }
+
+  function open(index) {
+    if (index < 0 || index >= rows.length) return;
+    at = index;
+    viewer.hidden = false;
+    render();
+    viewer.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+  }
+
+  function close() {
+    viewer.hidden = true;
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+    rows.forEach(function (r) { r.classList.remove('bg-amber-50'); });
+    at = -1;
+  }
+
+  // Rows are ordered newest-first, so "earlier" is further DOWN the list —
+  // the same direction the review workspace uses. Going forward in the list
+  // while the label says "earlier" is the bug that gets reported every time.
+  function step(delta) { open(Math.min(Math.max(at + delta, 0), rows.length - 1)); }
+
+  rows.forEach(function (row, i) {
+    row.querySelectorAll('.cv-open').forEach(function (btn) {
+      btn.addEventListener('click', function () { open(i); });
+    });
+  });
+  document.getElementById('cv-prev').addEventListener('click', function () { step(1); });
+  document.getElementById('cv-next').addEventListener('click', function () { step(-1); });
+  document.getElementById('cv-close').addEventListener('click', close);
+  toggle.addEventListener('click', function () { showAnnotated = !showAnnotated; render(); });
+
+  document.addEventListener('keydown', function (e) {
+    if (viewer.hidden) return;
+    if (e.key === 'Escape') { close(); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); step(1); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); step(-1); }
+  });
+})();
+</script>
+
 {% endblock %}

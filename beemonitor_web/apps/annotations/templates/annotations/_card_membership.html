@@ -1,0 +1,9 @@
+{% comment %}
+  The card corner in an annotation project: whether this clip is already in it.
+  Clips stay in the grid once added rather than disappearing — knowing you
+  already have twelve from this hotel is the thing you need while choosing, and
+  hiding them is what makes over-sampling invisible.
+{% endcomment %}
+{% if v.in_project %}
+<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-800 font-medium whitespace-nowrap">in project</span>
+{% endif %}

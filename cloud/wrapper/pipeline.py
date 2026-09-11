@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import tempfile
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -17,7 +18,22 @@ from cloud.storage.config import S3Config
 from cloud.storage.s3_client import S3StorageClient
 from cloud.wrapper.model_manager import ModelManager, ModelPaths
 
+try:  # the analysis library is vendored into the GPU image, not the web image
+    from beemonitor.core.profiling import PROFILER
+except ImportError:  # pragma: no cover - keeps CloudPipeline importable alone
+    PROFILER = None
+
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _stage(name: str):
+    """Record a pipeline stage when the profiler is importable, else no-op."""
+    if PROFILER is None:
+        yield
+        return
+    with PROFILER.stage(name):
+        yield
 
 
 @dataclass
@@ -91,6 +107,7 @@ class CloudPipeline:
         custom_nest_model_path: str = "",
         custom_bee_model_path: str = "",
         hotel_roi=None,
+        hotel_polygon=None,
         nest_layout=None,
         run_tracking: bool = True,
         detector_kind: str = "yolo",
@@ -126,7 +143,8 @@ class CloudPipeline:
         # Step 1 — Download video from S3 raw-videos
         video_local = str(job_dir / Path(video_blob_path).name)
         logger.info("[%s] Downloading video: %s", job_id, video_blob_path)
-        self._storage.download_file("raw-videos", video_blob_path, video_local)
+        with _stage("download"):
+            self._storage.download_file("raw-videos", video_blob_path, video_local)
 
         # Step 2 — Ensure models
         logger.info("[%s] Ensuring models are available", job_id)
@@ -161,7 +179,8 @@ class CloudPipeline:
         # post-processing — they only need the layout.
         if not run_tracking:
             return self._nest_only(job_id, user_id, video_local, model_paths,
-                                   custom_nest_local, hotel_roi, nest_layout)
+                                   custom_nest_local, hotel_roi, nest_layout,
+                                   hotel_polygon)
 
         # Step 3 — Build config and run analysis
         logger.info("[%s] Running BeeMonitor analysis", job_id)
@@ -177,6 +196,7 @@ class CloudPipeline:
             custom_nest_local=custom_nest_local,
             custom_bee_local=custom_bee_local,
             hotel_roi=hotel_roi,
+            hotel_polygon=hotel_polygon,
             nest_layout=nest_layout,
             recorded_at=recorded_at,
             start_frame=start_frame,
@@ -188,96 +208,99 @@ class CloudPipeline:
             species_max_votes=species_max_votes,
         )
 
-        # Step 4 — Post-processing: foraging trips + interactions
-        events = result.events if result is not None else None
-        tracks = result.tracks if result is not None else None
-        nests = result.nests if result is not None else None
+        with _stage("postprocess"):
+            # Step 4 — Post-processing: foraging trips + interactions
+            events = result.events if result is not None else None
+            tracks = result.tracks if result is not None else None
+            nests = result.nests if result is not None else None
 
-        from cloud.wrapper.foraging import compute_foraging_trips, compute_trip_summary
+            from cloud.wrapper.foraging import compute_foraging_trips, compute_trip_summary
 
-        # Detect fps from config or default to 30
-        fps = 30.0
-        if result and hasattr(result, "config") and result.config:
+            # Detect fps from config or default to 30
+            fps = 30.0
+            if result and hasattr(result, "config") and result.config:
+                try:
+                    fps = float(result.config.video.fps)
+                except Exception:
+                    pass
+
+            trips_df = compute_foraging_trips(events, fps=fps)
+            trip_summary = compute_trip_summary(trips_df)
+
+            # Save foraging trips CSV to output dir
+            if not trips_df.empty:
+                trips_csv_path = str(output_dir / "foraging_trips.csv")
+                trips_df.to_csv(trips_csv_path, index=False)
+                logger.info("[%s] Saved %d foraging trips", job_id, len(trips_df))
+
+            # Step 4b — Compute interactions from tracking data
+            interaction_count = 0
             try:
-                fps = float(result.config.video.fps)
-            except Exception:
-                pass
+                if (tracks is not None and hasattr(tracks, "empty") and not tracks.empty
+                        and nests and isinstance(nests, dict) and nests.get("nests")):
+                    from beemonitor.processing.interaction_analyzer import InteractionAnalyzer, nests_to_reference_objects
 
-        trips_df = compute_foraging_trips(events, fps=fps)
-        trip_summary = compute_trip_summary(trips_df)
+                    analyzer = InteractionAnalyzer(fps=fps)
 
-        # Save foraging trips CSV to output dir
-        if not trips_df.empty:
-            trips_csv_path = str(output_dir / "foraging_trips.csv")
-            trips_df.to_csv(trips_csv_path, index=False)
-            logger.info("[%s] Saved %d foraging trips", job_id, len(trips_df))
+                    # Bee-to-bee interactions
+                    track_interactions, _ = analyzer.analyze_track_interactions(tracks)
 
-        # Step 4b — Compute interactions from tracking data
-        interaction_count = 0
-        try:
-            if (tracks is not None and hasattr(tracks, "empty") and not tracks.empty
-                    and nests and isinstance(nests, dict) and nests.get("nests")):
-                from beemonitor.processing.interaction_analyzer import InteractionAnalyzer, nests_to_reference_objects
+                    # Bee-to-reference (nest) interactions
+                    ref_objects = nests_to_reference_objects(
+                        [{"id": k, "bbox": v} for k, v in nests["nests"].items()]
+                    )
+                    ref_interactions, _ = analyzer.analyze_reference_interactions(tracks, ref_objects)
 
-                analyzer = InteractionAnalyzer(fps=fps)
+                    all_interactions = track_interactions + ref_interactions
+                    interaction_count = len(all_interactions)
 
-                # Bee-to-bee interactions
-                track_interactions, _ = analyzer.analyze_track_interactions(tracks)
+                    if all_interactions:
+                        # Build track_id → taxon lookup from tracking data
+                        import pandas as pd
+                        taxon_lookup = {}
+                        if tracks is not None and "taxon" in tracks.columns and "track_id" in tracks.columns:
+                            for tid, grp in tracks.groupby("track_id"):
+                                taxon_lookup[tid] = grp["taxon"].mode().iloc[0] if len(grp) > 0 else "unknown"
 
-                # Bee-to-reference (nest) interactions
-                ref_objects = nests_to_reference_objects(
-                    [{"id": k, "bbox": v} for k, v in nests["nests"].items()]
-                )
-                ref_interactions, _ = analyzer.analyze_reference_interactions(tracks, ref_objects)
-
-                all_interactions = track_interactions + ref_interactions
-                interaction_count = len(all_interactions)
-
-                if all_interactions:
-                    # Build track_id → taxon lookup from tracking data
-                    import pandas as pd
-                    taxon_lookup = {}
-                    if tracks is not None and "taxon" in tracks.columns and "track_id" in tracks.columns:
-                        for tid, grp in tracks.groupby("track_id"):
-                            taxon_lookup[tid] = grp["taxon"].mode().iloc[0] if len(grp) > 0 else "unknown"
-
-                    # Combined CSV — organism-to-organism and organism-to-reference
-                    # Each row is one pairwise interaction. Multi-party encounters
-                    # produce multiple rows (e.g., A near B and C = rows A-B, A-C, B-C)
-                    rows = []
-                    track_set = set(id(e) for e in track_interactions)
-                    for event in all_interactions:
-                        is_track = id(event) in track_set
-                        rows.append({
-                            "interaction_type": "organism-to-organism" if is_track else "organism-to-reference",
-                            "organism_track_id": event.entity1_id,
-                            "organism_taxon": taxon_lookup.get(event.entity1_id, "unknown"),
-                            "partner_track_id": event.entity2_id if is_track else "",
-                            "partner_taxon": taxon_lookup.get(event.entity2_id, "") if is_track else "",
-                            "reference_id": "" if is_track else event.entity2_id,
-                            "start_frame": event.start_frame,
-                            "end_frame": event.end_frame,
-                            "duration_frames": event.duration_frames,
-                            "duration_seconds": round(event.duration_frames / fps, 2),
-                            "min_distance_px": round(event.min_distance, 1),
-                            "avg_distance_px": round(event.avg_distance, 1),
-                        })
-                    pd.DataFrame(rows).to_csv(str(output_dir / "interactions.csv"), index=False)
-                    logger.info("[%s] Saved %d interactions (%d organism-to-organism, %d organism-to-reference)",
-                                job_id, len(all_interactions), len(track_interactions), len(ref_interactions))
-        except Exception as e:
-            logger.warning("[%s] Interaction analysis failed (non-fatal): %s", job_id, e)
+                        # Combined CSV — organism-to-organism and organism-to-reference
+                        # Each row is one pairwise interaction. Multi-party encounters
+                        # produce multiple rows (e.g., A near B and C = rows A-B, A-C, B-C)
+                        rows = []
+                        track_set = set(id(e) for e in track_interactions)
+                        for event in all_interactions:
+                            is_track = id(event) in track_set
+                            rows.append({
+                                "interaction_type": "organism-to-organism" if is_track else "organism-to-reference",
+                                "organism_track_id": event.entity1_id,
+                                "organism_taxon": taxon_lookup.get(event.entity1_id, "unknown"),
+                                "partner_track_id": event.entity2_id if is_track else "",
+                                "partner_taxon": taxon_lookup.get(event.entity2_id, "") if is_track else "",
+                                "reference_id": "" if is_track else event.entity2_id,
+                                "start_frame": event.start_frame,
+                                "end_frame": event.end_frame,
+                                "duration_frames": event.duration_frames,
+                                "duration_seconds": round(event.duration_frames / fps, 2),
+                                "min_distance_px": round(event.min_distance, 1),
+                                "avg_distance_px": round(event.avg_distance, 1),
+                            })
+                        pd.DataFrame(rows).to_csv(str(output_dir / "interactions.csv"), index=False)
+                        logger.info("[%s] Saved %d interactions (%d organism-to-organism, %d organism-to-reference)",
+                                    job_id, len(all_interactions), len(track_interactions), len(ref_interactions))
+            except Exception as e:
+                logger.warning("[%s] Interaction analysis failed (non-fatal): %s", job_id, e)
 
         # Step 5 — Upload results to S3 processed bucket (includes per-track
         # crops so a species model can run on them later).
         logger.info("[%s] Uploading results to S3", job_id)
-        result_paths = self._upload_results(job_id, user_id, output_dir, video_local)
+        with _stage("upload"):
+            result_paths = self._upload_results(job_id, user_id, output_dir, video_local)
         crops_manifest = result_paths.get("crops_manifest") or {}
 
         # Step 6 — Build structured result
 
-        # get_statistics() exists on analysis_results.AnalysisResults but not
-        # on the version defined in video_analyzer.py — handle both
+        # get_statistics() is on AnalysisResults; the fallback covers a caller
+        # that hands us a bare result. (It used to cover a second, stale
+        # AnalysisResults defined inside video_analyzer.py — deleted 2026-09.)
         if result and hasattr(result, "get_statistics"):
             stats = result.get_statistics()
         elif result and events is not None and hasattr(events, "empty") and not events.empty:
@@ -343,11 +366,13 @@ class CloudPipeline:
     # ------------------------------------------------------------------
 
     def _nest_only(self, job_id, user_id, video_local, model_paths,
-                   custom_nest_local="", hotel_roi=None, nest_layout=None):
+                   custom_nest_local="", hotel_roi=None, nest_layout=None,
+                   hotel_polygon=None):
         """Fast path for run_tracking=False: the device layout if present,
         else NestDetector on the video's early frames. No motion detection,
         tracking model, events, or post-processing."""
-        nests = self._build_manual_nests(video_local, hotel_roi, nest_layout)
+        nests = self._build_manual_nests(video_local, hotel_roi, nest_layout,
+                                         hotel_polygon)
         if nests is None:
             from ultralytics import YOLO
             from beemonitor.core.config import Config
@@ -402,15 +427,29 @@ class CloudPipeline:
         if not ok or frame is None:
             return ""
 
+        import numpy as np
+
+        def outline(points, color, thickness):
+            """Draw a traced outline; returns True when there was one to draw."""
+            if not points or len(points) < 3:
+                return False
+            cv2.polylines(frame, [np.array(points, dtype=np.int32)], True, color, thickness)
+            return True
+
         hotel = (nests or {}).get("hotel")
         if hotel:
             x1, y1, x2, y2 = [int(v) for v in hotel]
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 160, 255), 3)
+            # The preview shows what was actually used: the traced outline when
+            # the ROI is a polygon, its bounding box otherwise.
+            if not outline((nests or {}).get("hotel_polygon"), (0, 160, 255), 3):
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 160, 255), 3)
             cv2.putText(frame, "hotel", (x1, max(24, y1 - 8)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 160, 255), 2)
+        nest_polygons = (nests or {}).get("nest_polygons") or {}
         for nest_id, bbox in ((nests or {}).get("nests") or {}).items():
             x1, y1, x2, y2 = [int(v) for v in bbox]
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 220, 0), 2)
+            if not outline(nest_polygons.get(nest_id), (0, 220, 0), 2):
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 220, 0), 2)
             cv2.putText(frame, str(nest_id), (x1, max(16, y1 - 5)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 220, 0), 2)
 
@@ -433,6 +472,7 @@ class CloudPipeline:
         custom_nest_local: str = "",
         custom_bee_local: str = "",
         hotel_roi=None,
+        hotel_polygon=None,
         nest_layout=None,
         recorded_at: str = "",
         start_frame: int = 0,
@@ -487,7 +527,8 @@ class CloudPipeline:
         # Device-supplied hotel ROI + nest tubes (normalized 0..1) → pixel-space
         # manual_nests so the run uses the human-set layout (model is the backup).
         # Requires BOTH the ROI and the tubes; otherwise fall back to detection.
-        manual_nests = self._build_manual_nests(video_local, hotel_roi, nest_layout)
+        manual_nests = self._build_manual_nests(video_local, hotel_roi, nest_layout,
+                                                hotel_polygon)
 
         from beemonitor import BeeMonitor
 
@@ -502,10 +543,18 @@ class CloudPipeline:
         return result
 
     @staticmethod
-    def _build_manual_nests(video_local: str, hotel_roi, nest_layout):
+    def _build_manual_nests(video_local: str, hotel_roi, nest_layout, hotel_polygon=None):
         """Turn a device's normalized hotel ROI + nest layout into the pixel-space
         ``{'hotel': (x1,y1,x2,y2), 'nests': {id: (x1,y1,x2,y2)}}`` the analyzer
-        consumes. Returns None (→ model detection) unless BOTH are present + valid."""
+        consumes. Returns None (→ model detection) unless BOTH are present + valid.
+
+        Shapes the user traced as polygons also carry their outline, in the same
+        pixel space: ``hotel_polygon`` (a list of points) and ``nest_polygons``
+        ({id: points}). The analyzer masks tracking to the hotel outline and tests
+        nest entry/exit against a nest's outline, so the background a bounding box
+        unavoidably includes is excluded. Rectangles carry no outline and behave
+        exactly as before.
+        """
         if not hotel_roi or not nest_layout:
             return None
         try:
@@ -520,15 +569,38 @@ class CloudPipeline:
             def to_px(box):
                 return (int(box[0] * w), int(box[1] * h), int(box[2] * w), int(box[3] * h))
 
-            nests = {}
+            def poly_px(points):
+                """Normalized [[x,y], ...] -> pixel [(x,y), ...], or None."""
+                if not isinstance(points, (list, tuple)) or len(points) < 3:
+                    return None
+                try:
+                    return [(int(float(p[0]) * w), int(float(p[1]) * h)) for p in points]
+                except (TypeError, ValueError, IndexError):
+                    return None
+
+            nests, nest_polygons = {}, {}
             for item in nest_layout:
                 box = item.get("box")
                 if box and len(box) == 4:
-                    nests[item.get("id")] = to_px(box)
+                    nest_id = item.get("id")
+                    nests[nest_id] = to_px(box)
+                    pts = poly_px(item.get("points"))
+                    if pts:
+                        nest_polygons[nest_id] = pts
             if not nests:
                 return None
-            logger.info("Using device hotel ROI + %d nest tubes (manual layout)", len(nests))
-            return {"hotel": to_px(hotel_roi), "nests": nests}
+            manual = {"hotel": to_px(hotel_roi), "nests": nests}
+            hotel_pts = poly_px(hotel_polygon)
+            if hotel_pts:
+                manual["hotel_polygon"] = hotel_pts
+            if nest_polygons:
+                manual["nest_polygons"] = nest_polygons
+            logger.info("Using device hotel ROI + %d nest tubes (manual layout%s)",
+                        len(nests),
+                        "; polygons: %s hotel, %d nest" % (
+                            "1" if hotel_pts else "0", len(nest_polygons))
+                        if (hotel_pts or nest_polygons) else "")
+            return manual
         except Exception as e:  # never let layout parsing break the run — fall back
             logger.warning("manual_nests build failed (%s) — falling back to detection", e)
             return None

@@ -1,62 +1,104 @@
 {% extends "base.html" %}
-{% block title %}Run history — BeeMonitor{% endblock %}
+{% block title %}Runs - BeeMonitor{% endblock %}
+
+{% comment %}
+History by LAUNCH, not by run. A launch is the unit a person thinks in — "the 12
+clips I ran on Tuesday" — not the 12 rows it became. Paginating runs meant page 3
+of a 3,250-clip batch was still the same batch, with the previous launch hundreds
+of pages away.
+{% endcomment %}
 
 {% block content %}
-<div class="flex items-center justify-between mb-6">
+<div class="flex items-start justify-between gap-4 mb-4">
   <div>
-    <h1 class="text-2xl font-bold text-gray-900">Run history</h1>
-    <p class="text-sm text-gray-500">Every pipeline run on your videos and images — open one to get its outputs.</p>
+    <h1 class="text-2xl font-bold text-gray-900">Runs</h1>
+    <p class="text-sm text-gray-500 mt-1">
+      {{ counts.all }} launch{{ counts.all|pluralize:"es" }} · {{ counts.runs }} clip run{{ counts.runs|pluralize }} in total.
+      Open one for its results, failures and re-runs.
+    </p>
   </div>
-  <div class="flex items-center gap-2">
-    <a href="{% url 'pipelines:list' %}" class="text-sm text-amber-700 hover:underline">Pipelines</a>
-    <a href="{% url 'analysis:processing' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-md text-sm font-medium">Run on videos →</a>
+  <div class="flex items-center gap-2 shrink-0">
+    <a href="{% url 'pipelines:list' %}" class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Pipelines</a>
+    <a href="{% url 'analysis:processing' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Run on videos →</a>
   </div>
+</div>
+
+<div class="flex items-center gap-2 flex-wrap mb-3">
+  <a href="?" class="text-xs px-2.5 py-1 rounded-full {% if not status_filter %}bg-amber-600 text-white{% else %}bg-gray-100 text-gray-700 hover:bg-gray-200{% endif %}">All</a>
+  <a href="?status=failed" class="text-xs px-2.5 py-1 rounded-full {% if status_filter == 'failed' %}bg-red-600 text-white{% else %}bg-gray-100 text-gray-700 hover:bg-gray-200{% endif %}">With failures</a>
+  <a href="?status=running" class="text-xs px-2.5 py-1 rounded-full {% if status_filter == 'running' %}bg-blue-600 text-white{% else %}bg-gray-100 text-gray-700 hover:bg-gray-200{% endif %}">Still running</a>
+  <a href="?status=completed" class="text-xs px-2.5 py-1 rounded-full {% if status_filter == 'completed' %}bg-green-700 text-white{% else %}bg-gray-100 text-gray-700 hover:bg-gray-200{% endif %}">All completed</a>
 </div>
 
 {% if batches %}
-<div class="mb-6">
-  <h2 class="text-sm font-medium text-gray-500 uppercase mb-2">Batches — aggregate results across videos</h2>
-  <div class="bg-white shadow rounded-lg divide-y">
-    {% for b in batches %}
-    <a href="{% url 'pipelines:batch_detail' batch_id=b.batch_id %}"
-       class="flex items-center justify-between gap-3 px-4 py-3 hover:bg-gray-50">
-      <div class="min-w-0">
-        <div class="text-sm font-medium text-gray-900 truncate">{{ b.pipeline.title }} — {{ b.count }} videos</div>
-        <div class="text-xs text-gray-400">{{ b.started_at|date:"Y-m-d H:i" }} · combined CSVs + cross-video foraging trips</div>
-      </div>
-      <div class="flex items-center gap-3 shrink-0">
-        <span class="text-xs text-gray-400">{{ b.done }}/{{ b.count }} done{% if b.failed %} · <span class="text-red-500">{{ b.failed }} failed</span>{% endif %}</span>
-        <span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">Aggregate →</span>
-      </div>
-    </a>
-    {% endfor %}
-  </div>
-</div>
-{% endif %}
-
-{% if rows %}
 <div class="bg-white shadow rounded-lg divide-y">
-  {% for row in rows %}
-  <a href="{% url 'pipelines:run_detail' pk=row.run.pipeline_id run_id=row.run.pk %}"
-     class="flex items-center justify-between gap-3 px-4 py-3 hover:bg-gray-50">
-    <div class="min-w-0">
-      <div class="text-sm font-medium text-gray-900 truncate">{{ row.run.pipeline.title }}</div>
-      <div class="text-xs text-gray-400 truncate">{{ row.input }} · {{ row.run.started_at|default:row.run.id|date:"Y-m-d H:i" }}</div>
+  {% for b in batches %}
+  <a href="{% url 'pipelines:batch_detail' batch_id=b.batch_id %}"
+     class="flex items-center gap-4 px-4 py-3 hover:bg-gray-50">
+    <div class="min-w-0 flex-1">
+      <div class="flex items-baseline gap-2 flex-wrap">
+        <span class="text-sm font-medium text-gray-900">{{ b.pipeline.title|default:"Pipeline" }}</span>
+        <span class="text-xs text-gray-400">{{ b.count }} clip{{ b.count|pluralize }}</span>
+        <span class="text-xs text-gray-400">· {{ b.started_at|date:"j M Y, H:i" }}</span>
+      </div>
+      <div class="flex items-center gap-2 mt-1.5">
+        <div class="flex h-1.5 w-40 rounded-full overflow-hidden bg-gray-100">
+          <div class="bg-green-600" style="width: {% widthratio b.done b.count 100 %}%"></div>
+          <div class="bg-red-600" style="width: {% widthratio b.failed b.count 100 %}%"></div>
+          <div class="bg-blue-500" style="width: {% widthratio b.running b.count 100 %}%"></div>
+        </div>
+        <span class="text-xs text-gray-500">
+          {{ b.done }}/{{ b.count }} done{% if b.failed %} · <span class="text-red-700">{{ b.failed }} failed</span>{% endif %}{% if b.running %} · <span class="text-blue-700">{{ b.running }} running</span>{% endif %}
+        </span>
+      </div>
     </div>
-    <div class="flex items-center gap-3 shrink-0">
-      <span class="text-xs text-gray-400">{{ row.done }}/{{ row.total }} steps</span>
-      <span class="text-xs px-2 py-0.5 rounded-full
-        {% if row.run.status == 'completed' %}bg-green-100 text-green-700
-        {% elif row.run.status == 'failed' %}bg-red-100 text-red-700
-        {% elif row.run.status == 'running' %}bg-amber-100 text-amber-700
-        {% else %}bg-gray-100 text-gray-600{% endif %}">{{ row.run.get_status_display }}</span>
-    </div>
+    <span class="text-sm text-amber-700 shrink-0">Results →</span>
   </a>
   {% endfor %}
 </div>
+
+{% if page.has_other_pages %}
+<div class="flex items-center justify-between mt-3 text-sm">
+  <div>{% if page.has_previous %}
+    <a href="?page={{ page.previous_page_number }}{% if status_filter %}&status={{ status_filter }}{% endif %}"
+       class="border border-gray-300 rounded px-3 py-1.5 text-gray-700 hover:bg-gray-50">← Newer</a>
+  {% endif %}</div>
+  <span class="text-xs text-gray-500">Page {{ page.number }} of {{ page.paginator.num_pages }} · {{ page.paginator.count }} launch{{ page.paginator.count|pluralize:"es" }}</span>
+  <div>{% if page.has_next %}
+    <a href="?page={{ page.next_page_number }}{% if status_filter %}&status={{ status_filter }}{% endif %}"
+       class="border border-gray-300 rounded px-3 py-1.5 text-gray-700 hover:bg-gray-50">Older →</a>
+  {% endif %}</div>
+</div>
+{% endif %}
+
 {% else %}
 <div class="bg-white rounded-lg border border-dashed border-gray-300 p-8 text-center text-gray-500">
-  No runs yet. <a href="{% url 'analysis:processing' %}" class="text-amber-700 font-medium">Run a pipeline on your videos</a>.
+  {% if status_filter %}No launches match this filter. <a href="?" class="text-amber-700 font-medium">Clear it</a>.
+  {% else %}No runs yet. <a href="{% url 'analysis:processing' %}" class="text-amber-700 font-medium">Run a pipeline on your videos</a>.{% endif %}
+</div>
+{% endif %}
+
+{% if solo %}
+{% comment %}
+Runs launched on their own — one-click analysis, a single-clip pipeline run.
+They carry no batch id, so a batch-only list would lose them entirely.
+{% endcomment %}
+<h2 class="text-sm font-medium text-gray-500 uppercase mt-8 mb-2">Single runs</h2>
+<div class="bg-white shadow rounded-lg divide-y">
+  {% for r in solo %}
+  <a href="{% url 'pipelines:run_detail' pk=r.pipeline_id run_id=r.pk %}"
+     class="flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-gray-50">
+    <div class="min-w-0">
+      <span class="text-sm text-gray-900">{{ r.pipeline.title }}</span>
+      <span class="text-xs text-gray-400 ml-2">{{ r.started_at|date:"j M, H:i" }}</span>
+    </div>
+    <span class="text-[10px] px-1.5 py-0.5 rounded-full shrink-0
+      {% if r.status == 'completed' %}bg-green-100 text-green-700
+      {% elif r.status == 'failed' %}bg-red-100 text-red-700
+      {% elif r.status == 'running' %}bg-blue-100 text-blue-700
+      {% else %}bg-gray-100 text-gray-600{% endif %}">{{ r.get_status_display }}</span>
+  </a>
+  {% endfor %}
 </div>
 {% endif %}
 {% endblock %}

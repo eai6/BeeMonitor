@@ -1,16 +1,16 @@
-"""Integration Tests for Tracking System
+"""Unit tests for the MOT layer — Detection, Track, and BeeTracker.
 
-Run: python -m pytest tests/test_tracking.py -v
-Or: python tests/test_tracking.py
+The BeeTracking-level tests that used to live here exercised the v2.1 detection
+modes (FGBG_ONLY / SIFT_ONLY / FGBG_SIFT) and a ``process_video(roi=...)``
+signature, all removed in v2.2 "YOLO-only". They imported a ``DetectionMode``
+that no longer exists, so this whole module failed to COLLECT — taking every
+other test in the package down with it, unnoticed, because CI ran neither suite.
+Deleted rather than ported: there is nothing left for them to test.
 """
 
 import unittest
-import cv2
 import numpy as np
-import pandas as pd
-from pathlib import Path
 
-from beemonitor.tracking import BeeTracking, DetectionMode
 from beemonitor.tracking.mot import BeeTracker, BaseMOT, Detection, Track
 from beemonitor.core.config import Config
 
@@ -55,308 +55,50 @@ class TestTrack(unittest.TestCase):
 
 
 class TestBeeTracker(unittest.TestCase):
-    """Test BeeTracker MOT algorithm."""
-    
+    """BeeTracker against its CURRENT API.
+
+    What was here tested ``predict()``, ``reset()``, ``get_tracks()`` and
+    ``BeeTracker(config=..., tracking_classes=[...])`` — none of which exist:
+    the class takes adaptive fps/size parameters and exposes ``update`` +
+    ``get_active_tracks``. It also fed ``Detection`` objects, where the tracker
+    actually consumes positional rows ``[x1, y1, x2, y2, conf, source, taxon]``
+    (the untyped detector->tracker seam).
+    """
+
+    # The one format the tracker consumes. Kept here as a named helper so the
+    # positional layout has at least one authoritative reference in tests.
+    @staticmethod
+    def _row(x1, y1, x2, y2, conf=0.9, source="yolo", taxon="bee"):
+        return [x1, y1, x2, y2, conf, source, taxon]
+
     def setUp(self):
-        """Create test config and tracker."""
-        self.config = Config.default()
-        self.tracker = BeeTracker(
-            config=self.config,
-            tracking_classes=['bee']
-        )
-    
-    def test_tracker_creation(self):
-        """Test creating BeeTracker."""
-        self.assertIsInstance(self.tracker, BaseMOT)
-    
-    def test_update_with_detections(self):
-        """Test updating tracker with detections."""
-        # Create test detections
-        detections = [
-            Detection(
-                bbox=(100, 100, 150, 150),
-                centroid=(125, 125),
-                label='bee',
-                confidence=0.9,
-                source='test'
-            ),
-            Detection(
-                bbox=(200, 200, 250, 250),
-                centroid=(225, 225),
-                label='bee',
-                confidence=0.8,
-                source='test'
-            )
-        ]
-        
-        # Update tracker
-        tracks = self.tracker.update(detections, frame_num=0)
-        
-        self.assertIsInstance(tracks, dict)
-        self.assertGreaterEqual(len(tracks), 0)
-    
-    def test_predict(self):
-        """Test track prediction."""
-        # Add detection
-        detections = [
-            Detection(
-                bbox=(100, 100, 150, 150),
-                centroid=(125, 125),
-                label='bee',
-                confidence=0.9,
-                source='test'
-            )
-        ]
-        
-        self.tracker.update(detections, frame_num=0)
-        
-        # Predict next frame
-        predicted = self.tracker.predict(frame_num=1)
-        
-        self.assertIsInstance(predicted, dict)
-    
-    def test_reset(self):
-        """Test resetting tracker."""
-        # Add some tracks
-        detections = [
-            Detection(
-                bbox=(100, 100, 150, 150),
-                centroid=(125, 125),
-                label='bee',
-                confidence=0.9,
-                source='test'
-            )
-        ]
-        
-        self.tracker.update(detections, frame_num=0)
-        
-        # Reset
-        self.tracker.reset()
-        
-        # Should have no tracks
-        tracks = self.tracker.get_tracks()
-        self.assertEqual(len(tracks), 0)
+        self.tracker = BeeTracker(fps=30.0, bee_size=50.0)
+
+    def test_a_persistent_detection_becomes_a_confirmed_track(self):
+        # min_hits_seconds defaults to 0.1s => ~3 frames at 30 fps.
+        for frame_num in range(10):
+            drift = frame_num  # a slow, trackable walk
+            self.tracker.update(
+                [self._row(100 + drift, 100, 150 + drift, 150)], frame_num=frame_num)
+
+        tracks = self.tracker.get_active_tracks()
+        self.assertEqual(len(tracks), 1)
+        self.assertEqual(tracks[0]["taxon"], "bee")
+        self.assertGreater(tracks[0]["track_id"], 0)
+
+    def test_two_separated_detections_track_separately(self):
+        for frame_num in range(10):
+            self.tracker.update(
+                [self._row(100, 100, 150, 150), self._row(400, 400, 450, 450)],
+                frame_num=frame_num)
+
+        self.assertEqual(len({t["track_id"] for t in self.tracker.get_active_tracks()}), 2)
+
+    def test_a_single_frame_blip_is_not_confirmed(self):
+        self.tracker.update([self._row(100, 100, 150, 150)], frame_num=0)
+
+        self.assertEqual(self.tracker.get_active_tracks(), [])
 
 
-class TestBeeTracking(unittest.TestCase):
-    """Test BeeTracking system."""
-    
-    def setUp(self):
-        """Create test config."""
-        self.config = Config.default()
-    
-    def test_bee_tracking_creation_fgbg_only(self):
-        """Test creating BeeTracking with FGBG_ONLY mode."""
-        mot = BeeTracker(self.config, ['bee'])
-        
-        tracker = BeeTracking(
-            mot_algorithm=mot,
-            detection_mode=DetectionMode.FGBG_ONLY,
-            config=self.config
-        )
-        
-        self.assertEqual(tracker.detection_mode, DetectionMode.FGBG_ONLY)
-        self.assertIsNotNone(tracker.blob_detector)
-        self.assertIsNone(tracker.sift_detector)
-        self.assertIsNone(tracker.yolo_detector)
-    
-    def test_bee_tracking_creation_sift_only(self):
-        """Test creating BeeTracking with SIFT_ONLY mode."""
-        mot = BeeTracker(self.config, ['bee'])
-        
-        tracker = BeeTracking(
-            mot_algorithm=mot,
-            detection_mode=DetectionMode.SIFT_ONLY,
-            config=self.config
-        )
-        
-        self.assertEqual(tracker.detection_mode, DetectionMode.SIFT_ONLY)
-        self.assertIsNone(tracker.blob_detector)
-        self.assertIsNotNone(tracker.sift_detector)
-    
-    def test_bee_tracking_creation_fgbg_sift(self):
-        """Test creating BeeTracking with FGBG_SIFT mode."""
-        mot = BeeTracker(self.config, ['bee'])
-        
-        tracker = BeeTracking(
-            mot_algorithm=mot,
-            detection_mode=DetectionMode.FGBG_SIFT,
-            config=self.config
-        )
-        
-        self.assertEqual(tracker.detection_mode, DetectionMode.FGBG_SIFT)
-        self.assertIsNotNone(tracker.blob_detector)
-        self.assertIsNotNone(tracker.sift_detector)
-    
-    def test_process_frame(self):
-        """Test processing single frame."""
-        mot = BeeTracker(self.config, ['bee'])
-        
-        tracker = BeeTracking(
-            mot_algorithm=mot,
-            detection_mode=DetectionMode.FGBG_ONLY,
-            config=self.config
-        )
-        
-        # Create test frame
-        frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        cv2.circle(frame, (320, 240), 30, (255, 255, 255), -1)
-        
-        # Process frame
-        result = tracker.process_frame(frame, frame_num=0)
-        
-        self.assertIn('detections', result)
-        self.assertIn('tracks', result)
-        self.assertIn('mode', result)
-    
-    def test_configure_detection(self):
-        """Test configuring detection parameters."""
-        mot = BeeTracker(self.config, ['bee'])
-        
-        tracker = BeeTracking(
-            mot_algorithm=mot,
-            detection_mode=DetectionMode.FGBG_SIFT,
-            config=self.config
-        )
-        
-        # Should not raise errors
-        tracker.configure_detection(
-            blob_min_area=100,
-            sift_min_keypoints=5
-        )
-    
-    def test_configure_tracking(self):
-        """Test configuring tracking parameters."""
-        mot = BeeTracker(self.config, ['bee'])
-        
-        tracker = BeeTracking(
-            mot_algorithm=mot,
-            detection_mode=DetectionMode.FGBG_ONLY,
-            config=self.config
-        )
-        
-        # Should not raise errors
-        tracker.configure_tracking(
-            max_age=30,
-            min_hits=3
-        )
-    
-    def test_reset(self):
-        """Test resetting tracking system."""
-        mot = BeeTracker(self.config, ['bee'])
-        
-        tracker = BeeTracking(
-            mot_algorithm=mot,
-            detection_mode=DetectionMode.FGBG_ONLY,
-            config=self.config
-        )
-        
-        # Process some frames
-        frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        tracker.process_frame(frame, 0)
-        
-        # Reset
-        tracker.reset()
-        
-        stats = tracker.get_statistics()
-        self.assertEqual(stats['total_frames'], 0)
-    
-    def test_get_statistics(self):
-        """Test getting statistics."""
-        mot = BeeTracker(self.config, ['bee'])
-        
-        tracker = BeeTracking(
-            mot_algorithm=mot,
-            detection_mode=DetectionMode.FGBG_ONLY,
-            config=self.config
-        )
-        
-        stats = tracker.get_statistics()
-        
-        self.assertIn('total_frames', stats)
-        self.assertIn('total_detections', stats)
-        self.assertIn('total_tracks', stats)
-
-
-def create_test_video(output_path, num_frames=30):
-    """Create test video with moving circle."""
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_path, fourcc, 30.0, (640, 480))
-    
-    for i in range(num_frames):
-        frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        
-        # Moving circle
-        x = int(200 + i * 10)
-        y = 240
-        cv2.circle(frame, (x, y), 30, (255, 255, 255), -1)
-        
-        out.write(frame)
-    
-    out.release()
-    return output_path
-
-
-def run_integration_test():
-    """Full integration test with video processing."""
-    print("\n" + "="*70)
-    print("INTEGRATION TEST - BeeTracking System")
-    print("="*70)
-    
-    # Create test video
-    test_video = '/tmp/test_tracking.mp4'
-    print(f"\nCreating test video: {test_video}")
-    create_test_video(test_video, num_frames=30)
-    
-    # Test different modes
-    modes = [
-        DetectionMode.FGBG_ONLY,
-        DetectionMode.SIFT_ONLY,
-        DetectionMode.FGBG_SIFT,
-    ]
-    
-    config = Config.default()
-    
-    for mode in modes:
-        print(f"\nTesting {mode.value}...")
-        
-        mot = BeeTracker(config, ['bee'])
-        
-        tracker = BeeTracking(
-            mot_algorithm=mot,
-            detection_mode=mode,
-            config=config
-        )
-        
-        try:
-            results = tracker.process_video(
-                test_video,
-                roi=(0, 0, 640, 480)
-            )
-            
-            stats = tracker.get_statistics()
-            
-            print(f"  Frames processed: {stats['total_frames']}")
-            print(f"  Total detections: {stats['total_detections']}")
-            print(f"  Total tracks: {stats['total_tracks']}")
-            print(f"  Results shape: {results.shape if isinstance(results, pd.DataFrame) else 'N/A'}")
-            
-        except Exception as e:
-            print(f"  Error: {e}")
-    
-    print("\nIntegration test complete!")
-
-
-if __name__ == '__main__':
-    # Run unit tests
-    print("Running unit tests...")
-    unittest.main(argv=[''], exit=False, verbosity=2)
-    
-    # Run integration test
-    print("\nRunning integration test...")
-    try:
-        run_integration_test()
-    except Exception as e:
-        print(f"Integration test failed: {e}")
-        import traceback
-        traceback.print_exc()
+if __name__ == "__main__":
+    unittest.main()

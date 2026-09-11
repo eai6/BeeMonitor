@@ -6,7 +6,6 @@
   <div>
     <h1 class="text-xl font-bold text-gray-900">{{ pipeline.title }}</h1>
     <div class="flex items-center gap-3">
-      <a href="{% url 'pipelines:editor' pk=pipeline.pk %}" class="text-xs text-gray-400 hover:text-gray-600">← Back to editor</a>
       <a href="{% url 'pipelines:run_list' %}" class="text-xs text-gray-400 hover:text-gray-600">Run history</a>
     </div>
   </div>
@@ -24,6 +23,47 @@
     {% endif %}
   </div>
 </div>
+
+{% if can_reanalyze and analyzers %}
+{% comment %}
+Detection and tracking are the expensive part, and they do not depend on which
+analyzer reads them. The GPU cache keys on the clip and the GPU step's own
+config, so swapping a LOCAL analyzer leaves that key untouched and the tracking
+is reused — seconds, and no GPU time. Saying that out loud matters: nobody
+infers it from a cache they cannot see.
+{% endcomment %}
+<div class="bg-white shadow rounded-lg p-4 mb-6">
+  <div class="flex items-baseline justify-between gap-3 mb-1">
+    <h2 class="text-sm font-semibold text-gray-900">Ask a different question of this clip</h2>
+    <span class="text-xs text-green-700">reuses the tracking · no GPU time</span>
+  </div>
+  <p class="text-xs text-gray-500 mb-3">
+    Swap the analyzer and the detection and tracking already computed for this clip
+    are reused. The original run keeps its answer, so you can compare the two.
+  </p>
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+    {% for a in analyzers %}
+    {% if a.current %}
+    <div class="border-2 border-amber-600 bg-amber-50 rounded-lg px-3 py-2.5">
+      <div class="text-[13px] font-medium text-amber-900">{{ a.icon }} {{ a.name }}</div>
+      <div class="text-[11px] text-amber-700 mt-0.5">what this run computed</div>
+    </div>
+    {% else %}
+    <form method="post" action="{% url 'pipelines:run_reanalyze' pk=pipeline.pk run_id=run.pk %}">
+      {% csrf_token %}
+      <input type="hidden" name="block_type" value="{{ a.key }}">
+      <button type="submit"
+              class="w-full text-left border border-gray-300 hover:border-amber-500 hover:bg-amber-50 rounded-lg px-3 py-2.5"
+              title="{{ a.description }}">
+        <div class="text-[13px] font-medium text-gray-900">{{ a.icon }} {{ a.name }}</div>
+        <div class="text-[11px] text-gray-500 mt-0.5">re-analyse &rarr;</div>
+      </button>
+    </form>
+    {% endif %}
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
 
 {% if not run.is_terminal %}
 <div hx-get="{% url 'pipelines:run_status' pk=pipeline.pk run_id=run.pk %}"

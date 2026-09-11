@@ -23,7 +23,7 @@ __all__ = [
 
 _LAZY = {
     "BeeMonitor": ("beemonitor.core.video_analyzer", "BeeMonitor"),
-    "AnalysisResults": ("beemonitor.core.video_analyzer", "AnalysisResults"),
+    "AnalysisResults": ("beemonitor.core.analysis_results", "AnalysisResults"),
     "Config": ("beemonitor.core.config", "Config"),
 }
 

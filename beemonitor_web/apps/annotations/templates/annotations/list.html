@@ -4,6 +4,7 @@
 {% block content %}
 <div class="flex justify-between items-center mb-6">
   <h1 class="text-2xl font-bold text-gray-900">Annotation Projects</h1>
+<a href="{% url 'annotations:browse' %}" class="text-sm text-amber-700 hover:underline">Shared publicly &rarr;</a>
   <a href="{% url 'annotations:create' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">New Project</a>
 </div>
 
@@ -25,18 +26,33 @@
       <tr>
         <td class="px-6 py-4 text-sm">
           <a href="{% url 'annotations:detail' project.pk %}" class="text-amber-600 hover:underline font-medium">{{ project.name }}</a>
+          {% comment %}
+            A shared project has to say whose it is and what you may do in it,
+            or the list mixes yours with other people's and reads as if you own
+            all of them — including the Delete button beside each one.
+          {% endcomment %}
+          {% if project.shared_by %}
+          <div class="text-[11px] text-gray-400 mt-0.5">
+            shared by {{ project.shared_by.username }} &middot;
+            <span class="text-gray-500">{{ project.my_role }}</span>
+          </div>
+          {% endif %}
         </td>
         <td class="px-6 py-4 text-sm text-gray-500">{{ project.classes|length }} classes</td>
         <td class="px-6 py-4 text-sm text-gray-500">{{ project.videos.count }}</td>
         <td class="px-6 py-4 text-sm text-gray-500">{{ project.annotations.count }}</td>
         <td class="px-6 py-4 text-sm text-gray-500">{{ project.created_at|timesince }} ago</td>
         <td class="px-6 py-4 text-sm text-right whitespace-nowrap">
+          {% if project.my_role == "owner" or project.my_role == "manager" %}
           <a href="{% url 'annotations:settings' project.pk %}" class="text-gray-500 hover:text-amber-600">Edit</a>
+          {% endif %}
+          {% if project.my_role == "owner" %}
           <form method="post" action="{% url 'annotations:delete' project.pk %}" class="inline ml-3"
                 onsubmit="return confirm('Delete project “{{ project.name }}” and all {{ project.annotations.count }} annotation(s)? This cannot be undone.');">
             {% csrf_token %}
             <button type="submit" class="text-red-400 hover:text-red-600">Delete</button>
           </form>
+          {% endif %}
         </td>
       </tr>
       {% endfor %}

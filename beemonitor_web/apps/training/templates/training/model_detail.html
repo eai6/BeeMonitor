@@ -2,6 +2,32 @@
 {% block title %}{{ model.name }} - Custom Model - BeeMonitor{% endblock %}
 
 {% block content %}
+{% comment %}
+  Publishing a model means anyone can select it in a pipeline — the weights
+  already live in a bucket the workers read. Its card names the project as it
+  stood when the model trained, because a model is an artefact of the data it
+  saw and the project keeps growing afterwards.
+{% endcomment %}
+<div class="bg-white shadow rounded-lg p-4 mb-5 flex items-center gap-3 flex-wrap">
+  <div>
+    <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Sharing</div>
+    <div class="text-sm text-gray-900 mt-0.5">
+      {% if model.visibility == "public" %}
+      Public — anyone can use it in a pipeline{% if model.published_at %}, since {{ model.published_at|date:"j M Y" }}{% endif %}.
+      {% else %}
+      Private — only you can select it.
+      {% endif %}
+    </div>
+  </div>
+  <form method="post" action="{% url 'training:model_publish' model.pk %}" class="ml-auto flex items-center gap-2">
+    {% csrf_token %}
+    <input type="hidden" name="visibility" value="{% if model.visibility == 'public' %}private{% else %}public{% endif %}">
+    <button type="submit" class="px-3.5 py-2 rounded text-sm font-semibold {% if model.visibility == 'public' %}border border-gray-300 text-gray-700 hover:bg-gray-50{% else %}bg-amber-600 hover:bg-amber-700 text-white{% endif %}">
+      {% if model.visibility == "public" %}Make private{% else %}Publish{% endif %}
+    </button>
+  </form>
+</div>
+
 <div class="flex justify-between items-center mb-6">
   <div>
     <h1 class="text-2xl font-bold text-gray-900">{{ model.name }}</h1>

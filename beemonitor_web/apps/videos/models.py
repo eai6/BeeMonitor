@@ -40,6 +40,11 @@ class Video(models.Model):
     duration_seconds = models.FloatField(null=True, blank=True)
     resolution = models.CharField(max_length=20, blank=True)
     fps = models.FloatField(null=True, blank=True)
+    # Frame size in pixels, measured from the container at ingest. Needed to
+    # normalise anything the worker reports in pixels — detected reference
+    # boxes, most importantly — into the 0..1 space the tracks live in.
+    width = models.PositiveIntegerField(null=True, blank=True)
+    height = models.PositiveIntegerField(null=True, blank=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)
     status = models.CharField(
         max_length=20,
@@ -64,6 +69,11 @@ class Video(models.Model):
     # own copy (S3 + this row) is unaffected — see VideoDeleteView for that.
     device_delete_requested = models.BooleanField(default=False)
     device_deleted_at = models.DateTimeField(null=True, blank=True)
+
+    # One sampled frame, so the review grid is scannable without playing 200
+    # clips. Key into the `processed` bucket; blank until extracted (older rows,
+    # or a clip whose extraction failed — the grid falls back to a placeholder).
+    thumbnail_key = models.CharField(max_length=500, blank=True)
 
     class Meta:
         ordering = ["-uploaded_at"]
@@ -161,6 +171,38 @@ class Video(models.Model):
                 pass
 
         return "", None
+
+    @staticmethod
+    def resolve_recorded_at(explicit, filename=""):
+        """``(recorded_at, source)`` from the best available evidence.
+
+        Three sources of very different quality used to collapse into one field
+        with no record of which was used:
+
+        - ``"device"``  — an ISO timestamp the recorder sent. Trustworthy.
+        - ``"filename"`` — parsed from the clip's name. Trustworthy.
+        - ``"upload_time"`` — wall-clock at ingest. **Not a recording time.**
+          A device that buffered a backlog offline and flushed it on reconnect
+          stamps every clip with the flush time, so they land on the wrong day
+          in every time series while looking exactly like good data.
+
+        Callers store the source alongside the value so aggregation can treat
+        ``upload_time`` as unknown rather than as fact.
+        """
+        from django.utils import timezone as _tz
+
+        if explicit:
+            return explicit, "device"
+        if filename:
+            _site, parsed = Video.parse_timestamp_from_filename(filename)
+            if parsed:
+                return parsed, "filename"
+        return _tz.now().astimezone(dt_timezone.utc), "upload_time"
+
+    @property
+    def recorded_at_is_measured(self) -> bool:
+        """False when the timestamp is really the upload time (see above)."""
+        return (self.metadata or {}).get("recorded_at_source") != "upload_time"
 
     def save(self, *args, **kwargs):
         """Auto-fill year/month/day/hour from recorded_at if available."""

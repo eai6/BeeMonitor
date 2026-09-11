@@ -88,8 +88,10 @@ class HiddenBlockTests(SimpleTestCase):
             "detect.objects",
             "reference.layout",
             "track.mot",
-            "analyze.foraging_trips", "analyze.visitation",
-            "analyze.interaction", "analyze.detection_count",
+            # Two primitives, not four questions: trips and visit counts are
+            # reads over these, not blocks of their own.
+            "analyze.events", "analyze.interactions",
+            "analyze.detection_count",
             "identify.marker", "identify.species",
         })
 
@@ -119,8 +121,8 @@ class HiddenBlockTests(SimpleTestCase):
 
     def test_module_blocks_are_not_flagged_hidden(self):
         blocks = serialize_blocks()
-        for block_type in ("detect.objects", "track.mot", "analyze.interaction",
-                           "analyze.detection_count"):
+        for block_type in ("detect.objects", "track.mot", "analyze.events",
+                           "analyze.interactions", "analyze.detection_count"):
             self.assertFalse(blocks[block_type]["hidden"], block_type)
 
 

@@ -551,3 +551,68 @@ class AnalyzerTests(ExecutorTestCase):
             )
 
         self.assertIn("No per-track crops are stored", out["note"])
+
+
+class InputVideoTests(ExecutorTestCase):
+    """Who the ``input.video`` step will resolve a video for.
+
+    The launch side selects with ``Video.manageable`` (owner **or** device
+    manager); this step has to agree, or a run passes validation and then dies
+    at step 1 with "not found" — taking every downstream step with it.
+    """
+
+    def _step(self, video_id):
+        return {"id": "v", "block_type": "input.video",
+                "config": {"video_id": str(video_id)}}
+
+    def test_owner_resolves_their_own_video(self):
+        run = self._run([self._step(self.video.pk)])
+
+        out = executors._exec_input_video(run.steps[0], run, {}, {}, 0)
+
+        self.assertEqual(out["artifact"], "video")
+        self.assertEqual(out["video_id"], self.video.pk)
+
+    def test_manager_of_a_shared_device_resolves_its_video(self):
+        from apps.devices.models import DeviceShare
+
+        bob = User.objects.create_user("bob", password="x")
+        DeviceShare.objects.create(
+            device=self.device, user=bob, role=DeviceShare.Role.MANAGER,
+        )
+        run = self._run([self._step(self.video.pk)])
+        run.user = bob
+
+        out = executors._exec_input_video(run.steps[0], run, {}, {}, 0)
+
+        self.assertEqual(out["video_id"], self.video.pk)
+
+    def test_viewer_of_a_shared_device_is_refused(self):
+        from apps.devices.models import DeviceShare
+
+        carol = User.objects.create_user("carol", password="x")
+        DeviceShare.objects.create(
+            device=self.device, user=carol, role=DeviceShare.Role.VIEWER,
+        )
+        run = self._run([self._step(self.video.pk)])
+        run.user = carol
+
+        out = executors._exec_input_video(run.steps[0], run, {}, {}, 0)
+
+        self.assertIn("not yours", out["error"])
+
+    def test_stranger_is_refused(self):
+        dave = User.objects.create_user("dave", password="x")
+        run = self._run([self._step(self.video.pk)])
+        run.user = dave
+
+        out = executors._exec_input_video(run.steps[0], run, {}, {}, 0)
+
+        self.assertIn(str(self.video.pk), out["error"])
+
+    def test_a_non_numeric_video_id_is_an_error_not_a_crash(self):
+        run = self._run([self._step("not-an-id")])
+
+        out = executors._exec_input_video(run.steps[0], run, {}, {}, 0)
+
+        self.assertIn("not found", out["error"])

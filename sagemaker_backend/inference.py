@@ -35,6 +35,50 @@ logger = logging.getLogger("beemonitor.handler")
 JSON_CONTENT_TYPE = "application/json"
 
 
+# How many CPU threads one invocation may fan out to.
+#
+# OpenCV and torch both size their pools to the MACHINE by default, which is the
+# wrong unit here: the container serves several invocations in one process, so
+# each job's decode and resize can claim every core and they contend. On
+# 2026-09-09 a batch put CPU at 360% of a 400% box and SageMaker gave up waiting
+# for the container — nine of twelve clips died of it, not of anything wrong
+# with the clips.
+#
+# Capacity was cut to one job per instance, which fixed the batch; a single job
+# still peaked at 251% of 400%, because Phase 4 gave decode its own thread and
+# nothing bounds the pools underneath it. Two per instance is 500% of 400% at
+# that rate, so packing stays impossible until this is bounded.
+#
+# 2 leaves headroom on a 4-vCPU box for the reader thread and — the part that
+# actually failed — for gunicorn to answer /ping while a job runs.
+CPU_THREADS = int(os.environ.get("BEEMONITOR_CPU_THREADS", "2"))
+
+
+def _limit_cpu_threads():
+    """Bound the OpenCV and torch thread pools, once per container.
+
+    Best-effort: a container that cannot set these should still serve. Neither
+    library is required to be present for the module to import — the web image
+    has no torch — so both are guarded.
+    """
+    if CPU_THREADS <= 0:
+        logger.info("cpu threads: unbounded (BEEMONITOR_CPU_THREADS=%s)", CPU_THREADS)
+        return
+    try:
+        import cv2
+        cv2.setNumThreads(CPU_THREADS)
+    except Exception:
+        logger.warning("cpu threads: could not cap OpenCV", exc_info=True)
+    try:
+        import torch
+        # Intra-op only. Inter-op governs how many operators run in parallel and
+        # is not the thing oversubscribing here.
+        torch.set_num_threads(CPU_THREADS)
+    except Exception:
+        logger.warning("cpu threads: could not cap torch", exc_info=True)
+    logger.info("cpu threads: OpenCV and torch capped at %s", CPU_THREADS)
+
+
 def model_fn(model_dir=None):
     """Build the CloudPipeline once per container.
 
@@ -45,6 +89,7 @@ def model_fn(model_dir=None):
     (~50 MB) on the very first invocation, not by container boot.
     """
     logger.info("model_fn: building CloudPipeline (model_dir=%s)", model_dir)
+    _limit_cpu_threads()
     # Imports here (not at module top) so the SageMaker contract module is
     # importable on the CPU dev box for tests where torch+cuda aren't present.
     from cloud.wrapper.pipeline import CloudPipeline
@@ -76,10 +121,18 @@ def predict_fn(payload, pipeline):
     ``task="pre_annotate"`` (sampled-frame YOLO detection that seeds the
     annotation editor). Both reuse the pipeline's models + S3 client.
     """
+    # Per-run stage accounting, reset BEFORE the task dispatch so pre-annotation
+    # and annotation are measured too — they run the same detectors. The
+    # container serves one invocation at a time (async inference), so resetting
+    # here makes "this run" explicit rather than relying on a fresh process.
+    profiler = _profiler()
+    if profiler is not None:
+        profiler.reset()
+
     if payload.get("task") == "pre_annotate":
-        return _pre_annotate(payload, pipeline)
+        return {**_pre_annotate(payload, pipeline), **_timings(profiler)}
     if payload.get("task") == "annotate_video":
-        return _annotate_video(payload, pipeline)
+        return {**_annotate_video(payload, pipeline), **_timings(profiler)}
 
     job_id = payload["job_id"]
     user_id = str(payload["user_id"])
@@ -103,6 +156,9 @@ def predict_fn(payload, pipeline):
             # Device-supplied hotel ROI + nest tubes (normalized); when both are
             # present the run uses them and the nest model is the backup.
             hotel_roi=payload.get("hotel_roi"),
+            # The ROI's traced outline, when the user drew a polygon: tracking is
+            # masked to it, so background inside the bounding box is ignored.
+            hotel_polygon=payload.get("hotel_polygon"),
             nest_layout=payload.get("nest_layout"),
             # False = nest/hotel-only fast path (skip tracking + events).
             run_tracking=bool(payload.get("run_tracking", True)),
@@ -131,13 +187,43 @@ def predict_fn(payload, pipeline):
             "user_id": user_id,
             "error_message": str(exc),
             "execution_seconds": round(time.time() - started, 2),
+            **_timings(profiler),
         }
 
     out = result.to_dict()
     out["status"] = "completed"
     out["execution_seconds"] = round(time.time() - started, 2)
-    out["device"] = _detect_device()
+    out.update(_timings(profiler))
     return out
+
+
+def _profiler():
+    """The analysis library's stage profiler, or None if it isn't importable."""
+    try:
+        from beemonitor.core.profiling import PROFILER
+        return PROFILER
+    except ImportError:  # pragma: no cover - the image always has it
+        return None
+
+
+def _timings(profiler) -> dict:
+    """``gpu_seconds`` + the per-stage breakdown, for cost and for diagnosis.
+
+    ``gpu_seconds`` is wall time around synchronous detector calls, not kernel
+    residency: Ultralytics copies results back to the host before returning, so
+    the call already blocks on the GPU. It is the honest answer to "how long was
+    the GPU step" and the number the web app prices — as opposed to
+    ``execution_seconds``, which also covers S3 transfer, decode and encode.
+    """
+    # ``device`` rides along because it is what the web app prices on: the GPU
+    # the container saw, not a tier anyone chose. Reported on every task, so a
+    # SAM 3 run on the g5 is billed at the g5 rate rather than the default.
+    timings = {"device": _detect_device()}
+    if profiler is None:
+        return timings
+    timings["gpu_seconds"] = profiler.seconds("inference")
+    timings["stage_seconds"] = profiler.snapshot()
+    return timings
 
 
 def output_fn(prediction, accept):

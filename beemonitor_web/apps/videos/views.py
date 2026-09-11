@@ -4,7 +4,7 @@ import re
 
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.http import HttpResponse
+from django.http import Http404, HttpResponse, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect
 from django.views import View
 from django.views.generic import DetailView, ListView, TemplateView
@@ -183,6 +183,56 @@ class VideoBatchUploadView(LoginRequiredMixin, TemplateView):
         ctx = super().get_context_data(**kwargs)
         ctx["devices"] = _user_devices(self.request.user)
         return ctx
+
+
+class VideoThumbnailView(LoginRequiredMixin, View):
+    """Redirect to the clip's sampled still.
+
+    A redirect rather than an inlined URL because the review grid renders 200
+    cards: presigning all of them server-side would be 200 S3 calls on every
+    page load, for images the viewer mostly never scrolls to. The <img> is
+    lazy, so only what reaches the viewport costs anything.
+    """
+
+    def get(self, request, pk):
+        video = get_object_or_404(Video.accessible(request.user), pk=pk)
+        key = video.thumbnail_key
+        if not key:
+            # Uploaded before stills existed. Make one now and keep it, so the
+            # grid fills in as it is browsed instead of waiting on a backfill.
+            from .thumbnails import extract_on_demand
+            key = extract_on_demand(video)
+        if not key:
+            raise Http404("No still for this clip.")
+        from config.storage import get_s3_client
+        try:
+            url = get_s3_client().generate_presigned_url("processed", key)
+        except Exception:
+            logger.exception("Failed to presign thumbnail for video %s", pk)
+            raise Http404("Could not read the still.")
+        return HttpResponseRedirect(url)
+
+
+class VideoStreamView(LoginRequiredMixin, View):
+    """Redirect to a playable URL for the raw clip.
+
+    Same reasoning as the thumbnail: the grid asks for this only when a card is
+    actually hovered or opened, so a presign is spent per clip WATCHED rather
+    than per clip listed.
+    """
+
+    def get(self, request, pk):
+        video = get_object_or_404(Video.accessible(request.user), pk=pk)
+        blob_path = video.storage_key or ""
+        if not blob_path or blob_path.startswith("s3://"):
+            raise Http404("This clip has no stored file yet.")
+        from config.storage import get_s3_client
+        try:
+            url = get_s3_client().generate_presigned_url("raw-videos", blob_path)
+        except Exception:
+            logger.exception("Failed to presign video %s", pk)
+            raise Http404("Could not read the clip.")
+        return HttpResponseRedirect(url)
 
 
 class VideoDetailView(LoginRequiredMixin, DetailView):

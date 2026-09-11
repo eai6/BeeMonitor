@@ -9,8 +9,18 @@ urlpatterns = [
     path("new/", views.ProjectCreateView.as_view(), name="create"),
     path("<int:pk>/", views.ProjectDetailView.as_view(), name="detail"),
     path("<int:pk>/settings/", views.ProjectUpdateView.as_view(), name="settings"),
+    path("browse/", views.PublicBrowseView.as_view(), name="browse"),
+    path("<int:pk>/people/", views.ProjectPeopleView.as_view(), name="people"),
+    path("<int:pk>/publish/", views.PublishProjectView.as_view(), name="publish"),
+    path("<int:pk>/copy/", views.CopyProjectView.as_view(), name="copy"),
+    path("<int:pk>/people/invite/", views.ShareInviteView.as_view(), name="share_invite"),
+    path("<int:pk>/people/update/", views.ShareUpdateView.as_view(), name="share_update"),
+    path("<int:pk>/assign/", views.AssignClipsView.as_view(), name="assign"),
+    path("<int:pk>/claim/", views.ClaimClipsView.as_view(), name="claim"),
     path("<int:pk>/delete/", views.ProjectDeleteView.as_view(), name="delete"),
     path("<int:pk>/add-videos/", views.AddVideosView.as_view(), name="add_videos"),
+    path("<int:pk>/add/", views.AddVideosWorkspaceView.as_view(), name="add_videos_page"),
+    path("<int:pk>/add/draft/", views.AddVideosDraftView.as_view(), name="add_videos_draft"),
     path("<int:pk>/remove-video/", views.RemoveVideoView.as_view(), name="remove_video"),
     path("<int:pk>/edit/", views.AnnotationEditorView.as_view(), name="editor"),
     path("<int:pk>/transfer/", views.TransferVideoView.as_view(), name="transfer_video"),
@@ -25,5 +35,6 @@ urlpatterns = [
     path("<int:pk>/export/", views.ExportProjectView.as_view(), name="export"),
     path("<int:pk>/frame/", views.FrameImageView.as_view(), name="frame_image"),
     # Review redirects to detail (review is now integrated into project page + editor)
-    path("<int:pk>/review/", views.ProjectDetailView.as_view(), name="review"),
+    # Same view, the other template — see ProjectDetailView.review.
+    path("<int:pk>/review/", views.ProjectDetailView.as_view(review=True), name="review"),
 ]

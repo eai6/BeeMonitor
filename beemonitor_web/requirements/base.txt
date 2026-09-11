@@ -5,6 +5,10 @@ celery>=5.3
 redis>=5.0
 psycopg2-binary>=2.9
 numpy>=1.26.0
+# The analyzers (apps/pipelines/ops.py) read tracking/detection tables into
+# DataFrames. Without it every one of them silently reports the job summary
+# instead of analysing anything, which is exactly what production did.
+pandas>=2.0
 boto3>=1.28.0
 django-anymail[amazon-ses]>=11.0
 cryptography>=42.0.0

@@ -168,9 +168,9 @@ class WebUploadCompleteView(APIView):
             if device is None:
                 return Response({"detail": "Unknown device."}, status=400)
 
-        parsed_site, parsed_recorded_at = Video.parse_timestamp_from_filename(filename)
+        parsed_site, _parsed_recorded_at = Video.parse_timestamp_from_filename(filename)
         final_site = site_name_override or (device.location if device else "") or parsed_site or ""
-        final_recorded_at = parsed_recorded_at or timezone.now().astimezone(dt_timezone.utc)
+        final_recorded_at, recorded_at_source = Video.resolve_recorded_at(None, filename)
 
         video = Video.objects.create(
             user=user,
@@ -181,7 +181,13 @@ class WebUploadCompleteView(APIView):
             status=Video.Status.READY,
             recorded_at=final_recorded_at,
             site_name=final_site,
+            metadata={"recorded_at_source": recorded_at_source},
         )
+
+        # One sampled still for the review grid — background, so the device (or
+        # the browser) is not held open for a decode.
+        from apps.videos.thumbnails import queue_thumbnail
+        queue_thumbnail(video)
 
         logger.info(
             "Web upload complete: user=%s video=%s key=%s size=%d MB",

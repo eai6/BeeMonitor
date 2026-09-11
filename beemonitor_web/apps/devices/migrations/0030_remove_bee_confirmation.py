@@ -53,7 +53,7 @@ def restore_crop_mode(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("devices", "0027_devicepipelineschedule"),
+        ("devices", "0029_device_rotate_180"),
         ("videos", "0007_pendingdevicedeletion"),
     ]
 

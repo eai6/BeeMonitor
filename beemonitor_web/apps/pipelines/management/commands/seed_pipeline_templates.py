@@ -45,7 +45,10 @@ TEMPLATES = [
             _s("m", "track.mot", _MOT, {"detections": "d"}),
             # The reference is the device's saved hotel + nest-tube layout.
             _s("r", "reference.layout", {"source": "device_layout"}, {"video": "v"}),
-            _s("f", "analyze.foraging_trips", {"event_confidence": 0.6},
+            # Trips are a read over the events table — pair exit(tube) with the
+            # next enter(tube) — so the pipeline records events and the trip
+            # pairing happens at review time, across clips.
+            _s("f", "analyze.events", {"event_confidence": 0.6, "gap_frames": 15},
                {"tracks": "m", "rois": "r"}),
         ],
     },
@@ -58,7 +61,9 @@ TEMPLATES = [
             _s("d", "detect.objects", _detect("bee"), {"video": "v"}),
             _s("m", "track.mot", _MOT, {"detections": "d"}),
             _s("r", "reference.layout", {"source": "drawn", "regions": "[]"}, {"video": "v"}),
-            _s("g", "analyze.visitation", {}, {"tracks": "m", "rois": "r"}),
+            # A visit is an insect interacting with a reference.
+            _s("g", "analyze.interactions", {"interaction_type": "organism_reference"},
+               {"tracks": "m", "rois": "r"}),
         ],
     },
     {
@@ -95,7 +100,7 @@ TEMPLATES = [
             # A second Detect node, aimed at the reference class — it rides the
             # same GPU pass as the bee detector.
             _s("n", "detect.objects", _detect("nest"), {"video": "v"}),
-            _s("x", "analyze.interaction", {"interaction_type": "all"},
+            _s("x", "analyze.interactions", {"interaction_type": "all"},
                {"tracks": "m", "rois": "n"}),
         ],
     },

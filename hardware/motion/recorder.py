@@ -44,7 +44,7 @@ from motion.config import (
     log, RECORD_DIR, WORK_DIR, MAIN_W, MAIN_H, LORES_W, LORES_H, FPS,
     PRE_ROLL, POST_ROLL, MAX_SEGMENT, WARMUP_SECONDS, TIMESTAMP_OVERLAY,
     DETECT_EVERY_N, BG_RESET_INTERVAL,
-    CALIB_FILE, TUNING_FILE, ROI_OVERRIDE_FILE,
+    CALIB_FILE, TUNING_FILE, ROI_OVERRIDE_FILE, ROI_POLYGON_FILE,
     CALIB_RELOAD_SECONDS, OVERRIDE_RELOAD_SECONDS,
     TELEMETRY_IMAGE_INTERVAL, TELEMETRY_QUEUE,
     FRAME_MAX_CANDIDATES, FRAME_CAPTURE_INTERVAL,
@@ -59,7 +59,7 @@ from motion.frames import _main_array_to_bgr
 from motion.roi import _resolve_record_roi
 from motion.overrides import (
     _build_gate, load_calibration, _apply_calibration,
-    load_tuning, _apply_tuning, load_roi_override_lores,
+    load_tuning, _apply_tuning, load_roi_override_lores, load_roi_polygon_lores,
     load_activity_crops_mode, load_record_settings,
 )
 from motion.remux import _remux, _snippet_paths
@@ -153,16 +153,21 @@ def record() -> None:
     # Cloud-faithful step 1: detect the hotel and confine detection to it before
     # we start recording. Falls back to the whole frame if detection fails.
     roi = _resolve_record_roi(cam)
+    # ...and, when the ROI was traced rather than dragged, the outline that keeps
+    # background inside that rectangle from triggering a recording. Only meaningful
+    # alongside the dashboard ROI it was drawn against.
+    roi_polygon = load_roi_polygon_lores() if load_roi_override_lores() is not None else None
 
     log.info(
         "recorder up: %s main=%dx%d lores=%dx%d @ %dfps | %s | pre=%.1fs "
-        "post=%.1fs max=%.0fs roi=%s",
+        "post=%.1fs max=%.0fs roi=%s%s",
         model_of(cam) or "camera", MAIN_W, MAIN_H, LORES_W, LORES_H, FPS,
         describe_camera(cam_profile), PRE_ROLL, POST_ROLL, MAX_SEGMENT,
         roi or "full",
+        " (polygon, %d corners)" % len(roi_polygon) if roi_polygon else "",
     )
 
-    gate = _build_gate(roi)
+    gate = _build_gate(roi, polygon=roi_polygon)
     remux_pool = []  # list of threading.Thread for in-flight remuxes
 
     def _spawn_remux(h264_path: Path, mp4_path: Path):
@@ -200,6 +205,7 @@ def record() -> None:
     calib_mtime = CALIB_FILE.stat().st_mtime if CALIB_FILE.exists() else 0.0
     tuning_mtime = TUNING_FILE.stat().st_mtime if TUNING_FILE.exists() else 0.0
     roi_ov_mtime = ROI_OVERRIDE_FILE.stat().st_mtime if ROI_OVERRIDE_FILE.exists() else 0.0
+    roi_poly_mtime = ROI_POLYGON_FILE.stat().st_mtime if ROI_POLYGON_FILE.exists() else 0.0
     # Dashboard-pushed crop mode: all|off (env ACTIVITY_CROPS_MODE is the fallback).
     crops_mode = load_activity_crops_mode()
     act_frames_on = crops_mode != "off"
@@ -399,6 +405,19 @@ def record() -> None:
                         log.info("applied ROI override %s — re-warming %.1fs",
                                  new_roi, WARMUP_SECONDS)
                     roi_ov_mtime = rm
+                # Live polygon edits (incl. switching back to a plain rectangle,
+                # which clears the file). Only the mask changes — the crop and the
+                # background model are untouched, so no re-warm is needed.
+                try:
+                    pm = ROI_POLYGON_FILE.stat().st_mtime if ROI_POLYGON_FILE.exists() else 0.0
+                except OSError:
+                    pm = roi_poly_mtime
+                if pm != roi_poly_mtime:
+                    new_poly = load_roi_polygon_lores()
+                    gate.set_polygon(new_poly)
+                    log.info("applied ROI polygon: %s",
+                             "%d corners" % len(new_poly) if new_poly else "cleared (rectangle ROI)")
+                    roi_poly_mtime = pm
                 # Live crop mode (all|off) from the dashboard.
                 try:
                     am = (ACTIVITY_FRAMES_FILE.stat().st_mtime

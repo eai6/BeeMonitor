@@ -8,8 +8,10 @@
     <h1 class="text-2xl font-bold text-gray-900">Edit hotel ROI &amp; nest holes</h1>
     <p class="text-sm text-gray-500">
       Draw the <span class="text-green-700 font-medium">hotel ROI</span> (the motion region) and the
-      <span class="text-red-600 font-medium">nest holes</span> over the latest picture. Tighter ROI / fewer
-      stray boxes = less false motion. Saved to the device; it applies within a few minutes.
+      <span class="text-red-600 font-medium">nest holes</span> over the latest picture. Use
+      <strong>Polygon</strong> to trace an irregular shape so grass, sky and other background stay
+      outside the region — a rectangle around a round or tilted subject sweeps a lot of it in.
+      Tighter ROI = less false motion. Saved to the device; it applies within a few minutes.
     </p>
   </div>
 
@@ -23,7 +25,11 @@
     <div class="inline-flex rounded-md overflow-hidden border border-gray-300">
       <button data-mode="roi"  class="mode-btn px-3 py-1.5 bg-amber-600 text-white">Hotel ROI</button>
       <button data-mode="nest" class="mode-btn px-3 py-1.5 bg-white text-gray-700">Add nest</button>
-      <button data-mode="move" class="mode-btn px-3 py-1.5 bg-white text-gray-700">Move / delete</button>
+      <button data-mode="move" class="mode-btn px-3 py-1.5 bg-white text-gray-700">Move / edit</button>
+    </div>
+    <div class="inline-flex rounded-md overflow-hidden border border-gray-300" id="tools">
+      <button data-tool="rect" class="tool-btn px-3 py-1.5 bg-gray-800 text-white">Rectangle</button>
+      <button data-tool="poly" class="tool-btn px-3 py-1.5 bg-white text-gray-700">Polygon</button>
     </div>
     <button id="autonum" class="px-3 py-1.5 bg-white border border-gray-300 rounded text-gray-700 hover:bg-gray-50">Auto-number</button>
     <button id="del" class="px-3 py-1.5 bg-white border border-gray-300 rounded text-gray-700 hover:bg-gray-50">Delete selected</button>
@@ -48,79 +54,178 @@
   var SAVE_URL = "{% url 'devices:roi_editor' device.pk %}";
   var img = document.getElementById('bgimg'), cv = document.getElementById('cv');
   var ctx = cv.getContext('2d');
-  var mode = 'roi', selected = null;            // selected: {type:'nest',i} | {type:'roi'}
-  var roi = {{ roi_json|safe }} || null;        // [x1,y1,x2,y2] normalized
-  var nests = {{ nests_json|safe }} || [];      // [{id, box:[..norm]}]
+  var mode = 'roi', tool = 'rect', selected = null;   // selected: {type:'nest',i} | {type:'roi'}
+
+  // Every shape is {box:[x1,y1,x2,y2], points:[[x,y],...]|null}, normalized 0..1.
+  // A rectangle has no points; a polygon carries both, and its box is the
+  // bounding box — so anything that only reads boxes still works.
+  var roi = {{ roi_json|safe }} || null;        // {box, points?} | null
+  var nests = {{ nests_json|safe }} || [];      // [{id, box, points?}]
+  var ROI_COLOR = '#16a34a', NEST_COLOR = '#dc2626';
+  var GRAB = 8;                                 // px radius for vertex grabbing
 
   function size() {
     cv.width = img.clientWidth; cv.height = img.clientHeight;
     cv.style.width = img.clientWidth + 'px'; cv.style.height = img.clientHeight + 'px';
     draw();
   }
-  function N2P(b) { return [b[0]*cv.width, b[1]*cv.height, b[2]*cv.width, b[3]*cv.height]; }
-  function rectOf(p1, p2) { return [Math.min(p1[0],p2[0])/cv.width, Math.min(p1[1],p2[1])/cv.height,
-                                    Math.max(p1[0],p2[0])/cv.width, Math.max(p1[1],p2[1])/cv.height]; }
   function pos(e) { var r = cv.getBoundingClientRect(); var t = e.touches ? e.touches[0] : e;
                     return [t.clientX - r.left, t.clientY - r.top]; }
+  function toN(p) { return [p[0]/cv.width, p[1]/cv.height]; }
+  function toP(n) { return [n[0]*cv.width, n[1]*cv.height]; }
+  function rectOf(p1, p2) { return [Math.min(p1[0],p2[0])/cv.width, Math.min(p1[1],p2[1])/cv.height,
+                                    Math.max(p1[0],p2[0])/cv.width, Math.max(p1[1],p2[1])/cv.height]; }
+  function cornersOf(b) { return [[b[0],b[1]], [b[2],b[1]], [b[2],b[3]], [b[0],b[3]]]; }
+  function bboxOf(pts) { var xs = pts.map(function(p){return p[0];}), ys = pts.map(function(p){return p[1];});
+                         return [Math.min.apply(null,xs), Math.min.apply(null,ys),
+                                 Math.max.apply(null,xs), Math.max.apply(null,ys)]; }
+  // The outline of a shape, whichever kind it is — draw/hit-test go through this.
+  function outline(s) { return s.points || cornersOf(s.box); }
+  function shapes() { return (roi ? [roi] : []).concat(nests); }
+
+  function pathOf(pts) {
+    ctx.beginPath();
+    pts.forEach(function (n, i) { var p = toP(n);
+      if (i === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]); });
+    ctx.closePath();
+  }
+  function inShape(px, s) {           // ray casting, in pixel space
+    var pts = outline(s).map(toP), inside = false;
+    for (var i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      var xi = pts[i][0], yi = pts[i][1], xj = pts[j][0], yj = pts[j][1];
+      if ((yi > px[1]) !== (yj > px[1]) &&
+          px[0] < (xj - xi) * (px[1] - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+  function vertexAt(px, s) {         // index of the polygon vertex under the cursor
+    if (!s.points) return -1;
+    for (var i = 0; i < s.points.length; i++) {
+      var p = toP(s.points[i]);
+      if (Math.abs(p[0]-px[0]) <= GRAB && Math.abs(p[1]-px[1]) <= GRAB) return i;
+    }
+    return -1;
+  }
+  function shapeOf(sel) { return !sel ? null : sel.type === 'roi' ? roi : nests[sel.i]; }
+
+  // ── Drawing ────────────────────────────────────────────────────────────────
+  var poly = null;   // in-progress polygon: {kind:'roi'|'nest', pts:[[px,py],...], cursor}
 
   function draw(temp) {
     ctx.clearRect(0, 0, cv.width, cv.height);
-    if (roi) {
-      var r = N2P(roi);
-      ctx.lineWidth = (selected && selected.type==='roi') ? 4 : 2;
-      ctx.strokeStyle = '#16a34a';
-      ctx.strokeRect(r[0], r[1], r[2]-r[0], r[3]-r[1]);
-      ctx.fillStyle = 'rgba(22,163,74,0.08)'; ctx.fillRect(r[0], r[1], r[2]-r[0], r[3]-r[1]);
-    }
+    if (roi) drawShape(roi, ROI_COLOR, selected && selected.type === 'roi', '');
     nests.forEach(function (n, i) {
-      var b = N2P(n.box);
-      ctx.lineWidth = (selected && selected.type==='nest' && selected.i===i) ? 4 : 2;
-      ctx.strokeStyle = '#dc2626';
-      ctx.strokeRect(b[0], b[1], b[2]-b[0], b[3]-b[1]);
-      ctx.fillStyle = '#dc2626'; ctx.font = 'bold 14px sans-serif';
-      ctx.fillText(String(n.id), b[0]+3, Math.max(b[1]-3, 12));
+      drawShape(n, NEST_COLOR, selected && selected.type === 'nest' && selected.i === i, String(n.id));
     });
-    if (temp) { ctx.lineWidth = 2; ctx.setLineDash([5,4]);
-      ctx.strokeStyle = mode==='nest' ? '#dc2626' : '#16a34a';
-      var t = N2P(temp); ctx.strokeRect(t[0], t[1], t[2]-t[0], t[3]-t[1]); ctx.setLineDash([]); }
+    if (temp) {                                   // rubber-band rectangle
+      ctx.lineWidth = 2; ctx.setLineDash([5,4]);
+      ctx.strokeStyle = mode === 'nest' ? NEST_COLOR : ROI_COLOR;
+      pathOf(cornersOf(temp)); ctx.stroke(); ctx.setLineDash([]);
+    }
+    if (poly) drawPending();
   }
 
-  function hit(p) {  // topmost nest then roi
-    for (var i = nests.length-1; i >= 0; i--) { var b = N2P(nests[i].box);
-      if (p[0]>=b[0] && p[0]<=b[2] && p[1]>=b[1] && p[1]<=b[3]) return {type:'nest', i:i}; }
-    if (roi) { var r = N2P(roi);
-      if (p[0]>=r[0] && p[0]<=r[2] && p[1]>=r[1] && p[1]<=r[3]) return {type:'roi'}; }
-    return null;
+  function drawShape(s, color, isSelected, label) {
+    var pts = outline(s);
+    ctx.lineWidth = isSelected ? 4 : 2;
+    ctx.strokeStyle = color;
+    pathOf(pts); ctx.stroke();
+    ctx.fillStyle = color === ROI_COLOR ? 'rgba(22,163,74,0.08)' : 'rgba(220,38,38,0.06)';
+    ctx.fill();
+    if (label) { var b = toP([s.box[0], s.box[1]]);
+      ctx.fillStyle = color; ctx.font = 'bold 14px sans-serif';
+      ctx.fillText(label, b[0]+3, Math.max(b[1]-3, 12)); }
+    if (isSelected && s.points) {                 // vertex handles, for dragging
+      ctx.fillStyle = '#ffffff'; ctx.strokeStyle = color; ctx.lineWidth = 2;
+      s.points.forEach(function (n) { var p = toP(n);
+        ctx.beginPath(); ctx.rect(p[0]-4, p[1]-4, 8, 8); ctx.fill(); ctx.stroke(); });
+    }
   }
 
-  var drag = null;  // {start, moving, last}
-  function down(e) { e.preventDefault(); var p = pos(e);
+  function drawPending() {
+    var color = poly.kind === 'nest' ? NEST_COLOR : ROI_COLOR;
+    var pts = poly.pts.concat(poly.cursor ? [poly.cursor] : []);
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.setLineDash([5,4]);
+    ctx.beginPath();
+    pts.forEach(function (p, i) { if (i === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]); });
+    ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = color;
+    poly.pts.forEach(function (p, i) {
+      ctx.beginPath(); ctx.arc(p[0], p[1], i === 0 ? 5 : 3, 0, Math.PI*2); ctx.fill(); });
+  }
+
+  // ── Polygon input ──────────────────────────────────────────────────────────
+  function polyClick(p) {
+    if (!poly) { poly = {kind: mode, pts: [p], cursor: p}; setHint(); return; }
+    var first = poly.pts[0];
+    if (poly.pts.length >= 3 &&
+        Math.abs(p[0]-first[0]) <= GRAB && Math.abs(p[1]-first[1]) <= GRAB) { closePoly(); return; }
+    poly.pts.push(p); draw();
+  }
+  function closePoly() {
+    if (!poly || poly.pts.length < 3) { poly = null; setHint(); draw(); return; }
+    var pts = poly.pts.map(toN), shape = {box: bboxOf(pts), points: pts};
+    if (poly.kind === 'nest') { shape.id = nextId(); nests.push(shape); selected = {type:'nest', i: nests.length-1}; }
+    else { roi = shape; selected = {type:'roi'}; }
+    poly = null; setHint(); draw();
+  }
+  function cancelPoly() { poly = null; setHint(); draw(); }
+
+  // ── Pointer handling ───────────────────────────────────────────────────────
+  var drag = null;  // {start,last} while rubber-banding | {moving|vertex, last}
+
+  function down(e) {
+    e.preventDefault(); var p = pos(e);
+    if (mode !== 'move' && tool === 'poly') { polyClick(p); return; }
     if (mode === 'move') {
+      var s = shapeOf(selected);
+      var vi = s ? vertexAt(p, s) : -1;          // grab a vertex of the selection first
+      if (vi >= 0) { drag = {vertex: vi, last: p}; return; }
       selected = hit(p);
-      drag = selected ? {moving:true, last:p} : null;
-    } else { drag = {start:p, last:p}; }
+      drag = selected ? {moving: true, last: p} : null;
+    } else { drag = {start: p, last: p}; }
     draw();
   }
   function move(e) {
-    if (!drag) return; e.preventDefault(); var p = pos(e);
-    if (mode === 'move' && drag.moving && selected) {
-      var dx = (p[0]-drag.last[0])/cv.width, dy = (p[1]-drag.last[1])/cv.height;
-      var box = selected.type==='roi' ? roi : nests[selected.i].box;
-      box[0]+=dx; box[1]+=dy; box[2]+=dx; box[3]+=dy; drag.last = p; draw();
+    if (poly) { poly.cursor = pos(e); draw(); return; }
+    if (!drag) return;
+    e.preventDefault(); var p = pos(e);
+    if (mode === 'move' && selected) {
+      var s = shapeOf(selected);
+      if (!s) { drag = null; return; }
+      if (drag.vertex !== undefined) {
+        s.points[drag.vertex] = [Math.max(0, Math.min(1, p[0]/cv.width)),
+                                 Math.max(0, Math.min(1, p[1]/cv.height))];
+        s.box = bboxOf(s.points);
+      } else if (drag.moving) {
+        var dx = (p[0]-drag.last[0])/cv.width, dy = (p[1]-drag.last[1])/cv.height;
+        translate(s, dx, dy);
+      }
+      drag.last = p; draw();
     } else if (mode !== 'move') { draw(rectOf(drag.start, p)); }
   }
   function up(e) {
-    if (!drag) return; var p = pos(e);
-    if (mode === 'roi') { roi = rectOf(drag.start, p); selected = {type:'roi'}; }
+    if (!drag || poly) return;
+    var p = pos(e);
+    if (mode === 'roi') { roi = {box: rectOf(drag.start, p), points: null}; selected = {type:'roi'}; }
     else if (mode === 'nest') {
       var box;
       if (Math.abs(p[0]-drag.start[0]) < 5 && Math.abs(p[1]-drag.start[1]) < 5) {
-        var s = 0.03; var cx = p[0]/cv.width, cy = p[1]/cv.height;  // click -> default box
+        var s = 0.03, cx = p[0]/cv.width, cy = p[1]/cv.height;   // click -> default box
         box = [cx-s, cy-s, cx+s, cy+s];
       } else { box = rectOf(drag.start, p); }
-      nests.push({id: nextId(), box: box}); selected = {type:'nest', i: nests.length-1};
+      nests.push({id: nextId(), box: box, points: null}); selected = {type:'nest', i: nests.length-1};
     }
     drag = null; draw();
+  }
+  function translate(s, dx, dy) {
+    s.box = [s.box[0]+dx, s.box[1]+dy, s.box[2]+dx, s.box[3]+dy];
+    if (s.points) s.points = s.points.map(function (n) { return [n[0]+dx, n[1]+dy]; });
+  }
+  function hit(p) {  // topmost nest, then the ROI
+    for (var i = nests.length-1; i >= 0; i--) if (inShape(p, nests[i])) return {type:'nest', i:i};
+    if (roi && inShape(p, roi)) return {type:'roi'};
+    return null;
   }
   function nextId() { var m = 0; nests.forEach(function (n){ if (n.id>m) m=n.id; }); return m+1; }
 
@@ -138,15 +243,37 @@
     draw();
   }
 
+  // ── Controls ───────────────────────────────────────────────────────────────
+  function setHint() {
+    var el = document.getElementById('hint'), txt;
+    if (poly) txt = 'Click to add corners; click the first corner (or press Enter / double-click) to close. ' +
+                    'Backspace undoes a corner, Esc cancels.';
+    else if (mode === 'move') txt = 'Click a shape to select; drag to move. Drag a white handle to move a polygon corner. ' +
+                                    'Delete selected removes it.';
+    else if (tool === 'poly') txt = mode === 'roi'
+      ? 'Click around the hotel to trace the ROI — corners can follow its real outline (replaces the current ROI).'
+      : 'Click around a nest hole to trace it. Then Auto-number.';
+    else txt = mode === 'roi' ? 'Drag to draw the hotel ROI (replaces the current one).'
+                              : 'Drag (or click) to add a nest hole. Then Auto-number.';
+    el.textContent = txt;
+  }
   document.querySelectorAll('.mode-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
+      cancelPoly();
       mode = btn.dataset.mode; selected = null;
       document.querySelectorAll('.mode-btn').forEach(function (b){ b.className = 'mode-btn px-3 py-1.5 bg-white text-gray-700'; });
       btn.className = 'mode-btn px-3 py-1.5 bg-amber-600 text-white';
-      document.getElementById('hint').textContent = mode==='roi' ? 'Drag to draw the hotel ROI (replaces the current one).'
-        : mode==='nest' ? 'Drag (or click) to add a nest hole. Then Auto-number.'
-        : 'Click a box to select; drag to move; Delete selected to remove.';
-      draw();
+      document.getElementById('tools').style.opacity = mode === 'move' ? '0.4' : '1';
+      setHint(); draw();
+    });
+  });
+  document.querySelectorAll('.tool-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      cancelPoly();
+      tool = btn.dataset.tool;
+      document.querySelectorAll('.tool-btn').forEach(function (b){ b.className = 'tool-btn px-3 py-1.5 bg-white text-gray-700'; });
+      btn.className = 'tool-btn px-3 py-1.5 bg-gray-800 text-white';
+      setHint(); draw();
     });
   });
   document.getElementById('autonum').addEventListener('click', autonumber);
@@ -158,15 +285,30 @@
   document.getElementById('clear-roi').addEventListener('click', function(){ roi=null; selected=null; draw(); });
   document.getElementById('clear-nests').addEventListener('click', function(){ nests=[]; selected=null; draw(); });
   document.getElementById('save').addEventListener('click', function () {
+    closePoly();   // don't silently drop a polygon the user was mid-way through
     fetch(SAVE_URL, { method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':CSRF},
       body: JSON.stringify({roi: roi, nests: nests}) })
       .then(function(r){ return r.json(); }).then(function (d) {
-        if (d && d.ok) { var s=document.getElementById('saved'); s.classList.remove('hidden'); setTimeout(function(){ s.classList.add('hidden'); }, 2500); }
-        else { alert((d && d.error) || 'Could not save.'); }
+        if (d && d.ok) {
+          // Adopt what the server stored (clamped + rounded) so the canvas shows
+          // exactly what the device will get.
+          roi = d.roi ? {box: d.roi, points: d.roi_polygon || null} : null;
+          nests = d.nests || []; selected = null; draw();
+          var s=document.getElementById('saved'); s.classList.remove('hidden');
+          setTimeout(function(){ s.classList.add('hidden'); }, 2500);
+        } else { alert((d && d.error) || 'Could not save.'); }
       }).catch(function(){ alert('Could not save.'); });
+  });
+  document.addEventListener('keydown', function (e) {
+    if (!poly) return;
+    if (e.key === 'Enter') { e.preventDefault(); closePoly(); }
+    else if (e.key === 'Escape') { e.preventDefault(); cancelPoly(); }
+    else if (e.key === 'Backspace') { e.preventDefault();
+      poly.pts.pop(); if (!poly.pts.length) cancelPoly(); else draw(); }
   });
 
   cv.addEventListener('mousedown', down); cv.addEventListener('mousemove', move);
+  cv.addEventListener('dblclick', function (e) { e.preventDefault(); closePoly(); });
   window.addEventListener('mouseup', up);
   cv.addEventListener('touchstart', down); cv.addEventListener('touchmove', move);
   window.addEventListener('touchend', up);

@@ -10,6 +10,7 @@ from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
+from django.http import Http404, HttpResponse
 from django.views import View
 from django.views.generic import DetailView, FormView, ListView, TemplateView
 
@@ -28,94 +29,21 @@ from .analytics import (
 )
 from .forms import JobCreateForm
 from .models import Job, JobResult, GPU_TIERS
+from .pricing import price_run
 
 logger = logging.getLogger(__name__)
 
-_NATALIES_RE = re.compile(r"natalies?", re.IGNORECASE)
-_SITEA_RE = re.compile(r"SiteA", re.IGNORECASE)
-
-
-def _sanitize_site(value: str) -> str:
-    """Replace occurrences of 'natalies' with 'SiteA' in display strings."""
-    if not value:
-        return value
-    return _NATALIES_RE.sub("SiteA", value)
-
-
-def _unsanitize_site(value: str) -> str:
-    """Reverse-map 'SiteA' back to 'natalies' for DB queries."""
-    if not value:
-        return value
-    return _SITEA_RE.sub("natalies", value)
-
-
-# GET/POST params the Processing-hub video filter understands.
-VIDEO_FILTER_KEYS = ("device", "site", "year", "month", "day", "hour",
-                     "hfrom", "hto", "from", "to", "q")
-
-
-def apply_video_filters(qs, params):
-    """Apply the Processing-hub video filters to a Video queryset. ``params`` is
-    any dict-like with .get() (a GET or POST QueryDict). Shared by the hub list
-    and the pipeline "run on all filtered videos" path so they never diverge."""
-    from datetime import datetime, time
-    from django.utils import timezone as _tz
-    from django.utils.dateparse import parse_date, parse_datetime
-
-    q = (params.get("q") or "").strip()
-    if q:
-        qs = qs.filter(title__icontains=q)
-    if params.get("device"):
-        qs = qs.filter(device_id=params.get("device"))
-    if params.get("site"):
-        qs = qs.filter(site_name=_unsanitize_site(params.get("site")))
-    for field in ("year", "month", "day", "hour"):
-        val = params.get(field)
-        if val:
-            try:
-                qs = qs.filter(**{field: int(val)})
-            except (ValueError, TypeError):
-                pass
-
-    # Daily time-of-day window: videos recorded between hfrom:00 (inclusive)
-    # and hto:00 (exclusive) EVERY day — combine with from/to for "6–7 pm each
-    # day across June". hfrom > hto wraps past midnight (e.g. 22 → 4).
-    try:
-        hfrom = int(params.get("hfrom")) if params.get("hfrom") not in (None, "") else None
-        hto = int(params.get("hto")) if params.get("hto") not in (None, "") else None
-    except (ValueError, TypeError):
-        hfrom = hto = None
-    if hfrom is not None or hto is not None:
-        lo = hfrom if hfrom is not None else 0
-        hi = hto if hto is not None else 24
-        if lo < hi:
-            qs = qs.filter(hour__gte=lo, hour__lt=hi)
-        elif lo > hi:  # wraps past midnight
-            from django.db.models import Q as _Q
-            qs = qs.filter(_Q(hour__gte=lo) | _Q(hour__lt=hi))
-        # lo == hi selects nothing meaningful -> ignore (treat as no window)
-
-    def _parse_dt(s):
-        dt = parse_datetime(s)
-        if dt is None:
-            d = parse_date(s)
-            if d:
-                dt = datetime.combine(d, time.min)
-        if dt and _tz.is_naive(dt):
-            dt = _tz.make_aware(dt, _tz.get_current_timezone())
-        return dt
-
-    if params.get("from"):
-        dt = _parse_dt(params.get("from"))
-        if dt:
-            qs = qs.filter(recorded_at__gte=dt)
-    if params.get("to"):
-        dt = _parse_dt(params.get("to"))
-        if dt:
-            qs = qs.filter(recorded_at__lte=dt)
-
-    return qs
-
+# The video filter and the review workspace live in apps.videos.workspace, so
+# the annotation project's clip picker uses the same one rather than growing a
+# second, subtly different copy. Re-exported here because the hub, the pipeline
+# runner, the API and the tests all import them from this module.
+from apps.videos.workspace import (  # noqa: F401
+    VIDEO_FILTER_KEYS,
+    _sanitize_site,
+    _unsanitize_site,
+    _values,
+    apply_video_filters,
+)
 
 def _generate_presigned_url(blob_path: str, container: str = "processed") -> str:
     """Time-limited URL for a blob in S3. Empty string on any error."""
@@ -310,6 +238,8 @@ def _spawn_gpu_job(job_pk: int) -> None:
         # them; the nest model is the backup.
         if job.config.get("hotel_roi"):
             payload["hotel_roi"] = job.config["hotel_roi"]
+        if job.config.get("hotel_polygon"):
+            payload["hotel_polygon"] = job.config["hotel_polygon"]
         if job.config.get("nest_layout"):
             payload["nest_layout"] = job.config["nest_layout"]
         payload["run_tracking"] = bool(job.config.get("run_tracking", True))
@@ -403,6 +333,8 @@ def _spawn_gpu_batch(jobs_data: list, detection_mode: str, confidence: float,
                 vcfg = jd.get("config") or {}
                 if vcfg.get("hotel_roi"):
                     payload["hotel_roi"] = vcfg["hotel_roi"]
+                if vcfg.get("hotel_polygon"):
+                    payload["hotel_polygon"] = vcfg["hotel_polygon"]
                 if vcfg.get("nest_layout"):
                     payload["nest_layout"] = vcfg["nest_layout"]
                 payload["run_tracking"] = bool(vcfg.get("run_tracking", True))
@@ -462,13 +394,23 @@ def _put_inference_payload(job_id: str, payload: dict) -> str:
 
 
 def _tracking_endpoint(detector_kind: str) -> str:
-    """Which endpoint a tracking job runs on. SAM 3 is heavy and needs the
-    A10G/g5 SAM 3 endpoint (the T4/g4dn OOMs); YOLO stays on the default g4dn.
-    Falls back to the default endpoint if the SAM 3 one isn't configured."""
+    """Which endpoint a tracking job runs on.
+
+    SAM 3 is heavy and needs the A10G/g5 SAM 3 endpoint; YOLO stays on the
+    default g4dn. A missing SAM 3 endpoint used to fall back to the default —
+    which silently sent SAM 3 to the T4 that, per this docstring's own warning,
+    OOMs on it. The run burned GPU minutes and failed deep inside inference with
+    an error that said nothing about routing. Refusing at submit says what is
+    actually wrong, and costs nothing.
+    """
     if detector_kind == "sam3":
         sam3 = getattr(settings, "SAGEMAKER_SAM3_ENDPOINT_NAME", "")
-        if sam3:
-            return sam3
+        if not sam3:
+            raise RuntimeError(
+                "SAM 3 needs its own endpoint (A10G/g5) — the default endpoint "
+                "is a T4 and runs out of memory on it. Set "
+                "SAGEMAKER_SAM3_ENDPOINT_NAME, or run this pipeline with YOLO.")
+        return sam3
     return settings.SAGEMAKER_ENDPOINT_NAME
 
 
@@ -516,13 +458,15 @@ def _chunk_ranges(video, detector_kind):
     can never truncate the tail."""
     import math
 
+    from apps.pipelines import ops
+
     if os.environ.get("BEEMONITOR_CHUNK_TRACKING") != "1":
         return None
     limit = _CHUNK_LIMIT_SECONDS["sam3" if detector_kind == "sam3" else "yolo"]
     dur = float(getattr(video, "duration_seconds", 0) or 0)
     if dur <= limit:
         return None  # fits one invocation (also: unknown duration -> unchunked)
-    fps = float(getattr(video, "fps", 0) or 30.0)
+    fps = ops.fps_of(video=video)
     total_frames = int(dur * fps)
     n = math.ceil(dur / limit)
     per = math.ceil(total_frames / n)
@@ -553,7 +497,9 @@ def _launch_gpu(payload, video, mid):
         cp["visualize"] = False  # a merged annotated video isn't supported
         input_uri = _put_inference_payload(cp["job_id"], cp)
         out_uri, fail_uri = _invoke_endpoint_async(cp["job_id"], input_uri, endpoint)
-        chunks.append({"i": i, "output_uri": out_uri,
+        # start_frame is kept so the merge knows where the seams are and can
+        # rejoin tracks the boundary cut in half.
+        chunks.append({"i": i, "output_uri": out_uri, "start_frame": start,
                        "failure_uri": fail_uri, "result": None})
     logger.info("job %s: video %.0fs chunked into %d invocations",
                 mid, float(video.duration_seconds or 0), len(chunks))
@@ -618,6 +564,13 @@ class JobCancelAllView(LoginRequiredMixin, View):
         return redirect("analysis:processing")
 
 
+# Per-hotel dot colours for the review grid. Distinct hues at similar
+# lightness so no hotel reads as more important than another; brand green first
+# because a single-hotel view should look like the rest of the product.
+from apps.videos import workspace  # noqa: E402
+from apps.videos.workspace import DEVICE_DOTS  # noqa: E402,F401
+
+
 class ProcessingHubView(LoginRequiredMixin, View):
     """Phase 0 'Processing' hub — the home of video processing.
 
@@ -632,7 +585,8 @@ class ProcessingHubView(LoginRequiredMixin, View):
 
     def get(self, request):
         from urllib.parse import urlencode
-        from django.db.models import OuterRef, Subquery
+        from django.db.models import Count, OuterRef, Subquery
+        from django.http import QueryDict
         from apps.devices.models import Device
         from apps.training.models import CustomModel
         from apps.pipelines.models import Pipeline
@@ -646,6 +600,9 @@ class ProcessingHubView(LoginRequiredMixin, View):
         # the CSV download links; apply_video_filters does the actual filtering
         # (shared with the pipeline "run on all filtered" path).
         f = {k: request.GET.get(k, "") for k in VIDEO_FILTER_KEYS}
+        # `device` is multi-valued now — several hotels reviewed side by side.
+        selected_devices = _values(request.GET, "device")
+        f["device"] = selected_devices
         qs = apply_video_filters(qs, request.GET)
 
         latest = (Job.objects.filter(video=OuterRef("pk"))
@@ -660,20 +617,37 @@ class ProcessingHubView(LoginRequiredMixin, View):
 
         devices = list(Device.accessible(request.user).order_by("name"))
         roi_devices = [d.name for d in devices if d.roi_override and d.nest_layout]
+
+        # Per-hotel counts under the OTHER filters, so a count answers "what
+        # would ticking this add" rather than "what is showing now". A hotel
+        # with nothing in range shows 0 instead of vanishing, so you can see it
+        # exists and widen the range.
+        others = QueryDict(request.GET.urlencode(), mutable=True)
+        others.setlist("device", [])
+        without_device = apply_video_filters(user_videos, others)
+        per_device = dict(without_device.exclude(device=None)
+                          # .order_by() clears Video.Meta.ordering — Django folds
+                          # a model's default ordering into the GROUP BY, which
+                          # would count per (device, uploaded_at) and give every
+                          # hotel a count of 1.
+                          .order_by()
+                          .values_list("device_id")
+                          .annotate(n=Count("id"))
+                          .values_list("device_id", "n"))
+        device_rows = workspace.device_rows(devices, selected_devices, per_device)
+        dot_by_device = workspace.dots_by_device(device_rows)
+
+        # Triage counts — "never analyzed" is what a run is usually for. The
+        # confirmed/unconfirmed/untagged buckets went with on-device bee
+        # confirmation: nothing tags a clip either way any more.
+        triage = {
+            "unanalyzed": qs.exclude(
+                pk__in=Job.objects.filter(status="completed").values("video_id")).count(),
+        }
         models = CustomModel.objects.filter(user=request.user, is_active=True)
 
         # Dropdown options from the user's actual videos.
-        opts = {
-            "sites": sorted({_sanitize_site(s) for s in
-                             user_videos.exclude(site_name="").values_list("site_name", flat=True)}),
-            "years": sorted(set(user_videos.exclude(year=None).values_list("year", flat=True))),
-            "months": sorted(set(user_videos.exclude(month=None).values_list("month", flat=True))),
-            "days": sorted(set(user_videos.exclude(day=None).values_list("day", flat=True))),
-            "hours": sorted(set(user_videos.exclude(hour=None).values_list("hour", flat=True))),
-            # Full clock for the daily time-of-day window (unlike "hours",
-            # which only lists hours that actually have videos).
-            "hours24": list(range(24)),
-        }
+        opts = workspace.filter_options(user_videos)
         # Query string for the CSV downloads — the download views filter on these.
         dl = {k: f[k] for k in ("device", "site", "year", "month", "day", "hour",
                                 "hfrom", "hto", "from", "to") if f[k]}
@@ -688,6 +662,8 @@ class ProcessingHubView(LoginRequiredMixin, View):
                                status__in=ACTIVE_JOB_STATUSES)
             .select_related("video").order_by("started_at", "id")
         )
+
+        video_days = workspace.group_by_day(videos, dot_by_device)
 
         return render(request, self.template_name, {
             "videos": videos,
@@ -704,7 +680,9 @@ class ProcessingHubView(LoginRequiredMixin, View):
             "can_manage_any": Video.manageable(request.user).exists(),
             "custom_nest_models": models.filter(model_type__in=["nest_detection", "custom"]),
             "custom_bee_models": models.filter(model_type__in=["bee_tracking", "custom"]),
-            "est_credits_per_video": 349,
+            "device_rows": device_rows,
+            "triage": triage,
+            "video_days": video_days,
             # Per-launch cap the run bar shows — mirrors the server enforcement in
             # pipelines.run_on_videos so the button label can't diverge from it.
             # 0/None means "no cap" (the template treats it as unlimited).
@@ -1208,9 +1186,12 @@ def _merge_chunk_results(job, chunks) -> dict:
 
     from config.storage import get_s3_client
 
+    from apps.analysis import chunk_stitch
+
     s3c = get_s3_client()
     uid, mid = str(job.user_id), job.modal_job_id
     results = [ch["result"] for ch in chunks]
+    merged_track_count = None
 
     def _read_rows(path):
         if not path:
@@ -1222,6 +1203,11 @@ def _merge_chunk_results(job, chunks) -> dict:
             logger.warning("chunk csv read failed (%s): %s", path, e)
             return []
         return list(_csv.DictReader(io.StringIO(buf.getvalue().decode("utf-8", "replace"))))
+
+    # Absolute start frame of each chunk after the first — the seams a track
+    # can be cut at.
+    boundaries = [int(ch["start_frame"]) for ch in chunks[1:]
+                  if str(ch.get("start_frame", "")).lstrip("-").isdigit()]
 
     merged_paths = {}
     # Detections merge through the same path — they carry no track_id, so the
@@ -1238,6 +1224,12 @@ def _merge_chunk_results(job, chunks) -> dict:
                 if "track_id" in row:
                     row["track_id"] = _remap_chunk_track_id(row.get("track_id"), i)
                 all_rows.append(row)
+        if kind == "tracking_csv_path" and all_rows:
+            # Each chunk restarts its tracker, so a bee mid-flight at a seam
+            # arrives as two namespaced ids. Rejoin them before anything counts
+            # or times them.
+            chunk_stitch.stitch(all_rows, boundaries)
+            merged_track_count = chunk_stitch.distinct_track_count(all_rows)
         if fieldnames:
             out = io.StringIO()
             w = _csv.DictWriter(out, fieldnames=fieldnames, extrasaction="ignore")
@@ -1254,6 +1246,10 @@ def _merge_chunk_results(job, chunks) -> dict:
         return sum(int(r.get(k) or 0) for r in results)
 
     stats0 = (results[0].get("summary_stats") or {}) if results else {}
+    merged_nest_bboxes = {}
+    for res in results:
+        for nest_id, bbox in ((res.get("summary_stats") or {}).get("nest_bboxes") or {}).items():
+            merged_nest_bboxes.setdefault(str(nest_id), bbox)
     return {
         "status": "completed",
         "events_csv_path": merged_paths["events_csv_path"],
@@ -1266,14 +1262,22 @@ def _merge_chunk_results(job, chunks) -> dict:
         "total_events": _sum("total_events"),
         "entry_count": _sum("entry_count"),
         "exit_count": _sum("exit_count"),
-        "unique_tracks": _sum("unique_tracks"),
-        "nest_count": max((int(r.get("nest_count") or 0) for r in results), default=0),
+        # Counted on the stitched rows. Summing each chunk's own figure counts
+        # every bee that crossed a seam once per chunk it appeared in.
+        "unique_tracks": (merged_track_count if merged_track_count is not None
+                          else _sum("unique_tracks")),
+        "nest_count": len(merged_nest_bboxes) or max(
+            (int(r.get("nest_count") or 0) for r in results), default=0),
         "foraging_trip_count": _sum("foraging_trip_count"),
         "avg_trip_duration_sec": None,
         "interaction_count": _sum("interaction_count"),
         "summary_stats": {
             "video_fps": stats0.get("video_fps"),
             "chunked": len(chunks),
+            # The nests a chunk saw are the nests the whole video has: union
+            # them rather than dropping the geometry the ROI work depends on.
+            "nest_bboxes": merged_nest_bboxes,
+            "total_nests": len(merged_nest_bboxes),
             "note": "merged from chunked invocations; annotated video, "
                     "interactions and per-track crops are unavailable for chunked runs",
         },
@@ -1325,15 +1329,19 @@ def _apply_result_to_job(job, result: dict) -> None:
         },
     )
 
-    exec_secs = result.get("execution_seconds", 0) or 0
-    credits_used = int(exec_secs)
-    cost_rate = GPU_TIERS.get(job.gpu_tier, {}).get("cost_per_sec", 0.000306)
-    cost_usd = round(exec_secs * cost_rate, 4)
+    # Priced from what the run reports it ran on — see apps/analysis/pricing.py.
+    priced = price_run(result)
+    exec_secs = priced["execution_seconds"]
+    credits_used = priced["credits"]
+    cost_usd = priced["compute_cost_usd"]
 
     Job.objects.filter(pk=job.pk).update(
         status="completed", progress_pct=100,
         completed_at=timezone.now(),
         execution_seconds=exec_secs,
+        gpu_seconds=priced["gpu_seconds"],
+        stage_seconds=priced["stage_seconds"],
+        gpu_tier=priced["gpu_tier"],
         compute_cost_usd=cost_usd,
     )
 
@@ -1381,8 +1389,13 @@ def _video_job_config(base: dict, video, use_device_roi: bool) -> dict:
     if use_device_roi and dev is not None:
         if dev.roi_override:
             cfg["hotel_roi"] = dev.roi_override     # normalized [x1,y1,x2,y2]
+        if dev.roi_polygon:
+            # The traced outline of that same ROI — the worker masks tracking to
+            # it so background inside the bounding box is not analysed.
+            cfg["hotel_polygon"] = dev.roi_polygon  # [[x,y], ...] normalized
         if dev.nest_layout:
-            cfg["nest_layout"] = dev.nest_layout    # [{id, box:[x1,y1,x2,y2]}, ...]
+            # [{id, box:[x1,y1,x2,y2], points?:[[x,y], ...]}, ...]
+            cfg["nest_layout"] = dev.nest_layout
     return cfg
 
 
@@ -1416,7 +1429,9 @@ class BatchJobView(LoginRequiredMixin, View):
         confidence = float(request.POST.get("confidence_threshold", 0.25))
         two_mode = request.POST.get("two_mode_tracking", "true") == "true"
         visualize = request.POST.get("visualize", "true") == "true"
-        gpu_tier = request.POST.get("gpu_tier", "A10G")
+        # gpu_tier is NOT read from the request any more: it never reached
+        # SageMaker, so the choice only mis-priced the job. It is stamped from
+        # the hardware the worker reports when the job completes.
         use_device_roi = request.POST.get("use_device_roi") in ("on", "true", "1")
 
         # Tracking runs the whole clip; the new Processing form marks itself
@@ -1522,7 +1537,6 @@ class BatchJobView(LoginRequiredMixin, View):
                 video=video,
                 config=video_configs[video.pk],
                 config_hash=compute_config_hash(video.pk, video_configs[video.pk]),
-                gpu_tier=gpu_tier,
                 status=Job.Status.PROCESSING,
                 started_at=tz.now(),
                 modal_job_id=modal_job_id,
@@ -1543,7 +1557,7 @@ class BatchJobView(LoginRequiredMixin, View):
         )
         thread.start()
 
-        msg = f"Submitted {len(jobs_data)} video(s) on {gpu_tier} GPU."
+        msg = f"Submitted {len(jobs_data)} video(s)."
         if skipped:
             msg += f" Skipped {skipped} already analyzed."
         est_total_credits = len(jobs_data) * est_credits_per_video
@@ -1641,29 +1655,73 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         if foraging_path:
             ctx["foraging_csv_url"] = _generate_presigned_url(foraging_path)
 
-        # Load CSV data for display in tables
-        ctx["events_data"] = _load_csv_from_storage(events_path)
-        ctx["tracking_data"] = _load_csv_from_storage(tracking_path)
-        ctx["interactions_data"] = _load_csv_from_storage(interactions_path)
+        # Raw detector output, before the tracker associated boxes into tracks.
+        # Offered only when the result recorded a path: unlike tracking, a run
+        # can legitimately produce no detections file, and presigning never
+        # checks existence — a constructed fallback would hand back a button
+        # that 404s, which reads as a broken download rather than a step that
+        # was never run.
+        if result.detections_csv_path:
+            ctx["detections_csv_url"] = _generate_presigned_url(
+                result.detections_csv_path)
 
-        # Data-driven stat tiles: core tracking counts always, plus derived
-        # analyses only when they ran (so the page reflects the actual pipeline).
+        # Tracking is the worker's own file because for tracking the worker's
+        # file IS the answer.
+        ctx["tracking_data"] = _load_csv_from_storage(tracking_path)
+
+        # Events and interactions are computed, not read. Rendering the
+        # worker's interactions CSV here made this page disagree with the batch
+        # export of the same clip — and the worker matches an insect to a
+        # reference by centroid distance under a flat 50 px, so a bee inside a
+        # large flower is in neither its table nor this one.
+        from apps.pipelines import executors as pipeline_executors
+        from apps.pipelines import primitives
+
+        interaction_rows = pipeline_executors.primitives_for_job(job, "interactions")
+        ctx["interactions_data"] = _rows_as_table(
+            interaction_rows, primitives.INTERACTION_FIELDS)
+        # Events are computed unconditionally, the same as interactions. They
+        # used to fall back to the worker's events CSV whenever the analyzers
+        # produced nothing, while the Events CSV button beside the table stayed
+        # computed — so in exactly that case the table showed rows the download
+        # did not contain. The fallback was not even adding anything: the
+        # analyzer already folds the worker's own nest events into its output
+        # (events_from_gpu), so an empty computed table means there was nothing
+        # to show.
+        ctx["events_data"] = _rows_as_table(
+            pipeline_executors.primitives_for_job(job, "events"),
+            primitives.EVENT_FIELDS)
+
+        # The base measurements this clip produced, not derived answers.
+        # Entries/Exits/Nests/Trips were four ways of slicing the event table,
+        # and on a pipeline that measured none of them they were four zeros —
+        # which reads as "nothing happened" rather than "nothing was asked".
+        # Trips and visits are reads over these; the reader can do their own.
+        from apps.pipelines.templatetags.batch_extras import duration_min
+
         stats = result.summary_stats or {}
+        # The tiles count the tables on this page. They used to read
+        # JobResult.total_events and JobResult.interaction_count — the worker's
+        # own counters — so a clip could head a 38-row events table with
+        # "Events 0", and the tile disagreed with both the table under it and
+        # the CSV beside it. Tracks stays the worker's figure because the
+        # tracking table IS the worker's file.
         tiles = [
-            {"label": "Unique Tracks", "value": result.unique_tracks, "color": "text-blue-600"},
-            {"label": "Total Events", "value": result.total_events, "color": "text-gray-900"},
-            {"label": "Entries", "value": result.entry_count, "color": "text-green-600"},
-            {"label": "Exits", "value": result.exit_count, "color": "text-red-600"},
+            {"label": "Tracks", "value": result.unique_tracks, "color": "text-blue-600"},
+            {"label": "Events", "value": (ctx.get("events_data") or {}).get("total", 0),
+             "color": "text-gray-900"},
+            {"label": "Interactions",
+             "value": (ctx.get("interactions_data") or {}).get("total", 0),
+             "color": "text-purple-600"},
         ]
-        if result.nest_count or stats.get("nest_bboxes"):
-            n = result.nest_count or len(stats.get("nest_bboxes") or {})
-            tiles.append({"label": "Nests", "value": n, "color": "text-amber-600"})
-        if result.foraging_trip_count:
-            tiles.append({"label": "Foraging Trips", "value": result.foraging_trip_count,
-                          "color": "text-amber-700"})
-        if result.interaction_count:
-            tiles.append({"label": "Interactions", "value": result.interaction_count,
-                          "color": "text-purple-600"})
+        if job.video.duration_seconds:
+            tiles.append({"label": "Length",
+                          "value": duration_min(job.video.duration_seconds),
+                          "color": "text-gray-900"})
+        if job.execution_seconds:
+            tiles.append({"label": "GPU time",
+                          "value": duration_min(job.execution_seconds),
+                          "color": "text-gray-500"})
         ctx["stat_tiles"] = tiles
 
         # Per-track crops (for later species ID): presign each track's crop keys.
@@ -2352,6 +2410,64 @@ def _fetch_weather_data(start_date: str, end_date: str, lat: float = 40.79, lon:
     except Exception as e:
         logger.warning("Weather fetch failed: %s", e)
         return {"hourly": [], "daily": []}
+
+
+class JobPrimitiveCsvView(LoginRequiredMixin, View):
+    """The computed events/interactions for one clip, as CSV.
+
+    The page's own download used to hand back the worker's file while the table
+    above it showed the computed rows — the same clip, two different answers,
+    one click apart.
+    """
+
+    def get(self, request, pk, kind):
+        import csv as _csv
+
+        from apps.pipelines import executors as pipeline_executors
+        from apps.pipelines import primitives
+
+        if kind not in ("events", "interactions"):
+            raise Http404("Unknown table.")
+        job = get_object_or_404(Job, pk=pk)
+        if job.user_id != request.user.id and not Video.accessible(
+                request.user).filter(pk=job.video_id).exists():
+            raise Http404("No such job.")
+
+        rows = pipeline_executors.primitives_for_job(job, kind)
+        fields = (primitives.EVENT_FIELDS if kind == "events"
+                  else primitives.INTERACTION_FIELDS)
+        table = _rows_as_table(rows, fields)
+
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = (
+            f'attachment; filename="{kind}_job_{job.pk}.csv"')
+        writer = _csv.writer(response)
+        writer.writerow(table["headers"])
+        writer.writerows(table["rows"])
+        return response
+
+
+def _rows_as_table(rows, preferred_fields=()):
+    """Computed rows in the shape the CSV tables already render.
+
+    Columns follow the primitive's declared order, then anything an analyzer
+    added (b_label, min_distance) — dropping those on screen would make the
+    page show less than the download of the same thing.
+    """
+    if not rows:
+        return {"headers": [], "rows": [], "total": 0}
+    headers = [f for f in preferred_fields if any(f in r for r in rows)]
+    headers += [k for r in rows for k in r if k not in headers]
+    seen, ordered = set(), []
+    for h in headers:
+        if h not in seen:
+            seen.add(h)
+            ordered.append(h)
+    return {
+        "headers": ordered,
+        "rows": [[("" if r.get(h) is None else r.get(h)) for h in ordered] for r in rows],
+        "total": len(rows),
+    }
 
 
 def _load_csv_from_storage(blob_path: str, container: str = "processed") -> dict:

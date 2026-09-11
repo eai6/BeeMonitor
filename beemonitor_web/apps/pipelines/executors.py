@@ -102,8 +102,8 @@ def detector_label(step):
 def resolve_reference(step, run, context, index):
     """Resolve a reference node's config into ROI-shaped data.
 
-    Returns the ``{hotel_roi?, nest_layout?, regions?}`` shape ``ops.roi_boxes``
-    already consumes. Deliberately a function of the step's **config** (plus the
+    Returns the ``{hotel_roi?, hotel_polygon?, nest_layout?, regions?}`` shape
+    ``ops.roi_shapes`` already consumes. Deliberately a function of the step's **config** (plus the
     upstream video's device), never of its cached output: ``engine`` caches a GPU
     step's output dict in ``StepResult`` and replays it verbatim on a hit, and
     drawn regions are not part of the hashed job config — so a reference stashed
@@ -143,7 +143,11 @@ def resolve_reference(step, run, context, index):
         }
 
     # "device_layout" — the hotel ROI + nest tubes drawn in the ROI editor.
-    hotel_roi, nest_layout = None, None
+    # hotel_polygon (and a nest's "points") is the traced outline of a shape the
+    # user drew as a polygon; the box is its bounding box, so a consumer that
+    # only reads boxes still works, and one that reads points excludes the
+    # background the box swept in.
+    hotel_roi, hotel_polygon, nest_layout = None, None, None
     video_out = find_artifact("video", run.steps, index, context)
     if video_out:
         try:
@@ -153,12 +157,14 @@ def resolve_reference(step, run, context, index):
             device = getattr(video, "device", None)
             if device is not None:
                 hotel_roi = getattr(device, "roi_override", None)
+                hotel_polygon = getattr(device, "roi_polygon", None)
                 nest_layout = getattr(device, "nest_layout", None)
         except Exception as exc:  # defensive — device linkage is optional
             logger.info("detect.objects: could not read device layout: %s", exc)
     return {
         "artifact": "roi",
         "hotel_roi": hotel_roi,
+        "hotel_polygon": hotel_polygon,
         "nest_layout": nest_layout,
         "source": "device",
     }
@@ -248,10 +254,15 @@ def _exec_input_video(step, run, context, inputs, index):
     video_id = (step.get("config") or {}).get("video_id")
     if not video_id:
         return {"error": "No video selected."}
+    # `manageable` — owned, or on a device shared with the runner as manager.
+    # MUST match the launch-side check (pipelines.views.run_on_videos and
+    # devices.scheduling._videos_for both select with `manageable`); an
+    # owner-only lookup here failed every run on a shared device's videos
+    # AFTER it had already passed validation.
     try:
-        video = Video.objects.get(pk=video_id, user=run.user)
-    except (Video.DoesNotExist, ValueError):
-        return {"error": "Selected video not found."}
+        video = Video.manageable(run.user).get(pk=video_id)
+    except (Video.DoesNotExist, ValueError, TypeError):
+        return {"error": f"Video {video_id} not found, or not yours to analyze."}
     return {
         "artifact": "video",
         "video_id": video.pk,
@@ -264,7 +275,7 @@ def _exec_roi_nest_layout(step, run, context, inputs, index):
     video_out = find_artifact("video", run.steps, index, context)
     if not video_out:
         return {"error": "No upstream video for the ROI layout."}
-    hotel_roi, nest_layout = None, None
+    hotel_roi, hotel_polygon, nest_layout = None, None, None
     try:
         from apps.videos.models import Video
 
@@ -272,12 +283,14 @@ def _exec_roi_nest_layout(step, run, context, inputs, index):
         device = getattr(video, "device", None)
         if device is not None:
             hotel_roi = getattr(device, "roi_override", None)
+            hotel_polygon = getattr(device, "roi_polygon", None)
             nest_layout = getattr(device, "nest_layout", None)
     except Exception as exc:  # defensive — device linkage is optional
         logger.info("roi.nest_layout: could not read device layout: %s", exc)
     return {
         "artifact": "roi",
         "hotel_roi": hotel_roi,
+        "hotel_polygon": hotel_polygon,
         "nest_layout": nest_layout,
         "source": "device",
     }
@@ -334,17 +347,42 @@ def _exec_mot(step, run, context, inputs, index):
     if up.get("error"):
         return {"error": "The upstream detector step failed."}
     result = up.get("result") or {}
-    if not result.get("tracking_csv_path"):
-        return {
-            "error": "No detections to track. The upstream Detector produced no "
-                     "tracking data — set its Run scope to 'Objects + reference' "
-                     "if it is currently 'Reference only'.",
-        }
     # Carry the upstream Detect node's class forward. Several Detect nodes share
     # one GPU result, so "which rows are mine" is decided by label, and every
     # downstream analyzer needs to inherit that answer rather than re-deriving it.
     detector = _upstream_detector(run.steps, index) if run is not None else None
     label = detector_label(detector) if detector else ""
+
+    if not result.get("tracking_csv_path"):
+        # Only a detector we can positively see was asked for objects earns the
+        # empty-clip reading. A reference-only scope, a legacy nest-only block,
+        # or a graph we cannot inspect all keep the original error: guessing
+        # "empty clip" for a misconfigured pipeline would hide the misconfiguration
+        # behind empty tables, which is the harder bug to find.
+        if detector is None or not _run_tracking_for(detector):
+            return {
+                "error": "No detections to track. The upstream Detector produced no "
+                         "tracking data — set its Run scope to 'Objects + reference' "
+                         "if it is currently 'Reference only'.",
+            }
+        # The detector ran the full pass and found nothing, and the worker writes
+        # no tracking CSV when it has nothing to write (files_uploaded: {}). That
+        # is a measurement, not a failure: an empty clip is the commonest thing in
+        # field footage, and failing the run for it turned "19 clips had no bees"
+        # into "19 failures to triage" — while each clip's own page said its job
+        # completed. The run now completes with zero rows, which is the answer.
+        return {
+            "artifact": "tracks",
+            "result": result,
+            "job_id": up.get("job_id"),
+            "tracker": (step.get("config") or {}).get("tracker", "beetrack"),
+            "label": label,
+            "unique_tracks": 0,
+            "empty": True,
+            "note": "The detector found nothing in this clip — no tracks to "
+                    "analyse. Downstream tables are empty because the clip is, "
+                    "not because the run failed.",
+        }
     return {
         "artifact": "tracks",
         "result": result,
@@ -353,6 +391,322 @@ def _exec_mot(step, run, context, inputs, index):
         "label": label,
         "unique_tracks": result.get("unique_tracks", 0),
     }
+
+
+def _analysis_inputs(step, run, context, inputs, index):
+    """The pieces every primitive analyzer needs: tidy tracks, refs, fps.
+
+    Returns ``(tidy, refs, result, fps, fps_source)``; ``tidy`` is None when
+    there is no readable tracking CSV, which callers report rather than treat
+    as "nothing happened".
+    """
+    from . import ops
+
+    up = inputs.get("tracks") or _first_upstream_result(inputs)
+    result = (up or {}).get("result", {})
+
+    video = _run_video(run)
+    scale = _frame_scale(run, result, video)
+
+    roi = find_reference(run.steps, index, context, run)
+    refs = ops.roi_references(roi)
+    ref_source = "graph"
+    if not refs:
+        # Nothing drawn or wired — but the detector may have FOUND the
+        # references (a pipeline whose reference class is detected rather than
+        # drawn: flowers on a board). Those boxes sit in the job's summary and
+        # nothing local ever read them, so such a pipeline reported "0
+        # references, 0 visits" while its job page said it had found four
+        # nests.
+        # The worker reports those boxes in pixels too, placed by the same
+        # frame size measured above.
+        refs = ops.detected_references(result, video)
+        ref_source = "detected" if refs else "none"
+    # The hotel ROI contains every tube, so counting it as a reference would
+    # double every episode. It is kept only when it is the ONLY thing defined.
+    tubes = [r for r in refs if r["id"] != "hotel"]
+    refs = tubes or refs
+
+    # What the reference branch claims, so the subject branch can be "the rest"
+    # when the detector's own class names differ from the configured ones. That
+    # is what makes the pipeline taxon-agnostic: renaming a class moves rows
+    # between branches by role, it does not empty one.
+    raw = ops.load_tracking_df(result)
+    taxa, taxa_how = ops.resolve_taxa(raw, _upstream_label(inputs),
+                                      exclude=[(roi or {}).get("label")])
+    df = ops.filter_by_label(raw, _upstream_label(inputs),
+                             exclude=[(roi or {}).get("label")])
+    tidy = ops.normalized_tracks(df, scale) if df is not None else None
+    fps, fps_source = ops.fps_with_source(result, video)
+    return tidy, refs, result, fps, fps_source, ref_source, {
+        "taxa": sorted(taxa) if taxa else ([] if taxa == set() else None),
+        "how": taxa_how,
+    }
+
+
+def _frame_scale(run, result, video=None):
+    """Summary dict for ``normalized_tracks``, carrying the clip's frame size.
+
+    The frame size is what turns a pixel coordinate into a position, and the
+    worker never reports it — so it comes from the video row, measured at
+    ingest and probed now for clips that predate that. Without it tracks cannot
+    be placed against a reference at all, and scaling them by their own extent
+    (what this used to fall back to) puts every clip's activity wherever that
+    clip happened to be busiest.
+    """
+    if video is None:
+        video = _run_video(run)
+    if video is not None:
+        from apps.videos.thumbnails import ensure_dimensions
+
+        ensure_dimensions(video)
+    scale = dict((result or {}).get("summary_stats") or {})
+    if video is not None and video.width and video.height:
+        scale.setdefault("frame_width", video.width)
+        scale.setdefault("frame_height", video.height)
+    return scale
+
+
+def _run_video(run):
+    """The Video row this run was launched on, or None.
+
+    Needed because detected reference boxes are in pixels and the frame size
+    that normalises them was measured at ingest onto the video row.
+    """
+    from apps.videos.models import Video
+
+    from . import aggregate
+
+    vid = aggregate.run_video_id(run)
+    return Video.objects.filter(pk=vid).first() if vid else None
+
+
+def _gap_frames(step, default=15):
+    try:
+        return max(int(float((step.get("config") or {}).get("gap_frames", default))), 0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _proximity_radius(step):
+    """Insect-to-insect radius, config'd as a percent of frame width."""
+    from . import ops
+
+    raw = (step.get("config") or {}).get("proximity_percent")
+    if raw in (None, ""):
+        return ops.DEFAULT_PROXIMITY
+    try:
+        return max(float(raw), 0.0) / 100.0
+    except (TypeError, ValueError):
+        return ops.DEFAULT_PROXIMITY
+
+
+def _run_for_job(job):
+    """The PipelineRun that spawned this job, if one did.
+
+    There is no back-reference from Job, and the run records the job id inside
+    its context JSON. Narrowed to runs contemporaneous with the job — the run
+    that submitted it started moments before — so this stays a small scan
+    rather than every run the user ever launched.
+    """
+    from datetime import timedelta
+
+    from . import aggregate
+    from .models import PipelineRun
+
+    when = job.created_at
+    if not when:
+        return None
+    nearby = (PipelineRun.objects
+              .filter(user_id=job.user_id,
+                      started_at__gte=when - timedelta(days=1),
+                      started_at__lte=when + timedelta(days=1))
+              .order_by("-started_at")[:400])
+    for run in nearby:
+        if aggregate.run_job_id(run) == job.pk:
+            return run
+    return None
+
+
+def primitives_for_job(job, kind):
+    """Events or interactions for one job, however it was launched.
+
+    The per-clip results page shows a job, not a run, and used to render the
+    worker's own interactions CSV — so it disagreed with the batch export,
+    which computes the primitives. Two tables of the same clip saying different
+    things is worse than either being wrong on its own.
+
+    Prefers the real run, so a drawn ROI or a device layout is honoured. Falls
+    back to a synthetic one carrying just this job's result and video, which
+    resolves references from the detector's own boxes.
+    """
+    from .models import PipelineRun
+
+    result = getattr(job, "result", None)
+    if result is None:
+        return []
+
+    run = _run_for_job(job)
+    if run is None:
+        payload = {f: getattr(result, f, None) for f in (
+            "events_csv_path", "tracking_csv_path", "detections_csv_path",
+            "interactions_csv_path", "summary_stats", "unique_tracks",
+            "entry_count", "exit_count", "total_events", "interaction_count")}
+        run = PipelineRun(user_id=job.user_id)
+        # A reference.layout step so the clip's own hotel geometry is used —
+        # that is what a pipeline on this device would have resolved. When the
+        # device has no saved layout it resolves to nothing and the detector's
+        # own boxes take over, which is the right order of preference either
+        # way: the user's geometry is intent, a detection is a guess.
+        run.steps = [
+            {"id": "v", "block_type": "input.video",
+             "config": {"video_id": str(job.video_id)}},
+            {"id": "r", "block_type": "reference.layout",
+             "config": {"source": "device_layout"}, "inputs": {"video": "v"}},
+            {"id": "a", "block_type": "analyze.interactions", "config": {},
+             "inputs": {"tracks": "m", "rois": "r"}},
+        ]
+        run.context = {"v": {"artifact": "video", "video_id": job.video_id},
+                       "m": {"artifact": "tracks", "result": payload}}
+    return recompute_primitive(run, kind)
+
+
+def recompute_primitive(run, kind):
+    """Events or interactions for a run whose analyzer never produced them.
+
+    A batch analysed before the primitives existed has no ``events`` or
+    ``interactions`` rows in its context — only whatever its retired analyzer
+    stored — so an export would have to fall back to the worker's own CSV, and
+    that is the file with the centroid-distance bug.
+
+    Nothing about the answer requires a re-run, though: the tracking table and
+    the reference geometry are both already saved, and the primitives are a
+    pure function of them. This recomputes at export time so an old batch
+    exports the same rows a fresh one would, without touching the GPU.
+
+    Returns [] when the run has no readable tracking table.
+    """
+    from . import aggregate
+
+    result = aggregate.run_gpu_result(run)
+    if not result.get("tracking_csv_path"):
+        return []
+
+    steps = list(run.steps or [])
+    # Resolve the reference the way the analyzer would have: from the analyzer's
+    # own position in the graph, so an explicit `rois` edge still wins.
+    index = next((i for i in range(len(steps) - 1, -1, -1)
+                  if str(steps[i].get("block_type", "")).startswith("analyze.")),
+                 max(len(steps) - 1, 0))
+    step = steps[index] if steps else {}
+    inputs = {"tracks": {"result": result, "label": ""}}
+
+    executor = (_exec_analyze_events if kind == "events"
+                else _exec_analyze_interactions)
+    out = executor(step, run, run.context or {}, inputs, index)
+    return out.get("rows") or []
+
+
+def _exec_analyze_events(step, run, context, inputs, index):
+    """Primitive 1 — every boundary crossing in the clip.
+
+    Two sources, one table: crossings of the user's references, derived from the
+    episode pass, and the worker's own Entry/Exit classifications against nests
+    it detected. Both normalise into the Event schema and each row says which it
+    came from, so neither can quietly stand in for the other.
+    """
+    from . import ops, primitives
+
+    tidy, refs, result, fps, fps_source, ref_source, taxa = _analysis_inputs(
+        step, run, context, inputs, index)
+
+    rows = primitives.events_from_gpu(ops.load_events_df(result), fps)
+    if tidy is not None and refs:
+        episodes = ops.compute_episodes(tidy, refs, gap_frames=_gap_frames(step))
+        rows = primitives.events_from_episodes(episodes, fps) + rows
+        rows.sort(key=lambda r: (r["frame"], r["action"], str(r["subject"])))
+    primitives.label_references(rows, refs, key="target")
+
+    out = {
+        "artifact": "events", "table_kind": "events",
+        "fps": fps, "fps_source": fps_source,
+        "reference_source": ref_source, "reference_count": len(refs),
+        "taxa": taxa["taxa"], "taxa_source": taxa["how"],
+        "csv": result.get("events_csv_path", ""),
+        **primitives.summarize_events(rows),
+    }
+    if tidy is None:
+        out["note"] = ("No readable tracking table — only the worker's own nest "
+                       "events are listed.")
+    elif not refs:
+        out["note"] = ("No reference upstream and none detected, so only the "
+                       "worker's own nest events are listed. Draw an ROI, use the "
+                       "device nest layout, or wire a Detect node for the "
+                       "reference class into the analyzer.")
+    return out
+
+
+def _exec_analyze_interactions(step, run, context, inputs, index):
+    """Primitive 2 — every episode of two things being together.
+
+    Insect-to-reference episodes come from the local pass over the user's ROI;
+    insect-to-insect proximity comes from the worker, which computes it while
+    the tracks are already in memory. A visit is simply an insect-to-reference
+    row, which is why Visitation Count is no longer a block of its own.
+    """
+    from . import ops, primitives
+
+    tidy, refs, result, fps, fps_source, ref_source, taxa = _analysis_inputs(
+        step, run, context, inputs, index)
+    want = (step.get("config") or {}).get("interaction_type", "all")
+
+    gap = _gap_frames(step)
+    rows = primitives.interactions_from_gpu(ops.load_interactions_df(result), fps)
+
+    if tidy is not None:
+        # Both halves are computed here when the tracks are readable, so the
+        # whole table honours one gap tolerance and one set of thresholds. The
+        # worker's rows are the fallback for jobs whose tracking CSV is gone.
+        #
+        # This is also a correctness fix, not just tidiness: the worker matches
+        # an insect to a reference by centroid-to-centroid distance under a flat
+        # 50 px, which discards the reference's size entirely. A bee sitting on
+        # the edge of a 400 px flower is 200 px from its centre and was simply
+        # never recorded — visibly inside the box in the annotated video, absent
+        # from the table. compute_episodes asks containment instead.
+        local = []
+        if refs:
+            local += primitives.interactions_from_episodes(
+                ops.compute_episodes(tidy, refs, gap_frames=gap), fps)
+        local += primitives.interactions_from_proximity(
+            ops.compute_proximity_episodes(
+                tidy, radius=_proximity_radius(step), gap_frames=gap,
+                aspect=ops.frame_aspect(result.get("summary_stats") or result)),
+            fps)
+        # Keep only what the local pass could not produce: reference rows when
+        # no reference was defined, and nothing else.
+        keep_gpu = [r for r in rows
+                    if r["b_kind"] == primitives.REFERENCE and not refs]
+        rows = local + keep_gpu
+
+    if want == "organism_organism":
+        rows = [r for r in rows if r["b_kind"] == primitives.ORGANISM]
+    elif want == "organism_reference":
+        rows = [r for r in rows if r["b_kind"] == primitives.REFERENCE]
+    rows.sort(key=lambda r: (r["start_frame"] is None, r["start_frame"], str(r["a"])))
+    primitives.label_references(rows, refs, key="b")
+
+    out = {
+        "artifact": "table", "table_kind": "interactions",
+        "fps": fps, "fps_source": fps_source,
+        "reference_source": ref_source, "reference_count": len(refs),
+        "taxa": taxa["taxa"], "taxa_source": taxa["how"],
+        "csv": result.get("interactions_csv_path", ""),
+        **primitives.summarize_interactions(rows),
+    }
+    if tidy is None and not rows:
+        out["note"] = "No readable tracking or interactions table for this job."
+    return out
 
 
 def _exec_analyze_interaction(step, run, context, inputs, index):
@@ -401,7 +755,7 @@ def _exec_analyze_detection_count(step, run, context, inputs, index):
     cfg = step.get("config") or {}
     metric = cfg.get("metric", "total")
     reference = find_reference(run.steps, index, context, run)
-    boxes = ops.roi_boxes(reference)
+    boxes = ops.roi_shapes(reference)
 
     label = _upstream_label(inputs)
 
@@ -435,6 +789,7 @@ def _exec_analyze_detection_count(step, run, context, inputs, index):
             note = (f"Most common per-frame count across "
                     f"{summary['frames_sampled']} sampled frame(s); "
                     f"{summary.get('frames_agreeing', 0)} frame(s) agreed.")
+        # No frame rate here: this branch counts sampled frames, not time.
         return {"artifact": "table", "table_kind": "detection_count",
                 "metric": metric, "note": note, **summary}
 
@@ -455,9 +810,10 @@ def _exec_analyze_detection_count(step, run, context, inputs, index):
                 "raw-detection export, so detections the tracker discarded are "
                 "not included. Re-run it to count raw detections.")
 
-    tidy = ops.normalized_tracks(df, result) if df is not None else None
+    tidy = (ops.normalized_tracks(df, _frame_scale(run, result))
+            if df is not None else None)
     if tidy is not None:
-        fps = ops.fps_of(result)
+        fps, fps_source = ops.fps_with_source(result)
         if metric == "over_time":
             try:
                 bin_sec = float(cfg.get("bin_seconds", 5) or 5)
@@ -467,12 +823,14 @@ def _exec_analyze_detection_count(step, run, context, inputs, index):
                 tidy, boxes, fps, metric="motion", bin_sec=bin_sec,
             )
             return {"artifact": "table", "table_kind": "detection_count",
-                    "metric": metric, "note": note, **series}
+                    "metric": metric, "note": note,
+                    "fps": fps, "fps_source": fps_source, **series}
         summary = ops.compute_detection_counts(
             tidy, boxes, fps, per_frame=(metric == "per_frame"), count_tracks=not raw,
         )
         return {"artifact": "table", "table_kind": "detection_count",
-                "metric": metric, "note": note, **summary}
+                "metric": metric, "note": note,
+                "fps": fps, "fps_source": fps_source, **summary}
 
     return {
         "artifact": "table", "table_kind": "detection_count",
@@ -496,21 +854,27 @@ def _exec_analyze_foraging_trips(step, run, context, inputs, index):
 
 
 def _exec_analyze_visitation(step, run, context, inputs, index):
+    """Retired — kept runnable, and now sharing the primitives' reference
+    resolution so an existing Visitation pipeline benefits from the detected-
+    reference fallback without having to be rewired."""
     from . import ops
 
-    up = inputs.get("tracks") or _first_upstream_result(inputs)
-    result = (up or {}).get("result", {})
-    roi = find_reference(run.steps, index, context, run)
-    boxes = ops.roi_boxes(roi)
-
-    df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
-    tidy = ops.normalized_tracks(df, result) if df is not None else None
+    tidy, refs, result, fps, fps_source, ref_source, _taxa = _analysis_inputs(
+        step, run, context, inputs, index)
     if tidy is not None:
-        if not boxes:
+        if not refs:
             return {"artifact": "table", "table_kind": "visitation",
-                    "note": "No ROI upstream — add an ROI (draw or nest layout) to count visits."}
-        summary = ops.compute_visitation(tidy, boxes, ops.fps_of(result))
-        return {"artifact": "table", "table_kind": "visitation", **summary}
+                    "reference_source": ref_source,
+                    "note": "No reference upstream, and the detector found none — "
+                            "draw an ROI, use the device nest layout, or wire a "
+                            "Detect node for the reference class into the analyzer."}
+        summary = ops.compute_visitation(tidy, refs, fps)
+        # Carried so the page can say "dwell times assume 30 fps" instead of
+        # presenting a guessed rate as a measurement.
+        return {"artifact": "table", "table_kind": "visitation",
+                "fps": fps, "fps_source": fps_source,
+                "reference_source": ref_source, "reference_count": len(refs),
+                **summary}
 
     # Fallback: no readable tracking CSV (e.g. dev DB) — surface the job summary.
     return {
@@ -530,13 +894,16 @@ def _exec_analyze_colony_activity(step, run, context, inputs, index):
     result = (up or {}).get("result", {})
     metric = (step.get("config") or {}).get("metric", "occupancy")
     roi = find_reference(run.steps, index, context, run)
-    boxes = ops.roi_boxes(roi)
+    boxes = ops.roi_shapes(roi)
 
     df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
-    tidy = ops.normalized_tracks(df, result) if df is not None else None
+    tidy = (ops.normalized_tracks(df, _frame_scale(run, result))
+            if df is not None else None)
     if tidy is not None:
-        series = ops.compute_colony_activity(tidy, boxes, ops.fps_of(result), metric=metric)
-        return {"artifact": "table", "table_kind": "colony_activity", **series}
+        fps, fps_source = ops.fps_with_source(result)
+        series = ops.compute_colony_activity(tidy, boxes, fps, metric=metric)
+        return {"artifact": "table", "table_kind": "colony_activity",
+                "fps": fps, "fps_source": fps_source, **series}
     return {
         "artifact": "table",
         "table_kind": "colony_activity",
@@ -641,12 +1008,14 @@ LOCAL_EXECUTORS = {
         "artifact": "roi", "source": (s.get("config") or {}).get("source", "device_layout"),
     },
     "track.mot": _exec_mot,
-    "analyze.interaction": _exec_analyze_interaction,
+    "analyze.events": _exec_analyze_events,
+    "analyze.interactions": _exec_analyze_interactions,
     "analyze.detection_count": _exec_analyze_detection_count,
     # ── Legacy (still runnable; not in the palette) ──
     "input.image_set": lambda s, r, c, i, idx: {"artifact": "frames", "source": (s.get("config") or {}).get("source", "device_crops")},
     "roi.nest_layout": _exec_roi_nest_layout,
     "roi.draw": _exec_roi_draw,
+    "analyze.interaction": _exec_analyze_interaction,
     "analyze.foraging_trips": _exec_analyze_foraging_trips,
     "analyze.visitation": _exec_analyze_visitation,
     "analyze.colony_activity": _exec_analyze_colony_activity,
@@ -730,9 +1099,7 @@ def _resolve_custom_models(cfg, run, config):
             model_pk = int(raw)
         except (TypeError, ValueError):
             return f"Invalid {label} model selection on this node."
-        cm = CustomModel.objects.filter(
-            pk=model_pk, user=run.user, is_active=True,
-        ).exclude(storage_key="").first()
+        cm = CustomModel.usable(run.user).filter(pk=model_pk).first()
         if not cm:
             return f"The selected {label} model is unavailable (removed or deactivated)."
         config[config_key] = cm.storage_key
@@ -870,12 +1237,18 @@ def _pipeline_tracker(step, steps):
     return "beetrack"
 
 
+# Blocks that carry the Entry/Exit classifier cutoff. Events are computed
+# during tracking, so the Track step reads it from whichever analyzer is
+# downstream — the Events primitive, or the retired Foraging Trips node on
+# pipelines saved before it.
+_EVENT_CONFIDENCE_BLOCKS = ("analyze.events", "analyze.foraging_trips")
+
+
 def _pipeline_event_confidence(step, steps):
-    """Entry/Exit event-classifier cutoff, read from a downstream Foraging Trips
-    node (events are computed during tracking, so the Track step needs it).
-    Defaults to 0.6 when no foraging node is downstream."""
+    """Entry/Exit event-classifier cutoff, from a downstream Events node.
+    Defaults to 0.6 when no such node is downstream."""
     for s in downstream_ids(step.get("id"), steps):
-        if s.get("block_type") == "analyze.foraging_trips":
+        if s.get("block_type") in _EVENT_CONFIDENCE_BLOCKS:
             try:
                 return float((s.get("config") or {}).get("event_confidence", 0.6) or 0.6)
             except (TypeError, ValueError):
@@ -930,8 +1303,12 @@ def build_detect_and_track_config(step, run, context, index):
         # Informational for the worker + part of the cache key, so adding or
         # renaming a class re-runs rather than serving a stale result.
         "detect_labels": labels,
-        # Annotated video is opt-in (off = much faster, needed for long clips).
-        "visualize": str(cfg.get("annotated_video", "")).lower() in ("1", "true", "on", "yes"),
+        # Never render the overlay video. It roughly doubled runtime, could time
+        # out long clips on its own, and was unavailable for chunked runs
+        # anyway — the merge cannot stitch one. Pinned False rather than read
+        # from config so pipelines saved while the option existed don't keep
+        # paying for it.
+        "visualize": False,
         # Selected on the downstream MOT node; inert on the worker for now.
         "tracker": _pipeline_tracker(step, run.steps),
     }
@@ -964,6 +1341,8 @@ def build_detect_and_track_config(step, run, context, index):
     if roi_out:
         if roi_out.get("hotel_roi"):
             config["hotel_roi"] = roi_out["hotel_roi"]
+        if roi_out.get("hotel_polygon"):
+            config["hotel_polygon"] = roi_out["hotel_polygon"]
         if roi_out.get("nest_layout"):
             config["nest_layout"] = roi_out["nest_layout"]
     return {"video_id": video_out["video_id"], "config": config}, None

@@ -45,6 +45,70 @@ def _boto3(service: str):
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
+# Which bucket a val-prediction key lives in is decided by its prefix, not by
+# configuration. The training container used to drop these frames in the
+# SageMaker output bucket, and that bucket carries a blanket 7-day expiration
+# (infra/aws-sagemaker: `_make_bucket(..., expire_days=7)`, prefix "") because
+# it was built for transient request/result JSON. The keys are recorded in
+# TrainingJob.metrics forever, so every model older than a week rendered a
+# gallery of tiles whose images all 404 — the browser showed the alt text, so
+# each frame appeared as its filename twice. New jobs write them beside best.pt
+# in the models bucket, which has no lifecycle rule and is versioned.
+_VAL_PRED_PREFIXES = (("custom/", "AWS_S3_BUCKET_MODELS"),
+                      ("training/", "SAGEMAKER_OUTPUT_BUCKET"))
+
+
+def _val_prediction_images(keys, job_pk=None):
+    """Presigned URLs for the val-set prediction frames that still exist.
+
+    Returns ``(images, expired)``. ``expired`` is True when the job recorded
+    previews but none of the objects are there any more: the page has to say
+    so, because a grid of broken images reads as a bug in the model page
+    rather than as a retention window that has passed.
+    """
+    by_bucket = {}
+    for key in keys:
+        bucket = next((getattr(settings, attr, "")
+                       for prefix, attr in _VAL_PRED_PREFIXES
+                       if key.startswith(prefix)), "")
+        if bucket:
+            by_bucket.setdefault(bucket, []).append(key)
+
+    images = []
+    try:
+        s3 = _boto3("s3")
+        for bucket, bucket_keys in by_bucket.items():
+            # One LIST per directory rather than a HEAD per frame: a job
+            # uploads up to 60 of these and they share a single prefix.
+            present = set()
+            for folder in {k.rsplit("/", 1)[0] + "/" for k in bucket_keys}:
+                token = None
+                while True:
+                    page = s3.list_objects_v2(
+                        **{"Bucket": bucket, "Prefix": folder,
+                           **({"ContinuationToken": token} if token else {})})
+                    present.update(o["Key"] for o in page.get("Contents", ()))
+                    token = page.get("NextContinuationToken")
+                    if not token:
+                        break
+            for key in bucket_keys:
+                if key not in present:
+                    continue
+                images.append({
+                    "name": key.rsplit("/", 1)[-1],
+                    "url": s3.generate_presigned_url(
+                        "get_object",
+                        Params={"Bucket": bucket, "Key": key},
+                        ExpiresIn=3600),
+                })
+    except Exception as e:
+        logger.warning("[train:%s] listing val predictions failed: %s", job_pk, e)
+        # Unknown, not gone — claiming expiry on an S3 hiccup would be a lie.
+        return [], False
+
+    return images, not images
+
+
 def _yolo_label_subset(ann, name_to_new_id: dict) -> str:
     """YOLO label lines for only the boxes whose class is in the subset,
     renumbered to the compact 0..k ids in ``name_to_new_id`` (keyed by class
@@ -326,7 +390,7 @@ class TrainingCreateView(LoginRequiredMixin, CreateView):
         # chosen project without a round-trip.
         ctx["project_classes_json"] = _json.dumps({
             str(p.pk): (p.classes or [])
-            for p in AnnotationProject.objects.filter(user=self.request.user)
+            for p in AnnotationProject.accessible(self.request.user)
         })
         return ctx
 
@@ -431,25 +495,11 @@ class TrainingDetailView(LoginRequiredMixin, DetailView):
             ctx["custom_model"] = None
 
         # Rendered best.pt predictions on the held-out val split (uploaded by
-        # the training container); presign so the gallery can show them.
+        # the training container); presign the ones that still exist.
         pred_keys = (self.object.metrics or {}).get("val_predictions") or []
         if pred_keys:
-            try:
-                s3 = _boto3("s3")
-                ctx["val_predictions"] = [
-                    {
-                        "name": key.rsplit("/", 1)[-1],
-                        "url": s3.generate_presigned_url(
-                            "get_object",
-                            Params={"Bucket": settings.SAGEMAKER_OUTPUT_BUCKET, "Key": key},
-                            ExpiresIn=3600,
-                        ),
-                    }
-                    for key in pred_keys
-                ]
-            except Exception as e:
-                logger.warning("[train:%s] presigning val predictions failed: %s",
-                               self.object.pk, e)
+            ctx["val_predictions"], ctx["val_predictions_expired"] = (
+                _val_prediction_images(pred_keys, self.object.pk))
 
         # Per-epoch metric curves (present on jobs trained after the container
         # update that emits epoch_metrics).
@@ -571,6 +621,10 @@ def poll_training_jobs(user=None) -> dict:
                     "metrics": metrics,
                     "status": CustomModel.Status.READY,
                     "is_active": True,
+                    # Frozen provenance. A model is an artefact of the data it
+                    # saw: if the project doubles afterwards the model did not
+                    # change, so this is a snapshot and never a live lookup.
+                    "trained_on": _training_snapshot(job),
                 },
             )
             logger.info("[poll] job=%s COMPLETED -> CustomModel (%s)", job.pk, storage_key)
@@ -606,6 +660,30 @@ class CustomModelListView(LoginRequiredMixin, ListView):
 
     def get_queryset(self):
         return CustomModel.objects.filter(user=self.request.user).select_related("training_job")
+
+
+class PublishModelView(LoginRequiredMixin, View):
+    """Publish or withdraw a trained model. Owner only."""
+
+    def post(self, request, pk):
+        from django.contrib import messages
+        from django.shortcuts import get_object_or_404, redirect
+        from django.utils import timezone as _tz
+
+        model = get_object_or_404(CustomModel, pk=pk, user=request.user)
+        if request.POST.get("visibility") == "public":
+            model.visibility = CustomModel.Visibility.PUBLIC
+            model.published_at = model.published_at or _tz.now()
+            messages.success(
+                request,
+                f"“{model.name}” is public — anyone can select it in a pipeline. "
+                "Its card shows the data it was trained on, as it stood then.")
+        else:
+            model.visibility = CustomModel.Visibility.PRIVATE
+            messages.info(request, f"“{model.name}” is no longer listed. "
+                                   "Pipelines already using it keep working.")
+        model.save(update_fields=["visibility", "published_at"])
+        return redirect("training:model_detail", pk=pk)
 
 
 class CustomModelDetailView(LoginRequiredMixin, DetailView):
@@ -664,6 +742,37 @@ class UploadModelView(LoginRequiredMixin, FormView):
         logger.info("[upload] CustomModel created for user=%s name='%s'", self.request.user.pk, name)
         messages.success(self.request, f"Model '{name}' uploaded successfully.")
         return redirect("training:models")
+
+
+def _training_snapshot(job):
+    """What the project contained when this job trained on it.
+
+    Kept as a snapshot because a model's card must describe the data the model
+    actually saw. Reading the project live would silently restate the model's
+    coverage every time someone added a clip to the source.
+    """
+    from django.db.models import Count, Q
+    from django.utils import timezone as _tz
+
+    from apps.annotations.models import Annotation
+
+    project = job.project
+    if project is None:
+        return {}
+    rows = (Annotation.objects.filter(project=project).exclude(sampled_only=True)
+            .order_by().aggregate(frames=Count("id", filter=~Q(boxes=[]))))
+    videos = project.videos.all()
+    hours = sorted({v.hour for v in videos if v.hour is not None})
+    return {
+        "project": project.name,
+        "project_id": project.pk,
+        "date": _tz.now().date().isoformat(),
+        "frames": rows["frames"] or 0,
+        "clips": videos.count(),
+        "devices": videos.exclude(device=None).values("device_id").distinct().count(),
+        "hours": hours,
+        "classes": list(job.class_subset or project.classes or []),
+    }
 
 
 # --- Domain-drift detection (memory/25, P2c) --------------------------------

@@ -23,6 +23,8 @@ urlpatterns = [
     path("<int:pk>/cancel/", views.JobCancelView.as_view(), name="cancel"),
     path("<int:pk>/", views.JobDetailView.as_view(), name="detail"),
     path("<int:pk>/results/", views.JobResultsView.as_view(), name="results"),
+    path("<int:pk>/results/<str:kind>.csv", views.JobPrimitiveCsvView.as_view(),
+         name="results_csv"),
     path("<int:pk>/annotate/", views.GenerateAnnotatedVideoView.as_view(), name="annotate_video"),
     path("<int:pk>/video/", VideoProxyView.as_view(), name="video_proxy"),
 ]

@@ -5,13 +5,16 @@ from django.conf import settings
 from django.db import models
 
 
-# GPU tiers with cost per second
+# Display labels for the hardware a job ran on. The per-second prices that used
+# to live here were Modal's, from before the AWS migration, and were applied to
+# a tier the user picked rather than the GPU that ran — see
+# apps/analysis/pricing.py, which now owns all cost arithmetic.
 GPU_TIERS = {
-    "T4": {"label": "T4 (Budget)", "cost_per_sec": 0.000164, "speed": "~10 min/video"},
-    "L4": {"label": "L4 (Standard)", "cost_per_sec": 0.000222, "speed": "~8 min/video"},
-    "A10G": {"label": "A10G (Fast)", "cost_per_sec": 0.000306, "speed": "~5.5 min/video"},
-    "L40S": {"label": "L40S (Faster)", "cost_per_sec": 0.000542, "speed": "~3.5 min/video"},
-    "A100": {"label": "A100 (Fastest)", "cost_per_sec": 0.000583, "speed": "~3 min/video"},
+    "T4": {"label": "T4 (Budget)", "speed": "~10 min/video"},
+    "L4": {"label": "L4 (Standard)", "speed": "~8 min/video"},
+    "A10G": {"label": "A10G (Fast)", "speed": "~5.5 min/video"},
+    "L40S": {"label": "L40S (Faster)", "speed": "~3.5 min/video"},
+    "A100": {"label": "A100 (Fastest)", "speed": "~3 min/video"},
 }
 
 
@@ -58,12 +61,26 @@ class Job(models.Model):
     config = models.JSONField(default=dict, blank=True)
     config_hash = models.CharField(max_length=32, blank=True, db_index=True,
                                    help_text="SHA256 hash for deduplication")
-    gpu_tier = models.CharField(max_length=10, choices=GpuTier.choices, default=GpuTier.A10G)
+    # Set from the hardware the run REPORTS, not from a user's choice. It was a
+    # dropdown that never reached SageMaker: every analysis job runs on whatever
+    # the endpoint is pinned to, so picking "A100" only inflated the bill.
+    gpu_tier = models.CharField(max_length=10, choices=GpuTier.choices, default=GpuTier.T4)
     progress_pct = models.IntegerField(default=0)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     error_message = models.TextField(blank=True)
-    execution_seconds = models.FloatField(null=True, blank=True, help_text="Actual GPU seconds consumed")
+    # Whole-handler wall time: S3 transfer + decode + inference + encode +
+    # upload. This is what the instance was busy for, so it is what gets billed
+    # (apps/analysis/pricing.py).
+    execution_seconds = models.FloatField(
+        null=True, blank=True, help_text="Handler wall seconds — what is billed")
+    # Inference only. The diagnostic half of the pair: gpu_seconds well under
+    # execution_seconds means the run was bound by decode or S3, not the GPU.
+    gpu_seconds = models.FloatField(
+        null=True, blank=True, help_text="GPU inference seconds (subset of execution_seconds)")
+    # Per-stage breakdown from the worker: {stage: {seconds, calls}}. JSON so a
+    # new stage is not a migration.
+    stage_seconds = models.JSONField(default=dict, blank=True)
     compute_cost_usd = models.DecimalField(
         max_digits=8,
         decimal_places=4,

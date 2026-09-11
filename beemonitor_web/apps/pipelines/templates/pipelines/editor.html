@@ -70,10 +70,13 @@
     <a href="{% url 'pipelines:list' %}" class="text-xs text-gray-400 hover:text-gray-600">← All pipelines</a>
   </div>
   <div class="flex items-center gap-2">
-    <a href="{% url 'pipelines:open_in_colab' pk=pipeline.pk %}" target="_blank" rel="noopener" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-md text-sm font-medium" title="Open a live, runnable notebook in Google Colab">▶ Open in Colab</a>
     <span id="pl-dirty" class="hidden text-xs text-amber-600" title="You have unsaved changes">● unsaved</span>
-    <button type="button" onclick="plSave()" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-md text-sm font-medium">💾 Save</button>
-    <button type="button" onclick="plRun()" class="bg-amber-600 hover:bg-amber-700 text-white px-5 py-2 rounded-md text-sm font-semibold">▶ Run</button>
+    {% comment %}
+      Running happens on the Processing page, where clips are chosen: a run
+      launched from here has no video selected, so it could only ever fail or
+      silently pick one for you. The editor's job is the graph.
+    {% endcomment %}
+    <button type="button" onclick="plSave()" class="bg-amber-600 hover:bg-amber-700 text-white px-5 py-2 rounded-md text-sm font-semibold">💾 Save</button>
   </div>
 </div>
 
@@ -116,8 +119,6 @@
     <p class="text-xs text-gray-400 mt-1">Drag a block in, connect output → input, edit fields on the node. Select a node and press <kbd>Delete</kbd> to remove it. Save persists the graph.</p>
   </div>
 </div>
-
-<form id="pl-run-form" method="post" action="{% url 'pipelines:run' pk=pipeline.pk %}" class="hidden">{% csrf_token %}</form>
 
 <script src="{% static 'vendor/drawflow.min.js' %}"></script>
 <script>
@@ -242,11 +243,6 @@ async function plSave(){
   toast.classList.remove('hidden'); setTimeout(()=>toast.classList.add('hidden'), 2500);
   if(j.ok) plMarkClean();
   return j;
-}
-async function plRun(){
-  const j = await plSave();
-  if(j.errors && j.errors.length){ return; }        // don't run an invalid graph
-  document.getElementById('pl-run-form').submit();
 }
 function plShowErrors(errors){
   const box = document.getElementById('pl-errors');

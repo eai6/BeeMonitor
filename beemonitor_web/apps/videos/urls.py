@@ -11,6 +11,10 @@ urlpatterns = [
     path("upload/", views.VideoUploadView.as_view(), name="upload"),
     path("batch-upload/", views.VideoBatchUploadView.as_view(), name="batch_upload"),
     path("<int:pk>/", views.VideoDetailView.as_view(), name="detail"),
+    # Media for the review grid: a presign is spent per clip actually
+    # looked at, not per clip listed.
+    path("<int:pk>/thumb/", views.VideoThumbnailView.as_view(), name="thumbnail"),
+    path("<int:pk>/stream/", views.VideoStreamView.as_view(), name="stream"),
     path("<int:pk>/delete/", views.VideoDeleteView.as_view(), name="delete"),
     path("batch-delete/", views.VideoBatchDeleteView.as_view(), name="batch_delete"),
     path("<int:pk>/device-delete/", views.VideoDeviceDeleteView.as_view(), name="device_delete"),

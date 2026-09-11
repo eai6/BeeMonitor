@@ -82,20 +82,25 @@ class DeviceShareVideoAccessTests(TestCase):
 
     # ---- Processing hub (the list page) --------------------------------
     def test_processing_hub_lists_shared_video_for_shared_users(self):
+        # The review grid leads each card with the recorded time, not the clip's
+        # UUID title, so presence is asserted on the card's own id.
         url = reverse("analysis:processing")
+        card = f'data-vid="{self.shared_video.pk}"'
         for u in (self.owner, self.manager, self.viewer):
             self.client.force_login(u)
             html = self.client.get(url).content.decode()
-            self.assertIn("shared-clip", html, f"{u} should see the shared video")
+            self.assertIn(card, html, f"{u} should see the shared video")
         self.client.force_login(self.stranger)
-        self.assertNotIn("shared-clip", self.client.get(url).content.decode())
+        self.assertNotIn(card, self.client.get(url).content.decode())
 
     def test_processing_hub_hides_run_controls_from_viewer(self):
+        # The sticky run bar is the control gated on `can_manage_any` — its
+        # button reads "Run pipeline" since the workflow-bar rework.
         url = reverse("analysis:processing")
         self.client.force_login(self.manager)
-        self.assertIn("Run analysis", self.client.get(url).content.decode())
+        self.assertIn("Run pipeline", self.client.get(url).content.decode())
         self.client.force_login(self.viewer)
-        self.assertNotIn("Run analysis", self.client.get(url).content.decode())
+        self.assertNotIn("Run pipeline", self.client.get(url).content.decode())
 
     # ---- detail view ---------------------------------------------------
     def test_detail_access(self):

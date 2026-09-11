@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Add clips - {{ project.name }} - BeeMonitor{% endblock %}
+
+{% comment %}
+  Choosing which clips to annotate — the decision that determines what the model
+  learns. It used to be a checkbox list of filenames in a five-row scroll box.
+
+  The rail and grid are the Processing hub's, included rather than copied, so
+  the two pages cannot drift apart on what a filter means. What is new here is
+  the coverage map: a lopsided sample is invisible in any list of clips, however
+  well presented, because the problem is not what you can see but what you
+  cannot.
+{% endcomment %}
+
+{% block content %}
+<div class="flex gap-0 -mx-4 sm:-mx-6 lg:-mx-8 -my-8" style="min-height: calc(100vh - 4rem);">
+
+  <aside class="w-72 shrink-0 bg-white border-r border-gray-200 flex flex-col">
+    <div class="px-4 pt-4 pb-3 border-b border-gray-200">
+      <div class="flex items-baseline justify-between gap-2">
+        <h1 class="text-xl font-bold text-gray-900">Add clips</h1>
+        <a href="{% url 'annotations:detail' project.pk %}" class="text-xs text-amber-700 hover:underline">Done</a>
+      </div>
+      <p class="text-xs text-gray-500 mt-1 truncate" title="{{ project.name }}">{{ project.name }}</p>
+      <p class="text-xs text-gray-500 mt-1">
+        {{ video_count }} shown &middot; {{ in_project_count }} in project
+        &middot; <span id="rail-selected">0</span> selected
+      </p>
+    </div>
+
+    <div class="flex-1 overflow-y-auto">
+      <form method="get" id="filter-form" class="px-4 py-4 space-y-5">
+        <div class="space-y-1.5">
+          <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">In this project</div>
+          {% for value, label in member_choices %}
+          <label class="flex items-center justify-between px-2 py-1.5 rounded cursor-pointer {% if member == value %}bg-amber-50 border border-amber-200{% else %}hover:bg-gray-50{% endif %}">
+            <span class="text-[13px] text-gray-700">{{ label }}</span>
+            <input type="radio" name="member" value="{{ value }}" class="hidden"
+                   {% if member == value %}checked{% endif %} onchange="this.form.submit()">
+          </label>
+          {% endfor %}
+        </div>
+        {% include "videos/_review_filters.html" %}
+      </form>
+    </div>
+  </aside>
+
+  <div class="flex-1 flex flex-col min-w-0">
+
+    {% if coverage %}
+    {% include "annotations/_coverage.html" %}
+    {% endif %}
+
+    <form method="post" action="{% url 'annotations:add_videos' project.pk %}" id="add-form" class="flex-1 flex flex-col min-h-0">
+      {% csrf_token %}
+
+      <div class="flex items-center gap-3 px-5 py-2.5 bg-white border-b border-gray-200 shrink-0">
+        <label class="flex items-center gap-2 text-sm text-gray-700">
+          <input type="checkbox" id="select-all" class="rounded border-gray-300"> Select all shown
+        </label>
+        <span class="text-xs text-gray-400">{% if video_count > 200 %}Showing 200 most recent — narrow with the filter{% endif %}</span>
+        <span class="text-xs text-gray-500 ml-auto hidden sm:inline">Hover to preview &middot; click to open</span>
+      </div>
+
+      <div class="flex-1 overflow-y-auto px-5 pt-4" id="grid-scroll">
+        {% include "videos/_review_grid.html" with can_select=True %}
+        <div class="h-4"></div>
+      </div>
+
+      <div class="flex items-center gap-4 px-5 py-3 bg-white border-t border-gray-200 shrink-0">
+        <span class="text-sm font-semibold text-gray-900"><span id="sel-n">0</span> selected</span>
+        {% comment %}
+          The mix of what is selected, not just the count. Twelve clips from one
+          hotel at one hour is a different thing from twelve spread across four,
+          and the number alone cannot tell them apart.
+        {% endcomment %}
+        <div id="sel-mix" class="flex items-center gap-2 text-[11px] text-gray-500"></div>
+        <div class="ml-auto flex items-center gap-2">
+          <button type="submit" id="add-btn" disabled
+                  class="bg-amber-600 hover:bg-amber-700 disabled:bg-gray-300 text-white px-5 py-2 rounded-md text-sm font-semibold">
+            Add <span id="add-n">0</span> to project
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% include "videos/_review_viewer.html" with viewer_select_label="Add this clip to the project" %}
+
+<script>
+// Selection bookkeeping: the count, the mix, and the balance draft.
+(function () {
+  var form = document.getElementById('add-form');
+  if (!form) return;
+  var boxes = function () { return form.querySelectorAll('input[name="video_ids"]'); };
+  var mix = document.getElementById('sel-mix');
+
+  function refresh() {
+    var picked = Array.prototype.filter.call(boxes(), function (b) { return b.checked; });
+    var n = picked.length;
+    document.getElementById('sel-n').textContent = n;
+    document.getElementById('add-n').textContent = n;
+    document.getElementById('rail-selected').textContent = n;
+    document.getElementById('add-btn').disabled = n === 0;
+
+    // Group by the hotel dot the card already carries, so "mix" needs no extra
+    // data on the page.
+    var byDot = {}, hours = [];
+    picked.forEach(function (b) {
+      var card = b.closest('.vid-card');
+      if (!card) return;
+      var dotEl = card.querySelector('[style*="background"]');
+      var key = dotEl ? dotEl.getAttribute('style') : 'x';
+      byDot[key] = (byDot[key] || 0) + 1;
+      var t = card.getAttribute('data-time');
+      if (t) hours.push(parseInt(t.slice(0, 2), 10));
+    });
+    if (!n) { mix.innerHTML = ''; return; }
+    var bar = '<span class="flex h-1.5 w-32 rounded-full overflow-hidden">';
+    Object.keys(byDot).forEach(function (k) {
+      var pct = (byDot[k] / n * 100).toFixed(1);
+      bar += '<i style="width:' + pct + '%;' + (k || '') + '"></i>';
+    });
+    bar += '</span>';
+    var span = hours.length
+      ? Math.min.apply(null, hours) + '–' + Math.max.apply(null, hours) + 'h' : '';
+    mix.innerHTML = bar + '<span>' + Object.keys(byDot).length + ' hotel(s) · ' + span + '</span>';
+  }
+
+  form.addEventListener('change', function (e) {
+    if (e.target.name === 'video_ids') refresh();
+  });
+  var all = document.getElementById('select-all');
+  if (all) all.addEventListener('change', function () {
+    Array.prototype.forEach.call(boxes(), function (b) { b.checked = all.checked; });
+    refresh();
+  });
+
+  var draft = document.getElementById('draft-btn');
+  if (draft) draft.addEventListener('click', function () {
+    draft.disabled = true;
+    var was = draft.textContent;
+    draft.textContent = 'Drafting…';
+    var per = document.getElementById('draft-per');
+    var url = draft.getAttribute('data-url')
+            + (window.location.search || '?')
+            + '&per_cell=' + (per ? per.value : 2);
+    fetch(url, {headers: {'X-Requested-With': 'XMLHttpRequest'}})
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var want = {};
+        (j.video_ids || []).forEach(function (id) { want[String(id)] = true; });
+        var hit = 0;
+        Array.prototype.forEach.call(boxes(), function (b) {
+          if (want[b.value]) { b.checked = true; hit++; }
+        });
+        refresh();
+        draft.textContent = hit
+          ? 'Selected ' + hit + ' of ' + j.count
+          : 'Nothing new to draft';
+        setTimeout(function () { draft.textContent = was; draft.disabled = false; }, 2600);
+      })
+      .catch(function () { draft.textContent = was; draft.disabled = false; });
+  });
+
+  refresh();
+})();
+</script>
+{% endblock %}

@@ -104,8 +104,11 @@ class VideoViewSet(viewsets.ModelViewSet):
             storage_key=blob_path,
             file_size_bytes=video_file.size,
             status=Video.Status.READY,
+            # Left None when the name carries no timestamp: aggregation already
+            # skips those honestly rather than placing them on a wrong day.
             recorded_at=recorded_at,
             site_name=final_site,
+            metadata={"recorded_at_source": "filename" if recorded_at else "unknown"},
         )
 
         return Response(VideoSerializer(video).data, status=status.HTTP_201_CREATED)
@@ -554,7 +557,7 @@ class SyncJobsView(viewsets.ViewSet):
         from collections import defaultdict
         from django.utils import timezone as tz
 
-        from apps.analysis.models import GPU_TIERS
+        from apps.analysis.pricing import price_run
 
         processing_jobs = Job.objects.filter(
             user=request.user,
@@ -624,15 +627,16 @@ class SyncJobsView(viewsets.ViewSet):
                             },
                         )
 
-                        exec_secs = result.get("execution_seconds", 0) or 0
-                        cost_rate = GPU_TIERS.get(job.gpu_tier, {}).get("cost_per_sec", 0.000306)
-                        cost_usd = round(exec_secs * cost_rate, 4)
+                        priced = price_run(result)
 
                         Job.objects.filter(pk=job.pk).update(
                             status="completed", progress_pct=100,
                             completed_at=tz.now(),
-                            execution_seconds=exec_secs,
-                            compute_cost_usd=cost_usd,
+                            execution_seconds=priced["execution_seconds"],
+                            gpu_seconds=priced["gpu_seconds"],
+                            stage_seconds=priced["stage_seconds"],
+                            gpu_tier=priced["gpu_tier"],
+                            compute_cost_usd=priced["compute_cost_usd"],
                         )
                         synced += 1
 

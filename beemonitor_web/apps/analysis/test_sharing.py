@@ -49,10 +49,12 @@ class RunResultSharingTest(TestCase):
             self.assertEqual(self._get("stranger", path).status_code, 404, path)
 
     def test_processing_hub_shows_shared_devices_jobs(self):
+        # Cards are keyed by video id — the grid no longer prints the UUID title.
+        card = f'data-vid="{self.video.pk}"'
         r = self._get("viewer", "/analysis/processing/")
-        self.assertContains(r, "sharedclip42")
+        self.assertContains(r, card)
         r = self._get("stranger", "/analysis/processing/")
-        self.assertNotContains(r, "sharedclip42")
+        self.assertNotContains(r, card)
 
     def test_annotated_render_is_manager_plus(self):
         # Viewer: 404 (write-ish, costs GPU). Manager: passes the gate — job has

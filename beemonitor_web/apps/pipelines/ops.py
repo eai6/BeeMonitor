@@ -38,26 +38,55 @@ def _pick(df, candidates):
 
 
 def _read_csv(path):
-    """Read a CSV at ``path`` (s3:// or local) into a DataFrame, or None."""
+    """Read a CSV into a DataFrame, or None.
+
+    Accepts the three spellings a path arrives in: an ``s3://bucket/key`` URL, a
+    local file (tests, dev), and — the one that matters in production — a bare
+    key into the *processed* bucket, which is what every JobResult stores.
+
+    That last case used to fall through to ``pd.read_csv("1/abc/tracking.csv")``,
+    which is a relative filename that does not exist, so every local analyzer
+    quietly took its "tracking CSV not available" branch and reported the job
+    summary instead of analysing anything. It looked like a data condition; it
+    was a plumbing bug.
+    """
     if not path:
         return None
     try:
         import pandas as pd
     except ImportError:
-        logger.warning("pandas unavailable — cannot post-process tracking CSV")
+        # A deployment defect, not a property of the clip: without pandas none
+        # of the analyzers can run at all. Loud, so it cannot hide as "no data".
+        logger.error("pandas is not installed in this image — no analyzer can "
+                     "post-process a tracking table")
         return None
+
+    from io import BytesIO
+
     try:
         if path.startswith("s3://"):
-            import boto3
             from urllib.parse import urlparse
-            from io import BytesIO
+
+            import boto3
             from django.conf import settings
 
             parsed = urlparse(path)
             s3 = boto3.client("s3", region_name=getattr(settings, "AWS_REGION", "us-east-1"))
             body = s3.get_object(Bucket=parsed.netloc, Key=parsed.path.lstrip("/"))["Body"].read()
             return pd.read_csv(BytesIO(body))
-        return pd.read_csv(path)
+
+        import os
+
+        if os.path.exists(path):
+            return pd.read_csv(path)
+
+        # A key in the processed bucket — the same place aggregate reads from.
+        from config.storage import get_s3_client
+
+        buf = BytesIO()
+        get_s3_client().download_to_stream("processed", path, buf)
+        buf.seek(0)
+        return pd.read_csv(buf)
     except Exception as exc:
         logger.info("Could not read CSV %s: %s", path, exc)
         return None
@@ -66,6 +95,11 @@ def _read_csv(path):
 def load_tracking_df(job_result):
     """Read the job's ``tracking_csv_path`` into a pandas DataFrame or None."""
     return _read_csv((job_result or {}).get("tracking_csv_path") or "")
+
+
+def load_events_df(job_result):
+    """Read the job's ``events_csv_path`` (worker Entry/Exit) into a DataFrame."""
+    return _read_csv((job_result or {}).get("events_csv_path") or "")
 
 
 def load_interactions_df(job_result):
@@ -113,104 +147,549 @@ def normalized_tracks(df, summary=None):
     tidy.columns = ["tid", "frame", "x", "y"]
     tidy = tidy.dropna(subset=["tid", "x", "y"])
 
-    # Normalise coords: if values look like pixels (max > 1.5), divide by frame
-    # dims (from summary) or by the observed max as a last resort.
-    def _norm(series, dim_keys):
-        m = float(series.abs().max() or 0)
-        if m <= 1.5:
-            return series  # already fractional
-        dim = None
-        for k in dim_keys:
-            if summary and summary.get(k):
-                dim = float(summary[k]); break
-        if not dim:
-            dim = m
-        return series / dim
+    # Normalise pixel coordinates against the FRAME, never against the tracks.
+    #
+    # This used to fall back to the observed max when no frame size was known,
+    # which silently rescales every clip by its own activity: a bee at (700,620)
+    # in a 1920x1080 frame is at (0.365, 0.574) — the top-left flower — but
+    # divided by the extent of its own track it lands at (0.974, 0.970), the
+    # bottom-right one. References are in true frame fractions, so every episode
+    # was attributed to whichever box the distortion happened to land in. That
+    # is why a clip whose activity was plainly in flower 1 reported nest_4.
+    #
+    # Returning None instead is the honest answer: without the frame size these
+    # coordinates cannot be placed against anything, and a wrong placement is
+    # far worse than a missing one.
+    def _dim(keys):
+        for k in keys:
+            try:
+                value = float((summary or {}).get(k) or 0)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+        return None
 
-    tidy["x"] = _norm(tidy["x"], ["frame_width", "width", "res_width", "video_width"])
-    tidy["y"] = _norm(tidy["y"], ["frame_height", "height", "res_height", "video_height"])
+    for axis, keys in (("x", ["frame_width", "width", "res_width", "video_width"]),
+                       ("y", ["frame_height", "height", "res_height", "video_height"])):
+        extent = float(tidy[axis].abs().max() or 0)
+        if extent <= 1.5:
+            continue                       # already fractional
+        dim = _dim(keys)
+        if not dim:
+            logger.warning(
+                "tracking table is in pixels but the frame size is unknown — "
+                "refusing to place tracks rather than scaling them by their own "
+                "extent")
+            return None
+        tidy[axis] = tidy[axis] / dim
     return tidy
 
 
-def roi_boxes(roi_output):
-    """Normalise a roi-step output into a list of 0..1 boxes [(x1,y1,x2,y2), ...]."""
+def _points(raw):
+    """A polygon outline as [(x, y), ...] in 0..1, or None if it isn't one."""
+    if not isinstance(raw, (list, tuple)) or len(raw) < 3:
+        return None
+    out = []
+    for p in raw:
+        try:
+            x, y = (float(v) for v in p)
+        except (TypeError, ValueError):
+            return None
+        out.append((x, y))
+    return out
+
+
+def roi_shapes(roi_output):
+    """Normalise a roi-step output into a list of 0..1 shapes.
+
+    Each shape is ``(box, points)``: the box is always present, and ``points`` is
+    the traced outline when the user drew a polygon rather than a rectangle (then
+    the box is merely its bounding box). Containment tests use the points, so a
+    bee over the grass beside a round trap is not counted as a visit.
+    """
     if not roi_output:
         return []
-    boxes = []
+    shapes = []
 
-    def _add(box):
+    def _add(box, points=None):
         try:
             x1, y1, x2, y2 = [float(v) for v in box]
-            boxes.append((min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)))
         except (TypeError, ValueError):
-            pass
+            return
+        shapes.append(((min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)),
+                       _points(points)))
+
+    def _add_shape(obj):
+        """One {box, points?} dict, or a bare box."""
+        if isinstance(obj, dict):
+            if obj.get("box"):
+                _add(obj["box"], obj.get("points"))
+        elif isinstance(obj, (list, tuple)):
+            _add(obj)
 
     hotel = roi_output.get("hotel_roi")
     if hotel:
-        _add(hotel)
-    layout = roi_output.get("nest_layout") or []
-    for tube in layout:
-        if isinstance(tube, dict) and tube.get("box"):
-            _add(tube["box"])
+        _add(hotel, roi_output.get("hotel_polygon"))
+    for tube in roi_output.get("nest_layout") or []:
+        _add_shape(tube)
     for region in roi_output.get("regions") or []:
-        if isinstance(region, dict) and region.get("box"):
-            _add(region["box"])
-        elif isinstance(region, (list, tuple)):
-            _add(region)
-    return boxes
+        _add_shape(region)
+    return shapes
 
 
-def in_any_box(x, y, boxes):
-    for (x1, y1, x2, y2) in boxes:
-        if x1 <= x <= x2 and y1 <= y <= y2:
+def roi_references(roi_output):
+    """The ROI's shapes WITH their identities.
+
+    ``roi_shapes`` returns geometry only, which is why every analyzer built on it
+    can say a track was inside *something* and never inside *which* — and a
+    treatment comparison is exactly the "which" question. This keeps the id the
+    layout already carries.
+
+    Each entry is ``{"id", "label", "box", "points"}``:
+
+    * a nest tube keeps the ``id`` from the device layout ("nest 3");
+    * a drawn region keeps its own ``id``/``name`` when the editor stored one,
+      otherwise its 1-based index ("region 2");
+    * the hotel ROI is its own reference, since a pipeline may count visits to
+      the hotel as a whole.
+
+    Ids are stable within one layout, which is what makes them comparable across
+    clips in a batch. They are not names — nothing in the editor lets a user call
+    one "full UV" yet — so ``label`` is a readable fallback, not a title.
+    """
+    if not roi_output:
+        return []
+
+    refs = []
+
+    def _shape(box, points=None):
+        try:
+            x1, y1, x2, y2 = [float(v) for v in box]
+        except (TypeError, ValueError):
+            return None
+        return ((min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)), _points(points))
+
+    def _add(ref_id, label, box, points=None):
+        shape = _shape(box, points)
+        if shape:
+            refs.append({"id": str(ref_id), "label": label,
+                         "box": shape[0], "points": shape[1]})
+
+    hotel = roi_output.get("hotel_roi")
+    if hotel:
+        _add("hotel", "Hotel", hotel, roi_output.get("hotel_polygon"))
+
+    for n, tube in enumerate(roi_output.get("nest_layout") or [], start=1):
+        if isinstance(tube, dict):
+            tube_id = tube.get("id", n)
+            _add(f"nest_{tube_id}", f"Nest {tube_id}", tube.get("box"), tube.get("points"))
+        else:
+            _add(f"nest_{n}", f"Nest {n}", tube)
+
+    for n, region in enumerate(roi_output.get("regions") or [], start=1):
+        if isinstance(region, dict):
+            # An editor that learns to name regions should put it in `name`;
+            # until then the index is the identity.
+            region_id = region.get("id", n)
+            label = region.get("name") or f"Region {region_id}"
+            _add(f"region_{region_id}", label, region.get("box"), region.get("points"))
+        else:
+            _add(f"region_{n}", f"Region {n}", region)
+
+    return refs
+
+
+def detected_references(job_result, video=None):
+    """References the DETECTOR found, when the graph defines none.
+
+    The worker writes the nest/reference boxes it detected into
+    ``summary_stats["nest_bboxes"]``, and until now nothing local ever read
+    them. A pipeline whose reference class is *detected* rather than drawn —
+    flowers on a board, say — therefore ran its analyzers against an empty
+    reference list and reported "0 references, 0 visits" while the job page
+    cheerfully said it had found four nests. The geometry was there; nobody
+    handed it over.
+
+    These are PIXEL coordinates (the annotator draws them straight onto the
+    frame), whereas references must be normalised 0..1 to match the tracks. The
+    frame size comes from the video row — measured at ingest — falling back to
+    the summary, and when neither knows we return nothing rather than emit
+    references at the wrong scale.
+    """
+    stats = (job_result or {}).get("summary_stats") or {}
+    boxes = stats.get("nest_bboxes") or {}
+    hotel = stats.get("hotel_bbox")
+    if not boxes and not hotel:
+        return []
+
+    width = height = None
+    for source, w_key, h_key in ((video, "width", "height"),
+                                 (stats, "frame_width", "frame_height"),
+                                 (stats, "width", "height")):
+        w = getattr(source, w_key, None) if video is source else (source or {}).get(w_key)
+        h = getattr(source, h_key, None) if video is source else (source or {}).get(h_key)
+        try:
+            if w and h and float(w) > 0 and float(h) > 0:
+                width, height = float(w), float(h)
+                break
+        except (TypeError, ValueError):
+            continue
+
+    def _norm(box):
+        try:
+            x1, y1, x2, y2 = [float(v) for v in box]
+        except (TypeError, ValueError):
+            return None
+        if max(abs(x1), abs(y1), abs(x2), abs(y2)) > 1.5:
+            if not width:
+                return None              # pixels with no frame size: refuse to guess
+            x1, y1, x2, y2 = x1 / width, y1 / height, x2 / width, y2 / height
+        # Ordered like roi_references does: containment tests read x1 <= x <= x2,
+        # so a box given corner-reversed would match nothing at all.
+        return (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
+
+    refs = []
+    for box_id, box in boxes.items():
+        shape = _norm(box)
+        if shape:
+            refs.append({"id": f"nest_{box_id}", "label": _reference_label(box_id),
+                         "box": shape, "points": None})
+    if hotel and not refs:
+        # Only when nothing finer was found — the hotel contains every tube, so
+        # counting both would double every episode.
+        shape = _norm(hotel)
+        if shape:
+            refs.append({"id": "hotel", "label": "Hotel", "box": shape, "points": None})
+    return refs
+
+
+def which_reference(x, y, refs):
+    """The FIRST reference containing (x, y), or None.
+
+    The counterpart to ``in_any_box``, which answers only yes/no. First-match
+    rather than all-matches because references can nest — a tube sits inside the
+    hotel ROI — and the tube is the more specific, more useful answer. Ordering
+    from ``roi_references`` puts the hotel first, so callers that want tube-level
+    detail should exclude it rather than rely on order.
+    """
+    for ref in refs:
+        x1, y1, x2, y2 = ref["box"]
+        if not (x1 <= x <= x2 and y1 <= y <= y2):
+            continue
+        if ref["points"] is None or _in_polygon(x, y, ref["points"]):
+            return ref
+    return None
+
+
+def roi_boxes(roi_output):
+    """Just the bounding boxes of ``roi_shapes`` — for callers that can't do
+    polygons (e.g. anything handing geometry to a box-only API)."""
+    return [box for box, _points in roi_shapes(roi_output)]
+
+
+def _in_polygon(x, y, points):
+    """Ray casting: is (x, y) inside the polygon? Handles concave outlines."""
+    inside = False
+    n = len(points)
+    for i in range(n):
+        xi, yi = points[i]
+        xj, yj = points[i - 1]
+        if (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / (yj - yi) + xi:
+            inside = not inside
+    return inside
+
+
+def in_any_box(x, y, shapes):
+    """Is (x, y) inside any shape? Accepts ``roi_shapes`` output or bare boxes."""
+    for shape in shapes:
+        if len(shape) == 2 and not isinstance(shape[0], (int, float)):
+            (x1, y1, x2, y2), points = shape
+        else:
+            (x1, y1, x2, y2), points = shape, None
+        if not (x1 <= x <= x2 and y1 <= y <= y2):
+            continue          # outside the bounding box — cheap reject
+        if points is None or _in_polygon(x, y, points):
             return True
     return False
 
 
-def fps_of(summary, default=30.0):
-    for k in ("fps", "video_fps", "frame_rate"):
-        if summary and summary.get(k):
-            try:
-                return float(summary[k])
-            except (TypeError, ValueError):
-                pass
+# The rate assumed when a clip records none. It is deliberately a module
+# constant and not an inline literal: a guessed frame rate silently rescales
+# every duration in the system, so there is exactly one place it can come from.
+DEFAULT_FPS = 30.0
+
+# Keys the GPU backend has used for the frame rate over the life of the
+# project. ``video_fps`` is what ``cloud/wrapper/pipeline.py`` writes today;
+# the others are older runs still in the database.
+_FPS_KEYS = ("video_fps", "fps", "frame_rate")
+
+
+def fps_with_source(summary=None, video=None, default=DEFAULT_FPS):
+    """Resolve a clip's frame rate and say where the number came from.
+
+    Returns ``(fps, source)`` where source is ``"video"`` (measured from the
+    file at ingest), ``"analysis"`` (reported by the GPU run) or ``"assumed"``
+    (nothing recorded one — the caller should disclose this rather than
+    present the derived seconds as measured).
+
+    Precedence puts the video row first: it is measured from the container by
+    ``videos.thumbnails``, whereas the analysis value is whatever OpenCV
+    reported on the GPU host for a copy of the same file.
+    """
+    measured = None
+    try:
+        measured = float(getattr(video, "fps", None) or 0) or None
+    except (TypeError, ValueError):
+        measured = None
+    if measured and measured > 0:
+        return measured, "video"
+
+    # Callers pass either the GPU result dict or the summary_stats inside it.
+    # PipelineResult.to_dict() is a plain asdict(), so the frame rate lives one
+    # level down under "summary_stats" — a resolver that only checked the top
+    # level found nothing and quietly assumed 30 for every analyzer.
+    for scope in (summary, (summary or {}).get("summary_stats")):
+        for key in _FPS_KEYS:
+            if scope and scope.get(key):
+                try:
+                    value = float(scope[key])
+                except (TypeError, ValueError):
+                    continue
+                if value > 0:
+                    return value, "analysis"
+
+    return float(default), "assumed"
+
+
+def fps_of(summary=None, video=None, default=DEFAULT_FPS):
+    """The frame rate alone, for callers with nothing to disclose it to."""
+    return fps_with_source(summary, video, default)[0]
+
+
+def compute_episodes(tidy, refs, gap_frames=15):
+    """Contiguous spells each track spends inside each reference.
+
+    An *episode* is a run of frames one track stays inside one reference; a gap
+    of more than ``gap_frames`` starts a new one. Moving from one reference to
+    another also ends the current episode — otherwise a bee crossing from tube 3
+    to tube 7 would read as a single long stay in neither.
+
+    This is the single geometric pass the whole analyze layer stands on. A visit
+    is an episode; an interaction with a reference is an episode; the enter and
+    exit events are an episode's two ends. Computing it once is what lets those
+    three stop being three code paths that can disagree about the same clip.
+
+    Episodes are returned in frame order and carry frames, not seconds: the
+    frame rate is applied by the projections, so there is exactly one place a
+    rate can be wrong (see ``fps_with_source``).
+
+    ``refs`` comes from ``roi_references``. Bare shapes from ``roi_shapes`` are
+    still accepted, and then references are identified by index — old pipelines
+    keep working, they just get numbers for names.
+    """
+    refs = _as_references(refs)
+    labels = {r["id"]: r["label"] for r in refs}
+    episodes = []
+
+    for tid, grp in tidy.sort_values("frame").groupby("tid"):
+        open_ep = None
+        for frame, x, y in zip(grp["frame"], grp["x"], grp["y"]):
+            frame = int(frame)
+            ref = which_reference(x, y, refs)
+            if ref is None:
+                continue
+            broke = (
+                open_ep is None
+                or open_ep["reference"] != ref["id"]
+                or frame - open_ep["end_frame"] > gap_frames
+            )
+            if broke:
+                open_ep = {
+                    "track": _as_native(tid),
+                    "reference": ref["id"],
+                    "reference_label": labels.get(ref["id"], ref["id"]),
+                    "start_frame": frame,
+                    "end_frame": frame,
+                    "frames": 0,
+                }
+                episodes.append(open_ep)
+            open_ep["end_frame"] = frame
+            open_ep["frames"] += 1
+
+    episodes.sort(key=lambda e: (e["start_frame"], str(e["reference"])))
+    return episodes
+
+
+# Proximity radius as a fraction of FRAME WIDTH, not pixels.
+#
+# The worker's InteractionAnalyzer uses a flat 50 px, which means the same
+# setting describes a different real distance at every resolution — and after
+# the tracks are normalised to 0..1 there are no pixels left to compare against
+# anyway. A fraction of the frame is the only threshold that means the same
+# thing on a 1080p clip and a 4K one.
+#
+# 5% of frame width is roughly two body lengths for a bee filling ~2% of the
+# frame: close enough to be an encounter, not so close that only overlapping
+# boxes qualify.
+DEFAULT_PROXIMITY = 0.05
+
+# Frames with more tracks than this are skipped for pairwise proximity: the
+# work is quadratic, and a frame with hundreds of detections is a detector
+# failure rather than a swarm worth measuring.
+_MAX_PAIRWISE_TRACKS = 200
+
+
+def frame_aspect(summary=None, default=16 / 9):
+    """Frame width ÷ height, for un-squashing normalised coordinates.
+
+    ``normalized_tracks`` divides x by width and y by height *separately*, so a
+    circle in pixel space becomes an ellipse in normalised space. Scaling y back
+    by the aspect ratio restores a true Euclidean distance, expressed in
+    fractions of frame width.
+    """
+    for w_key, h_key in (("frame_width", "frame_height"), ("width", "height"),
+                         ("res_width", "res_height"), ("video_width", "video_height")):
+        w = (summary or {}).get(w_key)
+        h = (summary or {}).get(h_key)
+        try:
+            if w and h and float(h) > 0:
+                return float(w) / float(h)
+        except (TypeError, ValueError):
+            continue
     return default
 
 
-def compute_visitation(tidy, boxes, fps, gap_frames=15):
-    """Count ROI visits per track.
+def compute_proximity_episodes(tidy, radius=DEFAULT_PROXIMITY, gap_frames=15,
+                               aspect=16 / 9):
+    """Contiguous spells two tracks spend within ``radius`` of each other.
 
-    A *visit* is a contiguous run of in-ROI frames for a track (runs separated by
-    more than ``gap_frames`` out-of-ROI frames count as separate visits). Returns a
-    summary dict + per-track rows.
+    The organism-to-organism half of the interaction table. Unlike containment
+    in a reference, a distance threshold genuinely is the right model here —
+    two bees have no boundary to be inside of — but the threshold has to be
+    resolution-independent to mean anything, hence a fraction of frame width
+    rather than a pixel count.
+
+    Returns episodes shaped like ``compute_episodes``' output, so both halves of
+    the table are built the same way and honour the same gap tolerance.
     """
-    rows = []
-    total_visits = 0
-    dwell_frames_total = 0
-    for tid, grp in tidy.sort_values("frame").groupby("tid"):
-        inside = [(int(f), in_any_box(x, y, boxes)) for f, x, y in zip(grp["frame"], grp["x"], grp["y"])]
-        visits, dwell = 0, 0
-        run_open, last_in = False, None
-        for frame, is_in in inside:
-            if is_in:
-                dwell += 1
-                if not run_open or (last_in is not None and frame - last_in > gap_frames):
-                    visits += 1
-                run_open, last_in = True, frame
-        if visits:
-            rows.append({
-                "track": _as_native(tid),
-                "visits": visits,
-                "dwell_sec": round(dwell / fps, 2) if fps else None,
-            })
-            total_visits += visits
-            dwell_frames_total += dwell
+    import numpy as np
+
+    if tidy is None or len(tidy) == 0 or radius <= 0:
+        return []
+
+    open_eps = {}
+    episodes = []
+    for frame, grp in tidy.sort_values("frame").groupby("frame"):
+        frame = int(frame)
+        if len(grp) < 2 or len(grp) > _MAX_PAIRWISE_TRACKS:
+            continue
+        ids = list(grp["tid"])
+        # y is scaled back up by the aspect ratio so both axes are in units of
+        # frame width and the distance below is a real circle.
+        pts = np.column_stack([
+            np.asarray(grp["x"], dtype=float),
+            np.asarray(grp["y"], dtype=float) / float(aspect or 1.0),
+        ])
+        deltas = pts[:, None, :] - pts[None, :, :]
+        dists = np.sqrt((deltas ** 2).sum(axis=-1))
+
+        close_i, close_j = np.where(dists <= radius)
+        for i, j in zip(close_i, close_j):
+            if i >= j:
+                continue  # each unordered pair once
+            a, b = _as_native(ids[i]), _as_native(ids[j])
+            key = (str(a), str(b)) if str(a) <= str(b) else (str(b), str(a))
+            open_ep = open_eps.get(key)
+            if open_ep is None or frame - open_ep["end_frame"] > gap_frames:
+                open_ep = {
+                    "track": a if key[0] == str(a) else b,
+                    "partner": b if key[0] == str(a) else a,
+                    "start_frame": frame,
+                    "end_frame": frame,
+                    "frames": 0,
+                    "min_distance": float(dists[i, j]),
+                }
+                open_eps[key] = open_ep
+                episodes.append(open_ep)
+            open_ep["end_frame"] = frame
+            open_ep["frames"] += 1
+            open_ep["min_distance"] = min(open_ep["min_distance"], float(dists[i, j]))
+
+    episodes.sort(key=lambda e: (e["start_frame"], str(e["track"]), str(e["partner"])))
+    return episodes
+
+
+def compute_visitation(tidy, refs, fps, gap_frames=15):
+    """Visit counts per track and per reference, rolled up from the episodes.
+
+    Kept as-is in shape so pipelines and batch pages built on it keep rendering
+    identically; the counting now happens over ``compute_episodes`` rather than
+    in a second traversal of its own.
+
+    A reference with no visits stays in the breakdown — "nothing visited the
+    control" is a result, and dropping the row would leave the reader to notice
+    an absence.
+    """
+    refs = _as_references(refs)
+    episodes = compute_episodes(tidy, refs, gap_frames=gap_frames)
+
+    per_ref = {r["id"]: {"id": r["id"], "label": r["label"], "visits": 0,
+                         "visitors": set(), "dwell_frames": 0} for r in refs}
+    per_track = {}
+    for ep in episodes:
+        bucket = per_ref.setdefault(ep["reference"], {
+            "id": ep["reference"], "label": ep["reference_label"],
+            "visits": 0, "visitors": set(), "dwell_frames": 0})
+        bucket["visits"] += 1
+        bucket["visitors"].add(ep["track"])
+        bucket["dwell_frames"] += ep["frames"]
+
+        track = per_track.setdefault(ep["track"], {"visits": 0, "dwell_frames": 0})
+        track["visits"] += 1
+        track["dwell_frames"] += ep["frames"]
+
+    rows = sorted(
+        ({"track": tid, "visits": t["visits"],
+          "dwell_sec": round(t["dwell_frames"] / fps, 2) if fps else None}
+         for tid, t in per_track.items()),
+        key=lambda r: str(r["track"]),
+    )
+
+    per_reference = sorted(
+        ({"id": b["id"], "label": b["label"], "visits": b["visits"],
+          "visitors": len(b["visitors"]),
+          "dwell_sec": round(b["dwell_frames"] / fps, 2) if fps else None}
+         for b in per_ref.values()),
+        key=lambda r: (-r["visits"], str(r["id"])),
+    )
+    dwell_frames_total = sum(ep["frames"] for ep in episodes)
+
     return {
         "unique_visitors": len(rows),
-        "total_visits": total_visits,
+        "total_visits": len(episodes),
         "total_dwell_sec": round(dwell_frames_total / fps, 2) if fps else None,
         "rows": rows,
+        "per_reference": per_reference,
     }
+
+
+def _as_references(refs):
+    """Accept ``roi_references`` dicts, or bare ``roi_shapes`` tuples.
+
+    Callers that predate references pass geometry only; give those an index for
+    an id so the breakdown still works, rather than refusing to compute.
+    """
+    out = []
+    for n, ref in enumerate(refs or [], start=1):
+        if isinstance(ref, dict):
+            out.append(ref)
+            continue
+        box, points = (ref if len(ref) == 2 and not isinstance(ref[0], (int, float))
+                       else (ref, None))
+        out.append({"id": f"region_{n}", "label": f"Region {n}",
+                    "box": tuple(box), "points": points})
+    return out
 
 
 def compute_colony_activity(tidy, boxes, fps, metric="occupancy", bin_sec=5.0):
@@ -243,24 +722,74 @@ def compute_colony_activity(tidy, boxes, fps, metric="occupancy", bin_sec=5.0):
     }
 
 
-def filter_by_label(df, label):
-    """Keep only rows whose taxon matches ``label`` (case-insensitive).
+def resolve_taxa(df, wanted, exclude=()):
+    """Which taxa in ``df`` belong to this branch. Returns ``(taxa, how)``.
 
-    This is what makes one GPU pass serve several Detect nodes: every node reads
-    the same table and takes its own class. An empty label means "no filter", and
-    a table with no taxon column is passed through unchanged rather than emptied —
-    older results predate the column, and silently returning nothing would look
-    like "no detections" instead of "can't tell".
+    A pipeline must not break because the detector calls the animal something
+    other than the node was configured with. The configured class is a
+    *preference*, resolved against the labels the table actually carries:
+
+    * ``"exact"``  — the configured class is in the table. Nothing to decide.
+    * ``"role"``   — it is not, but a sibling branch claims another class, so
+      this branch is what remains. A Detect(flower) node on the reference port
+      tells us the rest of the table is the subject, whatever it is called.
+    * ``"only"``   — it is not, and the table holds a single class. There is
+      nothing to separate, so that class is this branch.
+    * ``"absent"`` — several classes exist, none is the wanted one, and no
+      sibling claim narrows it down. Genuinely nothing here, and saying so
+      beats handing back bees when the question was wasps.
+
+    ``taxa`` of None means "take everything"; an empty set means "take nothing".
     """
-    if df is None or len(df) == 0 or not label:
-        return df
+    if df is None or len(df) == 0:
+        return None, "exact"
     col = _pick(df, ["taxon", "label", "class", "class_name"])
     if col is None:
-        return df
-    wanted = {p.strip().lower() for p in str(label).split(",") if p.strip()}
+        # Older results predate the column. Returning nothing would read as
+        # "no detections" instead of "can't tell".
+        return None, "exact"
+
+    wanted = {p.strip().lower() for p in str(wanted or "").split(",") if p.strip()}
     if not wanted:
+        return None, "exact"
+
+    have = set(df[col].astype(str).str.strip().str.lower().unique())
+    hit = wanted & have
+    if hit:
+        return hit, "exact"
+
+    claimed = {p.strip().lower()
+               for label in (exclude or []) if label
+               for p in str(label).split(",") if p.strip()}
+    remainder = have - claimed
+    if (claimed & have) and remainder:
+        logger.info("label filter: %s not in the table; taking %s by role "
+                    "(%s claimed by another branch)", sorted(wanted),
+                    sorted(remainder), sorted(claimed & have))
+        return remainder, "role"
+
+    if len(have) == 1:
+        logger.info("label filter: table is entirely %s but this branch asks "
+                    "for %s — taking it", sorted(have), sorted(wanted))
+        return have, "only"
+
+    return set(), "absent"
+
+
+def filter_by_label(df, label, exclude=()):
+    """Keep only the rows belonging to this branch.
+
+    One GPU pass serves several Detect nodes, so "which rows are mine" has to be
+    decided somehow — but it must not be decided by a literal string the user
+    typed, or renaming a class silently empties every analyzer downstream of it.
+    ``resolve_taxa`` explains how the answer is reached.
+    """
+    taxa, _how = resolve_taxa(df, label, exclude)
+    if taxa is None:
         return df
-    return df[df[col].astype(str).str.strip().str.lower().isin(wanted)]
+    col = _pick(df, ["taxon", "label", "class", "class_name"])
+    return df if col is None else df[
+        df[col].astype(str).str.strip().str.lower().isin(taxa)]
 
 
 def boxes_for_label(df, label, max_boxes=200):
@@ -376,13 +905,56 @@ def summarize_interactions(df, kind=None):
         [float(r["duration"]) for r in rows if r.get("duration") is not None]
         if cols["duration"] else []
     )
+    # Per reference. Interactions already carry a reference_id, so unlike
+    # visitation this needed exposing rather than computing — the breakdown was
+    # sitting in the rows and no caller ever grouped it.
+    per_ref = {}
+    for row in rows:
+        ref_id = row.get("reference")
+        if ref_id in (None, ""):
+            continue          # an insect-to-insect interaction has no reference
+        bucket = per_ref.setdefault(str(ref_id), {
+            "id": str(ref_id), "label": _reference_label(ref_id),
+            "interactions": 0, "partners": set(), "duration_sec": 0.0,
+        })
+        bucket["interactions"] += 1
+        if row.get("a") is not None:
+            bucket["partners"].add(row["a"])
+        try:
+            bucket["duration_sec"] += float(row.get("duration") or 0)
+        except (TypeError, ValueError):
+            pass
+
+    per_reference = sorted(
+        ({"id": b["id"], "label": b["label"], "interactions": b["interactions"],
+          "partners": len(b["partners"]), "duration_sec": round(b["duration_sec"], 2)}
+         for b in per_ref.values()),
+        key=lambda r: (-r["interactions"], r["id"]),
+    )
+
     return {
         "interaction_count": int(len(df)),
         "organism_organism": _count("organism-to-organism"),
         "organism_reference": _count("organism-to-reference"),
         "total_duration_sec": round(sum(durations), 2) if durations else None,
         "rows": rows,
+        "per_reference": per_reference,
     }
+
+
+def _reference_label(ref_id):
+    """A readable name for a reference id written by the worker.
+
+    The worker writes literals like ``nest_3``; the layout would call that
+    "Nest 3". Keeps the two vocabularies from diverging on screen until the
+    editor can carry a real name.
+    """
+    text = str(ref_id)
+    if text.startswith("nest_"):
+        return f"Nest {text[5:]}"
+    if text.startswith("region_"):
+        return f"Region {text[7:]}"
+    return text
 
 
 def _iou(a, b):

@@ -82,7 +82,10 @@ class TrainingCreateForm(forms.ModelForm):
     def __init__(self, *args, user=None, **kwargs):
         super().__init__(*args, **kwargs)
         if user:
-            self.fields["project"].queryset = AnnotationProject.objects.filter(user=user)
+            # Shared projects can be trained on: reading the dataset is a
+            # viewer capability, and the training run spends the trainer's own
+            # GPU budget rather than the project owner's.
+            self.fields["project"].queryset = AnnotationProject.accessible(user)
         self.fields["gpu_tier"].choices = self.TRAINING_GPU_CHOICES
         if not self.initial.get("gpu_tier"):
             self.initial["gpu_tier"] = "A10G"

@@ -22,19 +22,13 @@
       </div>
     </div>
 
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-      <!-- GPU Tier -->
-      <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1">GPU</label>
-        <select name="gpu_tier" id="cfg-gpu" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
-          <option value="T4">T4 (Budget)</option>
-          <option value="L4">L4 (Standard)</option>
-          <option value="A10G" selected>A10G (Fast)</option>
-          <option value="L40S">L40S (Faster)</option>
-          <option value="A100">A100 (Fastest)</option>
-        </select>
-      </div>
-
+    {% comment %}
+    The GPU picker that stood here was inert: the tier never reached SageMaker,
+    so every job ran on the endpoint's instance regardless, and the only effect
+    of choosing "A100" was a bill 2.85x the true rate. The hardware a job ran on
+    is now reported on its detail page instead.
+    {% endcomment %}
+    <div class="grid grid-cols-2 sm:grid-cols-3 gap-4">
       <!-- Confidence Threshold -->
       <div>
         <label class="block text-xs font-medium text-gray-500 mb-1">Confidence</label>
@@ -94,26 +88,25 @@
 
 <script>
 function applyPreset(preset) {
-    const gpu = document.getElementById('cfg-gpu');
     const conf = document.getElementById('cfg-conf');
     const twomode = document.getElementById('cfg-twomode');
     const viz = document.getElementById('cfg-viz');
 
     if (preset === 'fast') {
-        gpu.value = 'T4'; conf.value = '0.3'; twomode.value = 'true'; viz.value = 'false';
+        conf.value = '0.3'; twomode.value = 'true'; viz.value = 'false';
     } else if (preset === 'standard') {
-        gpu.value = 'A10G'; conf.value = '0.25'; twomode.value = 'true'; viz.value = 'true';
+        conf.value = '0.25'; twomode.value = 'true'; viz.value = 'true';
     } else if (preset === 'quality') {
-        gpu.value = 'A10G'; conf.value = '0.2'; twomode.value = 'true'; viz.value = 'true';
+        conf.value = '0.2'; twomode.value = 'true'; viz.value = 'true';
     }
     updateCostEstimate();
 }
 
 function updateCostEstimate() {
-    // Credits per video by GPU tier (1 credit ≈ 1 GPU-second)
-    const credits = { T4: 600, L4: 480, A10G: 349, L40S: 210, A100: 180 };
-    const gpu = document.getElementById('cfg-gpu').value;
-    const creditsPerVid = credits[gpu] || 349;
+    // 1 credit ~ 1 GPU-second. One figure, because every analysis job runs on
+    // the same endpoint instance — the per-tier table here implied a choice
+    // that did not exist.
+    const creditsPerVid = 349;
     const checked = document.querySelectorAll('.video-checkbox:checked').length;
 
     const el = document.getElementById('cost-text');
@@ -121,13 +114,13 @@ function updateCostEstimate() {
         const total = creditsPerVid * checked;
         el.innerHTML = `Estimated: <strong>~${creditsPerVid} credits/video × ${checked} videos = ${total.toLocaleString()} credits</strong>`;
     } else {
-        el.innerHTML = `~${creditsPerVid} credits per video on ${gpu}. Select videos to see total.`;
+        el.innerHTML = `~${creditsPerVid} credits per video. Select videos to see total.`;
     }
 }
 
 // Update cost when checkboxes change
 document.addEventListener('change', function(e) {
-    if (e.target.classList.contains('video-checkbox') || e.target.id === 'selectAll' || e.target.id === 'cfg-gpu') {
+    if (e.target.classList.contains('video-checkbox') || e.target.id === 'selectAll') {
         updateCostEstimate();
     }
 });

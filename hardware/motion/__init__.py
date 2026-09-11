@@ -28,7 +28,7 @@ from motion.roi import (  # noqa: F401
 )
 from motion.overrides import (  # noqa: F401
     load_calibration, _apply_calibration, load_tuning, _apply_tuning,
-    load_roi_override_lores, load_nest_layout, _build_gate,
+    load_roi_override_lores, load_roi_polygon_lores, load_nest_layout, _build_gate,
 )
 from motion.remux import _remux, _snippet_paths  # noqa: F401
 from motion.telemetry_still import _save_telemetry_still  # noqa: F401

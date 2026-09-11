@@ -48,7 +48,8 @@ class TestBlobDetector(unittest.TestCase):
         """Test creating BlobDetector."""
         detector = BlobDetector(min_area=50, min_solidity=0.5)
         self.assertIsInstance(detector, BaseDetector)
-        self.assertEqual(detector.get_source_name(), 'blob')
+        # 'fgbg' is the real source tag; 'blob' is the display alias.
+        self.assertEqual(detector.get_source_name(), 'fgbg')
     
     def test_detect_blob(self):
         """Test blob detection."""
@@ -67,7 +68,7 @@ class TestBlobDetector(unittest.TestCase):
         self.assertIsInstance(detections, list)
         for det in detections:
             self.assertIsInstance(det, Detection)
-            self.assertEqual(det.source, 'blob')
+            self.assertEqual(det.source, 'fgbg')
             self.assertGreater(det.confidence, 0)
     
     def test_configure(self):
@@ -100,13 +101,13 @@ class TestSIFTDetector(unittest.TestCase):
     
     def test_detector_creation(self):
         """Test creating SIFTDetector."""
-        detector = SIFTDetector(min_keypoints=3, cluster_eps=30.0)
+        detector = SIFTDetector(min_keypoints=3)
         self.assertIsInstance(detector, BaseDetector)
         self.assertEqual(detector.get_source_name(), 'sift')
     
     def test_detect_sift(self):
         """Test SIFT detection."""
-        detector = SIFTDetector(min_keypoints=3, cluster_eps=30.0)
+        detector = SIFTDetector(min_keypoints=3)
         detections = detector.detect(self.frame)
         
         self.assertIsInstance(detections, list)
@@ -206,7 +207,7 @@ def run_visual_test():
     
     # Test detectors
     blob_det = BlobDetector(min_area=50, min_solidity=0.5)
-    sift_det = SIFTDetector(min_keypoints=3, cluster_eps=30.0)
+    sift_det = SIFTDetector(min_keypoints=3)
     
     # Initialize blob detector
     blob_det.detect(frame)

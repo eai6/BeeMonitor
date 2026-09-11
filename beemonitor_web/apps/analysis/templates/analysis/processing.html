@@ -1,322 +1,285 @@
 {% extends "base.html" %}
-{% block title %}Processing - BeeMonitor{% endblock %}
+{% load pricing_extras %}
+{% block title %}Review - BeeMonitor{% endblock %}
+
+{% comment %}
+Video review workspace. Filters live in a persistent rail so the grid keeps its
+vertical space and the filter state stays visible while scrolling; clips render
+as cards you can watch in place, because the review task is finding the few
+clips worth analysing among hundreds that look alike in a list.
+
+Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
+<img>s hitting a redirect endpoint, and the stream URL is requested on hover.
+{% endcomment %}
 
 {% block content %}
-<div class="max-w-6xl mx-auto">
-  <div class="flex items-end justify-between flex-wrap gap-2 mb-1">
-    <h1 class="text-2xl font-bold text-gray-900">Processing</h1>
-    <a href="{% url 'videos:batch_upload' %}" class="text-sm text-amber-700 hover:underline">Upload video →</a>
-  </div>
-  <p class="text-sm text-gray-500 mb-5">
-    Select videos and run analysis to extract ecological data. Tracking produces
-    the trajectories that foraging trips and interactions are derived from.
-  </p>
+<div class="flex gap-0 -mx-4 sm:-mx-6 lg:-mx-8 -my-8" style="min-height: calc(100vh - 4rem);">
 
-  {% if active_jobs %}
-  <!-- In-flight jobs: what's occupying GPU slots right now, with cancel -->
-  <div class="bg-white shadow rounded-lg p-4 mb-5 border-l-4 border-blue-400">
-    <div class="flex items-center justify-between mb-2">
-      <h2 class="text-sm font-medium text-gray-700"
-          title="Job slots are your account's concurrent-job allowance. Actual GPUs are a separate, smaller pool — jobs beyond it queue and run as GPUs free up.">
-        Processing now — {{ active_jobs|length }} job(s), {{ slots_used }}/{{ slots_max }} job slots
-      </h2>
-      <form method="post" action="{% url 'analysis:cancel_all' %}"
-            onsubmit="return confirm('Cancel all {{ active_jobs|length }} in-flight job(s)? Their pipeline runs will be marked failed.');">
-        {% csrf_token %}
-        <button type="submit" class="text-xs text-red-500 hover:text-red-700 hover:underline">Cancel all</button>
-      </form>
-    </div>
-    <div class="divide-y divide-gray-100">
-      {% for job in active_jobs %}
-      <div class="flex items-center gap-3 py-1.5 text-sm">
-        <a href="{% url 'analysis:detail' job.pk %}" class="flex-1 text-gray-800 hover:text-amber-700 hover:underline truncate">{{ job.video.title }}</a>
-        <span class="text-xs text-gray-400 hidden sm:inline">{% if job.started_at %}started {{ job.started_at|timesince }} ago{% endif %}</span>
-        <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800 animate-pulse">{{ job.get_status_display }}</span>
-        <form method="post" action="{% url 'analysis:cancel' job.pk %}">
-          {% csrf_token %}
-          <button type="submit" class="text-red-400 hover:text-red-600 text-xs px-1">Cancel</button>
-        </form>
+  <!-- ── FILTER RAIL ──────────────────────────────────────────────────── -->
+  <aside class="w-72 shrink-0 bg-white border-r border-gray-200 flex flex-col">
+    <div class="px-4 pt-4 pb-3 border-b border-gray-200">
+      <div class="flex items-baseline justify-between gap-2">
+        <h1 class="text-xl font-bold text-gray-900">Review</h1>
+        {% if has_filter %}<a href="{% url 'analysis:processing' %}" class="text-xs text-amber-700 hover:underline">Clear all</a>{% endif %}
       </div>
-      {% endfor %}
+      <p class="text-xs text-gray-500 mt-1">
+        {{ video_count }} clip{{ video_count|pluralize }}
+        {% if f.device %}&middot; {{ f.device|length }} hotel{{ f.device|pluralize }}{% endif %}
+        &middot; <span id="rail-selected">0</span> selected
+      </p>
     </div>
-    <p class="text-[11px] text-gray-400 mt-2">Cancelling frees the slot for new runs immediately; GPU work already queued may still complete in the background (its result is discarded).</p>
-  </div>
-  {% endif %}
 
-  <!-- Filter (flows into the actions below: download or process) -->
-  <form method="get" class="flex flex-wrap items-center gap-2 mb-4">
-    <select name="device" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-      <option value="">All bee hotels</option>
-      {% for d in devices %}
-      <option value="{{ d.pk }}" {% if f.device == d.pk|stringformat:"s" %}selected{% endif %}>{{ d.name }}</option>
-      {% endfor %}
-    </select>
-    {% if opts.sites %}
-    <select name="site" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-      <option value="">All sites</option>
-      {% for s in opts.sites %}<option value="{{ s }}" {% if f.site == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
-    </select>
-    {% endif %}
-    <select name="year" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-      <option value="">Year</option>
-      {% for y in opts.years %}<option value="{{ y }}" {% if f.year == y|stringformat:"s" %}selected{% endif %}>{{ y }}</option>{% endfor %}
-    </select>
-    <select name="month" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-      <option value="">Month</option>
-      {% for m in opts.months %}<option value="{{ m }}" {% if f.month == m|stringformat:"s" %}selected{% endif %}>{{ m }}</option>{% endfor %}
-    </select>
-    <select name="day" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-      <option value="">Day</option>
-      {% for d in opts.days %}<option value="{{ d }}" {% if f.day == d|stringformat:"s" %}selected{% endif %}>{{ d }}</option>{% endfor %}
-    </select>
-    <select name="hour" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-      <option value="">Hour</option>
-      {% for h in opts.hours %}<option value="{{ h }}" {% if f.hour == h|stringformat:"s" %}selected{% endif %}>{{ h }}:00</option>{% endfor %}
-    </select>
-    <span class="flex items-center gap-1 text-xs text-gray-500"
-          title="Daily time-of-day window — only videos recorded in this hour range, EVERY day. Combine with the From/To dates for e.g. 18:00–19:00 across June. Start after end wraps past midnight.">
-      daily
-      <select name="hfrom" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-        <option value="">—</option>
-        {% for h in opts.hours24 %}<option value="{{ h }}" {% if f.hfrom == h|stringformat:"s" %}selected{% endif %}>{{ h|stringformat:"02d" }}:00</option>{% endfor %}
-      </select>
-      –
-      <select name="hto" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-        <option value="">—</option>
-        {% for h in opts.hours24 %}<option value="{{ h }}" {% if f.hto == h|stringformat:"s" %}selected{% endif %}>{{ h|stringformat:"02d" }}:00</option>{% endfor %}
-      </select>
-    </span>
-    <label class="text-xs text-gray-500 flex items-center gap-1" title="Recorded on/after">From
-      <input type="datetime-local" name="from" value="{{ f.from }}"
-             class="border border-gray-300 rounded px-2 py-1.5 text-sm"></label>
-    <label class="text-xs text-gray-500 flex items-center gap-1" title="Recorded on/before">To
-      <input type="datetime-local" name="to" value="{{ f.to }}"
-             class="border border-gray-300 rounded px-2 py-1.5 text-sm"></label>
-    <input name="q" value="{{ f.q }}" placeholder="Search title…"
-           class="border border-gray-300 rounded px-3 py-1.5 text-sm">
-    <button class="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded text-sm font-medium">Filter</button>
-    {% if has_filter %}<a href="{% url 'analysis:processing' %}" class="text-sm text-amber-700 hover:underline">Clear</a>{% endif %}
-  </form>
+    <div class="flex-1 overflow-y-auto">
+    <form method="get" id="filter-form" class="px-4 py-4 space-y-5">
+      {% include "videos/_review_filters.html" %}
+    </form>
 
+    {% comment %}
+    The run controls sit directly under the filters, in the same scroll flow —
+    you narrow to a set of clips and then act on it, so the two read as one
+    column rather than being separated by whatever space the rail has left.
 
-  {% if videos %}
-  <form method="post" action="{% url 'pipelines:run_on_videos' %}" id="run-form">
-    {% csrf_token %}
-    <!-- "Run on all filtered" carries the current filter so the server can
-         re-select the whole filtered set (not just the rendered 200). -->
-    <input type="hidden" name="all_filtered" id="all-filtered-flag" value="">
-    {% for k, v in f.items %}{% if v %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
-    {% if can_manage_any %}
-    <!-- Choose a pipeline to run on the selected videos -->
-    <div class="bg-white shadow rounded-lg p-4 mb-4">
-      <div class="flex items-center justify-between mb-2">
-        <h2 class="text-sm font-semibold text-gray-900">Pipeline to run</h2>
-        <a href="{% url 'pipelines:list' %}" class="text-xs text-amber-700 hover:underline">Build / edit pipelines →</a>
-      </div>
-      {% if pipelines or pipeline_templates %}
-      <select name="pipeline" id="pipeline-select" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
-        {% if pipelines %}<optgroup label="My pipelines">
+    They belong to the POST form in <main>: form="run-form" binds them across
+    the DOM, since HTML forms cannot nest. "Apply" above is the FILTER submit;
+    this is a separate action.
+    {% endcomment %}
+    {% if can_manage_any and videos %}
+    <div class="border-t border-gray-200 px-4 py-3 space-y-2">
+      <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Pipeline to run</div>
+      <select name="pipeline" form="run-form" class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
+        {% if pipelines %}<optgroup label="Your pipelines">
           {% for p in pipelines %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}>{{ p.title }}</option>{% endfor %}
         </optgroup>{% endif %}
         {% if pipeline_templates %}<optgroup label="Templates">
           {% for p in pipeline_templates %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}>{{ p.title }}</option>{% endfor %}
         </optgroup>{% endif %}
       </select>
-      <p class="text-xs text-gray-400 mt-2">Runs the pipeline once per selected video. Model &amp; ROI choices live inside the pipeline (e.g. the “Use bee-hotel ROI” block). Build your own on the <a href="{% url 'pipelines:list' %}" class="text-amber-700 hover:underline">Pipelines</a> page or start from a <a href="{% url 'pipelines:lesson_list' %}" class="text-amber-700 hover:underline">lesson</a>.</p>
-      {% else %}
-      <p class="text-sm text-gray-500">You have no pipelines yet. <a href="{% url 'pipelines:create' %}" class="text-amber-700 hover:underline font-medium">Create one</a> or start from a <a href="{% url 'pipelines:lesson_list' %}" class="text-amber-700 hover:underline">lesson</a>.</p>
-      {% endif %}
+      {% comment %}
+      No cost estimate before a run. What a clip costs is only knowable after it
+      has run, and a projection presented up front reads as a promise — the
+      figure it replaced was a hardcoded constant that had gone stale without
+      anyone noticing. Finished runs report their real GPU time instead.
+      {% endcomment %}
+      <p class="text-[11px] text-gray-500 leading-4">
+        <span id="cred-line">Select clips to run</span>
+      </p>
+      <div class="flex items-center gap-2">
+        <button type="submit" form="run-form" id="run-btn" disabled
+                class="flex-1 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white px-3 py-2 rounded text-sm font-medium">
+          Run pipeline (<span id="sel-count">0</span>)
+        </button>
+        <button type="button" id="clear-sel" class="text-xs text-gray-500 hover:text-gray-700 hidden px-1">Clear</button>
+      </div>
+    </div>
+    {% endif %}
+    </div>
+  </aside>
+
+  <!-- ── GRID ─────────────────────────────────────────────────────────── -->
+  <main class="flex-1 min-w-0 flex flex-col">
+
+    {% if active_jobs %}
+    <div class="bg-blue-50 border-b border-blue-100 px-5 py-2 flex items-center justify-between gap-3">
+      <p class="text-xs text-blue-800">
+        {{ active_jobs|length }} job{{ active_jobs|pluralize }} running &middot; {{ slots_used }}/{{ slots_max }} slots
+      </p>
+      <form method="post" action="{% url 'analysis:cancel_all' %}"
+            onsubmit="return confirm('Cancel all {{ active_jobs|length }} in-flight job(s)? Their pipeline runs will be marked failed.');">
+        {% csrf_token %}
+        <button type="submit" class="text-xs text-red-600 hover:underline">Cancel all</button>
+      </form>
     </div>
     {% endif %}
 
-    <!-- Select videos -->
-    <div class="flex items-center justify-between mb-2">
-      {% if can_manage_any %}
-      <label class="flex items-center gap-2 text-sm text-gray-700">
-        <input type="checkbox" id="select-all" class="rounded border-gray-300"> Select all ({{ video_count }})
-      </label>
-      {% else %}
-      <span class="text-sm text-gray-500">{{ video_count }} video{{ video_count|pluralize }} · view only</span>
-      {% endif %}
-      <span class="text-xs text-gray-400">{% if video_count > 200 %}Showing 200 most recent — narrow with the filter.{% endif %}</span>
-    </div>
-    <div class="bg-white shadow rounded-lg divide-y">
-      {% for v in videos %}
-      <div class="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50">
-        {% if can_manage_any %}
-        <input type="checkbox" name="video_ids" value="{{ v.pk }}" id="cb-{{ v.pk }}" class="vid-cb rounded border-gray-300">
-        {% endif %}
-        <div class="flex-1 min-w-0">
-          <div class="text-sm text-gray-900 flex items-center gap-1.5 min-w-0">
-            <a href="{% url 'videos:detail' v.pk %}" class="truncate text-amber-700 hover:underline font-medium" title="View this video">{{ v.title|default:"(untitled)" }}</a>
-          </div>
-          <div class="text-xs text-gray-400">{% if v.device %}{{ v.device.name }} · {% endif %}{{ v.recorded_at|default:v.uploaded_at|date:"Y-m-d H:i" }}</div>
-        </div>
-        <div id="status-{{ v.pk }}" data-vid="{{ v.pk }}" data-status="{{ v.job_status|default:'' }}" class="flex items-center gap-2 shrink-0">
-          {% if v.job_status == "completed" %}
-            <span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">analyzed</span>
-            {% if v.job_id %}<a href="{% url 'analysis:detail' v.job_id %}" class="text-xs text-amber-700 hover:underline">results →</a>{% endif %}
-          {% elif v.job_status == "processing" %}
-            <a href="{% if v.job_id %}{% url 'analysis:detail' v.job_id %}{% else %}#{% endif %}" class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">processing…</a>
-          {% elif v.job_status == "failed" %}
-            <a href="{% if v.job_id %}{% url 'analysis:detail' v.job_id %}{% else %}#{% endif %}" class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">failed</a>
+    {% if videos %}
+    <form method="post" action="{% url 'pipelines:run_on_videos' %}" id="run-form" class="flex-1 flex flex-col min-h-0">
+      {% csrf_token %}
+      <input type="hidden" name="all_filtered" id="all-filtered-flag" value="">
+      {% for k, v in f.items %}{% if v %}{% if k == "device" %}{% for d in v %}<input type="hidden" name="device" value="{{ d }}">{% endfor %}{% else %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endif %}{% endfor %}
+
+      <!-- toolbar -->
+      <div class="flex items-center justify-between gap-4 px-5 py-3 bg-white border-b border-gray-200">
+        <div class="flex items-center gap-3.5">
+          {% if can_manage_any %}
+          <label class="flex items-center gap-2 text-sm text-gray-700">
+            <input type="checkbox" id="select-all" class="rounded border-gray-300"> Select all {{ video_count }}
+          </label>
+          {% else %}
+          <span class="text-sm text-gray-500">{{ video_count }} clip{{ video_count|pluralize }} · view only</span>
           {% endif %}
+          <span class="text-xs text-gray-400">{% if video_count > 200 %}Showing 200 most recent — narrow with the filter{% endif %}</span>
         </div>
+        <span class="text-xs text-gray-500 hidden sm:inline">Hover to preview · click to open</span>
       </div>
-      {% endfor %}
-    </div>
 
-    <!-- Sticky run bar -->
-    {% if can_manage_any %}
-    <div class="sticky bottom-0 mt-3 bg-white/95 backdrop-blur border border-gray-200 rounded-lg shadow-lg px-4 py-2.5 flex items-center justify-between gap-3">
-      <p class="text-xs text-gray-500"><span id="cred-line">Select videos to run</span><span class="text-gray-400"> · ~{{ est_credits_per_video }} credits/video (A10G)</span></p>
-      <button type="submit" id="run-btn" disabled
-              class="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white px-4 py-1.5 rounded text-sm font-medium whitespace-nowrap">
-        Run pipeline (<span id="sel-count">0</span>)
-      </button>
+      <!-- cards -->
+      <div class="flex-1 overflow-y-auto px-5 pt-4" id="grid-scroll">
+        {% include "videos/_review_grid.html" with can_select=can_manage_any %}
+        <div class="h-4"></div>
+      </div>
+
+    </form>
+    {% else %}
+    <div class="flex-1 flex items-center justify-center p-10">
+      <div class="text-center">
+        <p class="text-sm text-gray-500 mb-3">No clips{% if has_filter %} match this filter{% else %} yet{% endif %}.</p>
+        {% if has_filter %}<a href="{% url 'analysis:processing' %}" class="text-sm text-amber-700 hover:underline">Clear the filter</a>
+        {% else %}<a href="{% url 'videos:batch_upload' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Upload a video</a>{% endif %}
+      </div>
     </div>
     {% endif %}
-  </form>
-  {% else %}
-  <div class="bg-white shadow rounded-lg p-6 text-center">
-    <p class="text-sm text-gray-500 mb-3">No videos{% if has_filter %} match this filter{% else %} yet{% endif %}. Upload footage or let a bee hotel push activity clips.</p>
-    <a href="{% url 'videos:batch_upload' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Upload a video</a>
-  </div>
-  {% endif %}
-
-  {% if recent_jobs %}
-  <h2 class="text-lg font-semibold text-gray-900 mt-8 mb-2">Recent jobs</h2>
-  <div class="bg-white shadow rounded-lg divide-y">
-    {% for job in recent_jobs %}
-    <a href="{% url 'analysis:detail' job.pk %}" class="flex items-center justify-between gap-3 px-4 py-3 hover:bg-gray-50">
-      <div class="min-w-0">
-        <div class="text-sm text-gray-900 truncate">#{{ job.pk }} · {{ job.video.title|default:"(video)" }}</div>
-        <div class="text-xs text-gray-400">{{ job.config.detection_mode|default:"detect_and_track" }} · {{ job.started_at|date:"Y-m-d H:i" }}</div>
-      </div>
-      <span class="text-xs px-2 py-0.5 rounded-full shrink-0
-        {% if job.status == 'completed' %}bg-green-100 text-green-700
-        {% elif job.status == 'processing' %}bg-amber-100 text-amber-700
-        {% elif job.status == 'failed' %}bg-red-100 text-red-700
-        {% else %}bg-gray-100 text-gray-600{% endif %}">{{ job.get_status_display }}</span>
-    </a>
-    {% endfor %}
-  </div>
-  {% endif %}
+  </main>
 </div>
 
+{% include "videos/_review_viewer.html" with viewer_select_label="Select for this run" %}
+
 <script>
-  (function () {
-    var PER = {{ est_credits_per_video }};
-    var all = document.getElementById('select-all');
-    var btn = document.getElementById('run-btn');
-    var cnt = document.getElementById('sel-count');
-    var credLine = document.getElementById('cred-line');
-    var form = document.getElementById('run-form');
-    var flag = document.getElementById('all-filtered-flag');
-    var TOTAL = {{ video_count }};              // all videos matching the filter
-    // Per-launch cap, from the server (settings.PIPELINE_MAX_BATCH). 0/None → no
-    // cap, treated as Infinity so nothing is trimmed and no "capped" note shows.
-    var CAP = {{ pipeline_max_batch|default:0 }} || Infinity;
-    function boxes() { return Array.prototype.slice.call(document.querySelectorAll('.vid-cb')); }
-    function refresh() {
-      var checked = boxes().filter(function (b) { return b.checked; }).length;
-      // "Select all" + more matches than are rendered → run the WHOLE filtered
-      // set server-side (capped at CAP), not just the visible checkboxes.
-      var useAll = all && all.checked && TOTAL > boxes().length;
-      if (flag) flag.value = useAll ? '1' : '';
-      var n = useAll ? Math.min(TOTAL, CAP) : checked;
-      if (cnt) cnt.textContent = n.toLocaleString();
-      if (btn) btn.disabled = n === 0;
-      if (credLine) credLine.textContent = n
-        ? (n.toLocaleString() + (useAll ? ' (all filtered)' : ' selected') + ' → ~' + (n * PER).toLocaleString() + ' credits'
-           + (useAll && TOTAL > CAP ? ' — capped; narrow the filter to run the rest' : ''))
-        : 'Select videos to run';
-      if (!useAll && all) all.checked = checked > 0 && checked === boxes().length;
-    }
-    if (all) all.addEventListener('change', function () {
-      boxes().forEach(function (b) { if (!b.disabled) b.checked = all.checked; }); refresh();
-    });
-    boxes().forEach(function (b) { b.addEventListener('change', refresh); });
+(function () {
+  var cards = Array.prototype.slice.call(document.querySelectorAll('.vid-card'));
+  var TOTAL = {{ video_count }};
+  var CAP = {{ pipeline_max_batch|default:50000 }} || Infinity;
+  // ── selection ───────────────────────────────────────────────────────
+  var all = document.getElementById('select-all');
+  var btn = document.getElementById('run-btn');
+  var cnt = document.getElementById('sel-count');
+  var railSel = document.getElementById('rail-selected');
+  var credLine = document.getElementById('cred-line');
+  var clearSel = document.getElementById('clear-sel');
+  var flag = document.getElementById('all-filtered-flag');
 
-    function toast(text, ok) {
-      var t = document.createElement('div');
-      t.className = 'fixed bottom-4 right-4 z-50 max-w-sm px-4 py-2.5 rounded-lg shadow-lg text-sm ' +
-                    (ok ? 'bg-green-600 text-white' : 'bg-red-600 text-white');
-      t.textContent = text;
-      document.body.appendChild(t);
-      setTimeout(function () { t.style.transition = 'opacity .4s'; t.style.opacity = '0';
-        setTimeout(function () { t.remove(); }, 400); }, 4500);
-    }
+  function boxes() { return Array.prototype.slice.call(document.querySelectorAll('.vid-cb')); }
 
-    // Video ids currently processing — polled until they resolve.
-    var active = new Set();
-    document.querySelectorAll('[data-status="processing"]').forEach(function (el) {
-      if (el.dataset.vid) active.add(el.dataset.vid);
-    });
-    function setStatus(vid, status, jobId) {
-      var el = document.getElementById('status-' + vid);
-      if (!el) return;
-      el.dataset.status = status;
-      if (status === 'completed') {
-        el.innerHTML = '<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">analyzed</span>' +
-          (jobId ? ' <a href="/analysis/' + jobId + '/" class="text-xs text-amber-700 hover:underline">results →</a>' : '');
-      } else if (status === 'failed') {
-        el.innerHTML = '<a href="' + (jobId ? '/analysis/' + jobId + '/' : '#') +
-          '" class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">failed</a>';
-      } else {
-        el.innerHTML = '<span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">processing…</span>';
+  function paintCard(cb) {
+    var card = cb.closest('.vid-card');
+    if (!card) return;
+    card.classList.toggle('ring-2', cb.checked);
+    card.classList.toggle('ring-amber-600', cb.checked);
+  }
+
+  function refresh() {
+    var checked = boxes().filter(function (b) { return b.checked; }).length;
+    var useAll = all && all.checked && TOTAL > boxes().length;
+    if (flag) flag.value = useAll ? '1' : '';
+    var n = useAll ? Math.min(TOTAL, CAP) : checked;
+    if (cnt) cnt.textContent = n.toLocaleString();
+    if (railSel) railSel.textContent = n.toLocaleString();
+    if (btn) btn.disabled = n === 0;
+    if (clearSel) clearSel.classList.toggle('hidden', n === 0);
+    if (credLine) {
+      if (!n) { credLine.textContent = 'Select clips to run'; }
+      else {
+        credLine.innerHTML = '<span class="text-gray-900 font-medium">' + n.toLocaleString() +
+          ' clip' + (n === 1 ? '' : 's') + ' selected</span>' +
+          (useAll && TOTAL > CAP ? ' — capped at ' + CAP.toLocaleString() : '');
       }
     }
+    if (!useAll && all) all.checked = checked > 0 && checked === boxes().length;
+    boxes().forEach(paintCard);
+  }
 
-    // AJAX run: submit the batch without leaving the page; mark submitted videos
-    // "processing…" in place and toast the result.
-    if (form) form.addEventListener('submit', function (e) {
-      e.preventDefault();
-      if (!btn || btn.disabled) return;
-      var token = form.querySelector('[name=csrfmiddlewaretoken]').value;
-      btn.disabled = true;
-      if (credLine) credLine.textContent = 'Submitting…';
-      fetch(form.action, {
-        method: 'POST',
-        headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': token},
-        body: new FormData(form),
-      }).then(function (r) { return r.json().then(function (d) { return {ok: r.ok, d: d}; }); })
-        .then(function (res) {
-          var d = res.d || {};
-          if (res.ok && d.ok) {
-            toast(d.message || 'Submitted.', true);
-            (d.video_ids || []).forEach(function (id) {
-              var cb = document.getElementById('cb-' + id);
-              if (cb) { cb.checked = false; cb.disabled = true; }
-              setStatus(String(id), 'processing', null);
-              active.add(String(id));
-            });
-          } else {
-            toast((d && d.error) || 'Could not start analysis.', false);
-          }
-        }).catch(function () { toast('Could not start analysis.', false); })
-        .then(function () { refresh(); });   // recompute count + button state
-    });
-
-    // Live poll: while anything is processing, flip rows to analyzed/failed in
-    // place (the endpoint also advances the jobs by checking SageMaker output).
-    function poll() {
-      if (!active.size) return;
-      fetch("{% url 'analysis:poll' %}", {headers: {'X-Requested-With': 'XMLHttpRequest'}})
-        .then(function (r) { return r.json(); })
-        .then(function (d) {
-          (d.jobs || []).forEach(function (j) {
-            var vid = String(j.video_id);
-            if (active.has(vid) && (j.status === 'completed' || j.status === 'failed')) {
-              setStatus(vid, j.status, j.job_id);
-              active.delete(vid);
-            }
-          });
-        }).catch(function () {});
-    }
-    setInterval(poll, 12000);
-
+  if (all) all.addEventListener('change', function () {
+    boxes().forEach(function (b) { if (!b.disabled) b.checked = all.checked; });
     refresh();
-  })();
+  });
+  if (clearSel) clearSel.addEventListener('click', function () {
+    if (all) all.checked = false;
+    boxes().forEach(function (b) { b.checked = false; });
+    refresh();
+  });
+  boxes().forEach(function (b) {
+    b.addEventListener('change', refresh);
+    b.addEventListener('click', function (e) { e.stopPropagation(); });
+  });
+
+  var hotelsAll = document.getElementById('hotels-all');
+  if (hotelsAll) hotelsAll.addEventListener('click', function () {
+    var devs = document.querySelectorAll('.dev-cb');
+    var anyOff = Array.prototype.some.call(devs, function (d) { return !d.checked; });
+    devs.forEach(function (d) { d.checked = anyOff; });
+    document.getElementById('filter-form').submit();
+  });
+
+  // Hover preview and the focused player live in videos/_review_viewer.html,
+  // shared with the annotation clip picker. It drives selection by ticking each
+  // card's own checkbox and letting the change event bubble, which is what
+  // refresh() below is already bound to.
+
+  // ── run + poll ──────────────────────────────────────────────────────
+  function toast(text, ok) {
+    var t = document.createElement('div');
+    t.className = 'fixed bottom-4 right-4 z-[60] max-w-sm px-4 py-2.5 rounded-lg shadow-lg text-sm ' +
+                  (ok ? 'bg-green-600 text-white' : 'bg-red-600 text-white');
+    t.textContent = text;
+    document.body.appendChild(t);
+    setTimeout(function () { t.style.transition = 'opacity .4s'; t.style.opacity = '0';
+      setTimeout(function () { t.remove(); }, 400); }, 4500);
+  }
+
+  var active = new Set();
+  document.querySelectorAll('[data-status="processing"]').forEach(function (el) {
+    if (el.dataset.vid) active.add(el.dataset.vid);
+  });
+  function setStatus(vid, status, jobId) {
+    var el = document.getElementById('status-' + vid);
+    if (!el) return;
+    el.dataset.status = status;
+    var href = jobId ? '/analysis/' + jobId + '/' : '#';
+    if (status === 'completed') {
+      el.innerHTML = '<a href="' + href + '" class="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700">analyzed</a>';
+    } else if (status === 'failed') {
+      el.innerHTML = '<a href="' + href + '" class="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700">failed</a>';
+    } else {
+      el.innerHTML = '<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">running</span>';
+    }
+  }
+
+  var form = document.getElementById('run-form');
+  if (form) form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (!btn || btn.disabled) return;
+    var token = form.querySelector('[name=csrfmiddlewaretoken]').value;
+    btn.disabled = true;
+    if (credLine) credLine.textContent = 'Submitting…';
+    fetch(form.action, {
+      method: 'POST',
+      headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': token},
+      body: new FormData(form),
+    }).then(function (r) { return r.json().then(function (d) { return {ok: r.ok, d: d}; }); })
+      .then(function (res) {
+        var d = res.d || {};
+        if (res.ok && d.ok) {
+          toast(d.message || 'Submitted.', true);
+          (d.video_ids || []).forEach(function (id) {
+            var cb = document.getElementById('cb-' + id);
+            if (cb) { cb.checked = false; cb.disabled = true; }
+            setStatus(String(id), 'processing', null);
+            active.add(String(id));
+          });
+          if (all) all.checked = false;
+        } else {
+          toast((d && d.error) || 'Could not start analysis.', false);
+        }
+      }).catch(function () { toast('Could not start analysis.', false); })
+      .then(function () { refresh(); });
+  });
+
+  function poll() {
+    if (!active.size) return;
+    fetch("{% url 'analysis:poll' %}", {headers: {'X-Requested-With': 'XMLHttpRequest'}})
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        (d.jobs || []).forEach(function (j) {
+          var vid = String(j.video_id);
+          if (active.has(vid) && (j.status === 'completed' || j.status === 'failed')) {
+            setStatus(vid, j.status, j.job_id);
+            active.delete(vid);
+          }
+        });
+      }).catch(function () {});
+  }
+  setInterval(poll, 12000);
+
+  refresh();
+})();
 </script>
 {% endblock %}

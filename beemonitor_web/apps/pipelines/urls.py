@@ -12,6 +12,7 @@ urlpatterns = [
     path("run-on-videos/", views.run_on_videos, name="run_on_videos"),
     path("runs/", views.run_list, name="run_list"),
     path("batch/<uuid:batch_id>/", views.batch_detail, name="batch_detail"),
+    path("batch/<uuid:batch_id>/rerun/", views.batch_rerun, name="batch_rerun"),
     path("batch/<uuid:batch_id>/trips.csv", views.batch_trips_csv, name="batch_trips_csv"),
     path("batch/<uuid:batch_id>/combined/<str:kind>.csv", views.batch_combined_csv, name="batch_combined_csv"),
     path("<uuid:pk>/", views.pipeline_editor, name="editor"),
@@ -24,6 +25,7 @@ urlpatterns = [
     path("<uuid:pk>/run/<uuid:run_id>/", views.run_detail, name="run_detail"),
     path("<uuid:pk>/run/<uuid:run_id>/status/", views.run_status, name="run_status"),
     path("<uuid:pk>/run/<uuid:run_id>/rerun/", views.rerun, name="rerun"),
+    path("<uuid:pk>/run/<uuid:run_id>/reanalyze/", views.run_reanalyze, name="run_reanalyze"),
     path("<uuid:pk>/run/<uuid:run_id>/retry/<str:step_id>/", views.retry_step, name="retry_step"),
     path("<uuid:pk>/run/<uuid:run_id>/output/<str:step_id>.csv", views.run_output_csv, name="run_output_csv"),
 ]

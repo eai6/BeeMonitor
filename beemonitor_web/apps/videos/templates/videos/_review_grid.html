@@ -1,0 +1,73 @@
+{% comment %}
+  The day-grouped clip grid: stills, hotel dots, hover-to-preview, a checkbox
+  per card. Shared by the Processing hub and an annotation project's picker.
+
+  Context: video_days (from workspace.group_by_day); can_select, which decides
+  whether a card carries a checkbox at all — a read-only viewer on the hub has
+  nothing to run, and both hosts must say so explicitly rather than the include
+  guessing from a name only one of them sets.
+{% endcomment %}
+{% for group in video_days %}
+        <div class="flex items-center gap-2.5 mb-2.5 {% if not forloop.first %}mt-6{% endif %}">
+          <h2 class="text-[13px] font-semibold text-gray-700">{{ group.day|date:"D j M" }}</h2>
+          <span class="text-xs text-gray-400">
+            {{ group.videos|length }} clip{{ group.videos|length|pluralize }}{% if group.hotels|length > 1 %} across {{ group.hotels|length }} hotels{% endif %}
+          </span>
+          <div class="flex-1 h-px bg-gray-200"></div>
+        </div>
+
+        <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3.5">
+          {% for v in group.videos %}
+          <div class="vid-card bg-white rounded-lg shadow overflow-hidden" data-vid="{{ v.pk }}"
+               data-stream="{% url 'videos:stream' v.pk %}"
+               data-time="{{ v.recorded_at|default:v.uploaded_at|date:'H:i' }}"
+               data-day="{{ group.day|date:'D j M' }}"
+               data-hotel="{{ v.device.name|default:'—' }}"
+               data-rotate="{% if v.device.rotate_180 %}1{% endif %}"
+               data-detail="{% url 'videos:detail' v.pk %}"
+               data-title="{{ v.title|default:'(untitled)' }}">
+            <div class="media relative bg-gray-800" style="aspect-ratio: 16/9;">
+              {% comment %}
+              Always requested, never gated on thumbnail_key: the endpoint makes
+              the still on first ask for clips that predate the extractor, so the
+              grid fills in as you scroll. onerror hides the <img> for a clip
+              that genuinely has no frame, leaving the play glyph.
+              {% endcomment %}
+              <img src="{% url 'videos:thumbnail' v.pk %}" alt="" loading="lazy" decoding="async"
+                   class="absolute inset-0 w-full h-full object-cover"
+                   onerror="this.remove()">
+              <div class="absolute inset-0 flex items-center justify-center pointer-events-none play-glyph">
+                <svg class="w-7 h-7 drop-shadow" viewBox="0 0 24 24" fill="rgba(255,255,255,0.85)"><path d="M8 5v14l11-7z"/></svg>
+              </div>
+              {% if can_select %}
+              <input type="checkbox" name="video_ids" value="{{ v.pk }}" id="cb-{{ v.pk }}"
+                     class="vid-cb absolute top-1.5 left-1.5 rounded border-gray-300 z-10">
+              {% endif %}
+              {% if v.duration_seconds %}
+              <span class="absolute bottom-1.5 right-1.5 text-[10px] text-white bg-black/60 px-1.5 rounded">{{ v.duration_seconds|floatformat:0 }}s</span>
+              {% endif %}
+            </div>
+            <div class="px-2.5 py-2 flex items-center justify-between gap-2">
+              <div class="min-w-0">
+                <div class="text-[13px] font-semibold text-gray-900">{{ v.recorded_at|default:v.uploaded_at|date:"H:i" }}</div>
+                <div class="text-[11px] text-gray-400 flex items-center gap-1.5 truncate">
+                  <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background: {{ v.dot }}"></span>{{ v.device.name|default:"—" }}
+                </div>
+              </div>
+              {% comment %}
+                Page-specific: the hub shows a job pill, an annotation project
+                shows whether the clip is already in it. Everything else about
+                a card is the same question either way.
+              {% endcomment %}
+              {% if card_status_template %}
+              <div class="shrink-0">{% include card_status_template %}</div>
+              {% else %}
+              <div id="status-{{ v.pk }}" data-vid="{{ v.pk }}" data-status="{{ v.job_status|default:'' }}" class="shrink-0">
+                {% include "analysis/components/status_pill.html" with status=v.job_status job_id=v.job_id %}
+              </div>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endfor %}

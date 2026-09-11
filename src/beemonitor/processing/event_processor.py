@@ -163,7 +163,12 @@ class EventProcessor:
         """
         events = []
         hole_bboxes = nests['nests']
-        
+        # Nest tubes the user traced as polygons (pixel coords, keyed by hole id).
+        # Entry/exit is then tested against the outline instead of the bounding
+        # box, so a bee sitting on the rim of the neighbouring tube — inside this
+        # tube's box, outside the tube itself — is not counted.
+        hole_polygons = nests.get('nest_polygons') or {}
+
         # Very lenient detection parameters
         window_size = 1  # Only need 1 frame!
         padding = 40     # Large detection area
@@ -187,7 +192,9 @@ class EventProcessor:
 
             for hole_id, bbox in hole_bboxes.items():
                 # Check if bee starts inside this nest
-                inside = all(self._is_inside_bbox(pos, bbox, padding) for pos in start_pos)
+                polygon = hole_polygons.get(hole_id)
+                inside = all(self._is_inside_shape(pos, bbox, polygon, padding)
+                             for pos in start_pos)
 
                 if inside:
                     events.append({
@@ -205,7 +212,9 @@ class EventProcessor:
 
             for hole_id, bbox in hole_bboxes.items():
                 # Check if bee ends inside this nest
-                inside = all(self._is_inside_bbox(pos, bbox, padding) for pos in end_pos)
+                polygon = hole_polygons.get(hole_id)
+                inside = all(self._is_inside_shape(pos, bbox, polygon, padding)
+                             for pos in end_pos)
 
                 if inside:
                     events.append({
@@ -231,6 +240,31 @@ class EventProcessor:
         
         return (x1 - padding <= x <= x2 + padding and
                 y1 - padding <= y <= y2 + padding)
+
+    def _is_inside_shape(
+        self,
+        point: Point,
+        bbox: BBox,
+        polygon: Optional[List[Point]] = None,
+        padding: float = 0
+    ) -> bool:
+        """Check if point is inside a nest (with padding), polygon-aware.
+
+        Without a polygon this is the bounding-box test, unchanged. With one the
+        point must be inside the traced outline — or within ``padding`` of it, the
+        same leniency the box test applies, measured to the outline rather than to
+        the corners of a box that may be mostly background.
+        """
+        if not polygon or len(polygon) < 3:
+            return self._is_inside_bbox(point, bbox, padding)
+        # Cheap reject on the bounding box first; the polygon can't reach beyond it.
+        if not self._is_inside_bbox(point, bbox, padding):
+            return False
+        import cv2  # local: keeps this module importable without OpenCV
+
+        contour = np.asarray(polygon, dtype=np.float32).reshape(-1, 1, 2)
+        # Signed distance: positive inside, negative outside.
+        return cv2.pointPolygonTest(contour, (float(point[0]), float(point[1])), True) >= -padding
     
     def score_events_with_ml(
         self,

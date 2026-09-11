@@ -6,7 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
-from django.urls import reverse_lazy
+from django.db import models
+from django.urls import reverse, reverse_lazy
 from django.views import View
 from django.views.generic import CreateView, DetailView, ListView, TemplateView, UpdateView
 
@@ -69,7 +70,21 @@ class ProjectListView(LoginRequiredMixin, ListView):
     paginate_by = 20
 
     def get_queryset(self):
-        return AnnotationProject.objects.filter(user=self.request.user)
+        # Shared projects belong in the list, or an invitation goes nowhere.
+        return AnnotationProject.accessible(self.request.user).select_related("user")
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        # A shared project has to say whose it is and what you may do in it —
+        # otherwise the list mixes yours with other people's and reads as if
+        # you own all of them.
+        me = self.request.user
+        roles = {s.project_id: s.role for s in
+                 me.shared_projects.all()} if me.is_authenticated else {}
+        for project in ctx["projects"]:
+            project.my_role = "owner" if project.user_id == me.id else roles.get(project.pk)
+            project.shared_by = None if project.my_role == "owner" else project.user
+        return ctx
 
 
 class ProjectCreateView(LoginRequiredMixin, CreateView):
@@ -94,7 +109,9 @@ class ProjectUpdateView(LoginRequiredMixin, UpdateView):
     template_name = "annotations/settings.html"
 
     def get_queryset(self):
-        return AnnotationProject.objects.filter(user=self.request.user)
+        # Editing the name, description and class list restructures the
+        # project — a labeller changing classes mid-run invalidates finished work.
+        return AnnotationProject.manageable(self.request.user)
 
     def get_initial(self):
         initial = super().get_initial()
@@ -203,7 +220,9 @@ class ProjectDeleteView(LoginRequiredMixin, View):
         from django.shortcuts import redirect
         from django.contrib import messages
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Deleting is the owner's alone.
+        project = get_object_or_404(
+            AnnotationProject.owned(request.user), pk=pk)
         name = project.name
         project.delete()
         messages.info(request, f"Deleted project '{name}' and its annotations.")
@@ -211,12 +230,30 @@ class ProjectDeleteView(LoginRequiredMixin, View):
 
 
 class ProjectDetailView(LoginRequiredMixin, DetailView):
+    """The project's clips, and — at ``/review/`` — its annotated frames.
+
+    Both halves are rendered from one context builder because they always were:
+    the frame grid lived at the bottom of the clip workspace, under the stage
+    tiles, the failures, the filters, the assignment controls, the selection
+    actions and a table of every clip. Choosing what to annotate and checking
+    what came back are different sittings with different filters, so they are
+    now different pages — but splitting the view as well would have meant
+    maintaining two context builders, and the one that already existed for this
+    (ReviewView) had drifted out of the URL conf without anyone noticing.
+    """
+
     model = AnnotationProject
     template_name = "annotations/detail.html"
     context_object_name = "project"
+    #: Set by the ``review`` URL. Same data, the other half of the template.
+    review = False
+
+    def get_template_names(self):
+        return ["annotations/review.html"] if self.review else [self.template_name]
 
     def get_queryset(self):
-        return AnnotationProject.objects.filter(user=self.request.user)
+        # Reading the project. Every write path below names its own level.
+        return AnnotationProject.accessible(self.request.user)
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -239,6 +276,10 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         )
         ctx["preannot_active"] = active
         ctx["preannot_failed"] = recent_failed
+        # One shared cause is worth stating once, above the list, instead of
+        # repeating it on every line and leaving the reader to notice.
+        ctx["preannot_all_timed_out"] = bool(recent_failed) and all(
+            "timed out" in (t.error_message or "").lower() for t in recent_failed)
 
         from django.db.models import Count, Q as _Q
 
@@ -302,10 +343,80 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         filtered.sort(key=lambda v: (v.recorded_at is None, v.recorded_at, v.pk),
                       reverse=True)
 
+        # Where each clip has actually got to. One aggregate, not a count per
+        # clip — and the stage is what the page filters and acts on.
+        from . import progress as progress_mod
+
+        failed_ids = {t.video_id for t in ctx.get("preannot_failed") or []}
+        states = progress_mod.per_video(self.object, failed_ids)
+        stage = (self.request.GET.get("stage") or "").strip()
+        if stage in progress_mod.STAGE_LABELS:
+            if stage == "new":
+                # These clips have no annotation rows to aggregate, so they are
+                # the ones the aggregate never saw.
+                filtered = [v for v in filtered
+                            if not states.get(v.pk, {}).get("frames")
+                            and v.pk not in failed_ids]
+            else:
+                wanted = progress_mod.filter_ids(states, len(counted), stage)
+                filtered = [v for v in filtered if v.pk in wanted]
+
+        # Who is doing which clip. One query for the whole project; the rows
+        # carry it so the list can filter, colour and reassign without more.
+        from . import assignments as assign_mod
+
+        holders = assign_mod.by_video(self.object)
+        assignee = (self.request.GET.get("assignee") or "").strip()
+        if assignee == "none":
+            filtered = [v for v in filtered if v.pk not in holders]
+        elif assignee == "me":
+            filtered = [v for v in filtered
+                        if holders.get(v.pk)
+                        and holders[v.pk].user_id == self.request.user.id]
+        elif assignee.isdigit():
+            filtered = [v for v in filtered
+                        if holders.get(v.pk)
+                        and holders[v.pk].user_id == int(assignee)]
+
         VIDEO_LIST_CAP = 500
-        shown = filtered[:VIDEO_LIST_CAP]
-        ctx["video_data"] = [{"video": v, "annotation_count": v.annotation_count}
+        shown = progress_mod.decorate(filtered[:VIDEO_LIST_CAP], states, failed_ids)
+        ctx["video_data"] = [{"video": v, "annotation_count": v.annotation_count,
+                              "progress": v.progress,
+                              "holder": holders.get(v.pk),
+                              "holder_dot": person_colour(
+                                  holders[v.pk].user_id) if v.pk in holders else "",
+                              "mine": (v.pk in holders
+                                       and holders[v.pk].user_id == self.request.user.id)}
                              for v in shown]
+
+        # Everyone on the project, for the "assigned to" filter and the assign
+        # control. Counts come from the same map, so the strip and the rows can
+        # never disagree.
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        member_ids = [self.object.user_id] + list(
+            self.object.shares.values_list("user_id", flat=True))
+        held = {}
+        for a in holders.values():
+            held[a.user_id] = held.get(a.user_id, 0) + 1
+        members = {u.pk: u for u in User.objects.filter(pk__in=member_ids)}
+        ctx["members"] = [{
+            "user": members[uid], "dot": person_colour(uid),
+            "count": held.get(uid, 0),
+            "is_you": uid == self.request.user.id,
+        } for uid in member_ids if uid in members]
+        ctx["assignee"] = assignee
+        ctx["unassigned_count"] = sum(
+            1 for v in counted if v.pk not in holders)
+        ctx["my_role"] = self.object.role_for(self.request.user)
+        ctx["can_assign"] = self.object.allows(self.request.user, "manager")
+        ctx["can_annotate"] = self.object.allows(self.request.user, "annotator")
+        ctx["my_clips"] = sum(1 for a in holders.values()
+                              if a.user_id == self.request.user.id)
+        ctx["stage"] = stage
+        ctx["progress"] = progress_mod.summary(
+            self.object, states, len(counted), failed_ids)
         ctx["video_filter"] = vf
         ctx["video_filter_on"] = any(vf.values())
         ctx["video_filtered_count"] = len(filtered)
@@ -323,44 +434,11 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
             "days": sorted({v.day for v in counted if v.day}),
         }
 
-        # Available videos to add — the SAME comprehensive filter as the Processing
-        # page (device · confirmation · site · year · month · day · hour · search),
-        # over all accessible videos (own + shared), so every hotel/location/time is
-        # reachable — not just the first page.
-        existing_ids = set(videos.values_list("pk", flat=True))
-        all_user = Video.accessible(self.request.user)
-        available = all_user.exclude(pk__in=existing_ids)
-
-        af = {k: self.request.GET.get("av_" + k, "").strip()
-              for k in ("q", "device", "site", "year", "month", "day", "hour")}
-        if af["q"]:
-            available = available.filter(title__icontains=af["q"])
-        if af["device"]:
-            available = available.filter(device_id=af["device"])
-        if af["site"]:
-            available = available.filter(site_name=_unsanitize_site(af["site"]))
-        for field in ("year", "month", "day", "hour"):
-            if af[field]:
-                try:
-                    available = available.filter(**{field: int(af[field])})
-                except (ValueError, TypeError):
-                    pass
-        available = available.select_related("device").order_by("-recorded_at", "-id")
-
-        ctx["available_videos"] = available[:500]
-        ctx["available_count"] = available.count()
-        ctx["available_filter"] = af
-        ctx["available_filter_on"] = any(af.values())
-        ctx["available_devices"] = Device.accessible(self.request.user).order_by("name")
-        # Options from ALL accessible videos so nothing is hidden.
-        ctx["available_opts"] = {
-            "sites": sorted({_sanitize_site(s) for s in
-                             all_user.exclude(site_name="").values_list("site_name", flat=True)}),
-            "years": sorted(set(all_user.exclude(year=None).values_list("year", flat=True))),
-            "months": sorted(set(all_user.exclude(month=None).values_list("month", flat=True))),
-            "days": sorted(set(all_user.exclude(day=None).values_list("day", flat=True))),
-            "hours": sorted(set(all_user.exclude(hour=None).values_list("hour", flat=True))),
-        }
+        # The clip picker moved to AddVideosWorkspaceView, which uses the
+        # shared workspace filter. What stood here was a second, hand-rolled
+        # copy — title/device/site/year/month/day/confirmed — that had already
+        # drifted from apply_video_filters: no multi-hotel selection, no
+        # time-of-day window, no date range, no "not yet analysed".
 
         # Build combined frame grid with filters
         filter_video = self.request.GET.get("video", "")
@@ -504,13 +582,386 @@ class RemoveVideoView(LoginRequiredMixin, View):
         from django.shortcuts import redirect
         from django.contrib import messages
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Removing a clip discards anyone's work on it.
+        project = get_object_or_404(
+            AnnotationProject.manageable(request.user), pk=pk)
         video_id = request.POST.get("video_id")
         if video_id:
             project.videos.remove(video_id)
             Annotation.objects.filter(project=project, video_id=video_id).delete()
             messages.info(request, "Video removed from the project.")
         return redirect("annotations:detail", pk=pk)
+
+
+# Stable per-person colours, so the same face is the same colour on the people
+# page, the clip list and every assignment chip.
+PERSON_DOTS = ["#16a34a", "#b45309", "#0e7490", "#7c3aed", "#be123c", "#4d7c0f",
+               "#0369a1", "#a16207"]
+
+
+def person_colour(user_id):
+    return PERSON_DOTS[(user_id or 0) % len(PERSON_DOTS)]
+
+
+class PublicBrowseView(LoginRequiredMixin, TemplateView):
+    """Datasets and models other people have published.
+
+    Datasets are COPIED, models are USED — a dataset you build on has to be
+    yours to change, a model is an artefact you point a pipeline at.
+    """
+
+    template_name = "annotations/browse.html"
+
+    def get_context_data(self, **kwargs):
+        from apps.training.models import CustomModel
+
+        from . import publishing
+
+        ctx = super().get_context_data(**kwargs)
+        tab = self.request.GET.get("tab") or "datasets"
+
+        datasets = []
+        for project in AnnotationProject.public()[:60]:
+            datasets.append({
+                "project": project,
+                "summary": publishing.summary(project),
+                "mine": project.user_id == self.request.user.id,
+            })
+
+        models = (CustomModel.objects
+                  .filter(visibility=CustomModel.Visibility.PUBLIC)
+                  .select_related("user").order_by("-published_at", "-id")[:60])
+
+        ctx.update({
+            "tab": tab,
+            "datasets": datasets,
+            "models": models,
+            "dataset_count": AnnotationProject.public().count(),
+            "model_count": CustomModel.objects.filter(
+                visibility=CustomModel.Visibility.PUBLIC).count(),
+        })
+        return ctx
+
+
+class PublishProjectView(LoginRequiredMixin, View):
+    """Publish or unpublish. Owner only — it is their data being offered."""
+
+    def post(self, request, pk):
+        from django.contrib import messages
+        from django.shortcuts import redirect
+
+        from . import publishing
+
+        project = get_object_or_404(AnnotationProject.owned(request.user), pk=pk)
+        if request.POST.get("visibility") == "public":
+            publishing.publish(
+                project, include_metadata=bool(request.POST.get("include_metadata")))
+            messages.success(
+                request,
+                "Published. Anyone signed in can now view it and take a copy — "
+                + ("recording times and site names are included."
+                   if project.publish_metadata
+                   else "recording times and site names are withheld."))
+        else:
+            publishing.unpublish(project)
+            messages.info(
+                request,
+                "No longer listed. Copies people already took are unaffected.")
+        return redirect("annotations:people", pk=pk)
+
+
+class CopyProjectView(LoginRequiredMixin, View):
+    """Take a copy of a published dataset into your own account."""
+
+    def post(self, request, pk):
+        from django.contrib import messages
+        from django.shortcuts import redirect
+
+        from . import publishing
+
+        source = get_object_or_404(
+            AnnotationProject, pk=pk,
+            visibility=AnnotationProject.Visibility.PUBLIC)
+        copy = publishing.copy_for(source, request.user,
+                                   name=(request.POST.get("name") or "").strip() or None)
+        messages.success(
+            request,
+            f"Copied “{source.name}” — {copy.annotations.count()} frame(s) are "
+            "yours to change. The original is untouched.")
+        return redirect("annotations:detail", pk=copy.pk)
+
+
+class ProjectPeopleView(LoginRequiredMixin, TemplateView):
+    """Who is on this project, what they may do, and how far along they are.
+
+    Readable by everyone on the project — knowing who else is working on it is
+    part of working on it — while every control is owner-only.
+    """
+
+    template_name = "annotations/people.html"
+
+    def get_context_data(self, **kwargs):
+        from . import assignments as assign_mod
+        from .models import ProjectShare
+
+        ctx = super().get_context_data(**kwargs)
+        project = get_object_or_404(
+            AnnotationProject.accessible(self.request.user), pk=kwargs["pk"])
+
+        loads = {w["user_id"]: w for w in assign_mod.workloads(project)}
+        people = [{
+            "user": project.user, "role": "owner", "role_label": "Owner",
+            "dot": person_colour(project.user_id),
+            "is_you": project.user_id == self.request.user.id,
+            "share": None, "load": loads.get(project.user_id),
+        }]
+        for share in project.shares.select_related("user").all():
+            people.append({
+                "user": share.user, "role": share.role,
+                "dot": person_colour(share.user_id),
+                "role_label": share.get_role_display(),
+                "is_you": share.user_id == self.request.user.id,
+                "share": share, "load": loads.get(share.user_id),
+            })
+
+        ctx.update({
+            "project": project,
+            "people": people,
+            "roles": ProjectShare.Role.choices,
+            "can_manage_people": project.user_id == self.request.user.id,
+            "unassigned_count": assign_mod.unassigned(project).count(),
+            "my_role": project.role_for(self.request.user),
+        })
+        return ctx
+
+
+class ShareInviteView(LoginRequiredMixin, View):
+    """Add a person to the project. Owner only."""
+
+    def post(self, request, pk):
+        from django.contrib import messages
+        from django.contrib.auth import get_user_model
+        from django.shortcuts import redirect
+
+        from .models import ProjectShare
+
+        project = get_object_or_404(AnnotationProject.owned(request.user), pk=pk)
+        who = (request.POST.get("who") or "").strip()
+        role = request.POST.get("role") or ProjectShare.Role.ANNOTATOR
+
+        User = get_user_model()
+        user = (User.objects.filter(username__iexact=who).first()
+                or User.objects.filter(email__iexact=who).first())
+        if user is None:
+            messages.error(request, f"No account matches “{who}”.")
+        elif user.id == project.user_id:
+            messages.info(request, "You already own this project.")
+        elif role not in dict(ProjectShare.Role.choices):
+            messages.error(request, "Unknown role.")
+        else:
+            share, created = ProjectShare.objects.update_or_create(
+                project=project, user=user,
+                defaults={"role": role, "created_by": request.user})
+            messages.success(
+                request,
+                f"{'Added' if created else 'Updated'} {user.username} as "
+                f"{share.get_role_display().split('—')[0].strip().lower()}.")
+        return redirect("annotations:people", pk=pk)
+
+
+class ShareUpdateView(LoginRequiredMixin, View):
+    """Change someone's role, or remove them. Owner only."""
+
+    def post(self, request, pk):
+        from django.contrib import messages
+        from django.shortcuts import redirect
+
+        from .models import ProjectShare
+
+        project = get_object_or_404(AnnotationProject.owned(request.user), pk=pk)
+        share = get_object_or_404(ProjectShare, project=project,
+                                  pk=request.POST.get("share_id"))
+
+        if request.POST.get("remove"):
+            # Their assignments go back to the pool rather than vanishing with
+            # them — the work is the project's, not theirs.
+            freed = project.assignments.filter(user=share.user).delete()[0]
+            name = share.user.username
+            share.delete()
+            messages.info(
+                request,
+                f"Removed {name}." + (f" {freed} clip(s) returned to the "
+                                      "unassigned pool." if freed else ""))
+        else:
+            role = request.POST.get("role")
+            if role in dict(ProjectShare.Role.choices):
+                share.role = role
+                share.save(update_fields=["role"])
+                messages.success(request, f"{share.user.username} is now a "
+                                          f"{role}.")
+        return redirect("annotations:people", pk=pk)
+
+
+class AssignClipsView(LoginRequiredMixin, View):
+    """Hand clips out, or deal them round-robin. Manager and above."""
+
+    def post(self, request, pk):
+        from django.contrib import messages
+        from django.contrib.auth import get_user_model
+        from django.shortcuts import redirect
+
+        from . import assignments as assign_mod
+
+        project = get_object_or_404(AnnotationProject.manageable(request.user), pk=pk)
+        video_ids = [int(v) for v in request.POST.getlist("video_ids") if str(v).isdigit()]
+        if not video_ids:
+            messages.warning(request, "No clips selected.")
+            return redirect("annotations:detail", pk=pk)
+
+        User = get_user_model()
+        targets = User.objects.filter(pk__in=request.POST.getlist("assignee"))
+        # Only people who are actually on the project, or the assignment names
+        # someone who cannot open it.
+        allowed = {project.user_id} | set(
+            project.shares.values_list("user_id", flat=True))
+        targets = [u for u in targets if u.id in allowed]
+
+        if not targets:
+            freed = project.assignments.filter(video_id__in=video_ids).delete()[0]
+            messages.info(request, f"Returned {freed} clip(s) to the pool.")
+        elif len(targets) == 1:
+            moved = assign_mod.assign(project, video_ids, targets[0], by=request.user)
+            messages.success(request,
+                             f"Assigned {moved} clip(s) to {targets[0].username}.")
+        else:
+            tally = assign_mod.distribute(project, video_ids, targets, by=request.user)
+            spread = ", ".join(f"{u.username} {tally.get(u.id, 0)}" for u in targets)
+            messages.success(request, f"Split {len(video_ids)} clip(s): {spread}.")
+        return redirect(request.POST.get("next") or f"/annotations/{pk}/")
+
+
+class ClaimClipsView(LoginRequiredMixin, View):
+    """Take clips from the unassigned pool, or give your own back."""
+
+    def post(self, request, pk):
+        from django.contrib import messages
+        from django.shortcuts import redirect
+
+        from . import assignments as assign_mod
+
+        project = get_object_or_404(AnnotationProject.annotatable(request.user), pk=pk)
+        video_ids = [int(v) for v in request.POST.getlist("video_ids") if str(v).isdigit()]
+        releasing = bool(request.POST.get("release"))
+
+        done = 0
+        for vid in video_ids:
+            if releasing:
+                done += 1 if assign_mod.release(project, vid, request.user) else 0
+            else:
+                done += 1 if assign_mod.claim(project, vid, request.user) else 0
+
+        if releasing:
+            messages.info(request, f"Returned {done} clip(s) to the pool.")
+        else:
+            messages.success(request, f"Took {done} clip(s).")
+            if done < len(video_ids):
+                messages.warning(
+                    request,
+                    f"{len(video_ids) - done} were already taken by someone else.")
+        return redirect(request.POST.get("next") or f"/annotations/{pk}/")
+
+
+class AddVideosWorkspaceView(LoginRequiredMixin, TemplateView):
+    """Choosing clips to annotate, in the interface built for choosing clips.
+
+    The picker used to be a checkbox list of filenames in a five-row scroll box
+    capped at 500 — the decision that determines what the model learns, made by
+    reading titles through a window. This is the Processing hub's rail and grid,
+    shared rather than copied, plus the coverage map that says whether the
+    sample is lopsided.
+    """
+
+    template_name = "annotations/add_videos.html"
+
+    def get_context_data(self, **kwargs):
+        from apps.devices.models import Device
+        from apps.videos import workspace
+        from apps.videos.models import Video
+
+        from . import coverage as coverage_mod
+
+        ctx = super().get_context_data(**kwargs)
+        # Adding clips restructures the project and spends decode time.
+        project = get_object_or_404(
+            AnnotationProject.manageable(self.request.user), pk=kwargs["pk"])
+        params = self.request.GET
+
+        accessible = Video.accessible(self.request.user)
+        qs = workspace.apply_video_filters(accessible, params)
+        in_project = set(project.videos.values_list("pk", flat=True))
+
+        devices = Device.accessible(self.request.user).order_by("name")
+        per_device = dict(
+            qs.exclude(device=None).order_by()
+            .values_list("device_id").annotate(models.Count("id")))
+        rows = workspace.device_rows(devices, workspace._values(params, "device"),
+                                     per_device)
+        dots = workspace.dots_by_device(rows)
+
+        # Clips already in the project stay in the grid, marked. Hiding them is
+        # what makes over-sampling one hotel invisible — the same reason a
+        # reference with zero visits keeps its row.
+        membership = (params.get("member") or "").strip()
+        if membership == "in":
+            qs = qs.filter(pk__in=in_project)
+        elif membership == "out":
+            qs = qs.exclude(pk__in=in_project)
+
+        videos = list(qs.select_related("device")
+                      .order_by("-recorded_at", "-uploaded_at", "-id")[:200])
+        for v in videos:
+            v.in_project = v.pk in in_project
+
+        ctx.update({
+            "project": project,
+            "f": workspace.current_filter(params),
+            "opts": workspace.filter_options(accessible),
+            "device_rows": rows,
+            "video_days": workspace.group_by_day(videos, dots),
+            "video_count": qs.count(),
+            "available_total": accessible.count(),
+            "in_project_count": len(in_project),
+            "member": membership,
+            "member_choices": (("", "Show all"), ("out", "Not yet added"),
+                               ("in", "Already added")),
+            "coverage": coverage_mod.build(
+                workspace.apply_video_filters(accessible, params),
+                project.videos.all(), devices, dots),
+            "card_status_template": "annotations/_card_membership.html",
+            "filter_action": reverse("annotations:add_videos_page", args=[project.pk]),
+        })
+        return ctx
+
+
+class AddVideosDraftView(LoginRequiredMixin, View):
+    """Pre-select a balanced spread across the hotels and hours the project lacks."""
+
+    def get(self, request, pk):
+        from apps.videos import workspace
+        from apps.videos.models import Video
+
+        from . import coverage as coverage_mod
+
+        # Part of adding clips.
+        project = get_object_or_404(
+            AnnotationProject.manageable(request.user), pk=pk)
+        qs = workspace.apply_video_filters(Video.accessible(request.user), request.GET)
+        try:
+            per_cell = max(1, min(int(request.GET.get("per_cell") or 2), 10))
+        except (TypeError, ValueError):
+            per_cell = 2
+        picks = coverage_mod.draft(qs, project.videos.all(), per_cell=per_cell)
+        return JsonResponse({"video_ids": picks, "count": len(picks)})
 
 
 class AddVideosView(LoginRequiredMixin, View):
@@ -520,7 +971,9 @@ class AddVideosView(LoginRequiredMixin, View):
         from django.shortcuts import redirect
         from django.contrib import messages
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Adding clips restructures the project.
+        project = get_object_or_404(
+            AnnotationProject.manageable(request.user), pk=pk)
         video_ids = request.POST.getlist("video_ids")
 
         if not video_ids:
@@ -528,14 +981,34 @@ class AddVideosView(LoginRequiredMixin, View):
             return redirect("annotations:detail", pk=pk)
 
         from apps.videos.models import Video
-        videos = Video.objects.filter(user=request.user, pk__in=video_ids)
-        added = 0
+        # Accessible, not owned: the picker lists clips from shared devices, so
+        # restricting the add to owned ones silently drops half a selection.
+        videos = Video.accessible(request.user).filter(pk__in=video_ids)
+        added_videos = []
         for video in videos:
             if not project.videos.filter(pk=video.pk).exists():
                 project.videos.add(video)
-                added += 1
+                added_videos.append(video)
+        added = len(added_videos)
 
-        messages.success(request, f"Added {added} video(s) to project.")
+        # Sample them straight away. Adding a clip and then remembering to
+        # sample it were two steps that always ran together, and forgetting the
+        # second left the clip looking added-but-empty with nothing saying why.
+        # Re-sampling with different knobs stays available on the project page.
+        from . import sampling
+        from .models import FrameSamplingTask
+
+        params = sampling.clamp_params({})
+        for video in added_videos:
+            task = FrameSamplingTask.objects.create(
+                user=request.user, project=project, video=video, params=params)
+            sampling.spawn_sampling_async(task.pk)
+
+        messages.success(
+            request,
+            f"Added {added} clip(s) and started sampling them — up to "
+            f"{params['max_frames']} frames each, every "
+            f"{params['sample_interval']} frames. Frames appear as they finish.")
         return redirect("annotations:detail", pk=pk)
 
 
@@ -545,9 +1018,10 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
     def get(self, request, *args, **kwargs):
         """Return JSON for AJAX frame navigation, HTML for normal page load."""
         if request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.GET.get("format") == "json":
+            # Opening the editor is reading; SaveAnnotationView decides who
+            # may actually draw, and on which clip.
             project = get_object_or_404(
-                AnnotationProject, pk=self.kwargs["pk"], user=request.user
-            )
+                AnnotationProject.accessible(request.user), pk=self.kwargs["pk"])
             video_id = request.GET.get("video")
             frame_number = int(request.GET.get("frame", 0))
             boxes = []
@@ -567,8 +1041,8 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
         ctx = super().get_context_data(**kwargs)
         try:
             project = get_object_or_404(
-                AnnotationProject, pk=self.kwargs["pk"], user=self.request.user
-            )
+                AnnotationProject.accessible(self.request.user),
+                pk=self.kwargs["pk"])
         except Exception as e:
             logger.error("Editor: project lookup failed: %s", e)
             raise
@@ -680,12 +1154,17 @@ class TransferVideoView(LoginRequiredMixin, View):
         from django.shortcuts import redirect
         from django.contrib import messages
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Moving a clip between projects.
+        project = get_object_or_404(
+            AnnotationProject.manageable(request.user), pk=pk)
         video_id = request.POST.get("video_id")
         frame = request.POST.get("frame", 0)
 
         from apps.videos.models import Video
-        video = get_object_or_404(Video, pk=video_id, user=request.user)
+        # The clip has to be in this project. Filtering on ownership instead
+        # would make every manager on a shared project unable to touch clips
+        # the owner added — which is all of them.
+        video = get_object_or_404(project.videos.all(), pk=video_id)
 
         if not video.storage_key.startswith("s3://"):
             messages.info(request, "Video is already in storage.")
@@ -704,9 +1183,10 @@ class TransferVideoView(LoginRequiredMixin, View):
 
 class SaveAnnotationView(LoginRequiredMixin, View):
     def post(self, request, pk):
+        # Drawing. The per-clip check below narrows it further: an annotator
+        # works only what is assigned to them.
         project = get_object_or_404(
-            AnnotationProject, pk=pk, user=request.user
-        )
+            AnnotationProject.annotatable(request.user), pk=pk)
         try:
             data = json.loads(request.body)
         except json.JSONDecodeError:
@@ -720,6 +1200,16 @@ class SaveAnnotationView(LoginRequiredMixin, View):
             return JsonResponse({"error": "video_id and frame_number are required"}, status=400)
 
         video = get_object_or_404(project.videos, pk=video_id)
+
+        # The rule that actually confines an annotator: they draw on the clips
+        # assigned to them, by someone else or by themselves out of the pool.
+        # Reviewers and above are not confined that way, because checking other
+        # people's work is the job.
+        if not project.may_annotate_video(request.user, video.pk):
+            return JsonResponse(
+                {"error": "This clip is not assigned to you. Claim it from the "
+                          "unassigned pool, or ask for it to be assigned."},
+                status=403)
 
         # A human saving in the editor = a human review.
         from django.utils import timezone
@@ -1092,9 +1582,12 @@ class PreAnnotateView(LoginRequiredMixin, View):
         from django.shortcuts import redirect
         from django.contrib import messages
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Spends GPU.
+        project = get_object_or_404(
+            AnnotationProject.manageable(request.user), pk=pk)
         from apps.videos.models import Video
-        video = get_object_or_404(Video, pk=request.POST.get("video_id"), user=request.user)
+        video = get_object_or_404(project.videos.all(),
+                                  pk=request.POST.get("video_id"))
 
         task = _create_preannotation_task(request, project, video)
         spawn_preannotation_async(task.pk)
@@ -1140,7 +1633,9 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
         from django.shortcuts import redirect
         from django.contrib import messages
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Spends GPU, on every sampled frame.
+        project = get_object_or_404(
+            AnnotationProject.manageable(request.user), pk=pk)
         videos = project.videos.all()
         video_ids = request.POST.getlist("video_ids")
         if video_ids:
@@ -1189,7 +1684,9 @@ class CancelPreAnnotationView(LoginRequiredMixin, View):
 
         from .models import PreAnnotationTask
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Cancelling other people's GPU work.
+        project = get_object_or_404(
+            AnnotationProject.manageable(request.user), pk=pk)
         active = PreAnnotationTask.objects.filter(
             project=project, user=request.user,
             status__in=[PreAnnotationTask.Status.QUEUED, PreAnnotationTask.Status.PROCESSING],
@@ -1216,13 +1713,16 @@ class FrameImageView(LoginRequiredMixin, View):
         frame_number = int(request.GET.get("frame", 0))
         draw_boxes = request.GET.get("boxes", "false") == "true"
 
-        from apps.videos.models import Video
-        video = get_object_or_404(Video, pk=video_id, user=request.user)
+        # This is the hinge. Check ownership and shares silently do not work —
+        # a collaborator sees an empty editor. Check nothing and every project's
+        # frames leak. The rule is: the project must be readable by this user,
+        # and the clip must be in it.
+        project = get_object_or_404(AnnotationProject.accessible(request.user), pk=pk)
+        video = get_object_or_404(project.videos.all(), pk=video_id)
 
-        ann = None
         try:
-            project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
-            ann = Annotation.objects.get(project=project, video=video, frame_number=frame_number)
+            ann = Annotation.objects.get(project=project, video=video,
+                                         frame_number=frame_number)
         except Annotation.DoesNotExist:
             ann = None
 
@@ -1304,87 +1804,13 @@ class FrameImageView(LoginRequiredMixin, View):
             return HttpResponse(status=500)
 
 
-class ReviewView(LoginRequiredMixin, TemplateView):
-    """Visual annotation review page (Roboflow-style grid of annotated frames)."""
-    template_name = "annotations/review.html"
-
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        project = get_object_or_404(
-            AnnotationProject, pk=self.kwargs["pk"], user=self.request.user
-        )
-
-        # Filters from query params
-        video_filter = self.request.GET.get("video", "")
-        class_filter = self.request.GET.get("cls", "")
-        page_num = int(self.request.GET.get("page", 1))
-
-        annotations_qs = project.annotations.select_related("video").order_by(
-            "video__title", "frame_number"
-        )
-
-        if video_filter:
-            annotations_qs = annotations_qs.filter(video__pk=video_filter)
-
-        # Materialise and apply class filter (boxes is JSON, so filter in Python)
-        all_anns = list(annotations_qs[:2000])  # Cap for safety
-
-        if class_filter:
-            filtered = []
-            for ann in all_anns:
-                classes_in_ann = {b.get("class", "") for b in (ann.boxes or [])}
-                if class_filter in classes_in_ann:
-                    filtered.append(ann)
-            all_anns = filtered
-
-        # Build annotation card data
-        ann_data = []
-        for ann in all_anns:
-            boxes = ann.boxes or []
-            class_names = sorted(set(b.get("class", "unknown") for b in boxes)) if boxes else []
-            ann_data.append({
-                "video": ann.video,
-                "video_pk": ann.video.pk,
-                "frame_number": ann.frame_number,
-                "box_count": len(boxes),
-                "class_names": class_names,
-            })
-
-        # Pagination (50 per page)
-        per_page = 50
-        total = len(ann_data)
-        total_pages = max(1, (total + per_page - 1) // per_page)
-        page_num = max(1, min(page_num, total_pages))
-        start = (page_num - 1) * per_page
-        end = start + per_page
-        page_anns = ann_data[start:end]
-
-        ctx["project"] = project
-        ctx["annotations"] = page_anns
-        ctx["total_count"] = total
-        ctx["page"] = page_num
-        ctx["total_pages"] = total_pages
-        ctx["has_prev"] = page_num > 1
-        ctx["has_next"] = page_num < total_pages
-        ctx["prev_page"] = page_num - 1
-        ctx["next_page"] = page_num + 1
-
-        # Filter options
-        ctx["videos"] = project.videos.all().order_by("title")
-        ctx["classes"] = project.classes
-        ctx["current_video"] = video_filter
-        ctx["current_class"] = class_filter
-
-        return ctx
-
-
 class ExportProjectView(LoginRequiredMixin, View):
     """Export YOLO dataset with images extracted from videos."""
 
     def get(self, request, pk):
+        # A viewer may export: the dataset is what sharing is for.
         project = get_object_or_404(
-            AnnotationProject, pk=pk, user=request.user
-        )
+            AnnotationProject.accessible(request.user), pk=pk)
         # Same rule as the training payload: un-annotated sampled frames are
         # navigation placeholders, not labelled data.
         annotations = (project.annotations.exclude(sampled_only=True)
@@ -1436,7 +1862,10 @@ class ExportProjectView(LoginRequiredMixin, View):
                 img_bytes = None
                 if ann.frame_image_path:
                     try:
-                        import io
+                        # `io` is imported at module level. Re-importing it here
+                        # made the name local to this whole method, so the
+                        # io.BytesIO() forty lines above raised UnboundLocalError
+                        # and export failed for everyone, every time.
                         b = io.BytesIO()
                         s3.download_to_stream("processed", ann.frame_image_path, b)
                         img_bytes = b.getvalue()
@@ -1493,7 +1922,10 @@ class PreAnnotateFrameView(LoginRequiredMixin, View):
         from django.conf import settings
         from .models import PreAnnotationTask
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # One frame in the editor: an annotation aid, bounded, and how
+        # labelling is actually done.
+        project = get_object_or_404(
+            AnnotationProject.annotatable(request.user), pk=pk)
         if not getattr(settings, "SAGEMAKER_SAM3_ENDPOINT_NAME", ""):
             return JsonResponse({"error": "SAM 3 endpoint isn't configured on this server."},
                                 status=400)
@@ -1544,7 +1976,9 @@ class PreAnnotateFrameStatusView(LoginRequiredMixin, View):
 
         from .models import PreAnnotationTask
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Polling the above.
+        project = get_object_or_404(
+            AnnotationProject.annotatable(request.user), pk=pk)
         task = get_object_or_404(PreAnnotationTask, pk=request.GET.get("task"),
                                  project=project, user=request.user)
         if task.status == PreAnnotationTask.Status.FAILED:
@@ -1613,7 +2047,9 @@ class SampleFramesView(LoginRequiredMixin, View):
         from . import sampling
         from .models import FrameSamplingTask
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Decodes every clip; a labeller must not start it.
+        project = get_object_or_404(
+            AnnotationProject.manageable(request.user), pk=pk)
         videos = project.videos.all()
         video_ids = request.POST.getlist("video_ids") or (
             [request.POST["video_id"]] if request.POST.get("video_id") else []
@@ -1654,7 +2090,9 @@ class CancelSamplingView(LoginRequiredMixin, View):
 
         from .models import FrameSamplingTask
 
-        project = get_object_or_404(AnnotationProject, pk=pk, user=request.user)
+        # Cancelling other people's work.
+        project = get_object_or_404(
+            AnnotationProject.manageable(request.user), pk=pk)
         cancelled = FrameSamplingTask.objects.filter(
             project=project,
             status__in=[FrameSamplingTask.Status.QUEUED,

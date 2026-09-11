@@ -1,0 +1,178 @@
+{% comment %}
+  Watching a clip without leaving the grid: hover-to-preview, and a focused
+  player with earlier/later stepping and keyboard control.
+
+  Shared by the Processing hub and the annotation clip picker — scanning
+  footage to decide what to run and scanning it to decide what to label are
+  the same act, and the second one is where the sample gets chosen, so it needs
+  the better tool at least as much.
+
+  Self-contained: it finds `.vid-card` elements itself and drives selection by
+  toggling each card's own checkbox and dispatching a bubbling `change`, which
+  is what both hosts already listen for. Nothing here knows what the host does
+  with a selection.
+
+  Context: viewer_select_label — what ticking the box means on this page.
+{% endcomment %}
+<div id="viewer" class="fixed inset-0 z-50 bg-gray-900/70 hidden items-center justify-center p-6">
+  <div class="bg-white rounded-xl shadow-2xl w-full max-w-5xl flex flex-col overflow-hidden" style="max-height: 90vh;">
+    <div class="flex items-center justify-between gap-4 px-4 py-3 border-b border-gray-200">
+      {% comment %}
+      The clip id is a UUID, so it never leads a card — but it is what you quote
+      in a bug report, so the focused view keeps it reachable, last and muted.
+      Day/time never wrap: they are the clip's identity and must stay on one line
+      however narrow the header gets.
+      {% endcomment %}
+      <div class="flex items-baseline gap-2.5 min-w-0">
+        <span id="v-day" class="text-base font-bold text-gray-900 whitespace-nowrap"></span>
+        <span id="v-time" class="text-base font-bold text-gray-900 whitespace-nowrap"></span>
+        <span id="v-hotel" class="text-xs text-gray-500 whitespace-nowrap"></span>
+        <span id="v-title" class="text-[11px] text-gray-300 truncate hidden sm:inline"></span>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        <span id="v-pos" class="text-xs text-gray-500"></span>
+        {% comment %}
+         Labelled by TIME, not by grid position. The grid is newest-first, so
+         "previous" by index walks toward newer footage — the opposite of what
+         stepping back through a day means. Earlier/Later cannot be read the
+         wrong way round.
+        {% endcomment %}
+        <button type="button" id="v-prev" class="border border-gray-300 rounded px-2 py-1 text-xs text-gray-700 hover:bg-gray-50">← Earlier</button>
+        <button type="button" id="v-next" class="border border-gray-300 rounded px-2 py-1 text-xs text-gray-700 hover:bg-gray-50">Later →</button>
+        <button type="button" id="v-close" class="text-gray-400 hover:text-gray-600 px-1.5 text-lg leading-none">&times;</button>
+      </div>
+    </div>
+    <div class="bg-gray-900 flex-1 min-h-0 flex items-center justify-center">
+      <video id="v-player" controls autoplay class="max-h-[65vh] w-auto max-w-full"></video>
+    </div>
+    <div class="flex items-center justify-between gap-4 px-4 py-2.5 border-t border-gray-200">
+      <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+        <input type="checkbox" id="v-select" class="rounded border-gray-300">
+        {{ viewer_select_label|default:"Select for this run" }}
+      </label>
+      <p class="text-[11px] text-gray-400">
+        <kbd class="bg-gray-100 border border-gray-300 rounded px-1">Space</kbd> play ·
+        <kbd class="bg-gray-100 border border-gray-300 rounded px-1">←</kbd><kbd class="bg-gray-100 border border-gray-300 rounded px-1">→</kbd> earlier / later ·
+        <kbd class="bg-gray-100 border border-gray-300 rounded px-1">X</kbd> select ·
+        <kbd class="bg-gray-100 border border-gray-300 rounded px-1">Esc</kbd> close
+      </p>
+      <a id="v-detail" href="#" class="text-xs text-amber-700 hover:underline">Open clip page →</a>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var cards = Array.prototype.slice.call(document.querySelectorAll('.vid-card'));
+  var viewer = document.getElementById('viewer');
+  if (!viewer || !cards.length) return;
+  var player = document.getElementById('v-player');
+  var sel = document.getElementById('v-select');
+  var at = -1;
+
+  // Toggling from the viewer drives the card's own checkbox and lets the event
+  // bubble, so whatever the host does with a selection keeps working without
+  // this file knowing about it.
+  function setChecked(card, value) {
+    var cb = card && card.querySelector('input[name="video_ids"]');
+    if (!cb) return null;
+    cb.checked = value;
+    cb.dispatchEvent(new Event('change', {bubbles: true}));
+    return cb;
+  }
+
+  function open(i) {
+    if (i < 0 || i >= cards.length) return;
+    at = i;
+    var c = cards[i];
+    document.getElementById('v-day').textContent = c.dataset.day || '';
+    document.getElementById('v-time').textContent = c.dataset.time || '';
+    document.getElementById('v-hotel').textContent = c.dataset.hotel || '';
+    document.getElementById('v-title').textContent = c.dataset.title || '';
+    document.getElementById('v-pos').textContent = (i + 1) + ' of ' + cards.length;
+    var detail = document.getElementById('v-detail');
+    detail.href = c.dataset.detail || '#';
+    detail.style.display = c.dataset.detail ? '' : 'none';
+    var cb = c.querySelector('input[name="video_ids"]');
+    sel.checked = cb ? cb.checked : false;
+    sel.disabled = !cb;
+    // The device's display rotation travels with the card, so the player turns
+    // for a flipped camera and back again for the next clip.
+    player.classList.toggle('rotate-180', c.dataset.rotate === '1');
+    player.src = c.dataset.stream;
+    viewer.classList.remove('hidden');
+    viewer.classList.add('flex');
+    c.scrollIntoView({block: 'nearest'});
+  }
+
+  function close() {
+    viewer.classList.add('hidden');
+    viewer.classList.remove('flex');
+    player.pause(); player.removeAttribute('src'); player.load();
+    at = -1;
+  }
+
+  // Cards run newest-first, so the LATER clip is the lower index and the
+  // EARLIER one the higher. Naming the moves after time keeps every caller
+  // (buttons, arrows, vim keys) from having to remember that.
+  function earlier() { open(at + 1); }
+  function later() { open(at - 1); }
+
+  // ── hover preview ─────────────────────────────────────────────────────
+  // The stream URL is requested only when a card is actually hovered, so a
+  // presign is spent per clip watched rather than per clip listed.
+  var hoverTimer = null;
+  cards.forEach(function (card, i) {
+    var media = card.querySelector('.media');
+    if (media) {
+      card.addEventListener('mouseenter', function () {
+        hoverTimer = setTimeout(function () {
+          if (media.querySelector('video')) return;
+          var v = document.createElement('video');
+          v.src = card.dataset.stream;
+          v.muted = true; v.loop = true; v.autoplay = true; v.playsInline = true;
+          v.className = 'absolute inset-0 w-full h-full object-cover';
+          media.appendChild(v);
+          var glyph = card.querySelector('.play-glyph');
+          if (glyph) glyph.style.display = 'none';
+        }, 180);   // a flick of the mouse across the grid costs nothing
+      });
+      card.addEventListener('mouseleave', function () {
+        clearTimeout(hoverTimer);
+        var v = media.querySelector('video');
+        if (v) { v.pause(); v.removeAttribute('src'); v.load(); v.remove(); }
+        var glyph = card.querySelector('.play-glyph');
+        if (glyph) glyph.style.display = '';
+      });
+    }
+    card.addEventListener('click', function (e) {
+      if (e.target.matches('input[type="checkbox"], label')) return;
+      open(i);
+    });
+  });
+
+  document.getElementById('v-close').addEventListener('click', close);
+  document.getElementById('v-prev').addEventListener('click', earlier);
+  document.getElementById('v-next').addEventListener('click', later);
+  viewer.addEventListener('click', function (e) { if (e.target === viewer) close(); });
+  sel.addEventListener('change', function () { setChecked(cards[at], this.checked); });
+
+  document.addEventListener('keydown', function (e) {
+    if (viewer.classList.contains('hidden')) return;
+    if (e.key === 'Escape') { close(); }
+    // Left goes back in time; j/k follow vim (j = down the grid = earlier),
+    // which lands on the same clip either way.
+    else if (e.key === 'ArrowLeft' || e.key === 'j' || e.key === 'J') { earlier(); }
+    else if (e.key === 'ArrowRight' || e.key === 'k' || e.key === 'K') { later(); }
+    else if (e.key === 'x' || e.key === 'X') {
+      var cb = cards[at] && cards[at].querySelector('input[name="video_ids"]');
+      if (cb) { sel.checked = !cb.checked; setChecked(cards[at], sel.checked); }
+    } else if (e.key === ' ') {
+      e.preventDefault();
+      if (player.paused) { player.play(); } else { player.pause(); }
+      return;
+    } else { return; }
+    e.preventDefault();
+  });
+})();
+</script>

@@ -14,6 +14,7 @@ import uuid
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.db.models import Q
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -113,9 +114,9 @@ def pipeline_editor(request, pk):
         for v in _user_videos(request)
     ]
     from apps.training.models import CustomModel
-    ready_models = CustomModel.objects.filter(
-        user=request.user, is_active=True, status=CustomModel.Status.READY,
-    ).exclude(storage_key="")
+    # Published models included: the weights are already in a bucket the
+    # workers read, so publishing one is only meaningful if it can be selected.
+    ready_models = CustomModel.usable(request.user)
     # Same type filters as the New Analysis form's model selects.
     bee_models = [
         {"id": str(m.pk), "name": m.name}
@@ -315,55 +316,49 @@ def run_on_videos(request):
 
 @login_required
 def run_list(request):
-    """History of the current user's pipeline runs (across pipelines)."""
+    """History, by LAUNCH rather than by run.
+
+    A launch is the unit a person thinks in: "the 12 clips I ran on Tuesday",
+    not the 12 rows it became. Paginating runs meant page 3 of a 3,250-clip batch
+    was still the same batch, and the launch before it was hundreds of pages
+    away. Batches are paginated now; a batch's own page lists its runs.
+
+    Runs launched on their own (one-click analysis, a single-clip pipeline run)
+    have no batch id, so they are listed separately rather than being lost.
+    """
+    from django.core.paginator import Paginator
+    from django.db.models import Count, F, Max, Q
+
     # Unstick runs whose jobs already resolved (missed completion notification).
     engine.reconcile_user_runs(request.user)
-    runs = list(PipelineRun.objects.filter(user=request.user)
-                .select_related("pipeline").order_by("-started_at", "-id")[:100])
 
-    # Resolve each run's input video title(s) in one query.
-    vid_ids = set()
-    for r in runs:
-        for s in (r.steps or []):
-            if s.get("block_type") == "input.video":
-                vid = (s.get("config") or {}).get("video_id")
-                if str(vid).isdigit():
-                    vid_ids.add(int(vid))
-    titles = {}
-    if vid_ids:
-        titles = {str(v.pk): (getattr(v, "title", "") or f"Video {v.pk}")
-                  for v in Video.objects.filter(pk__in=vid_ids)}
+    mine = PipelineRun.objects.filter(user=request.user)
 
-    rows = []
-    for r in runs:
-        inputs = [titles.get(str((s.get("config") or {}).get("video_id")))
-                  for s in (r.steps or []) if s.get("block_type") == "input.video"]
-        inputs = [i for i in inputs if i]
-        status_vals = (r.step_status or {}).values()
-        rows.append({
-            "run": r,
-            "input": ", ".join(inputs) or "—",
-            "done": sum(1 for st in status_vals if st == PipelineRun.STEP_DONE),
-            "total": len(r.steps or []),
-        })
+    batch_qs = (mine.exclude(batch_id=None)
+                .values("batch_id")
+                .annotate(
+                    count=Count("id"),
+                    done=Count("id", filter=Q(status=PipelineRun.Status.COMPLETED)),
+                    failed=Count("id", filter=Q(status=PipelineRun.Status.FAILED)),
+                    # Aliasing Max as `started_at` shadows the field, so a
+                    # second aggregate on it cannot resolve. One is enough.
+                    started_at=Max("started_at"),
+                )
+                .order_by("-started_at"))
 
-    # Batches (multi-video launches) with aggregate results pages. Counts come
-    # from the DB across ALL runs in each batch — NOT the capped recent-runs
-    # window above — so a large batch shows its true size (was capped at ~100).
-    from django.db.models import Count, Max, Q
-    batch_rows = list(
-        PipelineRun.objects.filter(user=request.user).exclude(batch_id=None)
-        .values("batch_id")
-        .annotate(
-            count=Count("id"),
-            done=Count("id", filter=Q(status=PipelineRun.Status.COMPLETED)),
-            failed=Count("id", filter=Q(status=PipelineRun.Status.FAILED)),
-            started_at=Max("started_at"),
-        )
-        .filter(count__gt=1)
-        .order_by("-started_at")[:50]
-    )
-    # Attach each batch's pipeline (a batch runs a single pipeline).
+    status_filter = request.GET.get("status", "")
+    if status_filter == "failed":
+        batch_qs = batch_qs.filter(failed__gt=0)
+    elif status_filter == "running":
+        batch_qs = batch_qs.filter(count__gt=F("done") + F("failed"))
+    elif status_filter == "completed":
+        batch_qs = batch_qs.filter(failed=0).filter(count=F("done"))
+
+    paginator = Paginator(batch_qs, 20)
+    page = paginator.get_page(request.GET.get("page"))
+    batch_rows = list(page.object_list)
+
+    # Each batch runs one pipeline; resolve them in a single query.
     pipe_by_batch = {}
     for r in (PipelineRun.objects.filter(batch_id__in=[b["batch_id"] for b in batch_rows])
               .values("batch_id", "pipeline_id").distinct()):
@@ -371,8 +366,23 @@ def run_list(request):
     pipes = {p.pk: p for p in Pipeline.objects.filter(pk__in=set(pipe_by_batch.values()))}
     for b in batch_rows:
         b["pipeline"] = pipes.get(pipe_by_batch.get(b["batch_id"]))
+        b["running"] = b["count"] - b["done"] - b["failed"]
+        b["pct_done"] = round(100 * b["done"] / b["count"]) if b["count"] else 0
 
-    return render(request, "pipelines/runs.html", {"rows": rows, "batches": batch_rows})
+    # Runs with no batch — one-click analysis and single-clip pipeline runs.
+    solo = list(mine.filter(batch_id=None).select_related("pipeline")
+                .order_by("-started_at", "-id")[:10])
+
+    return render(request, "pipelines/runs.html", {
+        "batches": batch_rows,
+        "page": page,
+        "solo": solo,
+        "status_filter": status_filter,
+        "counts": {
+            "all": mine.exclude(batch_id=None).values("batch_id").distinct().count(),
+            "runs": mine.count(),
+        },
+    })
 
 
 @login_required
@@ -444,6 +454,95 @@ def retry_step(request, pk, run_id, step_id):
     return redirect("pipelines:run_detail", pk=pk, run_id=run_id)
 
 
+def analyzer_options(run):
+    """Analyzers this run could be re-analysed with, and the one it used.
+
+    Every analyzer accepts tracks or detections, so a swap is nearly always
+    valid — what matters is that the run HAS a cached GPU result to feed them.
+    Hidden blocks are left out as swap *targets*, but the run's own analyzer is
+    always listed even when it has been retired: a run built on Visitation
+    Count still has to be able to say that is what it did, or the page offers
+    three alternatives to nothing in particular.
+    """
+    from .registry import BLOCK_REGISTRY
+
+    current = next((s.get("block_type") for s in (run.steps or [])
+                    if str(s.get("block_type", "")).startswith("analyze.")), "")
+    options = []
+    for key, block in BLOCK_REGISTRY.items():
+        if block.get("category") != "analyze":
+            continue
+        if block.get("hidden") and key != current:
+            continue
+        options.append({
+            "key": key,
+            "name": block.get("display_name", key),
+            "description": block.get("description", ""),
+            "icon": block.get("icon", ""),
+            "current": key == current,
+            # A retired analyzer can be kept but not chosen afresh.
+            "retired": bool(block.get("hidden")),
+        })
+    return current, options
+
+
+@login_required
+@require_POST
+def run_reanalyze(request, pk, run_id):
+    """Re-run this clip with a different analyzer, reusing the tracking.
+
+    Detection and tracking are the expensive part and they do not depend on
+    which analyzer reads them. ``engine._gpu_cache_key`` hashes the clip and the
+    GPU step's own config, so swapping a LOCAL analyzer leaves that key
+    untouched and the cached result is served — the new run finishes in seconds
+    and costs no GPU time.
+
+    That is the same cache that makes a benchmark re-run dishonest unless it
+    passes ``fresh`` (a GPU-side fix would return the old result). Here reuse is
+    exactly what is wanted, so this deliberately does NOT pass it.
+
+    A new run rather than a mutation: the original keeps its answer, so two
+    analyses of one clip can be compared instead of one overwriting the other.
+    """
+    from .registry import BLOCK_REGISTRY
+
+    old = get_object_or_404(PipelineRun, pk=run_id, user=request.user)
+    new_type = request.POST.get("block_type", "")
+    block = BLOCK_REGISTRY.get(new_type)
+    if not block or block.get("category") != "analyze":
+        messages.error(request, "That is not an analyzer.")
+        return redirect("pipelines:run_detail", pk=pk, run_id=run_id)
+
+    steps = copy.deepcopy(old.steps or [])
+    swapped = False
+    for step in steps:
+        if str(step.get("block_type", "")).startswith("analyze."):
+            step["block_type"] = new_type
+            # The old analyzer's config does not transfer — a visitation gap
+            # threshold means nothing to foraging trips. Seed the new block's
+            # defaults so required fields (detection_count's `metric`) are set.
+            step["config"] = {f["name"]: f.get("default")
+                              for f in block.get("config_fields", [])
+                              if f.get("default") is not None}
+            swapped = True
+    if not swapped:
+        messages.error(request, "This run has no analyzer step to swap.")
+        return redirect("pipelines:run_detail", pk=pk, run_id=run_id)
+
+    errors = validate_steps(steps)
+    if errors:
+        messages.error(request, errors[0])
+        return redirect("pipelines:run_detail", pk=pk, run_id=run_id)
+
+    run = PipelineRun.objects.create(pipeline=old.pipeline, user=request.user)
+    engine.start_run(run, steps=steps)          # NOT fresh: reuse is the point
+    messages.success(
+        request,
+        f"Re-analysing with {block.get('display_name', new_type)} — reuses this "
+        "clip's tracking, so it costs no GPU time.")
+    return redirect("pipelines:run_detail", pk=old.pipeline_id, run_id=run.pk)
+
+
 def _viewable_run_or_404(request, run_id):
     """The launcher sees their run; device-share users (viewer/manager) see
     runs on videos of devices shared with them. Write paths (rerun, retry)
@@ -462,10 +561,16 @@ def _viewable_run_or_404(request, run_id):
 @login_required
 def run_detail(request, pk, run_id):
     run = _viewable_run_or_404(request, run_id)
+    current_analyzer, analyzers = analyzer_options(run)
     return render(request, "pipelines/run.html", {
         "pipeline": run.pipeline,
         "run": run,
         "steps": _run_steps(run),
+        "analyzers": analyzers,
+        "current_analyzer": current_analyzer,
+        # Re-analysing needs a cached GPU result to feed the new analyzer, and
+        # only the owner may spend anything on this run's behalf.
+        "can_reanalyze": run.user_id == request.user.id and run.status == "completed",
     })
 
 
@@ -710,6 +815,10 @@ def _trip_bounds(request):
         request.GET.get("min_sec"), request.GET.get("max_sec"))
 
 
+# How many clips may be probed for their measured properties per page render.
+PROBES_PER_RENDER = 8
+
+
 @login_required
 def batch_detail(request, batch_id):
     """Aggregate results for runs launched together: per-run status, combined
@@ -720,52 +829,79 @@ def batch_detail(request, batch_id):
     sources, skipped = aggregate.collect_sources(runs)
     all_done = all(r.is_terminal for r in runs)
 
-    # Cap the IN-PAGE aggregation so a huge batch can't ride the request past
-    # App Runner's hard 120s limit (each source may cost an S3 read on a cold
-    # cache). The combined-CSV downloads below remain uncapped. Oldest-first
-    # order is preserved; the page shows what was left out.
-    AGG_CAP = 300
-    agg_total = len(sources)
-    if agg_total > AGG_CAP:
-        sources = sources[:AGG_CAP]
+    # Per-run rows + failures grouped by cause. The page used to show a status
+    # pill per run and nothing else, so nine failures of two kinds could only be
+    # triaged by opening nine pages.
+    from . import failures as failure_taxonomy
+    rows = aggregate.batch_rows(runs)
+    outcome = aggregate.batch_summary(rows)
+    failure_groups = failure_taxonomy.group([
+        (r["video"].pk if r["video"] else None, r["error"], r["run"].started_at)
+        for r in rows if r["status"] == "failed"
+    ])
 
-    min_sec, max_sec = _trip_bounds(request)
-    events = aggregate.collect_events(sources) if sources else []
-    trips, summary = (aggregate.aggregate_trips(sources, min_sec, max_sec, events=events)
-                      if sources else ([], None))
-    charts = aggregate.activity_charts(events, trips) if sources else {}
-    # Individual Exit/Entry events (per-nest drill-down table), newest first.
-    event_rows = sorted(
-        ({"nest": e["nest"], "action": e["action"], "time": e["time"],
-          "video": e["video"], "video_pk": e.get("video_pk")} for e in events),
-        key=lambda e: e["time"], reverse=True,
-    )
+    # The base tables this batch can hand back, combined across its clips. Only
+    # the ones something actually wrote: a button that downloads nothing looks
+    # like a bug rather than a missing pipeline step.
+    _backfill_interactions_paths(sources)
+    downloads = aggregate.available_downloads(sources, runs)
 
-    # Per-run rows (title + status) for the members table.
-    from apps.videos.models import Video
-    vid_ids = [v for r in runs if (v := aggregate.run_video_id(r)) is not None]
-    titles = {v.pk: (v.title or f"Video {v.pk}")
-              for v in Video.objects.filter(pk__in=vid_ids)}
-    members = [{"run": r,
-                "video": titles.get(aggregate.run_video_id(r), "—")}
-               for r in runs]
+    # What the downloads leave out. collect_sources has always returned this and
+    # the page has always thrown it away, so a clip that could not join an export
+    # vanished from it with nothing on screen to say so — and a download that is
+    # quietly missing clips is worse than one that says which.
+    skipped_sources = skipped
+
+    # Whether a reference reached the analyzer decided every count on this page
+    # and was visible nowhere.
+    references = aggregate.reference_summary(runs, rows)
+
+    # Running these same clips through a different pipeline. Offered instead of
+    # an analyzer swap: a different pipeline may detect a different class,
+    # prompt differently or use a different reference, and those are the
+    # choices actually worth revisiting on a finished batch.
+    rerun_videos = sorted({r["video"].pk for r in rows if r["video"]})
+
+    # A clip's length comes from its own file, so "unknown" is a gap we can
+    # close rather than a fact about the clip. Anything still missing is probed
+    # in the background and fills in on a later load.
+    #
+    # Capped per render: a 3,000-clip batch would otherwise spawn 3,000 threads
+    # that almost all immediately give up on the semaphore. A few per load
+    # drains a backlog over a handful of visits without ever being a spike, and
+    # `backfill_video_props` remains the way to do the whole library at once.
+    from apps.videos.thumbnails import probe_on_demand
+    probes = 0
+    for row in rows:
+        if probes >= PROBES_PER_RENDER:
+            break
+        if row["video"] and not row["video"].duration_seconds:
+            probe_on_demand(row["video"])
+            probes += 1
+    rerun_pipelines = (Pipeline.objects
+                       .filter(Q(user=request.user) | Q(is_template=True))
+                       .exclude(pk=runs[0].pipeline_id if runs else None)
+                       .order_by("-is_template", "title"))
+
+    # No cross-video aggregation here any more. The page used to pair trips and
+    # build activity charts on every load — up to 300 clips' events CSVs read
+    # from S3 — for panels that are now gone. Trips are a read over the events
+    # table, and the table is a download.
 
     return render(request, "pipelines/batch.html", {
+        "rows": rows,
+        "outcome": outcome,
+        "failure_groups": failure_groups,
+        "downloads": downloads,
+        "references": references,
+        "rerun_videos": rerun_videos,
+        "rerun_pipelines": rerun_pipelines,
+        "can_rerun": any(r.user_id == request.user.id for r in runs),
         "batch_id": batch_id,
         "pipeline": runs[0].pipeline,
-        "members": members,
-        "all_done": all_done,
         "running": sum(1 for r in runs if not r.is_terminal),
         "sources": sources,
-        "skipped": skipped,
-        "trips": trips,
-        "events": event_rows,
-        "summary": summary,
-        "charts": charts,
-        "agg_total": agg_total,
-        "agg_capped": agg_total > AGG_CAP,
-        "min_sec": min_sec,
-        "max_sec": max_sec,
+        "skipped_sources": skipped_sources,
     })
 
 
@@ -781,6 +917,73 @@ def _csv_response(filename, fieldnames, rows):
 
 
 @login_required
+@login_required
+@require_POST
+def batch_rerun(request, batch_id):
+    """Re-run a batch: all of it, only what failed, or one cause.
+
+    Launches a NEW batch over the same clips and the same pipeline, so the two
+    stay comparable — the old batch keeps its record rather than being
+    overwritten, which is what makes a batch usable as a benchmark.
+
+    ``fresh=1`` skips the GPU result cache. That matters more than it looks: a
+    finished step is cached on a hash of the clip and the job config, NOT on the
+    build that produced it, so re-running after a fix would hand back the old
+    result and report success. Failures were never cached, so "re-run failed" is
+    honest either way; "re-run all" is the one that needs it.
+    """
+    from . import aggregate
+
+    runs = _batch_runs(request, batch_id)
+    mine = [r for r in runs if r.user_id == request.user.id]
+    if not mine:
+        return HttpResponse(status=403)
+
+    rows = aggregate.batch_rows(mine)
+    scope = request.POST.get("scope", "failed")
+    cause_key = request.POST.get("cause", "")
+
+    if scope == "all":
+        wanted = [r for r in rows]
+    elif scope == "cause" and cause_key:
+        from . import failures as failure_taxonomy
+        wanted = [r for r in rows
+                  if r["status"] == "failed"
+                  and failure_taxonomy.classify(r["error"])["key"] == cause_key]
+    else:
+        wanted = [r for r in rows if r["status"] == "failed"]
+
+    video_ids = [r["video"].pk for r in wanted if r["video"]]
+    if not video_ids:
+        messages.warning(request, "Nothing to re-run.")
+        return redirect("pipelines:batch_detail", batch_id=batch_id)
+
+    from apps.videos.models import Video
+    videos = list(Video.manageable(request.user).filter(pk__in=video_ids))
+    if not videos:
+        messages.error(request, "Those clips are no longer yours to run.")
+        return redirect("pipelines:batch_detail", batch_id=batch_id)
+
+    pipeline = mine[0].pipeline
+    fresh = request.POST.get("fresh") == "1"
+    new_batch, launched, invalid = engine.launch_batch(
+        pipeline, videos, request.user, fresh=fresh)
+
+    if launched:
+        try:
+            from apps.analysis.views import _drain_queue
+            _drain_queue()
+        except Exception:
+            logger.exception("inline drain after batch re-run failed")
+
+    msg = f"Re-running {len(launched)} clip(s)"
+    msg += " from scratch." if fresh else ", reusing cached results where nothing changed."
+    if invalid:
+        msg += f" Skipped {invalid}."
+    messages.success(request, msg)
+    return redirect("pipelines:batch_detail", batch_id=new_batch)
+
+
 def batch_trips_csv(request, batch_id):
     from . import aggregate
 
@@ -826,10 +1029,30 @@ def batch_combined_csv(request, batch_id, kind):
 
     path_key = {"events": "events_csv_path",
                 "tracking": "tracking_csv_path",
-                "interactions": "interactions_csv_path"}.get(kind)
+                "interactions": "interactions_csv_path",
+                "detections": "detections_csv_path"}.get(kind)
     if not path_key:
         raise Http404("Unknown CSV kind.")
     runs = _batch_runs(request, batch_id)
+
+    # Events and interactions come from the analyzers, recomputed if need be.
+    # They must NOT silently fall back to the worker's own file: that one
+    # matches an insect to a reference by centroid distance under a flat 50 px,
+    # so a bee inside a large flower never appears in it, and a download that
+    # quietly hands back a different answer is worse than one that fails.
+    if kind in aggregate.PRIMITIVE_KINDS:
+        fieldnames, rows = aggregate.primitive_csv(runs, kind)
+        if fieldnames:
+            return _csv_response(f"{kind}_batch_{str(batch_id)[:8]}.csv",
+                                 fieldnames, rows)
+        messages.warning(
+            request,
+            f"No {kind} could be computed for this batch. That usually means no "
+            "reference reached the analyzer — draw an ROI, use the device nest "
+            "layout, or wire a Detect node for the reference class into it. The "
+            "Tracking CSV is unaffected.")
+        return redirect("pipelines:batch_detail", batch_id=batch_id)
+
     sources, _ = aggregate.collect_sources(runs)
     if path_key == "interactions_csv_path":
         _backfill_interactions_paths(sources)

@@ -17,15 +17,26 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from typing import List
 
 import numpy as np
 
+from beemonitor.core.profiling import PROFILER
 from beemonitor.detection.base_detector import BaseDetector, Detection
 
 logger = logging.getLogger(__name__)
 
 _MODEL_ID = os.environ.get("SAM3_MODEL_ID", "facebook/sam3")
+
+# One model per PROCESS, not per detector. The lock serialises both the lazy
+# ``transformers`` import (which is not thread-safe on first access) and the
+# load itself, so concurrent invocations cannot race or duplicate a multi-GB
+# model on the GPU.
+_LOAD_LOCK = threading.Lock()
+_SHARED_MODEL = None
+_SHARED_PROCESSOR = None
+_SHARED_DEVICE = None
 
 
 class Sam3Detector(BaseDetector):
@@ -44,17 +55,46 @@ class Sam3Detector(BaseDetector):
 
     # ── lazy model load ──────────────────────────────────────────────────────
     def _ensure_model(self):
+        """Load SAM 3 once per process, serialised across threads.
+
+        Two things made this the batch's second failure mode:
+
+        **The import races.** ``transformers`` resolves submodules lazily, so a
+        first ``from transformers import Sam3Model`` from two threads at once
+        can have one of them observe a half-registered module and raise
+        ``ImportError: cannot import name 'Sam3Model'``. The container serves
+        several invocations on gunicorn gthread workers, each constructing its
+        own detector, so the first batch to run SAM 3 concurrently hit it —
+        intermittently, which is why a single retry looked fine.
+
+        **The model was loaded per detector.** Every concurrent invocation put
+        another multi-GB copy on the same GPU. Sharing one across the process
+        is what makes more than one job per instance feasible at all; the model
+        is read-only in eval mode and the prompt is per-call, so there is no
+        per-detector state to keep separate.
+        """
         if self._model is not None:
             return
-        import torch
-        from transformers import Sam3Model, Sam3Processor
 
-        self._device = self._device or ("cuda" if torch.cuda.is_available() else "cpu")
-        token = os.environ.get("HF_TOKEN") or None  # None when baked/offline
-        logger.info("Loading SAM 3 (%s) on %s for tracking prompts=%s",
-                    _MODEL_ID, self._device, self.prompts)
-        self._processor = Sam3Processor.from_pretrained(_MODEL_ID, token=token)
-        self._model = Sam3Model.from_pretrained(_MODEL_ID, token=token).to(self._device).eval()
+        global _SHARED_MODEL, _SHARED_PROCESSOR, _SHARED_DEVICE
+        with _LOAD_LOCK:
+            if _SHARED_MODEL is None:
+                import torch
+                from transformers import Sam3Model, Sam3Processor
+
+                device = self._device or ("cuda" if torch.cuda.is_available() else "cpu")
+                token = os.environ.get("HF_TOKEN") or None  # None when baked/offline
+                logger.info("Loading SAM 3 (%s) on %s (once per process)",
+                            _MODEL_ID, device)
+                _SHARED_PROCESSOR = Sam3Processor.from_pretrained(_MODEL_ID, token=token)
+                _SHARED_MODEL = (Sam3Model.from_pretrained(_MODEL_ID, token=token)
+                                 .to(device).eval())
+                _SHARED_DEVICE = device
+
+            self._processor = _SHARED_PROCESSOR
+            self._model = _SHARED_MODEL
+            self._device = _SHARED_DEVICE
+        logger.info("SAM 3 ready on %s for prompts=%s", self._device, self.prompts)
 
     # ── one prompt on one PIL image → [(x1,y1,x2,y2,score), ...] ──────────────
     def _segment(self, pil_image, prompt: str):
@@ -86,15 +126,21 @@ class Sam3Detector(BaseDetector):
         self._ensure_model()
         pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         dets: List[Detection] = []
-        for prompt in self.prompts:
-            for x1, y1, x2, y2, score in self._segment(pil, prompt):
-                dets.append(Detection(
-                    bbox=(x1, y1, x2, y2),
-                    centroid=((x1 + x2) / 2.0, (y1 + y2) / 2.0),
-                    confidence=score,
-                    label=prompt,       # → tracking CSV taxon
-                    source="sam3",
-                ))
+        # Recorded as "inference", same stage name YOLODetector uses, with a
+        # count of one per FRAME rather than per prompt — so calls means frames
+        # whichever detector ran, and the seconds cover every prompt pass for
+        # that frame. Without this a SAM 3 run reported gpu_seconds = 0, which
+        # reads as "the GPU was idle" on the very detector where it is busiest.
+        with PROFILER.stage("inference"):
+            for prompt in self.prompts:
+                for x1, y1, x2, y2, score in self._segment(pil, prompt):
+                    dets.append(Detection(
+                        bbox=(x1, y1, x2, y2),
+                        centroid=((x1 + x2) / 2.0, (y1 + y2) / 2.0),
+                        confidence=score,
+                        label=prompt,       # → tracking CSV taxon
+                        source="sam3",
+                    ))
         # Dedupe overlapping boxes from the per-prompt passes.
         return self.nms(dets, self.iou_threshold)
 

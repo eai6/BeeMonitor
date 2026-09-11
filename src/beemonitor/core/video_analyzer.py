@@ -24,50 +24,12 @@ from ultralytics import YOLO
 import os
 import cv2
 
+from beemonitor.core.analysis_results import AnalysisResults
 from beemonitor.core.config import Config
 import re
 
 logger = logging.getLogger(__name__)
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
-
-# AnalysisResults class remains unchanged - keeping from original file
-class AnalysisResults:
-    """Container for video analysis results."""
-    
-    def __init__(self, events, tracks, nests, video_path, motion_data=None, config=None):
-        self.events = events
-        self.tracks = tracks
-        self.nests = nests
-        self.video_path = video_path
-        self.motion_data = motion_data
-        self.config = config
-    
-    def to_csv(self, output_folder="output", columns=None):
-        Path(output_folder).mkdir(parents=True, exist_ok=True)
-        base_filename = Path(self.video_path).stem
-        events_filename = str(Path(output_folder) / f"{base_filename}_events.csv")
-        
-        if columns is None:
-            self.events.to_csv(events_filename, index=False)
-        else:
-            available_cols = [col for col in columns if col in self.events.columns]
-            self.events[available_cols].to_csv(events_filename, index=False)
-        
-        logger.info(f"Saved {len(self.events)} events to {events_filename}")
-        
-        tracking_filename = str(Path(output_folder) / f"{base_filename}_tracking_results.csv")
-        if self.tracks is not None and isinstance(self.tracks, pd.DataFrame) and not self.tracks.empty:
-            self.tracks.to_csv(tracking_filename, index=False)
-            logger.info(f"Saved {len(self.tracks)} tracking records to {tracking_filename}")
-    
-    def save_video(self, output_folder="output"):
-        from beemonitor.output.video_synthesizer import VideoSynthesizer
-        synthesizer = VideoSynthesizer(self.config)
-        output_path = synthesizer.synthesize(
-            self.video_path, self.events, self.motion_data, self.nests, output_folder
-        )
-        logger.info(f"Saved annotated video to {output_path}")
 
 
 class BeeMonitor:
@@ -122,8 +84,12 @@ class BeeMonitor:
             return None
         
         logger.info("Step 2/3: Detecting motion and tracking bees...")
+        # A manual layout may carry the ROI's traced outline ('hotel_polygon',
+        # pixel coords). The crop is still its bounding box; the outline masks the
+        # background inside that box so it never produces detections.
         flat_tracking_df, grouped_tracking_df = self.get_motion_tracking(
-            video_path, nests['hotel'], output_folder, visualize=visualize, detection_mode=detection_mode
+            video_path, nests['hotel'], output_folder, visualize=visualize,
+            detection_mode=detection_mode, hotel_polygon=nests.get('hotel_polygon'),
         )
         
         if flat_tracking_df is None or flat_tracking_df.empty:
@@ -156,7 +122,8 @@ class BeeMonitor:
         nests = detector.get_nests_and_hotel_detections(video_path=video_path)
         return nests
     
-    def get_motion_tracking(self, video_path, hotel_roi, output_folder, visualize=False, detection_mode='yolo'):
+    def get_motion_tracking(self, video_path, hotel_roi, output_folder, visualize=False,
+                            detection_mode='yolo', hotel_polygon=None):
         """Detect motion and track bees using YOLO-only mode (v2.2.1 CONFIG-BASED)."""
         from beemonitor.tracking.bee_tracking import BeeTracking
         from beemonitor.tracking.mot.bee_tracker import BeeTracker
@@ -257,6 +224,7 @@ class BeeMonitor:
             yolo_model_path=self.config.models.tracking,
             confidence_threshold=self.config.tracking.confidence_threshold,
             roi=hotel_roi,
+            roi_polygon=hotel_polygon,
             max_age_seconds=tracker_params['max_age_seconds'],
             min_hits_seconds=tracker_params['min_hits_seconds'],
             max_resurrection_seconds=tracker_params['max_resurrection_seconds'],
