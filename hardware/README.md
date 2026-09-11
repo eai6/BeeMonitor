@@ -381,11 +381,11 @@ BEEMONITOR_RECORD_DIR=/home/beemonitor/Desktop/cameraOutput/beeHotel
 # BEEMONITOR_PRE_ROLL=3
 # BEEMONITOR_POST_ROLL=4
 
-# Camera mounting. The defaults (1/1) are a 180-degree rotation, correct for a
-# camera mounted upside down in the standard enclosure. If this unit's footage
-# comes out upside down, it is mounted the other way up — set both to 0.
-# BEEMONITOR_VFLIP=1
-# BEEMONITOR_HFLIP=1
+# Camera orientation. Normally leave these unset: the 180 is decided from the
+# sensor model (see "Orientation" above), so a unit on the older module gets it
+# and an Arducam OwlSight does not. Set both only to override that choice.
+# BEEMONITOR_HFLIP=0
+# BEEMONITOR_VFLIP=0
 ```
 
 The file holds the device key, so lock it down:
