@@ -46,6 +46,25 @@
       </div>
     </div>
     <p class="text-xs text-gray-500">Decimal degrees. Set both, or leave both blank.</p>
+
+    <div class="pt-2 border-t border-gray-200">
+      <label class="flex items-start gap-2 cursor-pointer">
+        <input type="checkbox" name="rotate_180" id="id_rotate_180"
+               {% if form.rotate_180.value %}checked{% endif %}
+               class="mt-0.5 rounded border-gray-300 text-amber-600 focus:ring-amber-500">
+        <span>
+          <span class="block text-sm font-medium text-gray-700">Camera records upside down</span>
+          <span class="block text-xs text-gray-500 mt-0.5">
+            Rotates playback and thumbnails 180° for this device's clips. Saved
+            annotations, drawn ROIs and analysis are not affected. For footage
+            not yet recorded, fix it on the Pi instead — set
+            <code class="text-[11px]">BEEMONITOR_VFLIP=0 BEEMONITOR_HFLIP=0</code>
+            so the camera hands over upright frames in the first place.
+          </span>
+        </span>
+      </label>
+    </div>
+
     {% if form.non_field_errors %}<p class="text-xs text-red-600">{{ form.non_field_errors|join:", " }}</p>{% endif %}
 
     <div class="flex gap-3 pt-2">

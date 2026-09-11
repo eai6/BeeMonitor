@@ -158,6 +158,11 @@ def extract_thumbnail(video, *, force: bool = False) -> str:
             return video.thumbnail_key   # probed above; the still is already stored
 
         frame = _downscale(cv2, frame)
+        # A still is something a person looks at, so it follows the device's
+        # display rotation. Nothing derived from pixel positions is computed
+        # here, so this cannot move a coordinate.
+        if getattr(getattr(video, "device", None), "rotate_180", False):
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
         if not ok:
             return ""

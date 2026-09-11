@@ -40,12 +40,16 @@ class DeviceEditForm(forms.ModelForm):
 
     class Meta:
         model = Device
-        fields = ["name", "location", "lat", "lon"]
+        fields = ["name", "location", "lat", "lon", "rotate_180"]
         help_texts = {
             "name": "A nickname for this Pi.",
             "location": "Optional label, e.g. 'north hedgerow'.",
             "lat": "Optional. Decimal degrees, e.g. 40.7934.",
             "lon": "Optional. Decimal degrees, e.g. -77.8600.",
+            "rotate_180": "Tick if this camera records upside down. Affects "
+                          "playback and thumbnails only — the fix for new "
+                          "footage is BEEMONITOR_VFLIP / BEEMONITOR_HFLIP on "
+                          "the Pi.",
         }
 
     def clean(self):

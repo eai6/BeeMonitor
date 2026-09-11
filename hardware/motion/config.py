@@ -38,6 +38,19 @@ LORES_W = _env_int("BEEMONITOR_LORES_W", 640)
 LORES_H = _env_int("BEEMONITOR_LORES_H", 480)
 FPS = _env_int("BEEMONITOR_FPS", 25)
 
+# Camera mounting correction, applied in the ISP so BOTH streams (main and
+# lores) come out the same way up. The default 1/1 is a 180-degree rotation,
+# which is right for a camera mounted upside down in the standard enclosure --
+# every device in the field so far. A camera mounted the other way up records
+# upside-down footage with those defaults, and no amount of downstream work
+# makes that free: the detector, the annotation frames and the drawn geometry
+# all inherit whatever the sensor hands over. So it is set here, per device,
+# rather than corrected later.
+#
+#   BEEMONITOR_VFLIP=0 BEEMONITOR_HFLIP=0   # camera already the right way up
+CAMERA_VFLIP = _env_int("BEEMONITOR_VFLIP", 1)
+CAMERA_HFLIP = _env_int("BEEMONITOR_HFLIP", 1)
+
 # Clip timing (seconds).
 PRE_ROLL = _env_float("BEEMONITOR_PRE_ROLL", 3.0)
 # Tail kept AFTER motion stops before a clip closes. A short tail cuts clips off

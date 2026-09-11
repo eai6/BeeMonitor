@@ -23,6 +23,7 @@
                data-time="{{ v.recorded_at|default:v.uploaded_at|date:'H:i' }}"
                data-day="{{ group.day|date:'D j M' }}"
                data-hotel="{{ v.device.name|default:'—' }}"
+               data-rotate="{% if v.device.rotate_180 %}1{% endif %}"
                data-detail="{% url 'videos:detail' v.pk %}"
                data-title="{{ v.title|default:'(untitled)' }}">
             <div class="media relative bg-gray-800" style="aspect-ratio: 16/9;">

@@ -45,6 +45,7 @@ import cv2
 from motion.config import (
     log, RECORD_DIR, WORK_DIR, MAIN_W, MAIN_H, LORES_W, LORES_H, FPS,
     PRE_ROLL, POST_ROLL, MAX_SEGMENT, WARMUP_SECONDS, TIMESTAMP_OVERLAY,
+    CAMERA_VFLIP, CAMERA_HFLIP,
     DETECT_EVERY_N, BG_RESET_INTERVAL,
     CALIB_FILE, TUNING_FILE, ROI_OVERRIDE_FILE, ROI_POLYGON_FILE,
     CALIB_RELOAD_SECONDS, OVERRIDE_RELOAD_SECONDS,
@@ -184,7 +185,7 @@ def record() -> None:
         main={"size": (MAIN_W, MAIN_H)},
         lores={"size": (LORES_W, LORES_H), "format": "YUV420"},
         controls={"FrameRate": FPS},
-        transform=libcamera.Transform(vflip=1, hflip=1),
+        transform=libcamera.Transform(vflip=CAMERA_VFLIP, hflip=CAMERA_HFLIP),
     )
     cam.configure(config)
 

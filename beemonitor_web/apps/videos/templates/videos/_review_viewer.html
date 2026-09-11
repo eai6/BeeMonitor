@@ -96,6 +96,9 @@
     var cb = c.querySelector('input[name="video_ids"]');
     sel.checked = cb ? cb.checked : false;
     sel.disabled = !cb;
+    // The device's display rotation travels with the card, so the player turns
+    // for a flipped camera and back again for the next clip.
+    player.classList.toggle('rotate-180', c.dataset.rotate === '1');
     player.src = c.dataset.stream;
     viewer.classList.remove('hidden');
     viewer.classList.add('flex');

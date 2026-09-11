@@ -38,7 +38,12 @@
 <!-- Video Player -->
 {% if video_url %}
 <div class="bg-white shadow rounded-lg overflow-hidden mb-6">
-  <video controls class="w-full" preload="metadata" style="max-height: 500px;">
+  {% comment %}
+    The device's display rotation. The real fix is on the camera (see
+    Device.rotate_180); this makes footage recorded before that correction
+    watchable without re-encoding anything.
+  {% endcomment %}
+  <video controls class="w-full{% if video.device.rotate_180 %} rotate-180{% endif %}" preload="metadata" style="max-height: 500px;">
     <source src="{{ video_url }}" type="video/mp4">
     Your browser does not support the video tag.
   </video>

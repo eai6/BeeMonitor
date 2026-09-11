@@ -303,7 +303,8 @@ their reason.
        {% if r.video %}data-title="{{ r.when|date:"j M, H:i"|default:"clip" }}"
        data-original="{% url 'videos:stream' r.video.pk %}"
        {% if r.result.annotated_video_path %}data-annotated="{% url 'analysis:video_proxy' r.job.pk %}"{% endif %}
-       {% if r.job %}data-results="{% url 'analysis:results' r.job.pk %}"{% endif %}{% endif %}>
+       {% if r.job %}data-results="{% url 'analysis:results' r.job.pk %}"{% endif %}
+       data-rotate="{% if r.video.device.rotate_180 %}1{% endif %}"{% endif %}>
     {% comment %}
       Both the still and the time open this clip's own results — the videos,
       the per-clip numbers and its four CSVs. That page is what "open the clip"
@@ -409,6 +410,10 @@ setTimeout(function(){
       var playing = video.play();
       if (playing && playing.catch) playing.catch(function () {});
     }
+    // The clip's device may be mounted upside down. Both sources turn together:
+    // the overlay is drawn on the unrotated frames, so its boxes stay put.
+    video.classList.toggle('rotate-180', row.getAttribute('data-rotate') === '1');
+
     title.textContent = row.getAttribute('data-title') || '';
     pos.textContent = (at + 1) + ' of ' + rows.length;
 

@@ -181,6 +181,21 @@ class Device(models.Model):
     # consumer that only understands rectangles keeps working unchanged. Consumers
     # that DO understand polygons (motion gate, analyzer, visitation ops) use the
     # points to exclude the background the bounding box would have swept in.
+    # A camera mounted the other way up from the standard enclosure records
+    # upside-down footage. The real fix is on the device (BEEMONITOR_VFLIP /
+    # BEEMONITOR_HFLIP in hardware/motion/config.py) so the pixels arrive the
+    # right way up and the detector, the annotation frames and the drawn
+    # geometry all agree. This flag is for footage ALREADY uploaded from a
+    # miscofigured camera: it rotates what a person looks at -- playback and
+    # thumbnails -- and deliberately nothing else. Stored coordinates, saved
+    # annotations and analysis are untouched, so turning it on can never put a
+    # box in the wrong place.
+    rotate_180 = models.BooleanField(
+        default=False,
+        help_text="Display this device's videos rotated 180°. For footage "
+                  "recorded before the camera's flip settings were corrected.",
+    )
+
     roi_override = models.JSONField(null=True, blank=True)
     roi_polygon = models.JSONField(null=True, blank=True)
     nest_layout = models.JSONField(default=list, blank=True)
@@ -459,6 +474,24 @@ class Device(models.Model):
             prefix=prefix,
         )
         return device, raw_key
+
+    def save(self, *args, **kwargs):
+        """Clear cached stills when the display rotation changes.
+
+        A thumbnail is keyed on the video's blob path, so flipping this flag
+        would otherwise leave every already-generated still the old way up
+        forever — the grid would disagree with the player beside it. Clearing
+        the key makes them regenerate on next view, which is the same lazy path
+        a new video takes.
+        """
+        flipped = False
+        if self.pk:
+            was = type(self).objects.filter(pk=self.pk).values_list(
+                "rotate_180", flat=True).first()
+            flipped = was is not None and was != self.rotate_180
+        super().save(*args, **kwargs)
+        if flipped:
+            self.videos.exclude(thumbnail_key="").update(thumbnail_key="")
 
     def rotate_key(self) -> str:
         """Issue a fresh credential for this device; returns the new raw key.
