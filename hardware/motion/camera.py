@@ -39,18 +39,23 @@ FOCUSABLE_MODELS = ("ov64a40",)
 AF_TIMEOUT = 12.0
 
 # Modules whose native readout is upside down in our enclosure and so need the
-# ISP's 180 (hflip+vflip). Nothing we currently ship does: both the Arducam
-# OwlSight (OV64A40) and the OV5647 night-vision module read out the right way
-# up in the current mount, and turning one of them anyway records everything
-# inverted — which is what happened when the OwlSight inherited the old
-# module's default, and again when a unit's ribbon went back to an OV5647.
+# ISP's 180 (hflip+vflip). The OV5647 night-vision module does; the Arducam
+# OwlSight (OV64A40) does not, and turning it anyway records everything
+# inverted — which is what happened when the OwlSight first inherited the
+# OV5647's default.
 #
-# Empty on purpose, and the emptiness is the point: orientation is decided by
-# what detect_model() finds, not by a baked-in default, so a module that turns
-# out to need the turn is listed here once and every unit fitted with it picks
-# it up on the next update. A single oddly-mounted unit overrides hflip/vflip
-# in camera.json instead of being encoded as a property of its sensor.
-FLIPPED_MODELS = ()
+# Measured, not assumed: with the camera to itself, a still captured under
+# Transform(hflip=1, vflip=1) scores ncc +0.995 against rot180 of the
+# unflipped still, and it is the flipped one that comes out upright — desk
+# along the bottom, cables hanging down. scripts/camera-flip-test.sh re-runs
+# that check on any unit and prints which way up each variant lands.
+#
+# Orientation is decided by what detect_model() finds rather than by a
+# baked-in default, so a module that turns out to need the turn is listed here
+# once and every unit fitted with it picks it up on the next update. A single
+# oddly-mounted unit overrides hflip/vflip in camera.json instead of having it
+# encoded as a property of its sensor.
+FLIPPED_MODELS = ("ov5647",)
 
 
 def detect_model() -> str:
@@ -75,9 +80,11 @@ def default_flip(model=None) -> bool:
     """Whether this module needs the ISP's 180, decided from the sensor model.
 
     False unless the model is listed in FLIPPED_MODELS. An unrecognised or
-    unreadable model lands on False too: every module we know reads out
-    upright, so no turn is the better guess than one that would invert the
-    picture on all of them. Override per unit in camera.json.
+    unreadable model lands on False too — the modules we ship disagree with
+    each other, so there is no majority to fall back on and no turn is the
+    safer guess: it leaves the picture as the sensor read it out rather than
+    inverting it on a guess. Such a unit wants an explicit hflip/vflip in
+    camera.json. Override per unit there.
     """
     if model is None:
         model = detect_model()

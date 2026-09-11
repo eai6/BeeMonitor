@@ -1,0 +1,21 @@
+[Unit]
+Description=BeeMonitor camera auto-detect (bring up whichever sensor is fitted)
+Documentation=https://github.com/eai6/BeeMonitor
+# camera_auto_detect handles the official Pi sensors at boot. This covers the
+# one it cannot see (Arducam OwlSight) by applying its overlay at runtime, so
+# it has to finish before anything opens the camera.
+After=multi-user.target
+Before=beemonitor-recorder.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Runs as root: dtoverlay writes to /sys/kernel/config/device-tree/overlays.
+ExecStart=/home/beemonitor/BeeMonitor/hardware/camera-autodetect.sh
+# Exits 0 even with no camera — a missing sensor must not block the boot; the
+# recorder reports that itself, with a better message than we could here.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

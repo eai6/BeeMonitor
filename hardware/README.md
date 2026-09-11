@@ -337,15 +337,39 @@ powered up in).
 **Orientation.** A camera mounted upside down needs a 180° turn. That one the
 ISP does for free as `hflip`+`vflip`, and it applies to everything — recorded
 video, detection frames, stills, crops alike. Whether it is on by default
-is detected from the sensor model, so a swapped module needs no config: both
-modules we ship (OV64A40, OV5647) read out upright in the current mount and get
-no turn, and an unrecognised one is assumed upright too. Override per unit with
-`BEEMONITOR_HFLIP` / `BEEMONITOR_VFLIP` or `camera.json`. If the
+is detected from the sensor model, so a swapped module needs no config: the
+OV5647 night-vision module reads out upside down in the current mount and gets
+the turn, the OwlSight (OV64A40) does not, and an unrecognised one is left
+unturned. `scripts/camera-flip-test.sh` measures which a unit needs. Override
+per unit with `BEEMONITOR_HFLIP` / `BEEMONITOR_VFLIP` or `camera.json`. If the
 picture still isn't upright, press `o` to turn it: 90°/270° can only be done in
 software, so runFocus rotates its preview and stills but **the recorder cannot
 follow** — the hardware encoder is fed straight from the ISP, which flips but
 cannot transpose. It logs a warning and records unrotated. Fix a sideways camera
 by turning it in its mount.
+
+**Which sensor.** Nothing to configure: a unit comes up with whatever module is
+on its ribbon. `camera_auto_detect=1` finds every official Pi sensor (OV5647,
+IMX219/477/708) at boot, and `beemonitor-camera-detect.service` covers the one
+it cannot see — the Arducam OwlSight (OV64A40), whose overlay it applies at
+runtime. Swapping modules needs no edit and no flag.
+
+If a swap leaves an old `dtoverlay=<sensor>` pinned in `config.txt`, that pin
+blocks detection: it is loaded at boot and a boot-applied overlay cannot be
+unloaded at runtime. The service handles it — no camera enumerates, so it
+comments the pin out, sets `camera_auto_detect=1` and reboots once. A swap
+therefore costs one extra reboot and no visit. The ladder is bounded (four
+attempts, reset the moment a camera is found), so it cannot loop:
+
+```bash
+sudo hardware/camera-autodetect.sh --status      # what the last boot decided
+sudo hardware/camera-autodetect.sh --probe-only  # report only, change nothing
+sudo hardware/camera-autodetect.sh --reset       # clear the repair counter
+```
+
+Set `BEEMONITOR_CAMERA_AUTOREBOOT=0` to have it edit `config.txt` but leave the
+reboot to you. `hardware/setup-camera.sh` remains the tool for bring-up and
+diagnosis of a module that will not come up at all.
 
 **Note:** The camera must be connected when the Pi boots. If it wasn't, reboot:
 
