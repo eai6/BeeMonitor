@@ -5,8 +5,9 @@ tool and the stills all agree on which way up the picture is and where the lens
 is focused. Two knobs, and they are not equivalent:
 
     orientation — hflip/vflip, done by the ISP. Free, and every consumer sees
-                  the same upright frame. This unit is mounted upside down, so
-                  both are on: that is the 180-degree turn.
+                  the same upright frame. Both together are the 180-degree
+                  turn, and whether a unit needs it is detected from the
+                  sensor model (see FLIPPED_MODELS) unless the profile says.
     focus       — LensPosition, in dioptres (1/metres). Fixed-focus modules
                   ignore it; the Arducam OwlSight (OV64A40) needs it, and
                   nothing in the recorder used to set it at all, so a unit
@@ -18,7 +19,7 @@ runFocus.py when you press "save for recorder", read here at startup. Env
 defaults (BEEMONITOR_HFLIP / VFLIP / ROTATE / LENS_POSITION / AF_RANGE) apply
 when the file has nothing to say, matching how the other JSON contracts in
 motion/ layer over config.py. The flips are the one knob with no fixed default:
-left unset they follow the sensor model (see UPRIGHT_MODELS), because whether
+left unset they follow the sensor model (see FLIPPED_MODELS), because whether
 the picture needs turning over is a property of which module is fitted.
 """
 
@@ -37,13 +38,19 @@ from motion.config import (
 FOCUSABLE_MODELS = ("ov64a40",)
 AF_TIMEOUT = 12.0
 
-# Modules whose native readout is already the right way up in our enclosure.
-# The older modules sit upside down and need the ISP's 180 (hflip+vflip); the
-# Arducam OwlSight does not, and applying it anyway records everything
+# Modules whose native readout is upside down in our enclosure and so need the
+# ISP's 180 (hflip+vflip). Nothing we currently ship does: both the Arducam
+# OwlSight (OV64A40) and the OV5647 night-vision module read out the right way
+# up in the current mount, and turning one of them anyway records everything
 # inverted — which is what happened when the OwlSight inherited the old
-# module's default. Anything not listed keeps the 180, so a unit still on the
-# old camera is unaffected.
-UPRIGHT_MODELS = ("ov64a40",)
+# module's default, and again when a unit's ribbon went back to an OV5647.
+#
+# Empty on purpose, and the emptiness is the point: orientation is decided by
+# what detect_model() finds, not by a baked-in default, so a module that turns
+# out to need the turn is listed here once and every unit fitted with it picks
+# it up on the next update. A single oddly-mounted unit overrides hflip/vflip
+# in camera.json instead of being encoded as a property of its sensor.
+FLIPPED_MODELS = ()
 
 
 def detect_model() -> str:
@@ -65,12 +72,16 @@ def detect_model() -> str:
 
 
 def default_flip(model=None) -> bool:
-    """Whether this module needs the ISP's 180. An unknown model keeps the 180:
-    that is what every unit in the field before the OwlSight wanted, so a failed
-    enumeration degrades to the old behaviour rather than to a new one."""
+    """Whether this module needs the ISP's 180, decided from the sensor model.
+
+    False unless the model is listed in FLIPPED_MODELS. An unrecognised or
+    unreadable model lands on False too: every module we know reads out
+    upright, so no turn is the better guess than one that would invert the
+    picture on all of them. Override per unit in camera.json.
+    """
     if model is None:
         model = detect_model()
-    return model not in UPRIGHT_MODELS
+    return model in FLIPPED_MODELS
 
 
 def load_profile() -> dict:

@@ -334,10 +334,13 @@ autofocuses once at startup and holds that position (it never used to focus at
 all, which on a lens module meant recording at whatever position the lens
 powered up in).
 
-**Orientation.** The camera is mounted upside down, so the picture needs a 180°
-turn. That one the ISP does for free as `hflip`+`vflip`, and it applies to
-everything — recorded video, detection frames, stills, crops alike. It is on by
-default (`BEEMONITOR_HFLIP` / `BEEMONITOR_VFLIP`, or `camera.json`). If the
+**Orientation.** A camera mounted upside down needs a 180° turn. That one the
+ISP does for free as `hflip`+`vflip`, and it applies to everything — recorded
+video, detection frames, stills, crops alike. Whether it is on by default
+is detected from the sensor model, so a swapped module needs no config: both
+modules we ship (OV64A40, OV5647) read out upright in the current mount and get
+no turn, and an unrecognised one is assumed upright too. Override per unit with
+`BEEMONITOR_HFLIP` / `BEEMONITOR_VFLIP` or `camera.json`. If the
 picture still isn't upright, press `o` to turn it: 90°/270° can only be done in
 software, so runFocus rotates its preview and stills but **the recorder cannot
 follow** — the hardware encoder is fed straight from the ISP, which flips but
