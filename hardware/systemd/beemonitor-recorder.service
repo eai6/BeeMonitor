@@ -3,6 +3,15 @@ Description=BeeMonitor motion-gated recorder
 Documentation=https://github.com/eai6/BeeMonitor
 # Camera is local hardware — no network dependency (unlike the uploader).
 After=multi-user.target
+# Let the overlay for a non-auto-detectable sensor load before we open the
+# camera. Wants= not Requires=: a unit whose camera is already up does not need
+# it, and a unit with no camera should still reach the recorder's own error.
+Wants=beemonitor-camera-detect.service
+After=beemonitor-camera-detect.service
+# StartLimit* are [Unit] keys — in [Service] systemd ignores them and logs
+# "Unknown key ... ignoring" on every start, so the burst limiter never applied.
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -17,8 +26,6 @@ Restart=on-failure
 # Let the recorder finalise the in-flight clip + remux on SIGTERM.
 TimeoutStopSec=60
 RestartSec=10
-StartLimitIntervalSec=600
-StartLimitBurst=5
 # Logs go to journalctl -u beemonitor-recorder.
 StandardOutput=journal
 StandardError=journal

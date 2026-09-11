@@ -9,6 +9,10 @@ After=network-online.target cellular.service
 Wants=network-online.target cellular.service
 # Run independently of the recorder so a recorder crash doesn't stop uploads
 # (and a network blip doesn't stop recording).
+# StartLimit* are [Unit] keys — in [Service] systemd ignores them and logs
+# "Unknown key ... ignoring" on every start, so the burst limiter never applied.
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -23,8 +27,6 @@ Restart=on-failure
 TimeoutStopSec=300
 # Don't hammer if it keeps failing.
 RestartSec=10
-StartLimitIntervalSec=600
-StartLimitBurst=5
 # Logs go to journalctl -u beemonitor-uploader.
 StandardOutput=journal
 StandardError=journal
