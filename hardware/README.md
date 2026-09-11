@@ -350,6 +350,12 @@ BEEMONITOR_RECORD_DIR=/home/beemonitor/Desktop/cameraOutput/beeHotel
 # --- optional tuning (sensible defaults if omitted; see Configuration Reference) ---
 # BEEMONITOR_PRE_ROLL=3
 # BEEMONITOR_POST_ROLL=4
+
+# Camera mounting. The defaults (1/1) are a 180-degree rotation, correct for a
+# camera mounted upside down in the standard enclosure. If this unit's footage
+# comes out upside down, it is mounted the other way up — set both to 0.
+# BEEMONITOR_VFLIP=1
+# BEEMONITOR_HFLIP=1
 ```
 
 The file holds the device key, so lock it down:
