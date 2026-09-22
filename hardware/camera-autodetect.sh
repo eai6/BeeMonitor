@@ -228,9 +228,26 @@ fi
 
 # Already on auto-detect, firmware found nothing and the runtime load did not
 # bind — the remaining possibility is a sensor that only binds at boot.
-step "Pinning $PIN_CANDIDATE for a boot-time bind"
+# The pin only works with auto-detect OFF. The OV64A40 answers at 0x36, the
+# ov5647's address, so with camera_auto_detect=1 the firmware claims the sensor
+# for the wrong driver and the pinned overlay never binds — the unit then
+# reboots through unpin/pin until the budget runs out. camera_auto_detect=0 +
+# dtoverlay=ov64a40 is the configuration proven on a working 64MP unit, and
+# step 3 turns auto-detect back on if the module is ever swapped.
+step "Pinning $PIN_CANDIDATE (auto-detect off) for a boot-time bind"
 backup_cfg || exit 0
-printf '\n# BeeMonitor: camera-autodetect.sh — runtime bind failed, trying at boot\ndtoverlay=%s\n' "$PIN_CANDIDATE" >> "$CFG"
-pass "added dtoverlay=$PIN_CANDIDATE"
+if grep -qE "^\s*camera_auto_detect=" "$CFG"; then
+  sed -i -E "s@^(\s*)camera_auto_detect=.*@\1camera_auto_detect=0@" "$CFG" \
+    || { bad "camera_auto_detect edit failed — not pinning"; exit 0; }
+  printf '\n# BeeMonitor: camera-autodetect.sh — runtime bind failed, trying at boot\ndtoverlay=%s\n' "$PIN_CANDIDATE" >> "$CFG"
+else
+  printf '\n# BeeMonitor: camera-autodetect.sh — runtime bind failed, trying at boot\ncamera_auto_detect=0\ndtoverlay=%s\n' "$PIN_CANDIDATE" >> "$CFG"
+fi
+if ! grep -qE "^\s*camera_auto_detect=0" "$CFG" || ! grep -qE "^\s*dtoverlay=$PIN_CANDIDATE" "$CFG"; then
+  bad "pin did not land cleanly — not rebooting"
+  grep -nE "^\s*(camera_auto_detect|dtoverlay=(ov|imx|arducam))" "$CFG" | sed 's/^/       /'
+  exit 0
+fi
+pass "camera_auto_detect=0, added dtoverlay=$PIN_CANDIDATE"
 request_reboot "pinned $PIN_CANDIDATE after the runtime load failed"
 exit 0
