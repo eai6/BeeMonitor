@@ -97,3 +97,6 @@ class HealthHistoryTests(TestCase):
         html = self.client.get(reverse("devices:detail", args=[self.device.pk])).content.decode()
         self.assertIn("77.7%", html)
         self.assertIn("Device health", html)
+        # Inside the collapsed Advanced settings, like the other sections.
+        self.assertLess(html.index("<details"), html.index("Device health"))
+        self.assertLess(html.index("Device health"), html.index("</details>"))
