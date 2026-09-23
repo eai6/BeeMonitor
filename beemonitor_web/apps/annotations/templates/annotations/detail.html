@@ -16,6 +16,9 @@
     </div>
   </div>
   <div class="flex gap-2">
+    {% if can_assign %}
+    <a href="{% url 'annotations:add_videos_page' project.pk %}" class="px-3 py-2 bg-amber-600 hover:bg-amber-700 rounded text-sm text-white font-medium">+ Add Videos</a>
+    {% endif %}
     <a href="{% url 'annotations:people' project.pk %}" class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">People</a>
     {% if can_assign %}
     <a href="{% url 'annotations:settings' project.pk %}" class="px-3 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Settings</a>
@@ -575,7 +578,11 @@
 {% if video_count == 0 %}
 <div class="bg-white shadow rounded-lg p-12 text-center">
   <p class="text-gray-500 mb-2">No videos in this project yet.</p>
+  {% if can_assign %}
   <p class="text-sm text-gray-400">Click "+ Add Videos" to get started.</p>
+  {% else %}
+  <p class="text-sm text-gray-400">A project manager adds the clips to label.</p>
+  {% endif %}
 </div>
 {% endif %}
 

@@ -51,6 +51,15 @@ class ReadPathTests(ViewAccessTestCase):
         for role in self.people:
             self.assertEqual(self.status(role, url), 200, role)
 
+    def test_managers_see_add_videos_and_others_do_not(self):
+        url = reverse("annotations:detail", args=[self.project.pk])
+        add = reverse("annotations:add_videos_page", args=[self.project.pk])
+
+        for role in self.people:
+            self.as_(role)
+            html = self.client.get(url).content.decode()
+            self.assertEqual(f'href="{add}"' in html, role in ("owner", "manager"), role)
+
     def test_a_stranger_cannot(self):
         url = reverse("annotations:detail", args=[self.project.pk])
 
