@@ -126,7 +126,7 @@ class DraftTests(CoverageTestCase):
 
         picks = coverage.draft(Video.accessible(self.user), self.project.videos.all())
 
-        self.assertIn(missing.pk, picks)
+        self.assertIn(missing.pk, [p["id"] for p in picks])
 
     def test_it_takes_at_most_the_requested_number_per_cell(self):
         for _ in range(6):
@@ -145,7 +145,7 @@ class DraftTests(CoverageTestCase):
 
         picks = coverage.draft(Video.accessible(self.user), self.project.videos.all(),
                                per_cell=2)
-        hours = set(Video.objects.filter(pk__in=picks).values_list("device_id", flat=True))
+        hours = set(Video.objects.filter(pk__in=[p["id"] for p in picks]).values_list("device_id", flat=True))
 
         self.assertEqual(len(picks), 4)
         self.assertEqual(hours, {self.a.id, self.b.id})

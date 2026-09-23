@@ -871,6 +871,63 @@ class ClaimClipsView(LoginRequiredMixin, View):
         return redirect(request.POST.get("next") or f"/annotations/{pk}/")
 
 
+# One add is capped: every added clip is frame-sampled (up to max_frames each)
+# on the web process, so a whole camera's history in one go would queue
+# millions of frames. Bigger sets take several adds — ideally even spreads.
+ADD_CAP = 1000
+ADD_PAGE_SIZE = 200
+
+
+def _frames_per_clip():
+    from . import sampling
+    return sampling.clamp_params({})["max_frames"]
+
+
+def _page_of_clips(qs, in_project, offset):
+    """One page of the picker grid, newest first, marked if already added."""
+    videos = list(qs.select_related("device")
+                  .order_by("-recorded_at", "-uploaded_at", "-id")[offset:offset + ADD_PAGE_SIZE])
+    for v in videos:
+        v.in_project = v.pk in in_project
+    return videos
+
+
+class AddVideosGridView(LoginRequiredMixin, View):
+    """The next page of the picker grid ("Load older clips"), as HTML."""
+
+    def get(self, request, pk):
+        from django.template.loader import render_to_string
+        from apps.devices.models import Device
+        from apps.videos import workspace
+        from apps.videos.models import Video
+
+        project = get_object_or_404(AnnotationProject.manageable(request.user), pk=pk)
+        params = request.GET
+        try:
+            offset = max(0, int(params.get("offset") or 0))
+        except (TypeError, ValueError):
+            offset = 0
+        qs = workspace.apply_video_filters(Video.accessible(request.user), params)
+        in_project = set(project.videos.values_list("pk", flat=True))
+        membership = (params.get("member") or "").strip()
+        if membership == "in":
+            qs = qs.filter(pk__in=in_project)
+        elif membership == "out":
+            qs = qs.exclude(pk__in=in_project)
+        videos = _page_of_clips(qs, in_project, offset)
+        devices = Device.accessible(request.user).order_by("name")
+        dots = workspace.dots_by_device(workspace.device_rows(devices, [], {}))
+        html = render_to_string("videos/_review_grid.html", {
+            "video_days": workspace.group_by_day(videos, dots),
+            "can_select": True,
+            "card_status_template": "annotations/_card_membership.html",
+        }, request=request)
+        next_offset = offset + len(videos)
+        return JsonResponse({"html": html, "count": len(videos),
+                             "next_offset": next_offset,
+                             "has_more": len(videos) == ADD_PAGE_SIZE and next_offset < qs.count()})
+
+
 class AddVideosWorkspaceView(LoginRequiredMixin, TemplateView):
     """Choosing clips to annotate, in the interface built for choosing clips.
 
@@ -917,10 +974,7 @@ class AddVideosWorkspaceView(LoginRequiredMixin, TemplateView):
         elif membership == "out":
             qs = qs.exclude(pk__in=in_project)
 
-        videos = list(qs.select_related("device")
-                      .order_by("-recorded_at", "-uploaded_at", "-id")[:200])
-        for v in videos:
-            v.in_project = v.pk in in_project
+        videos = _page_of_clips(qs, in_project, 0)
 
         ctx.update({
             "project": project,
@@ -929,6 +983,12 @@ class AddVideosWorkspaceView(LoginRequiredMixin, TemplateView):
             "device_rows": rows,
             "video_days": workspace.group_by_day(videos, dots),
             "video_count": qs.count(),
+            "page_size": ADD_PAGE_SIZE,
+            "add_cap": ADD_CAP,
+            "frames_per_clip": _frames_per_clip(),
+            "date_overview": workspace.date_overview(
+                workspace.apply_video_filters(accessible, workspace.without_dates(params))),
+            "grid_page_url": reverse("annotations:add_videos_grid", args=[project.pk]),
             "available_total": accessible.count(),
             "in_project_count": len(in_project),
             "member": membership,
@@ -956,12 +1016,18 @@ class AddVideosDraftView(LoginRequiredMixin, View):
         project = get_object_or_404(
             AnnotationProject.manageable(request.user), pk=pk)
         qs = workspace.apply_video_filters(Video.accessible(request.user), request.GET)
-        try:
-            per_cell = max(1, min(int(request.GET.get("per_cell") or 2), 10))
-        except (TypeError, ValueError):
-            per_cell = 2
-        picks = coverage_mod.draft(qs, project.videos.all(), per_cell=per_cell)
-        return JsonResponse({"video_ids": picks, "count": len(picks)})
+        if request.GET.get("even"):
+            # "Select an even N across everything matching the filter".
+            picks = coverage_mod.even_spread(qs, project.videos.all(), ADD_CAP)
+        else:
+            try:
+                per_cell = max(1, min(int(request.GET.get("per_cell") or 2), 10))
+            except (TypeError, ValueError):
+                per_cell = 2
+            picks = coverage_mod.draft(qs, project.videos.all(), per_cell=per_cell)
+        return JsonResponse({"picks": picks,
+                             "video_ids": [p["id"] for p in picks],
+                             "count": len(picks)})
 
 
 class AddVideosView(LoginRequiredMixin, View):
@@ -974,21 +1040,31 @@ class AddVideosView(LoginRequiredMixin, View):
         # Adding clips restructures the project.
         project = get_object_or_404(
             AnnotationProject.manageable(request.user), pk=pk)
-        video_ids = request.POST.getlist("video_ids")
+        # Picks that were never on screen (drafts) arrive as one comma list.
+        video_ids = request.POST.getlist("video_ids") + [
+            v for v in (request.POST.get("extra_ids") or "").split(",") if v.strip()]
+        try:
+            video_ids = sorted({int(v) for v in video_ids})
+        except (TypeError, ValueError):
+            messages.error(request, "Invalid clip selection.")
+            return redirect("annotations:add_videos_page", pk=pk)
 
         if not video_ids:
             messages.warning(request, "No videos selected.")
             return redirect("annotations:detail", pk=pk)
+        if len(video_ids) > ADD_CAP:
+            messages.error(
+                request, f"{len(video_ids)} clips selected — one add is limited to "
+                f"{ADD_CAP:,}. Add them in batches, or use an even spread.")
+            return redirect("annotations:add_videos_page", pk=pk)
 
         from apps.videos.models import Video
         # Accessible, not owned: the picker lists clips from shared devices, so
         # restricting the add to owned ones silently drops half a selection.
-        videos = Video.accessible(request.user).filter(pk__in=video_ids)
-        added_videos = []
-        for video in videos:
-            if not project.videos.filter(pk=video.pk).exists():
-                project.videos.add(video)
-                added_videos.append(video)
+        already = set(project.videos.filter(pk__in=video_ids).values_list("pk", flat=True))
+        added_videos = list(Video.accessible(request.user)
+                            .filter(pk__in=[v for v in video_ids if v not in already]))
+        project.videos.add(*added_videos)  # one bulk insert
         added = len(added_videos)
 
         # Sample them straight away. Adding a clip and then remembering to
@@ -998,15 +1074,20 @@ class AddVideosView(LoginRequiredMixin, View):
         from . import sampling
         from .models import FrameSamplingTask
 
+        # Queued in one insert; the bounded decode pool works through them two
+        # at a time (and the reconciler re-feeds any a deploy interrupts).
         params = sampling.clamp_params({})
-        for video in added_videos:
-            task = FrameSamplingTask.objects.create(
-                user=request.user, project=project, video=video, params=params)
+        tasks = FrameSamplingTask.objects.bulk_create([
+            FrameSamplingTask(user=request.user, project=project, video=video, params=params)
+            for video in added_videos])
+        for task in tasks:
             sampling.spawn_sampling_async(task.pk)
 
         messages.success(
             request,
-            f"Added {added} clip(s) and started sampling them — up to "
+            f"Added {added} clip(s)"
+            + (f" ({len(already)} already in the project, skipped)" if already else "")
+            + " and started sampling them — up to "
             f"{params['max_frames']} frames each, every "
             f"{params['sample_interval']} frames. Frames appear as they finish.")
         return redirect("annotations:detail", pk=pk)

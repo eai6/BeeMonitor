@@ -58,7 +58,7 @@ def apply_video_filters(qs, params):
     """Apply the Processing-hub video filters to a Video queryset. ``params`` is
     any dict-like with .get() (a GET or POST QueryDict). Shared by the hub list
     and the pipeline "run on all filtered videos" path so they never diverge."""
-    from datetime import datetime, time
+    from datetime import datetime, time, timedelta
     from django.utils import timezone as _tz
     from django.utils.dateparse import parse_date, parse_datetime
 
@@ -113,9 +113,16 @@ def apply_video_filters(qs, params):
         if dt:
             qs = qs.filter(recorded_at__gte=dt)
     if params.get("to"):
-        dt = _parse_dt(params.get("to"))
+        raw_to = params.get("to")
+        dt = _parse_dt(raw_to)
         if dt:
-            qs = qs.filter(recorded_at__lte=dt)
+            if len(raw_to.strip()) == 10:  # "YYYY-MM-DD", no time part
+                # A plain date is inclusive: "to 2026-08-31" means through the
+                # end of the 31st, not its first instant.
+                dt = dt + timedelta(days=1)
+                qs = qs.filter(recorded_at__lt=dt)
+            else:
+                qs = qs.filter(recorded_at__lte=dt)
 
     # "Not yet analyzed" — the review question a run usually answers, and the
     # one thing the hub could show but never filter on.
@@ -187,3 +194,73 @@ def current_filter(params):
     f = {k: (params.get(k) or "") for k in VIDEO_FILTER_KEYS}
     f["device"] = _values(params, "device")
     return f
+
+
+DATE_STRIP_MAX_BARS = 120
+
+
+def date_overview(qs):
+    """Where the footage is in time, for the rail's date-range control.
+
+    ``qs`` is the filtered clips *without* the from/to window, so the strip
+    shows the whole recorded span and where a range sits inside it. Days with
+    footage are counted per day (or per week once the span is too long to
+    draw a bar per day); months become quick-pick chips with their counts.
+    """
+    from datetime import timedelta
+    from django.db.models import Count
+    from django.db.models.functions import TruncDate
+
+    rows = (qs.exclude(recorded_at=None).order_by()
+            .annotate(d=TruncDate("recorded_at")).values("d").annotate(n=Count("id")))
+    per_day = {r["d"]: r["n"] for r in rows if r["d"]}
+    if not per_day:
+        return None
+    first, last = min(per_day), max(per_day)
+    span = (last - first).days + 1
+    step = 1 if span <= DATE_STRIP_MAX_BARS else 7
+    bars = []
+    day = first
+    while day <= last:
+        n = sum(per_day.get(day + timedelta(days=i), 0) for i in range(step))
+        end = min(day + timedelta(days=step - 1), last)
+        bars.append({"from": day.isoformat(), "to": end.isoformat(), "n": n})
+        day += timedelta(days=step)
+    peak = max(b["n"] for b in bars) or 1
+    for b in bars:
+        b["h"] = max(2, round(b["n"] / peak * 34)) if b["n"] else 0
+
+    months = {}
+    for d, n in per_day.items():
+        key = (d.year, d.month)
+        m = months.setdefault(key, {"n": 0, "from": d, "to": d})
+        m["n"] += n
+        m["from"] = min(m["from"], d)
+        m["to"] = max(m["to"], d)
+    import calendar
+    month_chips = []
+    for (y, mo), m in sorted(months.items()):
+        last_day = calendar.monthrange(y, mo)[1]
+        month_chips.append({
+            "label": f"{calendar.month_abbr[mo]}{'' if y == last.year else ' ' + str(y)[2:]}",
+            "n": m["n"],
+            "from": f"{y:04d}-{mo:02d}-01", "to": f"{y:04d}-{mo:02d}-{last_day:02d}"})
+    return {"first": first.isoformat(), "last": last.isoformat(), "total": sum(per_day.values()),
+            "step": step, "bars": bars, "months": month_chips,
+            "today": _today().isoformat(),
+            "last7": (_today() - timedelta(days=6)).isoformat(),
+            "last30": (_today() - timedelta(days=29)).isoformat()}
+
+
+def _today():
+    from django.utils import timezone
+    return timezone.localdate()
+
+
+def without_dates(params):
+    """``params`` minus the from/to window (for the date strip's full span)."""
+    q = params.copy() if hasattr(params, "copy") else dict(params)
+    for key in ("from", "to"):
+        if hasattr(q, "pop"):
+            q.pop(key, None)
+    return q

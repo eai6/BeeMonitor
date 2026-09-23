@@ -122,7 +122,7 @@
   // The stream URL is requested only when a card is actually hovered, so a
   // presign is spent per clip watched rather than per clip listed.
   var hoverTimer = null;
-  cards.forEach(function (card, i) {
+  function bindCard(card) {
     var media = card.querySelector('.media');
     if (media) {
       card.addEventListener('mouseenter', function () {
@@ -147,9 +147,18 @@
     }
     card.addEventListener('click', function (e) {
       if (e.target.matches('input[type="checkbox"], label')) return;
-      open(i);
+      open(cards.indexOf(card));
     });
-  });
+  }
+  cards.forEach(bindCard);
+  // Hosts that append cards later (the annotation picker's "Load older clips")
+  // hand them over here so they preview and open like the rest.
+  window.bindReviewCards = function (root) {
+    Array.prototype.forEach.call(root.querySelectorAll('.vid-card'), function (card) {
+      cards.push(card);
+      bindCard(card);
+    });
+  };
 
   document.getElementById('v-close').addEventListener('click', close);
   document.getElementById('v-prev').addEventListener('click', earlier);

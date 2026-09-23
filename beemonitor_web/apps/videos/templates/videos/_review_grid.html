@@ -25,6 +25,7 @@
                data-hotel="{{ v.device.name|default:'—' }}"
                data-device-id="{{ v.device_id|default:'' }}" data-hour="{{ v.hour|default_if_none:'' }}"
                data-in-project="{% if v.in_project %}1{% endif %}"
+               data-date="{{ v.recorded_at|default:v.uploaded_at|date:'Y-m-d' }}"
                data-rotate="{% if v.device.rotate_180 %}1{% endif %}"
                data-detail="{% url 'videos:detail' v.pk %}"
                data-title="{{ v.title|default:'(untitled)' }}">

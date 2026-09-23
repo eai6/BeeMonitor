@@ -42,13 +42,44 @@
         {% endif %}
       </div>
 
-      <!-- recorded -->
-      <div class="space-y-1.5">
-        <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Recorded</div>
-        <div class="grid grid-cols-2 gap-1.5">
-          <input type="datetime-local" name="from" value="{{ f.from }}" class="border border-gray-300 rounded px-2 py-1.5 text-xs" onchange="this.form.submit()">
-          <input type="datetime-local" name="to" value="{{ f.to }}" class="border border-gray-300 rounded px-2 py-1.5 text-xs" onchange="this.form.submit()">
+      <!-- recorded: a date range, with where the footage actually is -->
+      <div class="space-y-1.5" id="date-range">
+        <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Recorded between</div>
+        {% if date_overview %}
+        <div class="flex items-end gap-px h-9 border-b border-gray-200" role="group" aria-label="Clips per {% if date_overview.step == 1 %}day{% else %}week{% endif %}, {{ date_overview.first }} to {{ date_overview.last }}">
+          {% for b in date_overview.bars %}
+          <button type="button" class="dr-bar flex-1 min-w-0 {% if b.n %}bg-amber-200 hover:bg-amber-400{% else %}bg-transparent{% endif %}"
+                  style="height: {{ b.h }}px" data-from="{{ b.from }}" data-to="{{ b.to }}" data-n="{{ b.n }}"
+                  title="{{ b.from }}{% if b.to != b.from %} – {{ b.to }}{% endif %}: {{ b.n }} clip{{ b.n|pluralize }}" aria-label="{{ b.from }}: {{ b.n }} clips"></button>
+          {% endfor %}
         </div>
+        <div class="flex justify-between text-[10px] text-gray-400"><span>{{ date_overview.first }}</span><span>{{ date_overview.last }}</span></div>
+        {% endif %}
+        <div class="grid grid-cols-2 gap-1.5">
+          <label class="text-[11px] text-gray-500">From
+            <input type="date" name="from" id="dr-from" value="{{ f.from|slice:':10' }}"
+                   {% if date_overview %}min="{{ date_overview.first }}" max="{{ date_overview.last }}"{% endif %}
+                   class="mt-0.5 w-full border border-gray-300 rounded px-1.5 py-1 text-xs">
+          </label>
+          <label class="text-[11px] text-gray-500">To
+            <input type="date" name="to" id="dr-to" value="{{ f.to|slice:':10' }}"
+                   {% if date_overview %}min="{{ date_overview.first }}" max="{{ date_overview.last }}"{% endif %}
+                   class="mt-0.5 w-full border border-gray-300 rounded px-1.5 py-1 text-xs">
+          </label>
+        </div>
+        {% if date_overview %}
+        <div class="flex flex-wrap gap-1">
+          <button type="button" class="dr-chip px-2 py-0.5 rounded-full border text-[11px] {% if not f.from and not f.to %}border-amber-600 bg-amber-50 text-amber-800 font-semibold{% else %}border-gray-300 text-gray-700 hover:bg-gray-50{% endif %}" data-from="" data-to="">All</button>
+          <button type="button" class="dr-chip px-2 py-0.5 rounded-full border border-gray-300 text-[11px] text-gray-700 hover:bg-gray-50" data-from="{{ date_overview.last7 }}" data-to="{{ date_overview.today }}">Last 7 days</button>
+          <button type="button" class="dr-chip px-2 py-0.5 rounded-full border border-gray-300 text-[11px] text-gray-700 hover:bg-gray-50" data-from="{{ date_overview.last30 }}" data-to="{{ date_overview.today }}">Last 30 days</button>
+          {% for m in date_overview.months %}
+          <button type="button" class="dr-chip px-2 py-0.5 rounded-full border text-[11px] {% if f.from|slice:':10' == m.from and f.to|slice:':10' == m.to %}border-amber-600 bg-amber-50 text-amber-800 font-semibold{% else %}border-gray-300 text-gray-700 hover:bg-gray-50{% endif %}"
+                  data-from="{{ m.from }}" data-to="{{ m.to }}">{{ m.label }} · {{ m.n }}</button>
+          {% endfor %}
+        </div>
+        <p id="dr-summary" class="text-xs text-gray-600"></p>
+        <button type="submit" class="w-full border border-amber-600 text-amber-700 hover:bg-amber-50 px-3 py-1 rounded text-xs font-medium">Apply range</button>
+        {% endif %}
         <div class="flex items-center gap-1.5 pt-0.5">
           <span class="text-xs text-gray-500 shrink-0">Daily</span>
           <select name="hfrom" class="flex-1 border border-gray-300 rounded px-1.5 py-1.5 text-xs" onchange="this.form.submit()">
@@ -72,3 +103,35 @@
 
       {% for k, v in f.items %}{% if v and k not in "device,confirmed,from,to,hfrom,hto,q,analysis" %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
       <button type="submit" class="w-full bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded text-sm font-medium">Apply</button>
+
+<script>
+// Date range: bars and chips fill From/To (and highlight the span on the
+// strip); the page only reloads on Apply.
+(function () {
+  var box = document.getElementById('date-range');
+  if (!box) return;
+  var from = document.getElementById('dr-from'), to = document.getElementById('dr-to');
+  var bars = Array.prototype.slice.call(box.querySelectorAll('.dr-bar'));
+  var summary = document.getElementById('dr-summary');
+  function paint() {
+    var f = from.value, t = to.value, n = 0;
+    bars.forEach(function (b) {
+      var inside = (!f || b.dataset.to >= f) && (!t || b.dataset.from <= t);
+      if (inside) n += +b.dataset.n;
+      b.classList.toggle('bg-amber-500', inside && +b.dataset.n > 0 && !!(f || t));
+    });
+    if (summary) summary.innerHTML = (f || t)
+      ? '<b>' + (f || 'start') + ' – ' + (t || 'end') + '</b> · about ' + n.toLocaleString() + ' clips'
+      : 'All dates · ' + n.toLocaleString() + ' clips';
+  }
+  bars.forEach(function (b) {
+    b.addEventListener('click', function () { from.value = b.dataset.from; to.value = b.dataset.to; paint(); });
+  });
+  box.querySelectorAll('.dr-chip').forEach(function (c) {
+    c.addEventListener('click', function () { from.value = c.dataset.from; to.value = c.dataset.to; paint(); });
+  });
+  from.addEventListener('change', paint);
+  to.addEventListener('change', paint);
+  paint();
+})();
+</script>

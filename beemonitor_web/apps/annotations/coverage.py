@@ -105,29 +105,75 @@ def _findings(rows, hours):
     return out[:6]
 
 
+def _cells(available_qs, exclude_ids):
+    """Candidate clips grouped by (device, hour), each cell oldest-first."""
+    rows = (available_qs.exclude(hour=None).exclude(device=None).exclude(pk__in=exclude_ids)
+            .order_by("recorded_at", "id")
+            .values_list("id", "device_id", "hour", "recorded_at"))
+    cells = {}
+    for vid, dev, hour, rec in rows:
+        cells.setdefault((dev, hour), []).append((vid, dev, hour, rec))
+    return cells
+
+
+def _spaced(items, k):
+    """k items evenly spaced through a date-ordered list, so a pick spans the
+    whole recorded period instead of bunching at its newest end."""
+    n = len(items)
+    if k >= n:
+        return list(items)
+    return [items[int((j + 0.5) * n / k)] for j in range(k)]
+
+
+def _pick(vid, dev, hour, rec):
+    return {"id": vid, "device": dev, "hour": hour,
+            "date": rec.date().isoformat() if rec else ""}
+
+
 def draft(available_qs, project_videos, per_cell=2):
     """A balanced starting selection: up to ``per_cell`` clips per empty cell.
 
     Deliberately a draft. It picks clips the project is missing across hotels
-    and hours; the user still looks at each one before adding it, because
-    "spread evenly" and "worth annotating" are different questions and only the
-    second one needs eyes.
+    and hours — spread across the recorded dates, not the newest — and the user
+    still looks at each one before adding it, because "spread evenly" and
+    "worth annotating" are different questions and only the second one needs
+    eyes. Returns ``[{id, device, hour, date}]``.
     """
     have = _counts(project_videos)
-    wanted, seen = [], set()
-
-    qs = available_qs.exclude(hour=None).exclude(device=None).order_by("-recorded_at")
-
-    per_cell_taken = {}
-    for video in qs.iterator():
-        cell = (video.device_id, video.hour)
+    in_project = list(project_videos.values_list("pk", flat=True))
+    picks = []
+    for cell, items in sorted(_cells(available_qs, in_project).items()):
         if have.get(cell):
             continue                       # already represented
-        if per_cell_taken.get(cell, 0) >= per_cell:
-            continue
-        if video.pk in seen:
-            continue
-        per_cell_taken[cell] = per_cell_taken.get(cell, 0) + 1
-        seen.add(video.pk)
-        wanted.append(video.pk)
-    return wanted
+        picks += [_pick(*it) for it in _spaced(items, per_cell)]
+    return picks
+
+
+def even_spread(available_qs, project_videos, target):
+    """Up to ``target`` clips spread as evenly as possible over every
+    (device, hour) cell, and within each cell over the recorded dates.
+
+    For "select an even N across everything matching the filter": a cell with
+    fewer clips than its share gives the rest to the others.
+    """
+    in_project = list(project_videos.values_list("pk", flat=True))
+    cells = _cells(available_qs, in_project)
+    alloc = {c: 0 for c in cells}
+    left = target
+    open_cells = [c for c in cells if cells[c]]
+    while left > 0 and open_cells:
+        share = max(1, left // len(open_cells))
+        still_open = []
+        for c in open_cells:
+            if left <= 0:
+                break
+            give = min(share, len(cells[c]) - alloc[c], left)
+            alloc[c] += give
+            left -= give
+            if alloc[c] < len(cells[c]):
+                still_open.append(c)
+        open_cells = still_open
+    picks = []
+    for c in sorted(cells):
+        picks += [_pick(*it) for it in _spaced(cells[c], alloc[c])]
+    return picks

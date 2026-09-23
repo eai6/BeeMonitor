@@ -681,6 +681,9 @@ class ProcessingHubView(LoginRequiredMixin, View):
             "custom_nest_models": models.filter(model_type__in=["nest_detection", "custom"]),
             "custom_bee_models": models.filter(model_type__in=["bee_tracking", "custom"]),
             "device_rows": device_rows,
+            # The rail's date strip: the whole recorded span under the other filters.
+            "date_overview": workspace.date_overview(
+                apply_video_filters(user_videos, workspace.without_dates(request.GET))),
             "triage": triage,
             "video_days": video_days,
             # Per-launch cap the run bar shows — mirrors the server enforcement in

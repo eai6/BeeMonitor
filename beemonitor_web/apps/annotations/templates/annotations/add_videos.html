@@ -53,22 +53,43 @@
 
     <form method="post" action="{% url 'annotations:add_videos' project.pk %}" id="add-form" class="flex-1 flex flex-col min-h-0">
       {% csrf_token %}
+      <!-- Picks that are not on screen (drafts, even spreads, unloaded pages). -->
+      <input type="hidden" name="extra_ids" id="extra-ids" value="">
 
-      <div class="flex items-center gap-3 px-5 py-2.5 bg-white border-b border-gray-200 shrink-0">
-        <label class="flex items-center gap-2 text-sm text-gray-700">
-          <input type="checkbox" id="select-all" class="rounded border-gray-300"> Select all shown
-        </label>
-        <span class="text-xs text-gray-400">{% if video_count > 200 %}Showing 200 most recent — narrow with the filter{% endif %}</span>
-        <span class="text-xs text-gray-500 ml-auto hidden sm:inline">Hover to preview &middot; click to open</span>
+      <div class="px-5 py-2.5 bg-white border-b border-gray-200 shrink-0 space-y-2">
+        <div class="flex items-center gap-3">
+          <label class="flex items-center gap-2 text-sm text-gray-700">
+            <input type="checkbox" id="select-all" class="rounded border-gray-300"> Select all shown
+          </label>
+          <span class="text-xs text-gray-500">Showing <span id="shown-n">{% if video_count > page_size %}{{ page_size }}{% else %}{{ video_count }}{% endif %}</span> of {{ video_count }} clip{{ video_count|pluralize }} matching the filter &middot; newest first</span>
+          <span class="text-xs text-gray-500 ml-auto hidden sm:inline">Hover to preview &middot; click to open</span>
+        </div>
+        <!-- Past the cards on screen: everything the filter matches. -->
+        <div id="all-banner" class="hidden flex items-center gap-3 px-3 py-2 rounded border border-indigo-200 bg-indigo-50 text-xs text-indigo-900">
+          <span id="all-banner-text"></span>
+          <button type="button" id="all-banner-btn" class="ml-auto px-2.5 py-1 rounded border border-indigo-300 bg-white font-medium hover:bg-indigo-50"></button>
+          <button type="button" id="clear-sel" class="px-2 py-1 text-indigo-700 hover:underline">Clear selection</button>
+        </div>
       </div>
 
       <div class="flex-1 overflow-y-auto px-5 pt-4" id="grid-scroll">
-        {% include "videos/_review_grid.html" with can_select=True %}
+        <div id="grid-pages">
+          {% include "videos/_review_grid.html" with can_select=True %}
+        </div>
+        {% if video_count > page_size %}
+        <div class="text-center py-4">
+          <button type="button" id="load-older" data-url="{{ grid_page_url }}" data-offset="{{ page_size }}"
+                  class="px-4 py-2 border border-gray-300 rounded-md bg-white text-sm font-medium text-gray-700 hover:bg-gray-50">
+            Load older clips (next {{ page_size }})
+          </button>
+        </div>
+        {% endif %}
         <div class="h-4"></div>
       </div>
 
       <div class="flex items-center gap-4 px-5 py-3 bg-white border-t border-gray-200 shrink-0">
         <span class="text-sm font-semibold text-gray-900"><span id="sel-n">0</span> selected</span>
+        <span id="sel-offscreen" class="text-xs text-indigo-700"></span>
         {% comment %}
           The mix of what is selected, not just the count. Twelve clips from one
           hotel at one hour is a different thing from twelve spread across four,
@@ -76,6 +97,7 @@
         {% endcomment %}
         <div id="sel-mix" class="flex items-center gap-2 text-[11px] text-gray-500"></div>
         <div class="ml-auto flex items-center gap-2">
+          <span id="cap-note" class="hidden text-xs text-red-700">One add is limited to {{ add_cap }} clips</span>
           <button type="submit" id="add-btn" disabled
                   class="bg-amber-600 hover:bg-amber-700 disabled:bg-gray-300 text-white px-5 py-2 rounded-md text-sm font-semibold">
             Add <span id="add-n">0</span> to project
@@ -86,29 +108,53 @@
   </div>
 </div>
 
+<!-- Confirm a large add: what it will cost before it starts. -->
+<div id="confirm-add" class="hidden fixed inset-0 z-50 bg-gray-900/45 flex items-center justify-center p-4">
+  <div role="dialog" aria-modal="true" aria-labelledby="confirm-title" class="w-full max-w-lg bg-white rounded-xl shadow-2xl p-6 space-y-4">
+    <h2 id="confirm-title" class="text-lg font-bold text-gray-900"></h2>
+    <div class="grid grid-cols-3 gap-2.5">
+      <div class="bg-gray-50 rounded-lg p-2.5"><div id="confirm-clips" class="text-xl font-bold"></div><div id="confirm-hotels" class="text-[11px] text-gray-500"></div></div>
+      <div class="bg-gray-50 rounded-lg p-2.5"><div id="confirm-frames" class="text-xl font-bold"></div><div class="text-[11px] text-gray-500">frames to sample (at most)</div></div>
+      <div class="bg-gray-50 rounded-lg p-2.5"><div id="confirm-dates" class="text-sm font-bold leading-7"></div><div class="text-[11px] text-gray-500">recorded</div></div>
+    </div>
+    <p class="text-sm text-gray-600">Clips are added now. Frame sampling is queued and runs in the background a few clips at a time; frames appear on the project page as they finish. Clips already in the project are skipped.</p>
+    <div class="flex justify-end gap-2">
+      <button type="button" id="confirm-cancel" class="px-4 py-2 border border-gray-300 rounded-md text-sm text-gray-700 hover:bg-gray-50">Cancel</button>
+      <button type="button" id="confirm-go" class="px-4 py-2 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-sm font-semibold"></button>
+    </div>
+  </div>
+</div>
+
 {% include "videos/_review_viewer.html" with viewer_select_label="Add this clip to the project" %}
 
+{{ video_count|json_script:"match-count" }}
 <script>
-// Selection bookkeeping: the count, the mix, and the balance draft.
+// One selection across the cards on screen and picks that are not (drafts,
+// even spreads, pages not loaded yet). Everything below reads from it: the
+// counts, the mix, the coverage map, and the add itself.
 (function () {
   var form = document.getElementById('add-form');
   if (!form) return;
+  var CAP = {{ add_cap }}, FRAMES = {{ frames_per_clip }}, CONFIRM_AT = 100;
+  var MATCHING = JSON.parse(document.getElementById('match-count').textContent);
+  var extras = {};   // id -> {device, hour, date} for picks with no card on screen
   var boxes = function () { return form.querySelectorAll('input[name="video_ids"]'); };
   var mix = document.getElementById('sel-mix');
 
-  // Coverage map, live: each cell = clips in the project + clips selected here
-  // (not yet added), so the spread of a selection shows before adding it.
+  function cardInfo(b) {
+    var card = b.closest('.vid-card');
+    if (!card) return null;
+    var dotEl = card.querySelector('[style*="background"]');
+    return {device: card.getAttribute('data-device-id'), hour: card.getAttribute('data-hour'),
+            date: card.getAttribute('data-date'), inProject: !!card.getAttribute('data-in-project'),
+            dot: dotEl ? dotEl.getAttribute('style') : 'x', time: card.getAttribute('data-time')};
+  }
+
+  // Coverage map, live: each cell = clips in the project + clips selected here.
   var cells = Array.prototype.slice.call(document.querySelectorAll('.cov-cell'));
-  var cellHtml = cells.map(function (td) { return td.innerHTML; });  // server render
-  function drawCoverage(picked) {
+  var cellHtml = cells.map(function (td) { return td.innerHTML; });
+  function drawCoverage(sel, total) {
     if (!cells.length) return;
-    var sel = {}, total = 0;
-    picked.forEach(function (b) {
-      var card = b.closest('.vid-card');
-      if (!card || card.getAttribute('data-in-project')) return;  // already counted
-      var key = card.getAttribute('data-device-id') + ':' + card.getAttribute('data-hour');
-      sel[key] = (sel[key] || 0) + 1; total++;
-    });
     var gaps = 0;
     cells.forEach(function (td, i) {
       var key = td.getAttribute('data-device-id') + ':' + td.getAttribute('data-hour');
@@ -131,38 +177,132 @@
     }
   }
 
+  function fmtDate(iso) {
+    if (!iso) return '';
+    var d = new Date(iso + 'T00:00:00');
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+
+  var summary = { n: 0, hotels: 0, from: '', to: '' };
   function refresh() {
     var picked = Array.prototype.filter.call(boxes(), function (b) { return b.checked; });
-    var n = picked.length;
+    var extraIds = Object.keys(extras);
+    var n = picked.length + extraIds.length;
+    document.getElementById('extra-ids').value = extraIds.join(',');
     document.getElementById('sel-n').textContent = n;
     document.getElementById('add-n').textContent = n;
     document.getElementById('rail-selected').textContent = n;
-    document.getElementById('add-btn').disabled = n === 0;
+    document.getElementById('add-btn').disabled = n === 0 || n > CAP;
+    document.getElementById('cap-note').classList.toggle('hidden', n <= CAP);
+    document.getElementById('sel-offscreen').textContent = extraIds.length
+      ? extraIds.length + ' of them not on screen' : '';
 
-    // Group by the hotel dot the card already carries, so "mix" needs no extra
-    // data on the page.
-    var byDot = {}, hours = [];
+    var sel = {}, total = 0, byDot = {}, hotels = {}, hours = [], dates = [];
+    function count(info) {
+      if (info.inProject) return;
+      var key = info.device + ':' + info.hour;
+      sel[key] = (sel[key] || 0) + 1; total++;
+    }
     picked.forEach(function (b) {
-      var card = b.closest('.vid-card');
-      if (!card) return;
-      var dotEl = card.querySelector('[style*="background"]');
-      var key = dotEl ? dotEl.getAttribute('style') : 'x';
-      byDot[key] = (byDot[key] || 0) + 1;
-      var t = card.getAttribute('data-time');
-      if (t) hours.push(parseInt(t.slice(0, 2), 10));
+      var info = cardInfo(b);
+      if (!info) return;
+      count(info);
+      byDot[info.dot] = (byDot[info.dot] || 0) + 1;
+      if (info.device) hotels[info.device] = 1;
+      if (info.hour !== '' && info.hour != null) hours.push(+info.hour);
+      if (info.date) dates.push(info.date);
     });
-    drawCoverage(picked);
-    if (!n) { mix.innerHTML = ''; return; }
-    var bar = '<span class="flex h-1.5 w-32 rounded-full overflow-hidden">';
-    Object.keys(byDot).forEach(function (k) {
-      var pct = (byDot[k] / n * 100).toFixed(1);
-      bar += '<i style="width:' + pct + '%;' + (k || '') + '"></i>';
+    extraIds.forEach(function (id) {
+      var e = extras[id];
+      count(e);
+      byDot['extra'] = (byDot['extra'] || 0) + 1;
+      if (e.device) hotels[e.device] = 1;
+      if (e.hour != null) hours.push(+e.hour);
+      if (e.date) dates.push(e.date);
     });
-    bar += '</span>';
-    var span = hours.length
-      ? Math.min.apply(null, hours) + '–' + Math.max.apply(null, hours) + 'h' : '';
-    mix.innerHTML = bar + '<span>' + Object.keys(byDot).length + ' hotel(s) · ' + span + '</span>';
+    drawCoverage(sel, total);
+    dates.sort();
+    summary = { n: n, hotels: Object.keys(hotels).length,
+                from: dates[0] || '', to: dates[dates.length - 1] || '' };
+
+    if (!n) { mix.innerHTML = ''; }
+    else {
+      var bar = '<span class="flex h-1.5 w-32 rounded-full overflow-hidden">';
+      Object.keys(byDot).forEach(function (k) {
+        var pct = (byDot[k] / n * 100).toFixed(1);
+        bar += '<i style="width:' + pct + '%;' + (k === 'extra' ? 'background:#6366f1' : k) + '"></i>';
+      });
+      bar += '</span>';
+      var span = hours.length
+        ? Math.min.apply(null, hours) + '–' + Math.max.apply(null, hours) + 'h' : '';
+      var range = summary.from ? ' · ' + fmtDate(summary.from) + (summary.to !== summary.from ? ' – ' + fmtDate(summary.to) : '') : '';
+      mix.innerHTML = bar + '<span>' + summary.hotels + ' hotel(s) · ' + span + range + '</span>';
+    }
+    updateBanner(picked.length);
   }
+
+  // "Select all shown" -> offer everything the filter matches.
+  var banner = document.getElementById('all-banner');
+  function updateBanner(pickedOnScreen) {
+    var shown = boxes().length;
+    var allShown = shown && pickedOnScreen === shown;
+    var more = MATCHING > shown;
+    banner.classList.toggle('hidden', !(allShown && more));
+    if (!(allShown && more)) return;
+    var btn = document.getElementById('all-banner-btn');
+    if (MATCHING <= CAP) {
+      document.getElementById('all-banner-text').innerHTML = 'All ' + shown + ' shown are selected.';
+      btn.textContent = 'Select all ' + MATCHING.toLocaleString() + ' matching this filter';
+      btn.dataset.mode = 'all';
+    } else {
+      document.getElementById('all-banner-text').innerHTML = 'All ' + shown + ' shown are selected. <b>'
+        + MATCHING.toLocaleString() + '</b> clips match this filter — more than one add allows (' + CAP.toLocaleString() + ').';
+      btn.textContent = 'Select an even ' + CAP.toLocaleString() + ' across all ' + MATCHING.toLocaleString();
+      btn.dataset.mode = 'even';
+    }
+  }
+
+  // Apply server picks: tick the ones on screen, keep the rest as extras.
+  function applyPicks(picks, replace) {
+    if (replace) {
+      Array.prototype.forEach.call(boxes(), function (b) { b.checked = false; });
+      extras = {};
+    }
+    var onScreen = {};
+    Array.prototype.forEach.call(boxes(), function (b) { onScreen[b.value] = b; });
+    var hit = 0;
+    picks.forEach(function (p) {
+      var b = onScreen[String(p.id)];
+      if (b) { if (!b.checked) { b.checked = true; hit++; } }
+      else if (!extras[p.id]) { extras[p.id] = p; hit++; }
+    });
+    refresh();
+    return hit;
+  }
+
+  function draftUrl(extra) {
+    var el = document.getElementById('draft-btn');
+    var base = el ? el.getAttribute('data-url') : "{% url 'annotations:add_videos_draft' project.pk %}";
+    return base + (window.location.search || '?') + extra;
+  }
+
+  document.getElementById('all-banner-btn').addEventListener('click', function () {
+    var btn = this, was = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Selecting…';
+    // Both modes ask the server: "all" returns every match (<= cap) spread-
+    // ordered, "even" an even cap-sized spread across them.
+    fetch(draftUrl('&even=1'), {headers: {'X-Requested-With': 'XMLHttpRequest'}})
+      .then(function (r) { return r.json(); })
+      .then(function (j) { applyPicks(j.picks || [], true); })
+      .catch(function () { alert('Could not select those clips.'); })
+      .then(function () { btn.disabled = false; btn.textContent = was; });
+  });
+  document.getElementById('clear-sel').addEventListener('click', function () {
+    Array.prototype.forEach.call(boxes(), function (b) { b.checked = false; });
+    extras = {};
+    var all = document.getElementById('select-all'); if (all) all.checked = false;
+    refresh();
+  });
 
   form.addEventListener('change', function (e) {
     if (e.target.name === 'video_ids') refresh();
@@ -170,6 +310,7 @@
   var all = document.getElementById('select-all');
   if (all) all.addEventListener('change', function () {
     Array.prototype.forEach.call(boxes(), function (b) { b.checked = all.checked; });
+    if (!all.checked) extras = {};
     refresh();
   });
 
@@ -179,27 +320,68 @@
     var was = draft.textContent;
     draft.textContent = 'Drafting…';
     var per = document.getElementById('draft-per');
-    var url = draft.getAttribute('data-url')
-            + (window.location.search || '?')
-            + '&per_cell=' + (per ? per.value : 2);
-    fetch(url, {headers: {'X-Requested-With': 'XMLHttpRequest'}})
+    fetch(draftUrl('&per_cell=' + (per ? per.value : 2)), {headers: {'X-Requested-With': 'XMLHttpRequest'}})
       .then(function (r) { return r.json(); })
       .then(function (j) {
-        var want = {};
-        (j.video_ids || []).forEach(function (id) { want[String(id)] = true; });
-        var hit = 0;
-        Array.prototype.forEach.call(boxes(), function (b) {
-          if (want[b.value]) { b.checked = true; hit++; }
-        });
-        refresh();
-        draft.textContent = hit
-          ? 'Selected ' + hit + ' of ' + j.count
-          : 'Nothing new to draft';
+        var hit = applyPicks(j.picks || [], false);
+        draft.textContent = hit ? 'Selected ' + hit : 'Nothing new to draft';
         setTimeout(function () { draft.textContent = was; draft.disabled = false; }, 2600);
       })
       .catch(function () { draft.textContent = was; draft.disabled = false; });
   });
 
+  // Load older clips: append the next page; picks already held as extras
+  // become ticked cards.
+  var older = document.getElementById('load-older');
+  function updateShown() {
+    var el = document.getElementById('shown-n'); if (el) el.textContent = boxes().length;
+  }
+  if (older) older.addEventListener('click', function () {
+    older.disabled = true;
+    var was = older.textContent;
+    older.textContent = 'Loading…';
+    var q = (window.location.search || '?') + '&offset=' + older.getAttribute('data-offset');
+    fetch(older.getAttribute('data-url') + q, {headers: {'X-Requested-With': 'XMLHttpRequest'}})
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var wrap = document.createElement('div');
+        wrap.innerHTML = j.html;
+        document.getElementById('grid-pages').appendChild(wrap);
+        wrap.querySelectorAll('input[name="video_ids"]').forEach(function (b) {
+          if (extras[b.value]) { b.checked = true; delete extras[b.value]; }
+        });
+        older.setAttribute('data-offset', j.next_offset);
+        older.textContent = was; older.disabled = false;
+        if (!j.has_more) older.parentNode.remove();
+        if (window.bindReviewCards) window.bindReviewCards(wrap);
+        updateShown(); refresh();
+      })
+      .catch(function () { older.textContent = was; older.disabled = false; });
+  });
+
+  // Confirm large adds with what they will cost.
+  var modal = document.getElementById('confirm-add');
+  var confirmed = false;
+  form.addEventListener('submit', function (e) {
+    if (confirmed || summary.n < CONFIRM_AT) return;
+    e.preventDefault();
+    var n = summary.n;
+    document.getElementById('confirm-title').textContent = 'Add ' + n.toLocaleString() + ' clips to {{ project.name|escapejs }}?';
+    document.getElementById('confirm-clips').textContent = n.toLocaleString();
+    document.getElementById('confirm-hotels').textContent = 'clips · ' + summary.hotels + ' hotel' + (summary.hotels === 1 ? '' : 's');
+    var frames = n * FRAMES;
+    document.getElementById('confirm-frames').textContent = frames >= 10000 ? '~' + Math.round(frames / 1000) + 'k' : frames.toLocaleString();
+    document.getElementById('confirm-dates').textContent = summary.from
+      ? fmtDate(summary.from) + (summary.to !== summary.from ? ' – ' + fmtDate(summary.to) : '') : '—';
+    document.getElementById('confirm-go').textContent = 'Add ' + n.toLocaleString() + ' clips';
+    modal.classList.remove('hidden');
+  });
+  document.getElementById('confirm-cancel').addEventListener('click', function () { modal.classList.add('hidden'); });
+  document.getElementById('confirm-go').addEventListener('click', function () {
+    confirmed = true; modal.classList.add('hidden'); form.requestSubmit();
+  });
+
+  updateShown();
   refresh();
 })();
 </script>
