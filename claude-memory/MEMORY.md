@@ -9,3 +9,6 @@
 - [Motion gate uses shadow detection](motion-gate-shadow-detection.md) — MOG2 gate runs detectShadows=True + thresholds out shadow pixels to reject shadows/light-changes; don't revert to False. Tune BEEMONITOR_SHADOW_THRESHOLD; test via motion_replay.py.
 - [Remote update is two-phase](remote-update-two-phase.md) — cellular code update: fetch in telemetry's cgroup (firewall) + separate beemonitor-update.service apply with auto-rollback. Device + dashboard done (2d0f5a1/d28606c/64c9393). torch/models excluded.
 - [Video device-deletion two-key gate](video-device-deletion-two-key.md) — device frees a clip ONLY if uploaded AND a human clicked "Delete from device" (device_delete_requested); never auto. Device+API+dashboard done (a6bcb15/ed856f3). Server delete is separate.
+- [Committing from the Pi](pi-git-commit-and-push.md) — no git identity here; use -c eai6 noreply, fetch+rebase before push
+- [No sudo on the Pi](pi-no-passwordless-sudo.md) — user runs restarts/camera tests via `! sudo`; what can be checked without root
+- [Camera orientation per model](camera-orientation-per-model.md) — 3 swappable modules, FLIPPED_MODELS fix, HQ upright not yet verified
