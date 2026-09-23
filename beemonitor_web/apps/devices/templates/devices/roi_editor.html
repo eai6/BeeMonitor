@@ -23,7 +23,7 @@
   </div>
   {% else %}
 
-  <div class="flex flex-wrap items-center gap-2 mb-3 text-sm">
+  <div id="toolbar" class="flex flex-wrap items-center gap-2 mb-3 text-sm">
     <div class="inline-flex rounded-md overflow-hidden border border-gray-300">
       <button data-mode="roi"  class="mode-btn px-3 py-1.5 bg-amber-600 text-white">ROI</button>
       <button data-mode="nest" class="mode-btn px-3 py-1.5 bg-white text-gray-700">Add reference object</button>
@@ -41,6 +41,10 @@
     <span id="saved" class="text-xs text-green-700 hidden">Saved ✓</span>
   </div>
   <p id="hint" class="text-xs text-gray-500 mb-2">Drag to draw the ROI.</p>
+  <div id="viewing-banner" class="hidden mb-2 flex items-center gap-3 px-3 py-2 rounded border border-blue-200 bg-blue-50 text-xs text-blue-900">
+    <span id="viewing-text"></span>
+    <button type="button" id="viewing-back" class="ml-auto px-2.5 py-1 rounded border border-blue-300 bg-white text-blue-900 hover:bg-blue-50">Back to current</button>
+  </div>
 
   <div id="stage" class="relative inline-block select-none" style="touch-action:none;">
     <img id="bgimg" src="{{ image_url }}" alt="" class="block max-w-full h-auto rounded">
@@ -49,9 +53,18 @@
   {% endif %}
   </div>
 
+  <div class="w-full lg:w-72 shrink-0 space-y-4">
+  <!-- Layout history: every save is kept (read-only); analysis uses the layout
+       that was in use when each clip was recorded. -->
+  <div class="bg-white shadow rounded-lg p-4">
+    <h2 class="text-sm font-semibold text-gray-700">Layout history</h2>
+    <p class="text-xs text-gray-500 mt-0.5 mb-3">Every save is kept. Analysis uses the layout that was in use when each clip was recorded.</p>
+    <div id="layout-history" class="space-y-2"></div>
+  </div>
+
   <!-- Motion detection: which moving blobs count. Blank = the device's default. -->
   <form id="motion-form" method="post" action="{% url 'devices:motion_tuning' device.pk %}"
-        class="w-full lg:w-72 shrink-0 bg-white shadow rounded-lg p-4 space-y-3">
+        class="bg-white shadow rounded-lg p-4 space-y-3">
     {% csrf_token %}
     <div>
       <h2 class="text-sm font-semibold text-gray-700">Motion detection</h2>
@@ -82,8 +95,49 @@
     {% endif %}
   </form>
   </div>
+  </div>
 </div>
 
+{{ versions_json|json_script:"layout-versions" }}
+<script>
+// Layout history list. Clicking a version previews it read-only on the picture
+// (window.viewLayout, defined by the editor below when there is a picture).
+(function () {
+  var box = document.getElementById('layout-history');
+  var BADGE = {
+    in_use: ['In use', 'bg-green-100 text-green-800'],
+    waiting: ['Waiting for device', 'bg-amber-100 text-amber-800'],
+    used: ['Used', 'bg-gray-100 text-gray-600'],
+    never_used: ['Never used', 'bg-gray-100 text-gray-500'],
+  };
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  window.renderLayoutHistory = function (versions, viewingNumber) {
+    window._layoutVersions = versions || [];
+    if (!versions || !versions.length) {
+      box.innerHTML = '<p class="text-xs text-gray-400">No layout saved yet.</p>';
+      return;
+    }
+    box.innerHTML = versions.map(function (v, i) {
+      var b = BADGE[v.state] || ['', ''];
+      var on = v.number === viewingNumber;
+      return '<button type="button" data-i="' + i + '" class="layout-v w-full text-left rounded-md border px-3 py-2 '
+        + (on ? 'border-blue-300 bg-blue-50' : 'border-gray-200 hover:bg-gray-50') + '">'
+        + '<div class="flex items-center gap-2"><span class="text-sm font-semibold text-gray-900">v' + v.number + '</span>'
+        + '<span class="text-[11px] font-medium px-2 rounded-full ' + b[1] + '">' + b[0] + '</span>'
+        + (on ? '<span class="text-[11px] text-blue-800">viewing</span>' : '') + '</div>'
+        + '<div class="text-xs text-gray-600 mt-0.5">' + esc(v.span) + '</div>'
+        + '<div class="text-[11px] text-gray-500 mt-0.5">' + esc(v.detail) + '</div></button>';
+    }).join('');
+    box.querySelectorAll('.layout-v').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        if (window.viewLayout) window.viewLayout(window._layoutVersions[+btn.dataset.i]);
+      });
+    });
+  };
+  renderLayoutHistory(JSON.parse(document.getElementById('layout-versions').textContent));
+})();
+</script>
 <script>
 // Posts the motion-detection form; the ROI Save calls it too (window.saveMotion).
 (function () {
@@ -235,7 +289,37 @@
   // ── Pointer handling ───────────────────────────────────────────────────────
   var drag = null;  // {start,last} while rubber-banding | {moving|vertex, last}
 
+  // Read-only preview of a past layout version; the edited layout is parked
+  // in `parked` and restored by "Back to current".
+  var viewing = null, parked = null;
+  function copy(x) { return JSON.parse(JSON.stringify(x)); }
+  window.viewLayout = function (v) {
+    if (!v) return;
+    cancelPoly();
+    if (!viewing) parked = {roi: roi, nests: nests};
+    viewing = v; selected = null; drag = null;
+    roi = v.roi ? copy(v.roi) : null; nests = copy(v.nests || []);
+    document.getElementById('viewing-text').innerHTML =
+      '<b>Viewing layout v' + v.number + '</b> · ' + v.span.replace(/[<>&]/g, '') + ' · read-only';
+    document.getElementById('viewing-banner').classList.remove('hidden');
+    var tb = document.getElementById('toolbar');
+    tb.style.opacity = '0.4'; tb.style.pointerEvents = 'none';
+    renderLayoutHistory(window._layoutVersions, v.number);
+    draw();
+  };
+  function backToCurrent() {
+    if (!viewing) return;
+    roi = parked.roi; nests = parked.nests; viewing = null; parked = null; selected = null;
+    document.getElementById('viewing-banner').classList.add('hidden');
+    var tb = document.getElementById('toolbar');
+    tb.style.opacity = ''; tb.style.pointerEvents = '';
+    renderLayoutHistory(window._layoutVersions, null);
+    draw();
+  }
+  document.getElementById('viewing-back').addEventListener('click', backToCurrent);
+
   function down(e) {
+    if (viewing) return;
     e.preventDefault(); var p = pos(e);
     if (mode !== 'move' && tool === 'poly') { polyClick(p); return; }
     if (mode === 'move') {
@@ -357,6 +441,7 @@
           // exactly what the device will get.
           roi = d.roi ? {box: d.roi, points: d.roi_polygon || null} : null;
           nests = d.nests || []; selected = null; draw();
+          if (d.versions) renderLayoutHistory(d.versions, null);
           var s=document.getElementById('saved'); s.classList.remove('hidden');
           setTimeout(function(){ s.classList.add('hidden'); }, 2500);
         } else { alert((d && d.error) || 'Could not save.'); }

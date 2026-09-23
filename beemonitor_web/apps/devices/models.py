@@ -519,6 +519,38 @@ class DeviceHeartbeat(models.Model):
         return f"heartbeat {self.device.name} @ {self.created_at:%Y-%m-%d %H:%M}"
 
 
+class DeviceLayoutVersion(models.Model):
+    """One saved ROI + reference-object layout. Every change in the ROI editor
+    adds a version (read-only once saved), so analysis of a clip uses the layout
+    that was actually in use when it was recorded — see apps/devices/layouts.py.
+
+    ``applied_at`` is when the device first received it (the heartbeat response
+    that delivered it); the recorder hot-reloads the ROI, so that is when it
+    took effect. Null = the device hasn't checked in since it was saved; if a
+    newer version is saved first, this one was never used.
+    """
+
+    device = models.ForeignKey(Device, on_delete=models.CASCADE,
+                               related_name="layout_versions")
+    number = models.PositiveIntegerField()  # v1, v2, … per device
+    roi_override = models.JSONField(null=True, blank=True)
+    roi_polygon = models.JSONField(null=True, blank=True)
+    nest_layout = models.JSONField(default=list, blank=True)
+    saved_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
+                                 on_delete=models.SET_NULL, related_name="+")
+    saved_at = models.DateTimeField(auto_now_add=True)
+    applied_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-number"]
+        constraints = [models.UniqueConstraint(fields=["device", "number"],
+                                               name="uniq_layout_device_number")]
+        indexes = [models.Index(fields=["device", "applied_at"])]
+
+    def __str__(self) -> str:
+        return f"layout v{self.number} of device {self.device_id}"
+
+
 class DeviceHealthSample(models.Model):
     """One minute of a device's maintenance metrics, kept indefinitely.
 

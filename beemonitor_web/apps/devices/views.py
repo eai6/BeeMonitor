@@ -1710,6 +1710,50 @@ class DeviceDisplayTzView(LoginRequiredMixin, View):
         return redirect("devices:detail", pk=pk)
 
 
+def _layout_versions_payload(device) -> list:
+    """The ROI editor's Layout history list, newest first, with each version's
+    state (waiting / in use / used / never used) and span of use."""
+    from django.utils.formats import date_format
+    from .models import DeviceLayoutVersion
+
+    zone, _ = _display_zone(device)
+    versions = list(DeviceLayoutVersion.objects.filter(device=device)
+                    .select_related("saved_by").order_by("-number"))
+    applied = sorted((v for v in versions if v.applied_at), key=lambda v: v.applied_at)
+    ends = {a.pk: b.applied_at for a, b in zip(applied, applied[1:])}
+    current = applied[-1].pk if applied else None
+    earliest = applied[0].pk if applied else None
+
+    def when(dt):
+        return date_format(dt.astimezone(zone), "M j, Y H:i")
+
+    out = []
+    for v in versions:
+        if v.applied_at is None:
+            newer_applied = any(a.number > v.number for a in applied)
+            state = "never_used" if newer_applied or v is not versions[0] else "waiting"
+            span = (f"Saved {when(v.saved_at)} · replaced before the device checked in"
+                    if state == "never_used" else
+                    f"Saved {when(v.saved_at)} · device hasn't checked in yet")
+        else:
+            state = "in_use" if v.pk == current else "used"
+            start = ("the beginning" if v.pk == earliest and v.applied_at.year <= 2000
+                     else when(v.applied_at))
+            span = (f"Since {start}" if state == "in_use"
+                    else f"{start} – {when(ends[v.pk])}")
+        n = len(v.nest_layout or [])
+        shape = ("No ROI" if not v.roi_override else
+                 "Polygon ROI" if v.roi_polygon else "Rectangle ROI")
+        detail = f"{shape} · {n} reference object{'s' if n != 1 else ''}"
+        if v.saved_by:
+            detail += f" · {v.saved_by.get_username()}"
+        out.append({"number": v.number, "state": state, "span": span, "detail": detail,
+                    "roi": ({"box": v.roi_override, "points": v.roi_polygon}
+                            if v.roi_override else None),
+                    "nests": v.nest_layout or []})
+    return out
+
+
 class DeviceRoiEditorView(LoginRequiredMixin, View):
     """Edit the hotel ROI + nest boxes/IDs over the device's latest picture.
 
@@ -1727,6 +1771,7 @@ class DeviceRoiEditorView(LoginRequiredMixin, View):
             "image_url": _presign_image(img_hb.image_storage_key) if img_hb else None,
             "roi_json": json.dumps(_roi_shape(device)),
             "nests_json": json.dumps(device.nest_layout or []),
+            "versions_json": json.dumps(_layout_versions_payload(device)),
         }
         from django.shortcuts import render
         return render(request, self.template_name, ctx)
@@ -1758,8 +1803,12 @@ class DeviceRoiEditorView(LoginRequiredMixin, View):
         device.roi_polygon = roi_polygon
         device.nest_layout = nests
         device.save(update_fields=["roi_override", "roi_polygon", "nest_layout"])
+        # Keep every layout: analysis uses the one in use when a clip was recorded.
+        from .layouts import record_saved_layout
+        record_saved_layout(device, request.user)
         return JsonResponse({"ok": True, "roi": roi_override,
-                             "roi_polygon": roi_polygon, "nests": nests})
+                             "roi_polygon": roi_polygon, "nests": nests,
+                             "versions": _layout_versions_payload(device)})
 
 
 class DeviceLatestImageView(LoginRequiredMixin, View):

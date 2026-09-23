@@ -1379,23 +1379,25 @@ def _notify_pipeline(job_pk) -> None:
 
 
 def _video_job_config(base: dict, video, use_device_roi: bool) -> dict:
-    """Per-video job config. When use_device_roi is on and the video's DEVICE has a
-    configured hotel ROI / nest tubes, inject them so the run uses the human-set
+    """Per-video job config. When use_device_roi is on and the video's DEVICE had a
+    hotel ROI / nest tubes in use when the clip was recorded, inject them so the run uses the human-set
     layout (the nest-detection model becomes a backup for videos/devices without
     one). No-op when the device has nothing set. The SageMaker worker honours
     ``hotel_roi`` / ``nest_layout`` when present."""
     cfg = dict(base)
-    dev = getattr(video, "device", None)
-    if use_device_roi and dev is not None:
-        if dev.roi_override:
-            cfg["hotel_roi"] = dev.roi_override     # normalized [x1,y1,x2,y2]
-        if dev.roi_polygon:
+    if use_device_roi and getattr(video, "device", None) is not None:
+        # The layout in use when THIS clip was recorded, not today's.
+        from apps.devices.layouts import layout_for_video
+        layout = layout_for_video(video)
+        if layout["roi_override"]:
+            cfg["hotel_roi"] = layout["roi_override"]     # normalized [x1,y1,x2,y2]
+        if layout["roi_polygon"]:
             # The traced outline of that same ROI — the worker masks tracking to
             # it so background inside the bounding box is not analysed.
-            cfg["hotel_polygon"] = dev.roi_polygon  # [[x,y], ...] normalized
-        if dev.nest_layout:
+            cfg["hotel_polygon"] = layout["roi_polygon"]  # [[x,y], ...] normalized
+        if layout["nest_layout"]:
             # [{id, box:[x1,y1,x2,y2], points?:[[x,y], ...]}, ...]
-            cfg["nest_layout"] = dev.nest_layout
+            cfg["nest_layout"] = layout["nest_layout"]
     return cfg
 
 

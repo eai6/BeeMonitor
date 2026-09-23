@@ -156,9 +156,12 @@ def resolve_reference(step, run, context, index):
             video = Video.objects.select_related("device").get(pk=video_out["video_id"])
             device = getattr(video, "device", None)
             if device is not None:
-                hotel_roi = getattr(device, "roi_override", None)
-                hotel_polygon = getattr(device, "roi_polygon", None)
-                nest_layout = getattr(device, "nest_layout", None)
+                # The layout in use when this clip was recorded, not today's.
+                from apps.devices.layouts import layout_for_video
+                layout = layout_for_video(video)
+                hotel_roi = layout["roi_override"]
+                hotel_polygon = layout["roi_polygon"]
+                nest_layout = layout["nest_layout"] or None
         except Exception as exc:  # defensive — device linkage is optional
             logger.info("detect.objects: could not read device layout: %s", exc)
     return {
@@ -282,9 +285,12 @@ def _exec_roi_nest_layout(step, run, context, inputs, index):
         video = Video.objects.select_related("device").get(pk=video_out["video_id"])
         device = getattr(video, "device", None)
         if device is not None:
-            hotel_roi = getattr(device, "roi_override", None)
-            hotel_polygon = getattr(device, "roi_polygon", None)
-            nest_layout = getattr(device, "nest_layout", None)
+            # The layout in use when this clip was recorded, not today's.
+            from apps.devices.layouts import layout_for_video
+            layout = layout_for_video(video)
+            hotel_roi = layout["roi_override"]
+            hotel_polygon = layout["roi_polygon"]
+            nest_layout = layout["nest_layout"] or None
     except Exception as exc:  # defensive — device linkage is optional
         logger.info("roi.nest_layout: could not read device layout: %s", exc)
     return {

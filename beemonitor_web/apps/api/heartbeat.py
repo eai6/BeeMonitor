@@ -207,6 +207,11 @@ class DeviceHeartbeatView(APIView):
         if not device_tz:
             device_tz = (device.display_tz or "").strip() or None
 
+        # This response carries the current ROI layout to the device: a newly
+        # saved layout version is in use from now.
+        from apps.devices.layouts import mark_delivered
+        mark_delivered(device)
+
         logger.info(
             "heartbeat: device=%s user=%s hb=%s image=%s gps=%s cmd=%s",
             device.id, device.owner_id, hb.id, bool(image_key),
