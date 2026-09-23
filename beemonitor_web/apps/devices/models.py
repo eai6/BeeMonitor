@@ -22,19 +22,31 @@ from django.utils import timezone
 # Access levels, lowest -> highest. "owner" is implicit (Device.owner).
 _ROLE_RANK = {"viewer": 1, "manager": 2, "owner": 3}
 
-# Allowed telemetry beat intervals (seconds -> label) for the dashboard control.
-# The device picks the new rate up via the heartbeat/command response.
-TELEMETRY_INTERVAL_CHOICES = [
-    (5, "5 seconds"),
-    (10, "10 seconds"),
-    (30, "30 seconds"),
-    (60, "1 minute"),
-    (300, "5 minutes"),
-    (1800, "30 minutes"),
-    (3600, "1 hour"),
-    (86400, "1 day"),
-]
-TELEMETRY_INTERVAL_VALUES = [v for v, _ in TELEMETRY_INTERVAL_CHOICES]
+# Telemetry beat cadence is automatic, not user-set: as fast as the device
+# allows on WiFi, slow on metered cellular. The heartbeat sets it from the
+# transport each beat reports, and the device adopts it from the response.
+TELEMETRY_WIFI_SECONDS = 5
+TELEMETRY_CELLULAR_SECONDS = 300
+
+
+# Motion-clip timing, the same for every device and pushed in the heartbeat:
+# a clip closes RECORD_POST_ROLL seconds after motion stops, and constant motion
+# is force-split at RECORD_MAX_SEGMENT so one file can't grow unbounded.
+RECORD_POST_ROLL = 10
+RECORD_MAX_SEGMENT = 600
+
+
+def telemetry_interval_for(transport: str) -> "int | None":
+    """Beat interval for a reported transport; None when unknown (keep current).
+
+    Anything that isn't cellular (WiFi, or a wired/other interface) is
+    unmetered, so it beats at the fast rate."""
+    transport = (transport or "").strip().lower()
+    if not transport:
+        return None
+    if transport == "cellular":
+        return TELEMETRY_CELLULAR_SECONDS
+    return TELEMETRY_WIFI_SECONDS
 
 
 # --- WittyPi power schedule (remote review/edit) -------------------------------
@@ -144,8 +156,9 @@ class Device(models.Model):
     last_seen_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    # How often the device sends a telemetry beat (seconds). Set from the
-    # dashboard; the device adopts it via the heartbeat/command response.
+    # How often the device sends a telemetry beat (seconds). Set automatically
+    # from the reported transport (see telemetry_interval_for); the device adopts
+    # it via the heartbeat/command response.
     telemetry_interval_seconds = models.PositiveIntegerField(default=60)
 
     # The device's local timezone, reported via telemetry. Activity is bucketed
@@ -158,10 +171,9 @@ class Device(models.Model):
     # (then UTC). Charts/tile are converted to this from each clip's true instant.
     display_tz = models.CharField(max_length=64, blank=True, default="")
 
-    # Manual motion-tuning overrides (null = use the device's auto-calibration).
-    # Applied by the recorder on top of calibration.json. Higher var_threshold or
-    # min_blobs, or a tighter area window, = less sensitive.
-    motion_var_threshold = models.PositiveIntegerField(null=True, blank=True)
+    # Manual motion-tuning overrides (null = use the device's auto-calibration),
+    # set on the ROI editor page. Applied by the recorder on top of
+    # calibration.json. Higher min_blobs or a tighter area window = less sensitive.
     motion_min_area = models.FloatField(null=True, blank=True)
     motion_max_area = models.FloatField(null=True, blank=True)
     motion_min_blobs = models.PositiveIntegerField(null=True, blank=True)
@@ -220,19 +232,6 @@ class Device(models.Model):
     # the same physical unit maps back to the same Device instead of duplicating.
     hw_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
 
-    # Whether the uploader may push videos automatically when WiFi is up.
-    # "manual" (default) holds the backlog until the user taps "Upload now" or
-    # flips to auto — protects people whose "WiFi" is a phone hotspot from
-    # burning their cellular data plan. Pushed in the heartbeat; the uploader
-    # treats a missing state file as manual too (any unit that can upload can
-    # also beat, so it always learns its real mode first).
-    VIDEO_UPLOAD_MODES = [
-        ("manual", "Manual — hold videos until 'Upload now'"),
-        ("auto", "Auto — upload whenever WiFi is connected"),
-    ]
-    video_upload_mode = models.CharField(
-        max_length=8, default="manual", choices=VIDEO_UPLOAD_MODES)
-
     # How the recorder captures within its window, pushed in the heartbeat
     # (the recorder hot-reloads it). motion = clips only when motion triggers
     # (default); continuous = record the whole window, rotated into ~10-minute
@@ -249,15 +248,6 @@ class Device(models.Model):
     # This gates BOTH modes and only applies while the unit is powered (the
     # WittyPi power schedule remains the outer on/off envelope).
     record_window = models.JSONField(null=True, blank=True)
-    # Motion-mode clip tail: seconds of no motion before a clip closes. Higher
-    # keeps a briefly-paused bee (grooming, at a tube) in one clip instead of
-    # splitting it. Pushed in the heartbeat; the recorder hot-reloads it.
-    record_post_roll = models.PositiveIntegerField(default=30)
-    # Hard cap on a single motion clip's length (seconds). Continuous motion
-    # (a bee that stays, or wind/shadows/grass) is force-rotated at this length
-    # into a fresh clip so one file can't grow unbounded and fill the card.
-    # Default 600s (10 min). Pushed in the heartbeat; the recorder hot-reloads.
-    record_max_segment = models.PositiveIntegerField(default=600)
 
     # Pending command for the device, returned in the next heartbeat response and
     # then cleared. "" | "capture_image" | "stream" | "wifi_stream".
@@ -322,9 +312,12 @@ class Device(models.Model):
 
     @property
     def telemetry_interval_label(self) -> str:
-        """Human label for the current beat interval (e.g. '1 minute')."""
-        return dict(TELEMETRY_INTERVAL_CHOICES).get(
-            self.telemetry_interval_seconds, f"{self.telemetry_interval_seconds}s")
+        """Human label for the current beat interval (e.g. '5 seconds')."""
+        secs = self.telemetry_interval_seconds
+        if secs and secs % 60 == 0:
+            mins = secs // 60
+            return f"{mins} minute{'s' if mins != 1 else ''}"
+        return f"{secs} second{'s' if secs != 1 else ''}"
 
     def online_window_seconds(self) -> int:
         """How long since the last check-in before this unit is 'offline'.
@@ -364,8 +357,6 @@ class Device(models.Model):
     def motion_tuning_dict(self) -> dict:
         """Non-null motion overrides, in the keys the recorder expects."""
         d = {}
-        if self.motion_var_threshold is not None:
-            d["var_threshold"] = self.motion_var_threshold
         if self.motion_min_area is not None:
             d["min_area"] = self.motion_min_area
         if self.motion_max_area is not None:

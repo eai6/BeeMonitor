@@ -1228,8 +1228,9 @@ class DeviceCellularViewTests(TestCase):
         self.assertEqual(r.json()["cell_firewall"], "open")
 
 
-class ActivityTableRenderTests(TestCase):
-    """The device detail page renders the CSV-exportable activity table."""
+class ClipActivityRenderTests(TestCase):
+    """The device page shows clips per hour with its CSV button on the chart —
+    no foraging table, species link, or detailed-data downloads."""
 
     def setUp(self):
         from apps.devices.models import Device
@@ -1237,20 +1238,20 @@ class ActivityTableRenderTests(TestCase):
         self.client, _ = logged_in_client(self.owner)
         self.device, _ = Device.create_with_key(self.owner, "alice-pi")
 
-    def test_detail_has_activity_table_and_csv(self):
+    def test_detail_has_clip_chart_with_csv(self):
         r = self.client.get(reverse("devices:detail", args=[self.device.pk]))
         self.assertEqual(r.status_code, 200)
         body = r.content.decode()
-        self.assertIn('id="act-table-body"', body)
+        self.assertIn("Clip activity per", body)
         self.assertIn('id="act-csv-btn"', body)
-        self.assertIn("buildActivityTable", body)
-        self.assertIn("Activity per", body)
-        # One range selector drives both chart + table (shared, in-place switch).
         self.assertIn("act-range-btn", body)
         self.assertIn("data-range=", body)
         self.assertIn('id="act-range-label"', body)
+        for gone in ('id="act-table-body"', "buildActivityTable", "Foraging over time",
+                     "Browse activity", "Download detailed data", "act-min-sec",
+                     'name="post_roll"', 'name="max_segment"', "tele-form"):
+            self.assertNotIn(gone, body)
         # Controls are tucked in a collapsed Advanced settings dropdown, and the
-        # activity table stays OUTSIDE it (after </details>) so a viewer sees it.
-        self.assertIn("Advanced settings", body)
+        # chart stays OUTSIDE it (after </details>) so a viewer sees it.
         self.assertIn("<details", body)
-        self.assertLess(body.index("</details>"), body.index('id="act-table-body"'))
+        self.assertLess(body.index("</details>"), body.index('id="activityChart"'))

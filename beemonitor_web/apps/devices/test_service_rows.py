@@ -57,4 +57,58 @@ class ServiceRowTests(SimpleTestCase):
         for label in ("Recorder", "Uploader"):
             row = next(r for r in rows if r["label"] == label)
             self.assertTrue(row["ok"])
-            self.assertNotIn("note", row)
+            self.assertFalse(row.get("note"))
+
+
+def _unit(active, sub, result="success", load="loaded"):
+    return {"load": load, "active": active, "sub": sub, "result": result}
+
+
+class AllServicesTests(SimpleTestCase):
+    """Newer firmware reports every unit; each gets a row with a plain state."""
+
+    def _rows(self, units, **metrics):
+        return {r["label"]: r for r in _service_rows({"services": units, **metrics})}
+
+    def test_every_reported_unit_gets_a_row(self):
+        rows = self._rows({
+            "beemonitor-recorder.service": _unit("active", "running"),
+            "beemonitor-telemetry.service": _unit("active", "running"),
+            "beemonitor-camera-detect.service": _unit("active", "exited"),
+            "beemonitor-calibrate.timer": _unit("active", "waiting"),
+            "beemonitor-calibrate.service": _unit("inactive", "dead"),
+            "beemonitor-update.service": _unit("inactive", "dead"),
+            "beemonitor-tailscale.service": _unit("inactive", "dead", load="not-found"),
+        })
+        self.assertEqual(rows["Recorder"]["state"], "running")
+        self.assertEqual(rows["Camera detect"]["state"], "done")
+        self.assertEqual(rows["Motion calibration"]["state"], "scheduled")
+        self.assertEqual(rows["Updater"]["level"], "idle")
+        self.assertEqual(rows["Remote access"]["state"], "not installed")
+        self.assertNotIn("Uploader", rows)  # not reported -> no guess
+
+    def test_a_stopped_core_service_is_a_fault(self):
+        row = self._rows({"beemonitor-uploader.service": _unit("inactive", "dead")})["Uploader"]
+        self.assertEqual((row["state"], row["level"]), ("stopped", "fail"))
+
+    def test_failed_units_and_failed_last_runs_are_flagged(self):
+        rows = self._rows({
+            "beemonitor-enroll.service": _unit("failed", "failed", "exit-code"),
+            "beemonitor-update.service": _unit("inactive", "dead", "exit-code"),
+            "beemonitor-calibrate.timer": _unit("active", "waiting"),
+            "beemonitor-calibrate.service": _unit("failed", "failed", "exit-code"),
+        })
+        self.assertEqual(rows["Enrollment"]["level"], "fail")
+        self.assertEqual(rows["Updater"]["state"], "last run failed")
+        self.assertEqual(rows["Motion calibration"]["level"], "fail")
+
+    def test_recorder_restarts_and_cellular_traffic_still_warn(self):
+        rows = self._rows({
+            "beemonitor-recorder.service": _unit("active", "running"),
+            "cellular.service": _unit("active", "running"),
+        }, recorder_restarts=2, recorder_error="boom",
+            cellular_active=True, active_transport="cellular")
+        self.assertEqual(rows["Recorder"]["level"], "warn")
+        self.assertIn("restarted 2", rows["Recorder"]["note"])
+        self.assertEqual(rows["Cellular"]["note"], "carrying traffic")
+        self.assertEqual(rows["Cellular"]["level"], "warn")

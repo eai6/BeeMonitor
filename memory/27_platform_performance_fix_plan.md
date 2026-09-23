@@ -87,7 +87,15 @@ the v1 DB-cache-table phase was dropped as unnecessary complexity.
 notice (CSV downloads stay uncapped); events CSVs (small, immutable) are memoized 6h
 per blob in `read_processed_csv(use_cache=True)` via `collect_events`.
 
-## 5. Feature: WiFi video upload opt-in (SHIPPED; default = manual for EVERYONE — Edward's call)
+## 5. Feature: WiFi video upload opt-in (REMOVED 2026-09-23)
+
+> **Removed:** videos now always upload whenever WiFi is up — no mode, no "Upload
+> now" button. `Device.video_upload_mode` was dropped (migration 0031). The beat and
+> command poll still send `"video_upload_mode": "auto"` so units on older firmware
+> (which default to manual) release their backlog; drop that key once the fleet has
+> updated. The history below is kept for context.
+
+**Original status:** SHIPPED; default = manual for EVERYONE (Edward's call).
 
 **Problem:** the uploader pushed every pending video the moment any WiFi was up — and
 "WiFi" includes a phone hotspot, silently burning the user's cellular plan.

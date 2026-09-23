@@ -89,7 +89,10 @@ class ActivitySeriesTests(TestCase):
         self.assertGreaterEqual(_total(_build_activity_series(self.device, "7d")), 50)
 
 
-class MotionCalibrationDisplayTests(TestCase):
+class MotionDetectionPlacementTests(TestCase):
+    """Motion inputs live on the ROI editor; the device page no longer offers
+    sensitivity or the auto-calibration readout."""
+
     def setUp(self):
         self.user = User.objects.create_user("alice", password="x")
         self.device = Device.objects.create(
@@ -97,30 +100,32 @@ class MotionCalibrationDisplayTests(TestCase):
         )
         self.client.force_login(self.user)
 
-    def test_detail_shows_learned_calibration_window(self):
+    def test_device_page_has_no_motion_tuning(self):
         DeviceHeartbeat.objects.create(device=self.device, metrics={
-            "motion_calibration": {
-                "min_area": 24.0, "max_area": 480.0, "raw_p5": 40.0, "raw_p95": 300.0,
-                "n_samples": 42, "n_clips": 6, "age_days": 1.2,
-            },
+            "motion_calibration": {"min_area": 24.0, "max_area": 480.0, "n_samples": 42},
         })
         html = self.client.get(reverse("devices:detail", args=[self.device.pk])).content.decode()
-        self.assertIn("Auto-calibration", html)
-        self.assertIn("24.0", html)
-        self.assertIn("480.0", html)
-        self.assertIn("42", html)
+        self.assertNotIn("Motion tuning", html)
+        self.assertNotIn("Sensitivity threshold", html)
+        self.assertNotIn("Auto-calibration", html)
 
-    def test_detail_flags_few_samples(self):
-        DeviceHeartbeat.objects.create(device=self.device, metrics={
-            "motion_calibration": {"min_area": 10.0, "max_area": 90.0, "n_samples": 8, "age_days": 0.5},
-        })
-        html = self.client.get(reverse("devices:detail", args=[self.device.pk])).content.decode()
-        self.assertIn("few samples", html)
+    def test_roi_editor_offers_the_blob_inputs_with_neutral_names(self):
+        html = self.client.get(reverse("devices:roi_editor", args=[self.device.pk])).content.decode()
+        for name in ("min_area", "max_area", "min_blobs"):
+            self.assertIn(f'name="{name}"', html)
+        self.assertNotIn("var_threshold", html)
+        self.assertIn("reference object", html)
+        self.assertNotIn("hotel", html.lower())
+        self.assertNotIn("nest hole", html.lower())
 
-    def test_detail_no_calibration_reported(self):
-        DeviceHeartbeat.objects.create(device=self.device, metrics={})
-        html = self.client.get(reverse("devices:detail", args=[self.device.pk])).content.decode()
-        self.assertIn("no learned window reported", html)
+    def test_saving_motion_ignores_sensitivity(self):
+        r = self.client.post(
+            reverse("devices:motion_tuning", args=[self.device.pk]),
+            {"var_threshold": "40", "min_area": "20", "max_area": "", "min_blobs": "2"},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["tuning"], {"min_area": 20.0, "min_blobs": 2})
 
 
 class FleetUpdatePendingStateTests(TestCase):
@@ -186,3 +191,36 @@ class FleetUpdatePendingStateTests(TestCase):
         self._beat({"code_commit": "v-old"})  # still old, but request is stale
         self.device.refresh_from_db()
         self.assertEqual(self.device.update_target, "")  # gave up showing "updating"
+
+
+class FixedDeviceSettingsBeatTests(TestCase):
+    """Telemetry cadence follows the link, and clip timing is fleet-wide."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user("bob", password="x")
+        self.device, self.raw_key = Device.create_with_key(self.owner, "BeeMonitor10")
+
+    def _beat(self, metrics):
+        return self.client.post(
+            reverse("devices-heartbeat"), data={"metrics": json.dumps(metrics)},
+            HTTP_AUTHORIZATION=f"Bearer {self.raw_key}",
+        ).json()
+
+    def test_wifi_beats_fast_and_cellular_slow(self):
+        self.assertEqual(self._beat({"active_transport": "wifi"})["telemetry_interval"], 5)
+        self.assertEqual(self._beat({"active_transport": "cellular"})["telemetry_interval"], 300)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.telemetry_interval_seconds, 300)
+
+    def test_other_links_count_as_unmetered(self):
+        self.assertEqual(self._beat({"active_transport": "eth0"})["telemetry_interval"], 5)
+
+    def test_unknown_link_keeps_the_current_rate(self):
+        self._beat({"active_transport": "cellular"})
+        self.assertEqual(self._beat({})["telemetry_interval"], 300)
+
+    def test_clip_timing_is_fixed(self):
+        resp = self._beat({})
+        self.assertEqual(resp["record_post_roll"], 10)
+        self.assertEqual(resp["record_max_segment"], 600)
+        self.assertEqual(resp["video_upload_mode"], "auto")

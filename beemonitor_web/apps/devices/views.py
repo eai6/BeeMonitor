@@ -375,9 +375,8 @@ def _parse_custom_range(start, end, zone):
     return start_loc, end_loc
 
 
-def _build_activity_series(device, range_key: str,
-                           start=None, end=None, min_sec=None, max_sec=None) -> dict:
-    """Snippets per clock-hour/day in the device's DISPLAY timezone. Combines
+def _build_activity_series(device, range_key: str, start=None, end=None) -> dict:
+    """Clips per clock-hour/day in the device's DISPLAY timezone. Combines
     uploaded clips (recorded_at) with the device's on-card histogram, converting
     each to its true instant then to the display tz. Shared by page + poll.
     """
@@ -469,61 +468,14 @@ def _build_activity_series(device, range_key: str,
     if weather_enabled and key_dt:
         wx = _weather_lookup(list(key_dt.values()), gran, device.lat, device.lon, zone_name)
 
-    # Analyzed foraging per bucket. Entries/exits are cheap per-video DB counts
-    # (JobResult). Trips are paired Exit->Entry ACROSS the device's videos on the
-    # absolute timeline — because a bee usually returns in a DIFFERENT clip, so a
-    # per-video trip count is ~0 and would wrongly read zero here.
-    from apps.analysis.models import JobResult
-    forage, seen_vid = {}, set()
-    analyzed_ct = {}  # analyzed clips per bucket → is this period analyzed at all?
-    jr_qs = JobResult.objects.filter(
-        job__video__device=device,
-        job__video__recorded_at__gte=since,
-        job__video__recorded_at__lte=until)
-    jr = (jr_qs.order_by("job__video_id", "-job__id")
-          .values("job__video_id", "job__video__recorded_at", "entry_count", "exit_count"))
-    for row in jr:
-        vid = row["job__video_id"]
-        if vid in seen_vid:
-            continue
-        seen_vid.add(vid)  # latest job per video only
-        ra = row["job__video__recorded_at"]
-        if not ra:
-            continue
-        loc = _true_utc(ra, pi_off).astimezone(zone)
-        if loc < start_loc or loc > upper_loc:
-            continue
-        k, _b = bucket(loc)
-        f = forage.setdefault(k, {"entries": 0, "exits": 0, "trips": 0})
-        f["entries"] += row["entry_count"] or 0
-        f["exits"] += row["exit_count"] or 0
-        analyzed_ct[k] = analyzed_ct.get(k, 0) + 1
-    # Trips come from persisted DailyForagingSummary rows — a pure DB read
-    # (no S3 in this request path; the reconciler sweep keeps rows fresh).
-    # User-adjustable duration bounds are a read-time filter on stored trips.
-    from apps.analysis import foraging as _foraging
-    from apps.pipelines.aggregate import clamp_trip_bounds
-    min_sec, max_sec = clamp_trip_bounds(min_sec, max_sec)
-    for exit_time in _foraging.device_trips(device, since, until, min_sec, max_sec):
-        loc = _true_utc(exit_time, pi_off).astimezone(zone)
-        if loc < start_loc or loc > upper_loc:
-            continue
-        k, _b = bucket(loc)
-        forage.setdefault(k, {"entries": 0, "exits": 0, "trips": 0})["trips"] += 1
-
     series = []
     for k in sorted(counts, key=lambda kk: key_dt[kk]):
         b = key_dt[k]
         w = wx.get(b.strftime(wkey), {})
-        fg = forage.get(k, {})
         series.append({
             "iso": b.astimezone(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "t": b.strftime(fmt),  # display-tz label; the chart shows it as-is
-            "v": counts[k],
-            "analyzed": analyzed_ct.get(k, 0),  # analyzed clips in this bucket
-            "entries": fg.get("entries", 0),
-            "exits": fg.get("exits", 0),
-            "trips": fg.get("trips", 0),
+            "v": counts[k],  # clips recorded in this bucket
             "temp": w.get("temp"),
             "precip": w.get("precip"),
         })
@@ -539,9 +491,6 @@ def _build_activity_series(device, range_key: str,
         "activity_custom": bool(custom),
         "activity_start": start_loc.strftime("%Y-%m-%d") if custom else "",
         "activity_end": upper_loc.strftime("%Y-%m-%d") if custom else "",
-        # Active trip-duration bounds (clamped), echoed so the inputs persist.
-        "activity_min_sec": min_sec,
-        "activity_max_sec": max_sec,
     }
 
 
@@ -577,13 +526,95 @@ def _service_rows(metrics: dict) -> list:
         rec_note = f"restarted {restarts}\u00d7 this boot"
         if metrics.get("recorder_error"):
             rec_note += f" \u2014 {metrics['recorder_error']}"
-    return [
-        {"label": "Recorder", "ok": bool(metrics.get("recorder_active")),
-         "note": rec_note, "warn": bool(restarts)},
-        {"label": "Uploader", "ok": bool(metrics.get("uploader_active"))},
-        {"label": "Cellular", "ok": cell_up, "note": cell_note,
-         "warn": carrying},
-    ]
+    units = metrics.get("services")
+    if not isinstance(units, dict) or not units:
+        # Firmware too old to report every unit: the three it always sent.
+        return [_legacy_row(r) for r in (
+            {"label": "Recorder", "ok": bool(metrics.get("recorder_active")),
+             "note": rec_note, "warn": bool(restarts)},
+            {"label": "Uploader", "ok": bool(metrics.get("uploader_active"))},
+            {"label": "Cellular", "ok": cell_up, "note": cell_note,
+             "warn": carrying},
+        )]
+
+    pending = metrics.get("pending_uploads")
+    notes = {
+        "beemonitor-recorder.service": rec_note,
+        "beemonitor-uploader.service": (f"{pending} video{'s' if pending != 1 else ''} pending"
+                                        if isinstance(pending, int) and pending else ""),
+        "cellular.service": cell_note if cell_up else "",
+    }
+    rows = []
+    for unit, label, must_run in _SERVICE_UNITS:
+        st = units.get(unit)
+        if not isinstance(st, dict):
+            continue
+        if unit == "beemonitor-calibrate.timer":
+            # The timer says whether it's scheduled; the service says how the
+            # last run went.
+            run = units.get("beemonitor-calibrate.service") or {}
+            if run.get("active") == "failed" or run.get("result") not in (None, "", "success"):
+                st = {**st, "active": "failed"}
+        state, level = _unit_state(st, must_run)
+        note = notes.get(unit, "")
+        if unit == "beemonitor-recorder.service" and restarts and level == "ok":
+            level = "warn"
+        if unit == "cellular.service" and carrying:
+            level = "warn"
+        rows.append({"label": label, "unit": unit, "state": state, "level": level,
+                     "note": note, "ok": level in ("ok", "warn"), "warn": level == "warn"})
+    return rows
+
+
+# (unit, label, must_run) for the Services panel, in display order. must_run
+# units being stopped is a fault; the rest are allowed to sit idle.
+_SERVICE_UNITS = [
+    ("beemonitor-recorder.service", "Recorder", True),
+    ("beemonitor-uploader.service", "Uploader", True),
+    ("beemonitor-telemetry.service", "Telemetry", True),
+    ("cellular.service", "Cellular", False),
+    ("cellular-firewall.service", "Cellular firewall", False),
+    ("beemonitor-tailscale.service", "Remote access", False),
+    ("beemonitor-camera-detect.service", "Camera detect", False),
+    ("beemonitor-calibrate.timer", "Motion calibration", False),
+    ("beemonitor-enroll.service", "Enrollment", False),
+    ("beemonitor-update.service", "Updater", False),
+    ("beemonitor-usb-transfer@.service", "USB transfer", False),
+]
+
+
+def _unit_state(st: dict, must_run: bool) -> tuple:
+    """(state label, level) for one unit's systemd state. level is one of
+    ok | warn | fail | idle and picks the dot colour."""
+    if st.get("load") == "not-found":
+        return "not installed", "idle"
+    active, sub = st.get("active", ""), st.get("sub", "")
+    if active == "failed":
+        return "failed", "fail"
+    if active == "active":
+        return {"running": "running", "exited": "done", "waiting": "scheduled"}.get(sub, sub or "active"), "ok"
+    if active in ("activating", "reloading"):
+        return "starting", "ok"
+    if active == "deactivating":
+        return "stopping", "warn"
+    # inactive
+    if must_run:
+        return "stopped", "fail"
+    if st.get("result") not in (None, "", "success"):
+        return "last run failed", "fail"
+    return "idle", "idle"
+
+
+def _legacy_row(r: dict) -> dict:
+    """Give an old-firmware row the fields the panel renders."""
+    level = "warn" if r.get("warn") else ("ok" if r["ok"] else "idle")
+    return {**r, "unit": "", "state": "running" if r["ok"] else "off", "level": level}
+
+
+def _services_summary(rows: list) -> dict:
+    """The Services widget: how many units are fine, and how many need a look."""
+    attention = sum(1 for r in rows if r["level"] in ("warn", "fail"))
+    return {"total": len(rows), "healthy": len(rows) - attention, "attention": attention}
 
 
 class DeviceDetailView(LoginRequiredMixin, DetailView):
@@ -611,9 +642,6 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         ctx["latest_hb"] = latest
         metrics = (latest.metrics if latest else {}) or {}
         ctx["metrics"] = metrics
-        # The auto-calibrate job's learned bee-blob-area window, reported in the
-        # beat — shown read-only in the Motion tuning card for transparency.
-        ctx["motion_calibration"] = metrics.get("motion_calibration")
         # Always show the most RECENT image-bearing beat (regular beats carry no
         # image), so the camera card is never blank once any picture exists.
         image_hb = device.heartbeats.exclude(image_storage_key="").first()
@@ -628,9 +656,7 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
             sp = latest.storage_pct
         ctx["storage_pct"] = sp
         ctx["services"] = _service_rows(metrics)
-        # Telemetry rate control (manager+) + which link the last beat rode.
-        from .models import TELEMETRY_INTERVAL_CHOICES
-        ctx["telemetry_interval_choices"] = TELEMETRY_INTERVAL_CHOICES
+        ctx["services_summary"] = _services_summary(ctx["services"])
         ctx["record_modes"] = device.RECORD_MODES  # capture mode + hour window
         ctx["hours"] = list(range(24))
         # Recurring pipeline runs over this device's videos (Advanced page card).
@@ -677,21 +703,12 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         ctx["videos"] = device.videos.all()[:12]
         ctx["video_count"] = device.videos.count()
 
-        # Detailed-data export is offered only when this device has at least one
-        # completed analysis job — otherwise there's nothing behind the buttons.
-        from apps.analysis.models import Job, JobResult
-        ctx["has_analysis"] = JobResult.objects.filter(
-            job__video__device=device, job__status=Job.Status.COMPLETED
-        ).exists()
-
-        # Activity-over-time series for the chart (actual snippets per bucket).
+        # Clip-activity series for the chart (clips recorded per bucket).
         # `start`/`end` (YYYY-MM-DD) define a custom window that overrides `range`.
         ctx.update(_build_activity_series(
             device, self.request.GET.get("range", "7d"),
             start=self.request.GET.get("start"),
-            end=self.request.GET.get("end"),
-            min_sec=self.request.GET.get("min_sec"),
-            max_sec=self.request.GET.get("max_sec")))
+            end=self.request.GET.get("end")))
         return ctx
 
 
@@ -1269,41 +1286,6 @@ class DeviceUsbEjectView(LoginRequiredMixin, View):
         return redirect("devices:detail", pk=pk)
 
 
-class DeviceTelemetryRateView(LoginRequiredMixin, View):
-    """Set how often the device sends a telemetry beat.
-
-    Validated against the allowed presets; the device adopts the new rate via
-    its next heartbeat/command response (within ~COMMAND_POLL_SECONDS).
-    """
-
-    def post(self, request, pk):
-        from .models import TELEMETRY_INTERVAL_VALUES
-        device = _device_or_403(request.user, pk, "manager")
-        is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
-        try:
-            secs = int(request.POST.get("interval", ""))
-        except (TypeError, ValueError):
-            secs = None
-        if secs not in TELEMETRY_INTERVAL_VALUES:
-            if is_ajax:
-                return JsonResponse({"error": "Invalid telemetry rate."}, status=400)
-            messages.error(request, "Invalid telemetry rate.")
-            return redirect("devices:detail", pk=pk)
-        device.telemetry_interval_seconds = secs
-        device.save(update_fields=["telemetry_interval_seconds"])
-        if is_ajax:
-            return JsonResponse({
-                "ok": True, "interval": secs,
-                "label": device.telemetry_interval_label,
-            })
-        messages.success(
-            request,
-            f"Telemetry rate set to {device.telemetry_interval_label}. The device "
-            "will adopt it on its next check-in.",
-        )
-        return redirect("devices:detail", pk=pk)
-
-
 class DeviceActivityCropsView(LoginRequiredMixin, View):
     """Set which activities the device sends BioCLIP "review" crops for, over cellular.
 
@@ -1420,9 +1402,8 @@ class DeviceStatusView(LoginRequiredMixin, View):
         if request.GET.get("chart") == "1":
             activity = _build_activity_series(device, request.GET.get("range", "7d"),
                                               start=request.GET.get("start"),
-                                              end=request.GET.get("end"),
-                                              min_sec=request.GET.get("min_sec"),
-                                              max_sec=request.GET.get("max_sec"))
+                                              end=request.GET.get("end"))
+        service_rows = _service_rows(metrics)
         return JsonResponse({
             "online": _is_online(device),
             "last_seen": last_seen,
@@ -1446,7 +1427,8 @@ class DeviceStatusView(LoginRequiredMixin, View):
                 "uploader": bool(metrics.get("uploader_active")),
                 "cellular": bool(metrics.get("cellular_active")),
             },
-            "service_rows": _service_rows(metrics),
+            "service_rows": service_rows,
+            "services_summary": _services_summary(service_rows),
             "wifi_enabled": metrics.get("wifi_enabled"),
             "wifi_ssid": metrics.get("wifi_ssid"),
             "wifi_scan": metrics.get("wifi_scan") or [],
@@ -1476,11 +1458,10 @@ class DeviceStatusView(LoginRequiredMixin, View):
 
 
 class DeviceMotionTuningView(LoginRequiredMixin, View):
-    """Set manual motion-tuning overrides (blank = auto-calibration).
+    """Set manual motion-tuning overrides from the ROI editor (blank = auto).
 
     The device applies them on top of its calibration within a few minutes
-    (hot-reload). Higher var_threshold / min_blobs or a tighter area window =
-    less sensitive.
+    (hot-reload). Higher min_blobs or a tighter area window = less sensitive.
     """
 
     def post(self, request, pk):
@@ -1497,29 +1478,27 @@ class DeviceMotionTuningView(LoginRequiredMixin, View):
                 return None, False
             return (v, lo <= v <= hi)
 
-        var, ok1 = num("var_threshold", int, 4, 255)
-        mn, ok2 = num("min_area", float, 0, 1_000_000)
-        mx, ok3 = num("max_area", float, 0, 1_000_000_000)
-        blobs, ok4 = num("min_blobs", int, 1, 100)
-        if not (ok1 and ok2 and ok3 and ok4):
+        mn, ok1 = num("min_area", float, 0, 1_000_000)
+        mx, ok2 = num("max_area", float, 0, 1_000_000_000)
+        blobs, ok3 = num("min_blobs", int, 1, 100)
+        if not (ok1 and ok2 and ok3):
             err = "Invalid motion-tuning value (check the ranges)."
             if is_ajax:
                 return JsonResponse({"error": err}, status=400)
             messages.error(request, err)
-            return redirect("devices:detail", pk=pk)
+            return redirect("devices:roi_editor", pk=pk)
 
-        device.motion_var_threshold = var
         device.motion_min_area = mn
         device.motion_max_area = mx
         device.motion_min_blobs = blobs
-        device.save(update_fields=["motion_var_threshold", "motion_min_area",
-                                   "motion_max_area", "motion_min_blobs"])
+        device.save(update_fields=["motion_min_area", "motion_max_area",
+                                   "motion_min_blobs"])
         if is_ajax:
             return JsonResponse({"ok": True, "tuning": device.motion_tuning_dict()})
         messages.success(
-            request, "Motion tuning saved — the device applies it within a few "
+            request, "Motion detection saved — the device applies it within a few "
             "minutes (its next calibration reload).")
-        return redirect("devices:detail", pk=pk)
+        return redirect("devices:roi_editor", pk=pk)
 
 
 def _clamp01(v):
@@ -1638,21 +1617,6 @@ class DeviceRecordSettingsView(LoginRequiredMixin, View):
         if mode not in dict(device.RECORD_MODES):
             return _fail("Invalid recording mode.")
 
-        # Clip tail (post-roll) + max clip length (force-rotate). Clamped to sane
-        # ranges; blank keeps the current value.
-        def _clamp_int(name, lo, hi, cur):
-            raw = (request.POST.get(name) or "").strip()
-            if raw == "":
-                return cur
-            try:
-                return max(lo, min(hi, int(raw)))
-            except (ValueError, TypeError):
-                return None
-        post_roll = _clamp_int("post_roll", 1, 300, device.record_post_roll)
-        max_segment = _clamp_int("max_segment", 30, 3600, device.record_max_segment)
-        if post_roll is None or max_segment is None:
-            return _fail("Clip tail and max length must be whole numbers of seconds.")
-
         start_raw = (request.POST.get("start") or "").strip()
         end_raw = (request.POST.get("end") or "").strip()
         window = None
@@ -1669,77 +1633,18 @@ class DeviceRecordSettingsView(LoginRequiredMixin, View):
 
         device.record_mode = mode
         device.record_window = window
-        device.record_post_roll = post_roll
-        device.record_max_segment = max_segment
-        device.save(update_fields=["record_mode", "record_window",
-                                   "record_post_roll", "record_max_segment"])
+        device.save(update_fields=["record_mode", "record_window"])
 
         mode_label = dict(device.RECORD_MODES)[mode]
         window_label = (f"{window['start']:02d}:00–{window['end']:02d}:00"
                         if window else "all day")
         if is_ajax:
             return JsonResponse({"ok": True, "mode": mode, "mode_label": mode_label,
-                                 "window_label": window_label,
-                                 "post_roll": post_roll, "max_segment": max_segment})
+                                 "window_label": window_label})
         messages.success(
             request,
             f"Recording set to “{mode_label}”, {window_label}. The device adopts "
             "it on its next check-in.",
-        )
-        return redirect("devices:detail", pk=pk)
-
-
-class DeviceVideoUploadModeView(LoginRequiredMixin, View):
-    """Set the video upload policy (auto|manual) from the dashboard.
-
-    manual (default) = the uploader holds recorded videos even on WiFi until
-    "Upload now" — so tethering the unit to a phone hotspot can't silently
-    drain a cellular data plan. auto = upload whenever WiFi is connected.
-    The device adopts the change on its next check-in.
-    """
-
-    VALID = {"auto", "manual"}
-
-    def post(self, request, pk):
-        device = _device_or_403(request.user, pk, "manager")
-        is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
-        mode = (request.POST.get("mode") or "").strip().lower()
-        if mode not in self.VALID:
-            if is_ajax:
-                return JsonResponse({"error": "Invalid upload mode."}, status=400)
-            messages.error(request, "Invalid upload mode.")
-            return redirect("devices:detail", pk=pk)
-        device.video_upload_mode = mode
-        device.save(update_fields=["video_upload_mode"])
-        label = dict(device.VIDEO_UPLOAD_MODES).get(mode, mode)
-        if is_ajax:
-            return JsonResponse({"ok": True, "mode": mode, "label": label})
-        messages.success(
-            request,
-            f"Video uploads set to “{label}”. The device adopts it on its next check-in.",
-        )
-        return redirect("devices:detail", pk=pk)
-
-
-class DeviceUploadNowView(LoginRequiredMixin, View):
-    """One-shot backlog drain: queue an `upload_videos` command for the device.
-
-    Used with manual upload mode — the uploader pushes everything currently
-    pending, then goes back to holding. NOTE: `pending_command` is a single
-    slot, so this replaces any not-yet-delivered command (and vice versa)."""
-
-    def post(self, request, pk):
-        device = _device_or_403(request.user, pk, "manager")
-        is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
-        device.pending_command = "upload_videos"
-        device.command_params = {}
-        device.save(update_fields=["pending_command", "command_params"])
-        if is_ajax:
-            return JsonResponse({"ok": True})
-        messages.success(
-            request,
-            "Upload requested — the device pushes its pending videos on its next "
-            "check-in (WiFi required).",
         )
         return redirect("devices:detail", pk=pk)
 

@@ -84,7 +84,7 @@
           {% if image_hb and latest_image_url %}{{ image_hb.created_at|timesince }} ago{% endif %}
         </span>
         <div class="flex items-center gap-2">
-          <label class="text-xs text-gray-500 inline-flex items-center gap-1" title="Show the configured hotel ROI + nest holes drawn over the picture">
+          <label class="text-xs text-gray-500 inline-flex items-center gap-1" title="Show the configured ROI + reference objects drawn over the picture">
             <input id="cam-roi" type="checkbox" class="rounded border-gray-300" checked> ROI
           </label>
           <button id="cam-photo" class="px-2.5 py-1 text-xs rounded bg-amber-600 hover:bg-amber-700 text-white">Take photo</button>
@@ -125,25 +125,18 @@
         <div class="mt-2 text-2xl font-semibold text-gray-900" id="m-videocount">{{ video_count }}</div>
         <div class="mt-1 text-xs text-gray-400" id="m-pending">{{ metrics.pending_uploads|default:"—" }} pending</div>
       </div>
-      <!-- Services -->
-      <div class="bg-white shadow rounded-lg p-4">
+      <!-- Services (summary; the full list is the panel below) -->
+      <a href="#services" class="block bg-white shadow rounded-lg p-4 hover:bg-gray-50">
         <div class="text-xs text-gray-500 uppercase tracking-wide">Services</div>
-        <div class="mt-2 space-y-1 text-sm" id="m-services">
-          {% comment %}
-            The note is what stops "Cellular" with a green dot reading as "this
-            device is on cellular". The dot only ever meant the unit is running,
-            which is the normal state on a device sitting on WiFi with a modem
-            fitted — it stays up so the link is there the moment WiFi is not.
-          {% endcomment %}
-          {% for s in services %}
-          <div class="flex items-center gap-2">
-            <span class="w-1.5 h-1.5 rounded-full {% if s.warn %}bg-amber-500{% elif s.ok %}bg-green-500{% else %}bg-gray-300{% endif %}"></span>
-            <span class="text-gray-600">{{ s.label }}</span>
-            {% if s.note %}<span class="text-xs {% if s.warn %}text-amber-700{% else %}text-gray-400{% endif %}">· {{ s.note }}</span>{% endif %}
-          </div>
-          {% endfor %}
+        <div id="m-services-summary">
+          <div class="mt-2 text-2xl font-semibold text-gray-900">{{ services_summary.healthy }}<span class="text-base font-medium text-gray-500"> / {{ services_summary.total }}</span></div>
+          {% if services_summary.attention %}
+          <div class="mt-1 text-xs text-amber-800 flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>{{ services_summary.attention }} need{{ services_summary.attention|pluralize:"s," }} attention · see all ↓</div>
+          {% else %}
+          <div class="mt-1 text-xs text-gray-400">all healthy · see all ↓</div>
+          {% endif %}
         </div>
-      </div>
+      </a>
     </div>
 
     {% if metrics.schedule_window %}
@@ -155,6 +148,32 @@
   </div>
 </div>
 
+<!-- Services: every systemd unit the device runs, from the latest beat.
+     The cellular note is what stops a green "Cellular" reading as "this device
+     is on cellular": the unit stays up on WiFi so the link is there the moment
+     WiFi is not. -->
+<div id="services" class="mt-6 bg-white shadow rounded-lg p-4">
+  <div class="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+    <h2 class="text-sm font-semibold text-gray-700">Services</h2>
+    <span class="text-xs text-gray-400">Every service the device runs · from the latest beat</span>
+  </div>
+  <div id="m-services" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+    {% for s in services %}
+    <div class="rounded-md border px-3 py-2 {% if s.level == 'fail' %}border-red-200 bg-red-50/60{% elif s.level == 'warn' %}border-amber-200 bg-amber-50/60{% else %}border-gray-100 bg-gray-50{% endif %}">
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full shrink-0 {% if s.level == 'fail' %}bg-red-500{% elif s.level == 'warn' %}bg-amber-500{% elif s.level == 'ok' %}bg-green-500{% else %}bg-gray-300{% endif %}"></span>
+        <span class="text-sm font-medium text-gray-800">{{ s.label }}</span>
+        <span class="ml-auto text-xs font-medium {% if s.level == 'fail' %}text-red-700{% elif s.level == 'warn' %}text-amber-800{% elif s.level == 'ok' %}text-green-700{% else %}text-gray-500{% endif %}">{{ s.state }}</span>
+      </div>
+      {% if s.note %}<div class="mt-0.5 pl-4 text-xs text-gray-500 break-words">{{ s.note }}</div>{% endif %}
+      {% if s.unit %}<div class="mt-0.5 pl-4 text-[11px] text-gray-400 font-mono">{{ s.unit }}</div>{% endif %}
+    </div>
+    {% empty %}
+    <p class="text-sm text-gray-400">No service state reported yet.</p>
+    {% endfor %}
+  </div>
+</div>
+
 <!-- Advanced settings — device controls, collapsed by default so a viewer sees
      status + activity without scrolling past them. -->
 <details class="mt-6 group">
@@ -163,7 +182,7 @@
       <svg class="w-4 h-4 text-gray-400 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
       Advanced settings
     </span>
-    <span class="hidden sm:block text-xs font-normal text-gray-400">telemetry · processing · power schedule · motion · WiFi · cellular · software</span>
+    <span class="hidden sm:block text-xs font-normal text-gray-400">telemetry · recording · processing · power schedule · WiFi · cellular · software</span>
   </summary>
 
 <!-- Telemetry rate + transport -->
@@ -175,48 +194,10 @@
       <span id="m-transport">{% if active_transport == 'wifi' %}· <span class="inline-flex items-center gap-1 text-green-700"><span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>via WiFi</span>{% elif active_transport == 'cellular' %}· <span class="inline-flex items-center gap-1 text-amber-700"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>via cellular</span>{% elif active_transport %}· via {{ active_transport }}{% endif %}</span>
     </div>
   </div>
-  <p class="text-xs text-gray-400 mb-3">
-    How often the unit sends a health beat. Faster = fresher dashboard but more
-    data/power; slower saves both. The device adopts a change within seconds.
+  <p class="text-xs text-gray-400">
+    Automatic: every 5 seconds on WiFi, every 5 minutes on cellular to save
+    mobile data.
   </p>
-  {% if can_manage %}
-  <form id="tele-form" method="post" action="{% url 'devices:telemetry_rate' device.pk %}" class="flex flex-wrap items-center gap-2">
-    {% csrf_token %}
-    <select name="interval" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-      {% for secs, label in telemetry_interval_choices %}
-      <option value="{{ secs }}" {% if secs == device.telemetry_interval_seconds %}selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-    <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Set rate</button>
-    <span id="tele-saved" class="text-xs text-green-700 hidden">Saved ✓</span>
-  </form>
-  <script>
-    (function () {
-      var f = document.getElementById('tele-form');
-      if (!f) return;
-      f.addEventListener('submit', function (e) {
-        e.preventDefault();
-        var token = f.querySelector('[name=csrfmiddlewaretoken]').value;
-        fetch(f.action, {
-          method: 'POST',
-          headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': token},
-          body: new FormData(f),
-        }).then(function (r) { return r.json(); }).then(function (d) {
-          if (d && d.ok) {
-            var lbl = document.getElementById('tele-label');
-            if (lbl) lbl.textContent = d.label;
-            var s = document.getElementById('tele-saved');
-            if (s) { s.classList.remove('hidden'); setTimeout(function () { s.classList.add('hidden'); }, 2500); }
-          } else {
-            alert((d && d.error) || 'Could not set the telemetry rate.');
-          }
-        }).catch(function () { alert('Could not set the telemetry rate.'); });
-      });
-    })();
-  </script>
-  {% else %}
-  <p class="text-xs text-gray-400 italic">Read-only — changing the telemetry rate requires manager access.</p>
-  {% endif %}
 </div>
 
 <!-- Recording: capture mode + daily hour window -->
@@ -235,7 +216,9 @@
   </div>
   <p class="text-xs text-gray-400 mb-3">
     <b>Off</b> stops the camera recording entirely (telemetry keeps running).
-    <b>Motion-triggered</b> saves a clip only when something moves (default).
+    <b>Motion-triggered</b> saves a clip only when something moves (default);
+    it closes 10 seconds after motion stops, and constant motion is capped at
+    10-minute clips.
     <b>Continuous</b> records the whole window in ~10-minute clips — expect the
     SD card and pending uploads to grow much faster. The hour window (device
     local time, {{ display_tz|default:"UTC" }}) limits when EITHER recording mode runs;
@@ -264,18 +247,6 @@
       <option value="{{ h }}" {% if device.record_window.end == h %}selected{% endif %}>{{ h|stringformat:"02d" }}:00</option>
       {% endfor %}
     </select>
-    <span class="flex items-center gap-1 text-xs text-gray-500"
-          title="Clip tail — seconds of no motion before a motion clip closes. Higher keeps a briefly-paused bee (grooming, at a tube) in one clip.">
-      tail
-      <input type="number" name="post_roll" min="1" max="300" step="1" value="{{ device.record_post_roll }}"
-             class="w-16 border border-gray-300 rounded px-2 py-1.5 text-sm">s
-    </span>
-    <span class="flex items-center gap-1 text-xs text-gray-500"
-          title="Max clip length — continuous motion (a staying bee, or wind/shadows) is force-split into a fresh clip at this length so one file can't grow unbounded.">
-      max
-      <input type="number" name="max_segment" min="30" max="3600" step="10" value="{{ device.record_max_segment }}"
-             class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm">s
-    </span>
     <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Set</button>
     <span id="rec-saved" class="text-xs text-green-700 hidden">Saved ✓</span>
   </form>
@@ -559,86 +530,6 @@
   {% endif %}
 </div>
 
-<!-- Motion tuning (debug sensitivity) -->
-<div class="mt-6 bg-white shadow rounded-lg p-4">
-  <div class="flex items-center justify-between mb-1">
-    <h2 class="text-sm font-semibold text-gray-700">Motion tuning</h2>
-    {% if can_manage %}<a href="{% url 'devices:roi_editor' device.pk %}" class="text-xs text-amber-700 hover:underline">Edit hotel ROI &amp; nest holes →</a>{% endif %}
-  </div>
-  <p class="text-xs text-gray-400 mb-3">
-    Leave a field blank to use the device's auto-calibration. To make it
-    <em>less</em> sensitive: raise <strong>Sensitivity threshold</strong> or
-    <strong>Min blobs</strong>, or tighten the blob-area window. Use the camera's
-    <strong>ROI</strong> photo to see what's being detected. Applies within a few
-    minutes (the device's calibration reload).
-  </p>
-  <!-- Auto-calibration readout (read-only): what the device actually learned. -->
-  {% if motion_calibration %}
-  <div class="mb-3 rounded border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600">
-    <span class="font-medium text-gray-700">Auto-calibration — learned bee-blob window:</span>
-    <strong>{{ motion_calibration.min_area }}–{{ motion_calibration.max_area }}</strong> px²
-    {% if motion_calibration.raw_p5 %}<span class="text-gray-400">(raw p5/p95 {{ motion_calibration.raw_p5 }}–{{ motion_calibration.raw_p95 }})</span>{% endif %}
-    · from <strong>{{ motion_calibration.n_samples }}</strong> bee samples{% if motion_calibration.n_clips %} across {{ motion_calibration.n_clips }} clips{% endif %}
-    {% if motion_calibration.age_days is not None %}· updated {{ motion_calibration.age_days }}d ago{% endif %}
-    {% if motion_calibration.n_samples < 30 %}<span class="text-amber-600 font-medium">· few samples, may be unreliable</span>{% endif %}
-    {% if motion_calibration.age_days > 7 %}<span class="text-amber-600 font-medium">· stale</span>{% endif %}
-  </div>
-  {% else %}
-  <div class="mb-3 text-xs text-gray-400">Auto-calibration: no learned window reported yet (device on permissive defaults, or firmware too old to report it).</div>
-  {% endif %}
-  {% if can_manage %}
-  <form id="motion-form" method="post" action="{% url 'devices:motion_tuning' device.pk %}"
-        class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-    {% csrf_token %}
-    <label class="text-xs text-gray-600">Sensitivity threshold
-      <input name="var_threshold" type="number" min="4" max="255" step="1" placeholder="auto"
-             value="{{ device.motion_var_threshold|default_if_none:'' }}"
-             class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
-    </label>
-    <label class="text-xs text-gray-600">Min blob area
-      <input name="min_area" type="number" min="0" step="1" placeholder="auto"
-             value="{{ device.motion_min_area|default_if_none:'' }}"
-             class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
-    </label>
-    <label class="text-xs text-gray-600">Max blob area
-      <input name="max_area" type="number" min="0" step="1" placeholder="auto"
-             value="{{ device.motion_max_area|default_if_none:'' }}"
-             class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
-    </label>
-    <label class="text-xs text-gray-600">Min blobs
-      <input name="min_blobs" type="number" min="1" max="100" step="1" placeholder="auto"
-             value="{{ device.motion_min_blobs|default_if_none:'' }}"
-             class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
-    </label>
-    <div class="col-span-2 sm:col-span-4 flex items-center gap-2">
-      <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Save tuning</button>
-      <span id="motion-saved" class="text-xs text-green-700 hidden">Saved ✓</span>
-    </div>
-  </form>
-  <script>
-    (function () {
-      var f = document.getElementById('motion-form');
-      if (!f) return;
-      f.addEventListener('submit', function (e) {
-        e.preventDefault();
-        fetch(f.action, {
-          method: 'POST',
-          headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': f.querySelector('[name=csrfmiddlewaretoken]').value},
-          body: new FormData(f),
-        }).then(function (r) { return r.json(); }).then(function (d) {
-          if (d && d.ok) {
-            var s = document.getElementById('motion-saved');
-            if (s) { s.classList.remove('hidden'); setTimeout(function () { s.classList.add('hidden'); }, 2500); }
-          } else { alert((d && d.error) || 'Could not save motion tuning.'); }
-        }).catch(function () { alert('Could not save motion tuning.'); });
-      });
-    })();
-  </script>
-  {% else %}
-  <p class="text-xs text-gray-400 italic">Read-only — motion tuning requires manager access.</p>
-  {% endif %}
-</div>
-
 <!-- WiFi control -->
 <div class="mt-6 bg-white shadow rounded-lg p-4">
   <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
@@ -667,44 +558,6 @@
     connected (falling back to cellular when it isn't), so these commands reach
     the device either way. It acts on its next check-in.
   </p>
-  <!-- Video upload policy: manual (default) protects phone-hotspot data plans;
-       "Upload now" drains the current backlog once. -->
-  <div class="mb-3 p-3 rounded border {% if device.video_upload_mode == 'auto' %}border-green-200 bg-green-50/50{% else %}border-amber-200 bg-amber-50/50{% endif %}">
-    <div class="flex items-center justify-between flex-wrap gap-2">
-      <div class="text-sm">
-        {% if device.video_upload_mode == 'auto' %}
-          <span class="font-medium text-green-800">Auto-upload on</span>
-          <span class="text-gray-500">— videos upload whenever WiFi is connected.</span>
-        {% else %}
-          <span class="font-medium text-amber-800">Auto-upload off</span>
-          <span class="text-gray-500">— videos are held on the device{% if metrics.pending_uploads %} (<span class="font-medium">{{ metrics.pending_uploads }} pending</span>){% endif %} until you upload them.</span>
-        {% endif %}
-      </div>
-      {% if can_manage %}
-      <div class="flex items-center gap-2">
-        {% if device.video_upload_mode != 'auto' %}
-        <form method="post" action="{% url 'devices:upload_now' device.pk %}">
-          {% csrf_token %}
-          <button class="px-3 py-1.5 bg-amber-600 rounded text-sm text-white hover:bg-amber-700">Upload now</button>
-        </form>
-        {% endif %}
-        <form method="post" action="{% url 'devices:upload_mode' device.pk %}"
-              {% if device.video_upload_mode != 'auto' %}onsubmit="return confirm('Turn on auto-upload? If this device joins a phone hotspot, video uploads will use that phone\'s data plan.')"{% endif %}>
-          {% csrf_token %}
-          <input type="hidden" name="mode" value="{% if device.video_upload_mode == 'auto' %}manual{% else %}auto{% endif %}">
-          <button class="px-3 py-1.5 bg-white border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">
-            {% if device.video_upload_mode == 'auto' %}Switch to manual{% else %}Turn on auto-upload{% endif %}
-          </button>
-        </form>
-      </div>
-      {% endif %}
-    </div>
-    <p class="text-xs text-gray-400 mt-1.5">
-      Manual mode protects your data plan when the device's “WiFi” is a phone
-      hotspot. “Upload now” pushes everything currently pending, then holds again.
-      The device applies changes on its next check-in.
-    </p>
-  </div>
   {% if can_manage %}
   <!-- In-range networks (from a device scan); click one to fill the SSID below. -->
   <div class="mb-3">
@@ -934,13 +787,10 @@
 </details>
 <!-- /Advanced settings -->
 
-<!-- Activity over time -->
+<!-- Clip activity: clips recorded per hour/day -->
 <div class="mt-8">
   <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-    <div class="flex items-baseline gap-3">
-      <h2 class="text-lg font-semibold text-gray-900">Foraging over time</h2>
-      <a href="{% url 'monitor:activity_list' %}?device={{ device.pk }}" class="text-sm text-amber-600 hover:underline">Browse activity &amp; species &rarr;</a>
-    </div>
+    <h2 class="text-lg font-semibold text-gray-900">Clip activity per <span id="act-gran-label">{% if activity_gran == 'day' %}day{% else %}hour{% endif %}</span></h2>
     <div class="flex items-center gap-2 text-xs">
       {% if can_manage %}
       <select id="tz-select" title="Timezone to display this device's activity in"
@@ -965,15 +815,6 @@
         <button type="button" id="act-apply" class="px-2 py-1 rounded bg-gray-100 text-gray-600 hover:bg-gray-200">Apply</button>
         <button type="button" id="act-clear" class="px-2 py-1 rounded text-gray-500 hover:text-gray-700 {% if not activity_custom %}hidden{% endif %}">Clear</button>
       </div>
-      <div class="flex items-center gap-1" title="Foraging-trip duration bounds (seconds) — same filter as the batch page">
-        <span class="text-gray-400">trip</span>
-        <input type="number" id="act-min-sec" min="0" max="86400" step="1" value="{{ activity_min_sec|floatformat:0 }}"
-               class="w-16 border border-gray-300 rounded px-1.5 py-1 text-xs" aria-label="Min trip seconds">
-        <span class="text-gray-400">–</span>
-        <input type="number" id="act-max-sec" min="1" max="86400" step="1" value="{{ activity_max_sec|floatformat:0 }}"
-               class="w-16 border border-gray-300 rounded px-1.5 py-1 text-xs" aria-label="Max trip seconds">
-        <span class="text-gray-400">s</span>
-      </div>
     </div>
   </div>
   {% if can_manage %}
@@ -993,115 +834,31 @@
   </script>
   {% endif %}
   <div class="bg-white shadow rounded-lg p-4">
+    <div class="flex items-center justify-between gap-2 mb-2">
+      <span class="text-xs text-gray-400">{{ display_tz|default:"UTC" }} · <span id="act-range-label">{% if activity_custom %}{{ activity_start }} – {{ activity_end }}{% else %}{{ activity_range }}{% endif %}</span></span>
+      <button id="act-csv-btn" class="px-3 py-1.5 text-xs rounded bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100">Download CSV</button>
+    </div>
     <canvas id="activityChart" height="90" class="{% if not activity_series %}hidden{% endif %}"></canvas>
     {{ activity_series|json_script:"activity-data" }}
-    <p id="activity-empty" class="text-sm text-gray-500 text-center py-8 {% if activity_series %}hidden{% endif %}">No analyzed foraging data yet for this range. (Entries, exits and foraging trips come from running the pipeline on this device's clips.)</p>
+    <p id="activity-empty" class="text-sm text-gray-500 text-center py-8 {% if activity_series %}hidden{% endif %}">No clips recorded in this range.</p>
     <p class="text-xs text-gray-400 mt-2">
+      Clips recorded per period. Motion-triggered recording shows how often motion
+      started a clip; continuous recording shows a steady 6 per hour (one per
+      10-minute clip).
       {% if weather_enabled %}
-        Analyzed foraging entries, exits &amp; trips with temperature &amp; precipitation overlaid — weather via
+        Temperature &amp; precipitation via
         <a href="https://open-meteo.com/" target="_blank" rel="noopener" class="hover:underline">Open-Meteo</a>
-        for this device's coordinates. Times shown in {{ display_tz|default:"UTC" }}.
+        for this device's coordinates.
       {% elif can_manage %}
         <a href="{% url 'devices:edit' device.pk %}" class="text-amber-600 hover:underline">Set the device location</a>
         to overlay temperature &amp; precipitation.
       {% else %}
         Set the device location (ask the owner) to overlay temperature &amp; precipitation.
       {% endif %}
-    </p>
-    <p id="unanalyzed-hint" class="hidden text-xs text-gray-500 mt-1 flex items-center gap-1.5">
-      <span class="inline-block w-4 h-3 rounded-sm align-middle" style="background:rgba(100,116,139,0.18)"></span>
-      Shaded periods have clips that haven't been analyzed yet — a flat zero there means <strong>unknown</strong>, not "no foraging". Run the pipeline on those clips to fill them in.
+      Times shown in {{ display_tz|default:"UTC" }}. Download CSV exports the periods shown.
     </p>
   </div>
 </div>
-
-<!-- Activity data table (CSV-exportable) -->
-<div class="mt-4">
-  <div class="bg-white shadow rounded-lg p-4">
-    <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
-      <h3 class="text-sm font-semibold text-gray-700">
-        Activity per <span id="act-gran-label">hour</span>
-        <span class="text-xs font-normal text-gray-400">· {{ display_tz|default:"UTC" }} · <span id="act-range-label">{% if activity_custom %}{{ activity_start }} – {{ activity_end }}{% else %}{{ activity_range }}{% endif %}</span></span>
-      </h3>
-      <button id="act-csv-btn" class="px-3 py-1.5 text-xs rounded bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100">Download CSV</button>
-    </div>
-    <div class="overflow-auto max-h-80 border border-gray-100 rounded">
-      <table class="min-w-full text-sm">
-        <thead class="bg-gray-50 sticky top-0 text-xs text-gray-500 uppercase tracking-wide">
-          <tr>
-            <th class="text-left px-3 py-2 font-medium">Period</th>
-            <th class="text-right px-3 py-2 font-medium">Activity</th>
-            <th class="text-right px-3 py-2 font-medium">Entries</th>
-            <th class="text-right px-3 py-2 font-medium">Exits</th>
-            <th class="text-right px-3 py-2 font-medium">Trips</th>
-            <th id="act-th-temp" class="text-right px-3 py-2 font-medium hidden">Temp (°C)</th>
-            <th id="act-th-precip" class="text-right px-3 py-2 font-medium hidden">Precip (mm)</th>
-          </tr>
-        </thead>
-        <tbody id="act-table-body" class="divide-y divide-gray-100"></tbody>
-      </table>
-    </div>
-    <p id="act-table-empty" class="text-sm text-gray-500 text-center py-6 hidden">No activity data yet for this range.</p>
-    <p class="text-xs text-gray-400 mt-2">Counts per period (newest first). Use the range buttons above to switch between hourly (24h/7d) and daily (30d/90d) buckets. Download CSV exports the rows shown.</p>
-  </div>
-</div>
-
-<!-- Download detailed analysis data (per-event CSVs, all completed jobs for this device) -->
-{% if has_analysis %}
-<div class="mt-4">
-  <div class="bg-white shadow rounded-lg p-4">
-    <div>
-      <h3 class="text-sm font-semibold text-gray-700">Download detailed data</h3>
-      <p class="text-xs text-gray-500 mt-0.5">
-        Combined CSVs across the completed analyses for this device — each row tagged with its
-        video &amp; timestamp. (The activity table above exports the on-screen summary only.)
-      </p>
-    </div>
-    <div class="flex flex-wrap items-end gap-3 mt-3">
-      <label class="text-xs text-gray-600">From
-        <input type="date" id="dl-from" class="mt-1 block border border-gray-300 rounded px-2 py-1.5 text-sm">
-      </label>
-      <label class="text-xs text-gray-600">To
-        <input type="date" id="dl-to" class="mt-1 block border border-gray-300 rounded px-2 py-1.5 text-sm">
-      </label>
-      <button type="button" id="dl-clear" class="text-xs text-amber-700 hover:underline pb-2">Clear</button>
-      <span class="text-xs text-gray-400 pb-2">Leave blank to download all data{% if display_tz %} · {{ display_tz }}{% endif %}</span>
-    </div>
-    <div class="flex flex-wrap gap-2 mt-3">
-      <a data-base="{% url 'analysis:download_events' %}?device={{ device.pk }}" href="{% url 'analysis:download_events' %}?device={{ device.pk }}"
-         class="dl-link inline-flex items-center gap-1 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium">Events CSV</a>
-      <a data-base="{% url 'analysis:download_tracking' %}?device={{ device.pk }}" href="{% url 'analysis:download_tracking' %}?device={{ device.pk }}"
-         class="dl-link inline-flex items-center gap-1 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium">Tracking CSV</a>
-      <a data-base="{% url 'analysis:download_device_trips' %}?device={{ device.pk }}" href="{% url 'analysis:download_device_trips' %}?device={{ device.pk }}"
-         class="dl-link inline-flex items-center gap-1 px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded text-sm font-medium"
-         title="Cross-video foraging trips (a bee returning in a later clip) — matches the activity chart & batch trips table">Foraging Trips CSV</a>
-      <a data-base="{% url 'analysis:download_interactions' %}?device={{ device.pk }}" href="{% url 'analysis:download_interactions' %}?device={{ device.pk }}"
-         class="dl-link inline-flex items-center gap-1 px-3 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded text-sm font-medium">Interactions CSV</a>
-      <a data-base="{% url 'analysis:download_nest_data' %}?device={{ device.pk }}" href="{% url 'analysis:download_nest_data' %}?device={{ device.pk }}"
-         class="dl-link inline-flex items-center gap-1 px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm font-medium">Nest Data CSV</a>
-    </div>
-    <script>
-      (function () {
-        var from = document.getElementById('dl-from'),
-            to = document.getElementById('dl-to'),
-            clear = document.getElementById('dl-clear'),
-            links = Array.prototype.slice.call(document.querySelectorAll('.dl-link'));
-        if (!from || !to || !links.length) return;
-        function sync() {
-          var f = from.value, t = to.value;
-          if (f && t && f > t) { to.setCustomValidity('The From date must be on or before the To date.'); to.reportValidity(); return; }
-          to.setCustomValidity('');
-          var extra = (f ? '&from=' + encodeURIComponent(f) : '') + (t ? '&to=' + encodeURIComponent(t) : '');
-          links.forEach(function (a) { a.href = a.getAttribute('data-base') + extra; });
-        }
-        from.addEventListener('change', sync);
-        to.addEventListener('change', sync);
-        clear.addEventListener('click', function () { from.value = ''; to.value = ''; sync(); });
-      })();
-    </script>
-  </div>
-</div>
-{% endif %}
 
 <!-- Videos from this device -->
 <div class="mt-8">
@@ -1140,19 +897,12 @@
   var START = "{{ activity_start }}";
   var END = "{{ activity_end }}";
   var CUSTOM = {{ activity_custom|yesno:"true,false" }};
-  // Foraging-trip duration bounds (seconds) — same semantics as the batch page.
-  var MIN_SEC = "{{ activity_min_sec|floatformat:0 }}";
-  var MAX_SEC = "{{ activity_max_sec|floatformat:0 }}";
-
-  // The query the chart/table/poll all use: a custom window when active,
-  // otherwise the preset range. Trip bounds ride along.
+  // The query the chart/poll use: a custom window when active, otherwise the
+  // preset range.
   function activityQuery() {
-    var base = (CUSTOM && START && END)
+    return (CUSTOM && START && END)
       ? 'start=' + encodeURIComponent(START) + '&end=' + encodeURIComponent(END)
       : 'range=' + encodeURIComponent(RANGE);
-    if (MIN_SEC !== '') base += '&min_sec=' + encodeURIComponent(MIN_SEC);
-    if (MAX_SEC !== '') base += '&max_sec=' + encodeURIComponent(MAX_SEC);
-    return base;
   }
 
   // Keep the URL reflecting the active view so a refresh / shared link restores it.
@@ -1160,10 +910,17 @@
     try { history.replaceState(null, '', '?' + activityQuery()); } catch (_) {}
   }
 
-  // (Re)build the activity chart in place — used on load AND on each live poll.
+  // (Re)build the clip-activity chart in place — used on load AND on each live
+  // poll. Also stashes the rows for the CSV export.
   window.buildActivityChart = function (rows, weatherEnabled, gran) {
     var canvas = document.getElementById('activityChart');
     var empty = document.getElementById('activity-empty');
+    var lab = document.getElementById('act-gran-label');
+    if (lab) lab.textContent = (gran === 'day') ? 'day' : 'hour';
+    var hasTemp = weatherEnabled && rows && rows.some(function (d) { return d.temp != null; });
+    var hasPrecip = weatherEnabled && rows && rows.some(function (d) { return d.precip != null; });
+    window._actRows = rows || []; window._actHasTemp = hasTemp;
+    window._actHasPrecip = hasPrecip; window._actGran = gran || 'hour';
     if (!canvas || typeof Chart === 'undefined') return;
     if (!rows || !rows.length) {
       if (window._actChart) { window._actChart.destroy(); window._actChart = null; }
@@ -1171,72 +928,29 @@
       return;
     }
     canvas.classList.remove('hidden'); if (empty) empty.classList.add('hidden');
-    var hasTemp = weatherEnabled && rows.some(function (d) { return d.temp != null; });
-    var hasPrecip = weatherEnabled && rows.some(function (d) { return d.precip != null; });
     // Use the SERVER label (the bucket's wall-clock = the device's local time);
     // do NOT reformat to the viewer's timezone, or a device in another zone
     // would read shifted.
     function lbl(d) { return d.t || d.iso || ''; }
-    var datasets = [];
+    var datasets = [{ type: 'bar', label: 'Clips',
+      data: rows.map(function (d) { return d.v || 0; }),
+      backgroundColor: 'rgba(217,119,6,0.75)', yAxisID: 'y', order: 2 }];
     if (hasPrecip) datasets.push({ type: 'bar', label: 'Precipitation (mm)',
       data: rows.map(function (d) { return d.precip; }),
-      backgroundColor: 'rgba(59,130,246,0.30)', yAxisID: 'yP', order: 4 });
-    // Raw recorded activity (clip snippets per bucket) — a subtle dashed
-    // reference behind the analyzed foraging lines.
-    datasets.push({ type: 'line', label: 'Activity (snippets)',
-      data: rows.map(function (d) { return d.v; }),
-      borderColor: '#94a3b8', backgroundColor: 'rgba(148,163,184,0.08)',
-      borderDash: [4, 3], fill: false, tension: 0.3, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y', order: 3 });
-    // Analyzed foraging: entries, exits, and foraging trips (from the pipeline).
-    datasets.push({ type: 'line', label: 'Entries',
-      data: rows.map(function (d) { return d.entries; }),
-      borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,0.10)',
-      fill: false, tension: 0.3, pointRadius: 1, borderWidth: 1.75, yAxisID: 'y', order: 1 });
-    datasets.push({ type: 'line', label: 'Exits',
-      data: rows.map(function (d) { return d.exits; }),
-      borderColor: '#f97316', fill: false, tension: 0.3, pointRadius: 1, borderWidth: 1.75, yAxisID: 'y', order: 1 });
-    datasets.push({ type: 'line', label: 'Foraging trips',
-      data: rows.map(function (d) { return d.trips; }),
-      borderColor: '#7c3aed', backgroundColor: 'rgba(124,58,237,0.10)',
-      fill: true, tension: 0.3, pointRadius: 1, borderWidth: 2, yAxisID: 'y', order: 2 });
+      backgroundColor: 'rgba(59,130,246,0.30)', yAxisID: 'yP', order: 3 });
     if (hasTemp) datasets.push({ type: 'line', label: 'Temp (°C)',
       data: rows.map(function (d) { return d.temp; }),
-      borderColor: '#dc2626', tension: 0.3, pointRadius: 0, borderWidth: 1.5,
+      borderColor: '#2563eb', tension: 0.3, pointRadius: 0, borderWidth: 1.5,
       spanGaps: true, yAxisID: 'yT', order: 0 });
     var scales = {
       x: { ticks: { maxTicksLimit: 10, autoSkip: true } },
-      y: { beginAtZero: true, position: 'left', title: { display: true, text: 'Foraging (events / trips)' }, ticks: { precision: 0 } },
+      y: { beginAtZero: true, position: 'left', title: { display: true, text: 'Clips' }, ticks: { precision: 0 } },
     };
     if (hasTemp) scales.yT = { position: 'right', title: { display: true, text: '°C' }, grid: { drawOnChartArea: false } };
     if (hasPrecip) scales.yP = { position: 'right', display: false, beginAtZero: true };
-
-    // Shade buckets where clips were recorded but NOT (fully) analyzed, so a flat
-    // zero reads as "not analyzed yet" rather than "no foraging". Opacity scales
-    // with the unanalyzed fraction; fully-analyzed buckets are left clear.
-    var anyUnanalyzed = rows.some(function (d) { return (d.v || 0) > 0 && (d.analyzed || 0) < (d.v || 0); });
-    var unanalyzedBands = {
-      id: 'unanalyzedBands',
-      beforeDatasetsDraw: function (chart) {
-        var xa = chart.scales.x, area = chart.chartArea, c = chart.ctx, n = rows.length;
-        if (!n || !xa) return;
-        var step = n > 1 ? Math.abs(xa.getPixelForValue(1) - xa.getPixelForValue(0)) : (area.right - area.left);
-        var half = step / 2;
-        c.save();
-        for (var i = 0; i < n; i++) {
-          var d = rows[i], clips = d.v || 0;
-          if (clips <= 0) continue;                                  // nothing recorded
-          var frac = 1 - Math.min(1, (d.analyzed || 0) / clips);     // unanalyzed share
-          if (frac <= 0) continue;                                   // fully analyzed
-          var cx = xa.getPixelForValue(i);
-          c.fillStyle = 'rgba(100,116,139,' + (0.18 * frac).toFixed(3) + ')';
-          c.fillRect(cx - half, area.top, half * 2, area.bottom - area.top);
-        }
-        c.restore();
-      }
-    };
     if (window._actChart) window._actChart.destroy();
     window._actChart = new Chart(canvas, {
-      type: 'line',
+      type: 'bar',
       data: { labels: rows.map(lbl), datasets: datasets },
       options: {
         responsive: true, maintainAspectRatio: true,
@@ -1244,59 +958,19 @@
         plugins: { legend: { display: datasets.length > 1, labels: { boxWidth: 12, font: { size: 11 } } } },
         scales: scales,
       },
-      plugins: [unanalyzedBands],
     });
-    // Toggle the "not analyzed" legend hint under the chart.
-    var hint = document.getElementById('unanalyzed-hint');
-    if (hint) hint.classList.toggle('hidden', !anyUnanalyzed);
-  };
-
-  // (Re)build the activity data table from the SAME rows that drive the chart —
-  // used on load AND on each live poll, so it tracks the range selector.
-  function esc2(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
-  window.buildActivityTable = function (rows, weatherEnabled, gran) {
-    var body = document.getElementById('act-table-body');
-    var empty = document.getElementById('act-table-empty');
-    var lab = document.getElementById('act-gran-label');
-    if (lab) lab.textContent = (gran === 'day') ? 'day' : 'hour';
-    if (!body) return;
-    var hasTemp = weatherEnabled && rows && rows.some(function (d) { return d.temp != null; });
-    var hasPrecip = weatherEnabled && rows && rows.some(function (d) { return d.precip != null; });
-    var thT = document.getElementById('act-th-temp'), thP = document.getElementById('act-th-precip');
-    if (thT) thT.classList.toggle('hidden', !hasTemp);
-    if (thP) thP.classList.toggle('hidden', !hasPrecip);
-    // Stash for the CSV export.
-    window._actRows = rows || []; window._actHasTemp = hasTemp;
-    window._actHasPrecip = hasPrecip; window._actGran = gran || 'hour';
-    if (!rows || !rows.length) {
-      body.innerHTML = ''; if (empty) empty.classList.remove('hidden'); return;
-    }
-    if (empty) empty.classList.add('hidden');
-    body.innerHTML = rows.slice().reverse().map(function (d) {  // newest first
-      var c = '<td class="px-3 py-1.5 text-gray-700">' + esc2(d.t || d.iso || '') + '</td>'
-        + '<td class="px-3 py-1.5 text-right text-gray-500">' + (d.v != null ? d.v : 0) + '</td>'
-        + '<td class="px-3 py-1.5 text-right text-green-700">' + (d.entries != null ? d.entries : 0) + '</td>'
-        + '<td class="px-3 py-1.5 text-right text-orange-600">' + (d.exits != null ? d.exits : 0) + '</td>'
-        + '<td class="px-3 py-1.5 text-right font-medium text-purple-700">' + (d.trips != null ? d.trips : 0) + '</td>';
-      if (hasTemp) c += '<td class="px-3 py-1.5 text-right text-gray-500">' + (d.temp != null ? (Math.round(d.temp * 10) / 10) : '') + '</td>';
-      if (hasPrecip) c += '<td class="px-3 py-1.5 text-right text-gray-500">' + (d.precip != null ? d.precip : '') + '</td>';
-      return '<tr>' + c + '</tr>';
-    }).join('');
   };
 
   function csvCell(s) { s = String(s == null ? '' : s); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
   var csvBtn = document.getElementById('act-csv-btn');
   if (csvBtn) csvBtn.addEventListener('click', function () {
     var rows = window._actRows || [];
-    var cols = ['period_utc', 'period_local', 'activity', 'entries', 'exits', 'foraging_trips'];
+    var cols = ['period_utc', 'period_local', 'clips'];
     if (window._actHasTemp) cols.push('temp_c');
     if (window._actHasPrecip) cols.push('precip_mm');
     var lines = [cols.join(',')];
     rows.forEach(function (d) {  // chronological in the file
-      var rec = [csvCell(d.iso || ''), csvCell(d.t || ''), (d.v != null ? d.v : 0),
-                 (d.entries != null ? d.entries : 0), (d.exits != null ? d.exits : 0),
-                 (d.trips != null ? d.trips : 0)];
+      var rec = [csvCell(d.iso || ''), csvCell(d.t || ''), (d.v != null ? d.v : 0)];
       if (window._actHasTemp) rec.push(d.temp != null ? d.temp : '');
       if (window._actHasPrecip) rec.push(d.precip != null ? d.precip : '');
       lines.push(rec.join(','));
@@ -1305,7 +979,7 @@
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     var spanLabel = (CUSTOM && START && END) ? (START + '_' + END) : RANGE;
-    a.download = 'activity_device{{ device.pk }}_' + (window._actGran || 'hour') + '_' + spanLabel + '.csv';
+    a.download = 'clips_device{{ device.pk }}_' + (window._actGran || 'hour') + '_' + spanLabel + '.csv';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(a.href);
   });
@@ -1314,7 +988,6 @@
   var el = document.getElementById('activity-data');
   var _rows0 = el ? JSON.parse(el.textContent) : [];
   buildActivityChart(_rows0, {{ weather_enabled|yesno:"true,false" }}, "{{ activity_gran }}");
-  buildActivityTable(_rows0, {{ weather_enabled|yesno:"true,false" }}, "{{ activity_gran }}");
 
   // Live poll: refresh telemetry tiles + chart in place — no manual refresh.
   function setText(id, v) { var e = document.getElementById(id); if (e && v != null) e.textContent = v; }
@@ -1377,20 +1050,29 @@
           } else rec.innerHTML = '';
         }
         var sv = document.getElementById('m-services');
-        // service_rows carries the note ("standby" / "carrying traffic"), so the
-        // live card says the same thing the server-rendered one does.
         if (sv && d.service_rows) {
-          sv.innerHTML = d.service_rows.map(function (r) {
-            var d2 = r.warn
-              ? '<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>'
-              : dot(r.ok);
-            var note = r.note
-              ? ' <span class="text-xs ' + (r.warn ? 'text-amber-700' : 'text-gray-400')
-                + '">\u00b7 ' + esc(r.note) + '</span>'
-              : '';
-            return '<div class="flex items-center gap-2">' + d2
-              + '<span class="text-gray-600">' + r.label + '</span>' + note + '</div>';
-          }).join('');
+          var BOX = { fail: 'border-red-200 bg-red-50/60', warn: 'border-amber-200 bg-amber-50/60' };
+          var DOT = { fail: 'bg-red-500', warn: 'bg-amber-500', ok: 'bg-green-500' };
+          var TXT = { fail: 'text-red-700', warn: 'text-amber-800', ok: 'text-green-700' };
+          sv.innerHTML = d.service_rows.length ? d.service_rows.map(function (r) {
+            return '<div class="rounded-md border px-3 py-2 ' + (BOX[r.level] || 'border-gray-100 bg-gray-50') + '">'
+              + '<div class="flex items-center gap-2">'
+              + '<span class="w-2 h-2 rounded-full shrink-0 ' + (DOT[r.level] || 'bg-gray-300') + '"></span>'
+              + '<span class="text-sm font-medium text-gray-800">' + esc(r.label) + '</span>'
+              + '<span class="ml-auto text-xs font-medium ' + (TXT[r.level] || 'text-gray-500') + '">' + esc(r.state) + '</span></div>'
+              + (r.note ? '<div class="mt-0.5 pl-4 text-xs text-gray-500 break-words">' + esc(r.note) + '</div>' : '')
+              + (r.unit ? '<div class="mt-0.5 pl-4 text-[11px] text-gray-400 font-mono">' + esc(r.unit) + '</div>' : '')
+              + '</div>';
+          }).join('') : '<p class="text-sm text-gray-400">No service state reported yet.</p>';
+        }
+        var ss = document.getElementById('m-services-summary');
+        if (ss && d.services_summary) {
+          var n = d.services_summary.attention;
+          ss.innerHTML = '<div class="mt-2 text-2xl font-semibold text-gray-900">' + d.services_summary.healthy
+            + '<span class="text-base font-medium text-gray-500"> / ' + d.services_summary.total + '</span></div>'
+            + (n ? '<div class="mt-1 text-xs text-amber-800 flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>'
+                   + n + (n === 1 ? ' needs' : ' need') + ' attention · see all ↓</div>'
+                 : '<div class="mt-1 text-xs text-gray-400">all healthy · see all ↓</div>');
         }
         var wf = document.getElementById('m-wifi');
         if (wf) {
@@ -1442,12 +1124,10 @@
         }
         if (d.activity_series && seq === CHART_SEQ) {
           buildActivityChart(d.activity_series, d.weather_enabled, d.activity_gran);
-          buildActivityTable(d.activity_series, d.weather_enabled, d.activity_gran);
         }
       }).catch(function () {});
   }
-  // One range selector drives BOTH the chart and the table, in place (no reload),
-  // so they always show the same period and stay visually connected.
+  // The range selector refreshes the chart in place (no reload).
   // Toggle the visual "custom window active" state (input rings + Clear button)
   // and, when active, deselect every preset (a custom window overrides them).
   function setCustomActive(on) {
@@ -1486,12 +1166,12 @@
       var rl = document.getElementById('act-range-label');
       if (rl) rl.textContent = RANGE;
       syncActivityUrl();
-      poll(true);  // refetch this range -> rebuilds the chart AND the table at once
+      poll(true);  // refetch this range -> rebuilds the chart
     });
   });
 
   // Custom from–to window: Apply uses the two date inputs; Clear reverts to the
-  // active preset. Both refresh chart + table in place via poll().
+  // active preset. Both refresh the chart in place via poll().
   var applyBtn = document.getElementById('act-apply');
   if (applyBtn) applyBtn.addEventListener('click', function () {
     var s = (document.getElementById('act-start') || {}).value;
@@ -1516,18 +1196,6 @@
     if (rl) rl.textContent = RANGE;
     syncActivityUrl();
     poll(true);
-  });
-
-  // Trip-duration bounds: applying on change refreshes chart + table in place,
-  // exactly like the range/filter controls.
-  ['act-min-sec', 'act-max-sec'].forEach(function (id) {
-    var el = document.getElementById(id);
-    if (el) el.addEventListener('change', function () {
-      MIN_SEC = (document.getElementById('act-min-sec') || {}).value || '';
-      MAX_SEC = (document.getElementById('act-max-sec') || {}).value || '';
-      syncActivityUrl();
-      poll(true);
-    });
   });
 
   // Tiles every 5s (matches the 5s minimum beat rate); chart every 12th tick

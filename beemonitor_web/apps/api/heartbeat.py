@@ -29,7 +29,9 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.devices.models import Device, DeviceHeartbeat
+from apps.devices.models import (
+    RECORD_MAX_SEGMENT, RECORD_POST_ROLL, Device, DeviceHeartbeat, telemetry_interval_for,
+)
 
 # After this long with no matching version reported, stop showing "Updating…" for a
 # queued artifact update (the device likely failed/rolled back or went offline).
@@ -155,6 +157,11 @@ class DeviceHeartbeatView(APIView):
         if isinstance(tz_off, (int, float)) and int(tz_off) != device.tz_offset_min:
             device.tz_offset_min = int(tz_off)
             tz_updates.append("tz_offset_min")
+        # Beat cadence follows the link: fast on WiFi, slow on metered cellular.
+        interval = telemetry_interval_for(metrics.get("active_transport"))
+        if interval and interval != device.telemetry_interval_seconds:
+            device.telemetry_interval_seconds = interval
+            tz_updates.append("telemetry_interval_seconds")
         if tz_updates:
             device.save(update_fields=tz_updates)
 
@@ -210,7 +217,7 @@ class DeviceHeartbeatView(APIView):
                 # Device caches this to name the USB-transfer folder per hive
                 # (hardware/usb-transfer.sh); see telemetry's _cache_location.
                 "location": device.location or "",
-                # The device adopts this as its beat cadence (dashboard-set).
+                # The device adopts this as its beat cadence (set from transport above).
                 "telemetry_interval": device.telemetry_interval_seconds,
                 # Manual motion-tuning overrides (empty = use auto-calibration).
                 "motion_tuning": device.motion_tuning_dict(),
@@ -241,16 +248,17 @@ class DeviceHeartbeatView(APIView):
                 # Whether the device may actually program the WittyPi (off = the
                 # device reports the schedule but doesn't write it).
                 "wake_schedule_apply": device.wake_schedule_apply,
-                # Video upload policy (auto|manual). Manual holds the backlog
-                # until "Upload now" — protects phone-hotspot users' data plans.
-                "video_upload_mode": device.video_upload_mode,
+                # Videos always upload when WiFi is up. Still sent so units on
+                # older firmware (which held videos unless told "auto") release
+                # their backlog; drop once the fleet has updated.
+                "video_upload_mode": "auto",
                 # Recording behaviour: capture mode (motion|continuous) + the
                 # local-time hour window the recorder may record in (None = all
                 # day). The recorder hot-reloads both.
                 "record_mode": device.record_mode,
                 "record_window": device.record_window,
-                "record_post_roll": device.record_post_roll,
-                "record_max_segment": device.record_max_segment,
+                "record_post_roll": RECORD_POST_ROLL,
+                "record_max_segment": RECORD_MAX_SEGMENT,
             },
             status=201,
         )
@@ -282,8 +290,8 @@ class DeviceCommandView(APIView):
             "params": params,
             # Cached device-side to name the USB-transfer folder per hive.
             "location": device.location or "",
-            # Carry the cadence here too so a rate change applies within seconds
-            # even when the beat interval is long.
+            # Carry the cadence here too so the device picks up the latest
+            # beat-derived rate between beats.
             "telemetry_interval": device.telemetry_interval_seconds,
             # Crop cap here too so "stop crops" (0) applies within seconds.
             "frame_daily_cap": device.frame_daily_cap,
@@ -293,8 +301,8 @@ class DeviceCommandView(APIView):
             # Desired WittyPi power schedule (reconciled device-side).
             "wake_schedule": device.wake_schedule_dict(),
             "wake_schedule_apply": device.wake_schedule_apply,
-            # Upload policy here too so a flip applies within seconds on WiFi.
-            "video_upload_mode": device.video_upload_mode,
+            # Legacy: frees older-firmware units' held backlog (see beat).
+            "video_upload_mode": "auto",
             # Recording mode + window for parity with the beat.
             "record_mode": device.record_mode,
             "record_window": device.record_window,

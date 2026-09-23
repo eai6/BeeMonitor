@@ -73,6 +73,17 @@ ACTIVITY_PERIOD = int(os.environ.get("BEEMONITOR_ACTIVITY_PERIOD", "3600"))
 RECORDER_UNIT = os.environ.get("BEEMONITOR_RECORDER_UNIT", "beemonitor-recorder.service")
 UPLOADER_UNIT = os.environ.get("BEEMONITOR_UPLOADER_UNIT", "beemonitor-uploader.service")
 CELLULAR_UNIT = os.environ.get("BEEMONITOR_CELLULAR_UNIT", "cellular.service")
+# Every unit the dashboard's Services panel lists. A unit this image doesn't
+# have reports load=not-found and shows as "not installed".
+SERVICE_UNITS = [
+    RECORDER_UNIT, UPLOADER_UNIT, "beemonitor-telemetry.service", CELLULAR_UNIT,
+    "cellular-firewall.service", "beemonitor-tailscale.service",
+    "beemonitor-camera-detect.service", "beemonitor-calibrate.timer",
+    "beemonitor-calibrate.service", "beemonitor-enroll.service",
+    "beemonitor-update.service",
+]
+# USB transfer is a template unit: one instance per plugged-in drive.
+USB_TRANSFER_UNIT = "beemonitor-usb-transfer@.service"
 # WiFi interface used for the WiFi on/off/connect commands and state reporting.
 WIFI_IFACE = os.environ.get("BEEMONITOR_WIFI_IFACE", "wlan0")
 # Cellular interface (for transport reporting).
@@ -139,19 +150,9 @@ ROI_POLYGON_FILE = RECORD_DIR.parent / "roi_polygon.json"
 # Off = stop sampling/sending BioCLIP review crops over cellular (the recorder
 # stops sampling, so no SD/CPU/cellular spend). Same dir as the mode file above.
 ACTIVITY_FRAMES_FILE = RECORD_DIR.parent / "activity_frames.json"
-# Dashboard-pushed video upload policy ({"mode": "auto"|"manual"}); the uploader
-# re-reads it every cycle. manual = hold videos even on WiFi (protects users
-# whose "WiFi" is a phone hotspot); the uploader treats a MISSING file as manual
-# too — any unit that can upload can also beat, so it learns its real mode first.
-VIDEO_UPLOAD_MODE_FILE = RECORD_DIR.parent / "video_upload_mode.json"
 # Dashboard-pushed recording settings ({"mode": "motion"|"continuous",
 # "window": {"start": H, "end": H} | null}); the recorder hot-reloads it.
 RECORD_SETTINGS_FILE = RECORD_DIR.parent / "record_settings.json"
-# One-shot "upload now" trigger (dashboard command): the uploader drains the
-# current video backlog once, then deletes this file AFTER a pass ends with
-# nothing pending — so a crash mid-drain re-drains on restart (idempotent).
-UPLOAD_NOW_FILE = RECORD_DIR.parent / "upload_now"
-
 # Activity-frame upload (taxonomic monitoring). The recorder queues mover crops
 # here; we ship them over cellular under a daily cap. See main_motion.py +
 # memory/15_monitoring_agent_design.md.
@@ -250,6 +251,38 @@ def _service_active(unit: str) -> bool:
         ).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def _services_state() -> dict:
+    """systemd state of every BeeMonitor unit, for the dashboard's Services panel.
+
+    One ``systemctl show`` covers them all: ``{unit: {load, active, sub,
+    result}}``. The USB-transfer template is summarised from its instances
+    (active while a drive is being copied, failed if one copy failed).
+    """
+    out: dict = {}
+    r = _run(["systemctl", "show", *SERVICE_UNITS,
+              "--property=Id,LoadState,ActiveState,SubState,Result"], timeout=10)
+    if r and r.returncode == 0:
+        for block in r.stdout.strip().split("\n\n"):
+            kv = dict(ln.split("=", 1) for ln in block.splitlines() if "=" in ln)
+            if kv.get("Id"):
+                out[kv["Id"]] = {"load": kv.get("LoadState", ""),
+                                 "active": kv.get("ActiveState", ""),
+                                 "sub": kv.get("SubState", ""),
+                                 "result": kv.get("Result", "")}
+    r = _run(["systemctl", "list-units", "--all", "--plain", "--no-legend",
+              USB_TRANSFER_UNIT.replace("@.", "@*.")], timeout=10)
+    if r and r.returncode == 0:
+        states = [ln.split()[2] for ln in r.stdout.splitlines() if len(ln.split()) > 3]
+        if "active" in states or "activating" in states:
+            usb = {"active": "active", "sub": "running", "result": "success"}
+        elif "failed" in states:
+            usb = {"active": "failed", "sub": "failed", "result": "exit-code"}
+        else:
+            usb = {"active": "inactive", "sub": "dead", "result": "success"}
+        out[USB_TRANSFER_UNIT] = {"load": "loaded", **usb}
+    return out
 
 
 _EXC_LINE = re.compile(r"^[\w.]*(Error|Exception|Interrupt)\b.*|\bERROR\b.*|.*\bKilled\b.*")
@@ -848,6 +881,7 @@ def collect_metrics() -> dict:
     m.update(_recorder_failure())
     m["uploader_active"] = _service_active(UPLOADER_UNIT)
     m["cellular_active"] = _service_active(CELLULAR_UNIT)
+    m["services"] = _services_state()
 
     # Current WiFi state so the dashboard can show on/off + connected network.
     m.update(_wifi_state())
@@ -1026,27 +1060,6 @@ def _apply_frame_cap(value) -> None:
             log.info("frame daily cap set to %d (was %d)", value, cur)
     except OSError as e:
         log.warning("could not write frame cap: %s", e)
-
-
-def _apply_upload_mode(value) -> None:
-    """Persist the dashboard-pushed video upload policy (auto|manual) to the file
-    the uploader re-reads each cycle. Ignores absent/invalid values so a cloud
-    that doesn't send the field never clobbers the current mode."""
-    if not isinstance(value, str):
-        return
-    mode = value.strip().lower()
-    if mode not in ("auto", "manual"):
-        return
-    try:
-        new = json.dumps({"mode": mode}, sort_keys=True)
-        cur = (VIDEO_UPLOAD_MODE_FILE.read_text().strip()
-               if VIDEO_UPLOAD_MODE_FILE.exists() else "")
-        if new != cur:
-            VIDEO_UPLOAD_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            VIDEO_UPLOAD_MODE_FILE.write_text(new)
-            log.info("video upload mode set to %s", mode)
-    except OSError as e:
-        log.warning("could not write video upload mode: %s", e)
 
 
 def _apply_record_settings(mode, window, post_roll=None, max_segment=None) -> None:
@@ -1813,16 +1826,6 @@ def _handle_command(cmd: str, params: dict) -> None:
     elif cmd == "wifi_scan":
         log.info("command: wifi_scan")
         _wifi_scan()
-    elif cmd == "upload_videos":
-        # One-shot backlog drain (manual upload mode). The uploader consumes the
-        # trigger — deleting it only after a pass ends with nothing pending, so
-        # a crash mid-drain resumes on restart.
-        log.info("command: upload_videos — touching drain trigger")
-        try:
-            UPLOAD_NOW_FILE.parent.mkdir(parents=True, exist_ok=True)
-            UPLOAD_NOW_FILE.touch()
-        except OSError as e:
-            log.warning("command: upload_videos — could not touch trigger: %s", e)
     elif cmd == "cellular_open":
         log.info("command: cellular_open minutes=%s", params.get("minutes"))
         _open_cellular(params)
@@ -1993,8 +1996,6 @@ def main() -> int:
                 _apply_motion_tuning(resp.get("motion_tuning"))
                 # ...and a dashboard-pushed crop daily cap (0 = stop crop upload).
                 _apply_frame_cap(resp.get("frame_daily_cap"))
-                # ...and the video upload policy (auto|manual).
-                _apply_upload_mode(resp.get("video_upload_mode"))
                 # ...and the recording mode + hour window. Key-presence guard:
                 # only a cloud that SENDS record_mode may set window=None
                 # (all-day) — an older cloud omitting both must not clobber.
