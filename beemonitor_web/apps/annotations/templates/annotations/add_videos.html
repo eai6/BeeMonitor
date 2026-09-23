@@ -96,6 +96,41 @@
   var boxes = function () { return form.querySelectorAll('input[name="video_ids"]'); };
   var mix = document.getElementById('sel-mix');
 
+  // Coverage map, live: each cell = clips in the project + clips selected here
+  // (not yet added), so the spread of a selection shows before adding it.
+  var cells = Array.prototype.slice.call(document.querySelectorAll('.cov-cell'));
+  var cellHtml = cells.map(function (td) { return td.innerHTML; });  // server render
+  function drawCoverage(picked) {
+    if (!cells.length) return;
+    var sel = {}, total = 0;
+    picked.forEach(function (b) {
+      var card = b.closest('.vid-card');
+      if (!card || card.getAttribute('data-in-project')) return;  // already counted
+      var key = card.getAttribute('data-device-id') + ':' + card.getAttribute('data-hour');
+      sel[key] = (sel[key] || 0) + 1; total++;
+    });
+    var gaps = 0;
+    cells.forEach(function (td, i) {
+      var key = td.getAttribute('data-device-id') + ':' + td.getAttribute('data-hour');
+      var add = sel[key] || 0, n = +td.getAttribute('data-n'), avail = +td.getAttribute('data-available');
+      if (!add) {
+        td.innerHTML = cellHtml[i];
+        if (td.getAttribute('data-state') === 'gap') gaps++;
+        return;
+      }
+      td.innerHTML = '<div class="rounded text-center text-[10px] leading-6 font-semibold bg-indigo-500 text-white" style="width:30px;height:26px"'
+        + ' title="' + n + ' in project + ' + add + ' selected, of ' + avail + ' available">'
+        + (n ? n + '+' + add : '+' + add) + '</div>';
+    });
+    var cs = document.getElementById('cov-selected');
+    if (cs) cs.innerHTML = total ? '&middot; <span class="text-indigo-700 font-medium">+' + total + ' selected</span>' : '';
+    var g = document.getElementById('cov-gaps');
+    if (g) {
+      g.textContent = gaps;
+      var gs = document.getElementById('cov-gaps-s'); if (gs) gs.textContent = gaps === 1 ? '' : 's';
+    }
+  }
+
   function refresh() {
     var picked = Array.prototype.filter.call(boxes(), function (b) { return b.checked; });
     var n = picked.length;
@@ -116,6 +151,7 @@
       var t = card.getAttribute('data-time');
       if (t) hours.push(parseInt(t.slice(0, 2), 10));
     });
+    drawCoverage(picked);
     if (!n) { mix.innerHTML = ''; return; }
     var bar = '<span class="flex h-1.5 w-32 rounded-full overflow-hidden">';
     Object.keys(byDot).forEach(function (k) {

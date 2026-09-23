@@ -23,6 +23,8 @@
                data-time="{{ v.recorded_at|default:v.uploaded_at|date:'H:i' }}"
                data-day="{{ group.day|date:'D j M' }}"
                data-hotel="{{ v.device.name|default:'—' }}"
+               data-device-id="{{ v.device_id|default:'' }}" data-hour="{{ v.hour|default_if_none:'' }}"
+               data-in-project="{% if v.in_project %}1{% endif %}"
                data-rotate="{% if v.device.rotate_180 %}1{% endif %}"
                data-detail="{% url 'videos:detail' v.pk %}"
                data-title="{{ v.title|default:'(untitled)' }}">

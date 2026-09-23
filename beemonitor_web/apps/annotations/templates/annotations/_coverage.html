@@ -8,8 +8,9 @@
   <div class="flex items-baseline gap-3 mb-2.5">
     <h2 class="text-[13px] font-semibold text-gray-900">Coverage</h2>
     <span class="text-[11px] text-gray-400">
-      {{ coverage.in_project }} clip{{ coverage.in_project|pluralize }} annotated
-      {% if coverage.gaps %}&middot; <span class="text-red-700">{{ coverage.gaps }} hotel-hour{{ coverage.gaps|pluralize }} with footage and nothing labelled</span>{% endif %}
+      {{ coverage.in_project }} clip{{ coverage.in_project|pluralize }} in project
+      <span id="cov-selected"></span>
+      {% if coverage.gaps %}&middot; <span class="text-red-700"><span id="cov-gaps">{{ coverage.gaps }}</span> hotel-hour<span id="cov-gaps-s">{{ coverage.gaps|pluralize }}</span> with footage and nothing in the project</span>{% endif %}
     </span>
     <div class="flex-1"></div>
     <div class="flex items-center gap-2">
@@ -37,13 +38,14 @@
           <span class="inline-block w-2 h-2 rounded-full mr-1.5" style="background: {{ row.dot }}"></span>{{ row.device.name }}
         </td>
         {% for c in row.cells %}
-        <td>
+        <td class="cov-cell" data-device-id="{{ row.device.id }}" data-hour="{{ c.hour }}"
+            data-n="{{ c.n }}" data-available="{{ c.available }}" data-state="{{ c.state }}">
           {% if c.state == "none" %}
           <div class="rounded text-center text-[10px] leading-6 bg-gray-50 text-gray-300" style="width:30px;height:26px"
                title="No footage recorded">&middot;</div>
           {% elif c.state == "gap" %}
           <div class="rounded text-center text-[10px] leading-6 font-semibold bg-red-50 text-red-700 border border-dashed border-red-300" style="width:30px;height:26px"
-               title="{{ c.available }} clip{{ c.available|pluralize }} recorded, none annotated">0</div>
+               title="{{ c.available }} clip{{ c.available|pluralize }} recorded, none in the project">0</div>
           {% else %}
           <div class="rounded text-center text-[10px] leading-6 font-semibold {% if c.state == 'c1' %}bg-amber-50 text-amber-800{% elif c.state == 'c2' %}bg-amber-100 text-amber-800{% elif c.state == 'c3' %}bg-amber-200 text-amber-800{% else %}bg-amber-400 text-green-950{% endif %}" style="width:30px;height:26px"
                title="{{ c.n }} in project of {{ c.available }} available">{{ c.n }}</div>
@@ -54,6 +56,12 @@
       {% endfor %}
     </table>
   </div>
+
+  <p class="mt-2 text-[11px] text-gray-500 flex items-center gap-3">
+    <span class="inline-flex items-center gap-1"><span class="inline-block w-3 h-3 rounded bg-amber-200"></span>in project</span>
+    <span class="inline-flex items-center gap-1"><span class="inline-block w-3 h-3 rounded bg-indigo-500"></span>+ selected (not added yet)</span>
+    <span class="inline-flex items-center gap-1"><span class="inline-block w-3 h-3 rounded bg-red-50 border border-dashed border-red-300"></span>footage, nothing in project</span>
+  </p>
 
   {% if coverage.findings %}
   <div class="mt-2.5 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-[11.5px] text-amber-900 leading-5">
