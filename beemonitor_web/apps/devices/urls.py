@@ -36,6 +36,7 @@ urlpatterns = [
     path("<int:pk>/request-image/", views.DeviceRequestImageView.as_view(), name="request_image"),
     path("<int:pk>/latest-image.json", views.DeviceLatestImageView.as_view(), name="latest_image"),
     path("<int:pk>/status.json", views.DeviceStatusView.as_view(), name="status"),
+    path("<int:pk>/health.json", views.DeviceHealthView.as_view(), name="health"),
     path("<int:pk>/share/add/", views.DeviceShareAddView.as_view(), name="share_add"),
     path("<int:pk>/share/remove/", views.DeviceShareRemoveView.as_view(), name="share_remove"),
 ]

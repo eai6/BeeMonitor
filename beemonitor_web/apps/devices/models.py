@@ -519,6 +519,38 @@ class DeviceHeartbeat(models.Model):
         return f"heartbeat {self.device.name} @ {self.created_at:%Y-%m-%d %H:%M}"
 
 
+class DeviceHealthSample(models.Model):
+    """One minute of a device's maintenance metrics, kept indefinitely.
+
+    Raw heartbeats carry the full JSON and are pruned after a week; this is the
+    compact history the device page charts. Each beat upserts its minute's row
+    (the last beat in the minute wins), so there is at most one row per device
+    per minute. A minute with no row means the device was off or unreachable.
+    See apps/devices/health.py.
+    """
+
+    device = models.ForeignKey(Device, on_delete=models.CASCADE,
+                               related_name="health_samples")
+    minute = models.DateTimeField()  # UTC, truncated to the minute
+    storage_pct = models.FloatField(null=True, blank=True)
+    cpu_temp_c = models.FloatField(null=True, blank=True)
+    uptime_seconds = models.IntegerField(null=True, blank=True)
+    pending_uploads = models.IntegerField(null=True, blank=True)
+    clips_this_hour = models.IntegerField(null=True, blank=True)
+    services_healthy = models.IntegerField(null=True, blank=True)
+    services_total = models.IntegerField(null=True, blank=True)
+    transport = models.CharField(max_length=16, blank=True, default="")
+    battery_voltage = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["minute"]
+        constraints = [models.UniqueConstraint(fields=["device", "minute"],
+                                               name="uniq_health_device_minute")]
+
+    def __str__(self) -> str:
+        return f"health {self.device_id} @ {self.minute:%Y-%m-%d %H:%M}"
+
+
 class DeviceShare(models.Model):
     """Grants another account access to a device.
 

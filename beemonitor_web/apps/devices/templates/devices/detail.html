@@ -97,25 +97,30 @@
     </div>
   </div>
 
-  <!-- Health cards -->
+  <!-- Health cards. Anything the device reports is blanked while it is offline
+       (the history chart below keeps what it last said); server-side counts
+       (activity, uploaded videos) still show. -->
   <div class="lg:col-span-2">
     <div class="grid grid-cols-2 sm:grid-cols-3 gap-4">
       <!-- Storage -->
       <div class="bg-white shadow rounded-lg p-4">
         <div class="text-xs text-gray-500 uppercase tracking-wide">Storage</div>
-        <div class="mt-2 text-2xl font-semibold {% if storage_pct is None %}text-gray-300{% else %}text-gray-900{% endif %}" id="m-storage-pct">{% if storage_pct is not None %}{{ storage_pct|floatformat:1 }}%{% else %}—{% endif %}</div>
-        <div class="mt-1 text-xs text-gray-400" id="m-storage-free">{% if storage_pct is not None %}{{ metrics.storage_free_human|default:"—" }} free (whole card){% endif %}</div>
-        <div class="mt-1 text-xs text-gray-500" id="m-recordings">{% if metrics.recordings_human %}Clips: <span class="font-medium text-gray-700">{{ metrics.recordings_human }}</span>{% if metrics.videos_recorded %} · {{ metrics.videos_recorded }} on device{% endif %}{% endif %}</div>
+        <div class="mt-2 text-2xl font-semibold {% if storage_pct is None or not online %}text-gray-300{% else %}text-gray-900{% endif %}" id="m-storage-pct">{% if online and storage_pct is not None %}{{ storage_pct|floatformat:1 }}%{% else %}—{% endif %}</div>
+        <div class="dev-offline mt-1 text-xs text-red-700 flex items-center gap-1.5 {% if online %}hidden{% endif %}"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>Offline</div>
+        <div class="mt-1 text-xs text-gray-400" id="m-storage-free">{% if online and storage_pct is not None %}{{ metrics.storage_free_human|default:"—" }} free (whole card){% endif %}</div>
+        <div class="mt-1 text-xs text-gray-500" id="m-recordings">{% if online and metrics.recordings_human %}Clips: <span class="font-medium text-gray-700">{{ metrics.recordings_human }}</span>{% if metrics.videos_recorded %} · {{ metrics.videos_recorded }} on device{% endif %}{% endif %}</div>
       </div>
       <!-- Uptime -->
       <div class="bg-white shadow rounded-lg p-4">
         <div class="text-xs text-gray-500 uppercase tracking-wide">Uptime</div>
-        <div class="mt-2 text-lg font-semibold text-gray-900" id="m-uptime">{{ metrics.uptime_human|default:"—" }}</div>
+        <div class="mt-2 text-lg font-semibold {% if online %}text-gray-900{% else %}text-gray-300{% endif %}" id="m-uptime">{% if online %}{{ metrics.uptime_human|default:"—" }}{% else %}—{% endif %}</div>
+        <div class="dev-offline mt-1 text-xs text-red-700 flex items-center gap-1.5 {% if online %}hidden{% endif %}"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>Offline</div>
       </div>
       <!-- CPU temp -->
       <div class="bg-white shadow rounded-lg p-4">
         <div class="text-xs text-gray-500 uppercase tracking-wide">CPU temp</div>
-        <div class="mt-2 text-2xl font-semibold text-gray-900" id="m-cputemp">{% if metrics.cpu_temp_c %}{{ metrics.cpu_temp_c|floatformat:0 }}°C{% else %}—{% endif %}</div>
+        <div class="mt-2 text-2xl font-semibold {% if online %}text-gray-900{% else %}text-gray-300{% endif %}" id="m-cputemp">{% if online and metrics.cpu_temp_c %}{{ metrics.cpu_temp_c|floatformat:0 }}°C{% else %}—{% endif %}</div>
+        <div class="dev-offline mt-1 text-xs text-red-700 flex items-center gap-1.5 {% if online %}hidden{% endif %}"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>Offline</div>
       </div>
       <!-- Activity (snippets are recorded only on motion → activity proxy) -->
       <div class="bg-white shadow rounded-lg p-4">
@@ -127,17 +132,22 @@
       <div class="bg-white shadow rounded-lg p-4">
         <div class="text-xs text-gray-500 uppercase tracking-wide">Videos uploaded</div>
         <div class="mt-2 text-2xl font-semibold text-gray-900" id="m-videocount">{{ video_count }}</div>
-        <div class="mt-1 text-xs text-gray-400" id="m-pending">{{ metrics.pending_uploads|default:"—" }} pending</div>
+        <div class="mt-1 text-xs text-gray-400" id="m-pending">{% if online %}{{ metrics.pending_uploads|default:"—" }} pending{% else %}pending unknown (offline){% endif %}</div>
       </div>
       <!-- Services (summary; the full list is the panel below) -->
       <a href="#services" class="block bg-white shadow rounded-lg p-4 hover:bg-gray-50">
         <div class="text-xs text-gray-500 uppercase tracking-wide">Services</div>
         <div id="m-services-summary">
+          {% if not online %}
+          <div class="mt-2 text-2xl font-semibold text-gray-300">—</div>
+          <div class="mt-1 text-xs text-red-700 flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>Offline</div>
+          {% else %}
           <div class="mt-2 text-2xl font-semibold text-gray-900">{{ services_summary.healthy }}<span class="text-base font-medium text-gray-500"> / {{ services_summary.total }}</span></div>
           {% if services_summary.attention %}
           <div class="mt-1 text-xs text-amber-800 flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>{{ services_summary.attention }} need{{ services_summary.attention|pluralize:"s," }} attention · see all ↓</div>
           {% else %}
           <div class="mt-1 text-xs text-gray-400">all healthy · see all ↓</div>
+          {% endif %}
           {% endif %}
         </div>
       </a>
@@ -162,6 +172,9 @@
     <span class="text-xs text-gray-400">Every service the device runs · from the latest beat</span>
   </div>
   <div id="m-services" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+    {% if not online %}
+    <p class="text-sm text-gray-500">Device offline — service state is unknown until it checks in.</p>
+    {% else %}
     {% for s in services %}
     <div class="rounded-md border px-3 py-2 {% if s.level == 'fail' %}border-red-200 bg-red-50/60{% elif s.level == 'warn' %}border-amber-200 bg-amber-50/60{% else %}border-gray-100 bg-gray-50{% endif %}">
       <div class="flex items-center gap-2">
@@ -175,8 +188,147 @@
     {% empty %}
     <p class="text-sm text-gray-400">No service state reported yet.</p>
     {% endfor %}
+    {% endif %}
   </div>
 </div>
+
+<!-- Device health: per-minute history kept indefinitely (DeviceHealthSample).
+     Gaps are when the device was off; purple lines are reboots. -->
+<div class="mt-6">
+  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+    <h2 class="text-lg font-semibold text-gray-900">Device health</h2>
+    <div class="flex items-center gap-2 text-xs">
+      <div class="flex gap-1">
+        {% for r in health_ranges %}
+        <button type="button" data-hrange="{{ r }}" class="health-range-btn px-2 py-1 rounded {% if forloop.first %}bg-amber-600 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-gray-200{% endif %}">{{ r }}</button>
+        {% endfor %}
+      </div>
+      <button type="button" id="health-csv-btn" class="px-3 py-1.5 rounded bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100">Download CSV</button>
+    </div>
+  </div>
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+    {% for c in health_charts %}
+    <div class="bg-white shadow rounded-lg p-4">
+      <div class="flex items-baseline justify-between mb-1">
+        <span class="text-sm font-semibold text-gray-700">{{ c.title }}</span>
+        <span id="health-last-{{ c.key }}" class="text-xs text-gray-500"></span>
+      </div>
+      <canvas id="health-{{ c.key }}" height="110"></canvas>
+    </div>
+    {% endfor %}
+  </div>
+  <p class="text-xs text-gray-400 mt-2">
+    Saved every minute from the device's beats and kept indefinitely. Shaded gaps
+    are when the device was off or unreachable; purple lines mark reboots.
+    Times shown in <span id="health-tz">{{ display_tz|default:"UTC" }}</span>.
+  </p>
+</div>
+
+<script>
+(function () {
+  var URL_ = "{% url 'devices:health' device.pk %}";
+  var CHARTS = {{ health_charts_json|safe }};
+  var HRANGE = '24h';
+  var charts = {}, lastData = null;
+
+  // Shade buckets with no data (device off) and draw reboot lines.
+  var bands = {
+    id: 'healthBands',
+    beforeDatasetsDraw: function (chart) {
+      var pts = chart.$points || [], xa = chart.scales.x, area = chart.chartArea, c = chart.ctx;
+      if (!pts.length || !xa) return;
+      var step = pts.length > 1 ? Math.abs(xa.getPixelForValue(1) - xa.getPixelForValue(0)) : 0;
+      c.save();
+      for (var i = 0; i < pts.length; i++) {
+        var x = xa.getPixelForValue(i);
+        if (chart.$off[i]) {
+          c.fillStyle = 'rgba(156,163,175,0.18)';
+          c.fillRect(x - step / 2, area.top, step, area.bottom - area.top);
+        }
+        if (pts[i].reboot) {
+          c.strokeStyle = '#7c3aed'; c.lineWidth = 1.5;
+          c.beginPath(); c.moveTo(x, area.top); c.lineTo(x, area.bottom); c.stroke();
+        }
+      }
+      c.restore();
+    }
+  };
+
+  function render(d) {
+    lastData = d;
+    var pts = d.points || [];
+    var off = pts.map(function (p) {
+      return p.storage_pct == null && p.cpu_temp_c == null && p.pending_uploads == null && p.services_healthy == null;
+    });
+    var tz = document.getElementById('health-tz'); if (tz && d.display_tz) tz.textContent = d.display_tz;
+    CHARTS.forEach(function (c) {
+      var canvas = document.getElementById('health-' + c.key);
+      if (!canvas || typeof Chart === 'undefined') return;
+      var vals = pts.map(function (p) { return p[c.field]; });
+      var last = null;
+      for (var i = vals.length - 1; i >= 0; i--) { if (vals[i] != null) { last = vals[i]; break; } }
+      var lastEl = document.getElementById('health-last-' + c.key);
+      if (lastEl) lastEl.textContent = last == null ? 'no data in range' : 'last ' + last + c.unit;
+      if (charts[c.key]) charts[c.key].destroy();
+      charts[c.key] = new Chart(canvas, {
+        type: 'line',
+        data: { labels: pts.map(function (p) { return p.t; }),
+                datasets: [{ label: c.title, data: vals, borderColor: c.color, borderWidth: 1.75,
+                             pointRadius: 0, tension: 0.2, spanGaps: false, fill: false }] },
+        options: {
+          responsive: true, maintainAspectRatio: true, animation: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: { legend: { display: false } },
+          scales: { x: { ticks: { maxTicksLimit: 6, autoSkip: true } },
+                    y: { beginAtZero: !!c.zero, ticks: { precision: 0 } } },
+        },
+        plugins: [bands],
+      });
+      charts[c.key].$points = pts; charts[c.key].$off = off;
+      charts[c.key].update();
+    });
+  }
+
+  function load() {
+    fetch(URL_ + '?range=' + encodeURIComponent(HRANGE), { cache: 'no-store' })
+      .then(function (r) { return r.json(); }).then(render).catch(function () {});
+  }
+
+  document.querySelectorAll('.health-range-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      HRANGE = btn.getAttribute('data-hrange');
+      document.querySelectorAll('.health-range-btn').forEach(function (b) {
+        var on = b === btn;
+        b.classList.toggle('bg-amber-600', on); b.classList.toggle('text-white', on);
+        b.classList.toggle('bg-gray-100', !on); b.classList.toggle('text-gray-600', !on);
+        b.classList.toggle('hover:bg-gray-200', !on);
+      });
+      load();
+    });
+  });
+
+  var csv = document.getElementById('health-csv-btn');
+  if (csv) csv.addEventListener('click', function () {
+    var pts = (lastData && lastData.points) || [];
+    var lines = ['period_utc,period_local,storage_pct,cpu_temp_c,pending_uploads,services_healthy,services_total,reboot'];
+    pts.forEach(function (p) {
+      function v(x) { return x == null ? '' : x; }
+      lines.push([p.iso, '"' + p.t + '"', v(p.storage_pct), v(p.cpu_temp_c), v(p.pending_uploads),
+                  v(p.services_healthy), v(p.services_total), p.reboot ? 1 : 0].join(','));
+    });
+    var blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'health_device{{ device.pk }}_' + HRANGE + '.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  });
+
+  // Chart.js loads further down the page; draw once everything is in.
+  window.addEventListener('load', load);
+  setInterval(load, 60000);
+})();
+</script>
 
 <!-- Advanced settings — device controls, collapsed by default so a viewer sees
      status + activity without scrolling past them. -->
@@ -930,8 +1082,20 @@
             rec.innerHTML = h;
           } else rec.innerHTML = '';
         }
+        // Offline: device-reported values are blank (the server sends null),
+        // and each tile says so.
+        document.querySelectorAll('.dev-offline').forEach(function (el) {
+          el.classList.toggle('hidden', !!d.online);
+        });
+        ['m-storage-pct', 'm-uptime', 'm-cputemp'].forEach(function (id) {
+          var el = document.getElementById(id);
+          if (el) { el.classList.toggle('text-gray-300', !d.online); el.classList.toggle('text-gray-900', !!d.online); }
+        });
+        if (!d.online) setText('m-pending', 'pending unknown (offline)');
         var sv = document.getElementById('m-services');
-        if (sv && d.service_rows) {
+        if (sv && !d.online) {
+          sv.innerHTML = '<p class="text-sm text-gray-500">Device offline — service state is unknown until it checks in.</p>';
+        } else if (sv && d.service_rows) {
           var BOX = { fail: 'border-red-200 bg-red-50/60', warn: 'border-amber-200 bg-amber-50/60' };
           var DOT = { fail: 'bg-red-500', warn: 'bg-amber-500', ok: 'bg-green-500' };
           var TXT = { fail: 'text-red-700', warn: 'text-amber-800', ok: 'text-green-700' };
@@ -947,7 +1111,10 @@
           }).join('') : '<p class="text-sm text-gray-400">No service state reported yet.</p>';
         }
         var ss = document.getElementById('m-services-summary');
-        if (ss && d.services_summary) {
+        if (ss && !d.online) {
+          ss.innerHTML = '<div class="mt-2 text-2xl font-semibold text-gray-300">—</div>'
+            + '<div class="mt-1 text-xs text-red-700 flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>Offline</div>';
+        } else if (ss && d.services_summary) {
           var n = d.services_summary.attention;
           ss.innerHTML = '<div class="mt-2 text-2xl font-semibold text-gray-900">' + d.services_summary.healthy
             + '<span class="text-base font-medium text-gray-500"> / ' + d.services_summary.total + '</span></div>'

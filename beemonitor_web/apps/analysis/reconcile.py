@@ -139,6 +139,15 @@ def reconcile_all(limit: int = 500) -> dict:
     except Exception:
         logger.exception("foraging summary sweep failed")
 
+    # Raw heartbeats older than a week: folded into the per-minute health
+    # history, then deleted (bounded batch per tick; image beats are kept).
+    beats_pruned = 0
+    try:
+        from apps.devices.health import prune_heartbeats
+        beats_pruned = prune_heartbeats()
+    except Exception:
+        logger.exception("heartbeat prune failed")
+
     return {"jobs_checked": len(jobs), "jobs_resolved": resolved,
             "jobs_spawned": spawned,
             "run_users": len(run_user_ids), "annotate_users": len(annotate_user_ids),
@@ -146,7 +155,8 @@ def reconcile_all(limit: int = 500) -> dict:
             "preannot_finalized": preannot_done,
             "schedules_due": sched.get("due", 0),
             "scheduled_runs": sched.get("launched_runs", 0),
-            "trips_recomputed": trips_recomputed}
+            "trips_recomputed": trips_recomputed,
+            "beats_pruned": beats_pruned}
 
 
 def _loop():

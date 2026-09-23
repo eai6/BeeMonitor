@@ -47,6 +47,9 @@ gunicorn config.wsgi:application \
 
 GUNICORN_PID=$!
 
+# Fold stored heartbeats into the per-minute health history (idempotent).
+(python manage.py backfill_health_samples || true) &
+
 # Run foraging trip backfills in background after Gunicorn is up
 echo "Backfilling foraging trips in background..."
 (python manage.py backfill_foraging_trips && echo "Computing daily cross-video trips..." && python manage.py compute_daily_trips) &

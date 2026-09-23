@@ -657,6 +657,11 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         ctx["storage_pct"] = sp
         ctx["services"] = _service_rows(metrics)
         ctx["services_summary"] = _services_summary(ctx["services"])
+        # Device health chart (data comes from devices:health).
+        from .health import HEALTH_RANGES
+        ctx["health_ranges"] = list(HEALTH_RANGES)
+        ctx["health_charts"] = _HEALTH_CHARTS
+        ctx["health_charts_json"] = json.dumps(_HEALTH_CHARTS)
         ctx["record_modes"] = device.RECORD_MODES  # capture mode + hour window
         ctx["hours"] = list(range(24))
         # Recurring pipeline runs over this device's videos (Advanced page card).
@@ -1376,6 +1381,33 @@ class DeviceScheduleView(LoginRequiredMixin, View):
         return redirect("devices:detail", pk=pk)
 
 
+# The Device health chart's panels: which history field, and how to show it.
+_HEALTH_CHARTS = [
+    {"key": "storage", "field": "storage_pct", "title": "Storage used", "unit": "%", "color": "#d97706"},
+    {"key": "temp", "field": "cpu_temp_c", "title": "CPU temperature", "unit": "°C", "color": "#dc2626"},
+    {"key": "pending", "field": "pending_uploads", "title": "Pending uploads", "unit": "", "color": "#2563eb", "zero": True},
+    {"key": "services", "field": "services_healthy", "title": "Services healthy", "unit": "", "color": "#16a34a", "zero": True},
+]
+
+
+# Device-reported values that only mean something while the device is online.
+_LIVE_METRICS = {"storage_pct", "storage_free_human", "uptime_human", "uptime_seconds",
+                 "cpu_temp_c", "pending_uploads", "recordings_human", "videos_recorded"}
+
+
+class DeviceHealthView(LoginRequiredMixin, View):
+    """Per-minute maintenance history for the Device health chart (bucketed to
+    ~300 points per range; empty buckets = the device was off)."""
+
+    def get(self, request, pk):
+        from .health import health_series
+        device = _device_or_403(request.user, pk, "viewer")
+        zone, zone_name = _display_zone(device)
+        data = health_series(device, request.GET.get("range", "24h"), zone)
+        data["display_tz"] = zone_name
+        return JsonResponse(data)
+
+
 class DeviceStatusView(LoginRequiredMixin, View):
     """Live telemetry snapshot, polled by the device page so it refreshes in
     place (online, last seen, storage, services, WiFi, transport, activity) —
@@ -1404,8 +1436,14 @@ class DeviceStatusView(LoginRequiredMixin, View):
                                               start=request.GET.get("start"),
                                               end=request.GET.get("end"))
         service_rows = _service_rows(metrics)
+        online = _is_online(device)
+        if not online:
+            # Don't present the last beat's numbers as current: the tiles go
+            # blank and the history chart holds what the device last said.
+            metrics = {k: v for k, v in metrics.items() if k not in _LIVE_METRICS}
+            sp = None
         return JsonResponse({
-            "online": _is_online(device),
+            "online": online,
             "last_seen": last_seen,
             "storage_pct": sp,
             "storage_free_human": metrics.get("storage_free_human"),

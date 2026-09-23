@@ -132,6 +132,10 @@ class DeviceHeartbeatView(APIView):
             lon=lon if settings.DEVICE_STORE_GPS_PER_HEARTBEAT else None,
         )
 
+        # Per-minute health history (kept indefinitely; raw beats are pruned).
+        from apps.devices.health import record_beat
+        record_beat(hb)
+
         # Artifact-update tracking: clear the "updating" target once the device
         # reports it's on that version (update landed), or if the request has gone
         # stale (gave up / failed silently) so the list doesn't show "Updating…"
