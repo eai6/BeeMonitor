@@ -16,6 +16,8 @@
 #   * a single failure is logged but never aborts (the update continues);
 #   * only ALREADY-INSTALLED systemd units are refreshed — provisioning never
 #     enables, masks, or adds units, so it can't silently start or stop anything.
+#     The one exception is beemonitor-camera-detect (see below), a oneshot that
+#     does nothing on a unit whose camera already works.
 #
 # Run any time by hand too:  sudo hardware/provision.sh
 set -uo pipefail
@@ -155,9 +157,52 @@ ensure_camera_autodetect() {
     fi
 }
 
+# --- camera detect unit (the one unit provisioning ADDS) ---------------------
+# The exception to "never adds units", and a narrow one. beemonitor-recorder
+# already Wants= this unit, but Wants= on a unit that is not installed is
+# silently nothing — and sync_units only refreshes what is there — so units
+# flashed from a golden image that predates it never got it, and a 64MP
+# OwlSight on one of them stays invisible and the recorder crash-loops. Adding
+# it here means one update brings any unit, old image or new, up to date
+# without rebuilding the image.
+#
+# Safe to add: it is a oneshot that exits 0 with nothing to do whenever a
+# camera already enumerates, which is every working unit.
+#
+# It is also STARTED here, because update.sh restarts the recorder and judges
+# the update on its health right after this — waiting for the next boot would
+# roll back the very update that fixes the camera. Run with auto-reboot off: a
+# reboot in the middle of the apply phase would cut off the restart, health
+# check and status report. If only a boot-time bind will do, config.txt is left
+# ready and the enabled unit finishes the job on the next boot.
+CAMERA_UNIT=beemonitor-camera-detect.service
+
+ensure_camera_detect_unit() {
+    local src="$UNITS_SRC/$CAMERA_UNIT" dst="$UNITS_DST/$CAMERA_UNIT"
+    [ -f "$src" ] || return 0
+    if [ ! -f "$dst" ]; then
+        if install -m 0644 -o root -g root "$src" "$dst"; then
+            log "unit: installed $dst"
+            systemctl daemon-reload || log "daemon-reload FAILED"
+        else
+            log "unit: FAILED to install $dst"; return 0
+        fi
+    fi
+    if ! systemctl is-enabled --quiet "$CAMERA_UNIT" 2>/dev/null; then
+        systemctl enable "$CAMERA_UNIT" >/dev/null 2>&1 \
+            && log "unit: enabled $CAMERA_UNIT" \
+            || log "unit: FAILED to enable $CAMERA_UNIT"
+    fi
+    BEEMONITOR_CAMERA_AUTOREBOOT=0 bash "$REPO_DIR/hardware/camera-autodetect.sh" 2>&1 \
+        | sed 's/\x1b\[[0-9;]*m//g' | while IFS= read -r line; do
+            [ -n "$line" ] && log "camera-detect: $line"
+        done
+}
+
 ensure_minisign
 sync_sudoers
 sync_units
 ensure_camera_autodetect
+ensure_camera_detect_unit
 log "done"
 exit 0

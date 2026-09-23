@@ -1386,7 +1386,7 @@
               : dot(r.ok);
             var note = r.note
               ? ' <span class="text-xs ' + (r.warn ? 'text-amber-700' : 'text-gray-400')
-                + '">\u00b7 ' + r.note + '</span>'
+                + '">\u00b7 ' + esc(r.note) + '</span>'
               : '';
             return '<div class="flex items-center gap-2">' + d2
               + '<span class="text-gray-600">' + r.label + '</span>' + note + '</div>';

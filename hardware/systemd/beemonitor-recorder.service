@@ -8,10 +8,13 @@ After=multi-user.target
 # it, and a unit with no camera should still reach the recorder's own error.
 Wants=beemonitor-camera-detect.service
 After=beemonitor-camera-detect.service
-# StartLimit* are [Unit] keys — in [Service] systemd ignores them and logs
-# "Unknown key ... ignoring" on every start, so the burst limiter never applied.
-StartLimitIntervalSec=600
-StartLimitBurst=5
+# Never give up. With a burst limit (was 5 starts in 600s) a run of crashes
+# parks the recorder in "failed" until someone reboots — up after every reboot,
+# gone again soon after, with nobody on site to notice. A field unit
+# has no one to restart it, so keep retrying and let the growing RestartSec
+# below stop a hard crash-loop from hammering the Pi. (StartLimit* are [Unit]
+# keys; in [Service] systemd ignores them.)
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -22,10 +25,16 @@ Group=beemonitor
 # sync — the recorder writes snippets exactly where the uploader looks.
 EnvironmentFile=-/etc/beemonitor/uploader.env
 ExecStart=/home/beemonitor/BeeMonitor/hardware/venv/bin/python /home/beemonitor/BeeMonitor/hardware/main_motion.py
-Restart=on-failure
+# always, not on-failure: an exit 0 we did not ask for is still a recorder that
+# is not recording. `systemctl stop/restart` are unaffected.
+Restart=always
 # Let the recorder finalise the in-flight clip + remux on SIGTERM.
 TimeoutStopSec=60
+# 10s after the first crash, growing to 5 min over successive ones (systemd
+# 254+; older systemd warns and keeps the flat 10s).
 RestartSec=10
+RestartSteps=6
+RestartMaxDelaySec=300
 # Logs go to journalctl -u beemonitor-recorder.
 StandardOutput=journal
 StandardError=journal

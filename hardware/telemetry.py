@@ -252,6 +252,37 @@ def _service_active(unit: str) -> bool:
         return False
 
 
+_EXC_LINE = re.compile(r"^[\w.]*(Error|Exception|Interrupt)\b.*|\bERROR\b.*|.*\bKilled\b.*")
+
+
+def _recorder_failure() -> dict:
+    """Why the recorder keeps dying, for the dashboard — without a terminal.
+
+    ``recorder_restarts`` is systemd's restart count this boot; when it is
+    non-zero, ``recorder_error`` is the last exception (or the exit line) the
+    recorder logged before it went down. Empty when it has never restarted, so a
+    healthy unit sends nothing extra over cellular.
+    """
+    r = _run(["systemctl", "show", "-p", "NRestarts", "--value", RECORDER_UNIT], timeout=10)
+    try:
+        restarts = int((r.stdout if r else "").strip() or 0)
+    except ValueError:
+        return {}
+    if not restarts:
+        return {}
+    out: dict = {"recorder_restarts": restarts}
+    r = _run(["journalctl", "-u", RECORDER_UNIT, "-b", "-n", "400",
+              "--no-pager", "-o", "cat"], timeout=15)
+    lines = [ln.strip() for ln in (r.stdout if r else "").splitlines() if ln.strip()]
+    exits = [i for i, ln in enumerate(lines)
+             if "Main process exited" in ln or "Failed with result" in ln]
+    if exits:
+        last = exits[-1]
+        cause = next((ln for ln in reversed(lines[:last]) if _EXC_LINE.match(ln)), lines[last])
+        out["recorder_error"] = cause[:240]
+    return out
+
+
 def _run(cmd: list[str], timeout: int = 30):
     """Run a command best-effort; return the CompletedProcess or None."""
     try:
@@ -814,6 +845,7 @@ def collect_metrics() -> dict:
             vs["newest_mtime"], tz=timezone.utc).isoformat()
 
     m["recorder_active"] = _service_active(RECORDER_UNIT)
+    m.update(_recorder_failure())
     m["uploader_active"] = _service_active(UPLOADER_UNIT)
     m["cellular_active"] = _service_active(CELLULAR_UNIT)
 

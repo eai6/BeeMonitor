@@ -568,8 +568,18 @@ def _service_rows(metrics: dict) -> list:
     else:
         # No beat has reported a route yet, so "standby" would be a guess.
         cell_note, carrying = "ready", False
+    # A recorder that crashes and comes back reads as a healthy green dot on
+    # most beats, so say how often it has fallen over and why (telemetry sends
+    # both only when systemd has had to restart it this boot).
+    restarts = metrics.get("recorder_restarts") or 0
+    rec_note = ""
+    if restarts:
+        rec_note = f"restarted {restarts}\u00d7 this boot"
+        if metrics.get("recorder_error"):
+            rec_note += f" \u2014 {metrics['recorder_error']}"
     return [
-        {"label": "Recorder", "ok": bool(metrics.get("recorder_active"))},
+        {"label": "Recorder", "ok": bool(metrics.get("recorder_active")),
+         "note": rec_note, "warn": bool(restarts)},
         {"label": "Uploader", "ok": bool(metrics.get("uploader_active"))},
         {"label": "Cellular", "ok": cell_up, "note": cell_note,
          "warn": carrying},

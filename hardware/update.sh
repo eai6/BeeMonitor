@@ -286,6 +286,15 @@ _apply_artifact() {
     log B "symlink-swap -> $target (was ${prev:-none})"
     ln -sfn "$target_dir" "$SYMLINK"
 
+    # cmd_apply provisioned from the release being REPLACED — for an artifact the
+    # new code only exists from here on. Provision again from the new release so
+    # a system-config change lands with the update that ships it, not one later.
+    # Idempotent, so the repeat costs nothing when nothing changed.
+    if [ -f "$target_dir/hardware/provision.sh" ]; then
+        log B "provisioning system config from $target"
+        bash "$target_dir/hardware/provision.sh" || log B "provision reported issues (continuing)"
+    fi
+
     local bad; bad="$(_restart_and_check)"
     if [ -z "$bad" ]; then
         log B "healthy at $target"; write_status ok updated "updated to $target"
