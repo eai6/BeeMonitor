@@ -109,6 +109,11 @@ class MotionDetectionPlacementTests(TestCase):
         self.assertNotIn("Sensitivity threshold", html)
         self.assertNotIn("Auto-calibration", html)
 
+    def test_device_page_links_to_the_roi_editor(self):
+        html = self.client.get(reverse("devices:detail", args=[self.device.pk])).content.decode()
+        self.assertIn(reverse("devices:roi_editor", args=[self.device.pk]), html)
+        self.assertIn("Edit ROI &amp; reference objects", html)
+
     def test_roi_editor_offers_the_blob_inputs_with_neutral_names(self):
         html = self.client.get(reverse("devices:roi_editor", args=[self.device.pk])).content.decode()
         for name in ("min_area", "max_area", "min_blobs"):

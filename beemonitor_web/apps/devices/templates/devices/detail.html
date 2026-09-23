@@ -87,6 +87,10 @@
           <label class="text-xs text-gray-500 inline-flex items-center gap-1" title="Show the configured ROI + reference objects drawn over the picture">
             <input id="cam-roi" type="checkbox" class="rounded border-gray-300" checked> ROI
           </label>
+          {% if can_manage %}
+          <a href="{% url 'devices:roi_editor' device.pk %}" title="Draw the ROI and reference objects, and set motion detection"
+             class="px-2.5 py-1 text-xs rounded border border-gray-300 text-gray-700 hover:bg-gray-50">Edit ROI &amp; reference objects</a>
+          {% endif %}
           <button id="cam-photo" class="px-2.5 py-1 text-xs rounded bg-amber-600 hover:bg-amber-700 text-white">Take photo</button>
         </div>
       </div>
@@ -182,7 +186,7 @@
       <svg class="w-4 h-4 text-gray-400 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
       Advanced settings
     </span>
-    <span class="hidden sm:block text-xs font-normal text-gray-400">telemetry · recording · processing · power schedule · WiFi · cellular · software</span>
+    <span class="hidden sm:block text-xs font-normal text-gray-400">telemetry · recording · processing · clock · WiFi · cellular · software</span>
   </summary>
 
 <!-- Telemetry rate + transport -->
@@ -222,8 +226,7 @@
     <b>Continuous</b> records the whole window in ~10-minute clips — expect the
     SD card and pending uploads to grow much faster. The hour window (device
     local time, {{ display_tz|default:"UTC" }}) limits when EITHER recording mode runs;
-    start after end wraps past midnight. The unit still needs to be powered —
-    the Power schedule above is the outer envelope.
+    start after end wraps past midnight. The unit still needs to be powered.
   </p>
   {% if can_manage %}
   <form id="rec-form" method="post" action="{% url 'devices:record_settings' device.pk %}" class="flex flex-wrap items-center gap-2">
@@ -367,115 +370,6 @@
   </script>
   {% else %}
   <p class="text-xs text-gray-400 italic">Read-only — scheduling processing requires manager access.</p>
-  {% endif %}
-</div>
-
-<!-- Power schedule (WittyPi wake/sleep) -->
-<div class="mt-6 bg-white shadow rounded-lg p-4">
-  <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
-    <h2 class="text-sm font-semibold text-gray-700">Power schedule</h2>
-    <div class="text-xs" id="sched-status">
-      <span class="text-gray-500">Set to</span>
-      <span class="font-medium text-gray-700" id="sched-label">{{ device.wake_schedule_label }}</span>
-      {% if schedule_state == 'active' %}
-      <span id="sched-badge" class="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 text-green-800"><span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>active on device</span>
-      {% elif schedule_state == 'pending' %}
-      <span id="sched-badge" class="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>pending device confirm</span>
-      {% else %}
-      <span id="sched-badge" class="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-600"><span class="w-1.5 h-1.5 rounded-full bg-gray-400"></span>report-only (apply off)</span>
-      {% endif %}
-    </div>
-  </div>
-  <p class="text-xs text-gray-400 mb-3">
-    When the unit powers itself on/off via the WittyPi. A powered-off Pi is
-    unreachable, so a change applies on the next check-in (the device then follows
-    it across power cycles). The device keeps its low-voltage protection and a
-    guaranteed wake floor in every mode, so a schedule can't strand it.
-  </p>
-  <div class="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-xs text-gray-600 mb-3">
-    <div class="flex items-baseline gap-1.5">
-      <span class="text-gray-500 uppercase tracking-wide">Power</span>
-      <span class="text-base font-semibold {% if battery_voltage is None %}text-gray-300{% else %}text-gray-900{% endif %}" id="m-battery">{% if battery_voltage is not None %}{{ battery_voltage|floatformat:2 }}V{% else %}—{% endif %}</span>
-      <span class="text-gray-400" id="m-power-sub">{% if output_current is not None %}{{ output_current|floatformat:2 }}A load{% endif %}{% if power_source %} · {{ power_source }}{% endif %}</span>
-    </div>
-    <div>Next boot: <span id="sched-next-boot" class="font-medium text-gray-800">{{ next_boot|default:"—" }}</span></div>
-    <div>Next shutdown: <span id="sched-next-shutdown" class="font-medium text-gray-800">{{ next_shutdown|default:"—" }}</span></div>
-  </div>
-  {% if can_manage %}
-  <form id="sched-form" method="post" action="{% url 'devices:schedule' device.pk %}" class="flex flex-wrap items-end gap-3">
-    {% csrf_token %}
-    <label class="text-xs text-gray-600">Mode
-      <select name="mode" id="sched-mode" class="mt-1 block border border-gray-300 rounded px-2 py-1.5 text-sm">
-        <option value="daylight" {% if wake_schedule.mode == 'daylight' %}selected{% endif %}>Daylight (sun-up to sun-down)</option>
-        <option value="window" {% if wake_schedule.mode == 'window' %}selected{% endif %}>Custom window</option>
-        <option value="interval" {% if wake_schedule.mode == 'interval' %}selected{% endif %}>Wake at intervals</option>
-        <option value="always_on" {% if wake_schedule.mode == 'always_on' %}selected{% endif %}>Always on (24/7)</option>
-      </select>
-    </label>
-    <div id="sched-window" class="flex items-end gap-2 {% if wake_schedule.mode != 'window' %}hidden{% endif %}">
-      <label class="text-xs text-gray-600">On
-        <input name="on" type="time" value="{{ wake_schedule.on|default:'06:00' }}" class="mt-1 block border border-gray-300 rounded px-2 py-1.5 text-sm">
-      </label>
-      <label class="text-xs text-gray-600">Off
-        <input name="off" type="time" value="{{ wake_schedule.off|default:'20:00' }}" class="mt-1 block border border-gray-300 rounded px-2 py-1.5 text-sm">
-      </label>
-    </div>
-    <div id="sched-interval" class="flex items-end gap-2 {% if wake_schedule.mode != 'interval' %}hidden{% endif %}">
-      <label class="text-xs text-gray-600">Wake every (min)
-        <input name="wake_every_min" type="number" min="5" max="1440" step="1" value="{{ wake_schedule.wake_every_min|default:'60' }}" class="mt-1 block w-28 border border-gray-300 rounded px-2 py-1.5 text-sm">
-      </label>
-      <label class="text-xs text-gray-600">On for (min)
-        <input name="on_minutes" type="number" min="1" step="1" value="{{ wake_schedule.on_minutes|default:'10' }}" class="mt-1 block w-24 border border-gray-300 rounded px-2 py-1.5 text-sm">
-      </label>
-    </div>
-    <label class="text-xs text-gray-600 inline-flex items-center gap-1.5 self-center"
-           title="On: the device programs the WittyPi to follow this schedule. Off: it only reports the schedule and leaves the WittyPi unchanged.">
-      <input type="checkbox" name="apply" value="1" {% if wake_schedule_apply %}checked{% endif %} class="rounded border-gray-300">
-      Apply to the WittyPi
-    </label>
-    <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Set schedule</button>
-    <span id="sched-saved" class="text-xs text-green-700 hidden">Saved ✓</span>
-  </form>
-  <p class="mt-2 text-xs text-gray-400">
-    Leave <strong>Apply</strong> off to preview a schedule without touching the WittyPi
-    (badge shows “report-only”). Turn it on to let the device program the WittyPi —
-    the device still enforces a guaranteed wake floor, so a schedule can’t strand the unit.
-  </p>
-  <p id="sched-always-warn" class="mt-2 text-xs text-amber-700 {% if wake_schedule.mode != 'always_on' %}hidden{% endif %}">
-    ⚠ 24/7 keeps the Pi powered continuously — only choose this if the battery/solar
-    budget supports it. The WittyPi low-voltage cutoff still protects the battery.
-  </p>
-  <script>
-    (function () {
-      var f = document.getElementById('sched-form');
-      if (!f) return;
-      var mode = document.getElementById('sched-mode');
-      function sync() {
-        var m = mode.value;
-        document.getElementById('sched-window').classList.toggle('hidden', m !== 'window');
-        document.getElementById('sched-interval').classList.toggle('hidden', m !== 'interval');
-        document.getElementById('sched-always-warn').classList.toggle('hidden', m !== 'always_on');
-      }
-      mode.addEventListener('change', sync);
-      f.addEventListener('submit', function (e) {
-        e.preventDefault();
-        fetch(f.action, {
-          method: 'POST',
-          headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': f.querySelector('[name=csrfmiddlewaretoken]').value},
-          body: new FormData(f),
-        }).then(function (r) { return r.json(); }).then(function (d) {
-          if (d && d.ok) {
-            var lbl = document.getElementById('sched-label');
-            if (lbl) lbl.textContent = d.label;
-            var s = document.getElementById('sched-saved');
-            if (s) { s.classList.remove('hidden'); setTimeout(function () { s.classList.add('hidden'); }, 2500); }
-          } else { alert((d && d.error) || 'Could not set the schedule.'); }
-        }).catch(function () { alert('Could not set the schedule.'); });
-      });
-    })();
-  </script>
-  {% else %}
-  <p class="text-xs text-gray-400 italic">Read-only — changing the power schedule requires manager access.</p>
   {% endif %}
 </div>
 
@@ -1023,20 +917,7 @@
         setText('m-videocount', d.video_count != null ? d.video_count : '—');
         setText('m-pending', (d.pending_uploads != null ? d.pending_uploads : '—') + ' pending');
         setText('m-schedule', d.schedule_window || '');
-        // Power telemetry + schedule reconcile.
-        setText('m-battery', d.battery_voltage != null ? (Math.round(d.battery_voltage * 100) / 100) + 'V' : '—');
-        setText('m-power-sub', (d.output_current != null ? (Math.round(d.output_current * 100) / 100) + 'A load' : '')
-          + (d.power_source ? (d.output_current != null ? ' · ' : '') + d.power_source : ''));
-        setText('sched-label', d.wake_schedule_label);
-        setText('sched-next-boot', d.next_boot || '—');
-        setText('sched-next-shutdown', d.next_shutdown || '—');
         setText('m-device-time', d.device_time || '—');
-        var sb = document.getElementById('sched-badge');
-        if (sb) {
-          if (d.schedule_state === 'active') sb.outerHTML = '<span id="sched-badge" class="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 text-green-800">' + dot(true) + 'active on device</span>';
-          else if (d.schedule_state === 'pending') sb.outerHTML = '<span id="sched-badge" class="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>pending device confirm</span>';
-          else sb.outerHTML = '<span id="sched-badge" class="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-600"><span class="w-1.5 h-1.5 rounded-full bg-gray-400"></span>report-only (apply off)</span>';
-        }
         var ver = document.getElementById('m-version');
         if (ver) ver.innerHTML = d.code_commit
           ? 'version <span class="font-mono font-medium text-gray-700">' + d.code_commit + '</span>'
