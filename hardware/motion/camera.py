@@ -39,10 +39,11 @@ FOCUSABLE_MODELS = ("ov64a40",)
 AF_TIMEOUT = 12.0
 
 # Modules whose native readout is upside down in our enclosure and so need the
-# ISP's 180 (hflip+vflip). The OV5647 night-vision module does; the Arducam
-# OwlSight (OV64A40) does not, and turning it anyway records everything
-# inverted — which is what happened when the OwlSight first inherited the
-# OV5647's default.
+# ISP's 180 (hflip+vflip). The OV5647 night-vision module does, and so does
+# the Pi HQ camera (IMX477), which recorded upside down at flip=none when first
+# fitted. The Arducam OwlSight (OV64A40) does not, and turning it anyway
+# records everything inverted — which is what happened when the OwlSight first
+# inherited the OV5647's default.
 #
 # Measured, not assumed: with the camera to itself, a still captured under
 # Transform(hflip=1, vflip=1) scores ncc +0.995 against rot180 of the
@@ -55,7 +56,7 @@ AF_TIMEOUT = 12.0
 # once and every unit fitted with it picks it up on the next update. A single
 # oddly-mounted unit overrides hflip/vflip in camera.json instead of having it
 # encoded as a property of its sensor.
-FLIPPED_MODELS = ("ov5647",)
+FLIPPED_MODELS = ("ov5647", "imx477")
 
 
 def detect_model() -> str:
