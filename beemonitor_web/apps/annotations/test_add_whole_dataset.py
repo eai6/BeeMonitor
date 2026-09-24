@@ -123,3 +123,28 @@ class AddTests(WholeDatasetTestCase):
             r = self.post(video_ids=[a.pk], extra_ids="999999")
         self.assertEqual(r.status_code, 302)
         self.assertEqual(self.project.videos.count(), 0)
+
+
+class AddAllMatchingTests(WholeDatasetTestCase):
+    def post(self, **data):
+        with mock.patch("apps.annotations.sampling.spawn_sampling_async"):
+            return self.client.post(reverse("annotations:add_videos", args=[self.project.pk]), data)
+
+    def test_adds_every_clip_the_filter_matches_past_the_cap(self):
+        inside = [self.clip(self.day(7, d)) for d in range(1, 6)]
+        self.clip(self.day(8, 1))                     # outside the range
+        held = inside[0]
+        self.project.videos.add(held)
+        with mock.patch.object(ann_views, "ADD_CAP", 2):   # the cap is for id lists only
+            self.post(mode="filter", **{"from": "2026-07-01", "to": "2026-07-15"})
+        self.assertEqual(set(self.project.videos.values_list("pk", flat=True)),
+                         {v.pk for v in inside})
+        self.assertEqual(FrameSamplingTask.objects.count(), 4)   # held clip not resampled
+
+    def test_the_filter_keeps_its_hotel_and_hour_parts(self):
+        other = Device.objects.create(owner=self.user, name="Dan", key_hash="hd2", prefix="bmk_d2")
+        keep = self.clip(self.day(7, 2, 13))
+        self.clip(self.day(7, 2, 13), device=other)    # other hotel
+        self.clip(self.day(7, 2, 9))                   # outside the daily window
+        self.post(mode="filter", device=[self.dev.pk], hfrom="12", hto="16")
+        self.assertEqual(list(self.project.videos.values_list("pk", flat=True)), [keep.pk])
