@@ -203,9 +203,37 @@ def _overlaps(box, blobs, pad: float) -> bool:
     return False
 
 
-def moving_detections(boxes: Iterable[dict], blobs, pad: float = 1.0) -> list:
-    """Detections that overlap something that moved in the same frame."""
-    return [b for b in boxes if _overlaps(b, blobs, pad)]
+def moving_detections(boxes: Iterable[dict], blobs, pad: float = 0.25) -> list:
+    """Detections that overlap something that moved in the same frame.
+
+    ``pad`` widens each motion blob by that fraction of its size. It was 1.0
+    until the first live run: on a hotel with holes close together, one moving
+    bee also pulled in the plugs beside it.
+    """
+    return drop_contained([b for b in boxes if _overlaps(b, blobs, pad)])
+
+
+def drop_contained(boxes: List[dict], inside: float = 0.7) -> list:
+    """Drop boxes that lie mostly (``inside`` of their area) within a larger box.
+
+    SAM 3 boxes a whole insect *and* its parts (head, abdomen) — four boxes on
+    one bee in the first live run — and each extra is a delete for a reviewer.
+    Keep the largest; confidence is ignored because the whole-insect box often
+    scores slightly lower than a part.
+    """
+    kept: list = []
+    for b in sorted(boxes, key=lambda r: r["w"] * r["h"], reverse=True):
+        area = max(1, b["w"] * b["h"])
+        swallowed = False
+        for k in kept:
+            ix = max(0, min(b["x"] + b["w"], k["x"] + k["w"]) - max(b["x"], k["x"]))
+            iy = max(0, min(b["y"] + b["h"], k["y"] + k["h"]) - max(b["y"], k["y"]))
+            if ix * iy >= inside * area:
+                swallowed = True
+                break
+        if not swallowed:
+            kept.append(b)
+    return kept
 
 
 def pick_frames(ranked: Sequence[tuple], count: int, min_gap_frames: int) -> list:

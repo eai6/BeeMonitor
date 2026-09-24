@@ -132,3 +132,21 @@ def test_the_saved_frame_is_not_masked(clip_dir):
 def test_motion_profile_shape():
     prof = sl.motion_profile([0] * 50 + [5] * 10 + [0] * 40, [55], buckets=10)
     assert prof["frames"] == 100 and prof["picked"] == [5] and max(prof["profile"]) == 100
+
+
+def test_one_insect_keeps_one_box():
+    """SAM 3 boxed a whole insect and three of its parts (first live run)."""
+    whole = {"x": 322, "y": 419, "w": 162, "h": 161, "confidence": 0.575}
+    parts = [{"x": 434, "y": 468, "w": 49, "h": 97, "confidence": 0.586},
+             {"x": 335, "y": 419, "w": 101, "h": 73, "confidence": 0.577},
+             {"x": 322, "y": 506, "w": 95, "h": 77, "confidence": 0.573}]
+    other = {"x": 900, "y": 100, "w": 40, "h": 40, "confidence": 0.5}
+    assert sl.drop_contained(parts + [whole, other]) == [whole, other]
+
+
+def test_plugs_beside_a_moving_bee_are_not_kept():
+    """The margin around motion is a quarter of a blob, not a whole one."""
+    bee_blob = [(1150.0, 320.0, 1180.0, 342.0)]                  # 30 x 22 px of motion
+    bee = {"x": 1152, "y": 319, "w": 32, "h": 23}
+    plug_beside = {"x": 1237, "y": 323, "w": 27, "h": 32}         # ~57 px away
+    assert sl.moving_detections([bee, plug_beside], bee_blob) == [bee]
