@@ -380,13 +380,22 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
 
         VIDEO_LIST_CAP = 500
         shown = progress_mod.decorate(filtered[:VIDEO_LIST_CAP], states, failed_ids)
+        # Latest motion strip per clip (from its most recent motion sampling).
+        from .models import FrameSamplingTask
+        motion_by_video = {}
+        for vid, motion in (FrameSamplingTask.objects
+                            .filter(project=self.object, motion__isnull=False)
+                            .order_by("video_id", "-created_at")
+                            .values_list("video_id", "motion")):
+            motion_by_video.setdefault(vid, motion)
         ctx["video_data"] = [{"video": v, "annotation_count": v.annotation_count,
                               "progress": v.progress,
                               "holder": holders.get(v.pk),
                               "holder_dot": person_colour(
                                   holders[v.pk].user_id) if v.pk in holders else "",
                               "mine": (v.pk in holders
-                                       and holders[v.pk].user_id == self.request.user.id)}
+                                       and holders[v.pk].user_id == self.request.user.id),
+                              "motion": _motion_strip(motion_by_video.get(v.pk))}
                              for v in shown]
 
         # Everyone on the project, for the "assigned to" filter and the assign
@@ -904,6 +913,16 @@ def _page_of_clips(qs, in_project, offset):
     return videos
 
 
+def _motion_strip(motion):
+    """The clip row's motion strip: bar heights (px) and which bars were picked."""
+    if not motion or not motion.get("profile"):
+        return None
+    picked = set(motion.get("picked") or [])
+    return {"bars": [{"h": max(1, round(v * 0.16)), "picked": i in picked}
+                     for i, v in enumerate(motion["profile"])],
+            "n_picked": len(picked)}
+
+
 class AddVideosGridView(LoginRequiredMixin, View):
     """The next page of the picker grid ("Load older clips"), as HTML."""
 
@@ -1115,7 +1134,9 @@ class AddVideosView(LoginRequiredMixin, View):
 
         # Queued in one insert; the bounded decode pool works through them two
         # at a time (and the reconciler re-feeds any a deploy interrupts).
-        params = sampling.clamp_params({})
+        # New clips are sampled by motion: their most active frames, not every
+        # Nth one, so a labeller isn't handed a stack of empty frames.
+        params = sampling.motion_params()
         tasks = FrameSamplingTask.objects.bulk_create([
             FrameSamplingTask(user=request.user, project=project, video_id=v, params=params)
             for v in added_ids], batch_size=1000)
@@ -1126,9 +1147,9 @@ class AddVideosView(LoginRequiredMixin, View):
             request,
             f"Added {added} clip(s)"
             + (f" ({skipped} already in the project, skipped)" if skipped else "")
-            + " and started sampling them — up to "
-            f"{params['max_frames']} frames each, every "
-            f"{params['sample_interval']} frames. Frames appear as they finish.")
+            + " and started sampling their most active frames — up to "
+            f"{params['max_frames']} each, at least {params['min_gap_s']:g}s apart. "
+            "Frames appear as they finish.")
         return redirect("annotations:detail", pk=project.pk)
 
 
@@ -2181,9 +2202,16 @@ class SampleFramesView(LoginRequiredMixin, View):
             messages.warning(request, "No videos selected to sample.")
             return redirect("annotations:detail", pk=pk)
 
+        # The sampling panel's fields carry an "s_" prefix: the same form also
+        # feeds Auto-label, which reads its own sample_interval/max_frames.
+        # Unprefixed keys still work for other callers (the editor, the API).
+        def _field(key):
+            v = request.POST.get("s_" + key)
+            return v if v is not None else request.POST.get(key)
         params = sampling.clamp_params({
-            "sample_interval": request.POST.get("sample_interval", 30),
-            "max_frames": request.POST.get("max_frames", 100),
+            key: _field(key)
+            for key in ("method", "sample_interval", "max_frames", "min_gap_s", "roi", "replace")
+            if _field(key) is not None
         })
         for video in videos:
             task = FrameSamplingTask.objects.create(
@@ -2191,10 +2219,13 @@ class SampleFramesView(LoginRequiredMixin, View):
             )
             sampling.spawn_sampling_async(task.pk)
 
+        how = (f"the {params['max_frames']} most active frame(s), at least "
+               f"{params['min_gap_s']:g}s apart,"
+               if params["method"] == "motion" else
+               f"up to {params['max_frames']} frame(s), every {params['sample_interval']} frames,")
         messages.info(
             request,
-            f"Sampling up to {params['max_frames']} frame(s) from "
-            f"{len(videos)} video(s), every {params['sample_interval']} frames. "
+            f"Sampling {how} from {len(videos)} video(s). "
             "Refresh to see them appear — no GPU is used.",
         )
         return redirect("annotations:detail", pk=pk)

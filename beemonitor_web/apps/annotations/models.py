@@ -388,9 +388,13 @@ class FrameSamplingTask(models.Model):
     video = models.ForeignKey("videos.Video", on_delete=models.CASCADE,
                               related_name="frame_sampling_tasks")
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.QUEUED)
-    # {"sample_interval": int, "max_frames": int}
+    # {"method": "motion"|"interval", "sample_interval": int, "max_frames": int,
+    #  motion only: "min_gap_s", "roi": "device"|"frame", "replace": bool}
     params = models.JSONField(default=dict, blank=True)
     frames_written = models.IntegerField(default=0)
+    # Motion sampling's per-clip strip: {"profile": [0-100 per bucket],
+    # "picked": [bucket indices], "frames": n}. Null for interval sampling.
+    motion = models.JSONField(null=True, blank=True)
     error_message = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)

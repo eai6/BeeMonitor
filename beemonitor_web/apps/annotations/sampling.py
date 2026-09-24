@@ -39,18 +39,52 @@ MIN_INTERVAL, MAX_INTERVAL = 1, 600
 MIN_FRAMES, MAX_FRAMES = 1, 2000
 
 
+# Motion sampling ("Most activity"): the defaults a newly added clip gets.
+MOTION_DEFAULT_FRAMES = 20
+MIN_GAP_CHOICES = (0.5, 1.0, 2.0, 5.0)
+# A frame counts as active when at least this share of the ROI is moving
+# foreground after noise cleanup — about one bee at the scoring resolution.
+MOTION_MIN_FRACTION = float(os.environ.get("BEEMONITOR_SAMPLE_MOTION_MIN", "0.0015"))
+MOTION_SCORE_WIDTH = 320          # frames are scored at this width (greyscale)
+MOTION_WARMUP_SECONDS = 1.0       # background model settles before scoring
+PROFILE_BUCKETS = 60              # the clip row's motion strip
+
+
 def clamp_params(params):
-    """Normalise user-supplied sampling knobs into safe bounds."""
+    """Normalise user-supplied sampling knobs into safe bounds.
+
+    ``method`` is "motion" (the most active frames, spaced apart) or "interval"
+    (every Nth frame). A params dict without ``method`` is from before motion
+    sampling existed and means "interval".
+    """
     def _clamp(name, default, lo, hi):
         try:
             return max(lo, min(hi, int(params.get(name, default))))
         except (TypeError, ValueError):
             return default
 
-    return {
+    method = "motion" if params.get("method") == "motion" else "interval"
+    out = {
+        "method": method,
         "sample_interval": _clamp("sample_interval", 30, MIN_INTERVAL, MAX_INTERVAL),
-        "max_frames": _clamp("max_frames", 100, MIN_FRAMES, MAX_FRAMES),
+        "max_frames": _clamp("max_frames",
+                             MOTION_DEFAULT_FRAMES if method == "motion" else 100,
+                             MIN_FRAMES, MAX_FRAMES),
     }
+    if method == "motion":
+        try:
+            gap = float(params.get("min_gap_s", 1.0))
+        except (TypeError, ValueError):
+            gap = 1.0
+        out["min_gap_s"] = min(MIN_GAP_CHOICES, key=lambda c: abs(c - gap))
+        out["roi"] = "frame" if params.get("roi") == "frame" else "device"
+        out["replace"] = str(params.get("replace", "1")).lower() not in ("0", "false", "off", "")
+    return out
+
+
+def motion_params(**overrides):
+    """The "Most activity" defaults (what a newly added clip is sampled with)."""
+    return clamp_params({"method": "motion", **overrides})
 
 
 def frame_key(video_blob_path, frame_number):
@@ -96,6 +130,8 @@ def sample_frames_for_task(task):
     written = 0
     try:
         s3.download_file("raw-videos", blob_path, tmp.name)
+        if params["method"] == "motion":
+            return _sample_by_motion(task, params, tmp.name, blob_path, s3)
         cap = cv2.VideoCapture(tmp.name)
         if not cap.isOpened():
             raise ValueError("Could not open the video for decoding.")
@@ -126,6 +162,155 @@ def sample_frames_for_task(task):
             os.unlink(tmp.name)
         except OSError:
             pass
+    return written
+
+
+def _roi_for(task, params):
+    """(box, polygon) in normalized coords to score motion inside, or (None, None)
+    for the whole frame. The layout in use when the clip was recorded."""
+    if params.get("roi") != "device" or task.video.device_id is None:
+        return None, None
+    from apps.devices.layouts import layout_for_video
+    layout = layout_for_video(task.video)
+    return layout["roi_override"], layout["roi_polygon"]
+
+
+def score_motion(path, roi=None, polygon=None):
+    """Per-frame motion for a clip: the share of the ROI that is moving.
+
+    Greyscale at MOTION_SCORE_WIDTH, cropped to ``roi`` (normalized
+    [x1, y1, x2, y2]) and masked to ``polygon``; MOG2 background subtraction
+    (as the device's recorder) plus a morphological open to drop sensor noise
+    and leaf flicker. Frames inside the warm-up read 0. Returns
+    ``(scores, fps)``.
+    """
+    import cv2
+    import numpy as np
+
+    cap = cv2.VideoCapture(path)
+    if not cap.isOpened():
+        raise ValueError("Could not open the video for decoding.")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    warmup = int(round(fps * MOTION_WARMUP_SECONDS))
+    subtractor = cv2.createBackgroundSubtractorMOG2(history=300, varThreshold=16,
+                                                    detectShadows=False)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    scores, crop, mask, area = [], None, None, 1
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            h, w = frame.shape[:2]
+            small_h = max(1, int(h * MOTION_SCORE_WIDTH / w))
+            gray = cv2.cvtColor(cv2.resize(frame, (MOTION_SCORE_WIDTH, small_h),
+                                           interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
+            if crop is None:
+                x1, y1, x2, y2 = (roi or [0, 0, 1, 1])
+                cx1, cy1 = int(x1 * MOTION_SCORE_WIDTH), int(y1 * small_h)
+                cx2 = max(cx1 + 1, int(x2 * MOTION_SCORE_WIDTH))
+                cy2 = max(cy1 + 1, int(y2 * small_h))
+                crop = (cx1, cy1, cx2, cy2)
+                if polygon:
+                    mask = np.zeros((cy2 - cy1, cx2 - cx1), np.uint8)
+                    pts = np.array([[int(px * MOTION_SCORE_WIDTH) - cx1, int(py * small_h) - cy1]
+                                    for px, py in polygon], np.int32)
+                    cv2.fillPoly(mask, [pts], 255)
+                    area = max(1, int(np.count_nonzero(mask)))
+                else:
+                    area = (cy2 - cy1) * (cx2 - cx1)
+            region = gray[crop[1]:crop[3], crop[0]:crop[2]]
+            fg = subtractor.apply(region)
+            if len(scores) < warmup:
+                scores.append(0.0)
+                continue
+            fg = cv2.morphologyEx(fg, cv2.MORPH_OPEN, kernel)
+            if mask is not None:
+                fg = cv2.bitwise_and(fg, mask)
+            scores.append(float(np.count_nonzero(fg)) / area)
+    finally:
+        cap.release()
+    return scores, fps
+
+
+def pick_active_frames(scores, count, min_gap_frames, min_fraction=None):
+    """The ``count`` busiest frames, each at least ``min_gap_frames`` from any
+    other pick, ignoring frames below ``min_fraction``. Sorted by frame."""
+    floor = MOTION_MIN_FRACTION if min_fraction is None else min_fraction
+    picks = []
+    for i in sorted(range(len(scores)), key=lambda k: scores[k], reverse=True):
+        if len(picks) >= count or scores[i] < floor:
+            break
+        if all(abs(i - p) >= min_gap_frames for p in picks):
+            picks.append(i)
+    return sorted(picks)
+
+
+def motion_profile(scores, picks, buckets=PROFILE_BUCKETS):
+    """A compact strip for the clip row: peak motion per bucket (0-100) and
+    which buckets hold a picked frame."""
+    n = len(scores)
+    if not n:
+        return {"profile": [], "picked": [], "frames": 0}
+    size = max(1, -(-n // buckets))
+    peaks = [max(scores[i:i + size]) for i in range(0, n, size)]
+    top = max(peaks) or 1.0
+    return {"profile": [round(v / top * 100) for v in peaks],
+            "picked": sorted({p // size for p in picks}),
+            "frames": n}
+
+
+def _clear_unlabelled(task):
+    """Drop this clip's earlier sampled frames that nobody has touched: no
+    boxes, never reviewed. The frame images stay in storage (the key is per
+    video, shared across projects)."""
+    from .models import Annotation
+    return Annotation.objects.filter(
+        project=task.project, video=task.video, sampled_only=True,
+        reviewed=False, boxes=[]).delete()[0]
+
+
+def _sample_by_motion(task, params, path, blob_path, s3):
+    """Score every frame, keep the most active, write only those."""
+    import io
+
+    import cv2
+
+    from .models import Annotation, FrameSamplingTask
+
+    roi, polygon = _roi_for(task, params)
+    scores, fps = score_motion(path, roi, polygon)
+    picks = pick_active_frames(scores, params["max_frames"],
+                               max(1, int(round(params["min_gap_s"] * fps))))
+    FrameSamplingTask.objects.filter(pk=task.pk).update(
+        motion=motion_profile(scores, picks))
+
+    if params.get("replace"):
+        _clear_unlabelled(task)
+    if not picks:
+        return 0
+
+    wanted = set(picks)
+    written = 0
+    cap = cv2.VideoCapture(path)
+    try:
+        index, last = 0, picks[-1]
+        while index <= last:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            if index in wanted:
+                height, width = frame.shape[:2]
+                ok_enc, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                if ok_enc:
+                    key = frame_key(blob_path, index)
+                    s3.upload_stream("processed", key, io.BytesIO(buf.tobytes()),
+                                     content_type="image/jpeg")
+                    _record_frame(Annotation, task, index, key, width, height)
+                    written += 1
+            index += 1
+    finally:
+        cap.release()
     return written
 
 

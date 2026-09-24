@@ -55,9 +55,11 @@ class AutoSampleTests(TestCase):
     def test_the_task_carries_the_default_knobs(self):
         self._add([self.videos[0]])
 
+        # Added clips are sampled by motion: their most active frames.
         task = FrameSamplingTask.objects.get()
-        self.assertEqual(task.params["sample_interval"], 30)
-        self.assertEqual(task.params["max_frames"], 100)
+        self.assertEqual(task.params["method"], "motion")
+        self.assertEqual(task.params["max_frames"], 20)
+        self.assertEqual(task.params["min_gap_s"], 1.0)
 
     def test_adding_nothing_queues_nothing(self):
         with patch("apps.annotations.sampling.spawn_sampling_async") as spawn:

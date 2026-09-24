@@ -73,7 +73,7 @@ class SamplingTestCase(TestCase):
 class ClampParamsTests(TestCase):
     def test_defaults_when_absent(self):
         self.assertEqual(sampling.clamp_params({}),
-                         {"sample_interval": 30, "max_frames": 100})
+                         {"method": "interval", "sample_interval": 30, "max_frames": 100})
 
     def test_values_are_clamped(self):
         got = sampling.clamp_params({"sample_interval": 99999, "max_frames": 0})
@@ -82,7 +82,7 @@ class ClampParamsTests(TestCase):
 
     def test_garbage_falls_back_to_defaults(self):
         got = sampling.clamp_params({"sample_interval": "abc", "max_frames": None})
-        self.assertEqual(got, {"sample_interval": 30, "max_frames": 100})
+        self.assertEqual(got, {"method": "interval", "sample_interval": 30, "max_frames": 100})
 
     def test_frame_key_matches_the_gpu_workers_convention(self):
         """Diverging here means the editor can't find sampled frames."""
@@ -176,7 +176,7 @@ class SampleFramesViewTests(SamplingTestCase):
 
         task = FrameSamplingTask.objects.get()
         self.assertEqual(task.status, FrameSamplingTask.Status.QUEUED)
-        self.assertEqual(task.params, {"sample_interval": 15, "max_frames": 50})
+        self.assertEqual(task.params, {"method": "interval", "sample_interval": 15, "max_frames": 50})
         spawn.assert_called_once_with(task.pk)
 
     @patch("apps.annotations.sampling.spawn_sampling_async")

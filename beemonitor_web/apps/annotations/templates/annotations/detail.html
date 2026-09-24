@@ -376,10 +376,110 @@
           broken page rather than as a permission you do not have.
         {% endcomment %}
         {% if can_assign %}
-        <button type="submit" formaction="{% url 'annotations:sample_frames' project.pk %}"
-                class="text-[12.5px] px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 whitespace-nowrap">
-          Sample <span class="clip-n">all</span>
-        </button>
+        <!-- Sampling panel: method, frames per clip, spacing, ROI, replace. -->
+        <div class="relative" id="sample-wrap">
+          <button type="button" id="sample-toggle" aria-expanded="false" aria-controls="sample-panel"
+                  class="text-[12.5px] px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 whitespace-nowrap">
+            Sample <span class="clip-n">all</span> &#9662;
+          </button>
+          <div id="sample-panel" class="hidden absolute right-0 top-full mt-1.5 z-30 w-96 bg-white border border-gray-200 rounded-lg shadow-xl p-4 space-y-3.5 text-left">
+            <div class="text-sm font-bold text-gray-900">Sample frames from <span class="clip-n">all</span> clips</div>
+            <fieldset class="space-y-1.5">
+              <legend class="text-[10.5px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Method</legend>
+              <label class="flex gap-2 items-start p-2 rounded border border-gray-200 has-[:checked]:border-amber-600 has-[:checked]:bg-amber-50 text-[13px]">
+                <input type="radio" name="s_method" value="motion" checked class="mt-0.5">
+                <span><b>Most activity</b><br><span class="text-xs text-gray-600">Scores every frame for motion and keeps the busiest, spaced apart. Frames with no motion are never picked.</span></span>
+              </label>
+              <label class="flex gap-2 items-start p-2 rounded border border-gray-200 has-[:checked]:border-amber-600 has-[:checked]:bg-amber-50 text-[13px]">
+                <input type="radio" name="s_method" value="interval" class="mt-0.5">
+                <span><b>Even spacing</b><br><span class="text-xs text-gray-600">Every Nth frame, as before.</span></span>
+              </label>
+            </fieldset>
+            <div class="space-y-1.5">
+              <div class="text-[10.5px] font-semibold text-gray-500 uppercase tracking-wide">Frames per clip</div>
+              <div class="flex items-center gap-1.5">
+                <button type="button" class="s-count px-3 py-0.5 rounded-full border border-gray-300 text-xs" data-n="10">10</button>
+                <button type="button" class="s-count px-3 py-0.5 rounded-full border border-gray-300 text-xs" data-n="20">20</button>
+                <button type="button" class="s-count px-3 py-0.5 rounded-full border border-gray-300 text-xs" data-n="100">100</button>
+                <input type="number" name="s_max_frames" id="s-max-frames" value="20" min="1" max="2000"
+                       aria-label="Frames per clip" class="w-20 border border-gray-300 rounded px-2 py-1 text-xs">
+              </div>
+            </div>
+            <div id="s-motion-opts" class="grid grid-cols-2 gap-2.5">
+              <label class="text-xs text-gray-600">At least apart
+                <select name="s_min_gap_s" class="mt-1 w-full border border-gray-300 rounded px-1.5 py-1 text-xs">
+                  <option value="0.5">0.5 second</option>
+                  <option value="1" selected>1 second</option>
+                  <option value="2">2 seconds</option>
+                  <option value="5">5 seconds</option>
+                </select>
+              </label>
+              <label class="text-xs text-gray-600">Motion inside
+                <select name="s_roi" class="mt-1 w-full border border-gray-300 rounded px-1.5 py-1 text-xs">
+                  <option value="device" selected>The device's ROI</option>
+                  <option value="frame">Whole frame</option>
+                </select>
+              </label>
+            </div>
+            <div id="s-interval-opts" class="hidden">
+              <label class="text-xs text-gray-600">Every
+                <input type="number" name="s_sample_interval" value="30" min="1" max="600"
+                       class="w-20 border border-gray-300 rounded px-2 py-1 text-xs"> frames
+              </label>
+            </div>
+            <label id="s-replace-row" class="flex gap-2 items-start text-xs text-gray-700">
+              <input type="hidden" name="s_replace" value="0">
+              <input type="checkbox" name="s_replace" value="1" checked class="mt-0.5">
+              <span>Replace earlier sampled frames nobody has labelled <span class="text-gray-500">(labelled or reviewed frames are always kept)</span></span>
+            </label>
+            <div class="flex items-center gap-2 pt-2 border-t border-gray-100">
+              <span id="s-estimate" class="text-xs text-gray-500"></span>
+              <button type="submit" formaction="{% url 'annotations:sample_frames' project.pk %}"
+                      class="ml-auto px-3.5 py-1.5 rounded bg-amber-600 hover:bg-amber-700 text-white text-[12.5px] font-semibold">
+                Sample <span class="clip-n">all</span> clips
+              </button>
+            </div>
+          </div>
+        </div>
+        <script>
+        (function () {
+          var wrap = document.getElementById('sample-wrap');
+          if (!wrap) return;
+          var toggle = document.getElementById('sample-toggle'), panel = document.getElementById('sample-panel');
+          var count = document.getElementById('s-max-frames');
+          function selectedClips() {
+            var n = document.querySelectorAll('#clip-form .clip-cb:checked').length;
+            return n || document.querySelectorAll('#clip-form .clip-cb').length;
+          }
+          function sync() {
+            var motion = wrap.querySelector('input[name="s_method"]:checked').value === 'motion';
+            document.getElementById('s-motion-opts').classList.toggle('hidden', !motion);
+            document.getElementById('s-replace-row').classList.toggle('hidden', !motion);
+            document.getElementById('s-interval-opts').classList.toggle('hidden', motion);
+            wrap.querySelectorAll('.s-count').forEach(function (b) {
+              var on = b.dataset.n === count.value;
+              b.classList.toggle('border-amber-600', on); b.classList.toggle('bg-amber-50', on);
+              b.classList.toggle('font-semibold', on);
+            });
+            var frames = selectedClips() * (+count.value || 0);
+            document.getElementById('s-estimate').textContent =
+              'Up to ' + frames.toLocaleString() + ' frames · no GPU';
+          }
+          toggle.addEventListener('click', function () {
+            var open = panel.classList.toggle('hidden') === false;
+            toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+            if (open) sync();
+          });
+          document.addEventListener('click', function (e) {
+            if (!wrap.contains(e.target)) { panel.classList.add('hidden'); toggle.setAttribute('aria-expanded', 'false'); }
+          });
+          wrap.querySelectorAll('.s-count').forEach(function (b) {
+            b.addEventListener('click', function () { count.value = b.dataset.n; sync(); });
+          });
+          wrap.addEventListener('change', sync);
+          count.addEventListener('input', sync);
+        })();
+        </script>
         <button type="submit" formaction="{% url 'annotations:pre_annotate' project.pk %}"
                 class="text-[12.5px] px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 whitespace-nowrap"
                 title="Runs SAM 3 on a GPU for every sampled frame in the selected clips">
@@ -449,6 +549,14 @@
             {% if item.video.device %}{{ item.video.device.name }}{% endif %}
             {% if item.video.duration_seconds %} &middot; {{ item.video.duration_seconds|floatformat:0 }}s{% endif %}
           </div>
+          {% if item.motion %}
+          {# Motion over the clip (grey); the frames sampled from it (green). #}
+          <div class="mt-1 flex items-end gap-px h-4 w-full max-w-[16rem]"
+               title="Motion over the clip — {{ item.motion.n_picked }} sampled stretch{{ item.motion.n_picked|pluralize:'es' }} in green"
+               aria-label="Motion over the clip; {{ item.motion.n_picked }} sampled">
+            {% for b in item.motion.bars %}<span class="flex-1 {% if b.picked %}bg-green-600{% else %}bg-gray-300{% endif %}" style="height: {{ b.h }}px"></span>{% endfor %}
+          </div>
+          {% endif %}
         </div>
         <div>
           {% comment %}
