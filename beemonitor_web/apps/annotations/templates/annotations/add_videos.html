@@ -99,6 +99,15 @@
           and the number alone cannot tell them apart.
         {% endcomment %}
         <div id="sel-mix" class="flex items-center gap-2 text-[11px] text-gray-500"></div>
+        {% if gpu_sampling %}
+        {# GPU: added clips are sampled and pre-labelled for these classes. #}
+        <div class="flex items-center gap-2 text-[11px] text-gray-600" title="Classes the GPU looks for and pre-labels. Each class adds GPU time.">
+          <span class="font-semibold">Pre-label:</span>
+          {% for c in project.classes %}
+          <label class="inline-flex items-center gap-1"><input type="checkbox" name="s_classes" value="{{ c }}" checked> {{ c }}</label>
+          {% endfor %}
+        </div>
+        {% endif %}
         <div class="ml-auto flex items-center gap-2">
           <span id="cap-note" class="hidden text-xs text-red-700">One add is limited to {{ add_cap }} clips</span>
           <button type="submit" id="add-btn" disabled
@@ -120,7 +129,7 @@
       <div class="bg-gray-50 rounded-lg p-2.5"><div id="confirm-frames" class="text-xl font-bold"></div><div class="text-[11px] text-gray-500">frames to sample (at most)</div></div>
       <div class="bg-gray-50 rounded-lg p-2.5"><div id="confirm-dates" class="text-sm font-bold leading-7"></div><div class="text-[11px] text-gray-500">recorded</div></div>
     </div>
-    <p class="text-sm text-gray-600">Clips are added now. Frame sampling is queued and runs in the background two clips at a time<span id="confirm-time"></span>; frames appear on the project page as they finish. Clips already in the project are skipped.</p>
+    <p class="text-sm text-gray-600">Clips are added now. Frame sampling is queued and runs in the background{% if gpu_sampling %} on the GPU, which also pre-labels the frames{% endif %}<span id="confirm-time"></span>; frames appear on the project page as they finish. Clips already in the project are skipped.</p>
     <div class="flex justify-end gap-2">
       <button type="button" id="confirm-cancel" class="px-4 py-2 border border-gray-300 rounded-md text-sm text-gray-700 hover:bg-gray-50">Cancel</button>
       <button type="button" id="confirm-go" class="px-4 py-2 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-sm font-semibold"></button>
@@ -139,7 +148,7 @@
   var form = document.getElementById('add-form');
   if (!form) return;
   var CAP = {{ add_cap }}, FRAMES = {{ frames_per_clip }}, CONFIRM_AT = 100;
-  var SECS = {{ seconds_per_sample|default_if_none:"null" }}, WORKERS = {{ sample_workers }};
+  var PER_HOUR = {{ clips_per_hour|default_if_none:"null" }};
   // allMatching: every clip the filter matches is selected (added by filter on
   // the server). selectAllShown: "Select all shown" is on, so pages loaded
   // later arrive ticked too.
@@ -441,8 +450,8 @@
     document.getElementById('confirm-dates').textContent = summary.from
       ? fmtDate(summary.from) + (summary.to !== summary.from ? ' – ' + fmtDate(summary.to) : '') : '—';
     document.getElementById('confirm-go').textContent = 'Add ' + n.toLocaleString() + ' clips';
-    document.getElementById('confirm-time').textContent = SECS
-      ? ' — ' + fmtDuration(n * SECS / WORKERS) + ' at the recent pace' : '';
+    document.getElementById('confirm-time').textContent = PER_HOUR
+      ? ' — ' + fmtDuration(n / PER_HOUR * 3600) + ' at the recent pace (' + PER_HOUR + ' clips/hour)' : '';
     modal.classList.remove('hidden');
   });
   document.getElementById('confirm-cancel').addEventListener('click', function () { modal.classList.add('hidden'); });

@@ -166,6 +166,25 @@
 </div>
 
 
+<!-- Frame sampling status: what is queued, running, failed, or finished with
+     nothing active — a clip that sampled 0 frames otherwise looks unsampled. -->
+{% if sampling_status.queued or sampling_status.processing or sampling_status.failed or sampling_status.no_activity %}
+<div class="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2.5 rounded-lg border border-gray-200 bg-white text-[12.5px] text-gray-600">
+  <span class="font-semibold text-gray-800">Sampling{% if gpu_sampling %} (GPU){% endif %}</span>
+  {% if sampling_status.queued %}<span>{{ sampling_status.queued }} queued</span>{% endif %}
+  {% if sampling_status.processing %}<span class="text-blue-700">{{ sampling_status.processing }} running</span>{% endif %}
+  {% if sampling_status.failed %}<span class="text-red-700">{{ sampling_status.failed }} failed</span>{% endif %}
+  {% if sampling_status.no_activity %}<span title="Clips where nothing moving was found — often an empty trigger">{{ sampling_status.no_activity }} with no activity found</span>{% endif %}
+  {% if can_assign and sampling_status.queued or can_assign and sampling_status.processing %}
+  <form method="post" action="{% url 'annotations:sample_frames_cancel' project.pk %}" class="ml-auto"
+        onsubmit="return confirm('Cancel this project\'s queued and running sampling? Clips already on the GPU finish, but their results are ignored.')">
+    {% csrf_token %}
+    <button class="text-xs px-2.5 py-1 rounded border border-gray-300 hover:bg-gray-50">Cancel sampling</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
 <!-- In-flight pre-annotation tasks (durable; finalized by the reconciler) -->
 {% if preannot_active %}
 <div class="bg-white shadow rounded-lg p-4 mb-6 border-l-4 border-blue-400">
@@ -386,6 +405,19 @@
           </button>
           <div id="sample-panel" class="hidden absolute right-0 top-full mt-1.5 z-30 w-96 bg-white border border-gray-200 rounded-lg shadow-xl p-4 space-y-3.5 text-left">
             <div class="text-sm font-bold text-gray-900">Sample frames from <span class="clip-n">all</span> clips</div>
+            {% if gpu_sampling %}
+            {# GPU: one pass finds the frames with these classes and pre-labels them. #}
+            <input type="hidden" name="s_method" value="sample_label">
+            <fieldset class="space-y-1">
+              <legend class="text-[10.5px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Find and pre-label</legend>
+              {% for c in project.classes %}
+              <label class="flex items-center gap-2 text-[13px] text-gray-700">
+                <input type="checkbox" name="s_classes" value="{{ c }}" class="s-class" checked> {{ c }}
+              </label>
+              {% endfor %}
+              <p class="text-xs text-gray-500 pt-1">SAM 3 checks the busiest moments of each clip and keeps frames where these are moving, already boxed. Each class adds GPU time.</p>
+            </fieldset>
+            {% else %}
             <fieldset class="space-y-1.5">
               <legend class="text-[10.5px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Method</legend>
               <label class="flex gap-2 items-start p-2 rounded border border-gray-200 has-[:checked]:border-amber-600 has-[:checked]:bg-amber-50 text-[13px]">
@@ -397,6 +429,7 @@
                 <span><b>Even spacing</b><br><span class="text-xs text-gray-600">Every Nth frame, as before.</span></span>
               </label>
             </fieldset>
+            {% endif %}
             <div class="space-y-1.5">
               <div class="text-[10.5px] font-semibold text-gray-500 uppercase tracking-wide">Frames per clip</div>
               <div class="flex items-center gap-1.5">
@@ -454,7 +487,8 @@
             return n || document.querySelectorAll('#clip-form .clip-cb').length;
           }
           function sync() {
-            var motion = wrap.querySelector('input[name="s_method"]:checked').value === 'motion';
+            var m = wrap.querySelector('input[name="s_method"]:checked') || wrap.querySelector('input[name="s_method"]');
+            var motion = !m || m.value !== 'interval';
             document.getElementById('s-motion-opts').classList.toggle('hidden', !motion);
             document.getElementById('s-replace-row').classList.toggle('hidden', !motion);
             document.getElementById('s-interval-opts').classList.toggle('hidden', motion);
@@ -464,8 +498,10 @@
               b.classList.toggle('font-semibold', on);
             });
             var frames = selectedClips() * (+count.value || 0);
-            document.getElementById('s-estimate').textContent =
-              'Up to ' + frames.toLocaleString() + ' frames · no GPU';
+            var classes = wrap.querySelectorAll('.s-class:checked').length;
+            document.getElementById('s-estimate').textContent = {% if gpu_sampling %}
+              'Up to ' + frames.toLocaleString() + ' frames · GPU · ' + classes + ' class' + (classes === 1 ? '' : 'es'){% else %}
+              'Up to ' + frames.toLocaleString() + ' frames · no GPU'{% endif %};
           }
           toggle.addEventListener('click', function () {
             var open = panel.classList.toggle('hidden') === false;
@@ -728,7 +764,7 @@
     if (!scope) return;
     scope.innerHTML =
       'Sampling reads ' + clips + ' clip' + (clips === 1 ? '' : 's') +
-      ' on the server CPU. Auto-label runs SAM 3 on a GPU for every sampled frame in ' +
+      {% if gpu_sampling %}' on the GPU, finding and pre-labelling the busiest frames. Auto-label runs SAM 3 on the unlabelled sampled frames in ' +{% else %}' on the server CPU. Auto-label runs SAM 3 on a GPU for every sampled frame in ' +{% endif %}
       '<b class="text-gray-900">' + clips + ' clip' + (clips === 1 ? '' : 's') + '</b>' +
       (n ? '' : ' — the whole project') + '.' +
       (UNSAMPLED && !n ? ' <span class="text-amber-700">' + UNSAMPLED +

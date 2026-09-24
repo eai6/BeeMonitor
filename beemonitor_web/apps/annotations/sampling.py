@@ -337,15 +337,26 @@ def _record_frame(Annotation, task, frame_number, key, width, height):
     )
 
 
+def _not_gpu_task():
+    """Rows the web process may sample: anything but a GPU ``sample_label`` task.
+
+    Spelled out because ``exclude(params__method=...)`` also drops rows with no
+    ``method`` key at all (NULL comparisons), which is every older task.
+    """
+    from django.db.models import Q
+    return Q(params__method__isnull=True) | ~Q(params__method="sample_label")
+
+
 def run_sampling_task(task_pk):
     """Run one task to completion, recording status. Never raises."""
     from .models import FrameSamplingTask
 
     try:
         # Claim: only move QUEUED → PROCESSING, so a cancel mid-flight wins.
+        # GPU sample_label tasks are never run in the web process.
         claimed = FrameSamplingTask.objects.filter(
             pk=task_pk, status=FrameSamplingTask.Status.QUEUED,
-        ).update(status=FrameSamplingTask.Status.PROCESSING,
+        ).filter(_not_gpu_task()).update(status=FrameSamplingTask.Status.PROCESSING,
                  started_at=timezone.now())
         if not claimed:
             return 0
@@ -393,6 +404,8 @@ def poll_frame_sampling_tasks(limit=10):
         stale = list(
             FrameSamplingTask.objects
             .filter(status=FrameSamplingTask.Status.QUEUED)
+            # GPU tasks are sent by sampling_remote.dispatch, never run here.
+            .filter(_not_gpu_task())
             .order_by("created_at")[:limit]
         )
         for task in stale:

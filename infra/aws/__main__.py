@@ -843,6 +843,12 @@ if deploy_service:
         # 2026-07-14 (set live via update-service; kept here so pulumi up
         # doesn't revert it).
         "BEEMONITOR_CHUNK_TRACKING": "1",
+        # Frame sampling backend (memory/38): "local" samples in the web
+        # process; "sagemaker" sends clips to the SAM 3 endpoint, which samples
+        # and pre-labels in one pass. Switch with
+        #   pulumi config set sampling-backend sagemaker && pulumi up
+        # only after the endpoint runs an image with the sample_label task.
+        "SAMPLING_BACKEND": config.get("sampling-backend") or "local",
     })
 
     runtime_secrets = pulumi.Output.all(

@@ -111,11 +111,17 @@ def reconcile_all(limit: int = 500) -> dict:
     except Exception:
         logger.exception("adaptation reconcile failed")
 
-    # Frame sampling (CPU, web-side) — re-spawns tasks a deploy interrupted.
+    # Frame sampling. Local backend: re-spawn web-side tasks a deploy
+    # interrupted. GPU backend: send queued clips to the SAM 3 endpoint in
+    # batches and collect finished ones (memory/38). Collection runs either
+    # way, so switching back to local still drains batches already sent.
     try:
+        from apps.annotations import sampling_remote
         from apps.annotations.sampling import poll_frame_sampling_tasks
 
-        poll_frame_sampling_tasks()
+        if not sampling_remote.enabled():
+            poll_frame_sampling_tasks()
+        sampling_remote.tick()
     except Exception:
         logger.exception("frame sampling poll failed")
 

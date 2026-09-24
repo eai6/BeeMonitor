@@ -380,6 +380,10 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
 
         VIDEO_LIST_CAP = 500
         shown = progress_mod.decorate(filtered[:VIDEO_LIST_CAP], states, failed_ids)
+        # Frame sampling: which backend, and what state this project's clips are in.
+        from . import sampling_remote
+        ctx["gpu_sampling"] = sampling_remote.enabled()
+        ctx["sampling_status"] = sampling_remote.project_status(self.object)
         # Unlabelled sampled frames per clip — what "Auto-label N of M" counts.
         todo_by_video = dict(
             Annotation.objects.filter(project=self.object, boxes=[], reviewed=False)
@@ -388,7 +392,8 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         from .models import FrameSamplingTask
         motion_by_video = {}
         for vid, motion in (FrameSamplingTask.objects
-                            .filter(project=self.object, motion__isnull=False)
+                            .filter(project=self.object, motion__isnull=False,
+                                    video_id__in=[v.pk for v in shown])
                             .order_by("video_id", "-created_at")
                             .values_list("video_id", "motion")):
             motion_by_video.setdefault(vid, motion)
@@ -892,21 +897,28 @@ ADD_CAP = 1000
 ADD_PAGE_SIZE = 200
 
 
+def sampling_remote_enabled():
+    from . import sampling_remote
+    return sampling_remote.enabled()
+
+
 def _frames_per_clip():
+    """Frames an added clip is sampled into (the add confirm's estimate).
+    Adds use the motion / GPU default (20), not the even-spacing one (100)."""
     from . import sampling
-    return sampling.clamp_params({})["max_frames"]
+    return sampling.motion_params()["max_frames"]
 
 
-def _seconds_per_sample():
-    """Typical wall time of one clip's frame sampling, from recent finished
-    tasks — for the "about N hours" on the confirm. None until there is data."""
+def _clips_per_hour():
+    """Recent sampling throughput — clips finished in the last hour, any
+    project. The add confirm divides by this; None until there is a pace."""
+    from datetime import timedelta
+    from django.utils import timezone
     from .models import FrameSamplingTask
-    rows = list(FrameSamplingTask.objects
-                .filter(status=FrameSamplingTask.Status.COMPLETED,
-                        started_at__isnull=False, completed_at__isnull=False)
-                .order_by("-completed_at").values_list("started_at", "completed_at")[:50])
-    secs = sorted((done - start).total_seconds() for start, done in rows if done > start)
-    return round(secs[len(secs) // 2], 1) if secs else None
+    n = FrameSamplingTask.objects.filter(
+        status=FrameSamplingTask.Status.COMPLETED,
+        completed_at__gte=timezone.now() - timedelta(hours=1)).count()
+    return n or None
 
 
 def _page_of_clips(qs, in_project, offset):
@@ -1022,8 +1034,8 @@ class AddVideosWorkspaceView(LoginRequiredMixin, TemplateView):
             "page_size": ADD_PAGE_SIZE,
             "add_cap": ADD_CAP,
             "frames_per_clip": _frames_per_clip(),
-            "seconds_per_sample": _seconds_per_sample(),
-            "sample_workers": 2,
+            "clips_per_hour": _clips_per_hour(),
+            "gpu_sampling": sampling_remote_enabled(),
             "date_overview": workspace.date_overview(
                 workspace.apply_video_filters(accessible, workspace.without_dates(params))),
             "grid_page_url": reverse("annotations:add_videos_grid", args=[project.pk]),
@@ -1141,20 +1153,33 @@ class AddVideosView(LoginRequiredMixin, View):
         # at a time (and the reconciler re-feeds any a deploy interrupts).
         # New clips are sampled by motion: their most active frames, not every
         # Nth one, so a labeller isn't handed a stack of empty frames.
-        params = sampling.motion_params()
+        from . import sampling_remote
+        if sampling_remote.enabled():
+            # GPU: sample and pre-label in one pass, for the classes picked on
+            # the add page (all of the project's by default).
+            picked = [c for c in request.POST.getlist("s_classes") if c in (project.classes or [])]
+            params = sampling_remote.params_for(picked or project.classes)
+        else:
+            params = sampling.motion_params()
         tasks = FrameSamplingTask.objects.bulk_create([
             FrameSamplingTask(user=request.user, project=project, video_id=v, params=params)
             for v in added_ids], batch_size=1000)
-        for task in tasks:
-            sampling.spawn_sampling_async(task.pk)
+        sampling_remote.start(tasks)
 
+        if params["method"] == sampling_remote.METHOD:
+            how = (f" and queued them on the GPU to find and pre-label up to "
+                   f"{params['max_frames']} frames each with "
+                   f"{', '.join(params['classes'])}. The first batch may wait several "
+                   "minutes for the GPU to start. Frames appear as batches finish.")
+        else:
+            how = (" and started sampling their most active frames — up to "
+                   f"{params['max_frames']} each, at least {params['min_gap_s']:g}s apart. "
+                   "Frames appear as they finish.")
         messages.success(
             request,
             f"Added {added} clip(s)"
             + (f" ({skipped} already in the project, skipped)" if skipped else "")
-            + " and started sampling their most active frames — up to "
-            f"{params['max_frames']} each, at least {params['min_gap_s']:g}s apart. "
-            "Frames appear as they finish.")
+            + how)
         return redirect("annotations:detail", pk=project.pk)
 
 
@@ -1436,6 +1461,14 @@ class SaveAnnotationView(LoginRequiredMixin, View):
 _PREANNOT_POOL = ThreadPoolExecutor(max_workers=3, thread_name_prefix="preannot-spawn")
 
 
+def _unsent(status, output_uri) -> bool:
+    """A pre-annotation task that may still be sent to the GPU: queued, or
+    claimed by the drain (processing, no output location yet)."""
+    from .models import PreAnnotationTask
+    return (status == PreAnnotationTask.Status.QUEUED
+            or (status == PreAnnotationTask.Status.PROCESSING and not output_uri))
+
+
 def spawn_preannotation_async(task_pk: int) -> None:
     _PREANNOT_POOL.submit(_spawn_preannotation, task_pk)
 
@@ -1464,7 +1497,7 @@ def _spawn_preannotation(task_pk: int) -> None:
     # Cancel guard: a task cancelled while waiting in the pool must never reach
     # the GPU (an async invocation can't be recalled once sent). Also inert
     # against accidental double-spawn.
-    if task.status != PreAnnotationTask.Status.QUEUED:
+    if not _unsent(task.status, task.output_uri):
         logger.info("pre-annotate task %s skipped (status=%s)", task_pk, task.status)
         connection.close()
         return
@@ -1519,9 +1552,9 @@ def _spawn_preannotation(task_pk: int) -> None:
                       ContentType="application/json")
         # Last look before spending GPU money: the ingest + payload upload above
         # can be slow, so re-check that a cancel didn't land meanwhile.
-        cur = (PreAnnotationTask.objects
-               .filter(pk=task_pk).values_list("status", flat=True).first())
-        if cur != PreAnnotationTask.Status.QUEUED:
+        cur, cur_out = (PreAnnotationTask.objects.filter(pk=task_pk)
+                        .values_list("status", "output_uri").first() or (None, ""))
+        if not _unsent(cur, cur_out):
             logger.info("pre-annotate task %s cancelled before invoke (status=%s)",
                         task_pk, cur)
             return
@@ -1543,7 +1576,8 @@ def _spawn_preannotation(task_pk: int) -> None:
         # reconciler only polls QUEUED/PROCESSING, so the GPU result is
         # discarded (the documented cancel semantics).
         PreAnnotationTask.objects.filter(
-            pk=task_pk, status=PreAnnotationTask.Status.QUEUED,
+            pk=task_pk, output_uri="",
+            status__in=[PreAnnotationTask.Status.QUEUED, PreAnnotationTask.Status.PROCESSING],
         ).update(
             status=PreAnnotationTask.Status.PROCESSING,
             output_uri=resp["OutputLocation"], failure_uri=fail_loc,
@@ -1609,6 +1643,14 @@ def finalize_preannotation_task(task, s3) -> bool:
                 error_message="Timed out — no result. Re-run pre-annotation.",
                 completed_at=timezone.now())
             return True
+        return False
+
+    # Every web process runs this poll: only the one that stamps completed_at
+    # first records the result (and charges credits). A stamp left by a crash
+    # is released by poll_preannotation_tasks after 10 minutes.
+    if not PreAnnotationTask.objects.filter(
+            pk=task.pk, status=PreAnnotationTask.Status.PROCESSING,
+            completed_at__isnull=True).update(completed_at=timezone.now()):
         return False
 
     frames = result.get("frames") or []
@@ -1723,7 +1765,19 @@ def poll_preannotation_tasks(user=None) -> int:
         qs = PreAnnotationTask.objects.filter(status=PreAnnotationTask.Status.PROCESSING)
         if user is not None:
             qs = qs.filter(user=user)
-        tasks = list(qs.select_related("project", "video")[:100])
+        # Release claims that never got sent (a crash between claim and invoke)
+        # and result-recording stamps a crash left behind.
+        from datetime import timedelta
+        from django.utils import timezone
+        now = timezone.now()
+        PreAnnotationTask.objects.filter(
+            status=PreAnnotationTask.Status.PROCESSING, output_uri="",
+            started_at__lt=now - timedelta(minutes=15),
+        ).update(status=PreAnnotationTask.Status.QUEUED, started_at=None)
+        PreAnnotationTask.objects.filter(
+            status=PreAnnotationTask.Status.PROCESSING, completed_at__lt=now - timedelta(minutes=10),
+        ).update(completed_at=None)
+        tasks = list(qs.exclude(output_uri="").select_related("project", "video")[:100])
         finalized = 0
         if tasks:
             s3 = boto3.client("s3", region_name=getattr(settings, "AWS_REGION", "us-east-1"),
@@ -1745,6 +1799,7 @@ def poll_preannotation_tasks(user=None) -> int:
 def drain_preannotation_queue() -> int:
     """Promote QUEUED pre-annotation tasks while under the concurrency cap."""
     from django.conf import settings
+    from django.utils import timezone
 
     from .models import PreAnnotationTask
 
@@ -1759,8 +1814,14 @@ def drain_preannotation_queue() -> int:
         for task in PreAnnotationTask.objects.filter(
             status=PreAnnotationTask.Status.QUEUED,
         ).order_by("created_at")[:slots]:
-            # _spawn_preannotation re-checks the status before invoking, so a
-            # task cancelled between here and the pool never reaches the GPU.
+            # Claim before spawning: every web process drains, and without the
+            # claim two of them could invoke (and pay for) the same task. A
+            # claimed task counts as in flight; _spawn_preannotation re-checks
+            # it before invoking, so a cancel still wins.
+            if not PreAnnotationTask.objects.filter(
+                    pk=task.pk, status=PreAnnotationTask.Status.QUEUED).update(
+                    status=PreAnnotationTask.Status.PROCESSING, started_at=timezone.now()):
+                continue
             spawn_preannotation_async(task.pk)
             spawned += 1
         return spawned
@@ -2151,9 +2212,9 @@ class ExportProjectView(LoginRequiredMixin, View):
 class SampleFramesView(LoginRequiredMixin, View):
     """Sample frames from the project's videos so they can be annotated.
 
-    The cheap half of what used to be one fused SAM 3 call: this only decodes and
-    uploads frames (web CPU, no GPU). Auto-labelling stays a separate, opt-in
-    action — per project or, in the editor, per frame.
+    With SAMPLING_BACKEND=sagemaker the clips go to the GPU, which samples and
+    pre-labels them in one pass (sampling_remote.py); otherwise they are
+    sampled in the web process by motion or even spacing.
     """
 
     def post(self, request, pk):
@@ -2183,26 +2244,46 @@ class SampleFramesView(LoginRequiredMixin, View):
         def _field(key):
             v = request.POST.get("s_" + key)
             return v if v is not None else request.POST.get(key)
-        params = sampling.clamp_params({
-            key: _field(key)
-            for key in ("method", "sample_interval", "max_frames", "min_gap_s", "roi", "replace")
-            if _field(key) is not None
-        })
-        for video in videos:
-            task = FrameSamplingTask.objects.create(
-                user=request.user, project=project, video=video, params=params,
-            )
-            sampling.spawn_sampling_async(task.pk)
+        from . import sampling_remote
+        if sampling_remote.enabled():
+            # GPU: sample and pre-label in one pass for the ticked classes.
+            picked = [c for c in request.POST.getlist("s_classes") if c in (project.classes or [])]
+            if not picked:
+                messages.warning(request, "Pick at least one class to find and pre-label.")
+                return redirect("annotations:detail", pk=pk)
+            params = sampling_remote.params_for(
+                picked, max_frames=_field("max_frames") or 20,
+                min_gap_s=_field("min_gap_s") or 0.5, roi=_field("roi") or "device",
+                replace=str(_field("replace") or "1").lower() not in ("0", "false", "off"))
+        else:
+            params = sampling.clamp_params({
+                key: _field(key)
+                for key in ("method", "sample_interval", "max_frames", "min_gap_s", "roi", "replace")
+                if _field(key) is not None
+            })
+        # Re-sampling a clip supersedes whatever was still queued for it.
+        sampling_remote.supersede(project, [v.pk for v in videos])
+        tasks = [FrameSamplingTask.objects.create(
+            user=request.user, project=project, video=video, params=params,
+        ) for video in videos]
+        sampling_remote.start(tasks)
 
-        how = (f"the {params['max_frames']} most active frame(s), at least "
-               f"{params['min_gap_s']:g}s apart,"
-               if params["method"] == "motion" else
-               f"up to {params['max_frames']} frame(s), every {params['sample_interval']} frames,")
-        messages.info(
-            request,
-            f"Sampling {how} from {len(videos)} video(s). "
-            "Refresh to see them appear — no GPU is used.",
-        )
+        if params["method"] == sampling_remote.METHOD:
+            messages.info(
+                request,
+                f"Queued {len(videos)} clip(s) on the GPU to find and pre-label up to "
+                f"{params['max_frames']} frames each with {', '.join(params['classes'])}. "
+                "The first batch may wait several minutes for the GPU to start.")
+        else:
+            how = (f"the {params['max_frames']} most active frame(s), at least "
+                   f"{params['min_gap_s']:g}s apart,"
+                   if params["method"] == "motion" else
+                   f"up to {params['max_frames']} frame(s), every {params['sample_interval']} frames,")
+            messages.info(
+                request,
+                f"Sampling {how} from {len(videos)} video(s) on the server. "
+                "Refresh to see them appear.",
+            )
         return redirect("annotations:detail", pk=pk)
 
 

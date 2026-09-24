@@ -187,6 +187,16 @@ SAGEMAKER_OUTPUT_BUCKET = os.environ.get("SAGEMAKER_OUTPUT_BUCKET", "")
 # instead of flooding the endpoint (which caps at ~6 concurrent invocations).
 # Track this to the endpoint's real capacity; raise it when infra is scaled up.
 SAGEMAKER_MAX_CONCURRENT = int(os.environ.get("SAGEMAKER_MAX_CONCURRENT", "6"))
+
+# Frame sampling: "local" samples in the web process (dev, tests); "sagemaker"
+# sends clips in batches to the SAM 3 endpoint, which samples and pre-labels in
+# one pass (memory/38). Set on App Runner via infra/aws env_vars.
+SAMPLING_BACKEND = os.environ.get("SAMPLING_BACKEND", "local").strip().lower()
+# Batches on the GPU queue at once. The SAM 3 endpoint scales ~1 instance per
+# 5 queued requests (target tracking), so 20 reaches its 4-instance max.
+SAMPLING_MAX_BATCHES_IN_FLIGHT = int(os.environ.get("SAMPLING_MAX_BATCHES_IN_FLIGHT", "20"))
+SAMPLING_BATCH_CLIPS = int(os.environ.get("SAMPLING_BATCH_CLIPS", "10"))
+SAMPLING_CANDIDATES = int(os.environ.get("SAMPLING_CANDIDATES", "15"))
 # Fine-tuning (SageMaker training jobs) — role SageMaker assumes for the job and
 # the training image. Set by the aws-sagemaker stack via App Runner env.
 SAGEMAKER_TRAINING_ROLE_ARN = os.environ.get("SAGEMAKER_TRAINING_ROLE_ARN", "")

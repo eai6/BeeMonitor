@@ -395,6 +395,11 @@ class FrameSamplingTask(models.Model):
     # Motion sampling's per-clip strip: {"profile": [0-100 per bucket],
     # "picked": [bucket indices], "frames": n}. Null for interval sampling.
     motion = models.JSONField(null=True, blank=True)
+    # GPU sampling (SAMPLING_BACKEND=sagemaker): the batch this clip went out
+    # in, and how many times it has been sent. See sampling_remote.py.
+    batch = models.ForeignKey("SamplingBatch", null=True, blank=True,
+                              on_delete=models.SET_NULL, related_name="tasks")
+    attempts = models.PositiveSmallIntegerField(default=0)
     error_message = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)
@@ -402,6 +407,44 @@ class FrameSamplingTask(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [models.Index(fields=["status", "created_at"])]
 
     def __str__(self):
         return f"SampleFrames {self.video_id} [{self.status}]"
+
+
+class SamplingBatch(models.Model):
+    """A batch of clips sent to the GPU endpoint in one invocation (task
+    ``sample_label``: sample and pre-label in one pass, memory/38).
+
+    The dispatcher claims queued FrameSamplingTasks into a batch before
+    invoking, and the collector claims the batch (INVOKED → COLLECTING) before
+    writing results, so several web processes never send or record the same
+    work twice. ``result_key`` is a fixed S3 location the GPU writes, so a
+    result is never lost even if the async output location was.
+    """
+
+    class Status(models.TextChoices):
+        CLAIMED = "claimed", "Claimed"          # tasks reserved, not yet invoked
+        INVOKED = "invoked", "Invoked"          # on the GPU queue
+        COLLECTING = "collecting", "Collecting" # one process is writing results
+        COLLECTED = "collected", "Collected"
+        FAILED = "failed", "Failed"
+
+    batch_id = models.CharField(max_length=64, unique=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.CLAIMED)
+    params = models.JSONField(default=dict, blank=True)
+    result_key = models.CharField(max_length=300, blank=True, default="")
+    output_uri = models.CharField(max_length=700, blank=True, default="")
+    failure_uri = models.CharField(max_length=700, blank=True, default="")
+    error = models.TextField(blank=True, default="")
+    claimed_at = models.DateTimeField(auto_now_add=True)
+    invoked_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["claimed_at"]
+        indexes = [models.Index(fields=["status", "claimed_at"])]
+
+    def __str__(self) -> str:
+        return f"sampling batch {self.batch_id} ({self.status})"
