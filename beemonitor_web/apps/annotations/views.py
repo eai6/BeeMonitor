@@ -355,7 +355,7 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
                 # These clips have no annotation rows to aggregate, so they are
                 # the ones the aggregate never saw.
                 filtered = [v for v in filtered
-                            if not states.get(v.pk, {}).get("frames")
+                            if states.get(v.pk, {}).get("stage", "new") == "new"
                             and v.pk not in failed_ids]
             else:
                 wanted = progress_mod.filter_ids(states, len(counted), stage)

@@ -111,9 +111,9 @@
       <span class="block text-2xl font-bold leading-tight">{{ progress.clips }}</span>
       <span class="text-[10.5px] text-gray-500 uppercase tracking-wide">Clips</span>
       {% if progress.clips_unsampled %}
-      <span class="block text-[11px] text-amber-700 mt-0.5">{{ progress.clips_unsampled }} not sampled</span>
+      <span class="block text-[11px] text-amber-700 mt-0.5">{{ progress.clips_unsampled }} not sampled{% if progress.clips_empty %} <span class="text-gray-400">· {{ progress.clips_empty }} no activity</span>{% endif %}</span>
       {% else %}
-      <span class="block text-[11px] text-gray-400 mt-0.5">all sampled</span>
+      <span class="block text-[11px] text-gray-400 mt-0.5">all sampled{% if progress.clips_empty %} · {{ progress.clips_empty }} no activity{% endif %}</span>
       {% endif %}
     </a>
 
@@ -388,6 +388,7 @@
       <button type="button" data-pick="all" class="pick text-[11.5px] px-2.5 py-1 rounded-full border border-gray-300 text-gray-700 hover:bg-gray-50">All shown</button>
       <button type="button" data-pick="new" class="pick text-[11.5px] px-2.5 py-1 rounded-full border border-gray-300 text-gray-700 hover:bg-gray-50">Not sampled</button>
       <button type="button" data-pick="sampled" class="pick text-[11.5px] px-2.5 py-1 rounded-full border border-gray-300 text-gray-700 hover:bg-gray-50">Sampled, unlabelled</button>
+      <button type="button" data-pick="empty" class="pick text-[11.5px] px-2.5 py-1 rounded-full border border-gray-300 text-gray-700 hover:bg-gray-50" title="Sampled, but nothing active was found — select to try again, e.g. with other classes">No activity</button>
       <button type="button" data-pick="none" class="pick text-[11.5px] px-2.5 py-1 rounded-full text-gray-500 hover:underline">Clear</button>
 
       <div class="ml-auto flex items-center gap-2">
@@ -691,6 +692,7 @@
             {% elif item.progress.stage == 'labelled' %}bg-violet-100 text-violet-800
             {% elif item.progress.stage == 'sampled' %}bg-blue-100 text-blue-800
             {% elif item.progress.stage == 'failed' %}bg-red-100 text-red-700
+            {% elif item.progress.stage == 'empty' %}bg-gray-100 text-gray-500
             {% else %}bg-gray-100 text-gray-600{% endif %}">{{ item.progress.stage_label }}</span>
         </div>
         <div class="text-[11px] truncate">

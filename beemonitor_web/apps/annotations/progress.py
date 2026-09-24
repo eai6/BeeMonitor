@@ -19,10 +19,13 @@ named by the furthest stage it has actually reached, so "sampled" means
 from django.db.models import Count, Q
 
 # Order matters: a clip is named by the last stage it satisfies.
-STAGES = ("failed", "new", "sampled", "labelled", "reviewed")
+STAGES = ("failed", "new", "empty", "sampled", "labelled", "reviewed")
 
 STAGE_LABELS = {
     "new": "Not sampled",
+    # Sampled, and nothing worth keeping was found (an empty trigger, or no
+    # insect moving). Done — not the same as never sampled.
+    "empty": "No activity",
     "sampled": "Sampled",
     "labelled": "Labelled",
     "reviewed": "Reviewed",
@@ -51,14 +54,26 @@ def per_video(project, failed_ids=()):
     for r in rows:
         out[r["video_id"]] = _shape(r["video_id"], r["frames"], r["labelled"],
                                     r["reviewed"], failed_ids)
+    # Clips whose sampling finished with no frames have no rows to aggregate;
+    # without this they read as "Not sampled" and get sampled again and again.
+    for vid in empty_ids(project) - set(out):
+        out[vid] = _shape(vid, 0, 0, 0, failed_ids, sampled=True)
     return out
 
 
-def _shape(video_id, frames, labelled, reviewed, failed_ids):
+def empty_ids(project):
+    """Clips a finished sampling run left with no frames."""
+    from .models import FrameSamplingTask
+    return set(FrameSamplingTask.objects.filter(
+        project=project, status=FrameSamplingTask.Status.COMPLETED,
+    ).values_list("video_id", flat=True))
+
+
+def _shape(video_id, frames, labelled, reviewed, failed_ids, sampled=False):
     if video_id in failed_ids:
         stage = "failed"
     elif not frames:
-        stage = "new"
+        stage = "empty" if sampled else "new"
     elif reviewed and reviewed >= labelled and labelled:
         stage = "reviewed"
     elif labelled:
@@ -94,12 +109,14 @@ def summary(project, states, video_count, failed_ids=()):
     labelled = sum(s["labelled"] for s in states.values())
     reviewed = sum(s["reviewed"] for s in states.values())
     sampled_clips = sum(1 for s in states.values() if s["frames"])
+    empty_clips = sum(1 for s in states.values() if s["stage"] == "empty")
     counts = stage_counts(states, video_count, failed_ids)
 
     return {
         "clips": video_count,
         "clips_sampled": sampled_clips,
-        "clips_unsampled": max(video_count - sampled_clips, 0),
+        "clips_empty": empty_clips,
+        "clips_unsampled": max(video_count - sampled_clips - empty_clips, 0),
         "frames": frames,
         "labelled": labelled,
         "unlabelled": max(frames - labelled, 0),

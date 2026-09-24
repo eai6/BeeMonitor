@@ -226,3 +226,33 @@ class GpuSamplingTests(TestCase):
         self.assertIn('name="s_classes"', html)
         self.assertIn("1 queued", html)
         self.assertIn("Cancel sampling", html)
+
+
+class NoActivityStageTests(TestCase):
+    """A clip whose sampling finished with no frames is done — "No activity" —
+    not "Not sampled" (which would invite sampling it again and again)."""
+
+    def test_sampled_but_empty_clips_are_not_counted_as_unsampled(self):
+        from apps.annotations import progress
+        user = User.objects.create_user("n", password="x")
+        project = AnnotationProject.objects.create(user=user, name="P", classes=["bee"])
+        vids = []
+        for i in range(3):
+            v = Video.objects.create(user=user, title=f"c{i}", storage_key=f"u/{i}.mp4",
+                                     file_size_bytes=1, status=Video.Status.READY)
+            project.videos.add(v)
+            vids.append(v)
+        Annotation.objects.create(project=project, video=vids[0], frame_number=1, boxes=[])
+        FrameSamplingTask.objects.create(user=user, project=project, video=vids[1],
+                                         status="completed", frames_written=0)
+        states = progress.per_video(project)
+        summary = progress.summary(project, states, 3)
+        self.assertEqual((summary["clips_unsampled"], summary["clips_empty"]), (1, 1))
+        self.assertEqual(summary["stage_counts"]["new"], 1)
+        self.assertEqual(states[vids[1].pk]["stage_label"], "No activity")
+
+        self.client.force_login(user)
+        html = self.client.get(reverse("annotations:detail", args=[project.pk]) + "?stage=new").content.decode()
+        self.assertIn("c2", html)
+        self.assertNotIn(">c1<", html)
+        self.assertIn("1 no activity", self.client.get(reverse("annotations:detail", args=[project.pk])).content.decode())
