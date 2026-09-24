@@ -196,7 +196,7 @@ SAMPLING_BACKEND = os.environ.get("SAMPLING_BACKEND", "local").strip().lower()
 # 5 queued requests (target tracking), so 20 reaches its 4-instance max.
 SAMPLING_MAX_BATCHES_IN_FLIGHT = int(os.environ.get("SAMPLING_MAX_BATCHES_IN_FLIGHT", "20"))
 SAMPLING_BATCH_CLIPS = int(os.environ.get("SAMPLING_BATCH_CLIPS", "10"))
-SAMPLING_CANDIDATES = int(os.environ.get("SAMPLING_CANDIDATES", "15"))
+SAMPLING_CANDIDATES = int(os.environ.get("SAMPLING_CANDIDATES", "30"))
 # Fine-tuning (SageMaker training jobs) — role SageMaker assumes for the job and
 # the training image. Set by the aws-sagemaker stack via App Runner env.
 SAGEMAKER_TRAINING_ROLE_ARN = os.environ.get("SAGEMAKER_TRAINING_ROLE_ARN", "")

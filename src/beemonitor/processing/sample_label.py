@@ -43,6 +43,7 @@ class MotionConfig:
     warmup_s: float = 1.0          # background model settles
     history: int = 300             # MOG2
     var_threshold: int = 16
+    near_s: float = 0.5            # a box counts as moving if motion touched it within this
 
 
 @dataclass
@@ -51,6 +52,7 @@ class Candidate:
     score: int                      # bee-sized moving blobs in the ROI
     frame: np.ndarray               # full-resolution BGR
     blobs: list = field(default_factory=list)   # [(x1, y1, x2, y2)] full-frame px
+    near: list = field(default_factory=list)    # blobs from frames within cfg.near_s
 
 
 @dataclass
@@ -87,15 +89,18 @@ def _open(path):
     return cap
 
 
-def scan_clip(path: str, *, candidates: int = 15, spread: Optional[int] = None,
+def scan_clip(path: str, *, candidates: int = 30, spread: Optional[int] = None,
               min_gap_s: float = 0.5, roi=None, polygon=None,
               cfg: MotionConfig = MotionConfig()) -> ClipScan:
     """Decode once; score motion per frame; keep candidate frames in memory.
 
-    Candidates are the ``candidates`` highest-scoring frames at least
-    ``min_gap_s`` apart, plus ``spread`` evenly spaced frames (default
-    ``ceil(candidates / 4)``) so a sitting insect is still checked.
-    Memory is bounded: at most ``3 * candidates + spread`` frames are held.
+    The clip is cut into ``min_gap_s`` windows and each window offers its
+    busiest frame; candidates are the ``candidates`` busiest of those, plus
+    ``spread`` evenly spaced frames (default ``ceil(candidates / 4)``) so a
+    sitting insect is still checked. Taking the top frames first and spacing
+    them after (the first live version) kept one burst: a 2-minute clip moving
+    in 2,268 frames gave 8 candidates.
+    Memory is bounded: at most ``2 * candidates + spread + 1`` frames are held.
     """
     import cv2
 
@@ -110,10 +115,26 @@ def scan_clip(path: str, *, candidates: int = 15, spread: Optional[int] = None,
         spread_at = {warmup + int((j + 0.5) * usable / spread) for j in range(spread)}
 
     mog = cv2.createBackgroundSubtractorMOG2(cfg.history, cfg.var_threshold, False)
-    keep = 3 * candidates
-    heap: list = []                 # min-heap of (score, -n, n)
-    held: dict = {}                 # n -> Candidate (heap members + spread frames)
+    gap = max(1, int(round(min_gap_s * fps)))
+    keep = 2 * candidates           # window bests can sit < gap apart; spacing drops some
+    heap: list = []                 # min-heap of (score, -n, n): window bests
+    held: dict = {}                 # n -> Candidate (heap members, window best, spread)
+    best = None                     # (score, n) of the open window
     scores: List[int] = []
+    blob_log: List[list] = []
+
+    def close_window():
+        if best is None:
+            return
+        item = (best[0], -best[1], best[1])
+        if len(heap) < keep:
+            heapq.heappush(heap, item)
+            return
+        dropped = best[1]
+        if item > heap[0]:
+            dropped = heapq.heapreplace(heap, item)[2]
+        if dropped not in spread_at:
+            held.pop(dropped, None)
     width = height = 0
     geom = None
 
@@ -163,24 +184,23 @@ def scan_clip(path: str, *, candidates: int = 15, spread: Optional[int] = None,
                                           rx1 + (x + w) / scale, ry1 + (y + h) / scale))
                     score = len(blobs)
             scores.append(score)
+            blob_log.append(blobs)
 
             if n in spread_at:
                 held[n] = Candidate(n, score, frame, blobs)
-            if score > 0:
-                item = (score, -n, n)
-                if len(heap) < keep:
-                    heapq.heappush(heap, item)
-                    held.setdefault(n, Candidate(n, score, frame, blobs))
-                elif item > heap[0]:
-                    _s, _neg, dropped = heapq.heapreplace(heap, item)
-                    if dropped not in spread_at:
-                        held.pop(dropped, None)
-                    held.setdefault(n, Candidate(n, score, frame, blobs))
+            if n >= warmup and (n - warmup) % gap == 0:
+                close_window()
+                best = None
+            if score > 0 and (best is None or score > best[0]):
+                if best is not None and best[1] not in spread_at:
+                    held.pop(best[1], None)
+                best = (score, n)
+                held.setdefault(n, Candidate(n, score, frame, blobs))
             n += 1
+        close_window()
     finally:
         cap.release()
 
-    gap = max(1, int(round(min_gap_s * fps)))
     chosen: list = []
     for _score, _neg, idx in sorted(heap, reverse=True):
         if len(chosen) >= candidates:
@@ -190,8 +210,13 @@ def scan_clip(path: str, *, candidates: int = 15, spread: Optional[int] = None,
     for idx in sorted(spread_at):
         if idx in held and idx not in chosen:
             chosen.append(idx)
+    near = max(0, int(round(cfg.near_s * fps)))
+    picked = [held[i] for i in sorted(chosen) if i in held]
+    for c in picked:
+        c.near = [b for m in range(max(0, c.n - near), min(n, c.n + near + 1))
+                  for b in blob_log[m]]
     return ClipScan(fps=fps, width=width, height=height, frames=n, scores=scores,
-                    candidates=[held[i] for i in sorted(chosen) if i in held])
+                    candidates=picked)
 
 
 def _overlaps(box, blobs, pad: float) -> bool:
@@ -204,7 +229,8 @@ def _overlaps(box, blobs, pad: float) -> bool:
 
 
 def moving_detections(boxes: Iterable[dict], blobs, pad: float = 0.25) -> list:
-    """Detections that overlap something that moved in the same frame.
+    """Detections that overlap something that moved (``blobs``: this frame's, or
+    those within ``MotionConfig.near_s`` so a bee that paused still counts).
 
     ``pad`` widens each motion blob by that fraction of its size. It was 1.0
     until the first live run: on a hotel with holes close together, one moving
@@ -260,7 +286,7 @@ def motion_profile(scores: Sequence[int], picks: Sequence[int], buckets: int = 6
 
 
 def sample_label_clip(path: str, detect_fn: Callable[[List[np.ndarray]], List[List[dict]]], *,
-                      max_frames: int = 20, candidates: int = 15, min_gap_s: float = 0.5,
+                      max_frames: int = 20, candidates: int = 30, min_gap_s: float = 0.5,
                       roi=None, polygon=None, cfg: MotionConfig = MotionConfig()) -> dict:
     """Scan, detect on candidates, keep the top ``max_frames`` with moving detections.
 
@@ -274,7 +300,7 @@ def sample_label_clip(path: str, detect_fn: Callable[[List[np.ndarray]], List[Li
     detections = detect_fn(frames) if frames else []
     kept, ranked = {}, []
     for cand, boxes in zip(scan.candidates, detections):
-        moving = moving_detections(boxes or [], cand.blobs)
+        moving = moving_detections(boxes or [], cand.near or cand.blobs)
         if moving:
             kept[cand.n] = (cand, moving)
             ranked.append((sum(float(b.get("confidence") or 0.5) for b in moving), cand.n))

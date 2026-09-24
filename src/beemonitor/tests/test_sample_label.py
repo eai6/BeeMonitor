@@ -150,3 +150,25 @@ def test_plugs_beside_a_moving_bee_are_not_kept():
     bee = {"x": 1152, "y": 319, "w": 32, "h": 23}
     plug_beside = {"x": 1237, "y": 323, "w": 27, "h": 32}         # ~57 px away
     assert sl.moving_detections([bee, plug_beside], bee_blob) == [bee]
+
+
+def test_candidates_cover_the_whole_burst_not_its_start(clip_dir):
+    """Top frames first, spacing after, kept only the start of a burst: a real
+    2-minute clip moving in 2,268 frames gave 8 candidates of 15."""
+    p = os.path.join(clip_dir, "bee.avi")
+    _write(p, flash=False)
+    scan = sl.scan_clip(p, candidates=6, spread=0, min_gap_s=0.2)
+    ns = [c.n for c in scan.candidates]
+    assert len(ns) == 6
+    assert ns[-1] - ns[0] >= 25, ns
+    assert all(b - a >= 5 for a, b in zip(ns, ns[1:]))
+
+
+def test_a_box_counts_if_motion_touched_it_nearby(clip_dir):
+    """A bee that pauses has no blob in that frame; motion within near_s counts."""
+    p = os.path.join(clip_dir, "bee.avi")
+    _write(p, flash=False)
+    scan = sl.scan_clip(p, candidates=6, spread=0, min_gap_s=0.2)
+    for c in scan.candidates:
+        assert set(c.blobs) <= set(c.near)
+        assert len(c.near) > len(c.blobs)
