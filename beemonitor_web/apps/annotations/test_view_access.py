@@ -440,3 +440,34 @@ class ProjectListTests(ViewAccessTestCase):
 
         self.assertIn(settings_url, self.html("manager"))
         self.assertNotIn(settings_url, self.html("annotator"))
+
+
+class EditorLandingTests(ViewAccessTestCase):
+    """"Annotate" and clip links land on a real frame needing labels."""
+
+    def setUp(self):
+        super().setUp()
+        from apps.annotations.models import Annotation
+        Annotation.objects.filter(project=self.project).delete()
+        self.done = Annotation.objects.create(project=self.project, video=self.video,
+                                              frame_number=120, boxes=[{"label": "bee"}])
+        self.todo = Annotation.objects.create(project=self.project, video=self.video,
+                                              frame_number=480, boxes=[], sampled_only=True)
+        self.url = reverse("annotations:editor", args=[self.project.pk])
+
+    def test_annotate_goes_to_the_first_frame_needing_labels(self):
+        self.as_("owner")
+        r = self.client.get(self.url)
+        self.assertRedirects(r, f"{self.url}?video={self.video.pk}&frame=480",
+                             fetch_redirect_response=False)
+
+    def test_a_clip_link_without_a_sampled_frame_lands_on_one(self):
+        self.as_("owner")
+        r = self.client.get(f"{self.url}?video={self.video.pk}&frame=0")
+        self.assertRedirects(r, f"{self.url}?video={self.video.pk}&frame=480",
+                             fetch_redirect_response=False)
+
+    def test_a_real_frame_and_an_explicit_jump_open_as_asked(self):
+        self.as_("owner")
+        self.assertEqual(self.client.get(f"{self.url}?video={self.video.pk}&frame=120").status_code, 200)
+        self.assertEqual(self.client.get(f"{self.url}?video={self.video.pk}&frame=7&jump=1").status_code, 200)

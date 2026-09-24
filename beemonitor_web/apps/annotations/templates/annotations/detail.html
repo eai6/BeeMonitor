@@ -222,7 +222,7 @@
   <ul class="text-xs divide-y divide-red-100">
     {% for t in preannot_failed %}
     <li class="flex items-center gap-3 py-1">
-      <a href="{% url 'annotations:editor' project.pk %}?video={{ t.video_id }}&frame=0"
+      <a href="{% url 'annotations:editor' project.pk %}?video={{ t.video_id }}"
          class="flex-1 truncate hover:underline">{{ t.video.title }}</a>
       <span class="text-red-500 whitespace-nowrap">
         {% if t.video.recorded_at %}{{ t.video.recorded_at|date:"j M, H:i" }}{% endif %}
@@ -537,13 +537,13 @@
            data-stage="{{ item.progress.stage }}">
         <input type="checkbox" name="video_ids" value="{{ item.video.pk }}"
                class="clip-cb rounded border-gray-300">
-        <a href="{% url 'annotations:editor' project.pk %}?video={{ item.video.pk }}&frame=0" class="block">
+        <a href="{% url 'annotations:editor' project.pk %}?video={{ item.video.pk }}" class="block">
           <img src="{% url 'videos:thumbnail' item.video.pk %}" alt="" loading="lazy"
                class="w-[54px] rounded object-cover bg-gray-800" style="aspect-ratio:16/9"
                onerror="this.style.visibility='hidden'">
         </a>
         <div class="min-w-0">
-          <a href="{% url 'annotations:editor' project.pk %}?video={{ item.video.pk }}&frame=0"
+          <a href="{% url 'annotations:editor' project.pk %}?video={{ item.video.pk }}"
              class="block text-[12.5px] text-gray-900 hover:text-amber-700 hover:underline truncate">{{ item.video.title }}</a>
           <div class="text-[10.5px] text-gray-400 truncate">
             {% if item.video.device %}{{ item.video.device.name }}{% endif %}

@@ -15,7 +15,7 @@
   <p class="text-gray-500 mb-4">Select a video to annotate:</p>
   <div class="space-y-2">
     {% for v in videos %}
-    <a href="{% url 'annotations:editor' project.pk %}?video={{ v.pk }}&frame=0"
+    <a href="{% url 'annotations:editor' project.pk %}?video={{ v.pk }}"
        class="block p-3 border border-gray-200 rounded hover:bg-amber-50 hover:border-amber-300 text-sm">
       {{ v.title }}
     </a>
@@ -702,7 +702,7 @@
     var EDIT_BASE = "{% url 'annotations:editor' project.pk %}";
     function doJump() {
       var n = parseInt(document.getElementById("jump-frame").value, 10);
-      if (!isNaN(n) && n >= 0) { window.location.href = EDIT_BASE + "?video=" + VIDEO_ID + "&frame=" + n; }
+      if (!isNaN(n) && n >= 0) { window.location.href = EDIT_BASE + "?video=" + VIDEO_ID + "&frame=" + n + "&jump=1"; }
     }
     jumpBtn.addEventListener("click", doJump);
     document.getElementById("jump-frame").addEventListener("keydown", function(e) {

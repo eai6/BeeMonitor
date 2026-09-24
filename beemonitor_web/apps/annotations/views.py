@@ -1153,6 +1153,43 @@ class AddVideosView(LoginRequiredMixin, View):
         return redirect("annotations:detail", pk=project.pk)
 
 
+def _editor_landing(project, user, video_id, frame):
+    """Where the editor should open, or None to open what was asked for.
+
+    With a clip: that frame if it was sampled, else the clip's first frame
+    still needing labels (else its first frame). Without one: the first frame
+    needing labels in the user's assigned clips, then in the whole project.
+    "Needing labels" = no boxes and not reviewed. Order matches the editor's
+    prev/next (clip title, then frame).
+    """
+    from .models import ClipAssignment
+
+    frames = Annotation.objects.filter(project=project)
+    todo = frames.filter(boxes=[], reviewed=False)
+    order = ("video__title", "video_id", "frame_number")
+    try:
+        frame = int(frame) if frame not in (None, "") else None
+    except (TypeError, ValueError):
+        frame = None
+
+    if video_id:
+        if not project.videos.filter(pk=video_id).exists():
+            return None
+        if frame is not None and frames.filter(video_id=video_id, frame_number=frame).exists():
+            return None
+        hit = (todo.filter(video_id=video_id).order_by("frame_number").first()
+               or frames.filter(video_id=video_id).order_by("frame_number").first())
+    else:
+        mine = ClipAssignment.objects.filter(project=project, user=user).values("video_id")
+        hit = (todo.filter(video_id__in=mine).order_by(*order).first()
+               or todo.order_by(*order).first()
+               or frames.order_by(*order).first())
+    if hit is None:
+        return None
+    return (reverse("annotations:editor", args=[project.pk])
+            + f"?video={hit.video_id}&frame={hit.frame_number}")
+
+
 class AnnotationEditorView(LoginRequiredMixin, TemplateView):
     template_name = "annotations/editor.html"
 
@@ -1174,6 +1211,17 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
                 except (Annotation.DoesNotExist, Exception):
                     boxes = []
             return JsonResponse({"boxes": boxes, "frame": frame_number})
+        # Land on a real frame. "Annotate" opens the editor with no clip, and
+        # clip links say frame=0 — which motion sampling rarely picks — so both
+        # used to show an empty canvas with no prev/next.
+        from django.shortcuts import redirect
+        project = get_object_or_404(
+            AnnotationProject.accessible(request.user), pk=self.kwargs["pk"])
+        # jump=1: the editor's "go to frame N" — an unsampled frame on purpose.
+        target = None if request.GET.get("jump") else _editor_landing(
+            project, request.user, request.GET.get("video"), request.GET.get("frame"))
+        if target:
+            return redirect(target)
         return super().get(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
