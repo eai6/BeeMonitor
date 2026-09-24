@@ -1,6 +1,6 @@
-# 38 — Frame sampling on the SageMaker GPU endpoint
+# 38 — Frame sampling + pre-annotation in one GPU pass (SageMaker)
 
-Status: **PLAN v2 — audited, decisions made, not started** (2026-09-24). v1 was
+Status: **PLAN v3 — sampling and pre-annotation combined (§4.1); calibrated on real clips (§4.5); SAM 3 speed being measured (§6)** (2026-09-24). v2: v1 was
 audited against the code (SageMaker side, web side) and live AWS (endpoints,
 CloudWatch, S3, real clips); v2 folds in every finding. Decisions are in §9.
 Owner of every `pulumi up`: Edward.
@@ -56,20 +56,46 @@ Runner logs, 2026-09-22 → 24:
 
 ## 4. Design
 
-### 4.1 GPU: `task: "sample"` in `sagemaker_backend/inference.py`
-- `predict_fn` routes `task == "sample"` to `_sample_batch(payload, pipeline)`. `input_fn`'s required keys (`job_id`, `user_id`, `video_blob_path`) are exempted for this task.
-- Payload: `{task: "sample", batch_id, result_key, clips: [{task_id, video_blob_path, frame_prefix, method, max_frames, sample_interval, min_gap_s, roi, polygon, motion: {…calibrated constants…}}]}`. ROI and polygon are normalized to the full frame, as the ROI editor stores them.
-- **Concurrency: a `ThreadPoolExecutor(3)`**. Each thread drives `ffmpeg -threads 1` subprocesses, and MOG2 runs in cv2 (releases the GIL; `cv2.setNumThreads(1)`). No `multiprocessing`: CUDA is initialised after the first request, so fork is unsafe. This keeps ≥1 vCPU free for `/ping`.
-- Per clip:
-  1. Download from `raw-videos` using `pipeline._storage`.
-  2. **Score**: `ffmpeg` decode to low-res gray raw frames piped to Python (at native frame rate, so frame `n` stays the OpenCV index), with `-skip_loop_filter all`. MOG2 inside the ROI with calibrated settings (§4.5), scoring every frame or every k-th frame.
-  3. **Pick** top-N with the min gap, above threshold.
-  4. **Write** the picked frames in **one** ffmpeg pass (`select='eq(n\,a)+eq(n\,b)…'`, passthrough timing), upload as JPEG to `processed`.
-  5. Record `{task_id, frames: [{n, key, w, h}], motion: {profile, picked, frames}, seconds, error?}`.
+### 4.1 GPU: `task: "sample_label"` in `sagemaker_backend/inference.py`
+**One pass per clip does sampling and pre-annotation** (decision 4): decode
+once, find candidate frames by motion, confirm and box insects with SAM 3,
+keep the top N. Frames reach the editor already pre-labelled. It extends the
+existing `_pre_annotate` (which already keeps only frames with detections)
+with motion candidates, clip batches and a single decode.
+
+- `predict_fn` routes `task == "sample_label"` to `_sample_label_batch`.
+  `input_fn`'s required keys (`job_id`, `user_id`, `video_blob_path`) are
+  exempted for this task.
+- Payload: `{task, batch_id, result_key, classes, confidence, clips: [{task_id,
+  video_blob_path, frame_prefix, max_frames, min_gap_s, roi, polygon}]}`.
+  `classes` = the labels the user ticked (as in the Auto-label panel, decision
+  5): they are the SAM 3 prompts **and** decide which frames are picked.
+- **Per clip, CPU side** (a `ThreadPoolExecutor(3)`; each thread drives an
+  `ffmpeg -threads 1` subprocess; no `multiprocessing` — CUDA is initialised
+  after the first request, fork is unsafe; ≥1 vCPU stays free for `/ping`):
+  1. Download from `raw-videos` (`pipeline._storage`).
+  2. Decode once at native frame rate (frame `n` = OpenCV sequential index;
+     `-skip_loop_filter all`), full resolution BGR piped from ffmpeg.
+  3. Motion score per frame (§4.5 settings): ROI crop at 640 px wide, clock
+     masked, MOG2, bee-sized blob count; frames with >20% of the ROI moving are
+     "handling" and score 0.
+  4. Keep a bounded set of **candidates** in memory: the top ~C by motion
+     (C ≈ 30, tuned in §6), at least 0.5 s apart, **plus** ~C/4 evenly spaced
+     frames so still insects (camera 7) are checked too.
+- **GPU side** (one SAM 3 model, serialised through its existing lock):
+  run the candidates through SAM 3 with the chosen prompts, **batched** where
+  the processor allows. Rank frames by detections (count × confidence).
+- **Pick** the top N ranked frames, ≥ `min_gap_s` apart (default 0.5 s). A
+  clip with no detections yields **0 frames** (correct for empty
+  motion-triggered clips).
+- **Write** the picked frames as JPEG to `processed` (the same key
+  convention) and return `{task_id, frames: [{n, key, w, h, boxes:[…]}],
+  motion: {profile, picked, frames}, candidates, seconds: {decode, gpu,
+  upload}, error?}`. Boxes use the same shape `finalize_preannotation_task`
+  writes today.
 - Per-clip `try/except`: one bad clip never fails the batch.
-- Writes the whole result to a **fixed key** `sampling-results/{batch_id}.json` in the async output bucket, besides the normal async output.
-- Logs one line per clip with timings (throughput measurement).
-- Even spacing (`method: interval`) is supported the same way.
+- The whole result also goes to a **fixed key** `sampling-results/{batch_id}.json`.
+- One log line per clip with timings.
 
 ### 4.2 Web: batches, claims, dispatch
 - New model **`SamplingBatch`**: id, status (`claimed → invoked → collected | failed`), `attempts`, `claimed_at`, `invoked_at`, `output_uri`, `failure_uri`, `result_key`. `FrameSamplingTask` gains FK `batch`, `attempts`, and an index on `(status, created_at)`.
@@ -91,7 +117,10 @@ Runner logs, 2026-09-22 → 24:
 - Per task, in `transaction.atomic()`, apply only if the task is still `processing` and belongs to **this** batch:
   - Skip cancelled or superseded tasks.
   - Run "replace unlabelled" (web-side, as today).
-  - Upsert `Annotation` rows with `_record_frame`, idempotently.
+  - Upsert `Annotation` rows with `_record_frame`, idempotently, **with the
+    SAM 3 boxes** merged exactly as `finalize_preannotation_task` merges them
+    (the frame is pre-labelled, not `sampled_only`-empty). Never overwrite boxes
+    on a frame someone has labelled or reviewed.
   - Store `motion`.
   - Mark the task completed, or failed with the clip's own error.
 - Collecting twice changes nothing.
@@ -109,14 +138,23 @@ Runner logs, 2026-09-22 → 24:
   - Offer a re-sample of clips that got ≤2 frames.
   - Report counts, since the database isn't reachable from outside the app.
 
-### 4.5 Motion calibration (before writing the GPU task)
-Using the 3 clips already downloaded plus ~7 more (busy and quiet, several devices), with frames checked by eye, tune:
-- scoring resolution inside the ROI crop (score the ROI at ~480–640 px, not the whole frame at 320);
-- the noise filter (a connected-component area filter, not a 3×3 open);
-- the threshold as blob count and area, not share of the ROI;
-- whether scoring every k-th frame is good enough.
+### 4.5 Calibration results (done 2026-09-24, 13 clips, 7 cameras)
+Clips: hotels (cameras 2, 3), red box (7), yellow pan traps + an indoor test
+clip (8), a hand over the lens (6), flower platform (12). All 1080p, 25 fps.
 
-**Exit criterion:** busy clips give their 20 frames with visible bees, and clips without bees give ~0.
+| Finding | Consequence |
+|---|---|
+| At 320 px a bee is 3–10 px; the 3×3 open erases it | Score at 640 px **inside the ROI crop**; area filter 12–2000 px (at 640), no open |
+| The burned-in clock (top-left) changes every second | Always mask it (top 5 % × left 35 %) |
+| A hand / laptop / lighting change fills the frame (camera 6 up to 80 %) | Frames with >20 % of the ROI moving score 0 ("handling"): dropped 130 of 433 frames on one clip |
+| A still insect (camera 7) barely moves | Motion alone gives 0–1 frames; add evenly spaced candidates |
+| Wind in grass, sun/shadow flicker (camera 3 at 06:24: 70–141 "blobs" on the hotel face; flower platform: every pick was grass) | **Motion alone cannot rank bees outdoors, even inside a rectangular ROI** → confirm with a detector (SAM 3, §4.1); a traced polygon ROI helps |
+| Some motion-triggered clips contain no bee at all (camera 2, 32 s) | 0 frames is correct; the detector makes that safe |
+| Many clips are ~6 s | A 1 s gap caps them at ~6 picks; default gap 0.5 s |
+
+Baseline (today's code) vs tuned motion, frames picked of 20: camera 7 still
+insect 0 → 11; hotel 2 → 9; flower 2 → 20 (but all grass without an ROI).
+The detector stage is what makes the picks right; motion only proposes.
 
 ### 4.6 UI and text
 - **Project page:** a sampling status line (queued · running · failed · finished with 0 active frames). Today a 0-frame clip looks the same as "not sampled".
@@ -220,6 +258,13 @@ Each step is its own commit. Steps 1–5 change nothing live.
    same credit mechanism as pre-annotation (`annotations/views.py:1702-1706`),
    priced from measured GPU time per clip (§6). Show the cost on the add-page
    confirm and the Sample panel before starting.
+4. **Combine sampling and pre-annotation** into one GPU pass (§4.1): decode
+   once; SAM 3 confirms insects and its boxes are kept. No separate
+   motion-only mode. The batch Auto-label panel stays for frames sampled
+   before this.
+5. **The user picks the classes** (as in the Auto-label panel); they are the
+   SAM 3 prompts and decide which frames are picked.
+6. **Measure SAM 3 speed first** (§6), before sizing candidates and batches.
 
 ## 10. Out of scope
 - A global "top X frames across all clips".
