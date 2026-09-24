@@ -107,7 +107,9 @@ def input_fn(request_body, content_type):
         request_body = request_body.decode("utf-8")
     payload = json.loads(request_body)
 
-    required = ("job_id", "user_id", "video_blob_path")
+    # A sample_label batch carries many clips, so it has no single video.
+    required = (("batch_id", "clips") if payload.get("task") == "sample_label"
+                else ("job_id", "user_id", "video_blob_path"))
     missing = [k for k in required if not payload.get(k)]
     if missing:
         raise ValueError(f"missing required keys: {', '.join(missing)}")
@@ -129,6 +131,8 @@ def predict_fn(payload, pipeline):
     if profiler is not None:
         profiler.reset()
 
+    if payload.get("task") == "sample_label":
+        return {**_sample_label_batch(payload, pipeline), **_timings(profiler)}
     if payload.get("task") == "pre_annotate":
         return {**_pre_annotate(payload, pipeline), **_timings(profiler)}
     if payload.get("task") == "annotate_video":
@@ -384,6 +388,121 @@ def _pre_annotate(payload, pipeline) -> dict:
         "video_height": height,
         "execution_seconds": round(time.time() - started, 2),
     }
+
+
+def _sample_label_batch(payload, pipeline) -> dict:
+    """Sample and pre-label a batch of clips in one invocation (memory/38 §4.1).
+
+    Per clip: decode once, motion proposes candidate frames, SAM 3 confirms
+    insects for the requested classes, and the top ``max_frames`` frames whose
+    detections *moved* are written as JPEGs with their boxes. Clips are
+    prepared on a small thread pool (one decode thread each, leaving a core for
+    /ping) while the GPU works through whichever clip is ready.
+
+    Payload::
+
+        {"task": "sample_label", "batch_id", "result_bucket", "result_key",
+         "classes": [...], "confidence": 0.3, "candidates": 15,
+         "min_gap_s": 0.5,
+         "clips": [{"task_id", "video_blob_path", "max_frames", "roi", "polygon"}]}
+
+    One clip failing never fails the batch: it comes back with ``error``. The
+    whole result is also written to ``result_bucket/result_key`` so the web app
+    can find it even if it lost the async output location.
+    """
+    import io
+    import tempfile
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    import cv2
+
+    from beemonitor.detection.sam3_detector import Sam3Detector
+    from beemonitor.processing import sample_label as sl
+
+    started = time.time()
+    storage = pipeline._storage
+    classes = [c for c in (payload.get("classes") or ["bee"]) if c]
+    candidates = int(payload.get("candidates", 15))
+    min_gap_s = float(payload.get("min_gap_s", 0.5))
+    detector = Sam3Detector(prompt=",".join(classes),
+                            conf_threshold=float(payload.get("confidence", 0.3)),
+                            iou_threshold=0.5, max_detections=50)
+    wanted = {c.lower(): c for c in classes}
+    gpu_lock = threading.Lock()
+
+    def detect_fn(frames):
+        with gpu_lock:                       # one model on one GPU
+            per_frame = detector.detect_many(frames)
+        out = []
+        for dets in per_frame:
+            boxes = []
+            for d in dets:
+                name = wanted.get((d.label or "").lower())
+                if not name:
+                    continue
+                x1, y1, x2, y2 = d.bbox
+                boxes.append({"x": round(x1), "y": round(y1), "w": round(x2 - x1),
+                              "h": round(y2 - y1), "class": name,
+                              "confidence": round(float(d.confidence), 3)
+                              if d.confidence is not None else None})
+            out.append(boxes)
+        return out
+
+    def one_clip(clip):
+        t0 = time.time()
+        blob = clip["video_blob_path"]
+        res = {"task_id": clip.get("task_id"), "frames": []}
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=True) as tmp:
+                storage.download_file("raw-videos", blob, tmp.name)
+                t_dl = time.time()
+                out = sl.sample_label_clip(
+                    tmp.name, detect_fn, max_frames=int(clip.get("max_frames", 20)),
+                    candidates=candidates, min_gap_s=min_gap_s,
+                    roi=clip.get("roi"), polygon=clip.get("polygon"))
+            t_scan = time.time()
+            prefix = f"frames/{blob.replace('/', '_')}"
+            for pick in out["picks"]:
+                ok, buf = cv2.imencode(".jpg", pick["frame"], [cv2.IMWRITE_JPEG_QUALITY, 85])
+                if not ok:
+                    continue
+                key = f"{prefix}/f{pick['n']:06d}.jpg"
+                storage.upload_stream("processed", key, io.BytesIO(buf.tobytes()),
+                                      content_type="image/jpeg")
+                h, w = pick["frame"].shape[:2]
+                res["frames"].append({"n": pick["n"], "key": key, "w": w, "h": h,
+                                      "boxes": pick["boxes"]})
+            res.update(motion=out["motion"], candidates=out["candidates"],
+                       total_frames=out["frames"], fps=out["fps"],
+                       seconds={"download": round(t_dl - t0, 2),
+                                "scan_and_detect": round(t_scan - t_dl, 2),
+                                "upload": round(time.time() - t_scan, 2)})
+            logger.info("sample_label: %s -> %d frames (%d candidates, %d decoded) in %.1fs",
+                        blob, len(res["frames"]), out["candidates"], out["frames"],
+                        time.time() - t0)
+        except Exception as exc:  # one clip never fails the batch
+            logger.exception("sample_label: %s failed", blob)
+            res["error"] = f"{type(exc).__name__}: {exc}"[:500]
+        return res
+
+    # Three clips at a time: each is one decode thread plus its share of the GPU.
+    workers = max(1, min(3, int(os.environ.get("BEEMONITOR_SAMPLE_WORKERS", "3"))))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="sample-label") as pool:
+        results = list(pool.map(one_clip, payload.get("clips") or []))
+
+    body = {"status": "completed", "batch_id": payload.get("batch_id"),
+            "clips": results, "execution_seconds": round(time.time() - started, 2)}
+    bucket, key = payload.get("result_bucket"), payload.get("result_key")
+    if bucket and key:
+        try:
+            import boto3
+            boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-1")).put_object(
+                Bucket=bucket, Key=key, Body=json.dumps(body).encode("utf-8"),
+                ContentType="application/json")
+        except Exception:
+            logger.exception("sample_label: could not write %s/%s", bucket, key)
+    return body
 
 
 def _annotate_video(payload, pipeline) -> dict:

@@ -1,0 +1,134 @@
+"""Sample-and-pre-label: motion proposes, the detector confirms, only moving
+detections count. Each test mirrors a finding from calibrating on real clips
+(memory/38 §4.5): nest plugs a detector mistakes for bees, the burned-in
+clock, a hand or light change filling the frame, and frame numbers that must
+match the editor's."""
+
+import os
+import tempfile
+
+import cv2
+import numpy as np
+import pytest
+
+from beemonitor.processing import sample_label as sl
+
+W, H, FPS = 640, 360, 25
+PLUGS = [(100, 250), (200, 250), (300, 250), (400, 250)]   # static dark squares
+BEE_FRAMES = range(50, 90)
+FLASH_FRAMES = range(120, 126)
+
+
+def _write(path, n=150, bee=True, flash=True, number=True):
+    rng = np.random.default_rng(1)
+    bg = rng.integers(120, 170, (H, W, 3), dtype=np.uint8)
+    for x, y in PLUGS:
+        cv2.rectangle(bg, (x, y), (x + 14, y + 14), (20, 20, 20), -1)
+    out = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"MJPG"), FPS, (W, H))
+    for i in range(n):
+        f = bg.copy()
+        cv2.putText(f, f"12:00:{i // FPS:02d}", (4, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                    (255, 255, 255), 1)                       # burned-in clock
+        if number:
+            f[H - 24:H - 4, W - 24:W - 4] = i % 250           # frame number, for checks
+        if bee and i in BEE_FRAMES:
+            x = 480 + (i - BEE_FRAMES.start) * 2
+            cv2.rectangle(f, (x, 120), (x + 12, 132), (15, 15, 15), -1)
+        if flash and i in FLASH_FRAMES:
+            f = np.clip(f.astype(int) + 90, 0, 255).astype(np.uint8)
+        out.write(f)
+    out.release()
+
+
+def detect_dark(frames):
+    """A detector that, like SAM 3 on a bee hotel, boxes every dark object —
+    real bees and nest plugs alike."""
+    out = []
+    for f in frames:
+        g = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
+        g[H - 30:, W - 30:] = 255                           # ignore the frame-number patch
+        g[:20, :160] = 255                                  # and the clock
+        n, _l, st, _c = cv2.connectedComponentsWithStats((g < 50).astype(np.uint8), 8)
+        out.append([{"x": int(st[k][0]), "y": int(st[k][1]), "w": int(st[k][2]),
+                     "h": int(st[k][3]), "class": "bee", "confidence": 0.6}
+                    for k in range(1, n) if st[k][4] >= 20])
+    return out
+
+
+@pytest.fixture
+def clip_dir():
+    with tempfile.TemporaryDirectory() as d:
+        yield d
+
+
+def test_picks_the_moving_bee_and_drops_the_plugs(clip_dir):
+    p = os.path.join(clip_dir, "bee.avi")
+    _write(p)
+    res = sl.sample_label_clip(p, detect_dark, max_frames=5, candidates=10, min_gap_s=0.2)
+    picks = res["picks"]
+    assert picks, "the moving bee should be picked"
+    assert all(n in BEE_FRAMES or n in range(BEE_FRAMES.start, BEE_FRAMES.stop + 5)
+               for n in (p["n"] for p in picks))
+    for p_ in picks:
+        assert p_["boxes"], "each pick carries its detections"
+        for b in p_["boxes"]:
+            assert b["y"] < 200, "only the moving bee is kept — never a nest plug"
+    gaps = [b - a for a, b in zip([p_["n"] for p_ in picks], [p_["n"] for p_ in picks][1:])]
+    assert all(g >= round(0.2 * FPS) for g in gaps)
+
+
+def test_a_clip_with_only_static_detections_gives_nothing(clip_dir):
+    p = os.path.join(clip_dir, "empty.avi")
+    _write(p, bee=False, flash=False)
+    res = sl.sample_label_clip(p, detect_dark, max_frames=5)
+    assert res["picks"] == []
+
+
+def test_the_clock_is_not_motion(clip_dir):
+    p = os.path.join(clip_dir, "empty.avi")
+    _write(p, bee=False, flash=False, number=False)   # only the clock changes
+    scan = sl.scan_clip(p, candidates=5)
+    assert max(scan.scores) == 0
+
+
+def test_a_frame_wide_change_is_handling_not_activity(clip_dir):
+    p = os.path.join(clip_dir, "flash.avi")
+    _write(p, bee=False, flash=True)
+    scan = sl.scan_clip(p, candidates=5)
+    assert all(scan.scores[i] == 0 for i in FLASH_FRAMES)
+
+
+def test_picked_frame_numbers_match_sequential_decode(clip_dir):
+    p = os.path.join(clip_dir, "bee.avi")
+    _write(p)
+    res = sl.sample_label_clip(p, detect_dark, max_frames=4, candidates=8, min_gap_s=0.2)
+    cap = cv2.VideoCapture(p)
+    decoded = []
+    while True:
+        ok, f = cap.read()
+        if not ok:
+            break
+        decoded.append(f)
+    for pick in res["picks"]:
+        assert np.array_equal(pick["frame"], decoded[pick["n"]])
+        assert abs(int(pick["frame"][H - 14, W - 14].mean()) - pick["n"] % 250) <= 6
+
+
+def test_roi_excludes_motion_outside_it(clip_dir):
+    p = os.path.join(clip_dir, "bee.avi")
+    _write(p)
+    scan = sl.scan_clip(p, candidates=5, roi=[0.0, 0.5, 0.6, 1.0])   # bee is top-right
+    assert max(scan.scores) == 0
+
+
+def test_the_saved_frame_is_not_masked(clip_dir):
+    p = os.path.join(clip_dir, "bee.avi")
+    _write(p)
+    res = sl.sample_label_clip(p, detect_dark, max_frames=1, candidates=4)
+    top_left = res["picks"][0]["frame"][:16, :120]
+    assert top_left.max() > 200, "the clock stays in the stored image"
+
+
+def test_motion_profile_shape():
+    prof = sl.motion_profile([0] * 50 + [5] * 10 + [0] * 40, [55], buckets=10)
+    assert prof["frames"] == 100 and prof["picked"] == [5] and max(prof["profile"]) == 100

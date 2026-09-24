@@ -74,8 +74,11 @@ with motion candidates, clip batches and a single decode.
   `ffmpeg -threads 1` subprocess; no `multiprocessing` — CUDA is initialised
   after the first request, fork is unsafe; ≥1 vCPU stays free for `/ping`):
   1. Download from `raw-videos` (`pipeline._storage`).
-  2. Decode once at native frame rate (frame `n` = OpenCV sequential index;
-     `-skip_loop_filter all`), full resolution BGR piped from ffmpeg.
+  2. Decode once with **`cv2.VideoCapture`** in sequential order, one decode
+     thread per clip — the same decoder and order the editor uses, so frame `n`
+     is the same frame there by construction (chosen over an ffmpeg pipe, which
+     would need index mapping). Measured: 13.2 ms/frame on one M3 thread
+     including motion scoring (grey-then-resize saved ~25%).
   3. Motion score per frame (§4.5 settings): ROI crop at 640 px wide, clock
      masked, MOG2, bee-sized blob count; frames with >20% of the ROI moving are
      "handling" and score 0.
@@ -213,7 +216,7 @@ Give the pre-annotation drain and finalize the same claim helper: conditional UP
 | 0b | **`pulumi up` in `infra/aws` before 2026-09-29** | **Edward** | Yes (S3 rule) |
 | 0c | Restore-and-copy June (dry run → run); `Video.storage_class` + "archived" handling in pickers/sampling | Claude + Edward | Yes |
 | 1 | Calibrate motion scoring (§4.5); measure per-clip time with the ffmpeg pipeline | Claude | No |
-| 2 | GPU `sample` task + tests (synthetic clips; ffmpeg frame `n` == cv2 frame `n` on a variable-frame-rate sample; bad clip doesn't fail batch) | Claude | No |
+| 2 | **Done** — `src/beemonitor/processing/sample_label.py`, `Sam3Detector.detect_many` (batched, falls back to single frames), `sample_label` task in `sagemaker_backend/inference.py`; 11 tests | Claude | No |
 | 3 | Web: models + migration, `start()`, dispatcher, collector, recovery, cancel/supersede, backend gate, claims for pre-annotation, UI fixes; tests (§8) | Claude | No |
 | 4 | Push → CI builds `Dockerfile.gpu` → `beemonitor-sm-dev:<sha>`; web deploys with `SAMPLING_BACKEND=local` (no behaviour change) | Claude | Web only |
 | 5 | Set `beemonitor-sagemaker:image-tag` to the new sha; `pulumi preview`; hand over the diff and command. Expected: 2 Models + 2 EndpointConfigs created, **both** endpoints updated in place, no deletes. The main YOLO endpoint moves too; SAM 3 also catches up from `155d53c`. | Claude | No |

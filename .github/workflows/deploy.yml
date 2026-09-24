@@ -91,7 +91,7 @@ jobs:
         run: |
           pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
           pip install ultralytics opencv-python-headless numpy pandas scipy \
-                      scikit-learn filterpy pyyaml tqdm pillow pytest
+                      scikit-learn filterpy pyyaml tqdm pillow pytest boto3
 
       - name: BeeMonitor unit tests
         env:

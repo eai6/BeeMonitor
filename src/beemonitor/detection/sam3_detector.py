@@ -118,6 +118,69 @@ class Sam3Detector(BaseDetector):
                 out.append((x1, y1, x2, y2, float(s) if s is not None else 1.0))
         return out
 
+    def _segment_batch(self, pil_images, prompt: str):
+        """One prompt on several images in one forward pass → per-image boxes."""
+        import torch
+
+        proc = self._processor(images=list(pil_images), text=[prompt] * len(pil_images),
+                               return_tensors="pt").to(self._device)
+        with torch.no_grad():
+            outputs = self._model(**proc)
+        posts = self._processor.post_process_instance_segmentation(
+            outputs, threshold=self.conf_threshold, mask_threshold=0.5,
+            target_sizes=proc.get("original_sizes").tolist(),
+        )
+        out = []
+        for post in posts:
+            boxes, scores = post.get("boxes"), post.get("scores")
+            found = []
+            if boxes is not None:
+                box_list = boxes.tolist() if hasattr(boxes, "tolist") else list(boxes)
+                score_list = (scores.tolist() if scores is not None and hasattr(scores, "tolist")
+                              else [1.0] * len(box_list))
+                for b, s in list(zip(box_list, score_list))[:self.max_detections]:
+                    x1, y1, x2, y2 = [float(v) for v in b]
+                    found.append((x1, y1, x2, y2, float(s) if s is not None else 1.0))
+            out.append(found)
+        return out
+
+    def detect_many(self, frames: List[np.ndarray], batch_size: int = 8) -> List[List[Detection]]:
+        """``detect`` for many frames, ``batch_size`` per forward pass.
+
+        Frame sampling checks ~15 candidate frames per clip; one pass per frame
+        measured 0.58 s per frame per prompt on the g5 (memory/38 §6), so
+        batching is where the GPU time goes. If a batched pass fails (memory,
+        or a processor that rejects image lists) it falls back to one frame at
+        a time rather than losing the clip.
+        """
+        import cv2
+        from PIL import Image
+
+        self._ensure_model()
+        pils = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in frames]
+        found: List[List[Detection]] = [[] for _ in pils]
+        batched = batch_size > 1
+        with PROFILER.stage("inference", count=len(pils)):
+            for prompt in self.prompts:
+                for i in range(0, len(pils), max(1, batch_size)):
+                    chunk = pils[i:i + batch_size]
+                    results = None
+                    if batched and len(chunk) > 1:
+                        try:
+                            results = self._segment_batch(chunk, prompt)
+                        except Exception:
+                            logger.exception("SAM 3 batched pass failed; one frame at a time")
+                            batched = False
+                    if results is None:
+                        results = [self._segment(im, prompt) for im in chunk]
+                    for j, boxes in enumerate(results):
+                        for x1, y1, x2, y2, score in boxes:
+                            found[i + j].append(Detection(
+                                bbox=(x1, y1, x2, y2),
+                                centroid=((x1 + x2) / 2.0, (y1 + y2) / 2.0),
+                                confidence=score, label=prompt, source="sam3"))
+        return [self.nms(dets, self.iou_threshold) for dets in found]
+
     # ── BaseDetector API ─────────────────────────────────────────────────────
     def detect(self, frame: np.ndarray, **kwargs) -> List[Detection]:
         import cv2
