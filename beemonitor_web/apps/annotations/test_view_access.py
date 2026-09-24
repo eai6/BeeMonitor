@@ -171,7 +171,7 @@ class GpuAndStructureTests(ViewAccessTestCase):
         self.assertIn(self.status("manager", url, "post"), (200, 302))
 
     def test_only_a_manager_may_auto_label(self):
-        url = reverse("annotations:pre_annotate", args=[self.project.pk])
+        url = reverse("annotations:pre_annotate_all", args=[self.project.pk])
 
         self.assertEqual(self.status("annotator", url, "post"), 404)
         self.assertEqual(self.status("reviewer", url, "post"), 404)
@@ -402,7 +402,7 @@ class CollaboratorViewTests(ViewAccessTestCase):
         html = self.html("annotator")
 
         self.assertNotIn(
-            reverse("annotations:pre_annotate", args=[self.project.pk]), html)
+            reverse("annotations:pre_annotate_all", args=[self.project.pk]), html)
         self.assertNotIn(
             reverse("annotations:sample_frames", args=[self.project.pk]), html)
 
@@ -410,7 +410,7 @@ class CollaboratorViewTests(ViewAccessTestCase):
         html = self.html("manager")
 
         self.assertIn(
-            reverse("annotations:pre_annotate", args=[self.project.pk]), html)
+            reverse("annotations:pre_annotate_all", args=[self.project.pk]), html)
 
 
 class ProjectListTests(ViewAccessTestCase):

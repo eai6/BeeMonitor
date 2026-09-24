@@ -102,7 +102,7 @@ class ClipActionTests(ProjectPageTests):
 
         self.assertIn('id="clip-form"', html)
         self.assertIn(reverse("annotations:sample_frames", args=[self.project.pk]), html)
-        self.assertIn(reverse("annotations:pre_annotate", args=[self.project.pk]), html)
+        self.assertIn(reverse("annotations:pre_annotate_all", args=[self.project.pk]), html)
 
     def test_the_expensive_action_is_marked_as_such(self):
         self.clip(frames=1)

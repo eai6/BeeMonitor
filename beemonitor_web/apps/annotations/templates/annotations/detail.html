@@ -204,9 +204,11 @@
   {% endcomment %}
   <div class="flex items-baseline gap-3 mb-2">
     <p class="font-medium">Auto-labelling didn't finish on {{ preannot_failed|length }} clip{{ preannot_failed|pluralize }}</p>
-    <form method="post" action="{% url 'annotations:pre_annotate' project.pk %}" class="ml-auto">
+    <form method="post" action="{% url 'annotations:pre_annotate_all' project.pk %}" class="ml-auto">
       {% csrf_token %}
       {% for t in preannot_failed %}<input type="hidden" name="video_ids" value="{{ t.video_id }}">{% endfor %}
+      {# Every unlabelled sampled frame in those clips — not a fresh every-Nth pass. #}
+      <input type="hidden" name="a_frames" value="1000000">
       {% for c in project.classes %}<input type="hidden" name="labels" value="{{ c }}">{% endfor %}
       <button type="submit" class="text-xs px-2.5 py-1 border border-red-300 text-red-700 rounded hover:bg-red-100 whitespace-nowrap">
         Retry these {{ preannot_failed|length }}
@@ -480,12 +482,89 @@
           count.addEventListener('input', sync);
         })();
         </script>
-        <button type="submit" formaction="{% url 'annotations:pre_annotate' project.pk %}"
-                class="text-[12.5px] px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 whitespace-nowrap"
-                title="Runs SAM 3 on a GPU for every sampled frame in the selected clips">
-          Auto-label <span class="clip-n">all</span>
-          <span class="text-[9.5px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full ml-0.5">GPU</span>
-        </button>
+        <!-- Auto-label panel: N of the unlabelled sampled frames, spread across
+             hotels, hours and clips, in one batch (one GPU warm-up). -->
+        <div class="relative" id="auto-wrap">
+          <button type="button" id="auto-toggle" aria-expanded="false" aria-controls="auto-panel"
+                  class="text-[12.5px] px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 whitespace-nowrap">
+            Auto-label <span class="clip-n">all</span>
+            <span class="text-[9.5px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full ml-0.5">GPU</span> &#9662;
+          </button>
+          <div id="auto-panel" class="hidden absolute right-0 top-full mt-1.5 z-30 w-96 bg-white border border-gray-200 rounded-lg shadow-xl p-4 space-y-3.5 text-left">
+            <div class="text-sm font-bold text-gray-900">Auto-label with SAM 3</div>
+            <div class="space-y-1.5">
+              <div class="text-[10.5px] font-semibold text-gray-500 uppercase tracking-wide">Frames to label</div>
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <button type="button" class="a-count px-3 py-0.5 rounded-full border border-gray-300 text-xs" data-n="100">100</button>
+                <button type="button" class="a-count px-3 py-0.5 rounded-full border border-gray-300 text-xs" data-n="500">500</button>
+                <button type="button" class="a-count px-3 py-0.5 rounded-full border border-gray-300 text-xs" data-n="1000">1,000</button>
+                <button type="button" class="a-count px-3 py-0.5 rounded-full border border-gray-300 text-xs" data-n="all">All</button>
+                <input type="number" name="a_frames" id="a-frames" value="1000" min="1"
+                       aria-label="Frames to auto-label" class="w-24 border border-gray-300 rounded px-2 py-1 text-xs">
+              </div>
+              <p id="a-of" class="text-xs text-gray-600"></p>
+            </div>
+            <fieldset class="space-y-1">
+              <legend class="text-[10.5px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Detect</legend>
+              {% for c in project.classes %}
+              <label class="flex items-center gap-2 text-[13px] text-gray-700">
+                <input type="checkbox" name="target_labels" value="{{ c }}" checked> {{ c }}
+              </label>
+              {% endfor %}
+            </fieldset>
+            <p class="text-xs text-gray-500">Picks frames nobody has labelled, spread evenly across hotels, hours and clips. They run as one batch: the first may wait a few minutes for the GPU to start, the rest follow while it is warm.</p>
+            <div class="flex items-center gap-2 pt-2 border-t border-gray-100">
+              <span class="text-xs text-gray-500">Uses GPU credits</span>
+              <button type="submit" id="a-go" formaction="{% url 'annotations:pre_annotate_all' project.pk %}"
+                      class="ml-auto px-3.5 py-1.5 rounded bg-amber-600 hover:bg-amber-700 text-white text-[12.5px] font-semibold">
+                Auto-label <span id="a-go-n">1,000</span> frames
+              </button>
+            </div>
+          </div>
+        </div>
+        <script>
+        (function () {
+          var wrap = document.getElementById('auto-wrap');
+          if (!wrap) return;
+          var toggle = document.getElementById('auto-toggle'), panel = document.getElementById('auto-panel');
+          var input = document.getElementById('a-frames');
+          function eligible() {
+            // Unlabelled sampled frames in the selected clips (all when none ticked).
+            var rows = Array.prototype.slice.call(document.querySelectorAll('#clip-form .clip-row'));
+            var ticked = rows.filter(function (r) { var cb = r.querySelector('.clip-cb'); return cb && cb.checked; });
+            return (ticked.length ? ticked : rows).reduce(function (n, r) { return n + (+r.dataset.todo || 0); }, 0);
+          }
+          function sync() {
+            var m = eligible();
+            var n = Math.min(+input.value || 0, m);
+            wrap.querySelectorAll('.a-count').forEach(function (b) {
+              var on = b.dataset.n === 'all' ? (+input.value >= m && m > 0) : b.dataset.n === input.value;
+              b.classList.toggle('border-amber-600', on); b.classList.toggle('bg-amber-50', on);
+              b.classList.toggle('font-semibold', on);
+            });
+            document.getElementById('a-of').textContent = m
+              ? n.toLocaleString() + ' of ' + m.toLocaleString() + ' unlabelled sampled frames'
+              : 'No unlabelled sampled frames here — sample the clips first.';
+            document.getElementById('a-go-n').textContent = n.toLocaleString();
+            document.getElementById('a-go').disabled = !n;
+          }
+          toggle.addEventListener('click', function () {
+            var open = panel.classList.toggle('hidden') === false;
+            toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+            if (open) sync();
+          });
+          document.addEventListener('click', function (e) {
+            if (!wrap.contains(e.target)) { panel.classList.add('hidden'); toggle.setAttribute('aria-expanded', 'false'); }
+          });
+          wrap.querySelectorAll('.a-count').forEach(function (b) {
+            b.addEventListener('click', function () {
+              input.value = b.dataset.n === 'all' ? eligible() : b.dataset.n; sync();
+            });
+          });
+          input.addEventListener('input', sync);
+          wrap.addEventListener('change', sync);
+        })();
+        </script>
         {% endif %}
         {% if can_assign and members|length > 1 %}
         {% comment %}
@@ -534,6 +613,7 @@
     <div class="divide-y divide-gray-100 max-h-[32rem] overflow-y-auto">
       {% for item in video_data %}
       <div class="clip-row grid grid-cols-[20px_54px_minmax(0,1fr)_132px_104px_128px_78px] gap-3 items-center px-4 py-2 hover:bg-gray-50"
+           data-todo="{{ item.todo|default:0 }}"
            data-stage="{{ item.progress.stage }}">
         <input type="checkbox" name="video_ids" value="{{ item.video.pk }}"
                class="clip-cb rounded border-gray-300">

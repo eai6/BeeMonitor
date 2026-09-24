@@ -380,6 +380,10 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
 
         VIDEO_LIST_CAP = 500
         shown = progress_mod.decorate(filtered[:VIDEO_LIST_CAP], states, failed_ids)
+        # Unlabelled sampled frames per clip — what "Auto-label N of M" counts.
+        todo_by_video = dict(
+            Annotation.objects.filter(project=self.object, boxes=[], reviewed=False)
+            .order_by().values_list("video_id").annotate(n=models.Count("id")))
         # Latest motion strip per clip (from its most recent motion sampling).
         from .models import FrameSamplingTask
         motion_by_video = {}
@@ -395,7 +399,8 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
                                   holders[v.pk].user_id) if v.pk in holders else "",
                               "mine": (v.pk in holders
                                        and holders[v.pk].user_id == self.request.user.id),
-                              "motion": _motion_strip(motion_by_video.get(v.pk))}
+                              "motion": _motion_strip(motion_by_video.get(v.pk)),
+                              "todo": todo_by_video.get(v.pk, 0)}
                              for v in shown]
 
         # Everyone on the project, for the "assigned to" filter and the assign
@@ -1786,7 +1791,7 @@ class PreAnnotateView(LoginRequiredMixin, View):
         return redirect("annotations:detail", pk=pk)
 
 
-def _create_preannotation_task(request, project, video):
+def _create_preannotation_task(request, project, video, frame_numbers=None):
     """Build a PreAnnotationTask row from the request's pre-annotate options."""
     from .models import PreAnnotationTask
 
@@ -1810,6 +1815,10 @@ def _create_preannotation_task(request, project, video):
             "confidence": confidence, "selection": selection,
             "nms_iou": nms_iou, "max_detections": max_detections,
             "target_labels": target_labels,
+            # Exact sampled frames to label (batch "N of M"); the GPU then
+            # labels those frames rather than re-sampling every Nth itself.
+            **({"frame_numbers": frame_numbers, "max_frames": len(frame_numbers)}
+               if frame_numbers else {}),
         },
     )
 
@@ -1834,6 +1843,11 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
             messages.warning(request, "No videos in this project.")
             return redirect("annotations:detail", pk=pk)
 
+        # "Auto-label N of M frames": pick N unlabelled sampled frames, spread
+        # across hotels, hours and clips, and send each clip exactly its picks.
+        if request.POST.get("a_frames") not in (None, ""):
+            return self._run_on_picked(request, project, videos)
+
         # One durable QUEUED task per video. The drain below promotes only as
         # many as the concurrency cap allows and the reconciler picks up the
         # rest, so a 200-video project doesn't fire 200 GPU invocations at once.
@@ -1855,6 +1869,38 @@ class PreAnnotateAllView(LoginRequiredMixin, View):
             msg += f" {queued} more queued; they start as slots free up."
         messages.info(request, msg)
         return redirect("annotations:detail", pk=pk)
+
+
+    def _run_on_picked(self, request, project, videos):
+        from django.shortcuts import redirect
+        from django.contrib import messages
+        from . import preannotate_pick
+
+        try:
+            target = max(1, int(request.POST.get("a_frames")))
+        except (TypeError, ValueError):
+            messages.error(request, "Enter how many frames to auto-label.")
+            return redirect("annotations:detail", pk=project.pk)
+        eligible = preannotate_pick.eligible_frames(project, videos).count()
+        picks = preannotate_pick.pick(project, videos.exclude(storage_key=""), target)
+        if not picks:
+            messages.warning(request, "No unlabelled sampled frames to auto-label — "
+                                      "sample the clips first.")
+            return redirect("annotations:detail", pk=project.pk)
+        by_id = {v.pk: v for v in videos.filter(pk__in=picks)}
+        labeler, frames = "yolo", 0
+        for vid, frame_numbers in picks.items():
+            task = _create_preannotation_task(request, project, by_id[vid], frame_numbers)
+            labeler = task.labeler
+            frames += len(frame_numbers)
+        started = drain_preannotation_queue()
+        engine = "SAM 3" if labeler == "sam3" else "AI"
+        messages.info(
+            request,
+            f"{engine} auto-labelling {frames:,} of {eligible:,} unlabelled frames, spread "
+            f"across {len(picks)} clip(s). The first may wait a few minutes for the GPU "
+            "to start; the rest follow while it is warm. Refresh to see progress.")
+        return redirect("annotations:detail", pk=project.pk)
 
 
 class CancelPreAnnotationView(LoginRequiredMixin, View):
