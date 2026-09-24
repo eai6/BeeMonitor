@@ -127,6 +127,11 @@ aws.s3.BucketCorsConfigurationV2(
 
 # Raw videos transition to cheaper tiers — these are large, infrequently
 # accessed after initial analysis. Mirrors what we set with the CLI in 1a.
+# At 90 days: Glacier INSTANT Retrieval, not Glacier Flexible. Flexible made
+# clips unreadable without an hours-long restore — sampling, playback, analysis
+# and auto-label all failed on 39% of the footage — to save ~$1.75/month on
+# 197 GB. Instant Retrieval costs about the same to store and reads in
+# milliseconds. See memory/38_sampling_on_sagemaker.md §4.7.
 aws.s3.BucketLifecycleConfigurationV2(
     "raw-videos-lifecycle",
     bucket=raw_videos_bucket.id,
@@ -139,7 +144,7 @@ aws.s3.BucketLifecycleConfigurationV2(
                 days=30, storage_class="STANDARD_IA",
             ),
             aws.s3.BucketLifecycleConfigurationV2RuleTransitionArgs(
-                days=90, storage_class="GLACIER",
+                days=90, storage_class="GLACIER_IR",
             ),
         ],
         noncurrent_version_expiration=aws.s3
