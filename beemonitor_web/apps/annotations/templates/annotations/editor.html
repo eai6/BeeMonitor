@@ -157,20 +157,6 @@
       <button id="btn-save" class="w-full bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium mb-2">Save Annotations</button>
       <button id="btn-empty" class="w-full bg-slate-700 hover:bg-slate-800 text-white px-4 py-2 rounded text-sm font-medium mb-2"
               title="Save this frame as reviewed with NO insects — a negative example for training.">Mark empty (no insect) ✓</button>
-      <button id="btn-ai-detect" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded text-sm font-medium mb-2"
-              title="Run the SAM 3 detector on just this frame and load its boxes as suggestions. Review/adjust, then Save.">Pre-annotate this frame (SAM 3)</button>
-      <div id="preannot-popover" class="hidden border border-indigo-200 bg-indigo-50 rounded p-3 mb-2">
-        <p class="text-xs font-medium text-gray-700 mb-1">Detect labels on this frame</p>
-        <div id="preannot-classes" class="space-y-1 mb-2 max-h-32 overflow-y-auto"></div>
-        <label class="block text-[11px] text-gray-500 mb-1">Custom label(s) — new/unique, comma-separated</label>
-        <input id="preannot-custom" type="text" placeholder="e.g. hoverfly, beetle"
-               class="w-full border border-gray-300 rounded px-2 py-1 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-indigo-400">
-        <div class="flex gap-2">
-          <button id="btn-preannot-run" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded text-sm font-medium">Run SAM 3</button>
-          <button id="btn-preannot-cancel" class="px-3 py-1.5 border border-gray-300 rounded text-sm text-gray-600 hover:bg-white">Cancel</button>
-        </div>
-        <p class="text-[10px] text-gray-400 mt-1">A custom label is added to the project's classes.</p>
-      </div>
       <button id="btn-clear" class="w-full border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded text-sm">Clear All</button>
     </div>
   </div>
@@ -180,8 +166,6 @@
 (function() {
   const VIDEO_ID = {{ video.pk }};
   const SAVE_URL = "{% url 'annotations:save' project.pk %}";
-  const PREANNOT_FRAME_URL = "{% url 'annotations:preannotate_frame' project.pk %}";
-  const PREANNOT_FRAME_STATUS_URL = "{% url 'annotations:preannotate_frame_status' project.pk %}";
   const CSRF_TOKEN = "{{ csrf_token }}";
   let CLASSES = {{ classes|safe }};
   const currentFrame = {{ frame_number }};
@@ -709,100 +693,6 @@
       if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); doJump(); }
     });
   }
-
-  // Pre-annotate popover — pick which labels to detect (checkboxes) + optional
-  // custom/new label, then run the real SAM 3 detector on just this frame.
-  var preBtn = document.getElementById("btn-ai-detect");
-  var prePop = document.getElementById("preannot-popover");
-  function buildPreannotChecks() {
-    document.getElementById("preannot-classes").innerHTML = CLASSES.map(function(c, i) {
-      return '<label class="flex items-center gap-2 text-sm text-gray-700">'
-        + '<input type="checkbox" class="pre-cls" value="' + esc(c) + '" checked>'
-        + '<span class="w-2.5 h-2.5 rounded-full inline-block" style="background:' + getColor(i) + '"></span>'
-        + esc(c) + '</label>';
-    }).join("");
-  }
-  preBtn.addEventListener("click", function() {
-    var nowHidden = prePop.classList.toggle("hidden");
-    if (!nowHidden) buildPreannotChecks();
-  });
-  document.getElementById("btn-preannot-cancel").addEventListener("click", function() {
-    prePop.classList.add("hidden");
-  });
-
-  // If the project's class list changed (a custom label was added), sync the
-  // in-memory CLASSES + the Active-Class dropdown so new-label boxes map/colour.
-  function refreshClasses(newClasses) {
-    if (!Array.isArray(newClasses) || JSON.stringify(newClasses) === JSON.stringify(CLASSES)) return;
-    CLASSES = newClasses;
-    classSelect.innerHTML = "";
-    CLASSES.forEach(function(cls, i) {
-      var opt = document.createElement("option");
-      opt.value = i; opt.textContent = cls; classSelect.appendChild(opt);
-    });
-  }
-
-  document.getElementById("btn-preannot-run").addEventListener("click", function() {
-    var target = Array.prototype.map.call(document.querySelectorAll(".pre-cls:checked"),
-                                          function(el) { return el.value; });
-    var custom = (document.getElementById("preannot-custom").value || "")
-                 .split(",").map(function(s) { return s.trim(); }).filter(Boolean);
-    if (!target.length && !custom.length) {
-      if (statusText) statusText.textContent = "Pick at least one label to detect."; return;
-    }
-    prePop.classList.add("hidden");
-    var orig = preBtn.textContent;
-    preBtn.disabled = true; preBtn.textContent = "Starting…";
-    if (statusText) statusText.textContent = "Running SAM 3 on this frame…";
-    fetch(PREANNOT_FRAME_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-CSRFToken": CSRF_TOKEN },
-      body: JSON.stringify({ video_id: VIDEO_ID, frame_number: currentFrame,
-                             target_labels: target, custom_labels: custom })
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (!data.success) {
-        if (statusText) statusText.textContent = "Pre-annotate: " + (data.error || "failed");
-        preBtn.disabled = false; preBtn.textContent = orig; return;
-      }
-      var taskId = data.task_id, tries = 0, MAX = 60;  // ~4 min for cold-start
-      preBtn.textContent = "Detecting…";
-      (function poll() {
-        tries++;
-        fetch(PREANNOT_FRAME_STATUS_URL + "?task=" + taskId)
-          .then(function(r) { return r.json(); })
-          .then(function(s) {
-            if (s.status === "completed") {
-              refreshClasses(s.classes);  // pick up any newly-added custom label
-              var found = (s.boxes || []).length;
-              boxes = boxes.concat(s.boxes || []);
-              if (found) { classThresholds = {}; }  // show all detected classes
-              render(); updateBoxList();
-              if (statusText) statusText.textContent = found
-                ? "SAM 3 added " + found + " box(es) (all classes shown). Adjust, then Save."
-                : "SAM 3 found no insects on this frame.";
-              preBtn.disabled = false; preBtn.textContent = orig;
-            } else if (s.status === "failed") {
-              if (statusText) statusText.textContent = "Pre-annotate failed: " + (s.error || "unknown");
-              preBtn.disabled = false; preBtn.textContent = orig;
-            } else if (tries >= MAX) {
-              if (statusText) statusText.textContent = "Still running — check back on this frame shortly.";
-              preBtn.disabled = false; preBtn.textContent = orig;
-            } else {
-              if (statusText) statusText.textContent = "Detecting… (" + tries + ")";
-              setTimeout(poll, 4000);
-            }
-          })
-          .catch(function() { if (tries < MAX) setTimeout(poll, 4000);
-                              else { preBtn.disabled = false; preBtn.textContent = orig; } });
-      })();
-    })
-    .catch(function(err) {
-      if (statusText) statusText.textContent = "Pre-annotate error: " + err.message;
-      preBtn.disabled = false; preBtn.textContent = orig;
-    });
-  });
 
   // (Per-class confidence sliders are wired via #class-thresholds above.)
 
