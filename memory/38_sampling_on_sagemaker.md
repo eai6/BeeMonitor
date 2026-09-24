@@ -80,11 +80,17 @@ with motion candidates, clip batches and a single decode.
      masked, MOG2, bee-sized blob count; frames with >20% of the ROI moving are
      "handling" and score 0.
   4. Keep a bounded set of **candidates** in memory: the top ~C by motion
-     (C ≈ 30, tuned in §6), at least 0.5 s apart, **plus** ~C/4 evenly spaced
+     (C ≈ 15, see §6), at least 0.5 s apart, **plus** ~C/4 evenly spaced
      frames so still insects (camera 7) are checked too.
 - **GPU side** (one SAM 3 model, serialised through its existing lock):
   run the candidates through SAM 3 with the chosen prompts, **batched** where
   the processor allows. Rank frames by detections (count × confidence).
+- **Only moving detections count** (measured 2026-09-24): SAM 3 prompted
+  `bee` on a bee hotel boxes every mud-plugged nest hole as a bee (42–48 boxes
+  per frame, conf 0.2–0.6, identical positions every frame). A detection counts
+  as activity — and is kept as a pre-label — only if it overlaps a bee-sized
+  motion blob in that frame (dilated ~1 blob width). Nest plugs never move and
+  drop out; a sitting insect that shifts slightly (camera 7) stays.
 - **Pick** the top N ranked frames, ≥ `min_gap_s` apart (default 0.5 s). A
   clip with no detections yields **0 frames** (correct for empty
   motion-triggered clips).
@@ -219,14 +225,34 @@ Give the pre-annotation drain and finalize the same claim helper: conditional UP
 Each step is its own commit. Steps 1–5 change nothing live.
 
 ## 6. Numbers
-| | Value | Source |
+
+**SAM 3 measured on the live endpoint (2026-09-24, g5.xlarge, 1080p frames):**
+
+| Test | GPU | Per frame |
 |---|---|---|
-| Per clip (avg) | ~10–13 s per worker | decode timings, scaled to g5 |
-| Per instance | ~1,100–1,400 clips/h (3–4 workers) | estimate, confirm in step 7 |
-| 9,000 clips | ~2 h on 4 instances; ~3–4 h on 2 | + 9–16 min cold start |
-| Cost | ~$1.41/instance-h + ~$0.50 idle tail per scale-up + ~$0.01/GB IA retrieval | ≈ $6–12 per 9,000 clips |
-| Cold start | 9–16 min | measured |
-| Scale to zero | ~21 min after the last request | measured |
+| 20 frames, prompt `bee`, 3 clips | 11.6–11.9 s | 0.58 s |
+| 16 frames, `bee`, warm | 9.3 s | 0.58 s |
+| 20 frames, `bee, wasp, ant` | 34.7 s | 1.73 s — **linear in the number of classes** |
+| Cold start to first result | ~8 min (486 s) | |
+
+Detections: red box (camera 7) 20/20 frames, one box on the insect — correct.
+Hotel (camera 2) every frame, 42–48 boxes, all nest plugs — false (hence the
+motion-overlap rule in §4.1). Hotel (camera 3, conf 0.3) and pan traps
+(camera 8): 0.
+
+**Throughput of the combined pass** (C candidates × P classes × 0.58 s GPU,
+decode in parallel on the CPU threads; single-frame SAM 3 as today —
+batching is expected to help and is measured in step 7):
+
+| C × P | GPU/clip | Per instance | 4 instances | 9,000 clips | ≈ Cost |
+|---|---|---|---|---|---|
+| 30 × 1 | 17 s | ~210/h | ~840/h | ~11 h | ~$60 |
+| **15 × 1** | 9 s | ~400/h | ~1,600/h | ~5.5 h | ~$30 |
+| 15 × 3 | 26 s | ~140/h | ~550/h | ~16 h | ~$90 |
+
+Cost = instance-hours × $1.41 plus ~21 min idle per scale-up. Credits are
+charged per clip from GPU seconds (decision 3), so more classes cost more;
+the panel shows the estimate before starting.
 
 ## 7. Risks
 - **Auto-label waits behind sampling** (FIFO, 1 per instance). With batch ≈ 5 min and K bounded, the wait is ≈ (K / instances) × 5 min. Keep K modest (decision 2), or move sampling to its own endpoint later.
