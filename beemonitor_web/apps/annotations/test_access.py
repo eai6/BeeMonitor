@@ -139,7 +139,7 @@ class FrameEditTests(AccessTestCase):
         self.assertTrue(self.project.may_edit_frame(self.people["manager"], f))
 
     def test_a_reviewer_may_mark_a_frame_nobody_sampled(self):
-        """"Go to frame" reaches frames with no row yet (a negative example)."""
+        """Saving a frame that has no row yet creates it."""
         self.assertTrue(self.project.may_edit_frame(self.people["reviewer"], None))
 
     def test_a_viewer_may_never_edit_even_if_assigned(self):

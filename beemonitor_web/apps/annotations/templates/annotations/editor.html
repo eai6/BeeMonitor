@@ -53,18 +53,6 @@
 </div>
 {% endif %}
 
-<!-- Jump to any frame — reach frames the detector never flagged (e.g. to mark
-     an empty / no-insect frame as a reviewed negative). Shown whenever a video
-     is selected, including videos with no annotations yet. -->
-{% if video %}
-<div class="flex items-center gap-2 mb-3 text-sm">
-  <label for="jump-frame" class="text-gray-600">Go to frame</label>
-  <input id="jump-frame" type="number" min="0" value="{{ frame_number }}"
-         class="w-24 border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-amber-500">
-  <button id="btn-jump" class="px-3 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50">Go</button>
-  <span class="text-xs text-gray-400">— jump to any frame in this video to review it (e.g. mark a no-insect frame).</span>
-</div>
-{% endif %}
 
 <!-- Annotation Editor -->
 <div class="flex gap-4" id="editor-app" style="max-width: 100%; overflow: hidden;">
@@ -684,20 +672,6 @@
     .catch(function(err) { if (statusText) statusText.textContent = "Network error: " + err.message; });
   }
   document.getElementById("btn-empty").addEventListener("click", markEmpty);
-
-  // Jump to an arbitrary frame in this video (reach undetected frames).
-  var jumpBtn = document.getElementById("btn-jump");
-  if (jumpBtn) {
-    var EDIT_BASE = "{% url 'annotations:editor' project.pk %}";
-    function doJump() {
-      var n = parseInt(document.getElementById("jump-frame").value, 10);
-      if (!isNaN(n) && n >= 0) { window.location.href = EDIT_BASE + "?video=" + VIDEO_ID + "&frame=" + n + "&jump=1"; }
-    }
-    jumpBtn.addEventListener("click", doJump);
-    document.getElementById("jump-frame").addEventListener("keydown", function(e) {
-      if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); doJump(); }
-    });
-  }
 
   // (Per-class confidence sliders are wired via #class-thresholds above.)
 

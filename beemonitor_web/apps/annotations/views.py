@@ -1120,9 +1120,7 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
         from django.shortcuts import redirect
         project = get_object_or_404(
             AnnotationProject.accessible(request.user), pk=self.kwargs["pk"])
-        # jump=1: the editor's "go to frame N" — an unsampled frame on purpose.
-        target = None if request.GET.get("jump") else _editor_landing(
-            project, request.user, request.GET)
+        target = _editor_landing(project, request.user, request.GET)
         if target:
             return redirect(target)
         return super().get(request, *args, **kwargs)

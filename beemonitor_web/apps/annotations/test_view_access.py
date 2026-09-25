@@ -419,10 +419,9 @@ class EditorLandingTests(ViewAccessTestCase):
         self.assertRedirects(r, f"{self.url}?video={self.video.pk}&frame=480",
                              fetch_redirect_response=False)
 
-    def test_a_real_frame_and_an_explicit_jump_open_as_asked(self):
+    def test_a_real_frame_opens_as_asked(self):
         self.as_("owner")
         self.assertEqual(self.client.get(f"{self.url}?video={self.video.pk}&frame=120").status_code, 200)
-        self.assertEqual(self.client.get(f"{self.url}?video={self.video.pk}&frame=7&jump=1").status_code, 200)
 
     def test_your_own_queue_comes_first(self):
         mine = Annotation.objects.create(project=self.project, video=self.video,
