@@ -59,8 +59,8 @@
         <i class="bg-amber-600" style="width: {{ p.load.pct }}%"></i>
       </span>
       <span class="block text-[10.5px] text-gray-500 mt-1">
-        {{ p.load.clips }} clip{{ p.load.clips|pluralize }} &middot;
-        {{ p.load.labelled }} of {{ p.load.frames }} frame{{ p.load.frames|pluralize }}
+        {{ p.load.reviewed }} of {{ p.load.assigned }} frame{{ p.load.assigned|pluralize }} reviewed
+        {% if p.load.left %}&middot; {{ p.load.left }} left{% endif %}
       </span>
       {% else %}
       <span class="text-[10.5px] text-gray-400 italic">nothing assigned</span>
@@ -103,9 +103,8 @@
   <h2 class="text-sm font-semibold text-gray-900 mb-2">What each role may do</h2>
   <div class="grid grid-cols-[110px_minmax(0,1fr)] gap-y-1.5 gap-x-4 text-[12.5px] text-gray-700 leading-5">
     <b class="font-semibold">Viewer</b><span>See frames, boxes and stats. Export the dataset. Change nothing.</span>
-    <b class="font-semibold">Annotator</b><span>Draw and edit boxes, on the clips assigned to them — or that they take from the unassigned pool.</span>
-    <b class="font-semibold">Reviewer</b><span>The same, on <em>anyone's</em> clips. The checking role: someone who spots a bad box can fix it.</span>
-    <b class="font-semibold">Manager</b><span>Add clips, sample, auto-label, edit the class list, assign work.</span>
+    <b class="font-semibold">Reviewer</b><span>Check the boxes SAM 3 drew and fix them: keep, move, delete, or add a missed insect. On the frames assigned to them, or that they take from the unassigned pool.</span>
+    <b class="font-semibold">Manager</b><span>Add clips, sample and label them, edit the class list, assign frames — and fix any frame.</span>
     <b class="font-semibold">Owner</b><span>All of it, plus delete the project and manage this page.</span>
   </div>
 
@@ -115,7 +114,7 @@
     large one.
   {% endcomment %}
   <div class="mt-3.5 rounded-md bg-blue-50 border border-blue-200 px-3 py-2.5 text-[12px] text-blue-900 leading-5">
-    <b>Sharing this project does not share the footage.</b> Annotating reads the sampled
+    <b>Sharing this project does not share the footage.</b> Reviewing reads the sampled
     frames, never the source clips — so collaborators never see which hotel a frame came
     from, where it is, or when it was recorded.
   </div>
@@ -171,8 +170,8 @@
 
 {% if unassigned_count %}
 <p class="text-[12.5px] text-gray-500">
-  {{ unassigned_count }} clip{{ unassigned_count|pluralize }} unassigned.
-  <a href="{% url 'annotations:detail' project.pk %}?assignee=none" class="text-amber-700 hover:underline">Hand them out</a>.
+  {{ unassigned_count }} frame{{ unassigned_count|pluralize }} to review, not assigned to anyone.
+  <a href="{% url 'annotations:detail' project.pk %}?who=none" class="text-amber-700 hover:underline">Hand them out</a>.
 </p>
 {% endif %}
 {% endblock %}

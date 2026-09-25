@@ -1,19 +1,22 @@
-"""Handing work out, and taking it back.
+"""Handing frames out for review, and taking them back.
 
-Assignment is the difference between "you can reach this project" and "this is
-yours to do". Without it a shared project is a room full of people all looking
-at the same 59 clips.
+Assignment is per frame (memory/39): SAM 3 labels the frames, and "give eai7
+500" is the unit a manager thinks in. It is the difference between "you can
+reach this project" and "these are yours to check".
 """
+
+from datetime import datetime, timedelta, timezone as dt_tz
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.urls import reverse
 
 from apps.annotations import assignments
-from apps.annotations.models import (Annotation, AnnotationProject,
-                                     ClipAssignment, ProjectShare)
+from apps.annotations.models import Annotation, AnnotationProject, ProjectShare
 from apps.videos.models import Video
 
 User = get_user_model()
+BOX = [{"x": 1, "y": 1, "w": 5, "h": 5, "class": "bee"}]
 
 
 class AssignmentTestCase(TestCase):
@@ -24,159 +27,200 @@ class AssignmentTestCase(TestCase):
         self.kwame = User.objects.create_user("kwame", password="x")
         for u in (self.jill, self.kwame):
             ProjectShare.objects.create(project=self.project, user=u,
-                                        role="annotator", created_by=self.owner)
+                                        role="reviewer", created_by=self.owner)
         self.n = 0
 
-    def clip(self, frames=0, labelled=0):
+    def clip(self, frames=3, day=0):
         self.n += 1
-        v = Video.objects.create(user=self.owner, title=f"c{self.n}",
-                                 storage_key=f"as/{self.n}.mp4", file_size_bytes=1,
-                                 status=Video.Status.READY)
+        v = Video.objects.create(
+            user=self.owner, title=f"c{self.n}", storage_key=f"as/{self.n}.mp4",
+            file_size_bytes=1, status=Video.Status.READY,
+            recorded_at=datetime(2026, 7, 1, tzinfo=dt_tz.utc) + timedelta(days=day))
         self.project.videos.add(v)
         for i in range(frames):
-            Annotation.objects.create(project=self.project, video=v, frame_number=i,
-                                      boxes=[{"x": 1}] if i < labelled else [])
+            Annotation.objects.create(project=self.project, video=v,
+                                      frame_number=i * 10, boxes=BOX)
         return v
 
-
-class HandingOutTests(AssignmentTestCase):
-    def test_assigning_gives_the_clips_to_one_person(self):
-        clips = [self.clip(), self.clip()]
-
-        assignments.assign(self.project, [c.pk for c in clips], self.jill,
-                           by=self.owner)
-
-        self.assertEqual(self.project.assigned_to(self.jill).count(), 2)
-
-    def test_reassigning_moves_a_clip_rather_than_refusing(self):
-        """A clip has one owner of the work; silently refusing would leave the
-        page disagreeing with the database."""
-        c = self.clip()
-        assignments.assign(self.project, [c.pk], self.jill, by=self.owner)
-
-        assignments.assign(self.project, [c.pk], self.kwame, by=self.owner)
-
-        self.assertEqual(ClipAssignment.objects.get(video=c).user, self.kwame)
-        self.assertEqual(self.project.assigned_to(self.jill).count(), 0)
-
-    def test_distributing_deals_them_out_evenly(self):
-        clips = [self.clip() for _ in range(6)]
-
-        tally = assignments.distribute(self.project, [c.pk for c in clips],
-                                       [self.jill, self.kwame], by=self.owner)
-
-        self.assertEqual(tally[self.jill.id], 3)
-        self.assertEqual(tally[self.kwame.id], 3)
-
-    def test_an_odd_number_splits_as_evenly_as_it_can(self):
-        clips = [self.clip() for _ in range(7)]
-
-        tally = assignments.distribute(self.project, [c.pk for c in clips],
-                                       [self.jill, self.kwame])
-
-        self.assertEqual(sorted(tally.values()), [3, 4])
-
-    def test_distributing_to_nobody_does_nothing(self):
-        c = self.clip()
-
-        self.assertEqual(assignments.distribute(self.project, [c.pk], []), {})
-        self.assertFalse(ClipAssignment.objects.exists())
+    def frames(self):
+        return Annotation.objects.filter(project=self.project)
 
 
-class PoolTests(AssignmentTestCase):
-    def test_unassigned_clips_are_the_pool(self):
-        self.clip()
-        taken = self.clip()
-        assignments.assign(self.project, [taken.pk], self.jill)
+class PickTests(AssignmentTestCase):
+    def test_spread_takes_a_frame_from_each_clip_before_a_second(self):
+        clips = [self.clip(frames=5, day=d) for d in range(4)]
+        ids = assignments.pick(self.frames(), 4)
+        self.assertEqual(sorted(Annotation.objects.filter(pk__in=ids)
+                                .values_list("video_id", flat=True)),
+                         sorted(c.pk for c in clips))
 
-        pool = assignments.unassigned(self.project)
+    def test_spread_covers_the_whole_period_not_its_start(self):
+        """5 frames from 50 clips: evenly spaced clips, not the first five."""
+        for d in range(50):
+            self.clip(frames=1, day=d)
+        days = sorted(a.video.recorded_at.day + 30 * (a.video.recorded_at.month - 7)
+                      for a in Annotation.objects.filter(
+                          pk__in=assignments.pick(self.frames(), 5)).select_related("video"))
+        self.assertGreater(days[-1] - days[0], 30)
 
-        self.assertEqual(pool.count(), 1)
-        self.assertNotIn(taken, pool)
+    def test_whole_clips_keeps_a_clip_together(self):
+        first = self.clip(frames=4, day=0)
+        self.clip(frames=4, day=1)
+        ids = assignments.pick(self.frames(), 4, order="clips")
+        self.assertEqual(set(Annotation.objects.filter(pk__in=ids)
+                             .values_list("video_id", flat=True)), {first.pk})
 
-    def test_claiming_takes_a_clip_from_the_pool(self):
-        c = self.clip()
+    def test_asking_for_more_than_exist_gives_what_there_is(self):
+        self.clip(frames=3)
+        self.assertEqual(len(assignments.pick(self.frames(), 100)), 3)
 
-        self.assertTrue(assignments.claim(self.project, c.pk, self.jill))
-        self.assertTrue(self.project.may_annotate_video(self.jill, c.pk))
 
-    def test_a_self_claim_records_that_nobody_gave_it_to_them(self):
-        c = self.clip()
-        assignments.claim(self.project, c.pk, self.jill)
+class AssignTests(AssignmentTestCase):
+    def test_assigning_gives_the_frames_to_one_person(self):
+        self.clip(frames=4)
+        done = assignments.assign(self.project, self.frames().values_list("pk", flat=True),
+                                  self.jill, by=self.owner)
+        self.assertEqual(done, 4)
+        self.assertEqual(self.frames().filter(assigned_to=self.jill).count(), 4)
+        self.assertEqual(self.frames().first().assigned_by, self.owner)
 
-        self.assertTrue(ClipAssignment.objects.get(video=c).self_claimed)
+    def test_a_held_frame_is_not_handed_out_twice(self):
+        """Two managers assigning at once must not both get the same frame."""
+        self.clip(frames=2)
+        ids = list(self.frames().values_list("pk", flat=True))
+        assignments.assign(self.project, ids[:1], self.jill)
+        self.assertEqual(assignments.assign(self.project, ids, self.kwame), 1)
+        self.assertEqual(self.frames().filter(assigned_to=self.jill).count(), 1)
 
-    def test_claiming_someone_elses_clip_is_refused(self):
-        """Claiming is for the pool, not a way around an assignment."""
-        c = self.clip()
-        assignments.assign(self.project, [c.pk], self.kwame, by=self.owner)
+    def test_reviewed_frames_are_never_handed_out(self):
+        self.clip(frames=2)
+        self.frames().filter(frame_number=0).update(reviewed=True)
+        ids = self.frames().values_list("pk", flat=True)
+        self.assertEqual(assignments.assign(self.project, ids, self.jill), 1)
 
-        self.assertFalse(assignments.claim(self.project, c.pk, self.jill))
-        self.assertEqual(ClipAssignment.objects.get(video=c).user, self.kwame)
-
-    def test_re_claiming_your_own_clip_is_harmless(self):
-        c = self.clip()
-        assignments.claim(self.project, c.pk, self.jill)
-
-        self.assertTrue(assignments.claim(self.project, c.pk, self.jill))
-
-    def test_you_can_put_your_own_clip_back(self):
-        c = self.clip()
-        assignments.claim(self.project, c.pk, self.jill)
-
-        self.assertTrue(assignments.release(self.project, c.pk, self.jill))
-        self.assertEqual(assignments.unassigned(self.project).count(), 1)
-
-    def test_you_cannot_put_back_someone_elses(self):
-        c = self.clip()
-        assignments.assign(self.project, [c.pk], self.kwame)
-
-        self.assertFalse(assignments.release(self.project, c.pk, self.jill))
-
-    def test_a_manager_can_take_any_clip_back(self):
-        boss = User.objects.create_user("boss", password="x")
-        ProjectShare.objects.create(project=self.project, user=boss, role="manager")
-        c = self.clip()
-        assignments.assign(self.project, [c.pk], self.kwame)
-
-        self.assertTrue(assignments.release(self.project, c.pk, boss))
+    def test_release_returns_only_unreviewed_frames(self):
+        self.clip(frames=3)
+        self.frames().update(assigned_to=self.jill)
+        self.frames().filter(frame_number=0).update(reviewed=True)
+        self.assertEqual(assignments.release(self.project, self.jill), 2)
+        self.assertEqual(self.frames().filter(assigned_to=self.jill).count(), 1)
 
 
 class WorkloadTests(AssignmentTestCase):
-    def test_a_workload_counts_frames_not_just_clips(self):
-        """"12 clips" says nothing about whether the work is nearly done."""
-        # 12 of 16 — deliberately not a .5 tie, so the test is about the
-        # count and not about which way round() breaks one.
-        a = self.clip(frames=10, labelled=6)
-        b = self.clip(frames=6, labelled=6)
-        assignments.assign(self.project, [a.pk, b.pk], self.jill)
+    def test_a_workload_counts_assigned_reviewed_and_left(self):
+        self.clip(frames=4)
+        self.frames().update(assigned_to=self.jill)
+        self.frames().filter(frame_number__in=[0, 10]).update(reviewed=True)
+        [w] = assignments.workloads(self.project)
+        self.assertEqual((w["username"], w["assigned"], w["reviewed"], w["left"], w["pct"]),
+                         ("jill", 4, 2, 2, 50))
 
-        row = next(w for w in assignments.workloads(self.project)
-                   if w["username"] == "jill")
+    def test_the_pool_is_unreviewed_and_unheld(self):
+        self.clip(frames=3)
+        self.frames().filter(frame_number=0).update(assigned_to=self.jill)
+        self.frames().filter(frame_number=10).update(reviewed=True)
+        self.assertEqual(assignments.unassigned_count(self.project), 1)
 
-        self.assertEqual(row["clips"], 2)
-        self.assertEqual(row["frames"], 16)
-        self.assertEqual(row["labelled"], 12)
-        self.assertEqual(row["pct"], 75)
 
-    def test_everyone_holding_work_appears(self):
-        assignments.assign(self.project, [self.clip().pk], self.jill)
-        assignments.assign(self.project, [self.clip().pk], self.kwame)
+class AssignViewTests(AssignmentTestCase):
+    def post(self, user, **data):
+        self.client.force_login(user)
+        return self.client.post(reverse("annotations:assign_frames", args=[self.project.pk]), data)
 
-        names = {w["username"] for w in assignments.workloads(self.project)}
+    def test_a_manager_gives_n_frames_from_the_filter(self):
+        for d in range(3):
+            self.clip(frames=4, day=d)
+        self.post(self.owner, reviewer=self.jill.pk, count=5, order="spread", status="review")
+        self.assertEqual(self.frames().filter(assigned_to=self.jill).count(), 5)
+        # Spread: every clip got some.
+        self.assertEqual(self.frames().filter(assigned_to=self.jill)
+                         .values("video_id").distinct().count(), 3)
 
-        self.assertEqual(names, {"jill", "kwame"})
+    def test_the_filter_limits_the_pool(self):
+        self.clip(frames=2)
+        wasp = self.clip(frames=0)
+        Annotation.objects.create(project=self.project, video=wasp, frame_number=0,
+                                  boxes=[{"x": 1, "y": 1, "w": 2, "h": 2, "class": "wasp"}])
+        self.post(self.owner, reviewer=self.jill.pk, count=10, cls="wasp")
+        self.assertEqual(list(self.frames().filter(assigned_to=self.jill)
+                              .values_list("video_id", flat=True)), [wasp.pk])
 
-    def test_somebody_with_nothing_assigned_is_not_listed(self):
-        assignments.assign(self.project, [self.clip().pk], self.jill)
+    def test_only_a_manager_may_assign(self):
+        self.clip(frames=2)
+        resp = self.post(self.jill, reviewer=self.jill.pk, count=2)
+        self.assertEqual(resp.status_code, 404)
+        self.assertFalse(self.frames().filter(assigned_to__isnull=False).exists())
 
-        names = {w["username"] for w in assignments.workloads(self.project)}
+    def test_assigning_to_somebody_not_on_the_project_is_refused(self):
+        self.clip(frames=2)
+        stranger = User.objects.create_user("stranger", password="x")
+        self.post(self.owner, reviewer=stranger.pk, count=2)
+        self.assertFalse(self.frames().filter(assigned_to__isnull=False).exists())
 
-        self.assertNotIn("kwame", names)
+    def test_a_viewer_is_not_a_reviewer(self):
+        self.clip(frames=2)
+        viewer = User.objects.create_user("viewer", password="x")
+        ProjectShare.objects.create(project=self.project, user=viewer, role="viewer")
+        self.post(self.owner, reviewer=viewer.pk, count=2)
+        self.assertFalse(self.frames().filter(assigned_to__isnull=False).exists())
 
-    def test_an_unstarted_workload_reads_zero_rather_than_erroring(self):
-        assignments.assign(self.project, [self.clip().pk], self.jill)
+    def test_a_manager_can_take_frames_back(self):
+        self.clip(frames=2)
+        self.frames().update(assigned_to=self.jill)
+        self.post(self.owner, reviewer=self.jill.pk, release=1)
+        self.assertFalse(self.frames().filter(assigned_to__isnull=False).exists())
 
-        row = assignments.workloads(self.project)[0]
 
-        self.assertEqual((row["frames"], row["labelled"], row["pct"]), (0, 0, 0))
+class TakeViewTests(AssignmentTestCase):
+    def test_a_reviewer_takes_frames_from_the_pool(self):
+        self.clip(frames=3)
+        self.frames().filter(frame_number=0).update(assigned_to=self.kwame)
+        self.client.force_login(self.jill)
+        self.client.post(reverse("annotations:take_frames", args=[self.project.pk]), {"count": 100})
+        self.assertEqual(self.frames().filter(assigned_to=self.jill).count(), 2)
+        self.assertEqual(self.frames().filter(assigned_to=self.kwame).count(), 1)
+
+    def test_a_reviewer_gives_their_own_back(self):
+        self.clip(frames=2)
+        self.frames().update(assigned_to=self.jill)
+        self.client.force_login(self.jill)
+        self.client.post(reverse("annotations:take_frames", args=[self.project.pk]), {"release": 1})
+        self.assertFalse(self.frames().filter(assigned_to__isnull=False).exists())
+
+    def test_a_viewer_cannot_take_frames(self):
+        self.clip(frames=2)
+        viewer = User.objects.create_user("viewer", password="x")
+        ProjectShare.objects.create(project=self.project, user=viewer, role="viewer")
+        self.client.force_login(viewer)
+        resp = self.client.post(reverse("annotations:take_frames", args=[self.project.pk]))
+        self.assertEqual(resp.status_code, 404)
+
+
+class MigrationTests(TestCase):
+    """0012 copies each clip assignment onto that clip's unreviewed frames."""
+
+    def test_clip_assignments_become_frame_assignments(self):
+        from django.apps import apps as django_apps
+
+        from apps.annotations.migrations import __name__ as pkg
+        import importlib
+        mod = importlib.import_module(pkg + ".0012_frame_assignment")
+        from apps.annotations.models import ClipAssignment
+
+        owner = User.objects.create_user("o", password="x")
+        jill = User.objects.create_user("j", password="x")
+        project = AnnotationProject.objects.create(user=owner, name="P")
+        v = Video.objects.create(user=owner, title="c", storage_key="m/c.mp4",
+                                 file_size_bytes=1, status=Video.Status.READY)
+        project.videos.add(v)
+        todo = Annotation.objects.create(project=project, video=v, frame_number=0, boxes=BOX)
+        done = Annotation.objects.create(project=project, video=v, frame_number=1,
+                                         boxes=BOX, reviewed=True)
+        ClipAssignment.objects.create(project=project, video=v, user=jill, assigned_by=owner)
+
+        mod.clips_to_frames(django_apps, None)
+
+        todo.refresh_from_db()
+        done.refresh_from_db()
+        self.assertEqual((todo.assigned_to, todo.assigned_by), (jill, owner))
+        self.assertIsNone(done.assigned_to)

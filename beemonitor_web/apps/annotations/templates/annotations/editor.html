@@ -44,7 +44,12 @@
       Next Frame &rarr;
     </a>
   </div>
-  <span class="text-xs text-gray-500">{{ video.title }} &middot; f{{ frame_number }}</span>
+  <span class="flex items-center gap-3 text-xs text-gray-500">
+    {{ video.title }} &middot; f{{ frame_number }}
+    {% if queue_filter %}
+    <a href="{% url 'annotations:detail' project.pk %}?{{ queue_qs }}" class="text-amber-700 hover:underline">Back to frames</a>
+    {% endif %}
+  </span>
 </div>
 {% endif %}
 

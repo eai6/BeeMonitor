@@ -89,7 +89,7 @@ class AnnotationProject(models.Model):
     def allows(self, user, level):
         """True when the user's role is at least ``level``."""
         role = self.role_for(user)
-        return role is not None and _ROLE_RANK[role] >= _ROLE_RANK[level]
+        return role is not None and _ROLE_RANK.get(role, 0) >= _ROLE_RANK[level]
 
     @staticmethod
     def accessible(user):
@@ -101,20 +101,10 @@ class AnnotationProject(models.Model):
             models.Q(user=user) | models.Q(shares__user=user)).distinct()
 
     @staticmethod
-    def annotatable(user):
-        """Projects the user may draw boxes in (annotator and above)."""
-        return AnnotationProject.objects.filter(
-            models.Q(user=user)
-            | models.Q(shares__user=user,
-                       shares__role__in=("annotator", "reviewer", "manager"))
-        ).distinct()
-
-    @staticmethod
     def reviewable(user):
-        """Projects the user may sign off ANYONE's work in (reviewer and above).
+        """Projects the user may check and fix boxes in (reviewer and above).
 
-        Scope is what separates this from ``annotatable``: an annotator is
-        confined to their own assignments, a reviewer is not.
+        Which frames, within the project, is ``may_edit_frame``'s question.
         """
         return AnnotationProject.objects.filter(
             models.Q(user=user)
@@ -139,23 +129,20 @@ class AnnotationProject(models.Model):
         """Projects the user may delete, share or publish. Owner only."""
         return AnnotationProject.objects.filter(user=user)
 
-    def assigned_to(self, user):
-        """The clips this user is responsible for labelling."""
-        return self.videos.filter(clip_assignments__project=self,
-                                  clip_assignments__user=user)
+    def may_edit_frame(self, user, frame):
+        """Whether this user may save this frame (an ``Annotation``, or None
+        for a frame nobody has sampled yet).
 
-    def may_annotate_video(self, user, video_id):
-        """Whether this user may draw on this clip.
-
-        An annotator works only what is assigned to them — by someone else or by
-        themselves out of the pool. Reviewers and above are not confined that
-        way, because checking other people's work is the job.
+        A reviewer fixes the frames assigned to them, and anything nobody
+        holds. A frame assigned to someone else is theirs: two people fixing
+        the same boxes keep re-deciding the same judgement calls. Managers are
+        not confined — they hand the work out and settle disputes.
         """
-        if self.allows(user, "reviewer"):
+        if self.allows(user, "manager"):
             return True
-        if not self.allows(user, "annotator"):
+        if not self.allows(user, "reviewer"):
             return False
-        return self.assignments.filter(video_id=video_id, user=user).exists()
+        return frame is None or frame.assigned_to_id in (None, user.id)
 
     def save(self, *args, **kwargs):
         if not self.classes:
@@ -166,7 +153,8 @@ class AnnotationProject(models.Model):
 # Linear ranks, the property that makes DeviceShare easy to reason about: a
 # check is "at least this level", never a set membership. Adding a role that is
 # not comparable to the others is how permission systems become guesswork.
-_ROLE_RANK = {"viewer": 1, "annotator": 2, "reviewer": 3, "manager": 4, "owner": 5}
+# There is no annotator: SAM 3 labels, people review (migration 0013).
+_ROLE_RANK = {"viewer": 1, "reviewer": 3, "manager": 4, "owner": 5}
 
 
 class ProjectShare(models.Model):
@@ -186,9 +174,8 @@ class ProjectShare(models.Model):
 
     class Role(models.TextChoices):
         VIEWER = "viewer", "Viewer — see frames and labels"
-        ANNOTATOR = "annotator", "Annotator — label their assigned clips"
-        REVIEWER = "reviewer", "Reviewer — label, and sign off anyone's work"
-        MANAGER = "manager", "Manager — add clips, run sampling, assign work"
+        REVIEWER = "reviewer", "Reviewer — check and fix the AI's boxes"
+        MANAGER = "manager", "Manager — add clips, run sampling, assign frames"
 
     project = models.ForeignKey(
         "AnnotationProject", on_delete=models.CASCADE, related_name="shares",
@@ -197,7 +184,7 @@ class ProjectShare(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
         related_name="shared_projects",
     )
-    role = models.CharField(max_length=16, choices=Role.choices, default=Role.ANNOTATOR)
+    role = models.CharField(max_length=16, choices=Role.choices, default=Role.REVIEWER)
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
@@ -213,7 +200,12 @@ class ProjectShare(models.Model):
 
 
 class ClipAssignment(models.Model):
-    """Who is labelling one clip.
+    """Who was labelling one clip. RETIRED — kept read-only for one release.
+
+    Work is now handed out per frame (``Annotation.assigned_to``): sampling
+    and SAM 3 label the frames, and people review them, so "give eai7 500
+    frames" is the unit a manager thinks in (memory/39). Migration 0012 copied
+    each row onto its clip's unreviewed frames.
 
     Per clip rather than per frame: a clip is a coherent scene — one hotel, one
     stretch of time — so two people labelling the same one keep re-deciding the
@@ -294,6 +286,18 @@ class Annotation(models.Model):
     review_source = models.CharField(
         max_length=10, choices=ReviewSource.choices, default="", blank=True)
     reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="+")
+
+    # Who is reviewing this frame. Null = in the unassigned pool.
+    assigned_to = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="review_frames")
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="+")
+    assigned_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -301,6 +305,12 @@ class Annotation(models.Model):
     class Meta:
         unique_together = [("project", "video", "frame_number")]
         ordering = ["frame_number"]
+        indexes = [
+            # The review grid and the assign pool: to review, whose.
+            # (Keyset order, project/video/frame, rides the unique index.)
+            models.Index(fields=["project", "reviewed", "assigned_to"],
+                         name="ann_review_queue"),
+        ]
 
     def __str__(self):
         return f"Frame {self.frame_number} of {self.video.title}"

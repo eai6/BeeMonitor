@@ -230,70 +230,103 @@ class ProjectDeleteView(LoginRequiredMixin, View):
 
 
 class ProjectDetailView(LoginRequiredMixin, DetailView):
-    """The project's clips, and — at ``/review/`` — its annotated frames.
+    """The project page: frames to review first, clips second.
 
-    Both halves are rendered from one context builder because they always were:
-    the frame grid lived at the bottom of the clip workspace, under the stage
-    tiles, the failures, the filters, the assignment controls, the selection
-    actions and a table of every clip. Choosing what to annotate and checking
-    what came back are different sittings with different filters, so they are
-    now different pages — but splitting the view as well would have meant
-    maintaining two context builders, and the one that already existed for this
-    (ReviewView) had drifted out of the URL conf without anyone noticing.
+    Sampling and SAM 3 label the frames in one GPU pass, so what people come
+    here to do is review those frames (memory/39). The page leads with three
+    numbers — clips, labelled frames, reviewed frames — then a grid of the
+    frames still to review, filtered and handed out per frame. The clip table,
+    where clips are sampled, is the second tab.
     """
 
     model = AnnotationProject
     template_name = "annotations/detail.html"
     context_object_name = "project"
-    #: Set by the ``review`` URL. Same data, the other half of the template.
-    review = False
-
-    def get_template_names(self):
-        return ["annotations/review.html"] if self.review else [self.template_name]
 
     def get_queryset(self):
         # Reading the project. Every write path below names its own level.
         return AnnotationProject.accessible(self.request.user)
 
     def get_context_data(self, **kwargs):
+        from . import assignments as assign_mod
+        from . import frames as frames_mod
+        from . import sampling_remote
+
         ctx = super().get_context_data(**kwargs)
-        project = self.object
+        project, user = self.object, self.request.user
+        tab = "clips" if self.request.GET.get("tab") == "clips" else "frames"
 
-        # Advance any in-flight pre-annotation tasks on page load (the
-        # background reconciler also does this, so it works with no open tab).
-        poll_preannotation_tasks(self.request.user)
-        from .models import PreAnnotationTask
-        active = list(
-            PreAnnotationTask.objects.filter(
-                project=project,
-                status__in=[PreAnnotationTask.Status.QUEUED, PreAnnotationTask.Status.PROCESSING],
-            ).select_related("video")
-        )
-        recent_failed = list(
-            PreAnnotationTask.objects.filter(
-                project=project, status=PreAnnotationTask.Status.FAILED,
-            ).select_related("video")[:5]
-        )
-        ctx["preannot_active"] = active
-        ctx["preannot_failed"] = recent_failed
-        # One shared cause is worth stating once, above the list, instead of
-        # repeating it on every line and leaving the reader to notice.
-        ctx["preannot_all_timed_out"] = bool(recent_failed) and all(
-            "timed out" in (t.error_message or "").lower() for t in recent_failed)
+        ctx["tab"] = tab
+        ctx["metrics"] = frames_mod.metrics(project)
+        ctx["my_role"] = project.role_for(user)
+        ctx["can_assign"] = project.allows(user, "manager")
+        ctx["can_review"] = project.allows(user, "reviewer")
+        # Which hotel and when stays with managers: sharing a project does not
+        # share the footage (people.html).
+        ctx["show_source"] = ctx["can_assign"]
+        ctx["gpu_sampling"] = sampling_remote.enabled()
+        ctx["sampling_status"] = sampling_remote.project_status(project)
 
+        # Everyone on the project who may review: the assign dialog's list
+        # and the "who" filter.
+        from django.contrib.auth import get_user_model
+        member_ids = [project.user_id] + list(
+            project.shares.exclude(role="viewer").values_list("user_id", flat=True))
+        people = {u.pk: u for u in get_user_model().objects.filter(pk__in=member_ids)}
+        ctx["members"] = [{"user": people[uid], "dot": person_colour(uid),
+                           "is_you": uid == user.id}
+                          for uid in member_ids if uid in people]
+
+        loads = assign_mod.workloads(project)
+        for w in loads:
+            w["dot"] = person_colour(w["user_id"])
+            w["is_you"] = w["user_id"] == user.id
+        ctx["workloads"] = loads
+        ctx["mine"] = next((w for w in loads if w["is_you"]), None)
+        ctx["unassigned"] = assign_mod.unassigned_count(project)
+
+        if tab == "frames":
+            self._frames_context(ctx, frames_mod, assign_mod)
+        else:
+            self._clips_context(ctx)
+        return ctx
+
+    def _frames_context(self, ctx, frames_mod, assign_mod):
+        project, user = self.object, self.request.user
+        f = frames_mod.parse(self.request.GET)
+        base = frames_mod.base(project, f, user)
+        pg, cards = frames_mod.page(frames_mod.with_status(base, f["status"]),
+                                    self.request.GET.get("page"))
+        for c in cards:
+            c["assignee_is_you"] = c["assignee"] is not None and c["assignee"].pk == user.id
+        ctx.update({
+            "frame_filter": f,
+            "frame_qs": frames_mod.query(f),
+            "frame_qs_nostatus": frames_mod.query({k: v for k, v in f.items()
+                                                   if k != "status"}),
+            "filter_on": any(f[k] for k in f if k != "status"),
+            "status_counts": frames_mod.status_counts(base),
+            "pool_count": assign_mod.pool(base).count(),
+            "page_obj": pg,
+            "frame_cards": cards,
+            "device_opts": sorted(
+                {(v.device_id, v.device.name)
+                 for v in project.videos.select_related("device") if v.device_id},
+                key=lambda d: d[1]),
+        })
+
+    def _clips_context(self, ctx):
+        """The clip table: filter, stage, sampling. Unchanged in substance from
+        the page before the review redesign, minus clip assignment."""
         from django.db.models import Count, Q as _Q
 
         from apps.analysis.views import _sanitize_site, _unsanitize_site
-        from apps.devices.models import Device
-        from apps.videos.models import Video
 
+        project = self.object
         videos = project.videos.all()
-        ctx["project_videos"] = videos
-        ctx["video_count"] = videos.count()
+        video_count = ctx["metrics"]["clips"]
 
-        # Per-video annotated-frame counts in ONE query. This used to be a COUNT
-        # per video inside a loop — 45 queries for a 45-video project, growing
-        # linearly with the project.
+        # Per-video annotated-frame counts in ONE query.
         counted = list(
             videos.annotate(
                 annotation_count=Count("annotations",
@@ -302,12 +335,11 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
             .select_related("device")
         )
 
-        # Filter the project's OWN videos. A flat list of every video stops being
-        # usable past a few dozen. Same dimensions as the Processing hub, but
-        # prefixed v_ so they can't collide with the add-videos modal's av_.
+        # GET so a filtered view is a shareable URL. Prefixed v_ so they can't
+        # collide with the add-videos modal's av_.
         vf = {k: self.request.GET.get("v_" + k, "").strip()
               for k in ("q", "device", "site", "year", "month", "day",
-                        "hfrom", "hto", "state")}
+                        "hfrom", "hto")}
 
         def _keep(v):
             if vf["q"] and vf["q"].lower() not in (v.title or "").lower():
@@ -330,10 +362,6 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
                 inside = (lo <= hour < hi) if lo < hi else (hour >= lo or hour < hi)
                 if lo != hi and not inside:
                     return False
-            if vf["state"] == "annotated" and v.annotation_count == 0:
-                return False
-            if vf["state"] == "unannotated" and v.annotation_count > 0:
-                return False
             return True
 
         try:
@@ -343,17 +371,20 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         filtered.sort(key=lambda v: (v.recorded_at is None, v.recorded_at, v.pk),
                       reverse=True)
 
-        # Where each clip has actually got to. One aggregate, not a count per
-        # clip — and the stage is what the page filters and acts on.
         from . import progress as progress_mod
 
-        failed_ids = {t.video_id for t in ctx.get("preannot_failed") or []}
-        states = progress_mod.per_video(self.object, failed_ids)
+        # Failed: sampling failed and has not succeeded since (a retry that
+        # worked clears it).
+        from .models import FrameSamplingTask
+        tasks = FrameSamplingTask.objects.filter(project=project)
+        failed_ids = (set(tasks.filter(status=FrameSamplingTask.Status.FAILED)
+                          .values_list("video_id", flat=True))
+                      - set(tasks.filter(status=FrameSamplingTask.Status.COMPLETED)
+                            .values_list("video_id", flat=True)))
+        states = progress_mod.per_video(project, failed_ids)
         stage = (self.request.GET.get("stage") or "").strip()
         if stage in progress_mod.STAGE_LABELS:
             if stage == "new":
-                # These clips have no annotation rows to aggregate, so they are
-                # the ones the aggregate never saw.
                 filtered = [v for v in filtered
                             if states.get(v.pk, {}).get("stage", "new") == "new"
                             and v.pk not in failed_ids]
@@ -361,86 +392,31 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
                 wanted = progress_mod.filter_ids(states, len(counted), stage)
                 filtered = [v for v in filtered if v.pk in wanted]
 
-        # Who is doing which clip. One query for the whole project; the rows
-        # carry it so the list can filter, colour and reassign without more.
-        from . import assignments as assign_mod
-
-        holders = assign_mod.by_video(self.object)
-        assignee = (self.request.GET.get("assignee") or "").strip()
-        if assignee == "none":
-            filtered = [v for v in filtered if v.pk not in holders]
-        elif assignee == "me":
-            filtered = [v for v in filtered
-                        if holders.get(v.pk)
-                        and holders[v.pk].user_id == self.request.user.id]
-        elif assignee.isdigit():
-            filtered = [v for v in filtered
-                        if holders.get(v.pk)
-                        and holders[v.pk].user_id == int(assignee)]
-
         VIDEO_LIST_CAP = 500
         shown = progress_mod.decorate(filtered[:VIDEO_LIST_CAP], states, failed_ids)
-        # Frame sampling: which backend, and what state this project's clips are in.
-        from . import sampling_remote
-        ctx["gpu_sampling"] = sampling_remote.enabled()
-        ctx["sampling_status"] = sampling_remote.project_status(self.object)
-        # Unlabelled sampled frames per clip — what "Auto-label N of M" counts.
-        todo_by_video = dict(
-            Annotation.objects.filter(project=self.object, boxes=[], reviewed=False)
-            .order_by().values_list("video_id").annotate(n=models.Count("id")))
         # Latest motion strip per clip (from its most recent motion sampling).
-        from .models import FrameSamplingTask
         motion_by_video = {}
         for vid, motion in (FrameSamplingTask.objects
-                            .filter(project=self.object, motion__isnull=False,
+                            .filter(project=project, motion__isnull=False,
                                     video_id__in=[v.pk for v in shown])
                             .order_by("video_id", "-created_at")
                             .values_list("video_id", "motion")):
             motion_by_video.setdefault(vid, motion)
         ctx["video_data"] = [{"video": v, "annotation_count": v.annotation_count,
                               "progress": v.progress,
-                              "holder": holders.get(v.pk),
-                              "holder_dot": person_colour(
-                                  holders[v.pk].user_id) if v.pk in holders else "",
-                              "mine": (v.pk in holders
-                                       and holders[v.pk].user_id == self.request.user.id),
-                              "motion": _motion_strip(motion_by_video.get(v.pk)),
-                              "todo": todo_by_video.get(v.pk, 0)}
+                              "motion": _motion_strip(motion_by_video.get(v.pk))}
                              for v in shown]
-
-        # Everyone on the project, for the "assigned to" filter and the assign
-        # control. Counts come from the same map, so the strip and the rows can
-        # never disagree.
-        from django.contrib.auth import get_user_model
-
-        User = get_user_model()
-        member_ids = [self.object.user_id] + list(
-            self.object.shares.values_list("user_id", flat=True))
-        held = {}
-        for a in holders.values():
-            held[a.user_id] = held.get(a.user_id, 0) + 1
-        members = {u.pk: u for u in User.objects.filter(pk__in=member_ids)}
-        ctx["members"] = [{
-            "user": members[uid], "dot": person_colour(uid),
-            "count": held.get(uid, 0),
-            "is_you": uid == self.request.user.id,
-        } for uid in member_ids if uid in members]
-        ctx["assignee"] = assignee
-        ctx["unassigned_count"] = sum(
-            1 for v in counted if v.pk not in holders)
-        ctx["my_role"] = self.object.role_for(self.request.user)
-        ctx["can_assign"] = self.object.allows(self.request.user, "manager")
-        ctx["can_annotate"] = self.object.allows(self.request.user, "annotator")
-        ctx["my_clips"] = sum(1 for a in holders.values()
-                              if a.user_id == self.request.user.id)
+        ctx["video_count"] = video_count
         ctx["stage"] = stage
-        ctx["progress"] = progress_mod.summary(
-            self.object, states, len(counted), failed_ids)
+        counts = progress_mod.stage_counts(states, len(counted), failed_ids)
+        ctx["stage_links"] = [("", "All", video_count)] + [
+            (key, progress_mod.STAGE_LABELS[key], counts[key])
+            for key in ("new", "empty", "labelled", "reviewed", "failed")
+            if counts[key] or key == stage]
         ctx["video_filter"] = vf
         ctx["video_filter_on"] = any(vf.values())
         ctx["video_filtered_count"] = len(filtered)
         ctx["video_list_capped"] = len(filtered) > len(shown)
-        ctx["video_annotated_count"] = sum(1 for v in counted if v.annotation_count > 0)
         ctx["hours"] = list(range(24))
         # Options come from the project's own videos, so a filter can never offer
         # a value that matches nothing here.
@@ -453,145 +429,17 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
             "days": sorted({v.day for v in counted if v.day}),
         }
 
-        # The clip picker moved to AddVideosWorkspaceView, which uses the
-        # shared workspace filter. What stood here was a second, hand-rolled
-        # copy — title/device/site/year/month/day/confirmed — that had already
-        # drifted from apply_video_filters: no multi-hotel selection, no
-        # time-of-day window, no date range, no "not yet analysed".
 
-        # Build combined frame grid with filters
-        filter_video = self.request.GET.get("video", "")
-        filter_class = self.request.GET.get("class", "")
-        filter_review = self.request.GET.get("review", "")  # ""|reviewed|unreviewed|human|llm
-        ctx["filter_video"] = filter_video
-        ctx["filter_class"] = filter_class
-        ctx["filter_review"] = filter_review
+class ReviewRedirectView(LoginRequiredMixin, View):
+    """``/review/`` was the frame grid on its own page. The grid is now the
+    project page's first tab; old links and bookmarks land there, filters kept."""
 
-        anns_qs = project.annotations.select_related("video").order_by("video__title", "frame_number")
-        if filter_video:
-            try:
-                anns_qs = anns_qs.filter(video_id=int(filter_video))
-            except (ValueError, TypeError):
-                pass
-        if filter_review == "reviewed":
-            anns_qs = anns_qs.filter(reviewed=True)
-        elif filter_review == "unreviewed":
-            anns_qs = anns_qs.filter(reviewed=False)
-        elif filter_review in ("human", "llm"):
-            anns_qs = anns_qs.filter(review_source=filter_review)
+    def get(self, request, pk):
+        from django.shortcuts import redirect
 
-        # Review progress across the whole project (not just the filtered page).
-        proj_anns = project.annotations
-        ctx["reviewed_count"] = proj_anns.filter(reviewed=True).count()
-        ctx["reviewed_human"] = proj_anns.filter(review_source="human").count()
-        ctx["reviewed_llm"] = proj_anns.filter(review_source="llm").count()
-
-        # Project-wide totals for the top stat tiles — these must NOT change with
-        # the video/class/review filters (a filter making them read 0 looked like
-        # data loss). Class breakdown here also shows which labels actually exist
-        # yet (e.g. is "nest tube" populated, or still pre-annotating?).
-        proj_total_frames = 0
-        proj_total_boxes = 0
-        proj_class_counts = {}
-        for boxes in proj_anns.values_list("boxes", flat=True):
-            proj_total_frames += 1
-            for b in (boxes or []):
-                cls = b.get("class", "unknown")
-                proj_class_counts[cls] = proj_class_counts.get(cls, 0) + 1
-                proj_total_boxes += 1
-        ctx["proj_total_frames"] = proj_total_frames
-        ctx["proj_total_boxes"] = proj_total_boxes
-        ctx["proj_class_counts"] = dict(sorted(proj_class_counts.items()))
-
-        # Stats run over ALL matching annotations; the thumbnail grid is
-        # paginated (presigning thousands of URLs per page-load is too slow).
-        PAGE_SIZE = 500
-        try:
-            page = max(1, int(self.request.GET.get("page", 1)))
-        except (TypeError, ValueError):
-            page = 1
-        win_start = (page - 1) * PAGE_SIZE
-        win_end = win_start + PAGE_SIZE
-
-        total_boxes = 0
-        total_matching = 0  # index into the (class-)filtered set
-        class_counts = {}
-        frame_cards = []
-
-        for ann in anns_qs:
-            boxes = ann.boxes or []
-            box_classes = sorted(set(b.get("class", "unknown") for b in boxes)) if boxes else []
-
-            # Class filter
-            if filter_class and filter_class not in box_classes:
-                continue
-
-            for b in boxes:
-                cls = b.get("class", "unknown")
-                class_counts[cls] = class_counts.get(cls, 0) + 1
-            total_boxes += len(boxes)
-
-            # Only build cards for the current page window.
-            if win_start <= total_matching < win_end:
-                frame_cards.append({
-                    "video_pk": ann.video_id,
-                    "video_title": ann.video.title,
-                    "frame_number": ann.frame_number,
-                    "box_count": len(boxes),
-                    "classes": box_classes,
-                    "frame_image_path": ann.frame_image_path or "",
-                    "reviewed": ann.reviewed,
-                    "review_source": ann.review_source,
-                })
-            total_matching += 1
-
-        # Presigned URLs for frame thumbnails
-        try:
-            from config.storage import get_s3_client
-            s3 = get_s3_client()
-            for card in frame_cards:
-                if card["frame_image_path"]:
-                    card["thumbnail_url"] = s3.generate_presigned_url(
-                        "processed", card["frame_image_path"], expiry_hours=2,
-                    )
-        except Exception as e:
-            logger.warning("Failed to presign thumbnails: %s", e)
-
-        ctx["total_annotations"] = total_matching
-        ctx["total_boxes"] = total_boxes
-        ctx["class_counts"] = class_counts
-        ctx["frame_cards"] = frame_cards
-        # Pagination for the grid.
-        import math
-        total_pages = max(1, math.ceil(total_matching / PAGE_SIZE)) if total_matching else 1
-        page = min(page, total_pages)
-        ctx["page"] = page
-        ctx["total_pages"] = total_pages
-        ctx["page_size"] = PAGE_SIZE
-        ctx["page_start"] = win_start + 1 if frame_cards else 0
-        ctx["page_end"] = win_start + len(frame_cards)
-        ctx["has_prev_page"] = page > 1
-        ctx["has_next_page"] = page < total_pages
-        # Query string carrying the current filters (minus page) for page links.
-        from urllib.parse import urlencode
-        _pg = {k: v for k, v in (("video", filter_video), ("class", filter_class),
-                                 ("review", filter_review)) if v}
-        ctx["page_qs_prefix"] = ("?" + urlencode(_pg) + "&") if _pg else "?"
-
-        # Defaults for the AI pre-annotate sampling controls.
-        from django.conf import settings
-        ctx["preannotate_defaults"] = {
-            "sample_interval": settings.PREANNOTATE_SAMPLE_INTERVAL,
-            "max_frames": settings.PREANNOTATE_MAX_FRAMES,
-            "confidence": settings.PREANNOTATE_CONFIDENCE,
-        }
-        # Fine-tuned models selectable as the pre-annotation labeler.
-        from apps.training.models import CustomModel
-        ctx["custom_bee_models"] = CustomModel.objects.filter(
-            user=self.request.user, is_active=True, status=CustomModel.Status.READY,
-        ).exclude(storage_key="")
-
-        return ctx
+        get_object_or_404(AnnotationProject.accessible(request.user), pk=pk)
+        qs = request.GET.urlencode()
+        return redirect(reverse("annotations:detail", args=[pk]) + (f"?{qs}" if qs else ""))
 
 
 class RemoveVideoView(LoginRequiredMixin, View):
@@ -748,7 +596,7 @@ class ProjectPeopleView(LoginRequiredMixin, TemplateView):
             "people": people,
             "roles": ProjectShare.Role.choices,
             "can_manage_people": project.user_id == self.request.user.id,
-            "unassigned_count": assign_mod.unassigned(project).count(),
+            "unassigned_count": assign_mod.unassigned_count(project),
             "my_role": project.role_for(self.request.user),
         })
         return ctx
@@ -766,7 +614,7 @@ class ShareInviteView(LoginRequiredMixin, View):
 
         project = get_object_or_404(AnnotationProject.owned(request.user), pk=pk)
         who = (request.POST.get("who") or "").strip()
-        role = request.POST.get("role") or ProjectShare.Role.ANNOTATOR
+        role = request.POST.get("role") or ProjectShare.Role.REVIEWER
 
         User = get_user_model()
         user = (User.objects.filter(username__iexact=who).first()
@@ -802,14 +650,15 @@ class ShareUpdateView(LoginRequiredMixin, View):
                                   pk=request.POST.get("share_id"))
 
         if request.POST.get("remove"):
-            # Their assignments go back to the pool rather than vanishing with
-            # them — the work is the project's, not theirs.
-            freed = project.assignments.filter(user=share.user).delete()[0]
+            # Their unreviewed frames go back to the pool rather than staying
+            # with someone who can no longer open them.
+            from . import assignments as assign_mod
+            freed = assign_mod.release(project, share.user)
             name = share.user.username
             share.delete()
             messages.info(
                 request,
-                f"Removed {name}." + (f" {freed} clip(s) returned to the "
+                f"Removed {name}." + (f" {freed} frame(s) returned to the "
                                       "unassigned pool." if freed else ""))
         else:
             role = request.POST.get("role")
@@ -821,8 +670,13 @@ class ShareUpdateView(LoginRequiredMixin, View):
         return redirect("annotations:people", pk=pk)
 
 
-class AssignClipsView(LoginRequiredMixin, View):
-    """Hand clips out, or deal them round-robin. Manager and above."""
+class AssignFramesView(LoginRequiredMixin, View):
+    """Give a reviewer N frames to review, or take theirs back. Manager and up.
+
+    The N come from the frames the page is showing (its filter), still to
+    review and held by nobody — spread across clips and days by default, or
+    whole clips oldest first.
+    """
 
     def post(self, request, pk):
         from django.contrib import messages
@@ -830,37 +684,42 @@ class AssignClipsView(LoginRequiredMixin, View):
         from django.shortcuts import redirect
 
         from . import assignments as assign_mod
+        from . import frames as frames_mod
 
         project = get_object_or_404(AnnotationProject.manageable(request.user), pk=pk)
-        video_ids = [int(v) for v in request.POST.getlist("video_ids") if str(v).isdigit()]
-        if not video_ids:
-            messages.warning(request, "No clips selected.")
-            return redirect("annotations:detail", pk=pk)
+        f = frames_mod.parse(request.POST)
+        back = reverse("annotations:detail", args=[pk]) + "?" + frames_mod.query(f)
 
-        User = get_user_model()
-        targets = User.objects.filter(pk__in=request.POST.getlist("assignee"))
-        # Only people who are actually on the project, or the assignment names
-        # someone who cannot open it.
-        allowed = {project.user_id} | set(
-            project.shares.values_list("user_id", flat=True))
-        targets = [u for u in targets if u.id in allowed]
+        who = get_user_model().objects.filter(pk=request.POST.get("reviewer") or 0).first()
+        # Only people who may review here, or the frames sit with someone who
+        # cannot open them.
+        if who is None or not project.allows(who, "reviewer"):
+            messages.error(request, "Pick someone on this project who can review.")
+            return redirect(back)
 
-        if not targets:
-            freed = project.assignments.filter(video_id__in=video_ids).delete()[0]
-            messages.info(request, f"Returned {freed} clip(s) to the pool.")
-        elif len(targets) == 1:
-            moved = assign_mod.assign(project, video_ids, targets[0], by=request.user)
-            messages.success(request,
-                             f"Assigned {moved} clip(s) to {targets[0].username}.")
+        if request.POST.get("release"):
+            freed = assign_mod.release(project, who)
+            messages.info(request, f"Returned {freed} unreviewed frame(s) from "
+                                   f"{who.username} to the pool.")
+            return redirect(back)
+
+        try:
+            count = max(0, min(int(request.POST.get("count") or 0), 100_000))
+        except (TypeError, ValueError):
+            count = 0
+        order = "clips" if request.POST.get("order") == "clips" else "spread"
+        pool = assign_mod.pool(frames_mod.base(project, f, request.user))
+        done = assign_mod.assign(project, assign_mod.pick(pool, count, order), who,
+                                 by=request.user)
+        if done:
+            messages.success(request, f"Assigned {done} frame(s) to {who.username}.")
         else:
-            tally = assign_mod.distribute(project, video_ids, targets, by=request.user)
-            spread = ", ".join(f"{u.username} {tally.get(u.id, 0)}" for u in targets)
-            messages.success(request, f"Split {len(video_ids)} clip(s): {spread}.")
-        return redirect(request.POST.get("next") or f"/annotations/{pk}/")
+            messages.warning(request, "No unassigned frames to review match this filter.")
+        return redirect(back)
 
 
-class ClaimClipsView(LoginRequiredMixin, View):
-    """Take clips from the unassigned pool, or give your own back."""
+class TakeFramesView(LoginRequiredMixin, View):
+    """A reviewer takes frames from the pool for themselves, or gives theirs back."""
 
     def post(self, request, pk):
         from django.contrib import messages
@@ -868,26 +727,23 @@ class ClaimClipsView(LoginRequiredMixin, View):
 
         from . import assignments as assign_mod
 
-        project = get_object_or_404(AnnotationProject.annotatable(request.user), pk=pk)
-        video_ids = [int(v) for v in request.POST.getlist("video_ids") if str(v).isdigit()]
-        releasing = bool(request.POST.get("release"))
-
-        done = 0
-        for vid in video_ids:
-            if releasing:
-                done += 1 if assign_mod.release(project, vid, request.user) else 0
-            else:
-                done += 1 if assign_mod.claim(project, vid, request.user) else 0
-
-        if releasing:
-            messages.info(request, f"Returned {done} clip(s) to the pool.")
+        project = get_object_or_404(AnnotationProject.reviewable(request.user), pk=pk)
+        if request.POST.get("release"):
+            freed = assign_mod.release(project, request.user)
+            messages.info(request, f"Returned {freed} frame(s) to the pool.")
         else:
-            messages.success(request, f"Took {done} clip(s).")
-            if done < len(video_ids):
-                messages.warning(
-                    request,
-                    f"{len(video_ids) - done} were already taken by someone else.")
-        return redirect(request.POST.get("next") or f"/annotations/{pk}/")
+            try:
+                count = max(1, min(int(request.POST.get("count") or 100), 1000))
+            except (TypeError, ValueError):
+                count = 100
+            pool = assign_mod.pool(Annotation.objects.filter(project=project))
+            done = assign_mod.assign(project, assign_mod.pick(pool, count), request.user,
+                                     by=request.user)
+            if done:
+                messages.success(request, f"Took {done} frame(s) to review.")
+            else:
+                messages.info(request, "Nothing left in the pool.")
+        return redirect("annotations:detail", pk=pk)
 
 
 # One add is capped: every added clip is frame-sampled (up to max_frames each)
@@ -1183,20 +1039,36 @@ class AddVideosView(LoginRequiredMixin, View):
         return redirect("annotations:detail", pk=project.pk)
 
 
-def _editor_landing(project, user, video_id, frame):
+def _editor_queue(project, user, params):
+    """The frames the editor's prev/next walks, and the query string that keeps it.
+
+    Opened from the review grid ("Review these", "Continue reviewing") the
+    editor carries that grid's filter, so prev/next stay inside it. Opened any
+    other way — a clip link, "go to frame" — it walks every frame.
+    """
+    from . import frames as frames_mod
+
+    if any(k in params for k in frames_mod.FILTER_KEYS):
+        f = frames_mod.parse(params)
+        return frames_mod.filtered(project, f, user), "&" + frames_mod.query(f), f
+    return Annotation.objects.filter(project=project), "", None
+
+
+def _editor_landing(project, user, params):
     """Where the editor should open, or None to open what was asked for.
 
     With a clip: that frame if it was sampled, else the clip's first frame
-    still needing labels (else its first frame). Without one: the first frame
-    needing labels in the user's assigned clips, then in the whole project.
-    "Needing labels" = no boxes and not reviewed. Order matches the editor's
-    prev/next (clip title, then frame).
+    still to review (else its first frame). With a queue (the grid's filter):
+    its first frame. Otherwise: the first frame still to review assigned to
+    the user, then in the pool, then any.
     """
-    from .models import ClipAssignment
+    from . import frames as frames_mod
 
+    video_id, frame = params.get("video"), params.get("frame")
     frames = Annotation.objects.filter(project=project)
-    todo = frames.filter(boxes=[], reviewed=False)
-    order = ("video__title", "video_id", "frame_number")
+    todo = frames.filter(reviewed=False)
+    order = frames_mod.ORDER
+    queue, suffix, f = _editor_queue(project, user, params)
     try:
         frame = int(frame) if frame not in (None, "") else None
     except (TypeError, ValueError):
@@ -1209,15 +1081,16 @@ def _editor_landing(project, user, video_id, frame):
             return None
         hit = (todo.filter(video_id=video_id).order_by("frame_number").first()
                or frames.filter(video_id=video_id).order_by("frame_number").first())
+    elif f is not None:
+        hit = queue.order_by(*order).first()
     else:
-        mine = ClipAssignment.objects.filter(project=project, user=user).values("video_id")
-        hit = (todo.filter(video_id__in=mine).order_by(*order).first()
-               or todo.order_by(*order).first()
+        hit = (todo.filter(assigned_to=user).order_by(*order).first()
+               or todo.filter(assigned_to__isnull=True).order_by(*order).first()
                or frames.order_by(*order).first())
     if hit is None:
         return None
     return (reverse("annotations:editor", args=[project.pk])
-            + f"?video={hit.video_id}&frame={hit.frame_number}")
+            + f"?video={hit.video_id}&frame={hit.frame_number}{suffix}")
 
 
 class AnnotationEditorView(LoginRequiredMixin, TemplateView):
@@ -1249,7 +1122,7 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
             AnnotationProject.accessible(request.user), pk=self.kwargs["pk"])
         # jump=1: the editor's "go to frame N" — an unsampled frame on purpose.
         target = None if request.GET.get("jump") else _editor_landing(
-            project, request.user, request.GET.get("video"), request.GET.get("frame"))
+            project, request.user, request.GET)
         if target:
             return redirect(target)
         return super().get(request, *args, **kwargs)
@@ -1313,28 +1186,26 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
         ctx["videos"] = project.videos.all()
         ctx["video_url"] = ""
 
-        # Build ordered frame list for prev/next navigation across all project frames
-        all_frames = list(
-            Annotation.objects.filter(project=project)
-            .order_by("video__title", "frame_number")
-            .values_list("video_id", "frame_number")
-        )
-        current_key = (video.pk if video else None, frame_number)
-        ctx["total_project_frames"] = len(all_frames)
+        # Prev/next: a keyset step through the queue (the grid's filter, or
+        # every frame). It used to load every frame key and search the list.
+        from . import frames as frames_mod
+
+        queue, suffix, f = _editor_queue(project, self.request.user, self.request.GET)
+        ctx["queue_filter"] = f
+        ctx["queue_qs"] = suffix.lstrip("&")
+        ctx["total_project_frames"] = 0
         ctx["current_frame_index"] = 0
         ctx["prev_frame_url"] = ""
         ctx["next_frame_url"] = ""
-
-        if all_frames and current_key in all_frames:
-            idx = all_frames.index(current_key)
-            ctx["current_frame_index"] = idx + 1
+        if video:
+            pos, total, prev, nxt = frames_mod.neighbours(queue, video.pk, frame_number)
             base_url = f"/annotations/{project.pk}/edit/"
-            if idx > 0:
-                pv, pf = all_frames[idx - 1]
-                ctx["prev_frame_url"] = f"{base_url}?video={pv}&frame={pf}"
-            if idx < len(all_frames) - 1:
-                nv, nf = all_frames[idx + 1]
-                ctx["next_frame_url"] = f"{base_url}?video={nv}&frame={nf}"
+            ctx["total_project_frames"] = total
+            ctx["current_frame_index"] = min(pos, total)
+            if prev:
+                ctx["prev_frame_url"] = f"{base_url}?video={prev[0]}&frame={prev[1]}{suffix}"
+            if nxt:
+                ctx["next_frame_url"] = f"{base_url}?video={nxt[0]}&frame={nxt[1]}{suffix}"
 
         # Presigned URL for video playback
         if video and video.storage_key and not video.storage_key.startswith("s3://"):
@@ -1402,10 +1273,10 @@ class TransferVideoView(LoginRequiredMixin, View):
 
 class SaveAnnotationView(LoginRequiredMixin, View):
     def post(self, request, pk):
-        # Drawing. The per-clip check below narrows it further: an annotator
-        # works only what is assigned to them.
+        # Reviewing. The per-frame check below narrows it further: a reviewer
+        # fixes what is assigned to them, or what nobody holds.
         project = get_object_or_404(
-            AnnotationProject.annotatable(request.user), pk=pk)
+            AnnotationProject.reviewable(request.user), pk=pk)
         try:
             data = json.loads(request.body)
         except json.JSONDecodeError:
@@ -1420,14 +1291,12 @@ class SaveAnnotationView(LoginRequiredMixin, View):
 
         video = get_object_or_404(project.videos, pk=video_id)
 
-        # The rule that actually confines an annotator: they draw on the clips
-        # assigned to them, by someone else or by themselves out of the pool.
-        # Reviewers and above are not confined that way, because checking other
-        # people's work is the job.
-        if not project.may_annotate_video(request.user, video.pk):
+        frame = (Annotation.objects.select_related("assigned_to")
+                 .filter(project=project, video=video, frame_number=frame_number).first())
+        if not project.may_edit_frame(request.user, frame):
             return JsonResponse(
-                {"error": "This clip is not assigned to you. Claim it from the "
-                          "unassigned pool, or ask for it to be assigned."},
+                {"error": f"This frame is assigned to {frame.assigned_to.username}. "
+                          "Take frames from the unassigned pool, or ask a manager."},
                 status=403)
 
         # A human saving in the editor = a human review.
@@ -1441,6 +1310,7 @@ class SaveAnnotationView(LoginRequiredMixin, View):
                 "reviewed": True,
                 "review_source": Annotation.ReviewSource.HUMAN,
                 "reviewed_at": timezone.now(),
+                "reviewed_by": request.user,
                 # A human saved this frame, so it is no longer a bare sampled
                 # placeholder — including when they saved it with no boxes, which
                 # is a deliberate negative example.
@@ -1882,86 +1752,6 @@ def _create_preannotation_task(request, project, video, frame_numbers=None):
                if frame_numbers else {}),
         },
     )
-
-
-class PreAnnotateAllView(LoginRequiredMixin, View):
-    """Run AI pre-annotation on all videos in a project, or on the subset
-    checked in the video list (video_ids)."""
-
-    def post(self, request, pk):
-        from django.shortcuts import redirect
-        from django.contrib import messages
-
-        # Spends GPU, on every sampled frame.
-        project = get_object_or_404(
-            AnnotationProject.manageable(request.user), pk=pk)
-        videos = project.videos.all()
-        video_ids = request.POST.getlist("video_ids")
-        if video_ids:
-            videos = videos.filter(pk__in=video_ids)
-
-        if not videos.exists():
-            messages.warning(request, "No videos in this project.")
-            return redirect("annotations:detail", pk=pk)
-
-        # "Auto-label N of M frames": pick N unlabelled sampled frames, spread
-        # across hotels, hours and clips, and send each clip exactly its picks.
-        if request.POST.get("a_frames") not in (None, ""):
-            return self._run_on_picked(request, project, videos)
-
-        # One durable QUEUED task per video. The drain below promotes only as
-        # many as the concurrency cap allows and the reconciler picks up the
-        # rest, so a 200-video project doesn't fire 200 GPU invocations at once.
-        count = 0
-        labeler = "yolo"
-        for video in videos:
-            if not video.storage_key:
-                continue
-            task = _create_preannotation_task(request, project, video)
-            labeler = task.labeler
-            count += 1
-        started = drain_preannotation_queue()
-
-        engine = "SAM 3" if labeler == "sam3" else "AI"
-        queued = max(0, count - started)
-        msg = (f"{engine} pre-annotation started for {started} video(s). Runs in "
-               "the background — refresh to see progress.")
-        if queued:
-            msg += f" {queued} more queued; they start as slots free up."
-        messages.info(request, msg)
-        return redirect("annotations:detail", pk=pk)
-
-
-    def _run_on_picked(self, request, project, videos):
-        from django.shortcuts import redirect
-        from django.contrib import messages
-        from . import preannotate_pick
-
-        try:
-            target = max(1, int(request.POST.get("a_frames")))
-        except (TypeError, ValueError):
-            messages.error(request, "Enter how many frames to auto-label.")
-            return redirect("annotations:detail", pk=project.pk)
-        eligible = preannotate_pick.eligible_frames(project, videos).count()
-        picks = preannotate_pick.pick(project, videos.exclude(storage_key=""), target)
-        if not picks:
-            messages.warning(request, "No unlabelled sampled frames to auto-label — "
-                                      "sample the clips first.")
-            return redirect("annotations:detail", pk=project.pk)
-        by_id = {v.pk: v for v in videos.filter(pk__in=picks)}
-        labeler, frames = "yolo", 0
-        for vid, frame_numbers in picks.items():
-            task = _create_preannotation_task(request, project, by_id[vid], frame_numbers)
-            labeler = task.labeler
-            frames += len(frame_numbers)
-        started = drain_preannotation_queue()
-        engine = "SAM 3" if labeler == "sam3" else "AI"
-        messages.info(
-            request,
-            f"{engine} auto-labelling {frames:,} of {eligible:,} unlabelled frames, spread "
-            f"across {len(picks)} clip(s). The first may wait a few minutes for the GPU "
-            "to start; the rest follow while it is warm. Refresh to see progress.")
-        return redirect("annotations:detail", pk=project.pk)
 
 
 class CancelPreAnnotationView(LoginRequiredMixin, View):

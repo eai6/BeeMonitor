@@ -47,14 +47,13 @@ class SmokeTests(TestCase):
         v = Video.objects.create(user=self.user, title="c", storage_key="a/c.mp4",
                                  file_size_bytes=1, status=Video.Status.READY)
         proj.videos.add(v)
-        html = self.client.get(f"/annotations/{proj.pk}/").content.decode()
-        # Both actions live on the clip list they act on, not in a numbered bar.
-        self.assertIn("Sample <span", html)
-        self.assertIn("Auto-label <span", html)
-        # The cheap and the expensive path must stay distinguishable at a glance,
-        # and the expensive one must say what it is about to touch.
-        self.assertIn("GPU", html)
-        self.assertIn("runs sam 3 on a gpu", html.lower())
+        html = self.client.get(f"/annotations/{proj.pk}/?tab=clips").content.decode()
+        # Sampling lives on the clip list it acts on, and labels in the same
+        # GPU pass (there is no separate auto-label any more), so it must say
+        # what it is about to touch.
+        self.assertIn("Sample", html)
+        self.assertNotIn("Auto-label", html)
+        self.assertIn("clip-scope", html)
 
     def test_lessons_pages_render(self):
         self.assertEqual(self.client.get("/pipelines/lessons/").status_code, 200)

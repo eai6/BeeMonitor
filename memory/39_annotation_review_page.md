@@ -1,6 +1,6 @@
 # 39 · Annotation project page: review first
 
-Status: **plan, awaiting design approval** (2026-09-25)
+Status: **built** (2026-09-25) — migrations 0012 (frame assignment) and 0013 (no annotators)
 Design canvas: https://claude.ai/artifact/QL6XaWmJzaF5cAzVwFfPfY
 Source request: Google Doc "Annotation Review Page" (screenshots of Class 597).
 
@@ -112,7 +112,19 @@ exists, the grid filters on it, and a bulk `UPDATE … WHERE id IN (…)` assign
 7. Update tests: test_assignments, test_access, test_view_access,
    test_workflow_ui, test_page_split, test_batch_autolabel (delete).
 
-## Open questions
+## Decisions (2026-09-25)
+
+- Assign pool = the grid's current filter, spread by default.
+- `/review/` redirects to the Frames tab, filters kept.
+- Reviewed frames with no boxes count as reviewed.
+- **No annotator role.** SAM 3 labels; people review. Roles are viewer <
+  reviewer < manager < owner; 0013 turned every annotator into a reviewer.
+  A reviewer saves frames assigned to them or unassigned; a manager, any frame.
+- Device and recording time on frame cards, and those filters, are shown to
+  managers only — sharing a project does not share where or when (people.html).
+- Clip rows marked Failed come from failed sampling runs (not Auto-label).
+
+## Open questions (resolved above)
 
 1. Assign pool: current filter + spread (designed) — confirm.
 2. Should `/review/` stay as its own URL, or redirect to the Frames tab?

@@ -1,118 +1,100 @@
-"""Who is doing which clips, and how to hand work out.
+"""Who is reviewing which frames, and how to hand them out.
 
-Assignment is per clip. A clip is a coherent scene — one hotel, one stretch of
-time — so two people labelling the same one keep re-deciding the same judgement
-calls, and "who labelled this" stops having an answer.
+Assignment is per frame. Sampling and SAM 3 label the frames in one GPU pass;
+what people do is check those labels, and "give eai7 500 frames" is the unit a
+manager thinks in (memory/39). It used to be per clip, back when a person
+labelled every frame of a clip from scratch.
+
+A frame with no ``assigned_to`` is in the pool. Reviewed frames are done and
+never handed out again.
 """
 
 from django.db.models import Count, Q
+from django.utils import timezone
 
-from .models import ClipAssignment
+from .models import Annotation
+
+# SQLite caps bound parameters; Postgres doesn't mind either way.
+_CHUNK = 500
 
 
-def by_video(project):
-    """``{video_id: ClipAssignment}`` for the whole project, in one query."""
-    return {a.video_id: a for a in
-            project.assignments.select_related("user").all()}
+def pool(qs):
+    """Frames still to review that nobody holds, out of any frame query."""
+    return qs.filter(reviewed=False, assigned_to__isnull=True)
 
 
 def workloads(project):
-    """Per person: clips assigned, frames in them, frames they have labelled.
-
-    The owner's view of who has what. Counted from the annotations rather than
-    from the assignments, because "12 clips" says nothing about whether the
-    work is nearly done or barely started.
-    """
-    from .models import Annotation
-
-    rows = (ClipAssignment.objects.filter(project=project)
-            .values("user_id", "user__username")
-            .annotate(clips=Count("video_id", distinct=True))
-            .order_by("user__username"))
-
-    frames = (Annotation.objects.filter(project=project).order_by()
-              .values("video__clip_assignments__user_id")
-              .annotate(total=Count("id"),
-                        labelled=Count("id", filter=~Q(boxes=[]))))
-    by_user = {f["video__clip_assignments__user_id"]: f for f in frames}
-
+    """Per person: frames assigned, how many they have reviewed, what is left."""
+    rows = (Annotation.objects.filter(project=project, assigned_to__isnull=False)
+            .order_by().values("assigned_to_id", "assigned_to__username")
+            .annotate(n_assigned=Count("id"),
+                      n_reviewed=Count("id", filter=Q(reviewed=True))))
     out = []
-    for r in rows:
-        f = by_user.get(r["user_id"], {})
-        total = f.get("total", 0)
-        labelled = f.get("labelled", 0)
+    for r in sorted(rows, key=lambda r: r["assigned_to__username"].lower()):
         out.append({
-            "user_id": r["user_id"],
-            "username": r["user__username"],
-            "clips": r["clips"],
-            "frames": total,
-            "labelled": labelled,
-            "pct": round(100 * labelled / total) if total else 0,
+            "user_id": r["assigned_to_id"],
+            "username": r["assigned_to__username"],
+            "assigned": r["n_assigned"],
+            "reviewed": r["n_reviewed"],
+            "left": r["n_assigned"] - r["n_reviewed"],
+            "pct": round(100 * r["n_reviewed"] / r["n_assigned"]) if r["n_assigned"] else 0,
         })
     return out
 
 
-def unassigned(project):
-    """Clips nobody has taken. Visible to everyone so nothing is stranded."""
-    return project.videos.exclude(clip_assignments__project=project)
+def unassigned_count(project):
+    return pool(Annotation.objects.filter(project=project)).count()
 
 
-def assign(project, video_ids, user, by=None):
-    """Give these clips to one person. Returns how many moved.
+def pick(qs, count, order="spread"):
+    """Ids of ``count`` frames from ``qs``.
 
-    Reassignment overwrites: a clip has at most one owner of the work, and
-    silently refusing to move it would leave the page disagreeing with the
-    database.
+    ``spread``: a few frames from many clips across the whole period. Round r
+    takes each clip's r-th frame; when a round has more than is still wanted,
+    evenly spaced ones are kept, so 500 frames out of 5,000 clips cover all of
+    them rather than the first 500. ``clips``: whole clips, oldest first, so
+    one person sees a clip through.
     """
-    moved = 0
-    for vid in video_ids:
-        _obj, created = ClipAssignment.objects.update_or_create(
-            project=project, video_id=vid,
-            defaults={"user": user, "assigned_by": by},
-        )
-        moved += 1 if created else 1
-    return moved
+    if count <= 0:
+        return []
+    rows = qs.order_by("video__recorded_at", "video_id", "frame_number") \
+             .values_list("id", "video_id")
+    if order == "clips":
+        return [pk for pk, _v in rows[:count]]
+
+    by_clip, clips = {}, []
+    for pk, vid in rows.iterator(chunk_size=5000):
+        if vid not in by_clip:
+            by_clip[vid] = []
+            clips.append(vid)
+        by_clip[vid].append(pk)
+
+    out, r = [], 0
+    while len(out) < count:
+        round_ = [by_clip[v][r] for v in clips if len(by_clip[v]) > r]
+        if not round_:
+            break
+        want = count - len(out)
+        if len(round_) > want:
+            round_ = [round_[int(i * len(round_) / want)] for i in range(want)]
+        out.extend(round_)
+        r += 1
+    return out
 
 
-def distribute(project, video_ids, users, by=None):
-    """Deal these clips round-robin. Returns ``{user_id: count}``.
-
-    Hand-picking twenty clips is not something to make anyone do twice, and an
-    even split is what people mean by "share this out" almost every time.
-    """
-    users = list(users)
-    if not users:
-        return {}
-    tally = {}
-    for i, vid in enumerate(sorted(video_ids)):
-        user = users[i % len(users)]
-        ClipAssignment.objects.update_or_create(
-            project=project, video_id=vid,
-            defaults={"user": user, "assigned_by": by})
-        tally[user.id] = tally.get(user.id, 0) + 1
-    return tally
+def assign(project, ids, user, by=None):
+    """Give these frames to ``user``. Only frames still in the pool move, so
+    two managers assigning at once cannot hand the same frame out twice.
+    Returns how many were assigned."""
+    now, done = timezone.now(), 0
+    ids = list(ids)
+    for i in range(0, len(ids), _CHUNK):
+        done += pool(Annotation.objects.filter(project=project, pk__in=ids[i:i + _CHUNK])) \
+            .update(assigned_to=user, assigned_by=by, assigned_at=now)
+    return done
 
 
-def claim(project, video_id, user):
-    """Take an unassigned clip for yourself.
-
-    Refuses a clip someone else already holds — claiming is for the pool, not a
-    way around an assignment. ``assigned_by`` stays null, which is what marks it
-    as self-claimed rather than given.
-    """
-    existing = project.assignments.filter(video_id=video_id).first()
-    if existing:
-        return existing.user_id == user.id
-    ClipAssignment.objects.create(project=project, video_id=video_id, user=user)
-    return True
-
-
-def release(project, video_id, user):
-    """Give a clip back to the pool. Your own only, unless you manage."""
-    a = project.assignments.filter(video_id=video_id).first()
-    if a is None:
-        return False
-    if a.user_id != user.id and not project.allows(user, "manager"):
-        return False
-    a.delete()
-    return True
+def release(project, user):
+    """Return this person's unreviewed frames to the pool. Returns how many."""
+    return (Annotation.objects.filter(project=project, assigned_to=user, reviewed=False)
+            .update(assigned_to=None, assigned_by=None, assigned_at=None))

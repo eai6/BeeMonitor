@@ -213,7 +213,7 @@ class ReadableScopeTests(PublishingTestCase):
     def test_publishing_grants_no_write_of_any_kind(self):
         publishing.publish(self.project)
 
-        for scope in (AnnotationProject.annotatable, AnnotationProject.reviewable,
+        for scope in (AnnotationProject.reviewable,
                       AnnotationProject.manageable, AnnotationProject.owned):
             self.assertNotIn(self.project, scope(self.other), scope.__name__)
 
@@ -296,7 +296,7 @@ class BrowseAndCopyViewTests(PublishingTestCase):
         publishing.publish(self.project)
         self.client.post(reverse("annotations:copy", args=[self.project.pk]))
 
-        for scope in (AnnotationProject.annotatable, AnnotationProject.manageable,
+        for scope in (AnnotationProject.reviewable, AnnotationProject.manageable,
                       AnnotationProject.owned):
             self.assertNotIn(self.project, scope(self.other), scope.__name__)
 

@@ -246,8 +246,7 @@ class AnnotationProjectTests(TestCase):
         r = self.client.get(reverse("annotations:detail", args=[proj.pk]))
         self.assertEqual(r.status_code, 200)
         self.assertIn("frame_cards", r.context)
-        self.assertIn("total_boxes", r.context)
-        self.assertIn("class_counts", r.context)
+        self.assertIn("metrics", r.context)
 
 
 class AnnotationModelTests(TestCase):

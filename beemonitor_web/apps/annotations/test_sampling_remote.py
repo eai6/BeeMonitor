@@ -222,7 +222,8 @@ class GpuSamplingTests(TestCase):
     def test_project_page_shows_gpu_mode_and_status(self):
         self.queue(self.videos[:1])
         self.client.force_login(self.user)
-        html = self.client.get(reverse("annotations:detail", args=[self.project.pk])).content.decode()
+        html = self.client.get(reverse("annotations:detail", args=[self.project.pk]),
+                               {"tab": "clips"}).content.decode()
         self.assertIn('name="s_classes"', html)
         self.assertIn("1 queued", html)
         self.assertIn("Cancel sampling", html)
@@ -252,7 +253,7 @@ class NoActivityStageTests(TestCase):
         self.assertEqual(states[vids[1].pk]["stage_label"], "No activity")
 
         self.client.force_login(user)
-        html = self.client.get(reverse("annotations:detail", args=[project.pk]) + "?stage=new").content.decode()
+        html = self.client.get(reverse("annotations:detail", args=[project.pk]) + "?tab=clips&stage=new").content.decode()
         self.assertIn("c2", html)
         self.assertNotIn(">c1<", html)
         self.assertIn("1 no activity", self.client.get(reverse("annotations:detail", args=[project.pk])).content.decode())

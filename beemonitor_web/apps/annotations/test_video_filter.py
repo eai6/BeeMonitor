@@ -52,6 +52,7 @@ class VideoFilterTests(TestCase):
 
     def _titles(self, **params):
         qs = {f"v_{k}": v for k, v in params.items()}
+        qs["tab"] = "clips"
         resp = self.client.get(f"/annotations/{self.project.pk}/", qs)
         return [d["video"].title for d in resp.context["video_data"]]
 
@@ -78,10 +79,6 @@ class VideoFilterTests(TestCase):
                          ["dani_evening", "jill_evening", "jill_morning",
                           "jill_other_day"])
 
-    def test_filter_by_annotation_state(self):
-        self.assertEqual(self._titles(state="annotated"), ["jill_evening"])
-        self.assertEqual(len(self._titles(state="unannotated")), 3)
-
     def test_filters_combine(self):
         self.assertEqual(sorted(self._titles(device=str(self.jill.pk),
                                              hfrom="17", hto="20", day="8")),
@@ -91,20 +88,20 @@ class VideoFilterTests(TestCase):
         self.assertEqual(sorted(self._titles(q="morning")), ["jill_morning"])
 
     def test_no_matches_keeps_the_card_so_you_can_reset(self):
-        resp = self.client.get(f"/annotations/{self.project.pk}/", {"v_q": "nope"})
+        resp = self.client.get(f"/annotations/{self.project.pk}/", {"v_q": "nope", "tab": "clips"})
         self.assertEqual(resp.context["video_data"], [])
         self.assertTrue(resp.context["video_filter_on"])
         self.assertIn("No videos match this filter", resp.content.decode())
         self.assertIn("Reset", resp.content.decode())
 
     def test_counts_reported_for_the_header(self):
-        resp = self.client.get(f"/annotations/{self.project.pk}/", {"v_state": "annotated"})
+        resp = self.client.get(f"/annotations/{self.project.pk}/",
+                               {"v_q": "evening", "tab": "clips"})
         self.assertEqual(resp.context["video_count"], 4)          # project total
-        self.assertEqual(resp.context["video_annotated_count"], 1)
-        self.assertEqual(resp.context["video_filtered_count"], 1)
+        self.assertEqual(resp.context["video_filtered_count"], 2)
 
     def test_dropdowns_only_offer_values_present_in_the_project(self):
-        resp = self.client.get(f"/annotations/{self.project.pk}/")
+        resp = self.client.get(f"/annotations/{self.project.pk}/", {"tab": "clips"})
         opts = resp.context["video_filter_opts"]
         self.assertEqual(sorted(n for _pk, n in opts["devices"]), ["Danniella", "Jill"])
         self.assertEqual(opts["sites"], ["Location1", "Location2"])
@@ -120,7 +117,7 @@ class VideoFilterTests(TestCase):
         from django.test.utils import CaptureQueriesContext
         from django.db import connection
 
-        url = f"/annotations/{self.project.pk}/"
+        url = f"/annotations/{self.project.pk}/?tab=clips"
         with CaptureQueriesContext(connection) as small:
             self.client.get(url)
 

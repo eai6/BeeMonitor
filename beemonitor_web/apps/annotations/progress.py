@@ -27,7 +27,8 @@ STAGE_LABELS = {
     # insect moving). Done — not the same as never sampled.
     "empty": "No activity",
     "sampled": "Sampled",
-    "labelled": "Labelled",
+    # Labelled by SAM 3 (or a person), not yet checked.
+    "labelled": "To review",
     "reviewed": "Reviewed",
     "failed": "Failed",
 }
@@ -58,6 +59,9 @@ def per_video(project, failed_ids=()):
     # without this they read as "Not sampled" and get sampled again and again.
     for vid in empty_ids(project) - set(out):
         out[vid] = _shape(vid, 0, 0, 0, failed_ids, sampled=True)
+    # And a clip whose only run failed has no rows either.
+    for vid in failed_ids - set(out):
+        out[vid] = _shape(vid, 0, 0, 0, failed_ids)
     return out
 
 

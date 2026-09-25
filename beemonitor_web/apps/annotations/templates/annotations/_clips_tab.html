@@ -1,0 +1,370 @@
+{% comment %}
+  The project page's Clips tab: choose clips and sample them. Sampling on the
+  GPU also labels, so the frames land straight in "Frames to review". Who
+  reviews what is per frame now, on the other tab — not per clip here.
+{% endcomment %}
+<div>
+  <div class="px-4 pt-3 pb-3 border-b border-gray-200">
+    <div class="flex items-center gap-2 flex-wrap">
+      <span class="text-[10.5px] text-gray-500 uppercase tracking-wide mr-1">Show</span>
+      {% for key, label, n in stage_links %}
+      <a href="?tab=clips{% if key %}&stage={{ key }}{% endif %}"
+         class="text-[11.5px] px-2.5 py-1 rounded-full border {% if stage == key %}border-amber-600 bg-amber-50 text-amber-800 font-semibold{% else %}border-gray-300 text-gray-700 hover:bg-gray-50{% endif %}">{{ label }} &middot; {{ n }}</a>
+      {% endfor %}
+      <span class="text-xs text-gray-400 ml-1">{% if video_filter_on %}{{ video_filtered_count }} match the filter{% endif %}</span>
+    </div>
+    <!-- Filter. GET so a filtered view is a shareable URL and survives reload. -->
+    <form method="get" class="flex flex-wrap items-end gap-2 mt-3">
+      <input type="hidden" name="tab" value="clips">
+      {% if stage %}<input type="hidden" name="stage" value="{{ stage }}">{% endif %}
+      <div>
+        <label class="block text-[10px] uppercase tracking-wide text-gray-400">Device</label>
+        <select name="v_device" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="">All devices</option>
+          {% for pk, name in video_filter_opts.devices %}
+          <option value="{{ pk }}" {% if video_filter.device == pk|stringformat:"s" %}selected{% endif %}>{{ name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-[10px] uppercase tracking-wide text-gray-400">Location</label>
+        <select name="v_site" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="">All locations</option>
+          {% for s in video_filter_opts.sites %}
+          <option value="{{ s }}" {% if video_filter.site == s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-[10px] uppercase tracking-wide text-gray-400">Year</label>
+        <select name="v_year" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="">Any</option>
+          {% for y in video_filter_opts.years %}
+          <option value="{{ y }}" {% if video_filter.year == y|stringformat:"s" %}selected{% endif %}>{{ y }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-[10px] uppercase tracking-wide text-gray-400">Month</label>
+        <select name="v_month" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="">Any</option>
+          {% for m in video_filter_opts.months %}
+          <option value="{{ m }}" {% if video_filter.month == m|stringformat:"s" %}selected{% endif %}>{{ m }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-[10px] uppercase tracking-wide text-gray-400">Day</label>
+        <select name="v_day" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="">Any</option>
+          {% for d in video_filter_opts.days %}
+          <option value="{{ d }}" {% if video_filter.day == d|stringformat:"s" %}selected{% endif %}>{{ d }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div title="Hour-of-day window, every day. Start after end wraps past midnight (22 → 4).">
+        <label class="block text-[10px] uppercase tracking-wide text-gray-400">Hour of day</label>
+        <div class="flex items-center gap-1">
+          <select name="v_hfrom" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="">—</option>
+            {% for h in hours %}<option value="{{ h }}" {% if video_filter.hfrom == h|stringformat:"s" %}selected{% endif %}>{{ h }}:00</option>{% endfor %}
+          </select>
+          <span class="text-xs text-gray-400">to</span>
+          <select name="v_hto" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="">—</option>
+            {% for h in hours %}<option value="{{ h }}" {% if video_filter.hto == h|stringformat:"s" %}selected{% endif %}>{{ h }}:00</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+      <input name="v_q" value="{{ video_filter.q }}" placeholder="Search title…"
+             class="border border-gray-300 rounded px-3 py-1.5 text-sm w-40">
+      <button class="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded text-sm font-medium">Filter</button>
+      {% if video_filter_on %}
+      <a href="?tab=clips" class="text-xs text-gray-500 hover:underline px-1">Reset</a>
+      {% endif %}
+    </form>
+  </div>
+
+
+  <form method="post" id="clip-form">
+    {% csrf_token %}
+
+    <div class="flex items-center gap-2 px-4 py-2.5 border-b border-gray-200 flex-wrap">
+      <span class="text-[11px] text-gray-500">Select</span>
+      <button type="button" data-pick="all" class="pick text-[11.5px] px-2.5 py-1 rounded-full border border-gray-300 text-gray-700 hover:bg-gray-50">All shown</button>
+      <button type="button" data-pick="new" class="pick text-[11.5px] px-2.5 py-1 rounded-full border border-gray-300 text-gray-700 hover:bg-gray-50">Not sampled</button>
+      <button type="button" data-pick="empty" class="pick text-[11.5px] px-2.5 py-1 rounded-full border border-gray-300 text-gray-700 hover:bg-gray-50" title="Sampled, but nothing active was found — select to try again, e.g. with other classes">No activity</button>
+      <button type="button" data-pick="none" class="pick text-[11.5px] px-2.5 py-1 rounded-full text-gray-500 hover:underline">Clear</button>
+
+      <div class="ml-auto flex items-center gap-2">
+        {% comment %}
+          Only a manager may sample, so only a manager is offered it. A button that 404s is worse than an absent one — it reads as a
+          broken page rather than as a permission you do not have.
+        {% endcomment %}
+        {% if can_assign %}
+        <!-- Sampling panel: method, frames per clip, spacing, ROI, replace. -->
+        <div class="relative" id="sample-wrap">
+          <button type="button" id="sample-toggle" aria-expanded="false" aria-controls="sample-panel"
+                  class="text-[12.5px] px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 whitespace-nowrap">
+            Sample{% if gpu_sampling %} &amp; label{% endif %} <span class="clip-n">all</span>
+            {% if gpu_sampling %}<span class="text-[9.5px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full ml-0.5">GPU</span>{% endif %} &#9662;
+          </button>
+          <div id="sample-panel" class="hidden absolute right-0 top-full mt-1.5 z-30 w-96 bg-white border border-gray-200 rounded-lg shadow-xl p-4 space-y-3.5 text-left">
+            <div class="text-sm font-bold text-gray-900">Sample frames from <span class="clip-n">all</span> clips</div>
+            {% if gpu_sampling %}
+            {# GPU: one pass finds the frames with these classes and pre-labels them. #}
+            <input type="hidden" name="s_method" value="sample_label">
+            <fieldset class="space-y-1">
+              <legend class="text-[10.5px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Find and pre-label</legend>
+              {% for c in project.classes %}
+              <label class="flex items-center gap-2 text-[13px] text-gray-700">
+                <input type="checkbox" name="s_classes" value="{{ c }}" class="s-class" checked> {{ c }}
+              </label>
+              {% endfor %}
+              <p class="text-xs text-gray-500 pt-1">SAM 3 checks the busiest moments of each clip and keeps frames where these are moving, already boxed. Each class adds GPU time.</p>
+            </fieldset>
+            {% else %}
+            <fieldset class="space-y-1.5">
+              <legend class="text-[10.5px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Method</legend>
+              <label class="flex gap-2 items-start p-2 rounded border border-gray-200 has-[:checked]:border-amber-600 has-[:checked]:bg-amber-50 text-[13px]">
+                <input type="radio" name="s_method" value="motion" checked class="mt-0.5">
+                <span><b>Most activity</b><br><span class="text-xs text-gray-600">Scores every frame for motion and keeps the busiest, spaced apart. Frames with no motion are never picked.</span></span>
+              </label>
+              <label class="flex gap-2 items-start p-2 rounded border border-gray-200 has-[:checked]:border-amber-600 has-[:checked]:bg-amber-50 text-[13px]">
+                <input type="radio" name="s_method" value="interval" class="mt-0.5">
+                <span><b>Even spacing</b><br><span class="text-xs text-gray-600">Every Nth frame, as before.</span></span>
+              </label>
+            </fieldset>
+            {% endif %}
+            <div class="space-y-1.5">
+              <div class="text-[10.5px] font-semibold text-gray-500 uppercase tracking-wide">Frames per clip</div>
+              <div class="flex items-center gap-1.5">
+                <button type="button" class="s-count px-3 py-0.5 rounded-full border border-gray-300 text-xs" data-n="10">10</button>
+                <button type="button" class="s-count px-3 py-0.5 rounded-full border border-gray-300 text-xs" data-n="20">20</button>
+                <button type="button" class="s-count px-3 py-0.5 rounded-full border border-gray-300 text-xs" data-n="100">100</button>
+                <input type="number" name="s_max_frames" id="s-max-frames" value="20" min="1" max="2000"
+                       aria-label="Frames per clip" class="w-20 border border-gray-300 rounded px-2 py-1 text-xs">
+              </div>
+            </div>
+            <div id="s-motion-opts" class="grid grid-cols-2 gap-2.5">
+              <label class="text-xs text-gray-600">At least apart
+                <select name="s_min_gap_s" class="mt-1 w-full border border-gray-300 rounded px-1.5 py-1 text-xs">
+                  <option value="0.5">0.5 second</option>
+                  <option value="1" selected>1 second</option>
+                  <option value="2">2 seconds</option>
+                  <option value="5">5 seconds</option>
+                </select>
+              </label>
+              <label class="text-xs text-gray-600">Motion inside
+                <select name="s_roi" class="mt-1 w-full border border-gray-300 rounded px-1.5 py-1 text-xs">
+                  <option value="device" selected>The device's ROI</option>
+                  <option value="frame">Whole frame</option>
+                </select>
+              </label>
+            </div>
+            <div id="s-interval-opts" class="hidden">
+              <label class="text-xs text-gray-600">Every
+                <input type="number" name="s_sample_interval" value="30" min="1" max="600"
+                       class="w-20 border border-gray-300 rounded px-2 py-1 text-xs"> frames
+              </label>
+            </div>
+            <label id="s-replace-row" class="flex gap-2 items-start text-xs text-gray-700">
+              <input type="hidden" name="s_replace" value="0">
+              <input type="checkbox" name="s_replace" value="1" checked class="mt-0.5">
+              <span>Replace earlier sampled frames nobody has labelled <span class="text-gray-500">(labelled or reviewed frames are always kept)</span></span>
+            </label>
+            <div class="flex items-center gap-2 pt-2 border-t border-gray-100">
+              <span id="s-estimate" class="text-xs text-gray-500"></span>
+              <button type="submit" formaction="{% url 'annotations:sample_frames' project.pk %}"
+                      class="ml-auto px-3.5 py-1.5 rounded bg-amber-600 hover:bg-amber-700 text-white text-[12.5px] font-semibold">
+                Sample <span class="clip-n">all</span> clips
+              </button>
+            </div>
+          </div>
+        </div>
+        <script>
+        (function () {
+          var wrap = document.getElementById('sample-wrap');
+          if (!wrap) return;
+          var toggle = document.getElementById('sample-toggle'), panel = document.getElementById('sample-panel');
+          var count = document.getElementById('s-max-frames');
+          function selectedClips() {
+            var n = document.querySelectorAll('#clip-form .clip-cb:checked').length;
+            return n || document.querySelectorAll('#clip-form .clip-cb').length;
+          }
+          function sync() {
+            var m = wrap.querySelector('input[name="s_method"]:checked') || wrap.querySelector('input[name="s_method"]');
+            var motion = !m || m.value !== 'interval';
+            document.getElementById('s-motion-opts').classList.toggle('hidden', !motion);
+            document.getElementById('s-replace-row').classList.toggle('hidden', !motion);
+            document.getElementById('s-interval-opts').classList.toggle('hidden', motion);
+            wrap.querySelectorAll('.s-count').forEach(function (b) {
+              var on = b.dataset.n === count.value;
+              b.classList.toggle('border-amber-600', on); b.classList.toggle('bg-amber-50', on);
+              b.classList.toggle('font-semibold', on);
+            });
+            var frames = selectedClips() * (+count.value || 0);
+            var classes = wrap.querySelectorAll('.s-class:checked').length;
+            document.getElementById('s-estimate').textContent = {% if gpu_sampling %}
+              'Up to ' + frames.toLocaleString() + ' frames · GPU · ' + classes + ' class' + (classes === 1 ? '' : 'es'){% else %}
+              'Up to ' + frames.toLocaleString() + ' frames · no GPU'{% endif %};
+          }
+          toggle.addEventListener('click', function () {
+            var open = panel.classList.toggle('hidden') === false;
+            toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+            if (open) sync();
+          });
+          document.addEventListener('click', function (e) {
+            if (!wrap.contains(e.target)) { panel.classList.add('hidden'); toggle.setAttribute('aria-expanded', 'false'); }
+          });
+          wrap.querySelectorAll('.s-count').forEach(function (b) {
+            b.addEventListener('click', function () { count.value = b.dataset.n; sync(); });
+          });
+          wrap.addEventListener('change', sync);
+          count.addEventListener('input', sync);
+        })();
+        </script>
+        {% endif %}
+      </div>
+    </div>
+
+    {# What the GPU button is about to do, before it is pressed. #}
+    {% if can_assign %}
+    <p id="clip-scope" class="px-4 py-2 border-b border-gray-200 text-[11.5px] text-gray-500"></p>
+    {% endif %}
+
+    <div class="grid grid-cols-[20px_54px_minmax(0,1fr)_132px_104px_78px] gap-3 px-4 py-2
+                border-b border-gray-200 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">
+      <div></div><div></div><div>Clip</div><div>Progress</div><div>State</div>
+      <div class="text-right">Recorded</div>
+    </div>
+
+    <div class="divide-y divide-gray-100 max-h-[32rem] overflow-y-auto">
+      {% for item in video_data %}
+      <div class="clip-row grid grid-cols-[20px_54px_minmax(0,1fr)_132px_104px_78px] gap-3 items-center px-4 py-2 hover:bg-gray-50"
+           data-stage="{{ item.progress.stage }}">
+        <input type="checkbox" name="video_ids" value="{{ item.video.pk }}"
+               class="clip-cb rounded border-gray-300">
+        <a href="{% url 'annotations:editor' project.pk %}?video={{ item.video.pk }}" class="block">
+          <img src="{% url 'videos:thumbnail' item.video.pk %}" alt="" loading="lazy"
+               class="w-[54px] rounded object-cover bg-gray-800" style="aspect-ratio:16/9"
+               onerror="this.style.visibility='hidden'">
+        </a>
+        <div class="min-w-0">
+          <a href="{% url 'annotations:editor' project.pk %}?video={{ item.video.pk }}"
+             class="block text-[12.5px] text-gray-900 hover:text-amber-700 hover:underline truncate">{{ item.video.title }}</a>
+          <div class="text-[10.5px] text-gray-400 truncate">
+            {% if item.video.device %}{{ item.video.device.name }}{% endif %}
+            {% if item.video.duration_seconds %} &middot; {{ item.video.duration_seconds|floatformat:0 }}s{% endif %}
+          </div>
+          {% if item.motion %}
+          {# Motion over the clip (grey); the frames sampled from it (green). #}
+          <div class="mt-1 flex items-end gap-px h-4 w-full max-w-[16rem]"
+               title="Motion over the clip — {{ item.motion.n_picked }} sampled stretch{{ item.motion.n_picked|pluralize:'es' }} in green"
+               aria-label="Motion over the clip; {{ item.motion.n_picked }} sampled">
+            {% for b in item.motion.bars %}<span class="flex-1 {% if b.picked %}bg-green-600{% else %}bg-gray-300{% endif %}" style="height: {{ b.h }}px"></span>{% endfor %}
+          </div>
+          {% endif %}
+        </div>
+        <div>
+          {% comment %}
+            No bar. Its width was "{labelled+reviewed}-{reviewed}%" — the add
+            filter falls back to string concatenation, so it emitted invalid CSS
+            and a clip with 219 of 219 frames labelled drew an empty track. The
+            counts were right all along; only the graphic lied.
+          {% endcomment %}
+          <span class="block text-[11px] text-gray-600">
+            {% if item.progress.frames %}{{ item.progress.frames }} frame{{ item.progress.frames|pluralize }} &middot; {{ item.progress.reviewed }} reviewed{% else %}no frames yet{% endif %}
+          </span>
+        </div>
+        <div>
+          <span class="text-[10.5px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap
+            {% if item.progress.stage == 'reviewed' %}bg-amber-100 text-amber-800
+            {% elif item.progress.stage == 'labelled' %}bg-violet-100 text-violet-800
+            {% elif item.progress.stage == 'sampled' %}bg-blue-100 text-blue-800
+            {% elif item.progress.stage == 'failed' %}bg-red-100 text-red-700
+            {% elif item.progress.stage == 'empty' %}bg-gray-100 text-gray-500
+            {% else %}bg-gray-100 text-gray-600{% endif %}">{{ item.progress.stage_label }}</span>
+        </div>
+        <div class="text-[10.5px] text-gray-400 text-right whitespace-nowrap">
+          {% if item.video.recorded_at %}{{ item.video.recorded_at|date:"j M, H:i" }}{% else %}—{% endif %}
+        </div>
+      </div>
+      {% empty %}
+      {% if video_filter_on %}
+      <p class="px-4 py-6 text-sm text-gray-400">
+        No videos match this filter.
+        <a href="?tab=clips" class="text-amber-700 hover:underline">Reset</a>
+      </p>
+      {% elif stage %}
+      <p class="px-4 py-6 text-sm text-gray-400">
+        No clips in this stage.
+        <a href="?tab=clips" class="text-amber-700 hover:underline">Show all</a>
+      </p>
+      {% else %}
+      <p class="px-4 py-6 text-sm text-gray-400">No clips yet — add some to get started.</p>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </form>
+
+  {% if video_list_capped %}
+  <p class="px-4 py-2 text-[11px] text-gray-400 border-t border-gray-200">
+    Showing {{ video_data|length }} of {{ video_filtered_count }} — narrow the filter to reach the rest.
+  </p>
+  {% endif %}
+</div>
+
+<script>
+<script>
+// Selection drives both buttons' labels and the scope line. Nothing here knows
+// which view a button posts to — formaction decides that.
+(function () {
+  var form = document.getElementById('clip-form');
+  if (!form) return;
+  var rows = Array.prototype.slice.call(form.querySelectorAll('.clip-row'));
+  var scope = document.getElementById('clip-scope');
+  var TOTAL = {{ video_count }};
+  var UNSAMPLED = {{ metrics.clips_unsampled }};
+
+  function boxes() { return form.querySelectorAll('.clip-cb'); }
+  function picked() {
+    return Array.prototype.filter.call(boxes(), function (b) { return b.checked; });
+  }
+
+  function refresh() {
+    var sel = picked();
+    var n = sel.length;
+    var label = n ? n + ' clip' + (n === 1 ? '' : 's') : 'all ' + TOTAL;
+    form.querySelectorAll('.clip-n').forEach(function (el) { el.textContent = label; });
+
+    var clips = n || TOTAL;
+    if (!scope) return;
+    scope.innerHTML =
+      'Sampling reads ' + clips + ' clip' + (clips === 1 ? '' : 's') +
+      {% if gpu_sampling %}' on the GPU: SAM 3 finds the busiest frames and labels them, ready to review' +{% else %}' on the server CPU (no labels: this server has no GPU sampling)' +{% endif %}
+      (n ? '' : ' — the whole project') + '.' +
+      (UNSAMPLED && !n ? ' <span class="text-amber-700">' + UNSAMPLED +
+        ' of them have no frames yet.</span>' : '');
+  }
+
+  form.addEventListener('change', function (e) {
+    if (e.target.classList.contains('clip-cb')) refresh();
+  });
+  form.querySelectorAll('.pick').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var want = btn.dataset.pick;
+      rows.forEach(function (row) {
+        var cb = row.querySelector('.clip-cb');
+        if (!cb) return;
+        if (want === 'all') { cb.checked = true; }
+        else if (want === 'none') { cb.checked = false; }
+        else { cb.checked = row.dataset.stage === want; }
+      });
+      refresh();
+    });
+  });
+  refresh();
+})();
+</script>
+</script>

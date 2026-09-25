@@ -11,8 +11,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
-from apps.annotations.models import (Annotation, AnnotationProject,
-                                     ClipAssignment, ProjectShare)
+from apps.annotations.models import Annotation, AnnotationProject, ProjectShare
 from apps.videos.models import Video
 
 User = get_user_model()
@@ -24,17 +23,20 @@ class ViewAccessTestCase(TestCase):
         self.project = AnnotationProject.objects.create(
             user=self.owner, name="P", classes=["bee"])
         self.people = {"owner": self.owner}
-        for role in ("viewer", "annotator", "reviewer", "manager"):
+        for role in ("viewer", "reviewer", "manager"):
             u = User.objects.create_user(role, password="x")
             ProjectShare.objects.create(project=self.project, user=u, role=role)
             self.people[role] = u
+        # A second reviewer, to hold frames the first may not touch.
+        self.people["reviewer2"] = u2 = User.objects.create_user("reviewer2", password="x")
+        ProjectShare.objects.create(project=self.project, user=u2, role="reviewer")
         self.stranger = User.objects.create_user("stranger", password="x")
         self.video = Video.objects.create(
             user=self.owner, title="c", storage_key="va/c.mp4",
             file_size_bytes=1, status=Video.Status.READY)
         self.project.videos.add(self.video)
-        Annotation.objects.create(project=self.project, video=self.video,
-                                  frame_number=0, boxes=[])
+        self.frame = Annotation.objects.create(project=self.project, video=self.video,
+                                               frame_number=0, boxes=[])
 
     def as_(self, who):
         self.client.force_login(self.people[who] if who in self.people else who)
@@ -66,7 +68,7 @@ class ReadPathTests(ViewAccessTestCase):
         self.assertEqual(self.status(self.stranger, url), 404)
 
     def test_a_shared_project_appears_in_the_list(self):
-        self.as_("annotator")
+        self.as_("reviewer")
 
         html = self.client.get(reverse("annotations:list")).content.decode()
 
@@ -102,7 +104,7 @@ class FrameServingTests(ViewAccessTestCase):
                 + f"?video={self.video.pk}&frame=0")
 
     def test_a_collaborator_can_see_the_frames(self):
-        for role in ("viewer", "annotator", "reviewer", "manager"):
+        for role in ("viewer", "reviewer", "manager"):
             self.assertNotEqual(self.status(role, self.url()), 404, role)
 
     def test_a_stranger_cannot(self):
@@ -136,20 +138,30 @@ class WritePathTests(ViewAccessTestCase):
     def test_a_viewer_cannot_draw(self):
         self.assertEqual(self.save_as("viewer"), 404)
 
-    def test_an_annotator_cannot_draw_on_an_unassigned_clip(self):
-        self.assertEqual(self.save_as("annotator"), 403)
+    def hold(self, who):
+        self.frame.assigned_to = self.people[who]
+        self.frame.save()
 
-    def test_an_annotator_can_draw_on_their_own_clip(self):
-        ClipAssignment.objects.create(project=self.project, video=self.video,
-                                      user=self.people["annotator"])
-
-        self.assertEqual(self.save_as("annotator"), 200)
-
-    def test_a_reviewer_can_draw_on_anyone_s_clip(self):
-        ClipAssignment.objects.create(project=self.project, video=self.video,
-                                      user=self.people["annotator"])
-
+    def test_a_reviewer_can_fix_an_unassigned_frame(self):
         self.assertEqual(self.save_as("reviewer"), 200)
+
+    def test_a_reviewer_can_fix_their_own_frame(self):
+        self.hold("reviewer")
+        self.assertEqual(self.save_as("reviewer"), 200)
+
+    def test_a_reviewer_cannot_fix_someone_elses_frame(self):
+        self.hold("reviewer2")
+        self.assertEqual(self.save_as("reviewer"), 403)
+
+    def test_a_manager_can_fix_anyones_frame(self):
+        self.hold("reviewer2")
+        self.assertEqual(self.save_as("manager"), 200)
+
+    def test_saving_records_who_reviewed(self):
+        self.save_as("reviewer")
+        self.frame.refresh_from_db()
+        self.assertEqual((self.frame.reviewed, self.frame.reviewed_by),
+                         (True, self.people["reviewer"]))
 
     def test_a_stranger_cannot(self):
         self.as_(self.stranger)
@@ -166,15 +178,8 @@ class GpuAndStructureTests(ViewAccessTestCase):
     def test_only_a_manager_may_sample(self):
         url = reverse("annotations:sample_frames", args=[self.project.pk])
 
-        self.assertEqual(self.status("annotator", url, "post"), 404)
         self.assertEqual(self.status("reviewer", url, "post"), 404)
         self.assertIn(self.status("manager", url, "post"), (200, 302))
-
-    def test_only_a_manager_may_auto_label(self):
-        url = reverse("annotations:pre_annotate_all", args=[self.project.pk])
-
-        self.assertEqual(self.status("annotator", url, "post"), 404)
-        self.assertEqual(self.status("reviewer", url, "post"), 404)
 
     def test_only_a_manager_may_add_clips(self):
         url = reverse("annotations:add_videos_page", args=[self.project.pk])
@@ -207,7 +212,7 @@ class TrainingOnSharedProjectTests(ViewAccessTestCase):
     def test_a_shared_project_is_offered_on_the_training_form(self):
         from apps.training.forms import TrainingCreateForm
 
-        form = TrainingCreateForm(user=self.people["annotator"])
+        form = TrainingCreateForm(user=self.people["reviewer"])
 
         self.assertIn(self.project, form.fields["project"].queryset)
 
@@ -252,9 +257,15 @@ class PeoplePageTests(ViewAccessTestCase):
         self.as_("owner")
 
         self.client.post(reverse("annotations:share_invite", args=[self.project.pk]),
-                         {"who": "stranger", "role": "annotator"})
+                         {"who": "stranger", "role": "reviewer"})
 
-        self.assertEqual(self.project.role_for(self.stranger), "annotator")
+        self.assertEqual(self.project.role_for(self.stranger), "reviewer")
+
+    def test_the_default_role_is_reviewer(self):
+        self.as_("owner")
+        self.client.post(reverse("annotations:share_invite", args=[self.project.pk]),
+                         {"who": "stranger"})
+        self.assertEqual(self.project.role_for(self.stranger), "reviewer")
 
     def test_inviting_an_unknown_account_says_so_rather_than_failing_quietly(self):
         self.as_("owner")
@@ -266,94 +277,23 @@ class PeoplePageTests(ViewAccessTestCase):
         self.assertIn("No account matches", " ".join(
             str(m) for m in resp.context["messages"]))
 
-    def test_removing_someone_returns_their_clips_to_the_pool(self):
+    def test_removing_someone_returns_their_frames_to_the_pool(self):
         """The work is the project's, not theirs — it must not vanish with them."""
-        ClipAssignment.objects.create(project=self.project, video=self.video,
-                                      user=self.people["annotator"])
-        share = self.project.shares.get(user=self.people["annotator"])
+        self.frame.assigned_to = self.people["reviewer"]
+        self.frame.save()
+        share = self.project.shares.get(user=self.people["reviewer"])
         self.as_("owner")
 
         self.client.post(reverse("annotations:share_update", args=[self.project.pk]),
                          {"share_id": share.pk, "remove": "1"})
 
         self.assertFalse(self.project.shares.filter(pk=share.pk).exists())
-        self.assertFalse(self.project.assignments.exists())
-        self.assertTrue(Annotation.objects.filter(project=self.project).exists())
+        self.frame.refresh_from_db()
+        self.assertIsNone(self.frame.assigned_to)
 
 
-class AssignmentViewTests(ViewAccessTestCase):
-    def test_only_a_manager_may_assign(self):
-        url = reverse("annotations:assign", args=[self.project.pk])
-
-        self.assertEqual(self.status("reviewer", url, "post", data={
-            "video_ids": [self.video.pk],
-            "assignee": [self.people["annotator"].pk]}), 404)
-        self.assertFalse(self.project.assignments.exists())
-
-    def test_a_manager_can_hand_a_clip_out(self):
-        self.as_("manager")
-
-        self.client.post(reverse("annotations:assign", args=[self.project.pk]),
-                         {"video_ids": [self.video.pk],
-                          "assignee": [self.people["annotator"].pk]})
-
-        self.assertEqual(self.project.assignments.get().user,
-                         self.people["annotator"])
-
-    def test_assigning_to_somebody_not_on_the_project_is_refused(self):
-        """Otherwise the assignment names someone who cannot open it."""
-        self.as_("manager")
-
-        self.client.post(reverse("annotations:assign", args=[self.project.pk]),
-                         {"video_ids": [self.video.pk],
-                          "assignee": [self.stranger.pk]})
-
-        self.assertFalse(self.project.assignments.filter(user=self.stranger).exists())
-
-    def test_an_annotator_can_take_an_unassigned_clip(self):
-        self.as_("annotator")
-
-        self.client.post(reverse("annotations:claim", args=[self.project.pk]),
-                         {"video_ids": [self.video.pk]})
-
-        self.assertEqual(self.project.assignments.get().user,
-                         self.people["annotator"])
-
-    def test_taking_a_clip_someone_else_holds_is_refused_and_reported(self):
-        ClipAssignment.objects.create(project=self.project, video=self.video,
-                                      user=self.people["reviewer"])
-        self.as_("annotator")
-
-        resp = self.client.post(reverse("annotations:claim", args=[self.project.pk]),
-                                {"video_ids": [self.video.pk]}, follow=True)
-
-        self.assertEqual(self.project.assignments.get().user,
-                         self.people["reviewer"])
-        self.assertIn("already taken", " ".join(
-            str(m) for m in resp.context["messages"]))
-
-    def test_a_viewer_cannot_take_clips(self):
-        self.assertEqual(
-            self.status("viewer", reverse("annotations:claim", args=[self.project.pk]),
-                        "post", data={"video_ids": [self.video.pk]}), 404)
-
-    def test_the_list_can_be_filtered_to_one_person(self):
-        ClipAssignment.objects.create(project=self.project, video=self.video,
-                                      user=self.people["annotator"])
-        self.as_("owner")
-        url = reverse("annotations:detail", args=[self.project.pk])
-
-        mine = self.client.get(url, {"assignee": self.people["annotator"].pk})
-        nobody = self.client.get(url, {"assignee": "none"})
-
-        self.assertIn(f'name="video_ids" value="{self.video.pk}"',
-                      mine.content.decode())
-        self.assertNotIn(f'name="video_ids" value="{self.video.pk}"',
-                         nobody.content.decode())
-
-
-class CollaboratorViewTests(ViewAccessTestCase):
-    """What a collaborator opens the project to see."""
+class ReviewPageTests(ViewAccessTestCase):
+    """The project page: three numbers, frames to review, and a reviewer's queue."""
 
     def html(self, who, **params):
         self.as_(who)
@@ -361,56 +301,67 @@ class CollaboratorViewTests(ViewAccessTestCase):
             reverse("annotations:detail", args=[self.project.pk]),
             params).content.decode()
 
-    def test_a_collaborator_sees_their_own_workload(self):
-        ClipAssignment.objects.create(project=self.project, video=self.video,
-                                      user=self.people["annotator"])
+    def test_a_reviewer_sees_their_queue(self):
+        self.frame.boxes = [{"x": 1, "y": 1, "w": 2, "h": 2, "class": "bee"}]
+        self.frame.assigned_to = self.people["reviewer"]
+        self.frame.save()
 
-        html = self.html("annotator")
+        html = self.html("reviewer")
 
-        self.assertIn("Your work", html)
-        self.assertIn("Start annotating", html)
+        self.assertIn("Your review queue", html)
+        self.assertIn("Continue reviewing", html)
+        self.assertIn("who=me&status=review", html)
 
-    def test_the_owner_does_not_get_the_strip(self):
-        """It is the collaborator's view of a project they do not run."""
-        self.assertNotIn("Your work", self.html("owner"))
+    def test_a_reviewer_with_nothing_assigned_can_take_frames(self):
+        html = self.html("reviewer")
+        self.assertIn("Take 100 frames", html)
+        self.assertIn(reverse("annotations:take_frames", args=[self.project.pk]), html)
 
-    def test_show_mine_narrows_to_their_clips(self):
-        theirs = self.video
-        others = Video.objects.create(user=self.owner, title="o",
-                                      storage_key="va/o.mp4", file_size_bytes=1,
-                                      status=Video.Status.READY)
-        self.project.videos.add(others)
-        ClipAssignment.objects.create(project=self.project, video=theirs,
-                                      user=self.people["annotator"])
-        ClipAssignment.objects.create(project=self.project, video=others,
-                                      user=self.people["reviewer"])
+    def test_the_owner_does_not_get_the_queue_unless_assigned(self):
+        self.assertNotIn("Your review queue", self.html("owner"))
 
-        html = self.html("annotator", assignee="me")
-
-        self.assertIn(f'name="video_ids" value="{theirs.pk}"', html)
-        self.assertNotIn(f'name="video_ids" value="{others.pk}"', html)
-
-    def test_a_viewer_is_not_offered_the_pool(self):
-        """A viewer cannot annotate, so taking work would be a dead end."""
+    def test_a_viewer_is_not_offered_work(self):
         html = self.html("viewer")
+        self.assertNotIn("Your review queue", html)
+        self.assertNotIn("Review these", html)
 
-        self.assertNotIn("Unassigned pool", html)
+    def test_only_a_manager_gets_assign_and_sampling(self):
+        assign = reverse("annotations:assign_frames", args=[self.project.pk])
+        sample = reverse("annotations:sample_frames", args=[self.project.pk])
+        self.assertNotIn(assign, self.html("reviewer"))
+        self.assertNotIn(sample, self.html("reviewer", tab="clips"))
+        self.assertIn(assign, self.html("manager"))
+        self.assertIn(sample, self.html("manager", tab="clips"))
 
-    def test_a_collaborator_does_not_get_the_gpu_controls(self):
-        """A button that 404s reads as a broken page, not as a permission you
-        do not have."""
-        html = self.html("annotator")
+    def test_the_grid_filters_to_one_person(self):
+        other = Video.objects.create(user=self.owner, title="o", storage_key="va/o.mp4",
+                                     file_size_bytes=1, status=Video.Status.READY)
+        self.project.videos.add(other)
+        Annotation.objects.create(project=self.project, video=other, frame_number=5,
+                                  boxes=[], assigned_to=self.people["reviewer2"])
+        self.as_("owner")
+        url = reverse("annotations:detail", args=[self.project.pk])
 
-        self.assertNotIn(
-            reverse("annotations:pre_annotate_all", args=[self.project.pk]), html)
-        self.assertNotIn(
-            reverse("annotations:sample_frames", args=[self.project.pk]), html)
+        cards = self.client.get(url, {"who": self.people["reviewer2"].pk}).context["frame_cards"]
+        self.assertEqual([c["video_pk"] for c in cards], [other.pk])
+        cards = self.client.get(url, {"who": "none"}).context["frame_cards"]
+        self.assertEqual([c["video_pk"] for c in cards], [self.video.pk])
 
-    def test_a_manager_does(self):
-        html = self.html("manager")
+    def test_only_managers_see_where_and_when(self):
+        """Sharing a project does not share the footage (people.html)."""
+        from datetime import datetime, timezone as dt_tz
+        self.video.recorded_at = datetime(2026, 7, 14, 15, 41, tzinfo=dt_tz.utc)
+        self.video.save()
+        self.assertIn("14 Jul", self.html("manager"))
+        self.assertNotIn("14 Jul", self.html("reviewer"))
+        self.assertNotIn('name="device"', self.html("reviewer"))
 
-        self.assertIn(
-            reverse("annotations:pre_annotate_all", args=[self.project.pk]), html)
+    def test_the_old_review_url_lands_on_the_frames_tab(self):
+        self.as_("reviewer")
+        r = self.client.get(reverse("annotations:review", args=[self.project.pk]),
+                            {"status": "reviewed"})
+        self.assertRedirects(r, reverse("annotations:detail", args=[self.project.pk])
+                             + "?status=reviewed", fetch_redirect_response=False)
 
 
 class ProjectListTests(ViewAccessTestCase):
@@ -419,10 +370,10 @@ class ProjectListTests(ViewAccessTestCase):
         return self.client.get(reverse("annotations:list")).content.decode()
 
     def test_a_shared_project_says_whose_it_is_and_what_you_are(self):
-        html = self.html("annotator")
+        html = self.html("reviewer")
 
         self.assertIn("shared by owner", html)
-        self.assertIn("annotator", html)
+        self.assertIn("reviewer", html)
 
     def test_your_own_project_is_not_labelled_as_shared(self):
         self.assertNotIn("shared by", self.html("owner"))
@@ -439,23 +390,24 @@ class ProjectListTests(ViewAccessTestCase):
         settings_url = reverse("annotations:settings", args=[self.project.pk])
 
         self.assertIn(settings_url, self.html("manager"))
-        self.assertNotIn(settings_url, self.html("annotator"))
+        self.assertNotIn(settings_url, self.html("reviewer"))
 
 
 class EditorLandingTests(ViewAccessTestCase):
-    """"Annotate" and clip links land on a real frame needing labels."""
+    """The editor lands on a real frame still to review."""
 
     def setUp(self):
         super().setUp()
         from apps.annotations.models import Annotation
         Annotation.objects.filter(project=self.project).delete()
         self.done = Annotation.objects.create(project=self.project, video=self.video,
-                                              frame_number=120, boxes=[{"label": "bee"}])
+                                              frame_number=120, boxes=[{"label": "bee"}],
+                                              reviewed=True)
         self.todo = Annotation.objects.create(project=self.project, video=self.video,
                                               frame_number=480, boxes=[], sampled_only=True)
         self.url = reverse("annotations:editor", args=[self.project.pk])
 
-    def test_annotate_goes_to_the_first_frame_needing_labels(self):
+    def test_the_editor_opens_on_the_first_frame_to_review(self):
         self.as_("owner")
         r = self.client.get(self.url)
         self.assertRedirects(r, f"{self.url}?video={self.video.pk}&frame=480",
@@ -471,3 +423,25 @@ class EditorLandingTests(ViewAccessTestCase):
         self.as_("owner")
         self.assertEqual(self.client.get(f"{self.url}?video={self.video.pk}&frame=120").status_code, 200)
         self.assertEqual(self.client.get(f"{self.url}?video={self.video.pk}&frame=7&jump=1").status_code, 200)
+
+    def test_your_own_queue_comes_first(self):
+        mine = Annotation.objects.create(project=self.project, video=self.video,
+                                         frame_number=900, boxes=[],
+                                         assigned_to=self.people["reviewer"])
+        self.as_("reviewer")
+        r = self.client.get(self.url)
+        self.assertRedirects(r, f"{self.url}?video={self.video.pk}&frame={mine.frame_number}",
+                             fetch_redirect_response=False)
+
+    def test_prev_next_stay_inside_the_grids_filter(self):
+        """Opened from the grid, the editor walks the grid's frames and keeps
+        the filter on its links; a reviewed frame is out of "to review"."""
+        Annotation.objects.create(project=self.project, video=self.video,
+                                  frame_number=600, boxes=[])
+        self.as_("owner")
+        r = self.client.get(f"{self.url}?video={self.video.pk}&frame=480&status=review")
+        self.assertEqual(r.context["prev_frame_url"], "")
+        self.assertTrue(r.context["next_frame_url"].endswith(
+            f"?video={self.video.pk}&frame=600&status=review"))
+        self.assertEqual((r.context["current_frame_index"], r.context["total_project_frames"]),
+                         (1, 2))
