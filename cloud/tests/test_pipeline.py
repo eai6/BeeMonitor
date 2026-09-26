@@ -163,19 +163,30 @@ class TestLayout:
         assert layout["hotel"] == (0, 0, 320, 240)
         assert layout["nests"] == {1: (0, 0, 160, 120)}
 
-    def test_no_nests_found_still_returns_a_layout(self, clip):
-        with patch("beemonitor.detection.nest_detector.NestDetector") as det, \
-             patch("ultralytics.YOLO"):
-            det.return_value.get_nests_and_hotel_detections.return_value = None
-            layout = CloudPipeline._fill_nests(
+    @staticmethod
+    def _fill(clip, found):
+        """_fill_nests with the nest model stubbed. The stubs stand in for the
+        whole import chain (ultralytics, beemonitor.*) so this runs in CI's
+        cloud job, which installs neither."""
+        import sys
+        import types
+
+        det = MagicMock()
+        det.return_value.get_nests_and_hotel_detections.return_value = found
+        cfg = MagicMock()
+        mods = {name: types.ModuleType(name) for name in (
+            "ultralytics", "beemonitor", "beemonitor.core", "beemonitor.core.config",
+            "beemonitor.detection", "beemonitor.detection.nest_detector")}
+        mods["ultralytics"].YOLO = MagicMock()
+        mods["beemonitor.core.config"].Config = cfg
+        mods["beemonitor.detection.nest_detector"].NestDetector = det
+        with patch.dict(sys.modules, mods):
+            return CloudPipeline._fill_nests(
                 CloudPipeline._build_manual_nests(clip, None, None), clip, "m.pt")
-        assert layout == {"hotel": (0, 0, 320, 240), "nests": {}}
+
+    def test_no_nests_found_still_returns_a_layout(self, clip):
+        assert self._fill(clip, None) == {"hotel": (0, 0, 320, 240), "nests": {}}
 
     def test_model_nests_fill_in_but_the_roi_stays(self, clip):
-        with patch("beemonitor.detection.nest_detector.NestDetector") as det, \
-             patch("ultralytics.YOLO"):
-            det.return_value.get_nests_and_hotel_detections.return_value = {
-                "hotel": (10, 10, 20, 20), "nests": {"a": (1, 2, 3, 4)}}
-            layout = CloudPipeline._fill_nests(
-                CloudPipeline._build_manual_nests(clip, None, None), clip, "m.pt")
+        layout = self._fill(clip, {"hotel": (10, 10, 20, 20), "nests": {"a": (1, 2, 3, 4)}})
         assert layout == {"hotel": (0, 0, 320, 240), "nests": {"a": (1, 2, 3, 4)}}
