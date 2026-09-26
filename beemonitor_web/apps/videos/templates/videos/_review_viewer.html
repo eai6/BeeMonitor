@@ -123,6 +123,14 @@
   // presign is spent per clip watched rather than per clip listed.
   var hoverTimer = null;
   function bindCard(card) {
+    // A photo has nothing to play: it opens on its own page (fit / 100%).
+    if (card.dataset.kind === 'photo') {
+      card.addEventListener('click', function (e) {
+        if (e.target.matches('input[type="checkbox"], label')) return;
+        window.location = card.dataset.detail;
+      });
+      return;
+    }
     var media = card.querySelector('.media');
     if (media) {
       card.addEventListener('mouseenter', function () {

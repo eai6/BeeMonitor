@@ -259,7 +259,7 @@ def _upload_still(meta_path: Path) -> None:
         "width": meta.get("width"), "height": meta.get("height"),
         "sensor_mode": meta.get("sensor_mode"), "lens_position": meta.get("lens_position"),
         "source": meta.get("source"), "burst_id": meta.get("burst_id"),
-        "burst_index": meta.get("burst_index"),
+        "burst_index": meta.get("burst_index"), "clip": meta.get("clip"),
     })
     Path(str(meta_path) + ".uploaded").write_text(
         f"still_id={done.get('still_id')}\nstorage_key={key}\n")
@@ -292,6 +292,9 @@ def _upload_one(file_path: Path) -> None:
 
     # 3. Tell Django the PUT succeeded.
     complete = _api_post("/api/v1/uploads/complete", {
+        # The clip's own name, so the stills a burst took before it (which name
+        # this file) show on its page.
+        "filename": file_path.name,
         "storage_key": storage_key,
         "file_size_bytes": size,
         "recorded_at": recorded_at.isoformat(),

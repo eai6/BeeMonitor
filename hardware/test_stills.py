@@ -106,7 +106,9 @@ for p in (TMP / "stills").iterdir():
 cam = FakeCam()
 enc = mock.Mock()
 fresh = object()
-n = stills.take_burst(cam, enc, "video", None, None, 5, output=fresh)
+burst = stills.take_burst(cam, enc, "video", None, None, 5, output=fresh)
+n = burst.count
+burst.save("2026-09-26_12_00_05.mp4")
 check("burst: restarts on an empty pre-roll buffer (no jump back)", enc.output is fresh)
 import time as _t  # noqa: E402
 for _ in range(50):   # the writer thread
@@ -122,6 +124,8 @@ check("burst: 5 markers, one burst id, indexes 0-4",
       len(metas) == 5 and len({m["burst_id"] for m in metas}) == 1
       and sorted(m["burst_index"] for m in metas) == [0, 1, 2, 3, 4]
       and all(m["source"] == "burst" for m in metas))
+check("burst: each marker names the clip after it",
+      {m["clip"] for m in metas} == {"2026-09-26_12_00_05.mp4"})
 for p in (TMP / "stills").iterdir():
     p.unlink()
 

@@ -121,6 +121,31 @@ The gallery shows a burst as one row of 5 with a link to the clip recorded
 right after it (matched on device + time: the first video starting within
 ~15 s of the burst).
 
+## Part 1c: photos live in the videos table (2026-09-26, built)
+
+User: "I kinda don't want another thing with still images. It is better to
+integrate the two and use what we have already cleaned up."
+
+- A still is a `Video` row with `kind="photo"`; `DeviceStill` is gone
+  (devices 0038 copies old rows, keeping `metadata.legacy_still_id` because
+  field devices free files by that id).
+- `Video.objects` is **clips only** (ClipManager); `Video.everything` includes
+  photos (also the base manager, so deletes cascade to burst photos). Every
+  analysis / pipeline / schedule / annotation / count path therefore excludes
+  photos without being touched; photo-aware places opt in
+  (`accessible(user, photos=True)`).
+- A burst photo's `parent` is the clip recorded after it: the device names the
+  clip in each photo's marker and sends each clip's `filename`; whichever
+  uploads first, the server links them.
+- The clip's page shows "Photos taken at the trigger" (5, in order); a photo's
+  page is a fit / 100% viewer with "Taken right before this clip".
+- Periodic photos: the Processing hub's Clips | Photos switch (no run controls
+  on photos). The separate Stills page and device-page strip are gone.
+- Freeing the device: videos and photos alike (photos via `still_ids`, with
+  photo tombstones `PendingDeviceDeletion.is_photo`).
+- Burst clips no longer start with the 2 s from before the trigger (fresh
+  pre-roll buffer after a burst or a periodic still).
+
 ## Part 2: pipelines on stills
 
 Design: boards "Pipeline editor: Stills input" and "Run on stills + results".

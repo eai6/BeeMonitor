@@ -195,7 +195,17 @@ class VideoThumbnailView(LoginRequiredMixin, View):
     """
 
     def get(self, request, pk):
-        video = get_object_or_404(Video.accessible(request.user), pk=pk)
+        video = get_object_or_404(Video.accessible(request.user, photos=True), pk=pk)
+        if video.is_photo:
+            # The device's own 1280 px preview, in raw-videos beside the photo.
+            key = (video.metadata or {}).get("thumb_key") or video.storage_key
+            from config.storage import get_s3_client
+            try:
+                return HttpResponseRedirect(
+                    get_s3_client().generate_presigned_url("raw-videos", key))
+            except Exception:
+                logger.exception("Failed to presign photo preview %s", pk)
+                raise Http404("Could not read the photo.")
         key = video.thumbnail_key
         if not key:
             # Uploaded before stills existed. Make one now and keep it, so the
@@ -222,7 +232,7 @@ class VideoStreamView(LoginRequiredMixin, View):
     """
 
     def get(self, request, pk):
-        video = get_object_or_404(Video.accessible(request.user), pk=pk)
+        video = get_object_or_404(Video.accessible(request.user, photos=True), pk=pk)
         blob_path = video.storage_key or ""
         if not blob_path or blob_path.startswith("s3://"):
             raise Http404("This clip has no stored file yet.")
@@ -241,7 +251,9 @@ class VideoDetailView(LoginRequiredMixin, DetailView):
 
     def get_queryset(self):
         # Own videos, plus videos from a device shared with me (view-only).
-        return Video.accessible(self.request.user)
+        # Photos too: a periodic photo opens here, and so does each photo of a
+        # motion burst (from its clip's page).
+        return Video.accessible(self.request.user, photos=True)
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -256,18 +268,33 @@ class VideoDetailView(LoginRequiredMixin, DetailView):
         if blob_path and not blob_path.startswith("s3://"):
             try:
                 from config.storage import get_s3_client
-                ctx["video_url"] = get_s3_client().generate_presigned_url(
-                    "raw-videos", blob_path,
-                )
+                s3 = get_s3_client()
+                ctx["video_url"] = s3.generate_presigned_url("raw-videos", blob_path)
+                if video.is_photo:
+                    # Fit shows the device's 1280 px preview; 100% loads the
+                    # original only when asked.
+                    ctx["preview_url"] = s3.generate_presigned_url(
+                        "raw-videos", (video.metadata or {}).get("thumb_key") or blob_path)
             except Exception as e:
                 logger.error("Failed to presign video URL: %s", e)
+
+        # A clip's motion-burst photos (taken right before it), and a burst
+        # photo's clip and its siblings.
+        if video.is_photo:
+            ctx["clip"] = video.parent
+            ctx["burst"] = list(video.parent.burst_photos()) if video.parent_id else []
+        else:
+            ctx["burst"] = list(video.burst_photos())
 
         # Prev/next consecutive video on the SAME device, ordered by recorded time
         # (tie-broken by pk) — so you can step through a device's footage in order
         # without going back to the list. "Prev" = earlier, "Next" = later.
         from django.db.models import Q
-        siblings = Video.accessible(self.request.user).filter(
-            device_id=video.device_id).exclude(pk=video.pk)
+        # Photos step through photos; a burst photo steps through its burst
+        # (via the strip), so prev/next here stay among top-level items.
+        siblings = Video.accessible(self.request.user, photos=True).filter(
+            device_id=video.device_id, kind=video.kind, parent__isnull=True,
+        ).exclude(pk=video.pk)
         ts = video.recorded_at
         if ts:
             ctx["prev_video"] = siblings.filter(
@@ -285,10 +312,22 @@ class VideoDetailView(LoginRequiredMixin, DetailView):
 
 
 def _delete_storage_objects_for_video(video):
-    """Delete all S3 objects associated with a video and its analysis results."""
+    """Delete all S3 objects associated with a video and its analysis results —
+    and, for a clip, those of the motion-burst photos that go with it."""
+    if not video.is_photo:
+        for photo in video.burst_photos():
+            _delete_storage_objects_for_video(photo)
+            _tombstone_device_copy(photo)
     try:
         from config.storage import get_s3_client
         s3 = get_s3_client()
+
+        thumb = (video.metadata or {}).get("thumb_key") if video.is_photo else ""
+        if thumb:
+            try:
+                s3.delete_blob("raw-videos", thumb)
+            except Exception as e:
+                logger.warning("Could not delete photo preview %s: %s", thumb, e)
 
         blob_path = video.storage_key
         if blob_path and not blob_path.startswith("s3://"):
@@ -377,8 +416,12 @@ def _tombstone_device_copy(video):
     Video row is deleted (otherwise an un-freed on-device copy is orphaned)."""
     if video.device_id and video.device_deleted_at is None:
         from .models import PendingDeviceDeletion
+        # A photo's sidecar holds its still id (the old DeviceStill id for
+        # migrated photos) and is freed through the stills path.
+        sid = ((video.metadata or {}).get("legacy_still_id") or video.id
+               if video.is_photo else video.id)
         PendingDeviceDeletion.objects.get_or_create(
-            device_id=video.device_id, video_id=video.id,
+            device_id=video.device_id, video_id=sid, is_photo=video.is_photo,
         )
 
 
@@ -386,7 +429,7 @@ class VideoDeleteView(LoginRequiredMixin, View):
     """Delete a single video and its S3 objects."""
 
     def post(self, request, pk):
-        video = get_object_or_404(Video.manageable(request.user), pk=pk)
+        video = get_object_or_404(Video.manageable(request.user, photos=True), pk=pk)
         title = video.title
 
         _delete_storage_objects_for_video(video)
@@ -427,7 +470,7 @@ class VideoDeviceDeleteView(LoginRequiredMixin, View):
     """
 
     def post(self, request, pk):
-        video = get_object_or_404(Video.manageable(request.user), pk=pk)
+        video = get_object_or_404(Video.manageable(request.user, photos=True), pk=pk)
         if request.POST.get("cancel"):
             if video.device_deleted_at is None and video.device_delete_requested:
                 video.device_delete_requested = False

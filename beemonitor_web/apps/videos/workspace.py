@@ -33,8 +33,10 @@ def _unsanitize_site(value: str) -> str:
 
 
 # GET/POST params the Processing-hub video filter understands.
+# ``kind`` (clips | photos) picks the queryset rather than filtering it — see
+# ProcessingHubView — so apply_video_filters ignores it.
 VIDEO_FILTER_KEYS = ("device", "site", "year", "month", "day", "hour",
-                     "hfrom", "hto", "from", "to", "q", "analysis")
+                     "hfrom", "hto", "from", "to", "q", "analysis", "kind")
 
 
 def _values(params, key):

@@ -592,7 +592,14 @@ class ProcessingHubView(LoginRequiredMixin, View):
         from apps.pipelines.models import Pipeline
 
         # Own videos + videos from devices shared with me (viewer or manager).
-        user_videos = Video.accessible(request.user)
+        # Clips, or — with kind=photo — the periodic full-resolution photos
+        # (a motion burst's photos stay with their clip, on its page).
+        kind = "photo" if request.GET.get("kind") == "photo" else "video"
+        if kind == "photo":
+            user_videos = Video.accessible(request.user, photos=True).filter(
+                kind=Video.Kind.PHOTO, parent__isnull=True)
+        else:
+            user_videos = Video.accessible(request.user)
         qs = user_videos
 
         # Comprehensive filter: device · site · year · month · day · hour · date
@@ -666,6 +673,7 @@ class ProcessingHubView(LoginRequiredMixin, View):
         video_days = workspace.group_by_day(videos, dot_by_device)
 
         return render(request, self.template_name, {
+            "kind": kind,
             "videos": videos,
             "recent_jobs": recent_jobs,
             "active_jobs": active_jobs,

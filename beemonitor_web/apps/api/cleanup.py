@@ -9,7 +9,10 @@ never decides this on its own.
   POST /api/v1/devices/cleanup   {"deleted": [...], "deleted_stills": [...]}
                                                           -> stamps device_deleted_at
 
-Full-resolution stills (DeviceStill) follow the same two keys as clips.
+Full-resolution photos (``Video.kind == "photo"``) follow the same two keys
+but are listed apart, as ``still_ids``: the device frees them through their
+own sidecars. Photos migrated from the old DeviceStill table carry that old id
+(``metadata.legacy_still_id``), which is what their sidecar holds.
 
 Both device-authenticated (Bearer ``bmk_device_*``). Tiny JSON, so it's cheap to
 run over cellular from the telemetry service.
@@ -42,7 +45,7 @@ class DeviceCleanupView(APIView):
         if device is None or not isinstance(device, Device):
             return Response({"detail": "Device authentication required."}, status=401)
         ids = list(
-            Video.objects.filter(
+            Video.objects.filter(  # clips only (the default manager)
                 device=device,
                 device_delete_requested=True,
                 device_deleted_at__isnull=True,
@@ -54,17 +57,19 @@ class DeviceCleanupView(APIView):
         # on-device copy may still exist (the id still matches the Pi's sidecar).
         if len(ids) < MAX_BATCH:
             tomb = list(
-                PendingDeviceDeletion.objects.filter(device=device)
+                PendingDeviceDeletion.objects.filter(device=device, is_photo=False)
                 .order_by("created_at")
                 .values_list("video_id", flat=True)[: MAX_BATCH - len(ids)]
             )
             ids = list(dict.fromkeys(ids + tomb))  # de-dup, preserve order
-        from apps.devices.models import DeviceStill
-        still_ids = list(
-            DeviceStill.objects.filter(device=device, device_delete_requested=True,
-                                       device_deleted_at__isnull=True)
-            .order_by("taken_at").values_list("id", flat=True)[:MAX_BATCH])
-        return Response({"video_ids": ids, "still_ids": still_ids})
+        photos = (Video.everything.filter(kind=Video.Kind.PHOTO, device=device,
+                                          device_delete_requested=True,
+                                          device_deleted_at__isnull=True)
+                  .order_by("recorded_at").values_list("id", "metadata")[:MAX_BATCH])
+        still_ids = [(meta or {}).get("legacy_still_id") or pk for pk, meta in photos]
+        still_ids += list(PendingDeviceDeletion.objects.filter(device=device, is_photo=True)
+                          .values_list("video_id", flat=True)[:MAX_BATCH])
+        return Response({"video_ids": ids, "still_ids": list(dict.fromkeys(still_ids))})
 
     def post(self, request):
         device = request.auth
@@ -77,10 +82,13 @@ class DeviceCleanupView(APIView):
         ids, still_ids = _ids("deleted"), _ids("deleted_stills")
         s = 0
         if still_ids:
-            from apps.devices.models import DeviceStill
-            s = DeviceStill.objects.filter(
-                device=device, id__in=still_ids, device_delete_requested=True,
+            from django.db.models import Q
+            s = Video.everything.filter(
+                Q(id__in=still_ids) | Q(metadata__legacy_still_id__in=still_ids),
+                kind=Video.Kind.PHOTO, device=device, device_delete_requested=True,
                 device_deleted_at__isnull=True).update(device_deleted_at=timezone.now())
+            s += PendingDeviceDeletion.objects.filter(
+                device=device, is_photo=True, video_id__in=still_ids).delete()[0]
         if not ids:
             return Response({"confirmed": s})
         # Only stamp rows that belong to THIS device and were actually cleared —

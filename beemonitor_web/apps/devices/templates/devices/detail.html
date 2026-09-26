@@ -453,13 +453,14 @@
   {% endcomment %}
   <div class="mt-4 pt-4 border-t border-gray-100">
     <div class="flex flex-wrap items-center gap-2">
-      <h3 class="text-sm font-semibold text-gray-700">Full-resolution stills</h3>
+      <h3 class="text-sm font-semibold text-gray-700">Full-resolution photos</h3>
       <span class="text-xs text-gray-500">64 MP cameras only</span>
-      <a href="{% url 'devices:stills' device.pk %}" class="ml-auto text-xs text-amber-700 hover:underline">All stills{% if stills_total %} ({{ stills_total }}){% endif %} &rarr;</a>
+      <a href="{% url 'analysis:processing' %}?device={{ device.pk }}&kind=photo" class="ml-auto text-xs text-amber-700 hover:underline">See photos &rarr;</a>
     </div>
     <p class="text-xs text-gray-400 mt-1 mb-2">
       The camera's full 9152 × 6944 picture, about 15 MB each, uploaded over WiFi like a
-      video and kept on the device until you free the space below.
+      video and kept on the device until you free the space below. Photos from a motion
+      burst show on the page of the clip recorded after them.
     </p>
     {% if can_manage %}
     <form method="post" action="{% url 'devices:stills_setting' device.pk %}" class="flex flex-wrap items-center gap-2 mb-2">
@@ -467,9 +468,9 @@
       <span class="text-xs text-gray-600 w-32">On motion</span>
       <div class="flex border border-gray-300 rounded-md overflow-hidden text-sm" role="group" aria-label="Stills on motion">
         <button name="burst" value="off" class="px-3 py-1.5 {% if not device.motion_burst_stills %}bg-amber-100 text-amber-900 font-semibold{% else %}bg-white hover:bg-gray-50{% endif %}">Video only</button>
-        <button name="burst" value="on" class="px-3 py-1.5 border-l border-gray-300 {% if device.motion_burst_stills %}bg-amber-100 text-amber-900 font-semibold{% else %}bg-white hover:bg-gray-50{% endif %}">5 stills, then video</button>
+        <button name="burst" value="on" class="px-3 py-1.5 border-l border-gray-300 {% if device.motion_burst_stills %}bg-amber-100 text-amber-900 font-semibold{% else %}bg-white hover:bg-gray-50{% endif %}">5 photos, then video</button>
       </div>
-      <span class="text-[11px] text-gray-400">Every trigger: 5 full-resolution stills (~2–3 s), then the clip until motion stops. The clip starts ~4–6 s after the trigger.</span>
+      <span class="text-[11px] text-gray-400">Every trigger: 5 full-resolution photos (~2–3 s), then the clip until motion stops; the photos show on the clip's page.</span>
     </form>
     <form method="post" action="{% url 'devices:stills_setting' device.pk %}" class="flex flex-wrap items-center gap-2">
       {% csrf_token %}
@@ -484,27 +485,17 @@
     </form>
     {% else %}
     <p class="text-xs text-gray-600">
-      On motion: {% if device.motion_burst_stills %}{{ device.motion_burst_stills }} stills, then video{% else %}video only{% endif %}
+      On motion: {% if device.motion_burst_stills %}{{ device.motion_burst_stills }} photos, then video{% else %}video only{% endif %}
       &middot; periodic: {{ device.get_stills_interval_min_display|lower }}
     </p>
     {% endif %}
     {% if can_manage and on_device.videos|add:on_device.stills %}
     <form method="post" action="{% url 'devices:free_space' device.pk %}" class="flex flex-wrap items-center gap-2 mt-3"
-          onsubmit="return confirm('Delete the device\'s copies of {{ on_device.videos }} uploaded video(s) and {{ on_device.stills }} still(s)? The cloud copies are kept.')">
+          onsubmit="return confirm('Delete the device\'s copies of {{ on_device.videos }} uploaded video(s) and {{ on_device.stills }} photo(s)? The cloud copies are kept.')">
       {% csrf_token %}
       <button class="px-3 py-1.5 border border-red-300 text-red-700 rounded text-sm hover:bg-red-50">Free space on the device</button>
-      <span class="text-[11px] text-gray-500">{{ on_device.videos }} uploaded video{{ on_device.videos|pluralize }} &middot; {{ on_device.stills }} still{{ on_device.stills|pluralize }} still on the device{% if on_device.pending %} &middot; {{ on_device.pending }} waiting to be freed{% endif %}. Cloud copies are kept.</span>
+      <span class="text-[11px] text-gray-500">{{ on_device.videos }} uploaded video{{ on_device.videos|pluralize }} &middot; {{ on_device.stills }} photo{{ on_device.stills|pluralize }} still on the device{% if on_device.pending %} &middot; {{ on_device.pending }} waiting to be freed{% endif %}. Cloud copies are kept.</span>
     </form>
-    {% endif %}
-    {% if recent_stills %}
-    <div class="grid grid-cols-4 sm:grid-cols-8 gap-2 mt-3">
-      {% for c in recent_stills %}
-      <a href="{% url 'devices:still_detail' device.pk c.still.pk %}" title="{{ c.still.taken_at|date:'j M H:i' }}"
-         class="block aspect-[4/3] bg-gray-100 rounded overflow-hidden hover:ring-2 hover:ring-amber-500">
-        {% if c.thumb_url %}<img src="{{ c.thumb_url }}" alt="Still {{ c.still.taken_at|date:'j M H:i' }}" loading="lazy" class="w-full h-full object-cover">{% endif %}
-      </a>
-      {% endfor %}
-    </div>
     {% endif %}
   </div>
 </div>

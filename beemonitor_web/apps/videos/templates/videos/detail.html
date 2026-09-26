@@ -24,10 +24,10 @@
 <div class="flex justify-between items-center mb-4">
   <h1 class="text-2xl font-bold text-gray-900">{{ video.title|sanitize_name }}</h1>
   {% if can_manage %}
-  <form method="post" action="{% url 'videos:delete' video.pk %}" onsubmit="return confirm('Delete this video and all its analysis data? This cannot be undone.');">
+  <form method="post" action="{% url 'videos:delete' video.pk %}" onsubmit="return confirm('{% if video.is_photo %}Delete this photo? This cannot be undone.{% else %}Delete this video{% if burst %}, the {{ burst|length }} photos taken before it,{% endif %} and all its analysis data? This cannot be undone.{% endif %}');">
     {% csrf_token %}
     <button type="submit" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded text-sm font-medium">
-      Delete Video
+      {% if video.is_photo %}Delete photo{% else %}Delete Video{% endif %}
     </button>
   </form>
   {% else %}
@@ -35,8 +35,94 @@
   {% endif %}
 </div>
 
+{% if video.is_photo %}
+<!-- A full-resolution photo: Fit shows the device's 1280 px preview; 100% loads
+     the original (~15 MB) only when asked, at the spot you click, and pans. -->
+<div class="bg-gray-900 rounded-lg overflow-hidden mb-3" id="photo-box" style="height: calc(100vh - 260px); min-height: 420px">
+  <img id="photo-img" src="{{ preview_url }}" alt="{{ video.title }}"
+       class="w-full h-full object-contain cursor-zoom-in select-none{% if video.device.rotate_180 %} rotate-180{% endif %}" draggable="false">
+</div>
+<div class="flex flex-wrap items-center gap-2 mb-6 text-sm">
+  <button type="button" id="z-fit" class="px-3 py-1.5 rounded border border-amber-600 bg-amber-50 font-semibold">Fit</button>
+  <button type="button" id="z-100" class="px-3 py-1.5 rounded border border-gray-300">100%</button>
+  {% if video_url %}<a href="{{ video_url }}" download class="px-3 py-1.5 rounded border border-gray-300 hover:bg-gray-50">Download original</a>{% endif %}
+  {% if clip %}
+  <a href="{% url 'videos:detail' clip.pk %}" class="ml-auto px-3 py-1.5 rounded bg-gray-800 text-white hover:bg-gray-700">Taken right before this clip &rarr;</a>
+  {% endif %}
+</div>
+<script>
+(function () {
+  var box = document.getElementById('photo-box'), img = document.getElementById('photo-img');
+  var FULL = "{{ video_url|escapejs }}", PREVIEW = "{{ preview_url|escapejs }}";
+  var fitBtn = document.getElementById('z-fit'), fullBtn = document.getElementById('z-100'), full = false;
+  function mark() {
+    [[fitBtn, !full], [fullBtn, full]].forEach(function (p) {
+      p[0].classList.toggle('border-amber-600', p[1]); p[0].classList.toggle('bg-amber-50', p[1]);
+      p[0].classList.toggle('font-semibold', p[1]); p[0].classList.toggle('border-gray-300', !p[1]);
+    });
+  }
+  function toFit() {
+    full = false; box.style.overflow = 'hidden'; img.src = PREVIEW;
+    img.classList.add('w-full', 'h-full', 'object-contain', 'cursor-zoom-in');
+    img.classList.remove('max-w-none', 'cursor-grab'); mark();
+  }
+  function toFull(fx, fy) {
+    if (!FULL) return;
+    full = true; box.style.overflow = 'auto';
+    img.classList.remove('w-full', 'h-full', 'object-contain', 'cursor-zoom-in');
+    img.classList.add('max-w-none', 'cursor-grab');
+    img.onload = function () {
+      img.onload = null;
+      box.scrollLeft = (fx || 0.5) * img.naturalWidth - box.clientWidth / 2;
+      box.scrollTop = (fy || 0.5) * img.naturalHeight - box.clientHeight / 2;
+    };
+    img.src = FULL; mark();
+  }
+  fitBtn.addEventListener('click', toFit);
+  fullBtn.addEventListener('click', function () { toFull(); });
+  img.addEventListener('click', function (e) {
+    if (full) return;
+    var r = img.getBoundingClientRect(), ar = (img.naturalWidth || 4) / (img.naturalHeight || 3);
+    var pw = Math.min(r.width, r.height * ar), ph = pw / ar;
+    toFull(Math.min(1, Math.max(0, (e.clientX - r.left - (r.width - pw) / 2) / pw)),
+           Math.min(1, Math.max(0, (e.clientY - r.top - (r.height - ph) / 2) / ph)));
+  });
+  var drag = null;
+  box.addEventListener('mousedown', function (e) {
+    if (!full) return;
+    drag = {x: e.clientX, y: e.clientY, l: box.scrollLeft, t: box.scrollTop}; e.preventDefault();
+  });
+  window.addEventListener('mousemove', function (e) {
+    if (drag) { box.scrollLeft = drag.l - (e.clientX - drag.x); box.scrollTop = drag.t - (e.clientY - drag.y); }
+  });
+  window.addEventListener('mouseup', function () { drag = null; });
+})();
+</script>
+{% endif %}
+
+{% if burst %}
+<!-- The motion burst: the full-resolution photos taken on the trigger, right
+     before the clip. -->
+<div class="bg-white shadow rounded-lg p-4 mb-6">
+  <div class="flex items-baseline gap-2 mb-2">
+    <h2 class="text-sm font-semibold text-gray-800">Photos taken at the trigger</h2>
+    <span class="text-xs text-gray-500">{{ burst|length }} &middot; full resolution{% if not video.is_photo %} &middot; right before this clip{% endif %}</span>
+  </div>
+  <div class="grid grid-cols-5 gap-2">
+    {% for p in burst %}
+    <a href="{% url 'videos:detail' p.pk %}" title="{{ p.recorded_at|date:'H:i:s' }}"
+       class="block aspect-[4/3] bg-gray-100 rounded overflow-hidden {% if p.pk == video.pk %}ring-2 ring-amber-600{% else %}hover:ring-2 hover:ring-amber-400{% endif %}">
+      <img src="{% url 'videos:thumbnail' p.pk %}" alt="Photo {{ forloop.counter }}" loading="lazy"
+           class="w-full h-full object-cover{% if video.device.rotate_180 %} rotate-180{% endif %}">
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
 <!-- Video Player -->
-{% if video_url %}
+{% if video.is_photo %}
+{% elif video_url %}
 <div class="bg-white shadow rounded-lg overflow-hidden mb-6">
   {% comment %}
     The device's display rotation. The real fix is on the camera (see
@@ -102,6 +188,23 @@
       <p class="font-medium">{{ video.fps|floatformat:1 }}</p>
     </div>
     {% endif %}
+    {% if video.is_photo %}
+    <div>
+      <p class="text-gray-500">Size</p>
+      <p class="font-medium">{% if video.width %}{{ video.width }} × {{ video.height }}{% else %}--{% endif %}
+        {% if video.metadata.sensor_mode == "16mp" %}<span class="text-xs text-amber-700" title="The device could not allocate a 64 MP buffer for this one">(16 MP fallback)</span>{% endif %}</p>
+    </div>
+    <div>
+      <p class="text-gray-500">Taken</p>
+      <p class="font-medium">{% if video.metadata.source == "burst" %}On a motion trigger{% elif video.metadata.source == "manual" %}On request{% else %}Periodic{% endif %}</p>
+    </div>
+    {% if video.metadata.lens_position is not None %}
+    <div>
+      <p class="text-gray-500">Lens</p>
+      <p class="font-medium">{{ video.metadata.lens_position|floatformat:2 }} D</p>
+    </div>
+    {% endif %}
+    {% endif %}
   </div>
 </div>
 
@@ -134,7 +237,7 @@
         {% endif %}
       {% elif is_owner %}
         <form method="post" action="{% url 'videos:device_delete' video.pk %}"
-              onsubmit="return confirm('Delete this clip from the device to free space? The server copy is kept. This cannot be undone once the device acts.');">
+              onsubmit="return confirm('Delete this {% if video.is_photo %}photo{% else %}clip{% endif %} from the device to free space? The server copy is kept. This cannot be undone once the device acts.');">
           {% csrf_token %}
           <button class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm">Delete from device</button>
         </form>
@@ -144,6 +247,7 @@
 </div>
 {% endif %}
 
+{% if not video.is_photo %}
 <!-- Jobs for this video -->
 <div class="bg-white shadow rounded-lg">
   <div class="px-6 py-4 border-b border-gray-200">
@@ -192,4 +296,5 @@
   <p class="px-6 py-8 text-sm text-gray-500 text-center">No analysis jobs for this video.</p>
   {% endif %}
 </div>
+{% endif %}
 {% endblock %}

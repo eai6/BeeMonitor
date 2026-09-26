@@ -22,8 +22,16 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
         <h1 class="text-xl font-bold text-gray-900">Review</h1>
         {% if has_filter %}<a href="{% url 'analysis:processing' %}" class="text-xs text-amber-700 hover:underline">Clear all</a>{% endif %}
       </div>
+      {% comment %}Clips, or the devices' periodic full-resolution photos (a
+        motion burst's photos are on their clip's page).{% endcomment %}
+      <div class="flex border border-gray-300 rounded-md overflow-hidden text-[13px] mt-2 w-fit" role="group" aria-label="Clips or photos">
+        {% with dev=f.device %}
+        <a href="?{% for d in dev %}device={{ d }}&{% endfor %}" class="px-3 py-1 {% if kind != 'photo' %}bg-amber-100 text-amber-900 font-semibold{% else %}bg-white hover:bg-gray-50{% endif %}">Clips</a>
+        <a href="?{% for d in dev %}device={{ d }}&{% endfor %}kind=photo" class="px-3 py-1 border-l border-gray-300 {% if kind == 'photo' %}bg-amber-100 text-amber-900 font-semibold{% else %}bg-white hover:bg-gray-50{% endif %}">Photos</a>
+        {% endwith %}
+      </div>
       <p class="text-xs text-gray-500 mt-1">
-        {{ video_count }} clip{{ video_count|pluralize }}
+        {{ video_count }} {% if kind == "photo" %}photo{% else %}clip{% endif %}{{ video_count|pluralize }}
         {% if f.device %}&middot; {{ f.device|length }} hotel{{ f.device|pluralize }}{% endif %}
         &middot; <span id="rail-selected">0</span> selected
       </p>
@@ -43,7 +51,7 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
     the DOM, since HTML forms cannot nest. "Apply" above is the FILTER submit;
     this is a separate action.
     {% endcomment %}
-    {% if can_manage_any and videos %}
+    {% if can_manage_any and videos and kind != "photo" %}
     <div class="border-t border-gray-200 px-4 py-3 space-y-2">
       <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Pipeline to run</div>
       <select name="pipeline" form="run-form" class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
@@ -100,7 +108,9 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
       <!-- toolbar -->
       <div class="flex items-center justify-between gap-4 px-5 py-3 bg-white border-b border-gray-200">
         <div class="flex items-center gap-3.5">
-          {% if can_manage_any %}
+          {% if kind == "photo" %}
+          <span class="text-sm text-gray-500">{{ video_count }} photo{{ video_count|pluralize }} &middot; periodic and on request</span>
+          {% elif can_manage_any %}
           <label class="flex items-center gap-2 text-sm text-gray-700">
             <input type="checkbox" id="select-all" class="rounded border-gray-300"> Select all {{ video_count }}
           </label>
@@ -109,7 +119,7 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
           {% endif %}
           <span class="text-xs text-gray-400">{% if video_count > 200 %}Showing 200 most recent — narrow with the filter{% endif %}</span>
         </div>
-        <span class="text-xs text-gray-500 hidden sm:inline">Hover to preview · click to open</span>
+        <span class="text-xs text-gray-500 hidden sm:inline">{% if kind == "photo" %}Click to open at full resolution{% else %}Hover to preview · click to open{% endif %}</span>
       </div>
 
       <!-- cards -->

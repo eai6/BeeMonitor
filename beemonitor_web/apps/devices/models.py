@@ -598,47 +598,6 @@ class DeviceHealthSample(models.Model):
         return f"health {self.device_id} @ {self.minute:%Y-%m-%d %H:%M}"
 
 
-class DeviceStill(models.Model):
-    """One full-resolution still from a device's camera (memory/40).
-
-    The image and its 1280 px preview are uploaded like videos: presigned PUT
-    into raw-videos under ``users/<u>/devices/<d>/stills/``. Kept forever in the
-    cloud; the device keeps its copy until someone clears it on the dashboard
-    (the same two-key rule as videos: uploaded AND cleared).
-    """
-
-    device = models.ForeignKey(Device, on_delete=models.CASCADE, related_name="stills")
-    taken_at = models.DateTimeField()
-    storage_key = models.CharField(max_length=500, unique=True)
-    thumb_key = models.CharField(max_length=500, blank=True, default="")
-    width = models.PositiveIntegerField(default=0)
-    height = models.PositiveIntegerField(default=0)
-    file_size_bytes = models.BigIntegerField(default=0)
-    # "64mp" normally; "16mp" when the Pi could not allocate a 64 MP buffer.
-    sensor_mode = models.CharField(max_length=8, blank=True, default="")
-    lens_position = models.FloatField(null=True, blank=True)
-    # "schedule" | "manual" ("Take one now") | "burst" (on a motion trigger).
-    source = models.CharField(max_length=12, blank=True, default="schedule")
-    # A motion burst's frames share an id; index is their order (0-based).
-    burst_id = models.CharField(max_length=40, blank=True, default="", db_index=True)
-    burst_index = models.PositiveSmallIntegerField(null=True, blank=True)
-    # Freeing the device's copy: set on the dashboard, stamped when it confirms.
-    device_delete_requested = models.BooleanField(default=False)
-    device_deleted_at = models.DateTimeField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ["-taken_at"]
-        indexes = [models.Index(fields=["device", "taken_at"])]
-
-    def __str__(self) -> str:
-        return f"still {self.taken_at:%Y-%m-%d %H:%M} of device {self.device_id}"
-
-    @property
-    def megapixels(self) -> float:
-        return round(self.width * self.height / 1e6, 1)
-
-
 class DeviceShare(models.Model):
     """Grants another account access to a device.
 

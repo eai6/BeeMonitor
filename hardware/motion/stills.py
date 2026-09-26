@@ -96,10 +96,38 @@ def _restore_focus(cam, lens) -> None:
         log.warning("still: could not restore focus: %s", e)
 
 
+class Burst:
+    """A motion burst's captured frames, saved once the clip after it is named.
+
+    ``save(clip)`` writes them on a thread (in order; each raw 64 MP frame is
+    ~190 MB, so they are encoded and released one at a time), each marker
+    naming the clip so the server shows the stills on that clip's page.
+    """
+
+    def __init__(self, frames, mode, lens, burst_id):
+        self.frames, self.mode, self.lens, self.burst_id = frames, mode, lens, burst_id
+        self.count = len(frames)
+
+    def save(self, clip: str = "") -> None:
+        if not self.frames:
+            return
+        frames, self.frames = self.frames, []
+
+        def _write_all(items=frames):
+            index = 0
+            while items:
+                at, arr = items.pop(0)   # release each frame once written
+                _write(arr, at, self.mode, self.lens, "burst", burst_id=self.burst_id,
+                       burst_index=index, clip=clip)
+                index += 1
+        threading.Thread(target=_write_all, daemon=True).start()
+
+
 def take_burst(cam, encoder, video_config, transform, lens, count: int,
-               output=None) -> int:
+               output=None) -> "Burst":
     """On a motion trigger: ``count`` full-sensor frames in a row, then back to
-    video. One mode switch each way (not one per frame). Returns frames taken.
+    video. One mode switch each way (not one per frame). Returns the Burst;
+    the caller opens the clip, then calls ``burst.save(clip_name)``.
 
     A burst keeps no video from before the trigger. Stopping the encoder does
     NOT empty the pre-roll buffer, so the caller passes a fresh ``output``
@@ -134,20 +162,9 @@ def take_burst(cam, encoder, video_config, transform, lens, count: int,
                 encoder.output = output
             cam.start_encoder(encoder)
             _restore_focus(cam, lens)
-    taken = len(frames)   # counted now: the writer thread empties the list
-    log.info("burst: %d x %s in %.1fs (video paused)", taken, mode or "none",
+    log.info("burst: %d x %s in %.1fs (video paused)", len(frames), mode or "none",
              time.monotonic() - t0)
-    if frames:
-        # One writer thread, frames in order: each raw 64 MP frame is ~190 MB,
-        # so they are encoded and released one at a time.
-        def _write_all(items=frames):
-            index = 0
-            while items:
-                at, arr = items.pop(0)   # release each frame once written
-                _write(arr, at, mode, lens, "burst", burst_id=burst_id, burst_index=index)
-                index += 1
-        threading.Thread(target=_write_all, daemon=True).start()
-    return taken
+    return Burst(frames, mode, lens, burst_id)
 
 
 def take(cam, encoder, transform, lens, source: str = "schedule", output=None) -> bool:
@@ -187,7 +204,7 @@ def take(cam, encoder, transform, lens, source: str = "schedule", output=None) -
 
 
 def _write(arr, taken_at: datetime, mode: str, lens, source: str,
-           burst_id: str = "", burst_index: int | None = None) -> None:
+           burst_id: str = "", burst_index: int | None = None, clip: str = "") -> None:
     """JPEG + 1280 px preview + the marker (written last).
     "RGB888" arrays are BGR-ordered, which is what cv2 writes."""
     try:
@@ -210,7 +227,7 @@ def _write(arr, taken_at: datetime, mode: str, lens, source: str,
         meta = {"taken_at": taken_at.isoformat(), "width": w, "height": h,
                 "sensor_mode": mode, "lens_position": lens, "source": source}
         if burst_id:
-            meta.update(burst_id=burst_id, burst_index=burst_index)
+            meta.update(burst_id=burst_id, burst_index=burst_index, clip=clip)
         tmp = Path(str(stem) + ".json.tmp")
         tmp.write_text(json.dumps(meta))
         os.replace(tmp, Path(str(stem) + ".json"))   # the marker comes last

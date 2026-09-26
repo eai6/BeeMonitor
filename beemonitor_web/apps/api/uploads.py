@@ -15,10 +15,12 @@ Two-call flow:
 v1 implements single-PUT only (S3 hard cap: 5 GB per PUT). Multipart
 upload + resumable chunks lands in a follow-up.
 
-Full-resolution stills (memory/40) use the same two calls with
+Full-resolution photos (memory/40) use the same two calls with
 ``kind: "still"`` (and ``"still_thumb"`` for its 1280 px preview): the key goes
 under ``.../devices/<device_id>/stills/`` and ``complete`` creates a
-``DeviceStill`` instead of a ``Video``. Same WiFi-only uploader, same retries.
+``Video`` with ``kind="photo"``. A motion burst's photos name the clip recorded
+after them (``clip``) and are attached to it — whichever uploads first; a clip's
+complete carries its device ``filename`` for that. Same WiFi-only uploader.
 """
 
 from __future__ import annotations
@@ -227,6 +229,10 @@ class UploadCompleteView(APIView):
             # reconnect) is not mistaken for a measured recording time.
             "recorded_at_source": recorded_at_source,
         }
+        # The device's own file name: burst photos name the clip by it.
+        filename = PurePosixPath(str(request.data.get("filename") or "")).name
+        if filename:
+            metadata["device_filename"] = filename
 
         video = Video.objects.create(
             user=device.owner,
@@ -244,6 +250,13 @@ class UploadCompleteView(APIView):
         # the browser) is not held open for a decode.
         from apps.videos.thumbnails import queue_thumbnail
         queue_thumbnail(video)
+
+        # Photos of the burst before this clip that uploaded first.
+        if filename:
+            Video.everything.filter(
+                device=device, kind=Video.Kind.PHOTO, parent__isnull=True,
+                metadata__clip=filename,
+            ).update(parent=video)
 
         logger.info(
             "Pi upload complete: device=%s user=%s video=%s key=%s size=%d MB",
@@ -267,10 +280,10 @@ class UploadCompleteView(APIView):
 
     def _complete_still(self, request, device, storage_key, file_size_bytes,
                         taken_at, expected_prefix, s3):
-        """A full-resolution still: one DeviceStill row. Idempotent on the key,
-        so a retry after a lost response does not make a second row."""
-        from apps.devices.models import DeviceStill
-
+        """A full-resolution photo: a Video row with kind="photo". Idempotent on
+        the key, so a retry after a lost response does not make a second row.
+        Returns ``still_id`` — the device writes it to the photo's sidecar and
+        frees the file by it later."""
         thumb_key = (request.data.get("thumb_key") or "").strip()
         if thumb_key and (not thumb_key.startswith(expected_prefix)
                           or not s3.blob_exists("raw-videos", thumb_key)):
@@ -286,26 +299,38 @@ class UploadCompleteView(APIView):
             lens = float(request.data.get("lens_position"))
         except (TypeError, ValueError):
             lens = None
-        still, created = DeviceStill.objects.get_or_create(
-            storage_key=storage_key,
-            defaults={
-                "device": device,
-                "taken_at": taken_at or timezone.now(),
-                "thumb_key": thumb_key,
-                "width": _int("width"),
-                "height": _int("height"),
-                "file_size_bytes": file_size_bytes,
-                "sensor_mode": str(request.data.get("sensor_mode") or "")[:8],
-                "lens_position": lens,
-                "source": (request.data.get("source")
-                           if request.data.get("source") in ("manual", "burst") else "schedule"),
-                "burst_id": str(request.data.get("burst_id") or "")[:40],
-                "burst_index": _int("burst_index") if request.data.get("burst_id") else None,
-            },
-        )
-        logger.info("Pi still %s: device=%s still=%s key=%s size=%d MB",
-                    "complete" if created else "re-confirmed", device.id, still.id,
-                    storage_key, file_size_bytes // (1024 * 1024))
-        return Response({"still_id": still.id, "storage_key": storage_key,
-                         "taken_at": still.taken_at.isoformat()},
+        taken_at = taken_at or timezone.now()
+        source = request.data.get("source")
+        source = source if source in ("manual", "burst") else "schedule"
+        burst_id = str(request.data.get("burst_id") or "")[:40]
+        clip = PurePosixPath(str(request.data.get("clip") or "")).name
+        parent = None
+        if clip:
+            parent = (Video.objects.filter(device=device, metadata__device_filename=clip)
+                      .order_by("-uploaded_at").first())
+        photo = Video.everything.filter(device=device, kind=Video.Kind.PHOTO,
+                                        storage_key=storage_key).first()
+        created = photo is None
+        if created:
+            photo = Video.everything.create(
+                user=device.owner, device=device, kind=Video.Kind.PHOTO, parent=parent,
+                title=f"Photo {taken_at:%Y-%m-%d %H:%M:%S}", storage_key=storage_key,
+                file_size_bytes=file_size_bytes, width=_int("width") or None,
+                height=_int("height") or None, status=Video.Status.READY,
+                recorded_at=taken_at, site_name=device.location or "",
+                metadata={
+                    "device_id": device.id, "device_name": device.name,
+                    "thumb_key": thumb_key,
+                    "sensor_mode": str(request.data.get("sensor_mode") or "")[:8],
+                    "lens_position": lens, "source": source, "burst_id": burst_id,
+                    "burst_index": _int("burst_index") if burst_id else None,
+                    "clip": clip,
+                },
+            )
+        logger.info("Pi photo %s: device=%s video=%s key=%s parent=%s size=%d MB",
+                    "complete" if created else "re-confirmed", device.id, photo.id,
+                    storage_key, photo.parent_id, file_size_bytes // (1024 * 1024))
+        return Response({"still_id": photo.id, "video_id": photo.id,
+                         "storage_key": storage_key,
+                         "taken_at": photo.recorded_at.isoformat()},
                         status=201 if created else 200)

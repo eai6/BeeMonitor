@@ -6,7 +6,26 @@ from django.db import models
 from django.db.models import Q
 
 
+class ClipManager(models.Manager):
+    """Clips only — ``Video.objects``.
+
+    Full-resolution photos (memory/40) live in this table too, so they share
+    upload, access, the Processing hub and freeing the device. But nearly every
+    existing path — analysis jobs, pipelines, device schedules, annotation,
+    counts and charts — treats a row as a video file. Making the default
+    manager clips-only keeps photos out of all of them by default; the few
+    photo-aware places ask for ``Video.everything``.
+    """
+
+    def get_queryset(self):
+        return super().get_queryset().filter(kind=Video.Kind.VIDEO)
+
+
 class Video(models.Model):
+    class Kind(models.TextChoices):
+        VIDEO = "video", "Video"
+        PHOTO = "photo", "Photo"
+
     class Status(models.TextChoices):
         UPLOADING = "uploading", "Uploading"
         READY = "ready", "Ready"
@@ -75,8 +94,26 @@ class Video(models.Model):
     # or a clip whose extraction failed — the grid falls back to a placeholder).
     thumbnail_key = models.CharField(max_length=500, blank=True)
 
+    # A clip, or a full-resolution photo from the device's camera. A photo from
+    # a motion burst belongs to the clip recorded right after it (``parent``);
+    # a periodic photo stands alone. Photo details (sensor mode, lens, source,
+    # burst index, the device's 1280 px preview key) sit in ``metadata``.
+    kind = models.CharField(max_length=8, choices=Kind.choices, default=Kind.VIDEO)
+    parent = models.ForeignKey("self", on_delete=models.CASCADE, null=True, blank=True,
+                               related_name="+")
+
+    objects = ClipManager()
+    everything = models.Manager()
+
     class Meta:
         ordering = ["-uploaded_at"]
+        # Deletes and FK lookups see photos too (a clip's delete takes its
+        # burst photos with it).
+        base_manager_name = "everything"
+        indexes = [
+            models.Index(fields=["device", "kind", "recorded_at"], name="video_device_kind_rec"),
+            models.Index(fields=["kind", "recorded_at"], name="video_kind_rec"),
+        ]
 
     def __str__(self):
         return f"{self.title} ({self.get_status_display()})"
@@ -84,28 +121,40 @@ class Video(models.Model):
     # ------------------------------------------------------------------
     # Sharing / access control
     # ------------------------------------------------------------------
+    @property
+    def is_photo(self) -> bool:
+        return self.kind == Video.Kind.PHOTO
+
+    def burst_photos(self):
+        """The photos a motion burst took right before this clip, in order."""
+        return (Video.everything.filter(parent=self, kind=Video.Kind.PHOTO)
+                .order_by("recorded_at", "id"))
+
     @staticmethod
-    def accessible(user):
+    def accessible(user, photos=False):
         """Videos the user owns OR can see via a device share (any role).
+        ``photos=True`` includes full-resolution photos (clips only by default).
 
         The read-scope counterpart to ``Device.accessible(user)``: a viewer or
         manager on a device sees that device's videos (and the ecological data
         derived from them). Owner-only WRITE paths (delete, device-delete) must
         keep filtering on ``user=request.user`` and must NOT use this.
         """
-        return Video.objects.filter(
+        base = Video.everything if photos else Video.objects
+        return base.filter(
             Q(user=user) | Q(device__shares__user=user)
         ).distinct()
 
     @staticmethod
-    def manageable(user):
+    def manageable(user, photos=False):
         """Videos the user may WRITE (run analysis / delete): owned, or on a
         device shared with them as **manager** (not viewer).
 
         Use this for action paths (run, delete, device-delete). Viewers get
         read-only access via ``accessible`` and are excluded here.
         """
-        return Video.objects.filter(
+        base = Video.everything if photos else Video.objects
+        return base.filter(
             Q(user=user)
             | Q(device__shares__user=user, device__shares__role="manager")
         ).distinct()
@@ -231,6 +280,9 @@ class PendingDeviceDeletion(models.Model):
         "devices.Device", on_delete=models.CASCADE, related_name="pending_deletions",
     )
     video_id = models.IntegerField()  # the now-deleted Video.id; matches the sidecar
+    # A photo's sidecar is freed through the stills path (still_ids), a clip's
+    # through video_ids — the device keeps them apart.
+    is_photo = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

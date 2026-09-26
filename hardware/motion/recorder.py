@@ -311,13 +311,14 @@ def record() -> None:
                     # Stills first, then the clip. The burst discards the
                     # pre-roll (by design) and disturbs the background model,
                     # so re-learn it; the clip's idle timer starts after.
+                    burst = None
                     try:
                         # An empty pre-roll buffer: the clip starts after the
                         # stills, with no jump back to before the trigger.
                         circ = CircularOutput(buffersize=max(1, int(PRE_ROLL * FPS)))
-                        stills.take_burst(cam, encoder, config,
-                                          camera_transform(cam_profile), lens_pos, burst_n,
-                                          output=circ)
+                        burst = stills.take_burst(cam, encoder, config,
+                                                  camera_transform(cam_profile), lens_pos,
+                                                  burst_n, output=circ)
                     except Exception as e:  # never lose the clip over the stills
                         log.warning("burst failed: %s", e)
                     gate.reset()
@@ -325,6 +326,9 @@ def record() -> None:
                     warmup_deadline = now_mono + WARMUP_SECONDS
                     last_motion = now_mono
                     _open_segment(now_mono, "burst")
+                    if burst is not None:
+                        # The stills belong to this clip: name it in their markers.
+                        burst.save(cur_mp4.name if cur_mp4 else "")
                 elif motion:
                     _open_segment(now_mono, "motion")
 

@@ -11,14 +11,15 @@
         <div class="flex items-center gap-2.5 mb-2.5 {% if not forloop.first %}mt-6{% endif %}">
           <h2 class="text-[13px] font-semibold text-gray-700">{{ group.day|date:"D j M" }}</h2>
           <span class="text-xs text-gray-400">
-            {{ group.videos|length }} clip{{ group.videos|length|pluralize }}{% if group.hotels|length > 1 %} across {{ group.hotels|length }} hotels{% endif %}
+            {{ group.videos|length }} {% if kind == "photo" %}photo{% else %}clip{% endif %}{{ group.videos|length|pluralize }}{% if group.hotels|length > 1 %} across {{ group.hotels|length }} hotels{% endif %}
           </span>
           <div class="flex-1 h-px bg-gray-200"></div>
         </div>
 
         <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3.5">
           {% for v in group.videos %}
-          <div class="vid-card bg-white rounded-lg shadow overflow-hidden" data-vid="{{ v.pk }}"
+          <div class="vid-card bg-white rounded-lg shadow overflow-hidden{% if v.is_photo %} cursor-pointer{% endif %}" data-vid="{{ v.pk }}"
+               data-kind="{{ v.kind }}"
                data-stream="{% url 'videos:stream' v.pk %}"
                data-time="{{ v.recorded_at|default:v.uploaded_at|date:'H:i' }}"
                data-day="{{ group.day|date:'D j M' }}"
@@ -39,10 +40,14 @@
               <img src="{% url 'videos:thumbnail' v.pk %}" alt="" loading="lazy" decoding="async"
                    class="absolute inset-0 w-full h-full object-cover"
                    onerror="this.remove()">
+              {% if v.is_photo %}
+              <span class="absolute bottom-1.5 right-1.5 text-[10px] text-white bg-black/60 px-1.5 rounded">{% if v.width >= 9000 %}64 MP {% endif %}photo</span>
+              {% else %}
               <div class="absolute inset-0 flex items-center justify-center pointer-events-none play-glyph">
                 <svg class="w-7 h-7 drop-shadow" viewBox="0 0 24 24" fill="rgba(255,255,255,0.85)"><path d="M8 5v14l11-7z"/></svg>
               </div>
-              {% if can_select %}
+              {% endif %}
+              {% if can_select and not v.is_photo %}
               <input type="checkbox" name="video_ids" value="{{ v.pk }}" id="cb-{{ v.pk }}"
                      class="vid-cb absolute top-1.5 left-1.5 rounded border-gray-300 z-10">
               {% endif %}
@@ -62,7 +67,8 @@
                 shows whether the clip is already in it. Everything else about
                 a card is the same question either way.
               {% endcomment %}
-              {% if card_status_template %}
+              {% if v.is_photo %}
+              {% elif card_status_template %}
               <div class="shrink-0">{% include card_status_template %}</div>
               {% else %}
               <div id="status-{{ v.pk }}" data-vid="{{ v.pk }}" data-status="{{ v.job_status|default:'' }}" class="shrink-0">
