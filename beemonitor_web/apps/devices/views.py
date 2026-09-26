@@ -663,6 +663,10 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         ctx["health_charts"] = _HEALTH_CHARTS
         ctx["health_charts_json"] = json.dumps(_HEALTH_CHARTS)
         ctx["record_modes"] = device.RECORD_MODES  # capture mode + hour window
+        from .stills_views import recent_stills
+        ctx["stills_intervals"] = device.STILLS_INTERVALS
+        ctx["recent_stills"] = recent_stills(device)
+        ctx["stills_total"] = device.stills.count()
         ctx["hours"] = list(range(24))
         # Recurring pipeline runs over this device's videos (Advanced page card).
         from apps.pipelines.models import Pipeline

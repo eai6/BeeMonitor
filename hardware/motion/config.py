@@ -278,6 +278,21 @@ ACTIVITY_FRAMES_FILE = CALIB_FILE.parent / "activity_frames.json"
 # the recorder to use that focus. Wins over the env defaults above.
 CAMERA_FILE = CALIB_FILE.parent / "camera.json"
 
+# Full-resolution stills (memory/40): the camera's whole sensor (9152x6944 on
+# the 64 MP OV64A40), taken between clips every N minutes. The interval comes
+# from record_settings.json ("stills_interval_min", dashboard-pushed); this env
+# value is the fallback. 0 = off; anything else is floored at 15 minutes.
+STILLS_INTERVAL_MIN = _env_int("BEEMONITOR_STILLS_INTERVAL_MIN", 0)
+# Stills sit beside, not inside, the video tree: the uploader picks them up
+# like videos (WiFi only) and deletes them once the cloud has them.
+STILLS_DIR = Path(os.environ.get("BEEMONITOR_STILLS_DIR", str(RECORD_DIR.parent / "stills")))
+# "Take one now": telemetry drops this file on a take_still command.
+STILL_REQUEST_FILE = STILLS_DIR / "still.request"
+# A unit off WiFi for weeks must not fill its card: oldest stills go first.
+STILLS_MAX_BYTES = _env_int("BEEMONITOR_STILLS_MAX_MB", 2048) * 1024 * 1024
+STILL_JPEG_QUALITY = _env_int("BEEMONITOR_STILL_JPEG_QUALITY", 90)
+STILL_THUMB_SIDE = 1280
+
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s recorder %(message)s",

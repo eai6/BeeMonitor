@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Still {{ still.taken_at|date:"j M H:i" }} - {{ device.name }} - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="mb-2">
+  <a href="{% url 'devices:stills' device.pk %}?day={{ still.taken_at|date:'Y-m-d' }}" class="text-sm text-gray-500 hover:text-amber-700">&larr; Stills</a>
+</div>
+
+<div class="flex flex-wrap items-center gap-3 mb-3">
+  <h1 class="text-xl font-bold text-gray-900">{{ device.name }} &middot; {{ still.taken_at|date:"j M Y, H:i" }}</h1>
+  <span class="text-sm text-gray-500">
+    {{ still.width }} × {{ still.height }} &middot; {{ still.file_size_bytes|filesizeformat }}{% if still.lens_position is not None %} &middot; lens {{ still.lens_position|floatformat:1 }} D{% endif %}{% if still.sensor_mode == "16mp" %} &middot; <span title="The device could not allocate a 64 MP buffer for this one">16 MP fallback</span>{% endif %}
+  </span>
+  <div class="ml-auto flex items-center gap-2">
+    <button type="button" id="z-fit" class="px-3 py-1.5 rounded border border-amber-600 bg-amber-50 text-sm font-semibold">Fit</button>
+    <button type="button" id="z-100" class="px-3 py-1.5 rounded border border-gray-300 text-sm">100%</button>
+    {% if image_url %}<a href="{{ image_url }}" download class="px-3 py-1.5 rounded border border-gray-300 text-sm hover:bg-gray-50">Download original</a>{% endif %}
+    {% if prev %}<a href="{% url 'devices:still_detail' device.pk prev.pk %}" aria-label="Previous still" class="px-2.5 py-1.5 rounded border border-gray-300 text-sm hover:bg-gray-50">&larr;</a>{% endif %}
+    {% if next %}<a href="{% url 'devices:still_detail' device.pk next.pk %}" aria-label="Next still" class="px-2.5 py-1.5 rounded border border-gray-300 text-sm hover:bg-gray-50">&rarr;</a>{% endif %}
+  </div>
+</div>
+
+{% comment %}
+  Fit shows the 1280 px preview; 100% loads the original (~15 MB) only when
+  asked, into a scroll box you pan by dragging. Clicking in Fit zooms to 100%
+  at that spot.
+{% endcomment %}
+<div id="still-box" class="bg-gray-900 rounded-lg overflow-hidden" style="height: calc(100vh - 220px); min-height: 420px">
+  <img id="still-img" src="{{ thumb_url }}" alt="Still {{ still.taken_at|date:'j M H:i' }}"
+       class="w-full h-full object-contain cursor-zoom-in select-none" draggable="false">
+</div>
+
+<script>
+(function () {
+  var box = document.getElementById('still-box'), img = document.getElementById('still-img');
+  var FULL = "{{ image_url|escapejs }}", PREVIEW = "{{ thumb_url|escapejs }}";
+  var fitBtn = document.getElementById('z-fit'), fullBtn = document.getElementById('z-100');
+  var full = false;
+  function mark() {
+    [[fitBtn, !full], [fullBtn, full]].forEach(function (p) {
+      p[0].classList.toggle('border-amber-600', p[1]); p[0].classList.toggle('bg-amber-50', p[1]);
+      p[0].classList.toggle('font-semibold', p[1]); p[0].classList.toggle('border-gray-300', !p[1]);
+    });
+  }
+  function toFit() {
+    full = false; box.style.overflow = 'hidden'; img.src = PREVIEW;
+    img.className = 'w-full h-full object-contain cursor-zoom-in select-none'; mark();
+  }
+  function toFull(fx, fy) {
+    if (!FULL) return;
+    full = true; box.style.overflow = 'auto';
+    img.className = 'max-w-none cursor-grab select-none';
+    img.onload = function () {
+      img.onload = null;
+      box.scrollLeft = (fx || 0.5) * img.naturalWidth - box.clientWidth / 2;
+      box.scrollTop = (fy || 0.5) * img.naturalHeight - box.clientHeight / 2;
+    };
+    img.src = FULL; mark();
+  }
+  fitBtn.addEventListener('click', toFit);
+  fullBtn.addEventListener('click', function () { toFull(); });
+  img.addEventListener('click', function (e) {
+    if (full) return;
+    var r = img.getBoundingClientRect();
+    // object-contain letterboxes: map the click into the picture itself.
+    var ar = (img.naturalWidth || 4) / (img.naturalHeight || 3), w = r.width, h = r.height;
+    var pw = Math.min(w, h * ar), ph = pw / ar;
+    var fx = (e.clientX - r.left - (w - pw) / 2) / pw, fy = (e.clientY - r.top - (h - ph) / 2) / ph;
+    toFull(Math.min(1, Math.max(0, fx)), Math.min(1, Math.max(0, fy)));
+  });
+  var drag = null;
+  box.addEventListener('mousedown', function (e) {
+    if (!full) return;
+    drag = {x: e.clientX, y: e.clientY, l: box.scrollLeft, t: box.scrollTop};
+    img.style.cursor = 'grabbing'; e.preventDefault();
+  });
+  window.addEventListener('mousemove', function (e) {
+    if (!drag) return;
+    box.scrollLeft = drag.l - (e.clientX - drag.x); box.scrollTop = drag.t - (e.clientY - drag.y);
+  });
+  window.addEventListener('mouseup', function () { drag = null; if (full) img.style.cursor = 'grab'; });
+})();
+</script>
+{% endblock %}

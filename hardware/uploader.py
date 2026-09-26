@@ -60,6 +60,9 @@ INITIAL_BACKOFF = 5
 MAX_BACKOFF = 5 * 60  # 5 minutes
 
 # Files smaller than this are skipped (likely still being written by the recorder).
+# Full-resolution stills (memory/40) upload exactly like videos: the same
+# initiate -> PUT -> complete calls (kind "still"), the same WiFi-only gate.
+STILLS_DIR = Path(os.environ.get("BEEMONITOR_STILLS_DIR", str(RECORD_DIR.parent / "stills")))
 MIN_FILE_BYTES = 1024  # 1 KiB
 
 # Recording filename pattern from `main.py`: site_YYYY-MM-DD_HH_MM_SS.mp4
@@ -216,6 +219,52 @@ def _put_to_s3(presigned_url: str, file_path: Path, content_type: str) -> None:
         raise RuntimeError(f"S3 PUT -> {r.status_code}: {r.text[:300]}")
 
 
+def _list_pending_stills(stills_dir: Path) -> list[Path]:
+    """Complete stills, oldest first: the .json marker is written last."""
+    try:
+        return sorted(stills_dir.glob("*.json"), key=lambda p: p.name)
+    except OSError:
+        return []
+
+
+def _upload_still(meta_path: Path) -> None:
+    """One still: its 1280 px preview, then the full image, each via the video
+    upload calls; then complete (kind "still") and delete the local copies."""
+    stem = str(meta_path)[:-5]
+    full, thumb = Path(stem + ".jpg"), Path(stem + ".thumb.jpg")
+    meta = json.loads(meta_path.read_text())
+    if not full.exists():
+        log.warning("still %s has no image — dropping its marker", meta_path.name)
+        meta_path.unlink(missing_ok=True)
+        return
+    taken_at = meta.get("taken_at") or datetime.now(timezone.utc).isoformat()
+
+    def _send(path: Path, kind: str) -> str:
+        init = _api_post("/api/v1/uploads/initiate", {
+            "filename": path.name, "size_bytes": path.stat().st_size,
+            "content_type": "image/jpeg", "recorded_at": taken_at, "kind": kind,
+        })
+        _put_to_s3(init["upload_url"], path, "image/jpeg")
+        return init["storage_key"]
+
+    thumb_key = _send(thumb, "still_thumb") if thumb.exists() else ""
+    key = _send(full, "still")
+    size = full.stat().st_size
+    done = _api_post("/api/v1/uploads/complete", {
+        "kind": "still", "storage_key": key, "thumb_key": thumb_key,
+        "file_size_bytes": size, "recorded_at": taken_at,
+        "width": meta.get("width"), "height": meta.get("height"),
+        "sensor_mode": meta.get("sensor_mode"), "lens_position": meta.get("lens_position"),
+        "source": meta.get("source"),
+    })
+    for p in (full, thumb, meta_path):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+    log.info("uploaded still_id=%s %s (%.1f MB)", done.get("still_id"), full.name, size / 1e6)
+
+
 def _upload_one(file_path: Path) -> None:
     """End-to-end upload of a single .mp4. Touches .uploaded on success."""
     size = file_path.stat().st_size
@@ -326,12 +375,13 @@ def main() -> int:
         try:
             pending = _list_pending(RECORD_DIR)
             pending_frames = _list_pending_frames(RECORD_DIR)
+            pending_stills = _list_pending_stills(STILLS_DIR)
         except OSError as e:
             log.error("listing recording dir failed: %s", e)
             time.sleep(POLL_SECONDS)
             continue
 
-        if not pending and not pending_frames:
+        if not pending and not pending_frames and not pending_stills:
             time.sleep(POLL_SECONDS)
             backoff = INITIAL_BACKOFF
             continue
@@ -340,8 +390,8 @@ def main() -> int:
         # cellular — only drain the backlog when WiFi is up.
         if WIFI_ONLY_VIDEO and not _wifi_connected():
             if not holding_logged:
-                log.info("no WiFi — holding %d video(s) + %d frame group(s) until WiFi",
-                         len(pending), len(pending_frames))
+                log.info("no WiFi — holding %d video(s) + %d still(s) + %d frame group(s) "
+                         "until WiFi", len(pending), len(pending_stills), len(pending_frames))
                 holding_logged = True
             time.sleep(POLL_SECONDS)
             continue
@@ -362,6 +412,18 @@ def main() -> int:
                 time.sleep(backoff)
                 backoff = min(backoff * 2, MAX_BACKOFF)
                 # Move to next file rather than spin on the failing one.
+
+        # Stills, like videos: a failure keeps the files for the next loop.
+        for meta_path in pending_stills:
+            if not _running:
+                break
+            try:
+                _upload_still(meta_path)
+                backoff = INITIAL_BACKOFF
+            except Exception as e:
+                log.exception("still upload failed for %s: %s", meta_path.name, e)
+                time.sleep(backoff)
+                backoff = min(backoff * 2, MAX_BACKOFF)
 
         # Drain the durable activity-frame archive (crop + source frame) over WiFi.
         # Idempotent: a failed group is retried next loop (the cloud dedups), so we

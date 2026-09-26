@@ -248,6 +248,17 @@ class Device(models.Model):
     # This gates BOTH modes and only applies while the unit is powered (the
     # WittyPi power schedule remains the outer on/off envelope).
     record_window = models.JSONField(null=True, blank=True)
+    # Full-resolution stills (64 MP cameras only; others ignore it). Taken
+    # between clips inside the record window, uploaded like videos over WiFi.
+    # 0 = off. 15 min is the floor: each still pauses video ~2 s and is ~15 MB.
+    STILLS_INTERVALS = [
+        (0, "Off"),
+        (15, "Every 15 min"),
+        (30, "Every 30 min"),
+        (60, "Every hour"),
+    ]
+    stills_interval_min = models.PositiveSmallIntegerField(
+        default=0, choices=STILLS_INTERVALS)
 
     # Pending command for the device, returned in the next heartbeat response and
     # then cleared. "" | "capture_image" | "stream" | "wifi_stream".
@@ -581,6 +592,39 @@ class DeviceHealthSample(models.Model):
 
     def __str__(self) -> str:
         return f"health {self.device_id} @ {self.minute:%Y-%m-%d %H:%M}"
+
+
+class DeviceStill(models.Model):
+    """One full-resolution still from a device's camera (memory/40).
+
+    The image and its 1280 px preview are uploaded like videos: presigned PUT
+    into raw-videos under ``users/<u>/devices/<d>/stills/``. Kept forever.
+    """
+
+    device = models.ForeignKey(Device, on_delete=models.CASCADE, related_name="stills")
+    taken_at = models.DateTimeField()
+    storage_key = models.CharField(max_length=500, unique=True)
+    thumb_key = models.CharField(max_length=500, blank=True, default="")
+    width = models.PositiveIntegerField(default=0)
+    height = models.PositiveIntegerField(default=0)
+    file_size_bytes = models.BigIntegerField(default=0)
+    # "64mp" normally; "16mp" when the Pi could not allocate a 64 MP buffer.
+    sensor_mode = models.CharField(max_length=8, blank=True, default="")
+    lens_position = models.FloatField(null=True, blank=True)
+    # "schedule" | "manual" ("Take one now").
+    source = models.CharField(max_length=12, blank=True, default="schedule")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-taken_at"]
+        indexes = [models.Index(fields=["device", "taken_at"])]
+
+    def __str__(self) -> str:
+        return f"still {self.taken_at:%Y-%m-%d %H:%M} of device {self.device_id}"
+
+    @property
+    def megapixels(self) -> float:
+        return round(self.width * self.height / 1e6, 1)
 
 
 class DeviceShare(models.Model):

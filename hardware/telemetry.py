@@ -60,6 +60,8 @@ RECORD_DIR = Path(os.environ.get(
     "BEEMONITOR_RECORD_DIR", "/home/beemonitor/Desktop/cameraOutput/beeHotel"))
 QUEUE_DIR = Path(os.environ.get(
     "BEEMONITOR_TELEMETRY_QUEUE", str(RECORD_DIR.parent / "telemetry")))
+# Full-resolution stills (same default as motion/config.py STILLS_DIR).
+STILLS_DIR = Path(os.environ.get("BEEMONITOR_STILLS_DIR", str(RECORD_DIR.parent / "stills")))
 SCHEDULE_WINDOW = os.environ.get("BEEMONITOR_SCHEDULE_WINDOW", "")
 POST_TIMEOUT = int(os.environ.get("BEEMONITOR_TELEMETRY_TIMEOUT", "120"))
 # Seconds between beats. Defaults to 60 so an offline unit is noticed within a
@@ -1062,7 +1064,8 @@ def _apply_frame_cap(value) -> None:
         log.warning("could not write frame cap: %s", e)
 
 
-def _apply_record_settings(mode, window, post_roll=None, max_segment=None) -> None:
+def _apply_record_settings(mode, window, post_roll=None, max_segment=None,
+                           stills_interval=None) -> None:
     """Persist the dashboard's recording mode + daily hour window + clip-timing
     (post-roll tail, max clip length) to the file the recorder hot-reloads. Only
     called when the beat carried record_mode (new clouds), so window=None is a
@@ -1092,6 +1095,10 @@ def _apply_record_settings(mode, window, post_roll=None, max_segment=None) -> No
     ms = _clamp(max_segment, 30, 3600)
     if ms is not None:
         payload["max_segment"] = ms
+    # Full-resolution stills every N minutes (0 = off; the recorder floors it at 15).
+    si = _clamp(stills_interval, 0, 1440)
+    if si is not None:
+        payload["stills_interval_min"] = si
     try:
         new = json.dumps(payload, sort_keys=True)
         cur = (RECORD_SETTINGS_FILE.read_text().strip()
@@ -1781,8 +1788,22 @@ def _cache_location(value) -> None:
         log.debug("could not cache location: %s", e)
 
 
+def _take_still_request() -> None:
+    """Ask the recorder for one full-resolution still. It takes it between clips
+    and the uploader sends it like a video — nothing rides the heartbeat."""
+    req = STILLS_DIR / "still.request"
+    try:
+        STILLS_DIR.mkdir(parents=True, exist_ok=True)
+        req.write_text(str(time.time()))
+        log.info("command: take_still -> %s", req)
+    except OSError as e:
+        log.warning("take_still: could not write %s: %s", req, e)
+
+
 def _handle_command(cmd: str, params: dict) -> None:
-    if cmd == "capture_image":
+    if cmd == "take_still":
+        _take_still_request()
+    elif cmd == "capture_image":
         log.info("command: capture_image roi=%s", bool(params.get("roi")))
         _capture_and_upload(params)
     elif cmd == "update":
@@ -2003,7 +2024,8 @@ def main() -> int:
                     _apply_record_settings(resp.get("record_mode"),
                                            resp.get("record_window"),
                                            resp.get("record_post_roll"),
-                                           resp.get("record_max_segment"))
+                                           resp.get("record_max_segment"),
+                                           resp.get("stills_interval_min"))
                 # ...and the crop mode (all|off). Prefer the mode string; fall back
                 # to the legacy bool for older clouds.
                 if "activity_crops" in resp:

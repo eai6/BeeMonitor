@@ -139,6 +139,20 @@ def _valid_window(start, end):
     return None
 
 
+def load_stills_interval() -> int:
+    """Minutes between full-resolution stills (0 = off), from the
+    dashboard-pushed record_settings.json over the env default."""
+    from motion.config import STILLS_INTERVAL_MIN
+    minutes = STILLS_INTERVAL_MIN
+    d = _load_json_file(RECORD_SETTINGS_FILE)
+    if isinstance(d, dict) and "stills_interval_min" in d:
+        try:
+            minutes = int(d.get("stills_interval_min") or 0)
+        except (TypeError, ValueError):
+            pass
+    return max(0, minutes)
+
+
 def load_record_settings():
     """(mode, window, post_roll, max_segment) for the recorder: mode
     'motion'|'continuous', window (start_hour, end_hour) in device local time or

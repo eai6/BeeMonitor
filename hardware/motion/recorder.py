@@ -64,6 +64,7 @@ from motion.overrides import (
 )
 from motion.remux import _remux, _snippet_paths
 from motion.telemetry_still import _save_telemetry_still
+from motion import stills
 from motion.activity_frames import (
     _largest_blob, _mover_crop, _flush_activity_frames,
     _encode_source, _save_activity_archive,
@@ -148,7 +149,7 @@ def record() -> None:
     # sharp as the last thing that set LensPosition, and YOLO on a blurred frame
     # is exactly how hotel detection ends up falling back to the whole frame.
     # apply_focus logs what it actually did with the lens.
-    apply_focus(cam, cam_profile)
+    lens_pos = apply_focus(cam, cam_profile)
 
     # Cloud-faithful step 1: detect the hotel and confine detection to it before
     # we start recording. Falls back to the whole frame if detection fails.
@@ -219,6 +220,15 @@ def record() -> None:
              rec_mode, rec_window or "all-day", rec_post_roll, rec_max_segment)
     last_calib_check = time.monotonic()
     last_override_check = time.monotonic()
+
+    # Full-resolution stills (memory/40): 64 MP cameras only, between clips.
+    from motion.overrides import load_stills_interval
+    stills_capable = model_of(cam) == "ov64a40"
+    still_every = stills.interval_seconds(load_stills_interval())
+    next_still = warmup_deadline + 60.0   # first one a minute after warm-up
+    if still_every:
+        log.info("stills: every %.0f min%s", still_every / 60,
+                 "" if stills_capable else " requested, but this is not a 64 MP camera — off")
 
     # First telemetry still shortly after warmup, then every interval.
     next_telemetry_image = (
@@ -440,6 +450,12 @@ def record() -> None:
                 except OSError:
                     rsm = rec_settings_mtime
                 if rsm != rec_settings_mtime:
+                    new_every = stills.interval_seconds(load_stills_interval())
+                    if new_every != still_every:
+                        still_every = new_every
+                        next_still = min(next_still, now_mono + still_every) if still_every else next_still
+                        log.info("stills -> %s (dashboard)",
+                                 "every %.0f min" % (still_every / 60) if still_every else "off")
                     new = load_record_settings()
                     if new != (rec_mode, rec_window, rec_post_roll, rec_max_segment):
                         rec_mode, rec_window, rec_post_roll, rec_max_segment = new
@@ -459,6 +475,29 @@ def record() -> None:
                     req_file.unlink()
                 except OSError:
                     pass
+
+            # Full-resolution still: scheduled, or "take one now". Never while a
+            # clip is open — one due mid-clip is taken as soon as it closes.
+            if stills_capable:
+                asked = stills.requested()
+                if stills.due(now_mono, next_still, still_every, encoding=encoding,
+                              in_window=in_window, recording_on=rec_mode != "off",
+                              requested=asked):
+                    try:
+                        stills.take(cam, encoder, camera_transform(cam_profile), lens_pos,
+                                    source="manual" if asked else "schedule")
+                    except Exception as e:  # never stop recording over a still
+                        log.warning("still failed: %s", e)
+                    if asked:
+                        stills.clear_request()
+                    else:
+                        next_still = time.monotonic() + still_every
+                    # The mode switch disturbs the background model: re-learn it.
+                    gate.reset()
+                    warmup_deadline = time.monotonic() + WARMUP_SECONDS
+            elif stills.requested():
+                log.info("still requested, but this is not a 64 MP camera")
+                stills.clear_request()
 
             # Optional periodic still (off by default; TELEMETRY_IMAGE_INTERVAL=0).
             if now_mono >= next_telemetry_image:

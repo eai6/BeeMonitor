@@ -1,6 +1,6 @@
 # 40 · Full-resolution 64 MP stills
 
-Status: **plan, awaiting approval** (2026-09-26)
+Status: **part 1 built** (2026-09-26), awaiting a test on one 64 MP unit; part 2 (pipelines) not started
 Design: https://claude.ai/artifact/HYjUiHDMeCqLFJVBEn4mnA (boards "Full-resolution
 stills" and "Still viewer", bottom of the canvas)
 
@@ -46,12 +46,15 @@ checks and figures, while video stays 1080p for tracking.
   still fails, fall back to the 16 MP mode (4624×3472) and record which was used.
 - Orientation: same transform as video (ISP flips); a 90/270° unit is rotated
   in software like `runFocus._save_still`.
-- "Take one now" from the dashboard reuses the `capture.request` path with a
-  `full` flag.
+- "Take one now": a dashboard command makes telemetry drop `still.request`;
+  the recorder takes a still when idle and it uploads like a video (above).
 
-**Upload** — `uploader.py` picks up `stills/*.json` groups over **WiFi only**
-(cellular never: ~15 MB each), posts to a new `/api/devices/<id>/stills/`
-presigned-PUT flow (same as videos), deletes local copies once confirmed.
+**Upload — exactly like videos, never telemetry** (user, 2026-09-26): the
+uploader treats a still as it treats an .mp4 — same `uploads/initiate` →
+presigned S3 PUT → `uploads/complete` calls (with `kind: "still"`), same WiFi-only
+gate and backoff, same `.uploaded` marker. "Take one now" only asks the recorder
+to take a still; the still then waits in the upload queue like any other. The
+heartbeat/telemetry image path is not used for stills.
 Local cap: oldest stills dropped past 2 GB so a device off WiFi can't fill the card.
 
 **Web**
@@ -146,7 +149,16 @@ class ≈ 30 s per still per class — ~50× YOLO; offer it, default YOLO.
 7. `input.stills` block, validation, Count per-image/over-time, species block.
 8. Run-on-stills picker, schedules, results page.
 
-## Open questions
+## Decisions (2026-09-26)
+
+- 30 min default when turned on (off until turned on per device); 15 min floor.
+- No still at clip start.
+- Stills kept forever.
+- Pipelines on stills: YOLO and SAM 3 both offered (YOLO default).
+- Species ID only when the Identify species block is in the pipeline.
+- Stills upload like videos (initiate/PUT/complete, WiFi only), never telemetry.
+
+## Open questions (answered above)
 
 1. Default interval when turned on: 30 min? (15 min is the minimum offered.)
 2. Also take one at the start of each clip? (Better for species ID; costs a

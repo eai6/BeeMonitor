@@ -268,6 +268,8 @@ class DeviceHeartbeatView(APIView):
                 "record_window": device.record_window,
                 "record_post_roll": RECORD_POST_ROLL,
                 "record_max_segment": RECORD_MAX_SEGMENT,
+                # Full-resolution stills every N minutes (0 = off; 64 MP only).
+                "stills_interval_min": device.stills_interval_min,
             },
             status=201,
         )
@@ -312,7 +314,11 @@ class DeviceCommandView(APIView):
             "wake_schedule_apply": device.wake_schedule_apply,
             # Legacy: frees older-firmware units' held backlog (see beat).
             "video_upload_mode": "auto",
-            # Recording mode + window for parity with the beat.
+            # Recording settings for parity with the beat (the device applies
+            # them from the beat today).
             "record_mode": device.record_mode,
             "record_window": device.record_window,
+            "record_post_roll": RECORD_POST_ROLL,
+            "record_max_segment": RECORD_MAX_SEGMENT,
+            "stills_interval_min": device.stills_interval_min,
         })

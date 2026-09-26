@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views
+from . import stills_views, views
 
 app_name = "devices"
 
@@ -26,6 +26,10 @@ urlpatterns = [
     path("<int:pk>/usb-transfer/", views.DeviceUsbTransferView.as_view(), name="usb_transfer"),
     path("<int:pk>/usb-eject/", views.DeviceUsbEjectView.as_view(), name="usb_eject"),
     path("<int:pk>/record-settings/", views.DeviceRecordSettingsView.as_view(), name="record_settings"),
+    path("<int:pk>/stills-setting/", stills_views.DeviceStillsSettingView.as_view(), name="stills_setting"),
+    path("<int:pk>/take-still/", stills_views.DeviceTakeStillView.as_view(), name="take_still"),
+    path("<int:pk>/stills/", stills_views.DeviceStillsView.as_view(), name="stills"),
+    path("<int:pk>/stills/<int:still_pk>/", stills_views.DeviceStillDetailView.as_view(), name="still_detail"),
     path("<int:pk>/pipeline-schedule/", views.DevicePipelineScheduleView.as_view(), name="pipeline_schedule"),
     path("<int:pk>/review-crops/", views.DeviceActivityCropsView.as_view(), name="review_crops"),
     path("<int:pk>/motion-tuning/", views.DeviceMotionTuningView.as_view(), name="motion_tuning"),

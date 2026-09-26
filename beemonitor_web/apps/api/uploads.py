@@ -14,6 +14,11 @@ Two-call flow:
 
 v1 implements single-PUT only (S3 hard cap: 5 GB per PUT). Multipart
 upload + resumable chunks lands in a follow-up.
+
+Full-resolution stills (memory/40) use the same two calls with
+``kind: "still"`` (and ``"still_thumb"`` for its 1280 px preview): the key goes
+under ``.../devices/<device_id>/stills/`` and ``complete`` creates a
+``DeviceStill`` instead of a ``Video``. Same WiFi-only uploader, same retries.
 """
 
 from __future__ import annotations
@@ -53,12 +58,18 @@ def _safe_extension(filename: str) -> str:
     return ""
 
 
-def _build_storage_key(user_id: int, device_id: int, ext: str, recorded_at: datetime) -> str:
-    """``users/<user>/devices/<device>/<yyyy>/<mm>/<dd>/<uuid><ext>``."""
+STILL_KINDS = ("still", "still_thumb")
+
+
+def _build_storage_key(user_id: int, device_id: int, ext: str, recorded_at: datetime,
+                       kind: str = "") -> str:
+    """``users/<user>/devices/<device>/[stills/]<yyyy>/<mm>/<dd>/<uuid>[.thumb]<ext>``."""
+    sub = "stills/" if kind in STILL_KINDS else ""
+    suffix = ".thumb" if kind == "still_thumb" else ""
     return (
-        f"users/{user_id}/devices/{device_id}/"
+        f"users/{user_id}/devices/{device_id}/{sub}"
         f"{recorded_at.year:04d}/{recorded_at.month:02d}/{recorded_at.day:02d}/"
-        f"{uuid.uuid4().hex}{ext}"
+        f"{uuid.uuid4().hex}{suffix}{ext}"
     )
 
 
@@ -92,7 +103,9 @@ class UploadInitiateView(APIView):
             size_bytes = int(request.data.get("size_bytes", 0))
         except (TypeError, ValueError):
             return Response({"detail": "size_bytes must be an integer."}, status=400)
-        content_type = request.data.get("content_type") or "video/mp4"
+        kind = (request.data.get("kind") or "").strip()
+        content_type = request.data.get("content_type") or (
+            "image/jpeg" if kind in STILL_KINDS else "video/mp4")
         recorded_at = _parse_iso8601(request.data.get("recorded_at")) or timezone.now()
 
         if not filename:
@@ -105,7 +118,12 @@ class UploadInitiateView(APIView):
                 status=400,
             )
 
-        ext = _safe_extension(filename)
+        if kind in STILL_KINDS:
+            ext = ".jpg" if PurePosixPath(filename).suffix.lower() in (".jpg", ".jpeg") else ""
+            if not ext:
+                return Response({"detail": "a still must be a .jpg."}, status=400)
+        else:
+            ext = _safe_extension(filename)
         if not ext:
             return Response(
                 {"detail": "filename must end in .mp4 / .h264 / .mov / .mkv."},
@@ -119,6 +137,7 @@ class UploadInitiateView(APIView):
             device_id=device.id,
             ext=ext,
             recorded_at=recorded_at_utc,
+            kind=kind,
         )
 
         try:
@@ -186,6 +205,10 @@ class UploadCompleteView(APIView):
                 status=404,
             )
 
+        if (request.data.get("kind") or "").strip() == "still":
+            return self._complete_still(request, device, storage_key, file_size_bytes,
+                                        recorded_at, expected_prefix, s3)
+
         # Use filename-derived title if the Pi didn't supply one.
         if not title:
             title = PurePosixPath(storage_key).stem
@@ -241,3 +264,45 @@ class UploadCompleteView(APIView):
             },
             status=201,
         )
+
+    def _complete_still(self, request, device, storage_key, file_size_bytes,
+                        taken_at, expected_prefix, s3):
+        """A full-resolution still: one DeviceStill row. Idempotent on the key,
+        so a retry after a lost response does not make a second row."""
+        from apps.devices.models import DeviceStill
+
+        thumb_key = (request.data.get("thumb_key") or "").strip()
+        if thumb_key and (not thumb_key.startswith(expected_prefix)
+                          or not s3.blob_exists("raw-videos", thumb_key)):
+            thumb_key = ""  # the full image is what matters; the page falls back
+
+        def _int(name):
+            try:
+                return max(0, int(request.data.get(name) or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        try:
+            lens = float(request.data.get("lens_position"))
+        except (TypeError, ValueError):
+            lens = None
+        still, created = DeviceStill.objects.get_or_create(
+            storage_key=storage_key,
+            defaults={
+                "device": device,
+                "taken_at": taken_at or timezone.now(),
+                "thumb_key": thumb_key,
+                "width": _int("width"),
+                "height": _int("height"),
+                "file_size_bytes": file_size_bytes,
+                "sensor_mode": str(request.data.get("sensor_mode") or "")[:8],
+                "lens_position": lens,
+                "source": "manual" if request.data.get("source") == "manual" else "schedule",
+            },
+        )
+        logger.info("Pi still %s: device=%s still=%s key=%s size=%d MB",
+                    "complete" if created else "re-confirmed", device.id, still.id,
+                    storage_key, file_size_bytes // (1024 * 1024))
+        return Response({"still_id": still.id, "storage_key": storage_key,
+                         "taken_at": still.taken_at.isoformat()},
+                        status=201 if created else 200)
