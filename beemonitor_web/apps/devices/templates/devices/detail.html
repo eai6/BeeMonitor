@@ -455,7 +455,14 @@
     <div class="flex flex-wrap items-center gap-2">
       <h3 class="text-sm font-semibold text-gray-700">Full-resolution photos</h3>
       <span class="text-xs text-gray-500">64 MP cameras only</span>
-      <a href="{% url 'analysis:processing' %}?device={{ device.pk }}&kind=photo" class="ml-auto text-xs text-amber-700 hover:underline">See photos &rarr;</a>
+      {% if can_manage %}
+      <form method="post" action="{% url 'devices:take_still' device.pk %}" class="ml-auto">
+        {% csrf_token %}
+        <button class="text-xs px-2.5 py-1 border border-gray-300 rounded hover:bg-gray-50"
+                title="Taken between clips, then uploaded over WiFi like a video">Take one now</button>
+      </form>
+      {% endif %}
+      <a href="{% url 'analysis:processing' %}?device={{ device.pk }}&kind=photo" class="{% if not can_manage %}ml-auto {% endif %}text-xs text-amber-700 hover:underline">See photos &rarr;</a>
     </div>
     <p class="text-xs text-gray-400 mt-1 mb-2">
       The camera's full 9152 × 6944 picture, about 15 MB each, uploaded over WiFi like a
