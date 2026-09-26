@@ -96,13 +96,15 @@ def _restore_focus(cam, lens) -> None:
         log.warning("still: could not restore focus: %s", e)
 
 
-def take_burst(cam, encoder, video_config, transform, lens, count: int) -> int:
+def take_burst(cam, encoder, video_config, transform, lens, count: int,
+               output=None) -> int:
     """On a motion trigger: ``count`` full-sensor frames in a row, then back to
     video. One mode switch each way (not one per frame). Returns frames taken.
 
-    The encoder is stopped for the switch, which discards the pre-roll — by
-    design, a burst keeps no video from before the trigger. The caller opens
-    the clip straight after.
+    A burst keeps no video from before the trigger. Stopping the encoder does
+    NOT empty the pre-roll buffer, so the caller passes a fresh ``output``
+    (an empty CircularOutput) to restart on — otherwise the clip opened next
+    begins with the 2 s from before the burst and jumps past the stills.
     """
     taken_at = _now()
     burst_id = taken_at.strftime("%Y%m%d%H%M%S") + "-" + os.urandom(2).hex()
@@ -128,6 +130,8 @@ def take_burst(cam, encoder, video_config, transform, lens, count: int) -> int:
         try:
             cam.switch_mode(video_config)
         finally:
+            if output is not None:
+                encoder.output = output
             cam.start_encoder(encoder)
             _restore_focus(cam, lens)
     taken = len(frames)   # counted now: the writer thread empties the list
@@ -146,7 +150,7 @@ def take_burst(cam, encoder, video_config, transform, lens, count: int) -> int:
     return taken
 
 
-def take(cam, encoder, transform, lens, source: str = "schedule") -> bool:
+def take(cam, encoder, transform, lens, source: str = "schedule", output=None) -> bool:
     """Pause video, capture the full sensor, resume. True if a still was taken.
 
     The encoder is stopped for the mode switch and restarted after, the same
@@ -167,6 +171,8 @@ def take(cam, encoder, transform, lens, source: str = "schedule") -> bool:
             except Exception as e:  # most likely CMA: fall back to 16 MP
                 log.warning("still: %s capture failed (%s)", label, e)
     finally:
+        if output is not None:   # see take_burst: no stale pre-roll after a pause
+            encoder.output = output
         cam.start_encoder(encoder)
         _restore_focus(cam, lens)
     pause = time.monotonic() - t0

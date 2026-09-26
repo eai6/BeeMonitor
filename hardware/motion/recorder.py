@@ -312,8 +312,12 @@ def record() -> None:
                     # pre-roll (by design) and disturbs the background model,
                     # so re-learn it; the clip's idle timer starts after.
                     try:
+                        # An empty pre-roll buffer: the clip starts after the
+                        # stills, with no jump back to before the trigger.
+                        circ = CircularOutput(buffersize=max(1, int(PRE_ROLL * FPS)))
                         stills.take_burst(cam, encoder, config,
-                                          camera_transform(cam_profile), lens_pos, burst_n)
+                                          camera_transform(cam_profile), lens_pos, burst_n,
+                                          output=circ)
                     except Exception as e:  # never lose the clip over the stills
                         log.warning("burst failed: %s", e)
                     gate.reset()
@@ -506,8 +510,9 @@ def record() -> None:
                               in_window=in_window, recording_on=rec_mode != "off",
                               requested=asked):
                     try:
+                        circ = CircularOutput(buffersize=max(1, int(PRE_ROLL * FPS)))
                         stills.take(cam, encoder, camera_transform(cam_profile), lens_pos,
-                                    source="manual" if asked else "schedule")
+                                    source="manual" if asked else "schedule", output=circ)
                     except Exception as e:  # never stop recording over a still
                         log.warning("still failed: %s", e)
                     if asked:

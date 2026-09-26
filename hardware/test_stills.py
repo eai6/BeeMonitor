@@ -104,7 +104,10 @@ class FakeCam:
 for p in (TMP / "stills").iterdir():
     p.unlink()
 cam = FakeCam()
-n = stills.take_burst(cam, object(), "video", None, None, 5)
+enc = mock.Mock()
+fresh = object()
+n = stills.take_burst(cam, enc, "video", None, None, 5, output=fresh)
+check("burst: restarts on an empty pre-roll buffer (no jump back)", enc.output is fresh)
 import time as _t  # noqa: E402
 for _ in range(50):   # the writer thread
     if len(list((TMP / "stills").glob("*.json"))) == 5:
