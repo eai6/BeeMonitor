@@ -217,13 +217,22 @@ class AnalysisResults:
             >>> stats = results.get_statistics()
             >>> print(f"Total entries: {stats['total_entries']}")
         """
+        # Tracks count whether or not any nest events came of them: a run with
+        # no nests (none drawn or detected) still reports the bees it tracked.
+        tracks = self.tracks
+        if isinstance(tracks, list):
+            n_tracks = len(tracks)
+        elif tracks is not None and hasattr(tracks, "columns") and "track_id" in tracks.columns:
+            n_tracks = int(tracks["track_id"].nunique())
+        else:
+            n_tracks = 0
         if self.events.empty:
             return {
                 "total_events": 0,
                 "total_entries": 0,
                 "total_exits": 0,
                 "active_nests": 0,
-                "total_tracks": 0,
+                "total_tracks": n_tracks,
             }
         
         stats = {
@@ -232,7 +241,7 @@ class AnalysisResults:
             "total_exits": len(self.events[self.events['action'] == 'Exit']),
             "active_nests": len(self.events['nest'].unique()),
             "total_nests": len(self.nests.get('nests', {})),
-            "total_tracks": len(self.tracks) if isinstance(self.tracks, list) else 0,
+            "total_tracks": n_tracks,
         }
         
         # Add per-nest statistics

@@ -368,20 +368,12 @@ class CloudPipeline:
     def _nest_only(self, job_id, user_id, video_local, model_paths,
                    custom_nest_local="", hotel_roi=None, nest_layout=None,
                    hotel_polygon=None):
-        """Fast path for run_tracking=False: the device layout if present,
-        else NestDetector on the video's early frames. No motion detection,
-        tracking model, events, or post-processing."""
-        nests = self._build_manual_nests(video_local, hotel_roi, nest_layout,
-                                         hotel_polygon)
-        if nests is None:
-            from ultralytics import YOLO
-            from beemonitor.core.config import Config
-            from beemonitor.detection.nest_detector import NestDetector
-
-            config = Config.default()
-            config.models.nest_detection = custom_nest_local or model_paths.nest_detection
-            detector = NestDetector(model=YOLO(config.models.nest_detection), config=config)
-            nests = detector.get_nests_and_hotel_detections(video_path=video_local)
+        """Fast path for run_tracking=False: the device layout (ROI = whole
+        frame when none was drawn), nests from the model when none were drawn.
+        No motion detection, tracking model, events, or post-processing."""
+        nests = self._fill_nests(
+            self._build_manual_nests(video_local, hotel_roi, nest_layout, hotel_polygon),
+            video_local, custom_nest_local or model_paths.nest_detection, job_id)
 
         nest_bboxes = {}
         for nest_id, bbox in ((nests or {}).get("nests") or {}).items():
@@ -525,10 +517,13 @@ class CloudPipeline:
         config.video.end_frame = int(end_frame) if end_frame else None
 
         # Device-supplied hotel ROI + nest tubes (normalized 0..1) → pixel-space
-        # manual_nests so the run uses the human-set layout (model is the backup).
-        # Requires BOTH the ROI and the tubes; otherwise fall back to detection.
-        manual_nests = self._build_manual_nests(video_local, hotel_roi, nest_layout,
-                                                hotel_polygon)
+        # manual_nests. No ROI drawn → the whole frame; no tubes drawn → the nest
+        # model's, if it finds any. Tracking runs either way: a new hotel the
+        # model has never seen used to skip the whole analysis (0 of 35 nests
+        # found → "No nests detected") and report an empty run.
+        manual_nests = self._fill_nests(
+            self._build_manual_nests(video_local, hotel_roi, nest_layout, hotel_polygon),
+            video_local, config.models.nest_detection, "")
 
         from beemonitor import BeeMonitor
 
@@ -546,7 +541,11 @@ class CloudPipeline:
     def _build_manual_nests(video_local: str, hotel_roi, nest_layout, hotel_polygon=None):
         """Turn a device's normalized hotel ROI + nest layout into the pixel-space
         ``{'hotel': (x1,y1,x2,y2), 'nests': {id: (x1,y1,x2,y2)}}`` the analyzer
-        consumes. Returns None (→ model detection) unless BOTH are present + valid.
+        consumes.
+
+        No ROI drawn → the ROI is the whole frame. No tubes drawn → ``nests`` is
+        empty (``_fill_nests`` then asks the nest model). Returns None only when
+        the video cannot be read.
 
         Shapes the user traced as polygons also carry their outline, in the same
         pixel space: ``hotel_polygon`` (a list of points) and ``nest_polygons``
@@ -555,8 +554,6 @@ class CloudPipeline:
         unavoidably includes is excluded. Rectangles carry no outline and behave
         exactly as before.
         """
-        if not hotel_roi or not nest_layout:
-            return None
         try:
             import cv2
             cap = cv2.VideoCapture(video_local)
@@ -579,31 +576,70 @@ class CloudPipeline:
                     return None
 
             nests, nest_polygons = {}, {}
-            for item in nest_layout:
-                box = item.get("box")
+            for item in nest_layout or []:
+                box = (item or {}).get("box")
                 if box and len(box) == 4:
                     nest_id = item.get("id")
                     nests[nest_id] = to_px(box)
                     pts = poly_px(item.get("points"))
                     if pts:
                         nest_polygons[nest_id] = pts
-            if not nests:
-                return None
-            manual = {"hotel": to_px(hotel_roi), "nests": nests}
-            hotel_pts = poly_px(hotel_polygon)
+            roi = hotel_roi if (hotel_roi and len(hotel_roi) == 4) else None
+            manual = {"hotel": to_px(roi) if roi else (0, 0, w, h), "nests": nests}
+            hotel_pts = poly_px(hotel_polygon) if roi else None
             if hotel_pts:
                 manual["hotel_polygon"] = hotel_pts
             if nest_polygons:
                 manual["nest_polygons"] = nest_polygons
-            logger.info("Using device hotel ROI + %d nest tubes (manual layout%s)",
-                        len(nests),
+            logger.info("Layout: %s ROI, %d drawn nest tube(s)%s",
+                        "device" if roi else "whole-frame", len(nests),
                         "; polygons: %s hotel, %d nest" % (
                             "1" if hotel_pts else "0", len(nest_polygons))
                         if (hotel_pts or nest_polygons) else "")
             return manual
-        except Exception as e:  # never let layout parsing break the run — fall back
-            logger.warning("manual_nests build failed (%s) — falling back to detection", e)
+        except Exception as e:  # never let layout parsing break the run
+            logger.warning("layout build failed (%s) — whole frame, no nests", e)
             return None
+
+    @staticmethod
+    def _fill_nests(layout, video_local: str, nest_model_path: str, job_id: str = ""):
+        """No tubes drawn → try the nest model (the backup). The ROI stays as
+        drawn, or the whole frame. Finding none is fine: tracking still runs
+        over the ROI and the run reports bee activity with no nest events."""
+        if layout is None:
+            try:  # unreadable size: still the whole frame, by a second route
+                import cv2
+                cap = cv2.VideoCapture(video_local)
+                ok, frame = cap.read()
+                cap.release()
+                h, w = frame.shape[:2] if ok else (0, 0)
+            except Exception:
+                w = h = 0
+            if not (w and h):
+                return None
+            layout = {"hotel": (0, 0, w, h), "nests": {}}
+        if layout["nests"]:
+            return layout
+        try:
+            from ultralytics import YOLO
+            from beemonitor.core.config import Config
+            from beemonitor.detection.nest_detector import NestDetector
+
+            # Its own config: the detector writes the hotel it finds into the
+            # config it is given, and the run's ROI must not change under it.
+            config = Config.default()
+            config.models.nest_detection = nest_model_path
+            found = NestDetector(model=YOLO(nest_model_path), config=config) \
+                .get_nests_and_hotel_detections(video_path=video_local)
+        except Exception as e:
+            logger.warning("[%s] nest model failed (%s) — no nests", job_id, e)
+            found = None
+        if found and found.get("nests"):
+            layout["nests"] = dict(found["nests"])
+            logger.info("[%s] %d nests from the nest model", job_id, len(layout["nests"]))
+        else:
+            logger.info("[%s] No nests drawn or detected — tracking with no nest events", job_id)
+        return layout
 
     def _upload_results(
         self, job_id: str, user_id: str, output_dir: Path, video_local: str

@@ -130,3 +130,52 @@ class TestCloudPipeline:
         assert result.total_events == 3
         assert result.entry_count == 2
         assert result.exit_count == 1
+
+
+class TestLayout:
+    """No ROI drawn → the whole frame; no tubes drawn → none (the nest model
+    may fill them). Tracking must run either way: a new hotel the model has
+    never seen used to skip the whole analysis and report an empty run."""
+
+    @pytest.fixture
+    def clip(self, tmp_path):
+        cv2 = pytest.importorskip("cv2")
+        import numpy as np
+        path = str(tmp_path / "c.avi")
+        out = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"MJPG"), 10, (320, 240))
+        for _ in range(3):
+            out.write(np.zeros((240, 320, 3), np.uint8))
+        out.release()
+        return path
+
+    def test_no_roi_is_the_whole_frame(self, clip):
+        layout = CloudPipeline._build_manual_nests(clip, None, None)
+        assert layout == {"hotel": (0, 0, 320, 240), "nests": {}}
+
+    def test_a_drawn_roi_is_used_without_tubes(self, clip):
+        layout = CloudPipeline._build_manual_nests(clip, [0.5, 0.5, 1.0, 1.0], [])
+        assert layout["hotel"] == (160, 120, 320, 240)
+        assert layout["nests"] == {}
+
+    def test_drawn_tubes_are_kept(self, clip):
+        layout = CloudPipeline._build_manual_nests(
+            clip, None, [{"id": 1, "box": [0, 0, 0.5, 0.5]}])
+        assert layout["hotel"] == (0, 0, 320, 240)
+        assert layout["nests"] == {1: (0, 0, 160, 120)}
+
+    def test_no_nests_found_still_returns_a_layout(self, clip):
+        with patch("beemonitor.detection.nest_detector.NestDetector") as det, \
+             patch("ultralytics.YOLO"):
+            det.return_value.get_nests_and_hotel_detections.return_value = None
+            layout = CloudPipeline._fill_nests(
+                CloudPipeline._build_manual_nests(clip, None, None), clip, "m.pt")
+        assert layout == {"hotel": (0, 0, 320, 240), "nests": {}}
+
+    def test_model_nests_fill_in_but_the_roi_stays(self, clip):
+        with patch("beemonitor.detection.nest_detector.NestDetector") as det, \
+             patch("ultralytics.YOLO"):
+            det.return_value.get_nests_and_hotel_detections.return_value = {
+                "hotel": (10, 10, 20, 20), "nests": {"a": (1, 2, 3, 4)}}
+            layout = CloudPipeline._fill_nests(
+                CloudPipeline._build_manual_nests(clip, None, None), clip, "m.pt")
+        assert layout == {"hotel": (0, 0, 320, 240), "nests": {"a": (1, 2, 3, 4)}}
