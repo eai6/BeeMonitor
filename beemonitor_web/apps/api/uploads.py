@@ -297,7 +297,10 @@ class UploadCompleteView(APIView):
                 "file_size_bytes": file_size_bytes,
                 "sensor_mode": str(request.data.get("sensor_mode") or "")[:8],
                 "lens_position": lens,
-                "source": "manual" if request.data.get("source") == "manual" else "schedule",
+                "source": (request.data.get("source")
+                           if request.data.get("source") in ("manual", "burst") else "schedule"),
+                "burst_id": str(request.data.get("burst_id") or "")[:40],
+                "burst_index": _int("burst_index") if request.data.get("burst_id") else None,
             },
         )
         logger.info("Pi still %s: device=%s still=%s key=%s size=%d MB",

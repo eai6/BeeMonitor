@@ -41,10 +41,19 @@ def still_card(still: DeviceStill) -> dict:
 
 
 class DeviceStillsSettingView(LoginRequiredMixin, View):
-    """Set how often the device takes a full-resolution still (0 = off)."""
+    """Set how often the device takes a full-resolution still (0 = off), or
+    turn the motion burst on/off (``burst=on|off``)."""
 
     def post(self, request, pk):
         device = _device_or_403(request.user, pk, "manager")
+        if "burst" in request.POST:
+            on = request.POST.get("burst") == "on"
+            device.motion_burst_stills = device.MOTION_BURST_COUNT if on else 0
+            device.save(update_fields=["motion_burst_stills"])
+            messages.success(request, (
+                f"On motion: {device.MOTION_BURST_COUNT} full-resolution stills, then the clip."
+                if on else "On motion: video only.") + " The device adopts it on its next check-in.")
+            return redirect("devices:detail", pk=pk)
         try:
             minutes = int(request.POST.get("interval") or 0)
         except (TypeError, ValueError):
@@ -78,6 +87,49 @@ class DeviceTakeStillView(LoginRequiredMixin, View):
         return redirect("devices:stills", pk=pk)
 
 
+class DeviceFreeSpaceView(LoginRequiredMixin, View):
+    """Clear every uploaded video and still of this device for deletion ON THE
+    DEVICE. The cloud copies stay. The device frees them on its next cleanup
+    pass (two keys: it uploaded, and a person cleared it here)."""
+
+    def post(self, request, pk):
+        from apps.videos.models import Video
+
+        device = _device_or_403(request.user, pk, "manager")
+        v = (Video.objects.filter(device=device, device_delete_requested=False,
+                                  device_deleted_at__isnull=True)
+             .update(device_delete_requested=True))
+        st = (DeviceStill.objects.filter(device=device, device_delete_requested=False,
+                                         device_deleted_at__isnull=True)
+              .update(device_delete_requested=True))
+        messages.success(request, f"Cleared {v} video(s) and {st} still(s) for deletion on "
+                                  "the device — the cloud copies are kept. It frees the "
+                                  "space on its next check-in.")
+        return redirect("devices:detail", pk=pk)
+
+
+def on_device_counts(device) -> dict:
+    """Uploaded files the device still holds, and how many are already cleared."""
+    from apps.videos.models import Video
+
+    v = Video.objects.filter(device=device, device_deleted_at__isnull=True)
+    s = DeviceStill.objects.filter(device=device, device_deleted_at__isnull=True)
+    return {"videos": v.count(), "stills": s.count(),
+            "pending": (v.filter(device_delete_requested=True).count()
+                        + s.filter(device_delete_requested=True).count())}
+
+
+def _burst_clip(device, taken_at):
+    """The clip a burst was followed by: the first one starting within 30 s."""
+    from datetime import timedelta
+    from apps.videos.models import Video
+
+    return (Video.objects.filter(device=device,
+                                 recorded_at__gte=taken_at - timedelta(seconds=5),
+                                 recorded_at__lte=taken_at + timedelta(seconds=30))
+            .order_by("recorded_at").first())
+
+
 class DeviceStillsView(LoginRequiredMixin, TemplateView):
     """Stills by day, newest day first."""
 
@@ -98,13 +150,27 @@ class DeviceStillsView(LoginRequiredMixin, TemplateView):
                 day = None
         if day is None and days:
             day = days[0]["day"]
-        shown = (stills.filter(taken_at__date=day).order_by("taken_at")
-                 if day else stills.none())
+        shown = list(stills.filter(taken_at__date=day).order_by("taken_at")
+                     if day else stills.none())
+        # A motion burst is one row: its frames in order, then its clip.
+        bursts, singles = {}, []
+        for s in shown:
+            if s.burst_id:
+                bursts.setdefault(s.burst_id, []).append(s)
+            else:
+                singles.append(s)
+        burst_rows = []
+        for frames in bursts.values():
+            frames.sort(key=lambda s: (s.burst_index or 0, s.taken_at))
+            burst_rows.append({"taken_at": frames[0].taken_at,
+                               "cards": [still_card(s) for s in frames],
+                               "clip": _burst_clip(device, frames[0].taken_at)})
         ctx.update({
             "device": device,
             "days": days,
             "day": day,
-            "cards": [still_card(s) for s in shown],
+            "bursts": burst_rows,
+            "cards": [still_card(s) for s in singles],
             "total": stills.count(),
             "can_manage": _can(self.request.user, device, "manager"),
         })

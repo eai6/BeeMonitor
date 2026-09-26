@@ -36,7 +36,37 @@
   {% endif %}
 </div>
 
+{% if bursts %}
+<h2 class="text-sm font-semibold text-gray-700 mb-2">Motion bursts <span class="font-normal text-gray-400">&middot; stills taken on the trigger, then the clip</span></h2>
+<div class="bg-white shadow rounded-lg divide-y divide-gray-100 mb-6">
+  {% for b in bursts %}
+  <div class="flex items-center gap-3 p-3">
+    <div class="w-20 shrink-0">
+      <div class="text-sm font-bold">{{ b.taken_at|time:"H:i:s" }}</div>
+      <div class="text-[11px] text-gray-500">{{ b.cards|length }} stills</div>
+    </div>
+    <div class="grid grid-cols-5 gap-1.5 flex-1">
+      {% for c in b.cards %}
+      <a href="{% url 'devices:still_detail' device.pk c.still.pk %}" class="block aspect-[4/3] bg-gray-100 rounded overflow-hidden hover:ring-2 hover:ring-amber-500">
+        {% if c.thumb_url %}<img src="{{ c.thumb_url }}" alt="Burst frame {{ forloop.counter }}" loading="lazy" class="w-full h-full object-cover">{% endif %}
+      </a>
+      {% endfor %}
+    </div>
+    {% if b.clip %}
+    <a href="{% url 'videos:detail' b.clip.pk %}" class="w-32 shrink-0 self-stretch rounded bg-gray-800 text-white text-xs flex flex-col items-center justify-center gap-1 hover:bg-gray-700">
+      <span class="text-lg" aria-hidden="true">&#9654;</span>
+      then {% if b.clip.duration_seconds %}{{ b.clip.duration_seconds|floatformat:0 }} s of video{% else %}the clip{% endif %}
+    </a>
+    {% else %}
+    <span class="w-32 shrink-0 text-[11px] text-gray-400 text-center">clip not uploaded yet</span>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
 {% if cards %}
+{% if bursts %}<h2 class="text-sm font-semibold text-gray-700 mb-2">Scheduled &amp; on request</h2>{% endif %}
 <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
   {% for c in cards %}
   <a href="{% url 'devices:still_detail' device.pk c.still.pk %}"
@@ -53,7 +83,7 @@
   </a>
   {% endfor %}
 </div>
-{% else %}
+{% elif not bursts %}
 <div class="bg-white shadow rounded-lg p-10 text-center text-gray-500">
   <p class="mb-1">No stills yet.</p>
   <p class="text-sm text-gray-400">

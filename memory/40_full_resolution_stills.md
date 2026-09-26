@@ -49,7 +49,7 @@ checks and figures, while video stays 1080p for tracking.
 - "Take one now": a dashboard command makes telemetry drop `still.request`;
   the recorder takes a still when idle and it uploads like a video (above).
 
-**Upload — exactly like videos, never telemetry** (user, 2026-09-26): the
+**Upload — exactly like videos, never telemetry** (and kept on the card until cleared, like videos — see 1b) (user, 2026-09-26): the
 uploader treats a still as it treats an .mp4 — same `uploads/initiate` →
 presigned S3 PUT → `uploads/complete` calls (with `kind: "still"`), same WiFi-only
 gate and backoff, same `.uploaded` marker. "Take one now" only asks the recorder
@@ -201,11 +201,18 @@ class ≈ 30 s per still per class — ~50× YOLO; offer it, default YOLO.
 - Species ID only when the Identify species block is in the pipeline.
 - Stills upload like videos (initiate/PUT/complete, WiFi only), never telemetry.
 
-## Open questions — burst (1b)
+## Decisions — burst (1b), 2026-09-26 (built)
 
-1. Cooldown between bursts: 5 min?
-2. A daily cap on bursts as well (e.g. 100)? Or cooldown only.
-3. Raise the on-card stills cap from 2 GB for burst devices (e.g. 8 GB)?
+- **No cooldown, no cap**: every motion trigger bursts ("if motion is
+  triggered then motion is triggered"); stills are unlimited, like videos.
+- **Stills stay on the device like videos** until cleared on the dashboard:
+  uploaded stills keep a `<stamp>.json.uploaded` sidecar (still_id); the device
+  page's "Free space on the device" clears every uploaded video AND still of
+  that device (cloud copies kept); telemetry's cleanup deletes them (same two
+  keys as clips: uploaded + cleared). The earlier 2 GB on-card cap is gone.
+- Periodic stills (15 / 30 / 60 min) stay, independent of bursts.
+- Still times use the clips' convention (wall clock labelled UTC) so a burst
+  matches the clip after it.
 
 ## Open questions (answered above)
 

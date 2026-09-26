@@ -283,13 +283,15 @@ CAMERA_FILE = CALIB_FILE.parent / "camera.json"
 # from record_settings.json ("stills_interval_min", dashboard-pushed); this env
 # value is the fallback. 0 = off; anything else is floored at 15 minutes.
 STILLS_INTERVAL_MIN = _env_int("BEEMONITOR_STILLS_INTERVAL_MIN", 0)
-# Stills sit beside, not inside, the video tree: the uploader picks them up
-# like videos (WiFi only) and deletes them once the cloud has them.
+# Stills sit beside, not inside, the video tree. The uploader sends them like
+# videos (WiFi only); like videos they stay on the card until someone clears
+# them on the dashboard (telemetry's cleanup pass).
 STILLS_DIR = Path(os.environ.get("BEEMONITOR_STILLS_DIR", str(RECORD_DIR.parent / "stills")))
 # "Take one now": telemetry drops this file on a take_still command.
 STILL_REQUEST_FILE = STILLS_DIR / "still.request"
-# A unit off WiFi for weeks must not fill its card: oldest stills go first.
-STILLS_MAX_BYTES = _env_int("BEEMONITOR_STILLS_MAX_MB", 2048) * 1024 * 1024
+# On each motion trigger (motion mode): this many stills before the clip.
+# 0 = off. From record_settings.json ("motion_burst_stills"); env fallback.
+MOTION_BURST_STILLS = _env_int("BEEMONITOR_MOTION_BURST_STILLS", 0)
 STILL_JPEG_QUALITY = _env_int("BEEMONITOR_STILL_JPEG_QUALITY", 90)
 STILL_THUMB_SIDE = 1280
 

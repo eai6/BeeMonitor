@@ -1065,7 +1065,7 @@ def _apply_frame_cap(value) -> None:
 
 
 def _apply_record_settings(mode, window, post_roll=None, max_segment=None,
-                           stills_interval=None) -> None:
+                           stills_interval=None, motion_burst=None) -> None:
     """Persist the dashboard's recording mode + daily hour window + clip-timing
     (post-roll tail, max clip length) to the file the recorder hot-reloads. Only
     called when the beat carried record_mode (new clouds), so window=None is a
@@ -1099,6 +1099,9 @@ def _apply_record_settings(mode, window, post_roll=None, max_segment=None,
     si = _clamp(stills_interval, 0, 1440)
     if si is not None:
         payload["stills_interval_min"] = si
+    mb = _clamp(motion_burst, 0, 10)
+    if mb is not None:
+        payload["motion_burst_stills"] = mb
     try:
         new = json.dumps(payload, sort_keys=True)
         cur = (RECORD_SETTINGS_FILE.read_text().strip()
@@ -1921,6 +1924,42 @@ def _scan_uploaded_video_ids() -> dict:
     return out
 
 
+def _cleanup_stills(still_ids, base, hdrs) -> tuple[int, int]:
+    """Delete local stills the dashboard cleared — same two keys as clips: the
+    ``<stamp>.json.uploaded`` sidecar proves the cloud has it, and the server
+    listed its id. Confirms back. Returns (count, bytes)."""
+    if not still_ids:
+        return 0, 0
+    wanted = sorted({int(i) for i in still_ids if str(i).isdigit()})
+    local = {}
+    try:
+        for side in STILLS_DIR.glob("*.json.uploaded"):
+            for line in side.read_text().splitlines():
+                if line.startswith("still_id=") and line.split("=", 1)[1].strip().isdigit():
+                    local[int(line.split("=", 1)[1])] = side
+    except OSError:
+        pass
+    deleted, freed = [], 0
+    for sid in wanted:
+        side = local.get(sid)
+        if side is not None:
+            stem = str(side)[:-len(".json.uploaded")]
+            for p in (Path(stem + ".jpg"), Path(stem + ".thumb.jpg"),
+                      Path(stem + ".json"), side):
+                try:
+                    freed += p.stat().st_size
+                    p.unlink()
+                except OSError:
+                    pass
+        deleted.append(sid)  # not here (or just deleted): confirm either way
+    try:
+        requests.post(urljoin(base, "api/v1/devices/cleanup"), headers=hdrs,
+                      json={"deleted_stills": deleted}, timeout=POST_TIMEOUT)
+    except requests.RequestException as e:
+        log.warning("cleanup: still confirm failed (will retry next pass): %s", e)
+    return len(deleted), freed
+
+
 def _run_cleanup() -> None:
     """Delete local clips a human cleared for deletion on the dashboard.
 
@@ -1940,8 +1979,12 @@ def _run_cleanup() -> None:
     if r.status_code != 200:
         log.warning("cleanup: list -> %s %s", r.status_code, r.text[:200])
         return
-    ids = (r.json() or {}).get("video_ids") or []
+    body = r.json() or {}
+    ids = body.get("video_ids") or []
+    freed_stills, still_bytes = _cleanup_stills(body.get("still_ids") or [], base, hdrs)
     if not ids:
+        if freed_stills:
+            log.info("cleanup: freed %s across %d still(s)", _human_bytes(still_bytes), freed_stills)
         return
 
     local = _scan_uploaded_video_ids()
@@ -1970,7 +2013,8 @@ def _run_cleanup() -> None:
     except requests.RequestException as e:
         log.warning("cleanup: confirm failed (will retry next pass): %s", e)
         return
-    log.info("cleanup: freed %s across %d clip(s)", _human_bytes(freed), len(deleted))
+    log.info("cleanup: freed %s across %d clip(s) and %d still(s)",
+             _human_bytes(freed + still_bytes), len(deleted), freed_stills)
 
 
 def main() -> int:
@@ -2025,7 +2069,8 @@ def main() -> int:
                                            resp.get("record_window"),
                                            resp.get("record_post_roll"),
                                            resp.get("record_max_segment"),
-                                           resp.get("stills_interval_min"))
+                                           resp.get("stills_interval_min"),
+                                           resp.get("motion_burst_stills"))
                 # ...and the crop mode (all|off). Prefer the mode string; fall back
                 # to the legacy bool for older clouds.
                 if "activity_crops" in resp:

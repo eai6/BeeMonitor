@@ -5,8 +5,11 @@ Lets a field device free SD-card space by deleting local copies of clips that
 for deletion on the dashboard (``Video.device_delete_requested``). The device
 never decides this on its own.
 
-  GET  /api/v1/devices/cleanup   -> {"video_ids": [...]}  (cleared, still on device)
-  POST /api/v1/devices/cleanup   {"deleted": [...]}       -> stamps device_deleted_at
+  GET  /api/v1/devices/cleanup   -> {"video_ids": [...], "still_ids": [...]}
+  POST /api/v1/devices/cleanup   {"deleted": [...], "deleted_stills": [...]}
+                                                          -> stamps device_deleted_at
+
+Full-resolution stills (DeviceStill) follow the same two keys as clips.
 
 Both device-authenticated (Bearer ``bmk_device_*``). Tiny JSON, so it's cheap to
 run over cellular from the telemetry service.
@@ -56,16 +59,30 @@ class DeviceCleanupView(APIView):
                 .values_list("video_id", flat=True)[: MAX_BATCH - len(ids)]
             )
             ids = list(dict.fromkeys(ids + tomb))  # de-dup, preserve order
-        return Response({"video_ids": ids})
+        from apps.devices.models import DeviceStill
+        still_ids = list(
+            DeviceStill.objects.filter(device=device, device_delete_requested=True,
+                                       device_deleted_at__isnull=True)
+            .order_by("taken_at").values_list("id", flat=True)[:MAX_BATCH])
+        return Response({"video_ids": ids, "still_ids": still_ids})
 
     def post(self, request):
         device = request.auth
         if device is None or not isinstance(device, Device):
             return Response({"detail": "Device authentication required."}, status=401)
-        raw = request.data.get("deleted") if isinstance(request.data, dict) else None
-        ids = [int(v) for v in raw if str(v).isdigit()] if isinstance(raw, list) else []
+        def _ids(key):
+            raw = request.data.get(key) if isinstance(request.data, dict) else None
+            return [int(v) for v in raw if str(v).isdigit()] if isinstance(raw, list) else []
+
+        ids, still_ids = _ids("deleted"), _ids("deleted_stills")
+        s = 0
+        if still_ids:
+            from apps.devices.models import DeviceStill
+            s = DeviceStill.objects.filter(
+                device=device, id__in=still_ids, device_delete_requested=True,
+                device_deleted_at__isnull=True).update(device_deleted_at=timezone.now())
         if not ids:
-            return Response({"confirmed": 0})
+            return Response({"confirmed": s})
         # Only stamp rows that belong to THIS device and were actually cleared —
         # a device can't mark someone else's videos (or un-cleared ones) deleted.
         n = (
@@ -78,5 +95,6 @@ class DeviceCleanupView(APIView):
         )
         # Clear any tombstones the device just freed (cloud copy already gone).
         t = PendingDeviceDeletion.objects.filter(device=device, video_id__in=ids).delete()[0]
-        logger.info("device %s confirmed %d local deletions (+%d tombstoned)", device.id, n, t)
-        return Response({"confirmed": n + t})
+        logger.info("device %s confirmed %d local deletions (+%d tombstoned, %d stills)",
+                    device.id, n, t, s)
+        return Response({"confirmed": n + t + s})

@@ -156,3 +156,93 @@ class StillPagesTests(TestCase):
         self.assertIn(self.get("devices:stills", user=stranger).status_code, (403, 404))
         self.assertIn(self.get("devices:still_detail", self.stills[0].pk, user=stranger).status_code,
                       (403, 404))
+
+
+class BurstAndCleanupTests(TestCase):
+    """A motion burst's 5 stills, then its clip; and freeing the device's
+    copies of uploaded videos and stills (the same two keys as clips)."""
+
+    def setUp(self):
+        from apps.videos.models import Video
+        self.owner = User.objects.create_user("own", password="x")
+        self.device, self.raw_key = Device.create_with_key(self.owner, "hive")
+        self.t0 = datetime(2026, 9, 25, 9, 12, 4, tzinfo=dt_tz.utc)
+        self.burst = [DeviceStill.objects.create(
+            device=self.device, storage_key=f"b/{i}.jpg", taken_at=self.t0,
+            source="burst", burst_id="B1", burst_index=i) for i in (3, 0, 4, 1, 2)]
+        self.single = DeviceStill.objects.create(
+            device=self.device, storage_key="s/1.jpg",
+            taken_at=datetime(2026, 9, 25, 10, 0, tzinfo=dt_tz.utc))
+        from datetime import timedelta
+        self.clip = Video.objects.create(
+            user=self.owner, device=self.device, title="clip", storage_key="v/1.mp4",
+            file_size_bytes=1, status=Video.Status.READY,
+            recorded_at=self.t0 + timedelta(seconds=5))
+
+    def test_the_burst_setting_reaches_the_device(self):
+        self.client.force_login(self.owner)
+        self.client.post(reverse("devices:stills_setting", args=[self.device.pk]), {"burst": "on"})
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.motion_burst_stills, 5)
+        r = self.client.get(reverse("devices-command"), **{AUTH: f"Bearer {self.raw_key}"})
+        self.assertEqual(r.json()["motion_burst_stills"], 5)
+        self.client.post(reverse("devices:stills_setting", args=[self.device.pk]), {"burst": "off"})
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.motion_burst_stills, 0)
+
+    def test_a_burst_is_one_row_in_order_with_its_clip(self):
+        self.client.force_login(self.owner)
+        with patch("apps.devices.stills_views._presign", side_effect=lambda k: "https://s3/" + k):
+            r = self.client.get(reverse("devices:stills", args=[self.device.pk]))
+        [row] = r.context["bursts"]
+        self.assertEqual([c["still"].burst_index for c in row["cards"]], [0, 1, 2, 3, 4])
+        self.assertEqual(row["clip"], self.clip)
+        self.assertEqual([c["still"] for c in r.context["cards"]], [self.single])
+
+    def test_upload_complete_keeps_the_burst_fields(self):
+        prefix = f"users/{self.owner.pk}/devices/{self.device.pk}/"
+        with patch("apps.api.uploads.get_s3_client") as s3:
+            s3.return_value.blob_exists.return_value = True
+            self.client.post("/api/v1/uploads/complete", {
+                "storage_key": prefix + "stills/x.jpg", "file_size_bytes": 5, "kind": "still",
+                "recorded_at": "2026-09-25T11:00:00Z", "source": "burst",
+                "burst_id": "B2", "burst_index": 3},
+                content_type="application/json", **{AUTH: f"Bearer {self.raw_key}"})
+        s = DeviceStill.objects.get(burst_id="B2")
+        self.assertEqual((s.source, s.burst_index), ("burst", 3))
+
+    def test_free_space_clears_videos_and_stills_but_keeps_the_cloud_copies(self):
+        self.client.force_login(self.owner)
+        self.client.post(reverse("devices:free_space", args=[self.device.pk]))
+        self.clip.refresh_from_db()
+        self.assertTrue(self.clip.device_delete_requested)
+        self.assertEqual(DeviceStill.objects.filter(device_delete_requested=True).count(), 6)
+        self.assertEqual(DeviceStill.objects.count(), 6)            # cloud rows kept
+
+        auth = {AUTH: f"Bearer {self.raw_key}"}
+        r = self.client.get("/api/v1/devices/cleanup", **auth)
+        self.assertEqual(r.json()["video_ids"], [self.clip.pk])
+        self.assertEqual(len(r.json()["still_ids"]), 6)
+        r = self.client.post("/api/v1/devices/cleanup",
+                             {"deleted_stills": [self.single.pk]},
+                             content_type="application/json", **auth)
+        self.assertEqual(r.json()["confirmed"], 1)
+        self.single.refresh_from_db()
+        self.assertIsNotNone(self.single.device_deleted_at)
+        self.assertEqual(len(self.client.get("/api/v1/devices/cleanup", **auth)
+                             .json()["still_ids"]), 5)
+
+    def test_a_viewer_cannot_free_space(self):
+        viewer = User.objects.create_user("vw", password="x")
+        DeviceShare.objects.create(device=self.device, user=viewer, role="viewer")
+        self.client.force_login(viewer)
+        self.client.post(reverse("devices:free_space", args=[self.device.pk]))
+        self.assertFalse(DeviceStill.objects.filter(device_delete_requested=True).exists())
+
+    def test_the_device_page_offers_both_settings_and_free_space(self):
+        self.client.force_login(self.owner)
+        with patch("apps.devices.stills_views._presign", return_value=""):
+            html = self.client.get(reverse("devices:detail", args=[self.device.pk])).content.decode()
+        self.assertIn("5 stills, then video", html)
+        self.assertIn("Also periodically", html)
+        self.assertIn(reverse("devices:free_space", args=[self.device.pk]), html)

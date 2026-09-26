@@ -663,7 +663,8 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         ctx["health_charts"] = _HEALTH_CHARTS
         ctx["health_charts_json"] = json.dumps(_HEALTH_CHARTS)
         ctx["record_modes"] = device.RECORD_MODES  # capture mode + hour window
-        from .stills_views import recent_stills
+        from .stills_views import on_device_counts, recent_stills
+        ctx["on_device"] = on_device_counts(device)
         ctx["stills_intervals"] = device.STILLS_INTERVALS
         ctx["recent_stills"] = recent_stills(device)
         ctx["stills_total"] = device.stills.count()

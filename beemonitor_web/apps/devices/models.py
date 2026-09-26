@@ -259,6 +259,10 @@ class Device(models.Model):
     ]
     stills_interval_min = models.PositiveSmallIntegerField(
         default=0, choices=STILLS_INTERVALS)
+    # On each motion trigger (motion mode): take this many full-resolution
+    # stills, THEN record the clip. 0 = off. No pre-roll is kept for a burst.
+    MOTION_BURST_COUNT = 5
+    motion_burst_stills = models.PositiveSmallIntegerField(default=0)
 
     # Pending command for the device, returned in the next heartbeat response and
     # then cleared. "" | "capture_image" | "stream" | "wifi_stream".
@@ -598,7 +602,9 @@ class DeviceStill(models.Model):
     """One full-resolution still from a device's camera (memory/40).
 
     The image and its 1280 px preview are uploaded like videos: presigned PUT
-    into raw-videos under ``users/<u>/devices/<d>/stills/``. Kept forever.
+    into raw-videos under ``users/<u>/devices/<d>/stills/``. Kept forever in the
+    cloud; the device keeps its copy until someone clears it on the dashboard
+    (the same two-key rule as videos: uploaded AND cleared).
     """
 
     device = models.ForeignKey(Device, on_delete=models.CASCADE, related_name="stills")
@@ -611,8 +617,14 @@ class DeviceStill(models.Model):
     # "64mp" normally; "16mp" when the Pi could not allocate a 64 MP buffer.
     sensor_mode = models.CharField(max_length=8, blank=True, default="")
     lens_position = models.FloatField(null=True, blank=True)
-    # "schedule" | "manual" ("Take one now").
+    # "schedule" | "manual" ("Take one now") | "burst" (on a motion trigger).
     source = models.CharField(max_length=12, blank=True, default="schedule")
+    # A motion burst's frames share an id; index is their order (0-based).
+    burst_id = models.CharField(max_length=40, blank=True, default="", db_index=True)
+    burst_index = models.PositiveSmallIntegerField(null=True, blank=True)
+    # Freeing the device's copy: set on the dashboard, stamped when it confirms.
+    device_delete_requested = models.BooleanField(default=False)
+    device_deleted_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

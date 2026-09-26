@@ -153,6 +153,19 @@ def load_stills_interval() -> int:
     return max(0, minutes)
 
 
+def load_motion_burst() -> int:
+    """Stills to take on each motion trigger before the clip (0 = off)."""
+    from motion.config import MOTION_BURST_STILLS
+    n = MOTION_BURST_STILLS
+    d = _load_json_file(RECORD_SETTINGS_FILE)
+    if isinstance(d, dict) and "motion_burst_stills" in d:
+        try:
+            n = int(d.get("motion_burst_stills") or 0)
+        except (TypeError, ValueError):
+            pass
+    return max(0, min(n, 10))
+
+
 def load_record_settings():
     """(mode, window, post_roll, max_segment) for the recorder: mode
     'motion'|'continuous', window (start_hour, end_hour) in device local time or

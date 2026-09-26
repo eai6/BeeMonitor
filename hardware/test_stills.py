@@ -3,11 +3,13 @@
 
     python3 hardware/test_stills.py
 
-Pins the parts that need no camera: when a still is due (never mid-clip; a
-"take one now" ignores the schedule), the 15-minute floor, the files a still
-leaves for the uploader (marker last), the card cap, and that the uploader
-sends a still through the same calls as a video. The capture itself — the mode
-switch on a real OV64A40 — is tested on a unit.
+Pins the parts that need no real camera: when a still is due (never mid-clip;
+a "take one now" ignores the schedule), the 15-minute floor, the files a still
+leaves for the uploader (marker last), a motion burst on a stand-in camera
+(one switch each way, N frames, video restored), that the uploader sends a
+still through the same calls as a video and — like a video — keeps it on the
+card, and that telemetry's cleanup deletes only what the dashboard cleared.
+The capture itself — the mode switch on a real OV64A40 — is tested on a unit.
 
 Needs cv2 + numpy + requests. Exits non-zero on failure.
 """
@@ -75,16 +77,50 @@ check("marker carries size, mode, lens",
       == (4624, 3472, "16mp", 6.2))
 check("no temp marker left", not list((TMP / "stills").glob("*.tmp")))
 
-# -- the cap ------------------------------------------------------------------
-for i in range(3):
-    s2 = TMP / "stills" / f"2026-09-2{6 + i}_10_00_00"
-    for suf in (".jpg", ".thumb.jpg"):
-        Path(str(s2) + suf).write_bytes(b"x" * 1000)
-    Path(str(s2) + ".json").write_text("{}")
-dropped = stills.enforce_cap(max_bytes=4500)
-left = sorted(p.name for p in (TMP / "stills").glob("*.json"))
-check("oldest dropped first", dropped == 2 and left == ["2026-09-27_10_00_00.json",
-                                                        "2026-09-28_10_00_00.json"])
+# -- a motion burst on a stand-in camera ------------------------------------------
+class FakeCam:
+    sensor_resolution = (320, 240)
+
+    def __init__(self):
+        self.calls = []
+
+    def stop_encoder(self):
+        self.calls.append("stop_encoder")
+
+    def start_encoder(self, enc):
+        self.calls.append("start_encoder")
+
+    def create_still_configuration(self, main, buffer_count, transform):
+        return {"main": main, "controls": {}}
+
+    def switch_mode(self, cfg):
+        self.calls.append("switch:" + ("still" if isinstance(cfg, dict) else cfg))
+
+    def capture_array(self, name):
+        self.calls.append("capture")
+        return np.zeros((240, 320, 3), np.uint8)
+
+
+for p in (TMP / "stills").iterdir():
+    p.unlink()
+cam = FakeCam()
+n = stills.take_burst(cam, object(), "video", None, None, 5)
+import time as _t  # noqa: E402
+for _ in range(50):   # the writer thread
+    if len(list((TMP / "stills").glob("*.json"))) == 5:
+        break
+    _t.sleep(0.1)
+check("burst: 5 frames", n == 5)
+check("burst: one switch each way, encoder restarted",
+      cam.calls == ["stop_encoder", "switch:still"] + ["capture"] * 5
+      + ["switch:video", "start_encoder"])
+metas = [json.loads(p.read_text()) for p in (TMP / "stills").glob("*.json")]
+check("burst: 5 markers, one burst id, indexes 0-4",
+      len(metas) == 5 and len({m["burst_id"] for m in metas}) == 1
+      and sorted(m["burst_index"] for m in metas) == [0, 1, 2, 3, 4]
+      and all(m["source"] == "burst" for m in metas))
+for p in (TMP / "stills").iterdir():
+    p.unlink()
 
 # -- the upload: the video calls, kind "still" ---------------------------------
 import uploader  # noqa: E402
@@ -119,7 +155,22 @@ check("complete names both keys and the metadata",
       (done["thumb_key"].endswith("still_thumb.jpg"), done["width"], done["source"])
       == (True, 800, "manual"))
 check("two PUTs", put.call_count == 2)
-check("local copies deleted after", not list(still_dir.iterdir()))
+side = Path(str(pending[0]) + ".uploaded")
+check("kept on the card, like a video, with the cloud id",
+      Path(str(pending[0])[:-5] + ".jpg").exists() and "still_id=7" in side.read_text())
+check("not uploaded twice", uploader._list_pending_stills(still_dir) == [])
+
+# -- telemetry's cleanup: only what the dashboard cleared ---------------------------
+import telemetry  # noqa: E402
+
+posted = []
+with mock.patch.object(telemetry, "requests") as rq:
+    rq.post.side_effect = lambda url, headers, json, timeout: posted.append(json)
+    rq.RequestException = Exception
+    count, freed = telemetry._cleanup_stills([7, 99], "https://x/", {})
+check("cleared still deleted from the card", not list(still_dir.iterdir()))
+check("both confirmed (99 was not here)", count == 2 and posted == [{"deleted_stills": [7, 99]}])
+check("nothing cleared, nothing deleted", telemetry._cleanup_stills([], "https://x/", {}) == (0, 0))
 
 print()
 print("FAILED: " + ", ".join(FAILS) if FAILS else "all stills checks passed")

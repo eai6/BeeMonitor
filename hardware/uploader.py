@@ -220,16 +220,19 @@ def _put_to_s3(presigned_url: str, file_path: Path, content_type: str) -> None:
 
 
 def _list_pending_stills(stills_dir: Path) -> list[Path]:
-    """Complete stills, oldest first: the .json marker is written last."""
+    """Complete stills not yet uploaded, oldest first (the .json marker is
+    written last; ``.json.uploaded`` beside it means the cloud has it)."""
     try:
-        return sorted(stills_dir.glob("*.json"), key=lambda p: p.name)
+        return sorted((p for p in stills_dir.glob("*.json")
+                       if not Path(str(p) + ".uploaded").exists()), key=lambda p: p.name)
     except OSError:
         return []
 
 
 def _upload_still(meta_path: Path) -> None:
     """One still: its 1280 px preview, then the full image, each via the video
-    upload calls; then complete (kind "still") and delete the local copies."""
+    upload calls; then complete (kind "still"). Like a video, the files stay
+    on the card until the dashboard clears them (telemetry's cleanup pass)."""
     stem = str(meta_path)[:-5]
     full, thumb = Path(stem + ".jpg"), Path(stem + ".thumb.jpg")
     meta = json.loads(meta_path.read_text())
@@ -255,13 +258,11 @@ def _upload_still(meta_path: Path) -> None:
         "file_size_bytes": size, "recorded_at": taken_at,
         "width": meta.get("width"), "height": meta.get("height"),
         "sensor_mode": meta.get("sensor_mode"), "lens_position": meta.get("lens_position"),
-        "source": meta.get("source"),
+        "source": meta.get("source"), "burst_id": meta.get("burst_id"),
+        "burst_index": meta.get("burst_index"),
     })
-    for p in (full, thumb, meta_path):
-        try:
-            p.unlink()
-        except OSError:
-            pass
+    Path(str(meta_path) + ".uploaded").write_text(
+        f"still_id={done.get('still_id')}\nstorage_key={key}\n")
     log.info("uploaded still_id=%s %s (%.1f MB)", done.get("still_id"), full.name, size / 1e6)
 
 

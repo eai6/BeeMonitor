@@ -28,6 +28,7 @@ urlpatterns = [
     path("<int:pk>/record-settings/", views.DeviceRecordSettingsView.as_view(), name="record_settings"),
     path("<int:pk>/stills-setting/", stills_views.DeviceStillsSettingView.as_view(), name="stills_setting"),
     path("<int:pk>/take-still/", stills_views.DeviceTakeStillView.as_view(), name="take_still"),
+    path("<int:pk>/free-space/", stills_views.DeviceFreeSpaceView.as_view(), name="free_space"),
     path("<int:pk>/stills/", stills_views.DeviceStillsView.as_view(), name="stills"),
     path("<int:pk>/stills/<int:still_pk>/", stills_views.DeviceStillDetailView.as_view(), name="still_detail"),
     path("<int:pk>/pipeline-schedule/", views.DevicePipelineScheduleView.as_view(), name="pipeline_schedule"),

@@ -270,6 +270,8 @@ class DeviceHeartbeatView(APIView):
                 "record_max_segment": RECORD_MAX_SEGMENT,
                 # Full-resolution stills every N minutes (0 = off; 64 MP only).
                 "stills_interval_min": device.stills_interval_min,
+                # Stills taken on each motion trigger before the clip (0 = off).
+                "motion_burst_stills": device.motion_burst_stills,
             },
             status=201,
         )
@@ -321,4 +323,5 @@ class DeviceCommandView(APIView):
             "record_post_roll": RECORD_POST_ROLL,
             "record_max_segment": RECORD_MAX_SEGMENT,
             "stills_interval_min": device.stills_interval_min,
+            "motion_burst_stills": device.motion_burst_stills,
         })

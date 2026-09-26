@@ -222,13 +222,16 @@ def record() -> None:
     last_override_check = time.monotonic()
 
     # Full-resolution stills (memory/40): 64 MP cameras only, between clips.
-    from motion.overrides import load_stills_interval
+    from motion.overrides import load_motion_burst, load_stills_interval
     stills_capable = model_of(cam) == "ov64a40"
     still_every = stills.interval_seconds(load_stills_interval())
+    burst_n = load_motion_burst()
     next_still = warmup_deadline + 60.0   # first one a minute after warm-up
-    if still_every:
-        log.info("stills: every %.0f min%s", still_every / 60,
-                 "" if stills_capable else " requested, but this is not a 64 MP camera — off")
+    if still_every or burst_n:
+        log.info("stills: periodic %s, on motion %s%s",
+                 "every %.0f min" % (still_every / 60) if still_every else "off",
+                 "%d before each clip" % burst_n if burst_n else "off",
+                 "" if stills_capable else " — requested, but this is not a 64 MP camera: off")
 
     # First telemetry still shortly after warmup, then every interval.
     next_telemetry_image = (
@@ -304,6 +307,20 @@ def record() -> None:
             if not encoding and rec_mode != "off" and in_window:
                 if rec_mode == "continuous":
                     _open_segment(now_mono, "continuous")
+                elif motion and burst_n and stills_capable:
+                    # Stills first, then the clip. The burst discards the
+                    # pre-roll (by design) and disturbs the background model,
+                    # so re-learn it; the clip's idle timer starts after.
+                    try:
+                        stills.take_burst(cam, encoder, config,
+                                          camera_transform(cam_profile), lens_pos, burst_n)
+                    except Exception as e:  # never lose the clip over the stills
+                        log.warning("burst failed: %s", e)
+                    gate.reset()
+                    now_mono = time.monotonic()
+                    warmup_deadline = now_mono + WARMUP_SECONDS
+                    last_motion = now_mono
+                    _open_segment(now_mono, "burst")
                 elif motion:
                     _open_segment(now_mono, "motion")
 
@@ -450,6 +467,11 @@ def record() -> None:
                 except OSError:
                     rsm = rec_settings_mtime
                 if rsm != rec_settings_mtime:
+                    new_burst = load_motion_burst()
+                    if new_burst != burst_n:
+                        burst_n = new_burst
+                        log.info("stills on motion -> %s (dashboard)",
+                                 "%d before each clip" % burst_n if burst_n else "off")
                     new_every = stills.interval_seconds(load_stills_interval())
                     if new_every != still_every:
                         still_every = new_every
