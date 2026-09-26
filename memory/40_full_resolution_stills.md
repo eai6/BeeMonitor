@@ -78,6 +78,49 @@ S3 (~$0.30/month/device at Standard, less after the 90-day Glacier IR rule).
 3. Web: setting, device-page gallery, viewer.
 4. Roll out: on per device from the website.
 
+## Part 1b: a 64 MP burst on each motion trigger (requested 2026-09-26)
+
+User: "when motion is detected the device will take [5] high resolution
+pictures then record video afterwards until there is no more motion." 64 MP;
+5 frames for now (10 later if it proves fine); the 2 s pre-roll is NOT kept.
+
+### Flow (motion mode only; continuous mode never bursts)
+
+1. Motion triggers while no clip is open (and the burst is allowed — cap below).
+2. Stop the encoder; the pre-roll buffer is discarded.
+3. Switch ONCE to the full-sensor still configuration and take 5 consecutive
+   frames (~2–2.6 fps at 64 MP → ~2–2.5 s), then switch back (~1–2 s total
+   for the two switches; to measure).
+4. Restart the encoder and open the clip immediately (reason "burst"); it then
+   runs exactly as today: closes 10 s after motion stops, 10 min cap.
+   `last_motion` is set to the end of the burst so the clip is not closed by a
+   gate that is still re-warming.
+5. The 5 frames are encoded to JPEG (+ 1280 px preview) one at a time on a
+   background thread while video records; each raw 64 MP frame is ~190 MB, so
+   ~950 MB is held briefly (Pi 4, 4 GB). If a 64 MP buffer cannot be
+   allocated, the burst falls back to 16 MP and says so.
+
+Expected: video starts ~4–6 s after the trigger; the stills cover that gap.
+
+### Data
+
+5 × ~15 MB ≈ 75 MB per trigger. 100 triggers/day ≈ 7.5 GB/day/device — so a
+cap is needed (proposed below). Uploaded like videos (WiFi only), same 2 GB
+on-card cap (to revisit: bursts may need a larger one).
+
+### Setting (device page, Recording)
+
+"On motion: take 5 × 64 MP stills, then record" — Off | On, plus a cooldown:
+at most one burst every N minutes (proposed default 5). Triggers inside the
+cooldown record video as today (with pre-roll).
+
+### Data model / pages
+
+`DeviceStill` gains `burst_id` and `burst_index` (0–4) and `source="burst"`.
+The gallery shows a burst as one row of 5 with a link to the clip recorded
+right after it (matched on device + time: the first video starting within
+~15 s of the burst).
+
 ## Part 2: pipelines on stills
 
 Design: boards "Pipeline editor: Stills input" and "Run on stills + results".
@@ -157,6 +200,12 @@ class ≈ 30 s per still per class — ~50× YOLO; offer it, default YOLO.
 - Pipelines on stills: YOLO and SAM 3 both offered (YOLO default).
 - Species ID only when the Identify species block is in the pipeline.
 - Stills upload like videos (initiate/PUT/complete, WiFi only), never telemetry.
+
+## Open questions — burst (1b)
+
+1. Cooldown between bursts: 5 min?
+2. A daily cap on bursts as well (e.g. 100)? Or cooldown only.
+3. Raise the on-card stills cap from 2 GB for burst devices (e.g. 8 GB)?
 
 ## Open questions (answered above)
 
