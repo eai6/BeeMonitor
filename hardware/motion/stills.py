@@ -41,6 +41,17 @@ from motion.config import (
     log, STILLS_DIR, STILL_REQUEST_FILE, STILL_JPEG_QUALITY, STILL_THUMB_SIDE,
 )
 
+class CameraStuck(RuntimeError):
+    """The camera could not be put back into video mode after a still.
+
+    Fatal on purpose: the recorder must NOT carry on, because its next read of
+    the motion stream would wait forever on a camera that is stopped in still
+    mode — which is how a failed 64 MP capture once left a unit silently not
+    recording (and deaf to SIGTERM) for an hour. The recorder exits on this and
+    systemd restarts it with a fresh camera.
+    """
+
+
 MIN_INTERVAL_MIN = 15
 # The 16 MP binned mode, for when a 64 MP buffer cannot be allocated.
 FALLBACK_SIZE = (4624, 3472)
@@ -90,6 +101,37 @@ def _still_config(cam, size, transform, lens):
         cfg["controls"]["AfMode"] = controls.AfModeEnum.Manual
         cfg["controls"]["LensPosition"] = float(lens)
     return cfg
+
+
+def _resume_video(cam, encoder, video_config, output, lens) -> None:
+    """Back to video after a still, whatever state the still left the camera in.
+
+    Always switches to `video_config` explicitly. picamera2's switch-back
+    helpers return to whatever mode the camera was in when they were called —
+    after a failed 64 MP attempt that is the 64 MP still mode itself, and the
+    16 MP fallback then "restores" into it and fails. If switching fails, a full
+    stop / configure / start is the second try. Raises CameraStuck if neither
+    brings video back.
+    """
+    last = None
+    for attempt in ("switch", "restart"):
+        try:
+            if attempt == "switch":
+                cam.switch_mode(video_config)
+            else:
+                cam.stop()
+                cam.configure(video_config)
+                cam.start()
+            if output is not None:
+                encoder.output = output
+            cam.start_encoder(encoder)
+            break
+        except Exception as e:
+            last = e
+            log.error("still: back to video by %s failed: %s", attempt, e)
+    else:
+        raise CameraStuck(f"could not restore video after a still: {last}")
+    _restore_focus(cam, lens)
 
 
 def _restore_focus(cam, lens) -> None:
@@ -161,24 +203,20 @@ def take_burst(cam, encoder, video_config, transform, lens, count: int,
                     log.warning("burst: frame %d failed: %s", len(frames) + 1, e)
                     break
     finally:
-        try:
-            cam.switch_mode(video_config)
-        finally:
-            if output is not None:
-                encoder.output = output
-            cam.start_encoder(encoder)
-            _restore_focus(cam, lens)
+        _resume_video(cam, encoder, video_config, output, lens)
     log.info("burst: %d x %s in %.1fs (video paused)", len(frames), mode or "none",
              time.monotonic() - t0)
     return Burst(frames, mode, lens, burst_id)
 
 
-def take(cam, encoder, transform, lens, source: str = "schedule", output=None) -> bool:
+def take(cam, encoder, video_config, transform, lens, source: str = "schedule",
+         output=None) -> bool:
     """Pause video, capture the full sensor, resume. True if a still was taken.
 
     The encoder is stopped for the mode switch and restarted after, the same
-    way the recorder starts it; switch_mode_and_capture_array puts the video
-    configuration back. The lens is held where the recorder focused it.
+    way the recorder starts it, and video_config is put back explicitly
+    (_resume_video) — raising CameraStuck if it cannot be. The lens is held
+    where the recorder focused it.
     """
     taken_at = _now()
     t0 = time.monotonic()
@@ -187,17 +225,15 @@ def take(cam, encoder, transform, lens, source: str = "schedule", output=None) -
     try:
         for size, label in ((tuple(cam.sensor_resolution), "64mp"), (FALLBACK_SIZE, "16mp")):
             try:
-                arr = cam.switch_mode_and_capture_array(
-                    _still_config(cam, size, transform, lens), "main")
+                cam.switch_mode(_still_config(cam, size, transform, lens))
+                arr = cam.capture_array("main")
                 mode = label
                 break
             except Exception as e:  # most likely CMA: fall back to 16 MP
                 log.warning("still: %s capture failed (%s)", label, e)
     finally:
-        if output is not None:   # see take_burst: no stale pre-roll after a pause
-            encoder.output = output
-        cam.start_encoder(encoder)
-        _restore_focus(cam, lens)
+        # output: see take_burst — no stale pre-roll after a pause.
+        _resume_video(cam, encoder, video_config, output, lens)
     pause = time.monotonic() - t0
     if arr is None:
         log.warning("still: none taken; video paused %.1fs", pause)

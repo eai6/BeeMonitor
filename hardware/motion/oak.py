@@ -192,7 +192,8 @@ class OakCamera:
     def stop_encoder(self) -> None:
         pass  # the encoder lives in the pipeline; stop() takes it down
 
-    def capture_buffer(self, name: str = "lores"):
+    def capture_buffer(self, name: str = "lores", wait=None):  # noqa: ARG002 - picamera2's
+        # signature; the OAK's own FRAME_TIMEOUT already bounds the wait.
         if name != "lores":
             raise ValueError(f"OakCamera has no {name!r} buffer")
         frame = self._get(self._lores_q, "motion stream")

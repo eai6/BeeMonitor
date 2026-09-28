@@ -129,6 +129,97 @@ check("burst: each marker names the clip after it",
 for p in (TMP / "stills").iterdir():
     p.unlink()
 
+# -- a failed still must leave the camera recording (the 17:10 hang) ------------
+# 2026-09-28: the 64 MP switch failed (ENOMEM), the 16 MP fallback "switched
+# back" into that broken 64 MP mode ('raw'), the encoder could not restart, and
+# the recorder then waited forever on a camera stopped in still mode.
+class FlakyCam(FakeCam):
+    sensor_resolution = (9248, 6944)
+
+    def __init__(self, fail_captures=0, fail_video_switch=0, fail_restart=False):
+        super().__init__()
+        self.fail_captures, self.fail_video_switch = fail_captures, fail_video_switch
+        self.fail_restart = fail_restart
+        self.mode = "video"
+
+    def switch_mode(self, cfg):
+        target = "still" if isinstance(cfg, dict) else cfg
+        self.calls.append("switch:" + target)
+        if target == "video" and self.fail_video_switch:
+            self.fail_video_switch -= 1
+            raise RuntimeError("'raw'")
+        self.mode = target
+
+    def capture_array(self, name):
+        self.calls.append("capture")
+        if self.fail_captures:
+            self.fail_captures -= 1
+            raise OSError(12, "Cannot allocate memory")
+        return np.zeros((240, 320, 3), np.uint8)
+
+    def stop(self):
+        self.calls.append("stop")
+
+    def configure(self, cfg):
+        self.calls.append("configure:" + cfg)
+        if self.fail_restart:
+            raise RuntimeError("camera gone")
+        self.mode = cfg
+
+    def start(self):
+        self.calls.append("start")
+
+    def start_encoder(self, enc):
+        self.calls.append("start_encoder")
+        if self.mode != "video":
+            raise RuntimeError("Encode stream None was not defined")
+
+
+cam = FlakyCam(fail_captures=1)
+ok = stills.take(cam, mock.Mock(), "video", None, None, source="manual")
+check("64 MP fails, 16 MP taken, back to VIDEO (not the failed still mode)",
+      ok and cam.mode == "video" and cam.calls[-2:] == ["switch:video", "start_encoder"])
+
+cam = FlakyCam(fail_captures=2)
+ok = stills.take(cam, mock.Mock(), "video", None, None)
+check("both sizes fail: no still, video still restored",
+      not ok and cam.mode == "video" and cam.calls[-1] == "start_encoder")
+
+cam = FlakyCam(fail_captures=2, fail_video_switch=1)
+stills.take(cam, mock.Mock(), "video", None, None)
+check("switch back fails: full stop/configure/start brings video back",
+      cam.mode == "video"
+      and cam.calls[-4:] == ["stop", "configure:video", "start", "start_encoder"])
+
+cam = FlakyCam(fail_video_switch=1, fail_restart=True)
+try:
+    stills.take(cam, mock.Mock(), "video", None, None)
+    stuck = False
+except stills.CameraStuck:
+    stuck = True
+check("video cannot be restored: CameraStuck, not a warning to carry on past", stuck)
+
+cam = FlakyCam(fail_video_switch=1, fail_restart=True)
+try:
+    stills.take_burst(cam, mock.Mock(), "video", None, None, 3)
+    stuck = False
+except stills.CameraStuck:
+    stuck = True
+check("the same for a burst", stuck)
+for p in (TMP / "stills").iterdir():
+    p.unlink()
+
+# -- the recorder gives up on a wedged camera instead of blocking ---------------
+import inspect  # noqa: E402
+from motion import recorder  # noqa: E402
+src = inspect.getsource(recorder)
+check("recorder: the motion read is bounded",
+      'capture_buffer("lores", wait=FRAME_TIMEOUT_S)' in src)
+check("recorder: CameraStuck is re-raised past both 'never stop over a still' guards",
+      src.count("except stills.CameraStuck:\n") == 2)
+check("recorder: a wedged camera exits hard for systemd to restart",
+      "os._exit(1)" in src)
+
 # -- the upload: the video calls, kind "still" ---------------------------------
 import uploader  # noqa: E402
 

@@ -32,6 +32,8 @@ snippet length) before trusting it in the field, then tighten thresholds.
 
 from __future__ import annotations
 
+import logging
+import os
 import threading
 import time
 import uuid
@@ -85,6 +87,11 @@ except ImportError:  # pragma: no cover - not on a Pi
 
 
 _running = True
+
+# The longest a motion frame may take before the camera is declared wedged. A
+# healthy camera delivers one every 1/fps; the slowest legitimate read is the
+# first after a still restarts the OV64A40, measured at 3-4 s on a busy Pi 4.
+FRAME_TIMEOUT_S = 20.0
 
 
 def _handle_signal(signum, frame):  # noqa: ARG001
@@ -144,7 +151,15 @@ def record() -> None:
         MAX_SEGMENT, roi or "full",
         " (polygon, %d corners)" % len(roi_polygon) if roi_polygon else "",
     )
-    _record_loop(cam, encoder, circ, config, cam_profile, lens_pos, roi, roi_polygon, fps)
+    try:
+        _record_loop(cam, encoder, circ, config, cam_profile, lens_pos, roi, roi_polygon, fps)
+    except (stills.CameraStuck, TimeoutError) as e:
+        # A plain exit is not enough: picamera2's threads can keep a wedged
+        # process alive, and a recorder that is alive but not recording is the
+        # failure this guards against. Exit hard; systemd restarts us.
+        log.error("camera wedged (%s) — exiting so systemd restarts the recorder", e)
+        logging.shutdown()
+        os._exit(1)
 
 
 def _open_oak():
@@ -315,10 +330,13 @@ def _record_loop(cam, encoder, circ, config, cam_profile, lens_pos, roi, roi_pol
         act_uid = None
         act_cands = []
 
+    wedged = False
     try:
         while _running:
             # Blocks until the next lores frame ~= paces the loop at FPS.
-            buf = cam.capture_buffer("lores")
+            # Bounded: a camera wedged in still mode would otherwise block here
+            # forever — alive, deaf to SIGTERM, recording nothing.
+            buf = cam.capture_buffer("lores", wait=FRAME_TIMEOUT_S)
             now_mono = time.monotonic()
             frame_i += 1
 
@@ -366,6 +384,8 @@ def _record_loop(cam, encoder, circ, config, cam_profile, lens_pos, roi, roi_pol
                         burst = stills.take_burst(cam, encoder, config,
                                                   camera_transform(cam_profile), lens_pos,
                                                   burst_n, output=circ)
+                    except stills.CameraStuck:
+                        raise
                     except Exception as e:  # never lose the clip over the stills
                         log.warning("burst failed: %s", e)
                     gate.reset()
@@ -566,8 +586,10 @@ def _record_loop(cam, encoder, circ, config, cam_profile, lens_pos, roi, roi_pol
                     else:
                         try:
                             circ = CircularOutput(buffersize=max(1, int(PRE_ROLL * FPS)))
-                            stills.take(cam, encoder, camera_transform(cam_profile), lens_pos,
-                                        source=source, output=circ)
+                            stills.take(cam, encoder, config, camera_transform(cam_profile),
+                                        lens_pos, source=source, output=circ)
+                        except stills.CameraStuck:
+                            raise
                         except Exception as e:  # never stop recording over a still
                             log.warning("still failed: %s", e)
                         # The mode switch disturbs the background model: re-learn it.
@@ -597,14 +619,20 @@ def _record_loop(cam, encoder, circ, config, cam_profile, lens_pos, roi, roi_pol
                 total_clip_time = 0.0
                 last_stats_log = now_mono
 
+    except (stills.CameraStuck, TimeoutError):
+        wedged = True
+        raise
     finally:
         if encoding:
             _close_segment(time.monotonic(), "shutdown")
-        try:
-            cam.stop()
-            cam.stop_encoder()
-        except Exception:  # pragma: no cover - best-effort teardown
-            pass
+        # A wedged camera can block in stop() too, and the process is about to
+        # exit hard anyway — leave it to the restart.
+        if not wedged:
+            try:
+                cam.stop()
+                cam.stop_encoder()
+            except Exception:  # pragma: no cover - best-effort teardown
+                pass
         for t in remux_pool:
             t.join(timeout=30)
         log.info("recorder stopped")
