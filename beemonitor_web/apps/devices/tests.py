@@ -226,6 +226,6 @@ class FixedDeviceSettingsBeatTests(TestCase):
 
     def test_clip_timing_is_fixed(self):
         resp = self._beat({})
-        self.assertEqual(resp["record_post_roll"], 10)
+        self.assertEqual(resp["record_post_roll"], 5)
         self.assertEqual(resp["record_max_segment"], 600)
         self.assertEqual(resp["video_upload_mode"], "auto")

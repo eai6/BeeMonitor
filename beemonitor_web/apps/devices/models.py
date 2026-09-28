@@ -32,7 +32,7 @@ TELEMETRY_CELLULAR_SECONDS = 300
 # Motion-clip timing, the same for every device and pushed in the heartbeat:
 # a clip closes RECORD_POST_ROLL seconds after motion stops, and constant motion
 # is force-split at RECORD_MAX_SEGMENT so one file can't grow unbounded.
-RECORD_POST_ROLL = 10
+RECORD_POST_ROLL = 5
 RECORD_MAX_SEGMENT = 600
 
 

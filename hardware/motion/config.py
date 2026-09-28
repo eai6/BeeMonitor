@@ -101,8 +101,8 @@ OAK_LENS = os.environ.get("BEEMONITOR_OAK_LENS", "").strip()
 PRE_ROLL = _env_float("BEEMONITOR_PRE_ROLL", 3.0)
 # Tail kept AFTER motion stops before a clip closes — a bee that resumes within
 # POST_ROLL keeps one continuous clip instead of two stubs. Env default; the
-# server pushes the fleet-wide value (10s) the recorder hot-reloads.
-POST_ROLL = _env_float("BEEMONITOR_POST_ROLL", 10.0)
+# server pushes the fleet-wide value (5s) the recorder hot-reloads.
+POST_ROLL = _env_float("BEEMONITOR_POST_ROLL", 5.0)
 # Hard cap on one motion clip's length: continuous motion is force-rotated into
 # a fresh clip so a file can't grow unbounded. Env default; server-pushed (600s).
 MAX_SEGMENT = _env_float("BEEMONITOR_MAX_SEGMENT", 600.0)
