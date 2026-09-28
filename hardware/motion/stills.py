@@ -317,7 +317,10 @@ def _write(arr, taken_at: datetime, mode: str, lens, source: str,
         if burst_id:
             meta.update(burst_id=burst_id, burst_index=burst_index, clip=clip)
         tmp = Path(str(stem) + ".json.tmp")
-        tmp.write_text(json.dumps(meta))
+        with open(tmp, "w") as fh:   # fsync, or a power cut can leave a 0-byte marker
+            fh.write(json.dumps(meta))
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, Path(str(stem) + ".json"))   # the marker comes last
         log.info("still: saved %s.jpg (%.1f MB)", stem.name, len(full) / 1e6)
     except Exception as e:  # never take the recorder down over a still

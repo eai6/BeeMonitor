@@ -9,6 +9,7 @@ See memory/15_monitoring_agent_design.md.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import cv2
@@ -111,12 +112,25 @@ def _flush_activity_frames(uid, started_epoch, candidates):
         }
         try:
             base.with_suffix(".jpg").write_bytes(c["jpg"])
-            base.with_suffix(".json").write_text(json.dumps(meta))
+            _write_marker(base.with_suffix(".json"), meta)
             written += 1
         except OSError as e:
             log.warning("activity frames: write failed for %s: %s", uid, e)
     if written:
         log.info("activity frames: queued %d crop(s) for %s", written, uid)
+
+
+def _write_marker(path, meta):
+    """Write a JSON completion marker so a power cut leaves it absent, never
+    0-byte: the uploader treats the .json as "group complete", and an empty one
+    used to stall its whole queue. fsync before the rename, or ext4 can commit
+    the rename ahead of the data."""
+    tmp = Path(str(path) + ".tmp")
+    with open(tmp, "w") as fh:
+        fh.write(json.dumps(meta))
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
 
 
 def _save_activity_archive(clip_mp4, uid, started_epoch, candidates):
@@ -157,7 +171,7 @@ def _save_activity_archive(clip_mp4, uid, started_epoch, candidates):
             Path(stem + ".crop.jpg").write_bytes(c["jpg"])
             if src:
                 Path(stem + ".src.jpg").write_bytes(src)
-            Path(stem + ".json").write_text(json.dumps(meta))  # last = complete
+            _write_marker(Path(stem + ".json"), meta)  # last = complete
             saved += 1
         except OSError as e:
             log.warning("activity archive: write failed for %s: %s", uid, e)

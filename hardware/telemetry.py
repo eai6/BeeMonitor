@@ -489,11 +489,15 @@ def _video_stats(window_seconds: int) -> dict:
     cur_key = time.strftime("%Y-%m-%dT%H", time.localtime(now))
     if RECORD_DIR.is_dir():
         for mp4 in RECORD_DIR.rglob("*.mp4"):
-            total += 1
             try:
                 st = mp4.stat()
             except OSError:
                 continue
+            # A power cut mid-recording leaves a 0-byte clip. The uploader skips
+            # anything under 1 KiB, so counting it here showed "pending" forever.
+            if st.st_size < 1024:
+                continue
+            total += 1
             recordings_bytes += st.st_size  # footprint of ALL clips on the card
             if st.st_mtime > newest:
                 newest = st.st_mtime

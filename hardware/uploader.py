@@ -229,13 +229,36 @@ def _list_pending_stills(stills_dir: Path) -> list[Path]:
         return []
 
 
+def _read_meta(meta_path: Path) -> dict | None:
+    """A sidecar's JSON, or None if it's unreadable. A power cut mid-write can
+    leave a 0-byte / truncated marker; retrying it can never succeed, and every
+    failure sleeps the loop's backoff (5 s doubling to 5 min) — a handful of
+    these held fresh videos for tens of minutes. Rename it aside (the images
+    stay on the card) so the queue keeps moving."""
+    try:
+        meta = json.loads(meta_path.read_text())
+        if isinstance(meta, dict):
+            return meta
+    except (OSError, ValueError):
+        pass
+    bad = Path(str(meta_path) + ".corrupt")
+    try:
+        meta_path.rename(bad)
+        log.warning("unreadable sidecar %s — moved aside to %s", meta_path.name, bad.name)
+    except OSError as e:
+        log.warning("unreadable sidecar %s (and cannot move it: %s)", meta_path.name, e)
+    return None
+
+
 def _upload_still(meta_path: Path) -> None:
     """One still: its 1280 px preview, then the full image, each via the video
     upload calls; then complete (kind "still"). Like a video, the files stay
     on the card until the dashboard clears them (telemetry's cleanup pass)."""
     stem = str(meta_path)[:-5]
     full, thumb = Path(stem + ".jpg"), Path(stem + ".thumb.jpg")
-    meta = json.loads(meta_path.read_text())
+    meta = _read_meta(meta_path)
+    if meta is None:
+        return
     if not full.exists():
         log.warning("still %s has no image — dropping its marker", meta_path.name)
         meta_path.unlink(missing_ok=True)
@@ -332,7 +355,9 @@ def _upload_frame_group(meta_path: Path) -> None:
     """
     base = str(meta_path)[:-5]  # strip ".json"
     crop_p, src_p = Path(base + ".crop.jpg"), Path(base + ".src.jpg")
-    meta = json.loads(meta_path.read_text())
+    meta = _read_meta(meta_path)
+    if meta is None:
+        return
     uid, idx = meta.get("activity_uid"), meta.get("index", 0)
     shared = {k: meta.get(k) for k in
               ("activity_uid", "started_at", "captured_at", "bbox",
