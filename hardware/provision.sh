@@ -199,7 +199,28 @@ ensure_camera_detect_unit() {
         done
 }
 
+# --- udev: Luxonis OAK --------------------------------------------------------
+# Without this rule the OAK's USB node is root-only and depthai, running as the
+# recorder's user, sees the camera but cannot open it — the recorder then falls
+# back to the ribbon camera with a warning. Installed on every unit so an OAK
+# works wherever it is plugged in; a rule with no matching device does nothing.
+OAK_RULE_SRC="$REPO_DIR/hardware/oak/80-movidius.rules"
+OAK_RULE_DST="/etc/udev/rules.d/80-movidius.rules"
+
+ensure_oak_udev() {
+    [ -f "$OAK_RULE_SRC" ] || return 0
+    [ -f "$OAK_RULE_DST" ] && cmp -s "$OAK_RULE_SRC" "$OAK_RULE_DST" && return 0
+    if install -m 0644 -o root -g root "$OAK_RULE_SRC" "$OAK_RULE_DST"; then
+        log "udev: installed $OAK_RULE_DST"
+        udevadm control --reload-rules && udevadm trigger --subsystem-match=usb --attr-match=idVendor=03e7 \
+            || log "udev: reload FAILED (takes effect on the next boot)"
+    else
+        log "udev: FAILED to install $OAK_RULE_DST"
+    fi
+}
+
 ensure_minisign
+ensure_oak_udev
 sync_sudoers
 sync_units
 ensure_camera_autodetect

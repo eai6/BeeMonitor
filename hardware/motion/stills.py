@@ -18,6 +18,12 @@ clears them on the dashboard — telemetry's cleanup pass then deletes them.
 
 Times follow the clips' convention: the Pi's wall clock labelled UTC, so a
 burst and the clip after it can be matched on the server.
+
+On a Luxonis OAK (``take_oak`` / ``take_burst_oak``) none of the pausing
+applies: the OAK JPEG-encodes a full-size frame of the running video on
+request (motion/oak.py), so a photo is the video's own resolution — 12 MP on
+the OAK-1-AF — the video never stops, and the pre-roll survives a burst. The
+OAK's JPEG is saved as it arrives rather than decoded and re-encoded.
 """
 
 from __future__ import annotations
@@ -116,9 +122,9 @@ class Burst:
         def _write_all(items=frames):
             index = 0
             while items:
-                at, arr = items.pop(0)   # release each frame once written
+                at, arr, *jpeg = items.pop(0)   # release each frame once written
                 _write(arr, at, self.mode, self.lens, "burst", burst_id=self.burst_id,
-                       burst_index=index, clip=clip)
+                       burst_index=index, clip=clip, jpeg=jpeg[0] if jpeg else None)
                 index += 1
         threading.Thread(target=_write_all, daemon=True).start()
 
@@ -203,18 +209,64 @@ def take(cam, encoder, transform, lens, source: str = "schedule", output=None) -
     return True
 
 
+def take_oak(cam, lens, source: str = "schedule") -> bool:
+    """A full-size photo from an OAK, video running throughout."""
+    try:
+        (taken_at, jpeg), = cam.capture_jpegs(1)
+    except Exception as e:
+        log.warning("still: OAK capture failed: %s", e)
+        return False
+    mode = _oak_mode(cam)
+    log.info("still: %s taken (OAK, video not paused)", mode)
+    threading.Thread(target=_write, args=(None, taken_at, mode, lens, source),
+                     kwargs={"jpeg": jpeg}, daemon=True).start()
+    return True
+
+
+def take_burst_oak(cam, lens, count: int) -> "Burst":
+    """``count`` consecutive full-size frames from an OAK, video running."""
+    taken_at = _now()
+    burst_id = taken_at.strftime("%Y%m%d%H%M%S") + "-" + os.urandom(2).hex()
+    t0 = time.monotonic()
+    try:
+        frames = [(at, None, jpeg) for at, jpeg in cam.capture_jpegs(count)]
+    except Exception as e:
+        log.warning("burst: OAK capture failed: %s", e)
+        frames = []
+    mode = _oak_mode(cam)
+    log.info("burst: %d x %s in %.2fs (OAK, video not paused)", len(frames), mode,
+             time.monotonic() - t0)
+    return Burst(frames, mode, lens, burst_id)
+
+
+def _oak_mode(cam) -> str:
+    w, h = cam.main_wh
+    return f"{round(w * h / 1e6)}mp"
+
+
 def _write(arr, taken_at: datetime, mode: str, lens, source: str,
-           burst_id: str = "", burst_index: int | None = None, clip: str = "") -> None:
+           burst_id: str = "", burst_index: int | None = None, clip: str = "",
+           jpeg: bytes | None = None) -> None:
     """JPEG + 1280 px preview + the marker (written last).
-    "RGB888" arrays are BGR-ordered, which is what cv2 writes."""
+    "RGB888" arrays are BGR-ordered, which is what cv2 writes. With `jpeg`
+    (an OAK photo) those bytes are the full-size file; arr may be None."""
     try:
         STILLS_DIR.mkdir(parents=True, exist_ok=True)
+        if jpeg is not None and arr is None:
+            import numpy as np
+            arr = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+            if arr is None:
+                log.warning("still: undecodable JPEG from the camera")
+                return
         name = taken_at.strftime("%Y-%m-%d_%H_%M_%S")
         if burst_id:
             name += f"_b{burst_index}"   # a burst's frames share their second
         stem = STILLS_DIR / name
         h, w = arr.shape[:2]
-        ok, full = cv2.imencode(".jpg", arr, [cv2.IMWRITE_JPEG_QUALITY, STILL_JPEG_QUALITY])
+        if jpeg is not None:
+            ok, full = True, jpeg
+        else:
+            ok, full = cv2.imencode(".jpg", arr, [cv2.IMWRITE_JPEG_QUALITY, STILL_JPEG_QUALITY])
         scale = STILL_THUMB_SIDE / float(max(w, h))
         small = cv2.resize(arr, (round(w * scale), round(h * scale)), interpolation=cv2.INTER_AREA)
         ok2, thumb = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 85])
@@ -222,7 +274,7 @@ def _write(arr, taken_at: datetime, mode: str, lens, source: str,
         if not (ok and ok2):
             log.warning("still: JPEG encode failed")
             return
-        Path(str(stem) + ".jpg").write_bytes(full.tobytes())
+        Path(str(stem) + ".jpg").write_bytes(bytes(full))
         Path(str(stem) + ".thumb.jpg").write_bytes(thumb.tobytes())
         meta = {"taken_at": taken_at.isoformat(), "width": w, "height": h,
                 "sensor_mode": mode, "lens_position": lens, "source": source}

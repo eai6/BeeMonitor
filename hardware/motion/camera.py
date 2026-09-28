@@ -31,6 +31,7 @@ import time
 
 from motion.config import (
     log, CAMERA_FILE, HFLIP, VFLIP, ROTATE, LENS_POSITION, AF_RANGE,
+    CAMERA_BACKEND, OAK_LENS,
 )
 
 # Lens modules we know need a LensPosition. Anything else is fixed focus, where
@@ -57,6 +58,39 @@ AF_TIMEOUT = 12.0
 # oddly-mounted unit overrides hflip/vflip in camera.json instead of having it
 # encoded as a property of its sensor.
 FLIPPED_MODELS = ("ov5647", "imx477")
+
+
+def select_backend() -> str:
+    """Which camera the recorder opens: 'oak' or 'picamera2'.
+
+    BEEMONITOR_CAMERA=auto (the default) takes a Luxonis OAK whenever one is on
+    USB — it is the better camera, and a unit only has one plugged in because
+    somebody wants it used — and falls back to the ribbon camera otherwise.
+    An OAK on USB without depthai installed is said out loud: it is one pip
+    install away from being used and nothing else would tell you.
+    """
+    if CAMERA_BACKEND in ("oak", "picamera2"):
+        return CAMERA_BACKEND
+    from motion import oak
+    if oak.available():
+        return "oak"
+    if _oak_on_usb():
+        log.warning("an OAK is plugged in but depthai cannot use it (not installed, "
+                    "or no udev rule — see hardware/oak/README.md); using the "
+                    "ribbon camera")
+    return "picamera2"
+
+
+def _oak_on_usb() -> bool:
+    """Movidius vendor id on the USB bus, without depthai."""
+    import glob
+    for path in glob.glob("/sys/bus/usb/devices/*/idVendor"):
+        try:
+            if open(path).read().strip() == "03e7":
+                return True
+        except OSError:
+            pass
+    return False
 
 
 def detect_model() -> str:
@@ -92,20 +126,23 @@ def default_flip(model=None) -> bool:
     return model in FLIPPED_MODELS
 
 
-def load_profile() -> dict:
+def load_profile(model=None) -> dict:
     """Merged camera profile: camera.json over the env defaults.
 
     Keys: hflip, vflip (bool), rotate (0/90/180/270), lens (float | None,
-    None = autofocus at startup), af_range ('normal'|'macro'|'full').
+    None = autofocus at startup), af_range ('normal'|'macro'|'full'),
+    oak_lens (int 0..255 | None — the OAK's own scale, None = autofocus).
+    `model` decides the default flip; None = ask libcamera (the ribbon camera).
     Never raises — an unreadable or half-written profile falls back to env.
     """
-    flip = default_flip()
+    flip = default_flip(model)
     profile = {
         "hflip": flip if HFLIP is None else bool(HFLIP),
         "vflip": flip if VFLIP is None else bool(VFLIP),
         "rotate": ROTATE % 360,
         "lens": float(LENS_POSITION) if _is_number(LENS_POSITION) else None,
         "af_range": AF_RANGE if AF_RANGE in ("normal", "macro", "full") else "normal",
+        "oak_lens": _oak_lens(OAK_LENS),
     }
     try:
         saved = json.loads(CAMERA_FILE.read_text())
@@ -124,7 +161,15 @@ def load_profile() -> dict:
         profile["lens"] = None          # explicit "autofocus, please"
     if saved.get("af_range") in ("normal", "macro", "full"):
         profile["af_range"] = saved["af_range"]
+    if "oak_lens" in saved:
+        profile["oak_lens"] = _oak_lens(saved["oak_lens"])
     return profile
+
+
+def _oak_lens(v) -> int | None:
+    if not _is_number(v) or isinstance(v, bool):
+        return None
+    return max(0, min(255, int(float(v))))
 
 
 def save_profile(**fields) -> None:
@@ -153,10 +198,14 @@ def transform(profile: dict):
                                vflip=int(bool(profile["vflip"])))
 
 
-def describe(profile: dict) -> str:
+def describe(profile: dict, oak: bool = False) -> str:
     flips = "+".join([n for n, on in (("hflip", profile["hflip"]),
                                       ("vflip", profile["vflip"])) if on]) or "none"
-    lens = "autofocus" if profile["lens"] is None else f"{profile['lens']:.2f}D"
+    if oak:
+        lens = ("autofocus" if profile.get("oak_lens") is None
+                else f"{profile['oak_lens']}/255")
+    else:
+        lens = "autofocus" if profile["lens"] is None else f"{profile['lens']:.2f}D"
     return f"flip={flips} rotate={profile['rotate']}° focus={lens}"
 
 
@@ -187,6 +236,9 @@ def apply_focus(cam, profile: dict) -> float | None:
     hunt on every passing bee. Returns the resulting LensPosition, or None for a
     fixed-focus module (or if the lens never reported back).
     """
+    if hasattr(cam, "apply_focus"):      # the OAK drives its own lens (motion/oak.py)
+        return cam.apply_focus(profile.get("oak_lens"))
+
     from libcamera import controls
 
     if not has_focus(cam):

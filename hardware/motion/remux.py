@@ -9,14 +9,15 @@ from pathlib import Path
 from motion.config import log, FPS, WORK_DIR, RECORD_DIR
 
 
-def _remux(h264_path: Path, mp4_path: Path) -> None:
-    """ffmpeg stream-copy .h264 -> .mp4, then delete the .h264. Cheap (no re-encode)."""
+def _remux(h264_path: Path, mp4_path: Path, fps: float = FPS) -> None:
+    """ffmpeg stream-copy .h264 -> .mp4, then delete the .h264. Cheap (no re-encode).
+    `fps` is the rate the clip was encoded at: a raw .h264 carries no timing."""
     mp4_path.parent.mkdir(parents=True, exist_ok=True)
     # Write to a temp name first so the uploader never sees a half-muxed .mp4.
     tmp = mp4_path.with_suffix(".part.mp4")
     cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
-        "-r", str(FPS), "-i", str(h264_path),
+        "-r", str(fps), "-i", str(h264_path),
         "-c", "copy", "-f", "mp4", str(tmp),
     ]
     try:

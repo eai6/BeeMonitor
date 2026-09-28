@@ -18,6 +18,9 @@
 # So the firmware handles what it is good at and this covers the one case it
 # cannot, preferring the cheapest repair that could work:
 #
+#   0. a Luxonis OAK on USB                 -> reported; the recorder prefers it
+#                                              (motion/camera.py), so steps 3-4
+#                                              never reboot a unit that has one
 #   1. a camera already enumerated          -> nothing to do, the usual case
 #   2. runtime `dtoverlay ov64a40`          -> no reboot, nothing persistent
 #   3. config.txt is pinning the wrong      -> unpin, camera_auto_detect=1,
@@ -102,6 +105,22 @@ camera_model() {
     | sed -n 's/^[0-9]\+ : \([a-z0-9_]\+\) .*/\1/p' | head -1
 }
 
+# A Luxonis OAK (Movidius, vendor 03e7) on USB. sysfs rather than lsusb or
+# depthai: this runs as root before the venv is in play, and must never block.
+# The OAK drops off the bus and re-enumerates while depthai boots its firmware,
+# so a recorder that is already using it can hide it for a moment; one short
+# retry covers that.
+oak_present() {
+  local f try
+  for try in 1 2; do
+    for f in /sys/bus/usb/devices/*/idVendor; do
+      [ "$(cat "$f" 2>/dev/null)" = 03e7 ] && return 0
+    done
+    [ "$try" = 1 ] && sleep 1
+  done
+  return 1
+}
+
 backup_cfg() {
   local bak="$CFG.bak-$(date +%Y%m%d-%H%M%S)"
   cp -a "$CFG" "$bak" 2>/dev/null || { bad "backup of $CFG failed — not editing"; return 1; }
@@ -127,12 +146,30 @@ case "$mode" in
     [ -f "$STATE" ] && sed 's/^/  /' "$STATE" || echo "  (no state yet)"
     now=$(camera_model)
     echo "  current: ${now:-none}"
+    oak_present && echo "  usb:     OAK (the recorder uses this one)"
     exit 0 ;;
   reset)
     state_set repairs 0
     pass "repair counter reset"
     exit 0 ;;
 esac
+
+# --- 0. an OAK on USB? --------------------------------------------------------
+# The recorder takes an OAK over the ribbon camera whenever one is plugged in
+# (BEEMONITOR_CAMERA=auto). Its presence only changes what happens when NO
+# ribbon camera enumerates: the cheap runtime overlay still gets a try, but the
+# reboot-costing repairs do not — a unit recording from its OAK has a camera,
+# and rebooting it to chase an absent ribbon module would only lose footage.
+step "Looking for a USB camera (Luxonis OAK)"
+oak=no
+if oak_present; then
+  oak=yes
+  pass "OAK on USB — the recorder will use it"
+  state_set usb_camera oak
+else
+  echo "  none"
+  state_set usb_camera none
+fi
 
 # --- 1. is a camera already up? ---------------------------------------------
 step "Looking for a camera"
@@ -178,6 +215,13 @@ for entry in "${RUNTIME_CANDIDATES[@]}"; do
   echo "no camera"
   dtoverlay -r "$ov" 2>/dev/null
 done
+
+if [ "$oak" = yes ]; then
+  pass "no ribbon camera, but the OAK is the camera — not rebooting to look for one"
+  state_set last_action "oak-only"
+  state_set repairs 0
+  exit 0
+fi
 
 # --- repair budget: rations only the steps below, which each cost a reboot ---
 repairs=$(state_get repairs); repairs=${repairs:-0}

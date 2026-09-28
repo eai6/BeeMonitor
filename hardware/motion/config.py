@@ -73,6 +73,30 @@ ROTATE = _env_int("BEEMONITOR_ROTATE", 0) % 360
 LENS_POSITION = os.environ.get("BEEMONITOR_LENS_POSITION", "").strip()
 AF_RANGE = os.environ.get("BEEMONITOR_AF_RANGE", "normal").strip().lower()
 
+# --- Camera backend ------------------------------------------------------------
+# Which camera the recorder opens: "auto" (default) prefers a Luxonis OAK on USB
+# when one is plugged in and depthai is installed, else the CSI ribbon camera
+# through picamera2. "oak" / "picamera2" force one. See motion/camera.py.
+CAMERA_BACKEND = os.environ.get("BEEMONITOR_CAMERA", "auto").strip().lower()
+# OAK recording resolution + frame rate. Default: the most the OAK-1-AF's H.264
+# encoder takes — the whole 12 MP sensor (4056x3040) trimmed to 4032 wide, the
+# widest it will encode, at 20 fps, the fastest it sustains there (~13.6 Mbit/s,
+# about twice a 1080p25 clip). Measured: 4056x3040 and 4032x3040@25 run the
+# encoder "out of resources"; 3840x2160 (a 16:9 crop, loses the top and bottom
+# of the frame) does 25 fps. For 1080p at 25: OAK_MAIN_W/H=1920/1080, OAK_FPS=25.
+# The motion stream stays LORES_W x LORES_H and runs at OAK_FPS too (every
+# output on the OAK must share one rate — motion/oak.py).
+OAK_MAIN_W = _env_int("BEEMONITOR_OAK_MAIN_W", 4032)
+OAK_MAIN_H = _env_int("BEEMONITOR_OAK_MAIN_H", 3040)
+OAK_FPS = _env_int("BEEMONITOR_OAK_FPS", 20)
+# H.264 bitrate on the OAK, kbit/s. 0 = the encoder's own choice (measured on
+# an OAK-1-AF: ~7 Mbit/s at 1080p25, ~17 at 4K25, ~13.6 at 12 MP 20 fps).
+OAK_BITRATE_KBPS = _env_int("BEEMONITOR_OAK_BITRATE_KBPS", 0)
+# OAK lens position, 0..255 (the OAK's raw scale, NOT dioptres like
+# BEEMONITOR_LENS_POSITION). Empty = autofocus once at startup and hold it.
+# camera.json's "oak_lens" wins over this.
+OAK_LENS = os.environ.get("BEEMONITOR_OAK_LENS", "").strip()
+
 # Clip timing (seconds).
 PRE_ROLL = _env_float("BEEMONITOR_PRE_ROLL", 3.0)
 # Tail kept AFTER motion stops before a clip closes — a bee that resumes within

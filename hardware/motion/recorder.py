@@ -42,6 +42,7 @@ import cv2
 
 from motion.config import (
     log, RECORD_DIR, WORK_DIR, MAIN_W, MAIN_H, LORES_W, LORES_H, FPS,
+    OAK_MAIN_W, OAK_MAIN_H, OAK_FPS, OAK_BITRATE_KBPS,
     PRE_ROLL, POST_ROLL, MAX_SEGMENT, WARMUP_SECONDS, TIMESTAMP_OVERLAY,
     DETECT_EVERY_N, BG_RESET_INTERVAL,
     CALIB_FILE, TUNING_FILE, ROI_OVERRIDE_FILE, ROI_POLYGON_FILE,
@@ -54,6 +55,7 @@ from motion.config import (
 from motion.camera import (
     load_profile as load_camera_profile, transform as camera_transform,
     apply_focus, warn_if_unrotatable, describe as describe_camera, model_of,
+    select_backend,
 )
 from motion.frames import _main_array_to_bgr
 from motion.roi import _resolve_record_roi
@@ -109,11 +111,67 @@ def _in_record_window(window) -> bool:
 
 def record() -> None:
     """Main capture loop. Blocks until SIGTERM/SIGINT."""
-    if not HAVE_PICAMERA2:
-        raise RuntimeError("record() needs picamera2 — run this on the Pi")
+    backend = select_backend()
+    if backend == "picamera2" and not HAVE_PICAMERA2:
+        raise RuntimeError("record() needs picamera2 (or an OAK) — run this on the Pi")
     RECORD_DIR.mkdir(parents=True, exist_ok=True)
     WORK_DIR.mkdir(parents=True, exist_ok=True)
 
+    if backend == "oak":
+        cam, encoder, circ, config, cam_profile, main_wh, fps = _open_oak()
+    else:
+        cam, encoder, circ, config, cam_profile, main_wh, fps = _open_picamera2()
+
+    # Focus BEFORE detecting the hotel: on a lens module the frame is only as
+    # sharp as the last thing that set LensPosition, and YOLO on a blurred frame
+    # is exactly how hotel detection ends up falling back to the whole frame.
+    # apply_focus logs what it actually did with the lens.
+    lens_pos = apply_focus(cam, cam_profile)
+
+    # Cloud-faithful step 1: detect the hotel and confine detection to it before
+    # we start recording. Falls back to the whole frame if detection fails.
+    roi = _resolve_record_roi(cam)
+    # ...and, when the ROI was traced rather than dragged, the outline that keeps
+    # background inside that rectangle from triggering a recording. Only meaningful
+    # alongside the dashboard ROI it was drawn against.
+    roi_polygon = load_roi_polygon_lores() if load_roi_override_lores() is not None else None
+
+    log.info(
+        "recorder up: %s main=%dx%d lores=%dx%d @ %dfps | %s | pre=%.1fs "
+        "post=%.1fs max=%.0fs roi=%s%s",
+        model_of(cam) or "camera", main_wh[0], main_wh[1], LORES_W, LORES_H, fps,
+        describe_camera(cam_profile, oak=backend == "oak"), PRE_ROLL, POST_ROLL,
+        MAX_SEGMENT, roi or "full",
+        " (polygon, %d corners)" % len(roi_polygon) if roi_polygon else "",
+    )
+    _record_loop(cam, encoder, circ, config, cam_profile, lens_pos, roi, roi_polygon, fps)
+
+
+def _open_oak():
+    """A Luxonis OAK on USB (motion/oak.py). Returns what _open_picamera2 does;
+    encoder and config are None — the OAK encodes on its own chip, and its
+    photos (stills.take_oak) need neither."""
+    from motion.oak import OakCamera
+    cam_profile = load_camera_profile(model="")   # OAK: flip only if the profile says
+    warn_if_unrotatable(cam_profile)
+    if TIMESTAMP_OVERLAY:
+        log.info("timestamp overlay: not on the OAK (it encodes on-device); "
+                 "the clip's filename carries its start time")
+    main_wh = (OAK_MAIN_W, OAK_MAIN_H)
+    if cam_profile["hflip"] or cam_profile["vflip"]:
+        log.warning("camera profile asks for a flip, which the OAK cannot do "
+                    "without dropping frames (motion/oak.py). Recording UNFLIPPED "
+                    "— mount the OAK the right way up.")
+    cam = OakCamera(main_wh, (LORES_W, LORES_H), OAK_FPS, PRE_ROLL,
+                    bitrate_kbps=OAK_BITRATE_KBPS)
+    cam.start()
+    log.info("camera: OAK %s (%s) over USB %s", cam.camera_properties["Product"],
+             cam.camera_properties["Model"], cam.camera_properties["Usb"])
+    return cam, None, cam.clip_output, None, cam_profile, main_wh, OAK_FPS
+
+
+def _open_picamera2():
+    """The CSI ribbon camera through picamera2."""
     # Orientation and focus come from the per-unit camera profile (camera.json,
     # written by runFocus.py) over the env defaults — see motion/camera.py.
     cam_profile = load_camera_profile()
@@ -144,35 +202,16 @@ def record() -> None:
 
     cam.start_encoder(encoder)
     cam.start()
+    return cam, encoder, circ, config, cam_profile, (MAIN_W, MAIN_H), FPS
 
-    # Focus BEFORE detecting the hotel: on a lens module the frame is only as
-    # sharp as the last thing that set LensPosition, and YOLO on a blurred frame
-    # is exactly how hotel detection ends up falling back to the whole frame.
-    # apply_focus logs what it actually did with the lens.
-    lens_pos = apply_focus(cam, cam_profile)
 
-    # Cloud-faithful step 1: detect the hotel and confine detection to it before
-    # we start recording. Falls back to the whole frame if detection fails.
-    roi = _resolve_record_roi(cam)
-    # ...and, when the ROI was traced rather than dragged, the outline that keeps
-    # background inside that rectangle from triggering a recording. Only meaningful
-    # alongside the dashboard ROI it was drawn against.
-    roi_polygon = load_roi_polygon_lores() if load_roi_override_lores() is not None else None
-
-    log.info(
-        "recorder up: %s main=%dx%d lores=%dx%d @ %dfps | %s | pre=%.1fs "
-        "post=%.1fs max=%.0fs roi=%s%s",
-        model_of(cam) or "camera", MAIN_W, MAIN_H, LORES_W, LORES_H, FPS,
-        describe_camera(cam_profile), PRE_ROLL, POST_ROLL, MAX_SEGMENT,
-        roi or "full",
-        " (polygon, %d corners)" % len(roi_polygon) if roi_polygon else "",
-    )
-
+def _record_loop(cam, encoder, circ, config, cam_profile, lens_pos, roi, roi_polygon, fps):
+    """The capture loop proper, on whichever camera record() opened."""
     gate = _build_gate(roi, polygon=roi_polygon)
     remux_pool = []  # list of threading.Thread for in-flight remuxes
 
     def _spawn_remux(h264_path: Path, mp4_path: Path):
-        t = threading.Thread(target=_remux, args=(h264_path, mp4_path), daemon=True)
+        t = threading.Thread(target=_remux, args=(h264_path, mp4_path, fps), daemon=True)
         t.start()
         remux_pool.append(t)
         remux_pool[:] = [t for t in remux_pool if t.is_alive()]
@@ -221,9 +260,11 @@ def record() -> None:
     last_calib_check = time.monotonic()
     last_override_check = time.monotonic()
 
-    # Full-resolution stills (memory/40): 64 MP cameras only, between clips.
+    # Full-resolution stills (memory/40): the 64 MP ribbon camera (video pauses
+    # for each) and the OAK (full video resolution, no pause).
     from motion.overrides import load_motion_burst, load_stills_interval
-    stills_capable = model_of(cam) == "ov64a40"
+    is_oak = hasattr(cam, "capture_jpegs")
+    stills_capable = is_oak or model_of(cam) == "ov64a40"
     still_every = stills.interval_seconds(load_stills_interval())
     burst_n = load_motion_burst()
     next_still = warmup_deadline + 60.0   # first one a minute after warm-up
@@ -231,7 +272,7 @@ def record() -> None:
         log.info("stills: periodic %s, on motion %s%s",
                  "every %.0f min" % (still_every / 60) if still_every else "off",
                  "%d before each clip" % burst_n if burst_n else "off",
-                 "" if stills_capable else " — requested, but this is not a 64 MP camera: off")
+                 "" if stills_capable else " — requested, but this camera has no photo mode: off")
 
     # First telemetry still shortly after warmup, then every interval.
     next_telemetry_image = (
@@ -307,6 +348,12 @@ def record() -> None:
             if not encoding and rec_mode != "off" and in_window:
                 if rec_mode == "continuous":
                     _open_segment(now_mono, "continuous")
+                elif motion and burst_n and is_oak:
+                    # The OAK photographs the running video: no pause, so the
+                    # clip keeps its pre-roll and the background model is intact.
+                    burst = stills.take_burst_oak(cam, lens_pos, burst_n)
+                    _open_segment(now_mono, "burst")
+                    burst.save(cur_mp4.name if cur_mp4 else "")
                 elif motion and burst_n and stills_capable:
                     # Stills first, then the clip. The burst discards the
                     # pre-roll (by design) and disturbs the background model,
@@ -513,21 +560,25 @@ def record() -> None:
                 if stills.due(now_mono, next_still, still_every, encoding=encoding,
                               in_window=in_window, recording_on=rec_mode != "off",
                               requested=asked):
-                    try:
-                        circ = CircularOutput(buffersize=max(1, int(PRE_ROLL * FPS)))
-                        stills.take(cam, encoder, camera_transform(cam_profile), lens_pos,
-                                    source="manual" if asked else "schedule", output=circ)
-                    except Exception as e:  # never stop recording over a still
-                        log.warning("still failed: %s", e)
+                    source = "manual" if asked else "schedule"
+                    if is_oak:
+                        stills.take_oak(cam, lens_pos, source=source)
+                    else:
+                        try:
+                            circ = CircularOutput(buffersize=max(1, int(PRE_ROLL * FPS)))
+                            stills.take(cam, encoder, camera_transform(cam_profile), lens_pos,
+                                        source=source, output=circ)
+                        except Exception as e:  # never stop recording over a still
+                            log.warning("still failed: %s", e)
+                        # The mode switch disturbs the background model: re-learn it.
+                        gate.reset()
+                        warmup_deadline = time.monotonic() + WARMUP_SECONDS
                     if asked:
                         stills.clear_request()
                     else:
                         next_still = time.monotonic() + still_every
-                    # The mode switch disturbs the background model: re-learn it.
-                    gate.reset()
-                    warmup_deadline = time.monotonic() + WARMUP_SECONDS
             elif stills.requested():
-                log.info("still requested, but this is not a 64 MP camera")
+                log.info("still requested, but this camera has no photo mode")
                 stills.clear_request()
 
             # Optional periodic still (off by default; TELEMETRY_IMAGE_INTERVAL=0).

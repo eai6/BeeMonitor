@@ -16,7 +16,7 @@ import numpy as np
 from motion.config import (
     log, ROI, NEST_MODEL, NEST_CONF, HOTEL_ROI_DETECT,
     HOTEL_PAD_X_BASE, HOTEL_PAD_Y_BASE, HOTEL_SETTLE_SECONDS,
-    MAIN_W, MAIN_H, LORES_W, LORES_H,
+    LORES_W, LORES_H,
 )
 from motion.frames import _main_array_to_bgr, _scale_roi
 from motion.overrides import load_roi_override_lores
@@ -179,6 +179,7 @@ def _resolve_record_roi(cam):
     if roi_main is None:
         log.info("hotel detection unsuccessful — recording on full frame")
         return None
-    roi_lores = _scale_roi(roi_main, (MAIN_W, MAIN_H), (LORES_W, LORES_H))
+    # The frame's own size, not MAIN_W x MAIN_H: an OAK can record at another one.
+    roi_lores = _scale_roi(roi_main, (bgr.shape[1], bgr.shape[0]), (LORES_W, LORES_H))
     log.info("hotel ROI scaled to lores: %s", roi_lores)
     return roi_lores
