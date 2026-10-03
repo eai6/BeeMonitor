@@ -68,7 +68,7 @@ from motion.overrides import (
 )
 from motion.remux import _remux, _snippet_paths
 from motion.telemetry_still import _save_telemetry_still
-from motion import stills
+from motion import focus, stills
 from motion.activity_frames import (
     _largest_blob, _mover_crop, _flush_activity_frames,
     _encode_source, _save_activity_archive,
@@ -132,8 +132,13 @@ def record() -> None:
     # Focus BEFORE detecting the hotel: on a lens module the frame is only as
     # sharp as the last thing that set LensPosition, and YOLO on a blurred frame
     # is exactly how hotel detection ends up falling back to the whole frame.
-    # apply_focus logs what it actually did with the lens.
-    lens_pos = apply_focus(cam, cam_profile)
+    # apply_focus logs what it actually did with the lens. With no saved focus
+    # it autofocuses on the drawn ROI if there is one, else the frame's centre —
+    # never the whole frame, where sky and near plants pull it off the hotel.
+    from motion.camera import focus_region
+    drawn_roi = load_roi_override_lores()
+    focus_at, _src = focus_region(drawn_roi, (LORES_W, LORES_H), drawn_roi is not None)
+    lens_pos = apply_focus(cam, cam_profile, focus_at)
 
     # Cloud-faithful step 1: detect the hotel and confine detection to it before
     # we start recording. Falls back to the whole frame if detection fails.
@@ -602,6 +607,17 @@ def _record_loop(cam, encoder, circ, config, cam_profile, lens_pos, roi, roi_pol
             elif stills.requested():
                 log.info("still requested, but this camera has no photo mode")
                 stills.clear_request()
+
+            # Autofocus from the dashboard: between clips, on the ROI / hotel /
+            # centre; the lens is held and saved (motion/focus.py).
+            if not encoding and focus.requested():
+                new_lens = focus.run_request(
+                    cam, cam_profile, gate.roi,
+                    drawn=load_roi_override_lores() is not None, is_oak=is_oak)
+                if new_lens is not None:
+                    lens_pos = new_lens   # stills hold the lens here too
+                gate.reset()              # the picture changed: re-learn it
+                warmup_deadline = time.monotonic() + WARMUP_SECONDS
 
             # Optional periodic still (off by default; TELEMETRY_IMAGE_INTERVAL=0).
             if now_mono >= next_telemetry_image:

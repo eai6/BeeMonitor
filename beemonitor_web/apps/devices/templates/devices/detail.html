@@ -94,6 +94,39 @@
           <button id="cam-photo" class="px-2.5 py-1 text-xs rounded bg-amber-600 hover:bg-amber-700 text-white">Take photo</button>
         </div>
       </div>
+      {% comment %}
+        Focus: take a photo, check it, draw the ROI, autofocus, check again.
+        The device focuses on the drawn ROI, else the hotel it detected, else
+        the centre — and keeps that focus across restarts.
+      {% endcomment %}
+      <div class="px-4 py-2 border-t border-gray-100 flex flex-wrap items-center gap-2">
+        <span class="text-xs text-gray-500 mr-auto" id="focus-status">
+          <b class="font-medium text-gray-600">Focus:</b>
+          {% if focus_pending %}
+            requested — the device focuses between clips
+          {% elif focus_state %}
+            {% if focus_state.reset and focus_state.ok %}reset, refocused on {{ focus_state.region_label }}
+            {% elif focus_state.ok %}on {{ focus_state.region_label }}{% if focus_state.lens is not None %} at {{ focus_state.lens }}{% endif %}
+            {% elif focus_state.lens is not None %}<span class="text-amber-700">did not settle on {{ focus_state.region_label }} — try again in better light</span>
+            {% else %}<span class="text-red-700">failed{% if focus_state.error %} ({{ focus_state.error }}){% endif %}</span>{% endif %}
+            {% if focus_state.at_dt %}&middot; {{ focus_state.at_dt|timesince }} ago{% endif %}
+          {% else %}
+            set when the recorder starts
+          {% endif %}
+        </span>
+        {% if can_manage %}
+        <form method="post" action="{% url 'devices:autofocus' device.pk %}" class="inline">
+          {% csrf_token %}
+          <button class="px-2.5 py-1 text-xs rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
+                  title="Focus on the ROI (or the detected hotel, or the centre) and keep it">Autofocus</button>
+        </form>
+        <form method="post" action="{% url 'devices:autofocus' device.pk %}" class="inline"
+              onsubmit="return confirm('Forget the kept focus and autofocus again?')">
+          {% csrf_token %}<input type="hidden" name="reset" value="1">
+          <button class="text-xs text-gray-500 hover:underline" title="Forget the kept focus; the next start autofocuses again">Reset focus</button>
+        </form>
+        {% endif %}
+      </div>
     </div>
   </div>
 

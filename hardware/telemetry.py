@@ -141,6 +141,10 @@ MOTION_TUNING_FILE = RECORD_DIR.parent / "motion_tuning.json"
 # heartbeat (read-only) so the dashboard can show what each device actually
 # learned — otherwise the effective window is invisible without SSHing the Pi.
 CALIBRATION_FILE = RECORD_DIR.parent / "calibration.json"
+# Autofocus from the dashboard: the request the recorder acts on between clips,
+# and its result, sent with each beat (motion/focus.py; same folder).
+FOCUS_REQUEST_FILE = CALIBRATION_FILE.parent / "focus.request"
+FOCUS_STATE_FILE = CALIBRATION_FILE.parent / "focus_state.json"
 # Dashboard ROI editor outputs (normalized): hotel ROI override + nest layout.
 ROI_OVERRIDE_FILE = RECORD_DIR.parent / "roi_override.json"
 NEST_LAYOUT_FILE = RECORD_DIR.parent / "nest_layout.json"
@@ -835,6 +839,12 @@ def _timezone_info() -> dict:
 
 def collect_metrics() -> dict:
     m: dict = {}
+
+    # The last dashboard autofocus and how it went (motion/focus.py).
+    try:
+        m["focus"] = json.loads(FOCUS_STATE_FILE.read_text())
+    except (OSError, ValueError):
+        pass
 
     if RECORD_DIR.is_dir():
         try:
@@ -1807,8 +1817,20 @@ def _take_still_request() -> None:
         log.warning("take_still: could not write %s: %s", req, e)
 
 
+def _request_autofocus(params: dict) -> None:
+    """Ask the recorder to autofocus (on the ROI / hotel / centre) between clips."""
+    try:
+        FOCUS_REQUEST_FILE.parent.mkdir(parents=True, exist_ok=True)
+        FOCUS_REQUEST_FILE.write_text("reset" if params.get("reset") else "focus")
+        log.info("command: autofocus%s", " (reset)" if params.get("reset") else "")
+    except OSError as e:
+        log.warning("autofocus: could not write %s: %s", FOCUS_REQUEST_FILE, e)
+
+
 def _handle_command(cmd: str, params: dict) -> None:
-    if cmd == "take_still":
+    if cmd == "autofocus":
+        _request_autofocus(params)
+    elif cmd == "take_still":
         _take_still_request()
     elif cmd == "capture_image":
         log.info("command: capture_image roi=%s", bool(params.get("roi")))

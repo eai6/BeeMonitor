@@ -642,6 +642,8 @@ class DeviceDetailView(LoginRequiredMixin, DetailView):
         ctx["latest_hb"] = latest
         metrics = (latest.metrics if latest else {}) or {}
         ctx["metrics"] = metrics
+        ctx["focus_state"] = _focus_state(metrics)
+        ctx["focus_pending"] = device.pending_command == "autofocus"
         # Always show the most RECENT image-bearing beat (regular beats carry no
         # image), so the camera card is never blank once any picture exists.
         image_hb = device.heartbeats.exclude(image_storage_key="").first()
@@ -917,6 +919,35 @@ class DeviceDeleteView(LoginRequiredMixin, View):
         device.delete()
         messages.success(request, f"Device '{name}' deleted.")
         return redirect("devices:list")
+
+
+def _focus_state(metrics: dict):
+    """The device's last dashboard autofocus (motion/focus.py), for the page."""
+    f = metrics.get("focus")
+    if not isinstance(f, dict):
+        return None
+    from django.utils.dateparse import parse_datetime
+    labels = {"roi": "the ROI", "hotel": "the detected hotel", "center": "the centre"}
+    return {**f, "at_dt": parse_datetime(f.get("at") or ""),
+            "region_label": labels.get(f.get("region"), "the frame")}
+
+
+class DeviceAutofocusView(LoginRequiredMixin, View):
+    """Ask the device to autofocus between clips — on the drawn ROI, else the
+    hotel it detected, else the centre — and keep that focus. ``reset=1``
+    forgets a kept focus (the next start autofocuses again) and refocuses."""
+
+    def post(self, request, pk):
+        device = _device_or_403(request.user, pk, "manager")
+        reset = request.POST.get("reset") in ("1", "true", "on")
+        device.pending_command = "autofocus"
+        device.command_params = {"reset": True} if reset else {}
+        device.save(update_fields=["pending_command", "command_params"])
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return JsonResponse({"ok": True})
+        messages.success(request, "Autofocus requested. The device focuses between clips "
+                                  "(usually within a minute) — then take a photo to check.")
+        return redirect("devices:detail", pk=pk)
 
 
 class DeviceRequestImageView(LoginRequiredMixin, View):

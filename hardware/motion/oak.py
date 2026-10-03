@@ -51,7 +51,7 @@ import numpy as np
 from motion.config import log
 
 FRAME_TIMEOUT = timedelta(seconds=5)
-AF_SETTLE = 6.0      # seconds to let a one-shot autofocus land
+AF_SETTLE = 10.0     # seconds to let a one-shot autofocus land (then one retry)
 AF_STABLE_FRAMES = 15
 MAX_BURST = 10       # photos per request; the JPEG queue holds this many
 
@@ -229,40 +229,61 @@ class OakCamera:
 
     # --- focus -------------------------------------------------------------
     def apply_focus(self, lens: int | None) -> int | None:
-        """Hold the lens at `lens` (0..255), or autofocus once and hold that."""
-        dai = self._dai
-        ctrl = dai.CameraControl()
-        if lens is not None:
-            ctrl.setManualFocus(int(lens))
-            self._ctrl_q.send(ctrl)
-            log.info("OAK lens set to %d (profile)", int(lens))
-            return int(lens)
-
-        log.info("OAK: no saved focus — autofocusing once")
-        ctrl.setAutoFocusMode(dai.CameraControl.AutoFocusMode.AUTO)
-        ctrl.setAutoFocusTrigger()
+        """Hold the lens at `lens` (0..255), or autofocus once on the centre
+        and hold that."""
+        if lens is None:
+            return self.autofocus().get("lens")
+        ctrl = self._dai.CameraControl()
+        ctrl.setManualFocus(int(lens))
         self._ctrl_q.send(ctrl)
-        # The lens position rides on every frame's metadata; call it landed once
-        # it has stopped moving for half a second.
-        deadline = time.monotonic() + AF_SETTLE
-        last, same, pos = None, 0, None
-        time.sleep(0.5)  # let the trigger reach the device before we judge
-        while time.monotonic() < deadline:
-            pos = self._get(self._lores_q, "motion stream").getLensPosition()
-            same = same + 1 if pos == last else 0
-            last = pos
-            if same >= AF_STABLE_FRAMES:
+        log.info("OAK lens set to %d (profile)", int(lens))
+        return int(lens)
+
+    def autofocus(self, region=(0.25, 0.25, 0.75, 0.75)) -> dict:
+        """Autofocus once on ``region`` (normalised x1,y1,x2,y2 of the frame),
+        then hold the lens: {"ok", "lens", "settled"}. Tries twice.
+
+        Without a region the OAK meters the whole frame, and on a hotel with
+        sky, flare and near plants around it that lands anywhere — blurry
+        clips all day, since the lens is then held.
+        """
+        dai = self._dai
+        w, h = self.main_wh
+        x1, y1, x2, y2 = region
+        rx, ry = int(x1 * w), int(y1 * h)
+        rw, rh = max(1, int((x2 - x1) * w)), max(1, int((y2 - y1) * h))
+        pos, settled = None, False
+        for attempt in (1, 2):
+            ctrl = dai.CameraControl()
+            ctrl.setAutoFocusMode(dai.CameraControl.AutoFocusMode.AUTO)
+            ctrl.setAutoFocusRegion(rx, ry, rw, rh)
+            ctrl.setAutoFocusTrigger()
+            self._ctrl_q.send(ctrl)
+            # The lens position rides on every frame's metadata; call it landed
+            # once it has stopped moving for AF_STABLE_FRAMES frames.
+            deadline = time.monotonic() + AF_SETTLE
+            last, same = None, 0
+            time.sleep(0.5)  # let the trigger reach the device before we judge
+            while time.monotonic() < deadline:
+                pos = self._get(self._lores_q, "motion stream").getLensPosition()
+                same = same + 1 if pos == last else 0
+                last = pos
+                if same >= AF_STABLE_FRAMES:
+                    break
+            settled = same >= AF_STABLE_FRAMES
+            if settled:
                 break
+            log.warning("OAK autofocus attempt %d did not settle (lens %s)", attempt, pos)
         if pos is None:
             log.warning("OAK autofocus: no lens position reported — leaving it be")
-            return None
+            return {"ok": False, "lens": None, "settled": False}
         # Hold it: continuous AF would hunt on every passing bee.
         hold = dai.CameraControl()
         hold.setManualFocus(int(pos))
         self._ctrl_q.send(hold)
-        log.info("OAK autofocused at %d/255, holding%s", pos,
-                 "" if same >= AF_STABLE_FRAMES else " (had not settled)")
-        return int(pos)
+        log.info("OAK autofocused at %d/255 on region %s, holding%s", pos,
+                 tuple(round(v, 2) for v in region), "" if settled else " (had not settled)")
+        return {"ok": settled, "lens": int(pos), "settled": settled}
 
     # --- internals ---------------------------------------------------------
     def _get(self, q, what: str):

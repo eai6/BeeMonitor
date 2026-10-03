@@ -228,7 +228,77 @@ def has_focus(cam) -> bool:
         return False
 
 
-def apply_focus(cam, profile: dict) -> float | None:
+# Where autofocus looks when there is no ROI: the middle of the frame. Edges are
+# where sky, sun flare and near plants are; the hotel is usually in the middle.
+CENTER_REGION = (0.25, 0.25, 0.75, 0.75)
+
+
+def focus_region(gate_roi, lores_wh, drawn: bool):
+    """(region, source) for autofocus: the drawn ROI, else the hotel the
+    recorder detected, else the centre. ``region`` is normalised x1,y1,x2,y2
+    of the frame; ``gate_roi`` is the motion gate's lores-pixel box or None."""
+    if gate_roi is not None:
+        w, h = lores_wh
+        x1, y1, x2, y2 = gate_roi
+        r = (max(0.0, x1 / w), max(0.0, y1 / h), min(1.0, x2 / w), min(1.0, y2 / h))
+        if r[2] - r[0] > 0.02 and r[3] - r[1] > 0.02:
+            return r, ("roi" if drawn else "hotel")
+    return CENTER_REGION, "center"
+
+
+def autofocus(cam, region=CENTER_REGION, af_range: str = "normal") -> dict:
+    """Autofocus once on ``region`` (normalised), hold the lens where it lands,
+    and say how it went: {"ok", "lens", "settled"}. Retries once if the first
+    try does not settle. Both cameras: the OAK drives its own lens."""
+    if hasattr(cam, "autofocus"):        # the OAK (motion/oak.py)
+        return cam.autofocus(region)
+    if not has_focus(cam):
+        return {"ok": False, "lens": None, "settled": False, "error": "fixed-focus camera"}
+
+    from libcamera import controls
+
+    af_range = {"normal": controls.AfRangeEnum.Normal,
+                "macro": controls.AfRangeEnum.Macro,
+                "full": controls.AfRangeEnum.Full}.get(af_range, controls.AfRangeEnum.Normal)
+    windows = []
+    try:  # AfWindows are in ScalerCrop coordinates (the sensor's active area)
+        cx, cy, cw, ch = cam.camera_properties["ScalerCropMaximum"]
+        x1, y1, x2, y2 = region
+        windows = [(int(cx + x1 * cw), int(cy + y1 * ch),
+                    max(1, int((x2 - x1) * cw)), max(1, int((y2 - y1) * ch)))]
+    except Exception as e:
+        log.warning("autofocus: no focus window (%s) — using the whole frame", e)
+
+    state = pos = None
+    for attempt in (1, 2):
+        ctl = {"AfMode": controls.AfModeEnum.Auto, "AfRange": af_range,
+               "AfSpeed": controls.AfSpeedEnum.Normal}
+        if windows:
+            ctl.update(AfMetering=controls.AfMeteringEnum.Windows, AfWindows=windows)
+        cam.set_controls(ctl)
+        cam.set_controls({"AfTrigger": controls.AfTriggerEnum.Start})
+        deadline = time.monotonic() + AF_TIMEOUT
+        while time.monotonic() < deadline:
+            md = cam.capture_metadata()
+            state, pos = md.get("AfState"), md.get("LensPosition")
+            if state in (controls.AfStateEnum.Focused, controls.AfStateEnum.Failed):
+                break
+        if state == controls.AfStateEnum.Focused:
+            break
+        log.warning("autofocus attempt %d did not converge (state=%s lens=%s)",
+                    attempt, state, pos)
+    settled = state == controls.AfStateEnum.Focused
+    if pos is not None:
+        # Hold it: leaving AfMode in Auto lets a later trigger (or a mode
+        # change) move the lens mid-recording.
+        cam.set_controls({"AfMode": controls.AfModeEnum.Manual,
+                          "LensPosition": float(pos)})
+    log.info("autofocus %s at %s dioptres, holding",
+             "settled" if settled else "did NOT settle", pos)
+    return {"ok": settled, "lens": None if pos is None else float(pos), "settled": settled}
+
+
+def apply_focus(cam, profile: dict, region=CENTER_REGION) -> float | None:
     """Put the lens where the profile says, on a started camera.
 
     A saved position is applied and held. Without one we autofocus once and hold
@@ -237,7 +307,9 @@ def apply_focus(cam, profile: dict) -> float | None:
     fixed-focus module (or if the lens never reported back).
     """
     if hasattr(cam, "apply_focus"):      # the OAK drives its own lens (motion/oak.py)
-        return cam.apply_focus(profile.get("oak_lens"))
+        if profile.get("oak_lens") is not None:
+            return cam.apply_focus(profile.get("oak_lens"))
+        return autofocus(cam, region).get("lens")
 
     from libcamera import controls
 
@@ -254,32 +326,9 @@ def apply_focus(cam, profile: dict) -> float | None:
         log.info("lens set to %.2f dioptres (profile)", float(profile["lens"]))
         return pos
 
-    af_range = {"normal": controls.AfRangeEnum.Normal,
-                "macro": controls.AfRangeEnum.Macro,
-                "full": controls.AfRangeEnum.Full}[profile["af_range"]]
-    log.info("no saved focus — autofocusing once (range=%s)", profile["af_range"])
-    cam.set_controls({"AfMode": controls.AfModeEnum.Auto,
-                      "AfRange": af_range,
-                      "AfSpeed": controls.AfSpeedEnum.Normal})
-    cam.set_controls({"AfTrigger": controls.AfTriggerEnum.Start})
-    deadline = time.monotonic() + AF_TIMEOUT
-    state = pos = None
-    while time.monotonic() < deadline:
-        md = cam.capture_metadata()
-        state, pos = md.get("AfState"), md.get("LensPosition")
-        if state in (controls.AfStateEnum.Focused, controls.AfStateEnum.Failed):
-            break
-    if state == controls.AfStateEnum.Focused:
-        # Hold it: leaving AfMode in Auto lets a later trigger (or a mode change)
-        # move the lens mid-recording.
-        cam.set_controls({"AfMode": controls.AfModeEnum.Manual,
-                          "LensPosition": float(pos or 0.0)})
-        log.info("autofocused at %.2f dioptres, holding", float(pos or 0.0))
-    else:
-        log.warning("startup autofocus did not converge (state=%s lens=%s) — "
-                    "recording anyway. Run runFocus.py to set focus by hand.",
-                    state, pos)
-    return pos
+    log.info("no saved focus — autofocusing once on %s (range=%s)",
+             "the centre" if region == CENTER_REGION else "the ROI", profile["af_range"])
+    return autofocus(cam, region, profile["af_range"]).get("lens")
 
 
 def warn_if_unrotatable(profile: dict) -> None:

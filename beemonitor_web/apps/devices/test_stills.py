@@ -229,3 +229,34 @@ class SettingsAndCleanupTests(PhotoTestCase):
         self.client.post(reverse("devices:take_still", args=[self.device.pk]))
         self.device.refresh_from_db()
         self.assertEqual(self.device.pending_command, "take_still")
+
+
+class AutofocusTests(PhotoTestCase):
+    def test_the_button_sends_the_command(self):
+        self.client.force_login(self.owner)
+        self.client.post(reverse("devices:autofocus", args=[self.device.pk]))
+        r = self.client.get(reverse("devices-command"), **{AUTH: f"Bearer {self.raw_key}"})
+        self.assertEqual((r.json()["command"], r.json()["params"]), ("autofocus", {}))
+
+    def test_reset_says_so(self):
+        self.client.force_login(self.owner)
+        self.client.post(reverse("devices:autofocus", args=[self.device.pk]), {"reset": "1"})
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.command_params, {"reset": True})
+
+    def test_a_viewer_cannot(self):
+        viewer = User.objects.create_user("vw", password="x")
+        DeviceShare.objects.create(device=self.device, user=viewer, role="viewer")
+        self.client.force_login(viewer)
+        self.client.post(reverse("devices:autofocus", args=[self.device.pk]))
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.pending_command, "")
+
+    def test_the_page_shows_the_last_result(self):
+        from .models import DeviceHeartbeat
+        DeviceHeartbeat.objects.create(device=self.device, metrics={"focus": {
+            "ok": True, "lens": 142, "region": "roi", "at": "2026-10-03T12:00:00+00:00"}})
+        self.client.force_login(self.owner)
+        html = self.client.get(reverse("devices:detail", args=[self.device.pk])).content.decode()
+        self.assertIn("on the ROI at 142", html)
+        self.assertIn(reverse("devices:autofocus", args=[self.device.pk]), html)
