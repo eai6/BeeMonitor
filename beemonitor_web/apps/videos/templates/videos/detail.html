@@ -176,11 +176,19 @@
       <p class="font-medium">{{ video.duration_seconds|floatformat:1 }}s</p>
     </div>
     {% endif %}
-    {% if video.resolution %}
+    {% if not video.is_photo %}
+    {% if video.width and video.height %}
+    <div>
+      <p class="text-gray-500">Resolution</p>
+      <p class="font-medium">{{ video.width }} × {{ video.height }}
+        <span class="text-xs text-gray-500">({% widthratio video.width 1 video.height as px %}{% widthratio px 1000000 1 %} MP)</span></p>
+    </div>
+    {% elif video.resolution %}
     <div>
       <p class="text-gray-500">Resolution</p>
       <p class="font-medium">{{ video.resolution }}</p>
     </div>
+    {% endif %}
     {% endif %}
     {% if video.fps %}
     <div>
