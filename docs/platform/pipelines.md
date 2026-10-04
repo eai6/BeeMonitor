@@ -1,30 +1,31 @@
 # Pipelines
 
-A pipeline is a chain of steps run on each clip: detect bees, track them, then count what you care about.
+A pipeline is a chain of steps run on each clip: detect, track, measure against a reference. The steps and
+templates are explained in [Pipelines and steps](../concepts/pipelines.md). This page covers using them.
 
 <!-- SCREENSHOT: the pipeline builder -->
 
 ## Build one
 
-**Pipelines → New**, or start from a template. Drag steps from the palette and connect them:
-
-| Step | Does |
-|---|---|
-| Video | The clip being analysed |
-| Detect objects | Finds bees (YOLO, or SAM 3 with a text prompt) |
-| Track | Follows each bee between frames |
-| Reference layout | The device's nest tubes |
-| Visitation / Events | Counts nest entries and exits |
-| Foraging trips | Pairs exits with returns |
-| Count detections | Counts per frame, distinct, or over time |
-| Identify species | Species of each tracked bee |
+**Pipelines → New**, or start from a template (Foraging trips, Flower / ROI visitation, Colony activity,
+Interactions, Individual bee IDs). Drag steps from the palette and connect them.
 
 ## Run it
 
-From **Processing**, select clips (or all that match the filter) and **Run pipeline**. Or schedule it on the
-device page under **Scheduled processing** to run on new clips every day.
+- **On clips:** in **Processing**, select clips (or all that match the filter), choose the pipeline and
+  **Run pipeline**. Each clip becomes a run, and together they form a batch.
+- **On a schedule:** on the device page, under **Scheduled processing**, run a pipeline on each day's new
+  clips.
+- **From code:** see [API](api.md).
+
+Runs that use the GPU (Detect, Track, Identify species) use your account's credits.
 
 ## Results
 
-A run shows each step's output — tables, counts, the annotated video — and **CSV** downloads. A batch run
-combines its clips.
+**Runs** lists every run and batch. A run shows each step's output: the events and interactions tables,
+counts, and **CSV** downloads. A batch page combines its clips (tracks, events, interactions, GPU time)
+and has **Download batch data** for all of them. The columns are documented in
+[Events & interactions](../concepts/results.md).
+
+When clips fail, the batch page groups them by cause. You can rerun only the failed clips or the whole
+batch. A rerun is a new batch, and the old one is kept for comparison.

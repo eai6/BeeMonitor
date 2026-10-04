@@ -1,6 +1,7 @@
 # Annotation & training
 
-Label your own frames to train a detector for your bees and your hotels.
+Label your own frames to train a detector for your insects and your setting: a new species, a flower, an
+arena, or a hotel the built-in models haven't seen.
 
 <!-- SCREENSHOT: the project page with frames to review -->
 
@@ -13,11 +14,11 @@ Label your own frames to train a detector for your bees and your hotels.
 
 ## Working as a team
 
-Invite people under **People** as *reviewers* (check and fix frames) or *managers* (also add clips, sample
-and assign). A manager uses **Assign frames…** to give someone 100, 500 or more frames to review; they see
+Invite people under **People** as *viewers*, *reviewers* (check and fix frames) or *managers* (also add
+clips, sample and assign). See [Sharing & publishing](sharing.md). A manager uses **Assign frames…** to give someone 100, 500 or more frames to review; they see
 **Your review queue** on the project.
 
 ## Train and use a model
 
 **Export** downloads the labelled dataset. **Training** fine-tunes a model on it; a trained model can then
-be chosen in a pipeline's *Detect objects* step. Projects can be published under **Browse** for others to copy.
+be chosen in a pipeline's *Detect objects* step. Projects and models can be [published](sharing.md#publish) under **Browse** for others to copy and use.

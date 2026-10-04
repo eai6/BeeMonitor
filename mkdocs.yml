@@ -1,5 +1,5 @@
 site_name: BeeMonitor Docs
-site_description: Build a BeeMonitor camera trap for bee hotels and use the BeeMonitor platform.
+site_description: Open-source hardware and analysis platform for studying pollinator behaviour from video — nest hotels, flowers, lab assays.
 site_url: https://eai6.github.io/BeeMonitor/
 repo_url: https://github.com/eai6/BeeMonitor
 repo_name: eai6/BeeMonitor
@@ -40,25 +40,38 @@ markdown_extensions:
   - tables
   - toc: {permalink: true}
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed: {alternate_style: true}
 
 nav:
-  - Introduction: index.md
+  - Home: index.md
+  - Concepts:
+      - The architecture: concepts/index.md
+      - Pipelines and steps: concepts/pipelines.md
+      - Events & interactions: concepts/results.md
+      - Glossary: concepts/glossary.md
   - Hardware:
       - Overview: hardware/index.md
       - Components: hardware/components.md
       - Enclosure: hardware/enclosure.md
       - Assembly: hardware/assembly.md
       - Field deployment: hardware/deployment.md
-  - Device setup:
       - Set up a unit: software/setup.md
       - Troubleshooting: software/troubleshooting.md
-  - Using the platform:
+  - Platform:
       - Devices: platform/devices.md
+      - Getting video in: platform/sources.md
       - Videos & photos: platform/videos.md
       - Pipelines: platform/pipelines.md
       - Annotation & training: platform/annotation.md
-  - About:
+      - Sharing & publishing: platform/sharing.md
+      - API: platform/api.md
+  - Open source:
+      - What's in the repo: open-source/index.md
+      - Contributing: open-source/contributing.md
       - How it works: about/methods.md
       - License & citation: about/license.md

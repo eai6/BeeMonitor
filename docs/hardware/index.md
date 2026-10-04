@@ -1,5 +1,10 @@
 # Hardware overview
 
+A BeeMonitor unit is a camera that records only when insects are active and uploads the clips. It works at
+a nest hotel, by a flower patch or on a lab bench. You don't need one to use the platform, because
+[uploaded video](../platform/sources.md) works too, but a unit gives you motion-triggered recording,
+remote control and saved layouts.
+
 A BeeMonitor unit has two parts:
 
 - **Recording module** (~$350) — a Raspberry Pi 4, a camera and a Witty Pi 4 in a 3D-printed enclosure.

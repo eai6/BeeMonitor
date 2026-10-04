@@ -1,36 +1,66 @@
 # BeeMonitor
 
-**An open-source camera trap and platform for monitoring cavity-nesting solitary bees at bee hotels.**
+**Open-source hardware and an open-source analysis platform for studying pollinator behaviour from video.**
 
 ![A BeeMonitor unit](assets/beemonitor_hardware.png)
 
-BeeMonitor watches a bee hotel, records every bee that arrives or leaves, and turns the clips into
-nest visits, foraging trips and species — without anyone watching hours of footage.
+BeeMonitor started as a camera trap for bee hotels. It is now a general system: any video of insects,
+whether from a BeeMonitor unit, another camera or your cloud storage, goes through the same pipeline and comes
+out as two tables, **events** and **interactions**.
+
+## Two tables, any question
+
+Every pipeline produces the same two tables:
+
+- **Events**: something entered or exited something. *A bee left tube 3 at 12.4 s.*
+- **Interactions**: two things were together for a while. *A bee was on the flower from 3.0 s to 9.5 s.*
+
+You then derive what your study needs from them: foraging trips at a nest hotel from events; visits and time
+on a flower, or time in each zone of an indoor pollen assay, from interactions; encounters between insects
+from interactions between two tracks. See [Events & interactions](concepts/results.md).
 
 ## How it works
 
-1. **Record.** A Raspberry Pi with a camera watches the hotel. Motion inside the hotel's region of
-   interest (ROI) starts a short clip; full-resolution photos can be taken too.
-2. **Upload.** Clips and photos upload over WiFi. Health and commands also work over 4G. A Witty Pi
-   switches the unit on and off on a schedule, and a solar panel keeps it running in the field.
-3. **Analyse.** On the [BeeMonitor platform](https://beemonitor.edwardamoah.com), pipelines detect and
-   track bees, count nest entries and exits, and identify species. You can label your own data and train
-   your own models.
+```mermaid
+flowchart LR
+  A[BeeMonitor unit] --> V[Videos]
+  B[Upload / any camera] --> V
+  C[S3 · GCS · Google Drive] --> V
+  V --> P["Pipeline<br/>detect → track → reference"]
+  P --> E[Events]
+  P --> I[Interactions]
+  P --> D[Counts]
+  E & I & D --> Q["Your question<br/>trips · visits · dwell · activity"]
+```
+
+1. **Get video in.** Build a [BeeMonitor unit](hardware/index.md) that records when something moves, or
+   [upload clips](platform/sources.md) from any camera.
+2. **Run a pipeline.** Pick a template or build your own: detect the insects, track them, and measure them
+   against a *reference* (a nest tube, a flower, a region you draw). See [Concepts](concepts/index.md).
+3. **Read the results.** Every pipeline writes the same [events and interactions tables](concepts/results.md),
+   which you can open in a spreadsheet, R or Python.
+4. **Improve the models.** [Label your own frames](platform/annotation.md), train a detector for your
+   species, and [publish](platform/sharing.md) the dataset for others.
+
+## Open source
+
+The device software, the 3D-printed enclosure, the web platform, the GPU analysis code and these docs are
+all on [GitHub](https://github.com/eai6/BeeMonitor) under AGPLv3. See [what's in the repository](open-source/index.md).
 
 ## Where to start
 
 <div class="grid cards" markdown>
 
-- **[Build a unit](hardware/index.md)** — parts, 3D-printed enclosure, assembly and field deployment.
-- **[Set up a unit](software/setup.md)** — flash the card, enrol it on your account, power on.
-- **[Use the platform](platform/devices.md)** — draw the ROI, focus, record, review and analyse.
-- **[Cite BeeMonitor](about/license.md)** — open source under AGPLv3.
+- **[Understand the model](concepts/index.md)**: sources, pipelines, events and interactions.
+- **[Build a unit](hardware/index.md)**: parts, enclosure, assembly and field deployment.
+- **[Use the platform](platform/devices.md)**: devices, uploads, pipelines, annotation.
+- **[Cite BeeMonitor](about/license.md)**
 
 </div>
 
 ## Accuracy
 
-On 110 minutes of video with 300 hand-annotated foraging events:
+Validated on bee hotels: 110 minutes of video with 300 hand-annotated foraging events.
 
 | Mode | Precision | Recall | F1 |
 |---|---|---|---|

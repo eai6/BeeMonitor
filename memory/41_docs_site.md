@@ -109,3 +109,20 @@ Pages ship with clearly marked placeholders until then.
    above), or also people who self-host the whole stack on their own AWS
    (much bigger: Pulumi, SageMaker, costs)?
 4. Photos: do you have unit and assembly photos to use?
+
+## v2 (2026-10-04): general architecture, not just hotels
+
+The site now presents BeeMonitor as source → detect → track → reference → two
+tables (events, interactions). Per the user: no per-application pages —
+foraging trips, time on a flower, assay zones are *reads* the scientist does
+over events/interactions, shown as one table + pandas on concepts/results.md.
+
+- New: Concepts (architecture, pipelines & steps, events & interactions,
+  glossary); Platform: Getting video in (upload, S3/GCS/Drive), Sharing &
+  publishing, API (pipeline API only — webhooks have a model/CRUD but nothing
+  dispatches them, so they are not documented); Open source (repo map,
+  contributing). Self-hosting: architecture only, no guide (decision).
+- In-app /docs/ now redirects to the site; its stale template is deleted.
+- Not linked in the app's nav (reachable by URL only): /sources/,
+  /developer/, /pipelines/lessons/, and the Colab export (/pipelines/<id>/colab/).
+- Pollen assay: no protocol yet — mentioned only as a reference-zones example.

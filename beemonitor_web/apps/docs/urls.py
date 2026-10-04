@@ -1,8 +1,9 @@
 from django.urls import path
-from django.views.generic import TemplateView
+from django.views.generic import RedirectView
 
 app_name = "docs"
 
 urlpatterns = [
-    path("", TemplateView.as_view(template_name="docs/index.html"), name="index"),
+    # The docs live on the public site; one copy, not two.
+    path("", RedirectView.as_view(url="https://eai6.github.io/BeeMonitor/"), name="index"),
 ]
