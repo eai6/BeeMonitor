@@ -49,11 +49,6 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Concepts:
-      - The architecture: concepts/index.md
-      - Pipelines and steps: concepts/pipelines.md
-      - Events & interactions: concepts/results.md
-      - Glossary: concepts/glossary.md
   - Hardware:
       - Overview: hardware/index.md
       - Components: hardware/components.md
@@ -67,6 +62,8 @@ nav:
       - Getting video in: platform/sources.md
       - Videos & photos: platform/videos.md
       - Pipelines: platform/pipelines.md
+      - Steps & templates: concepts/pipelines.md
+      - Events & interactions: concepts/results.md
       - Annotation & training: platform/annotation.md
       - Sharing & publishing: platform/sharing.md
       - API: platform/api.md
@@ -74,4 +71,6 @@ nav:
       - What's in the repo: open-source/index.md
       - Contributing: open-source/contributing.md
       - How it works: about/methods.md
+      - Architecture: concepts/index.md
+      - Glossary: concepts/glossary.md
       - License & citation: about/license.md

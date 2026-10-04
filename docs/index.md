@@ -36,7 +36,7 @@ flowchart LR
 1. **Get video in.** Build a [BeeMonitor unit](hardware/index.md) that records when something moves, or
    [upload clips](platform/sources.md) from any camera.
 2. **Run a pipeline.** Pick a template or build your own: detect the insects, track them, and measure them
-   against a *reference* (a nest tube, a flower, a region you draw). See [Concepts](concepts/index.md).
+   against a *reference* (a nest tube, a flower, a region you draw). See [Architecture](concepts/index.md).
 3. **Read the results.** Every pipeline writes the same [events and interactions tables](concepts/results.md),
    which you can open in a spreadsheet, R or Python.
 4. **Improve the models.** [Label your own frames](platform/annotation.md), train a detector for your
@@ -51,7 +51,7 @@ all on [GitHub](https://github.com/eai6/BeeMonitor) under AGPLv3. See [what's in
 
 <div class="grid cards" markdown>
 
-- **[Understand the model](concepts/index.md)**: sources, pipelines, events and interactions.
+- **[Understand the architecture](concepts/index.md)**: sources, pipelines, events and interactions.
 - **[Build a unit](hardware/index.md)**: parts, enclosure, assembly and field deployment.
 - **[Use the platform](platform/devices.md)**: devices, uploads, pipelines, annotation.
 - **[Cite BeeMonitor](about/license.md)**
