@@ -1,6 +1,6 @@
 # 41 · Public documentation site (like Insect Detect)
 
-Status: **plan + design, awaiting approval** (2026-10-04)
+Status: **v1 built** (2026-10-04) — https://eai6.github.io/BeeMonitor/
 Design: https://claude.ai/artifact/Bvu8HPUGBk2ibN5c1mY5x7
 Reference: https://maxsitt.github.io/insect-detect-docs/ (MkDocs Material,
 GitHub Pages, source in its own repo; CC BY-SA 4.0 docs, GPL/AGPL code).
@@ -92,7 +92,16 @@ Pages ship with clearly marked placeholders until then.
 3. Using the platform pages (needs screenshots).
 4. Home, Introduction, Methods, FAQ, licence/citation polish.
 
-## Open questions
+## Decisions (2026-10-04)
+
+- GitHub Pages for now (`eai6.github.io/BeeMonitor`); a custom domain later.
+- Licence: AGPLv3 for code, hardware and docs (Ultralytics YOLO is AGPL).
+- Audience: people using the hosted platform (not self-hosting the cloud).
+- Photos/screenshots: the user generates them as needed; pages carry
+  `<!-- PHOTO: ... -->` / `<!-- SCREENSHOT: ... -->` markers where they go.
+- Keep it concise, like Insect Detect: 14 short pages.
+
+## Open questions (answered above)
 
 1. Address: `eai6.github.io/BeeMonitor` or a custom domain?
 2. Docs licence CC BY-SA 4.0?

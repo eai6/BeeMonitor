@@ -1,0 +1,52 @@
+name: Docs (GitHub Pages)
+
+# Builds docs/ with MkDocs Material and publishes it to GitHub Pages
+# (https://eai6.github.io/BeeMonitor/). memory/ is internal and never published.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No secrets in the public docs
+        run: |
+          # AWS account id, access keys, device/enrollment keys, presigned-URL signatures.
+          if grep -rEn '495331821764|AKIA[0-9A-Z]{16}|bmk_(device|enroll)_[A-Za-z0-9_-]{6,}|X-Amz-Signature' docs mkdocs.yml; then
+            echo "::error::secret-like text in the docs — remove it before publishing"; exit 1
+          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r docs/requirements.txt
+      - run: mkdocs build --strict -d site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
