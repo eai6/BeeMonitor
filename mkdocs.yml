@@ -20,7 +20,7 @@ theme:
       accent: light green
       toggle: {icon: material/weather-sunny, name: Light mode}
   features:
-    - navigation.tabs
+    - toc.integrate
     - navigation.sections
     - navigation.footer
     - navigation.top
