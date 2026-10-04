@@ -20,8 +20,7 @@ If a file name contains a timestamp, it is used as the recording time.
 
 ## Connect cloud storage
 
-For footage that already lives in a bucket or a shared folder, go to
-[beemonitor.edwardamoah.com/sources/](https://beemonitor.edwardamoah.com/sources/) → **Add Data Source**:
+For footage that already lives in a bucket or a shared folder, go to **Sources → Add Data Source**:
 
 | Source | You provide |
 |---|---|

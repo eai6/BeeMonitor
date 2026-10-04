@@ -43,8 +43,7 @@ or add a second Detect step for a reference that moves.
 ## Lessons
 
 Each template has a short lesson on the platform covering the question, how the pipeline answers it, and
-what to look at in the results. Open them at **Pipelines → Lessons**
-([beemonitor.edwardamoah.com/pipelines/lessons/](https://beemonitor.edwardamoah.com/pipelines/lessons/)).
+what to look at in the results. Open them from **Lessons** in the top bar.
 They work well for teaching.
 
 **Next:** [Events & interactions](results.md)

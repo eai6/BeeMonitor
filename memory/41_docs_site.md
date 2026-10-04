@@ -123,6 +123,6 @@ over events/interactions, shown as one table + pandas on concepts/results.md.
   dispatches them, so they are not documented); Open source (repo map,
   contributing). Self-hosting: architecture only, no guide (decision).
 - In-app /docs/ now redirects to the site; its stale template is deleted.
-- Not linked in the app's nav (reachable by URL only): /sources/,
-  /developer/, /pipelines/lessons/, and the Colab export (/pipelines/<id>/colab/).
+- Nav now links Sources, Lessons and API (developer page). The Colab export
+  (/pipelines/<id>/colab/) still has no button.
 - Pollen assay: no protocol yet — mentioned only as a reference-zones example.

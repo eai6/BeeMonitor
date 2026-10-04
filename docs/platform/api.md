@@ -5,8 +5,7 @@ pipelines and fetch results from Python, R or a Colab notebook.
 
 ## Get a key
 
-Open [beemonitor.edwardamoah.com/developer/](https://beemonitor.edwardamoah.com/developer/) and
-**Create API Key**. The key starts with `bmk_` and is shown only once. Send it with every request:
+Click **API** in the top bar (next to your username) and **Create API Key**. The key starts with `bmk_` and is shown only once. Send it with every request:
 
 ```
 Authorization: Bearer <your key>
