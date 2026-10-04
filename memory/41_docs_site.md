@@ -126,3 +126,13 @@ over events/interactions, shown as one table + pandas on concepts/results.md.
 - Nav now links Sources, Lessons and API (developer page). The Colab export
   (/pipelines/<id>/colab/) still has no button.
 - Pollen assay: no protocol yet — mentioned only as a reference-zones example.
+
+## v3 (2026-10-04): fewer pages, one menu
+
+User found the site "a pain to navigate" (top tabs + left nav + right TOC,
+23 short pages). Now: no tabs, TOC folded into the left sidebar (h2 only),
+11 pages — Home, Get started, Build a unit (Build · Set up & deploy ·
+Troubleshooting), Use the platform (Devices · Videos · Pipelines · Results ·
+Annotation & sharing · API), About (open source, contributing, methods,
+glossary, license). Keep it this flat; add sections to a page before adding
+a page.

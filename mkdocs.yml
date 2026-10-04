@@ -38,7 +38,7 @@ markdown_extensions:
   - attr_list
   - md_in_html
   - tables
-  - toc: {permalink: true}
+  - toc: {permalink: true, toc_depth: 2}
   - pymdownx.details
   - pymdownx.superfences:
       custom_fences:
@@ -47,30 +47,21 @@ markdown_extensions:
           format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed: {alternate_style: true}
 
+validation:
+  anchors: warn
+
 nav:
   - Home: index.md
-  - Hardware:
-      - Overview: hardware/index.md
-      - Components: hardware/components.md
-      - Enclosure: hardware/enclosure.md
-      - Assembly: hardware/assembly.md
-      - Field deployment: hardware/deployment.md
-      - Set up a unit: software/setup.md
-      - Troubleshooting: software/troubleshooting.md
-  - Platform:
+  - Get started: get-started.md
+  - Build a unit:
+      - Build: hardware/build.md
+      - Set up & deploy: hardware/setup.md
+      - Troubleshooting: hardware/troubleshooting.md
+  - Use the platform:
       - Devices: platform/devices.md
-      - Getting video in: platform/sources.md
-      - Videos & photos: platform/videos.md
+      - Videos: platform/videos.md
       - Pipelines: platform/pipelines.md
-      - Steps & templates: concepts/pipelines.md
-      - Events & interactions: concepts/results.md
-      - Annotation & training: platform/annotation.md
-      - Sharing & publishing: platform/sharing.md
+      - Results: platform/results.md
+      - Annotation & sharing: platform/annotation.md
       - API: platform/api.md
-  - Open source:
-      - What's in the repo: open-source/index.md
-      - Contributing: open-source/contributing.md
-      - How it works: about/methods.md
-      - Architecture: concepts/index.md
-      - Glossary: concepts/glossary.md
-      - License & citation: about/license.md
+  - About: about.md

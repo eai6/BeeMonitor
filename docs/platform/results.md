@@ -1,4 +1,4 @@
-# Events & interactions
+# Results
 
 Tracking produces two tables, and every study is answered from them. BeeMonitor doesn't have a separate
 "foraging" or "flower" analysis. Time on a flower is a sum over interactions, and a foraging trip is a pair of
