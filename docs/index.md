@@ -5,7 +5,7 @@
 ![A BeeMonitor unit](assets/beemonitor_hardware.png)
 
 BeeMonitor started as a camera trap for bee hotels. It is now a general system: any video of insects,
-whether from a BeeMonitor unit, another camera or your cloud storage, goes through the same pipeline and comes
+whether from a BeeMonitor unit or another camera, goes through the same pipeline and comes
 out as two tables, **events** and **interactions**.
 
 ## Two tables, any question

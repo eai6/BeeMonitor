@@ -1,8 +1,8 @@
 # Build a unit
 
 A BeeMonitor unit is a Raspberry Pi camera in a 3D-printed case. It records only when insects are active and
-uploads the clips itself. You don't need one to use the platform: [video from any camera](../platform/videos.md#getting-video-in)
-works too.
+uploads the clips itself. You don't need one to use the platform: video from any camera can be
+[uploaded through the API](../platform/api.md).
 
 <div class="grid cards" markdown>
 

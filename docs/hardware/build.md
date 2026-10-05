@@ -2,7 +2,7 @@
 
 A BeeMonitor unit is a camera that records only when insects are active and uploads the clips. It works at
 a nest hotel, by a flower patch or on a lab bench. You don't need one to use the platform, because
-[uploaded video](../platform/videos.md#getting-video-in) works too, but a unit gives you motion-triggered recording,
+video [uploaded through the API](../platform/api.md) works too, but a unit gives you motion-triggered recording,
 remote control and saved layouts.
 
 A BeeMonitor unit has two parts:

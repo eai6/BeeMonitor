@@ -5,7 +5,7 @@ the lab.
 
 ```mermaid
 flowchart LR
-  S["<b>1. Get video in</b><br/>unit · upload · cloud storage"] --> P["<b>2. Run a pipeline</b><br/>detect → track → reference"]
+  S["<b>1. Get video in</b><br/>unit · API"] --> P["<b>2. Run a pipeline</b><br/>detect → track → reference"]
   P --> R["<b>3. Read the results</b><br/>events · interactions"]
 ```
 
@@ -15,8 +15,7 @@ You need an account on [beemonitor.edwardamoah.com](https://beemonitor.edwardamo
 
 - **Build a BeeMonitor unit** ([Build](hardware/build.md), [Set up & deploy](hardware/setup.md)). It records
   only when insects are active, uploads the clips itself, and lets you control it remotely.
-- **Use video you already have** from any camera: upload it, or connect S3, Google Cloud Storage or Google
-  Drive ([Videos](platform/videos.md)).
+- **Use video you already have** from any camera: upload it through the [API](platform/api.md).
 
 ## 2. Run a pipeline
 
