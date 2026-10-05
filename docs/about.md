@@ -16,7 +16,6 @@ flowchart LR
     G["GPU workers<br/><code>sagemaker_backend/</code>"]
     S[(Video and result storage)]
   end
-  M["Mobile app<br/><code>beemonitor-mobile/</code>"] --> W
   U -- clips, health --> W
   W -- jobs --> G
   G -- tracks, events --> W
@@ -34,7 +33,6 @@ flowchart LR
 | `sagemaker_backend/` | GPU workers: detection + tracking, SAM 3 sampling and labelling, BeeMachine species ID, model training | Docker, PyTorch, AWS SageMaker |
 | `cloud/` | Storage and ingestion connectors (S3, GCS, Google Drive) | Python |
 | `models/` | Model weights: bee detector, nest detector, entry/exit classifier | |
-| `beemonitor-mobile/` | Mobile app for checking devices, videos and jobs | Expo / React Native |
 | `desktop/` | Offline desktop app for analysing hotel videos on your own computer, no cloud needed | PyQt6 |
 | `infra/` | Cloud infrastructure as code | Pulumi (AWS) |
 | `docs/` | This site | MkDocs Material |
