@@ -24,7 +24,6 @@ from apps.videos.models import Video
 
 from . import engine, executors
 from .graph import build_initial_steps, graph_to_steps
-from .lessons import get_lesson, list_lessons
 from .notebook import create_colab_gist, generate_api_notebook
 from .models import Pipeline, PipelineRun
 from .registry import (
@@ -738,33 +737,6 @@ def _poll_run_jobs(run):
 
 
 # ── Templates / cloning ───────────────────────────────────────────────────────
-
-# ── STEM lessons ──────────────────────────────────────────────────────────────
-
-@login_required
-def lesson_list(request):
-    return render(request, "pipelines/lessons/list.html", {"lessons": list_lessons()})
-
-
-@login_required
-def lesson_detail(request, slug):
-    lesson = get_lesson(slug)
-    if not lesson:
-        raise Http404("No such lesson.")
-    template = Pipeline.objects.filter(is_template=True, title=lesson["template"]).first()
-    steps = []
-    if template:
-        for step in template.steps or []:
-            block = get_block(step.get("block_type", "")) or {}
-            steps.append({
-                "display_name": block.get("display_name", step.get("block_type", "")),
-                "icon": block.get("icon", "🔧"),
-                "description": block.get("description", ""),
-            })
-    return render(request, "pipelines/lessons/detail.html", {
-        "lesson": lesson, "slug": slug, "template": template, "steps": steps,
-    })
-
 
 @login_required
 @require_POST

@@ -66,9 +66,3 @@ or add a second Detect step for a reference that moves.
 - **Event confidence**: how sure the entry/exit classifier must be before an event counts (default 0.6).
 - **Insect ↔ insect radius**: how close two insects must be, as a percentage of the frame width, to count
   as interacting.
-
-### Lessons
-
-Each template has a short lesson on the platform covering the question, how the pipeline answers it, and
-what to look at in the results. Open them from **Lessons** in the top bar.
-They work well for teaching.

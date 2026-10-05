@@ -32,8 +32,7 @@ def _detect(label, **extra):
 _MOT = {"tracker": "beetrack"}
 
 # Every template is the same three modules recombined — that is the point of the
-# abstraction. Titles are load-bearing: ``lessons.py`` resolves each lesson to its
-# template by title, so renaming one orphans a lesson.
+# abstraction.
 TEMPLATES = [
     {
         "title": "Foraging trips",

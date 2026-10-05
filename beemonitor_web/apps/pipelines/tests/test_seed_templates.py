@@ -11,7 +11,6 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import TestCase
 
-from apps.pipelines.lessons import LESSONS
 from apps.pipelines.models import Pipeline
 from apps.pipelines.registry import get_block, validate_steps
 
@@ -80,7 +79,3 @@ class SeedTemplateTests(TestCase):
                 self.assertTrue((step.get("config") or {}).get("label"),
                                 f"{template.title}: Detect node with no label")
 
-    def test_every_lesson_resolves_to_a_seeded_template(self):
-        titles = {p.title for p in self._templates()}
-        for slug, lesson in LESSONS.items():
-            self.assertIn(lesson["template"], titles, slug)

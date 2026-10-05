@@ -55,6 +55,3 @@ class SmokeTests(TestCase):
         self.assertNotIn("Auto-label", html)
         self.assertIn("clip-scope", html)
 
-    def test_lessons_pages_render(self):
-        self.assertEqual(self.client.get("/pipelines/lessons/").status_code, 200)
-        self.assertEqual(self.client.get("/pipelines/lessons/interactions/").status_code, 200)
