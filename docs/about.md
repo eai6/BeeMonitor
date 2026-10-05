@@ -36,15 +36,12 @@ flowchart LR
 | `infra/` | Cloud infrastructure as code | Pulumi (AWS) |
 | `docs/` | This site | MkDocs Material |
 
-### Running parts of it yourself
+### Ways to use it
 
 - **Analyse videos offline**: the `beemonitor` Python package runs detection, tracking and entry/exit events
   on your own machine (a GPU helps).
 - **Use the hosted platform**: [beemonitor.edwardamoah.com](https://beemonitor.edwardamoah.com). Units,
   pipelines, annotation and training all run there.
-- **Self-host the platform**: the code and the infrastructure definitions are all in the repository, but a
-  step-by-step self-hosting guide isn't written yet. Open an
-  [issue](https://github.com/eai6/BeeMonitor/issues) if you plan to do this.
 
 ## Contributing
 
