@@ -139,6 +139,40 @@ def _iou(a, b):
     return inter / union if union > 0 else 0.0
 
 
+def _ultralytics_tracker(kind, params, fps):
+    """BYTETracker / BOTSORT across Ultralytics versions.
+
+    The tracker reads whatever keys its version's YAML defines, and the set
+    changes between releases — so start from the installed package's own
+    ``cfg/trackers/<kind>.yaml`` and lay our settings over it. Before 8.4.1xx
+    the constructor also took ``frame_rate`` (track_buffer was scaled by
+    fps/30); later releases take ``args`` alone and count ``track_buffer`` in
+    plain frames.
+    """
+    import os
+
+    import yaml
+    import ultralytics
+    from ultralytics.trackers.basetrack import BaseTrack
+
+    cfg_path = os.path.join(os.path.dirname(ultralytics.__file__), "cfg", "trackers", f"{kind}.yaml")
+    try:
+        with open(cfg_path) as fh:
+            base = yaml.safe_load(fh) or {}
+    except OSError:
+        base = {}
+    args = SimpleNamespace(**{**base, **params, "tracker_type": kind})
+    if kind == "bytetrack":
+        from ultralytics.trackers.byte_tracker import BYTETracker as cls
+    else:
+        from ultralytics.trackers.bot_sort import BOTSORT as cls
+    getattr(BaseTrack, "reset_id", lambda: None)()   # ids from 1, per clip
+    try:
+        return cls(args, frame_rate=int(round(fps)))
+    except TypeError:
+        return cls(args)
+
+
 class ExternalTracker:
     """A standard tracker that BeeTracking can use in place of BeeTracker."""
 
@@ -162,14 +196,7 @@ class ExternalTracker:
     @staticmethod
     def _build(kind, p, fps, w, h):
         if kind in ("bytetrack", "botsort"):
-            from ultralytics.trackers.basetrack import BaseTrack
-            BaseTrack.reset_id()
-            args = SimpleNamespace(tracker_type=kind, **p)
-            if kind == "bytetrack":
-                from ultralytics.trackers.byte_tracker import BYTETracker
-                return BYTETracker(args, frame_rate=int(round(fps)))
-            from ultralytics.trackers.bot_sort import BOTSORT
-            return BOTSORT(args, frame_rate=int(round(fps)))
+            return _ultralytics_tracker(kind, p, fps)
         if kind == "ocsort":
             from beemonitor.tracking.mot.vendor.ocsort import OCSort
             return OCSort(**p)

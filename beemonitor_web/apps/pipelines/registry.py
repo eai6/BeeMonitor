@@ -95,7 +95,7 @@ TRACKER_FIELDS = [
     _tf("byte_track_high_thresh", "High-score threshold", 0.25, "bytetrack,botsort"),
     _tf("byte_track_low_thresh", "Low-score threshold (second pass)", 0.1, "bytetrack,botsort"),
     _tf("byte_new_track_thresh", "New-track threshold", 0.25, "bytetrack,botsort"),
-    _tf("byte_track_buffer", "Keep a lost track (frames at 30 fps)", 30, "bytetrack,botsort"),
+    _tf("byte_track_buffer", "Keep a lost track (frames)", 30, "bytetrack,botsort"),
     _tf("byte_match_thresh", "Match threshold", 0.8, "bytetrack,botsort"),
     _tf("botsort_gmc_method", "Camera-motion compensation", "sparseOptFlow", "botsort",
         field_type="select", choices=[
