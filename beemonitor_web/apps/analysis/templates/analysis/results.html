@@ -316,7 +316,8 @@
   through the same track's crops, Esc or a click outside closes. Pixels are
   shown unsmoothed so the fine detail the crop actually holds is what you see.
 {% endcomment %}
-<div id="crop-viewer" hidden class="fixed inset-0 z-50 bg-black/85 flex flex-col items-center justify-center p-4">
+{# Hidden with the .hidden class, not the hidden attribute: .flex would override the attribute. #}
+<div id="crop-viewer" class="hidden fixed inset-0 z-50 bg-black/85 flex-col items-center justify-center p-4">
   <div class="w-full max-w-5xl flex items-center justify-between text-white text-sm mb-2">
     <span id="cv-label" class="truncate"></span>
     <span class="flex items-center gap-2 shrink-0">
@@ -343,7 +344,8 @@
     document.getElementById('cv-open').href = urls[i];
     document.getElementById('cv-count').textContent = (i + 1) + ' / ' + urls.length;
   }
-  function close() { viewer.hidden = true; img.removeAttribute('src'); }
+  function open() { viewer.classList.remove('hidden'); viewer.classList.add('flex'); }
+  function close() { viewer.classList.add('hidden'); viewer.classList.remove('flex'); img.removeAttribute('src'); }
   document.querySelectorAll('[data-crop-strip]').forEach(function (strip) {
     const links = Array.from(strip.querySelectorAll('[data-crop]'));
     links.forEach(function (a, n) {
@@ -352,7 +354,7 @@
         urls = links.map(function (l) { return l.href; });
         i = n;
         document.getElementById('cv-label').textContent = strip.dataset.label;
-        viewer.hidden = false;
+        open();
         show();
       });
     });
@@ -362,7 +364,7 @@
   document.getElementById('cv-close').onclick = close;
   viewer.addEventListener('click', function (e) { if (e.target === viewer) close(); });
   document.addEventListener('keydown', function (e) {
-    if (viewer.hidden) return;
+    if (viewer.classList.contains('hidden')) return;
     if (e.key === 'Escape') close();
     else if (e.key === 'ArrowLeft') document.getElementById('cv-prev').click();
     else if (e.key === 'ArrowRight') document.getElementById('cv-next').click();
