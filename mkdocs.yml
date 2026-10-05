@@ -20,7 +20,9 @@ theme:
       accent: light green
       toggle: {icon: material/weather-sunny, name: Light mode}
   features:
-    - toc.integrate
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.indexes
     - navigation.sections
     - navigation.footer
     - navigation.top
@@ -30,6 +32,9 @@ theme:
   icon:
     repo: fontawesome/brands/github
 
+extra_css:
+  - stylesheets/extra.css
+
 plugins:
   - search
 
@@ -38,7 +43,7 @@ markdown_extensions:
   - attr_list
   - md_in_html
   - tables
-  - toc: {permalink: true, toc_depth: 2}
+  - toc: {permalink: true}
   - pymdownx.details
   - pymdownx.superfences:
       custom_fences:
@@ -54,10 +59,12 @@ nav:
   - Home: index.md
   - Get started: get-started.md
   - Build a unit:
+      - hardware/index.md
       - Build: hardware/build.md
       - Set up & deploy: hardware/setup.md
       - Troubleshooting: hardware/troubleshooting.md
   - Use the platform:
+      - platform/index.md
       - Devices: platform/devices.md
       - Videos: platform/videos.md
       - Pipelines: platform/pipelines.md
