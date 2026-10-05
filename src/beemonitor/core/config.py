@@ -461,6 +461,13 @@ class TrackingConfig:
     force_yolo_on_no_blobs: bool = True
     force_yolo_for_tracking: bool = True
 
+    # Association algorithm (memory/43): "beetrack" (default) or one of
+    # tracking.mot.external.TRACKERS. tracker_params holds the pipeline's
+    # settings for it; for BeeTrack they override the *_seconds / multiplier
+    # fields below, key by key.
+    tracker: str = "beetrack"
+    tracker_params: dict = None
+
     save_crops = True
     # 0 = a crop from every frame each track was detected in (not just the
     # first few, which are usually the bee flying in, motion-blurred).

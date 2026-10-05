@@ -288,7 +288,9 @@ function plApplyShowIf(scope){
     var node = fieldEl.closest('.drawflow-node') || document;
     var ctrlInput = node.querySelector('.pl-inp[data-cfg="' + fieldEl.getAttribute('data-showif-field') + '"]');
     var val = ctrlInput ? ctrlInput.value : '';
-    fieldEl.style.display = (String(val) === fieldEl.getAttribute('data-showif-value')) ? '' : 'none';
+    // A comma-separated value shows the field for any of them (e.g. "bytetrack,botsort").
+    var wanted = fieldEl.getAttribute('data-showif-value').split(',');
+    fieldEl.style.display = (wanted.indexOf(String(val)) !== -1) ? '' : 'none';
   });
 }
 

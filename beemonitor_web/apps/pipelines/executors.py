@@ -1251,6 +1251,45 @@ def _pipeline_markers(step, steps):
     return None
 
 
+def tracker_settings(mot_config: dict) -> dict:
+    """The selected tracker's settings from a MOT node's config, prefix
+    stripped, coerced to numbers, and only where they differ from the default.
+    """
+    from .registry import TRACKER_FIELDS, TRACKER_SETTING_PREFIX
+
+    cfg = mot_config or {}
+    kind = (cfg.get("tracker") or "beetrack").lower()
+    prefixes = TRACKER_SETTING_PREFIX.get(kind, ())
+    out = {}
+    for field in TRACKER_FIELDS:
+        name = field["name"]
+        prefix = next((p for p in prefixes if name.startswith(p)), None)
+        if prefix is None or cfg.get(name) in (None, ""):
+            continue
+        value, default = cfg[name], field["default"]
+        if field["field_type"] == "number":
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                continue
+            if value.is_integer() and isinstance(default, int):
+                value = int(value)
+            if default is not None and float(value) == float(default):
+                continue
+        elif value == default:
+            continue
+        out[name[len(prefix):]] = value
+    return out
+
+
+def _pipeline_tracker_settings(step, steps):
+    """Settings for the tracker chosen on the downstream MOT node."""
+    for s in downstream_ids(step.get("id"), steps):
+        if s.get("block_type") == "track.mot":
+            return tracker_settings(s.get("config") or {})
+    return {}
+
+
 def _pipeline_tracker(step, steps):
     """Tracking algorithm, read from a downstream MOT node (default BeeTrack).
 
@@ -1337,6 +1376,10 @@ def build_detect_and_track_config(step, run, context, index):
         "visualize": False,
         # Selected on the downstream MOT node; inert on the worker for now.
         "tracker": _pipeline_tracker(step, run.steps),
+        # Only values changed from the tracker's defaults, so an untouched
+        # BeeTrack node hashes exactly as it did before trackers were tunable.
+        **({"tracker_params": settings}
+           if (settings := _pipeline_tracker_settings(step, run.steps)) else {}),
     }
     species_model = _pipeline_species(step, run.steps)
     if species_model:

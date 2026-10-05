@@ -4,6 +4,9 @@
 
 # YOLO + tracking
 ultralytics>=8.4.0
+# Ultralytics' trackers (ByteTrack / BoT-SORT, memory/43) import lap; without it
+# Ultralytics tries to pip-install it at runtime, which an offline worker can't.
+lap>=0.5.12
 opencv-python-headless>=4.8.0
 filterpy>=1.4.5
 

@@ -229,6 +229,10 @@ class BeeTracking:
         # edges — the details a small bee is identified by.
         crop_padding: float = 0.25,
         crop_min_padding_px: int = 16,
+        # Association algorithm (memory/43): "beetrack" (BeeTracker, default) or
+        # one of mot.external.TRACKERS, with that tracker's own settings.
+        tracker_kind: str = "beetrack",
+        tracker_options: Optional[Dict[str, Any]] = None,
         # Pluggable detector: pass an injected BaseDetector (e.g. Sam3Detector)
         # to replace YOLO; default None builds the YOLO detector below.
         detector=None,
@@ -315,6 +319,8 @@ class BeeTracking:
         
         # Tracker (will be initialized when video properties are known)
         self.tracker = None
+        self.tracker_kind = (tracker_kind or "beetrack").lower()
+        self.tracker_options = dict(tracker_options or {})
         
         # Bee identifier (optional)
         self.identifier = identifier
@@ -360,14 +366,19 @@ class BeeTracking:
             fps: Video frame rate
             frame_height: Video frame height for resolution-relative fallback
         """
-        logger.info(f"Initializing adaptive tracker with FPS={fps}, frame_height={frame_height}")
-        
-        self.tracker = BeeTracker(
-            fps=fps,
-            bee_size=None,  # Auto-calculate from detections
-            frame_height=frame_height,  # For resolution-relative fallback
-            **self.tracker_params
-        )
+        if self.tracker_kind != "beetrack":
+            from beemonitor.tracking.mot.external import ExternalTracker
+            self.tracker = ExternalTracker(
+                self.tracker_kind, self.tracker_options, fps=fps,
+                frame_size=(getattr(self, "video_width", 0) or 0, frame_height or 0))
+        else:
+            logger.info(f"Initializing adaptive tracker with FPS={fps}, frame_height={frame_height}")
+            self.tracker = BeeTracker(
+                fps=fps,
+                bee_size=None,  # Auto-calculate from detections
+                frame_height=frame_height,  # For resolution-relative fallback
+                **self.tracker_params
+            )
         
         # Set lookback buffer size based on FPS
         self.lookback_frames = int(fps * self.lookback_seconds)
@@ -542,6 +553,12 @@ class BeeTracking:
         vote = self.species_votes.get(track_id)
         return vote.winner() if vote else None
 
+    def _give_frame(self, frame):
+        """Trackers that look at the image (BoT-SORT's camera-motion
+        compensation) get the frame; BeeTracker doesn't take one."""
+        if hasattr(self.tracker, "frame"):
+            self.tracker.frame = frame
+
     def _save_track_crops(self, frame: np.ndarray, frame_num: int):
         """Save a padded crop of every track detected in this frame.
 
@@ -675,6 +692,7 @@ class BeeTracking:
 
                         # Update tracker with lookback detections
                         if self.tracker is not None:
+                            self._give_frame(buf_frame)
                             buf_tracks = self.tracker.update(buf_detections, buf_frame_num)
                             # These frames are real detections too — the start
                             # of the bee's arrival — so they get crops.
@@ -718,6 +736,7 @@ class BeeTracking:
         # Update tracker (full frame coordinates, no adjustment needed)
         tracks = []
         if self.tracker is not None:
+            self._give_frame(frame)
             tracks = self.tracker.update(detections, frame_num)
             
             # Run identification on confirmed tracks

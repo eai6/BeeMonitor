@@ -182,6 +182,12 @@ class BeeMonitor:
         # v2.2.1: Get adaptive tracker params from config
         # ====================================================================
         tracker_params = self.config.get_adaptive_tracker_params()
+        tracker_kind = (getattr(self.config.tracking, 'tracker', 'beetrack') or 'beetrack').lower()
+        tracker_options = dict(getattr(self.config.tracking, 'tracker_params', None) or {})
+        if tracker_kind == 'beetrack':
+            # The pipeline's BeeTrack settings win over the config defaults.
+            tracker_params.update({k: v for k, v in tracker_options.items()
+                                   if k in tracker_params and v is not None})
         
         logger.info("\nAdaptive Tracker Configuration (from config):")
         for key, value in tracker_params.items():
@@ -236,6 +242,8 @@ class BeeMonitor:
             crops_per_track=getattr(self.config.tracking, 'crops_per_track', 0),
             crop_padding=getattr(self.config.tracking, 'crop_padding', 0.25),
             crop_min_padding_px=getattr(self.config.tracking, 'crop_min_padding_px', 16),
+            tracker_kind=tracker_kind,
+            tracker_options=tracker_options,
             detector=detector,
             species_classifier=species_classifier,
             species_max_votes=getattr(

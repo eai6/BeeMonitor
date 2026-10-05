@@ -36,7 +36,7 @@ batch. A rerun is a new batch, and the old one is kept for comparison.
 |---|---|
 | **Video** | The clip being analysed. Every pipeline starts here. |
 | **Detect** | Finds one class in each frame with YOLO (fast) or SAM 3 (text prompt, slower). Can analyse every frame (needed for tracking) or a sample of frames (for objects that don't move). |
-| **MOT: Track objects** | Links detections into tracks (BeeTrack). Runs inside the same GPU pass as Detect. |
+| **MOT: Track objects** | Links detections into tracks. Choose the algorithm — BeeTrack (default), ByteTrack, BoT-SORT, OC-SORT or SFSORT — and tune its settings on the node. Runs inside the same GPU pass as Detect, on whatever Detect found. |
 | **Reference: Saved layout** | The device's saved ROI and nest tubes, or regions you draw. No GPU needed. |
 | **Events** | One row per enter or exit of a reference. |
 | **Interactions** | One row per episode of contact: insect with reference (a visit), insect with insect, or both. |

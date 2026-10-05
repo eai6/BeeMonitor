@@ -63,6 +63,61 @@ def accepted_types(block_type):
     return block.get("accepts") or [block.get("input_type", "none")]
 
 
+
+# ── MOT tracker settings (memory/43) ─────────────────────────────────────────
+# Each tracker's key settings, shown on the MOT node only while that tracker is
+# selected. Names carry a prefix because two trackers can share a parameter
+# name (BeeTrack's and OC-SORT's iou_threshold); executors.tracker_settings()
+# strips it. ByteTrack and BoT-SORT share the "byte_" set. Defaults are each
+# tracker's own; a value left at its default isn't sent, so it can't change a
+# job's cache key.
+TRACKER_SETTING_PREFIX = {
+    "beetrack": ("beetrack_",),
+    "bytetrack": ("byte_",),
+    "botsort": ("byte_", "botsort_"),
+    "ocsort": ("ocsort_",),
+    "sfsort": ("sfsort_",),
+}
+
+
+def _tf(name, label, default, show, field_type="number", choices=None):
+    return {"name": name, "label": label, "field_type": field_type, "required": False,
+            "default": default, "choices": choices,
+            "show_if": {"field": "tracker", "value": show}}
+
+
+TRACKER_FIELDS = [
+    _tf("beetrack_max_age_seconds", "Keep a lost track (seconds)", 0.5, "beetrack"),
+    _tf("beetrack_min_hits_seconds", "Confirm a track after (seconds)", 0.0, "beetrack"),
+    _tf("beetrack_max_resurrection_seconds", "Revive a dead track within (seconds)", 0.3, "beetrack"),
+    _tf("beetrack_iou_threshold", "Match overlap (IoU)", 0.25, "beetrack"),
+
+    _tf("byte_track_high_thresh", "High-score threshold", 0.25, "bytetrack,botsort"),
+    _tf("byte_track_low_thresh", "Low-score threshold (second pass)", 0.1, "bytetrack,botsort"),
+    _tf("byte_new_track_thresh", "New-track threshold", 0.25, "bytetrack,botsort"),
+    _tf("byte_track_buffer", "Keep a lost track (frames at 30 fps)", 30, "bytetrack,botsort"),
+    _tf("byte_match_thresh", "Match threshold", 0.8, "bytetrack,botsort"),
+    _tf("botsort_gmc_method", "Camera-motion compensation", "sparseOptFlow", "botsort",
+        field_type="select", choices=[
+            {"value": "sparseOptFlow", "label": "Sparse optical flow"},
+            {"value": "orb", "label": "ORB features"},
+            {"value": "none", "label": "None (fixed camera)"}]),
+
+    _tf("ocsort_det_thresh", "Detection threshold", 0.25, "ocsort"),
+    _tf("ocsort_max_age", "Keep a lost track (frames)", 30, "ocsort"),
+    _tf("ocsort_min_hits", "Confirm a track after (frames)", 3, "ocsort"),
+    _tf("ocsort_iou_threshold", "Match overlap (IoU)", 0.3, "ocsort"),
+    _tf("ocsort_delta_t", "Velocity look-back (frames)", 3, "ocsort"),
+    _tf("ocsort_inertia", "Direction-consistency weight", 0.2, "ocsort"),
+
+    _tf("sfsort_high_th", "High-score threshold", 0.6, "sfsort"),
+    _tf("sfsort_low_th", "Low-score threshold", 0.1, "sfsort"),
+    _tf("sfsort_new_track_th", "New-track threshold", 0.7, "sfsort"),
+    _tf("sfsort_match_th_first", "First-pass match threshold", 0.67, "sfsort"),
+    _tf("sfsort_match_th_second", "Second-pass match threshold", 0.3, "sfsort"),
+    _tf("sfsort_central_timeout", "Keep a lost track (frames; blank = 1 s)", None, "sfsort"),
+]
+
 BLOCK_REGISTRY = {
     # ── Input ─────────────────────────────────────────────────────────────────
     "input.video": {
@@ -384,8 +439,13 @@ BLOCK_REGISTRY = {
                 "default": "beetrack",
                 "choices": [
                     {"value": "beetrack", "label": "BeeTrack (default)"},
+                    {"value": "bytetrack", "label": "ByteTrack"},
+                    {"value": "botsort", "label": "BoT-SORT"},
+                    {"value": "ocsort", "label": "OC-SORT"},
+                    {"value": "sfsort", "label": "SFSORT"},
                 ],
             },
+            *TRACKER_FIELDS,
         ],
     },
 

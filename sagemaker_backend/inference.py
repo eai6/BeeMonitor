@@ -185,6 +185,9 @@ def predict_fn(payload, pipeline):
             candidate_taxa=payload.get("candidate_taxa") or None,
             identify_markers=bool(payload.get("identify_markers", False)),
             marker_type=payload.get("marker_type", "auto") or "auto",
+            # MOT algorithm + settings from the pipeline (memory/43).
+            tracker=payload.get("tracker", "beetrack") or "beetrack",
+            tracker_params=payload.get("tracker_params") or None,
         )
     except Exception as exc:
         logger.exception("predict_fn: pipeline failed for job %s", job_id)

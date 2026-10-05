@@ -286,6 +286,12 @@ def _spawn_gpu_job(job_pk: int) -> None:
                 payload["species_model_key"] = job.config["species_model_key"]
             if classifier == "bioclip":
                 payload["candidate_taxa"] = _candidate_taxa(video)
+        # MOT algorithm + its settings (memory/43). BeeTrack with no changed
+        # settings sends nothing, exactly as before.
+        if (job.config.get("tracker") or "beetrack") != "beetrack" or job.config.get("tracker_params"):
+            payload["tracker"] = job.config.get("tracker") or "beetrack"
+            if job.config.get("tracker_params"):
+                payload["tracker_params"] = job.config["tracker_params"]
         if job.config.get("identify_markers"):
             payload["identify_markers"] = True
             payload["marker_type"] = job.config.get("marker_type") or "auto"

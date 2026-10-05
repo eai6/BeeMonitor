@@ -217,6 +217,8 @@ class CloudPipeline:
         candidate_taxa: "list | None" = None,
         identify_markers: bool = False,
         marker_type: str = "auto",
+        tracker: str = "beetrack",
+        tracker_params: "dict | None" = None,
     ) -> PipelineResult:
         """Run the full BeeMonitor pipeline on a video stored in S3.
 
@@ -304,6 +306,8 @@ class CloudPipeline:
             end_frame=end_frame,
             detector_kind=detector_kind,
             text_prompt=text_prompt,
+            tracker=tracker,
+            tracker_params=tracker_params,
         )
 
         identification = None
@@ -614,6 +618,8 @@ class CloudPipeline:
         species_model: str = "",
         species_min_confidence: float = 0.5,
         species_max_votes: int = 25,
+        tracker: str = "beetrack",
+        tracker_params: "dict | None" = None,
     ):
         """Build a BeeMonitor Config, instantiate, and run."""
         from beemonitor.core.config import Config, ModelConfig
@@ -645,6 +651,9 @@ class CloudPipeline:
         config.tracking.species_min_confidence = float(species_min_confidence or 0.5)
         config.tracking.species_max_votes = int(species_max_votes)
         config.tracking.text_prompt = text_prompt or ""
+        # Association algorithm + its settings, from the pipeline's MOT step.
+        config.tracking.tracker = (tracker or "beetrack").lower()
+        config.tracking.tracker_params = dict(tracker_params or {})
         config.output.save_visualizations = visualize
         # Recording start metadata (video.recorded_at) — event timestamps come
         # from this, so uploads with arbitrary filenames work (the legacy

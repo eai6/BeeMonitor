@@ -620,3 +620,36 @@ class InputVideoTests(ExecutorTestCase):
         out = executors._exec_input_video(run.steps[0], run, {}, {}, 0)
 
         self.assertIn("not found", out["error"])
+
+
+class TrackerSettingsTests(ExecutorTestCase):
+    """The MOT node's tracker and settings reach the GPU job (memory/43)."""
+
+    _build = BuildJobConfigTests._build
+
+    def _with_mot(self, mot_config):
+        steps = self._module_steps()
+        steps[2]["config"] = mot_config
+        built, err = self._build(steps)
+        self.assertIsNone(err)
+        return built["config"]
+
+    def test_untouched_beetrack_hashes_as_before(self):
+        cfg = self._with_mot({"tracker": "beetrack", "beetrack_max_age_seconds": 0.5,
+                              "byte_track_buffer": 99})
+        self.assertEqual(cfg["tracker"], "beetrack")
+        self.assertNotIn("tracker_params", cfg)
+
+    def test_chosen_tracker_sends_only_its_changed_settings(self):
+        cfg = self._with_mot({"tracker": "botsort", "byte_track_buffer": "60",
+                              "byte_match_thresh": 0.8, "botsort_gmc_method": "none",
+                              "ocsort_max_age": 5})
+        self.assertEqual(cfg["tracker"], "botsort")
+        self.assertEqual(cfg["tracker_params"], {"track_buffer": 60, "gmc_method": "none"})
+
+    def test_settings_helper(self):
+        from apps.pipelines.executors import tracker_settings
+        self.assertEqual(tracker_settings({"tracker": "ocsort", "ocsort_iou_threshold": "0.5",
+                                           "beetrack_iou_threshold": 0.9}),
+                         {"iou_threshold": 0.5})
+        self.assertEqual(tracker_settings({"tracker": "sfsort", "sfsort_central_timeout": ""}), {})
