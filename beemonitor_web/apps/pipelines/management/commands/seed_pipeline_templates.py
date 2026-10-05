@@ -1,6 +1,6 @@
 """
-Seed the three flagship pipeline templates (foraging trips, flower/ROI visitation,
-colony activity) described in ``memory/23_pipeline_builder_port_design.md``.
+Seed the flagship pipeline templates (originally described in
+``memory/23_pipeline_builder_port_design.md``).
 
 Templates need an owner (Pipeline.user is required); pass ``--user <username>`` or
 the command falls back to the first superuser. Idempotent: re-running updates the
@@ -76,15 +76,22 @@ TEMPLATES = [
         ],
     },
     {
-        "title": "Colony activity",
-        "description": "Measure how much insect activity there is over time, without "
-                       "asking who went where.",
+        "title": "Pollen assay",
+        "description": "Compare two or more pollen tubes in a lab arena: how many times "
+                       "bees interact with each tube, and for how long. Draw one "
+                       "region per tube.",
         "steps": [
             _s("v", "input.video"),
             _s("d", "detect.objects", _detect("bee"), {"video": "v"}),
             _s("m", "track.mot", _MOT, {"detections": "d"}),
-            _s("a", "analyze.detection_count",
-               {"metric": "over_time", "bin_seconds": 5}, {"detections": "m"}),
+            # Drawn, not detected: the tubes sit still in the arena, so regions
+            # drawn once hold for every trial, need no GPU, and need no model
+            # trained on pollen tubes. A sampled Detect can't feed a reference.
+            _s("r", "reference.layout", {"source": "drawn", "regions": "[]"}, {"video": "v"}),
+            # Each row is one bee-tube episode; per tube, rows = number of
+            # interactions and sum(duration_sec) = time spent.
+            _s("i", "analyze.interactions", {"interaction_type": "organism_reference"},
+               {"tracks": "m", "rois": "r"}),
         ],
     },
     {
@@ -104,6 +111,12 @@ TEMPLATES = [
         ],
     },
 ]
+
+
+# Templates that used to ship. Re-seeding turns them into ordinary pipelines
+# owned by the template owner rather than deleting them: a run made straight
+# from a template points at it, and deleting would cascade those runs away.
+RETIRED = ("Colony activity",)
 
 
 class Command(BaseCommand):
@@ -141,3 +154,8 @@ class Command(BaseCommand):
             )
             verb = "Created" if created else "Updated"
             self.stdout.write(self.style.SUCCESS(f"{verb} template: {pipeline.title}"))
+
+        retired = Pipeline.objects.filter(is_template=True, title__in=RETIRED).update(
+            is_template=False)
+        if retired:
+            self.stdout.write(f"Retired {retired} template(s): {', '.join(RETIRED)}")

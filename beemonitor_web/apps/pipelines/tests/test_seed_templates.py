@@ -29,8 +29,15 @@ class SeedTemplateTests(TestCase):
         titles = {p.title for p in self._templates()}
         self.assertEqual(titles, {
             "Foraging trips", "Flower / ROI visitation", "Individual bee IDs",
-            "Colony activity", "Interactions",
+            "Pollen assay", "Interactions",
         })
+
+    def test_reseeding_retires_old_templates_without_deleting_them(self):
+        old = Pipeline.objects.create(user=self.user, title="Colony activity",
+                                      is_template=True, steps=[])
+        call_command("seed_pipeline_templates", user="alice", stdout=StringIO())
+        old.refresh_from_db()
+        self.assertFalse(old.is_template)
 
     def test_seeding_twice_is_idempotent(self):
         before = Pipeline.objects.count()

@@ -7,7 +7,7 @@ name a clip; you choose the clips when you run it. The [steps and templates](#st
 
 ## Build one
 
-**Pipelines → New**, or start from a template (Foraging trips, Flower / ROI visitation, Colony activity,
+**Pipelines → New**, or start from a template (Foraging trips, Flower / ROI visitation, Pollen assay,
 Interactions, Individual bee IDs). Drag steps from the palette and connect them.
 
 ## Run it
@@ -52,7 +52,7 @@ Each template is the same few steps put together in a different way:
 |---|---|
 | **Foraging trips** | Video → Detect (bee) → Track → Reference (device layout) → Events |
 | **Flower / ROI visitation** | Video → Detect (bee) → Track → Reference (drawn regions) → Interactions (insect ↔ reference) |
-| **Colony activity** | Video → Detect (bee) → Track → Detection count (over time) |
+| **Pollen assay** | Video → Detect (bee) → Track → Reference (one drawn region per pollen tube) → Interactions (insect ↔ reference) |
 | **Interactions** | Video → Detect (bee) → Track; Detect (nest) as the reference → Interactions (all) |
 | **Individual bee IDs** | Video → Detect (bee) → Track → Read bee marker |
 

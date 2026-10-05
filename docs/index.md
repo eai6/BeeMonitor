@@ -16,7 +16,7 @@ Every pipeline produces the same two tables:
 - **Interactions**: two things were together for a while. *A bee was on the flower from 3.0 s to 9.5 s.*
 
 You then derive what your study needs from them: foraging trips at a nest hotel from events; visits and time
-on a flower, or time in each zone of an indoor pollen assay, from interactions; encounters between insects
+on a flower, or which pollen tube in a lab assay gets more (and longer) bee interactions, from interactions; encounters between insects
 from interactions between two tracks. See [Results](platform/results.md).
 
 ## Start here

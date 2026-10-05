@@ -51,7 +51,7 @@ always the same read.
 | Foraging trips at a nest | Events: each `exit` from a tube paired with the next `enter` into it; trip length = the time between them |
 | Visits to a flower | Interactions with `b_kind = reference`, counted per `b` |
 | Time on a flower (dwell) | The same rows, summing `duration_sec` per `b` |
-| Time in each zone of a lab assay | The same, with the zones as references |
+| Pollen assay: which tube bees prefer | Interactions per pollen tube (`b`): count the rows for the number of interactions, sum `duration_sec` for the total time |
 | Insect-to-insect encounters | Interactions with `b_kind = organism` |
 | Activity through the day | Bin events or interactions by time, or use **Detection count** |
 | Per individual or per species | Join the marker or species label to `subject` / `a` |
