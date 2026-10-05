@@ -33,13 +33,14 @@ flowchart LR
 | `sagemaker_backend/` | GPU workers: detection + tracking, SAM 3 sampling and labelling, BeeMachine species ID, model training | Docker, PyTorch, AWS SageMaker |
 | `cloud/` | Storage and ingestion connectors (S3, GCS, Google Drive) | Python |
 | `models/` | Model weights: bee detector, nest detector, entry/exit classifier | |
+| `desktop/` | Offline desktop app for analysing hotel videos on your own computer, no cloud needed | PyQt6 |
 | `infra/` | Cloud infrastructure as code | Pulumi (AWS) |
 | `docs/` | This site | MkDocs Material |
 
 ### Ways to use it
 
-- **Analyse videos offline**: the `beemonitor` Python package runs detection, tracking and entry/exit events
-  on your own machine (a GPU helps).
+- **Analyse videos offline**: the [desktop app](https://github.com/eai6/BeeMonitor/tree/main/desktop) or the
+  `beemonitor` Python package runs detection, tracking and entry/exit events on your own machine (a GPU helps).
 - **Use the hosted platform**: [beemonitor.edwardamoah.com](https://beemonitor.edwardamoah.com). Units,
   pipelines, annotation and training all run there.
 
