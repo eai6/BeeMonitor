@@ -176,12 +176,15 @@ def predict_fn(payload, pipeline):
             # GPU call exceeds the async platform's 1h cap. Absent = whole video.
             start_frame=int(payload.get("start_frame", 0) or 0),
             end_frame=int(payload["end_frame"]) if payload.get("end_frame") else None,
-            # BeeMachine species classification during tracking. The 83 MB model
-            # is only fetched when this is on.
+            # Species / marker identity: voted over every crop of each track
+            # after tracking. BeeMachine (fetched only when on) or BioCLIP,
+            # constrained to the region's species when the platform sends them.
             identify_species=bool(payload.get("identify_species", False)),
             species_model_key=payload.get("species_model_key", "") or "",
-            species_min_confidence=float(payload.get("species_min_confidence", 0.5) or 0.5),
-            species_max_votes=int(payload.get("species_max_votes", 25) or 25),
+            species_classifier=payload.get("species_classifier", "beemachine") or "beemachine",
+            candidate_taxa=payload.get("candidate_taxa") or None,
+            identify_markers=bool(payload.get("identify_markers", False)),
+            marker_type=payload.get("marker_type", "auto") or "auto",
         )
     except Exception as exc:
         logger.exception("predict_fn: pipeline failed for job %s", job_id)

@@ -21,6 +21,9 @@ huggingface_hub>=0.20.0
 # install degrades species labels rather than failing tracking.
 onnxruntime-gpu>=1.19,<2
 
+# BioCLIP zero-shot species ID of track crops (identify.species, model=bioclip).
+pybioclip
+
 # Data / numerics
 numpy>=1.26.0
 pandas>=2.2.0

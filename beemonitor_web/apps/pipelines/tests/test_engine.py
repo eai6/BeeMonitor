@@ -162,24 +162,19 @@ class StepCacheTests(EngineTestCase):
 
         self.assertEqual(Job.objects.count(), 2)
 
-    def test_adding_a_marker_node_does_not_bust_the_cache(self):
-        """Regression: identify.marker used to force a full GPU re-run.
-
-        It set identify_bees/marker_method on the job config — keys nothing
-        downstream consumed — and the cache key hashes that config, so authoring
-        a marker node silently re-billed an already-computed video.
-        """
+    def test_adding_a_marker_node_re_runs_the_gpu_job(self):
+        """Markers are now decoded on the GPU from every crop, so a run without
+        them can't serve one that asks for them."""
         self._start(self._steps())
         self._finish_job(Job.objects.get())
 
         with_marker = self._steps(extra=[
             {"id": "i", "block_type": "identify.marker",
-             "config": {"marker_type": "qr"}, "inputs": {"tracks": "m"}},
+             "config": {"marker_type": "color"}, "inputs": {"tracks": "m"}},
         ])
-        second = self._start(with_marker)
+        self._start(with_marker)
 
-        self.assertEqual(Job.objects.count(), 1)
-        self.assertTrue(second.context["d"]["_cached"])
+        self.assertEqual(Job.objects.count(), 2)
 
 
 class ReconcileTests(EngineTestCase):

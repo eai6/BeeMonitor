@@ -677,12 +677,13 @@ BLOCK_REGISTRY = {
     # ── Identify ──────────────────────────────────────────────────────────────
     "identify.species": {
         "display_name": "Identify Species",
-        "description": "Name the species of each tracked insect (BeeMachine — "
-                       "354 bee taxa). Runs inside the tracking GPU pass, "
-                       "classifying every frame of a trajectory and taking the "
-                       "majority, so one blurred frame can't rename an animal. "
-                       "Adding this node changes what the tracking job produces, "
-                       "so it re-runs rather than reusing a cached result.",
+        "description": "Name the species of each tracked insect. After tracking, "
+                       "every saved crop of a track is classified and votes; the "
+                       "track takes the species with the most votes, so one "
+                       "blurred frame can't rename an animal. BeeMachine knows "
+                       "354 bee taxa; BioCLIP is zero-shot, limited to the "
+                       "species recorded near the device. Adding this node "
+                       "changes what the tracking job produces, so it re-runs.",
         "category": "identify",
         "icon": "🔬",
         "input_type": "tracks",
@@ -691,25 +692,29 @@ BLOCK_REGISTRY = {
         "backend": "local",
         "config_fields": [
             {
-                # The model always emits a softmax over 354 classes, so
-                # something always wins. This floor is what keeps a motion-blurred
-                # wing from being recorded as a species.
-                "name": "min_confidence",
-                "label": "Minimum confidence",
-                "field_type": "number",
+                # Every crop votes its top-1 — no confidence floor: on small
+                # crops a floor left whole runs with no species at all. How firm
+                # a call is shows as its vote share instead.
+                "name": "model",
+                "label": "Model",
+                "field_type": "select",
                 "required": False,
-                "default": 0.5,
-                "choices": None,
+                "default": "beemachine",
+                "choices": [
+                    {"value": "beemachine", "label": "BeeMachine (354 bee taxa)"},
+                    {"value": "bioclip", "label": "BioCLIP (species near the device)"},
+                ],
             },
         ],
     },
     "identify.marker": {
         "display_name": "Read Bee Marker (QR / Colour)",
         "description": "Read which individual each track is, from its paint "
-                       "mark. Decoded from the per-track crops the tracking run "
-                       "already saved, voting across a track's crops — so it "
-                       "also works on videos you analysed earlier. Printed tag "
-                       "(ArUco / QR) decoding is not implemented yet.",
+                       "mark. After tracking, every saved crop of a track is "
+                       "decoded and votes; the track takes the marker with the "
+                       "most votes. Videos analysed before this read their stored "
+                       "crops instead. Printed tag (ArUco / QR) decoding is not "
+                       "implemented yet.",
         "category": "identify",
         "icon": "🏷️",
         "input_type": "tracks",

@@ -1,6 +1,6 @@
 # 42 · Keep fine detail on the OAK; species + marker ID from every crop of a track
 
-Status: **plan** (2026-10-05). Track crops are already padded and saved for
+Status: **Part B built** (2026-10-05; needs a GPU image build + tag bump). Part A (OAK) next, tested on one unit. Track crops are already padded and saved for
 every detected frame (commit 149794b, not yet in a GPU image).
 
 ## Goal
@@ -72,7 +72,19 @@ New: after tracking, on the GPU worker, over the saved crops:
    Read marker becomes a GPU-job flag (now actually consumed). Old jobs keep
    the CPU marker fallback.
 
-## Open questions
-- BioCLIP label set: whole Tree of Life, or the region's candidate species
-  (monitor/priors.py already builds these)?
-- Confidence floor: none (every crop votes) or keep one?
+## Decisions (2026-10-05)
+- BioCLIP: the region's candidate species (monitor/priors.region_taxa from the
+  device's lat/lon + recording month); whole Tree of Life when none.
+- No confidence floor: every crop votes its top-1.
+- Order: Part B first, then Part A.
+
+## Built (Part B)
+- `beemonitor/identification/track_vote.py` (vote over crops),
+  `bioclip.py` (BioClipIdentifier), `SpeciesIdentifier.classify_images`.
+- Worker: `identify_tracks` after tracking → tracking CSV taxon/bee_id
+  columns + `track_votes.csv`; `summary_stats.identification` status. The
+  inline per-frame species path is no longer wired (still in the package).
+- Platform: Identify species has Model (beemachine|bioclip); Read marker sets
+  identify_markers (now consumed, so it re-runs the GPU job);
+  `_candidate_taxa` sends the region list for BioCLIP (not hashed).
+- GPU image: pybioclip + baked BioCLIP / ToL weights.

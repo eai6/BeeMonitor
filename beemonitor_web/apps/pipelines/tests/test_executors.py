@@ -275,14 +275,21 @@ class BuildJobConfigTests(ExecutorTestCase):
 
     def test_species_node_turns_classification_on_in_the_job(self):
         """The whole chain hangs off this flag: _spawn_gpu_job forwards it, the
-        handler passes it to CloudPipeline, and the tracker classifies with it."""
+        handler passes it to CloudPipeline, and the worker votes every crop."""
         analyzer = {"id": "sp", "block_type": "identify.species",
-                    "config": {"min_confidence": 0.7}, "inputs": {"tracks": "m"}}
+                    "config": {"model": "bioclip"}, "inputs": {"tracks": "m"}}
         built, err = self._build(self._module_steps(analyzer=analyzer))
 
         self.assertIsNone(err)
         self.assertTrue(built["config"]["identify_species"])
-        self.assertEqual(built["config"]["species_min_confidence"], 0.7)
+        self.assertEqual(built["config"]["species_classifier"], "bioclip")
+        self.assertNotIn("species_min_confidence", built["config"])
+
+    def test_species_model_defaults_to_beemachine(self):
+        analyzer = {"id": "sp", "block_type": "identify.species",
+                    "config": {}, "inputs": {"tracks": "m"}}
+        built, _ = self._build(self._module_steps(analyzer=analyzer))
+        self.assertEqual(built["config"]["species_classifier"], "beemachine")
 
     def test_species_flag_absent_without_the_node(self):
         built, _ = self._build(self._module_steps())
@@ -299,21 +306,18 @@ class BuildJobConfigTests(ExecutorTestCase):
 
         self.assertNotEqual(without["config"], with_species["config"])
 
-    def test_marker_node_does_not_add_identify_flags(self):
-        """Regression: identify_bees was a pure cache-buster.
-
-        Nothing downstream consumed it — analysis.views._spawn_gpu_job builds the
-        SageMaker payload key-by-key and dropped it — but engine._gpu_cache_key
-        hashes this dict, so its only effect was re-billing a full GPU run.
-        """
+    def test_marker_node_turns_marker_voting_on_in_the_job(self):
+        """The worker now decodes every crop of every track, so the marker node
+        really changes the output — and the key is consumed (_spawn_gpu_job
+        forwards it). The old identify_bees/marker_method keys stay gone."""
         analyzer = {"id": "i", "block_type": "identify.marker",
-                    "config": {"marker_type": "qr"}, "inputs": {"tracks": "m"}}
+                    "config": {"marker_type": "color"}, "inputs": {"tracks": "m"}}
         with_marker, _ = self._build(self._module_steps(analyzer=analyzer))
-        without, _ = self._build(self._module_steps())
 
+        self.assertTrue(with_marker["config"]["identify_markers"])
+        self.assertEqual(with_marker["config"]["marker_type"], "color")
         self.assertNotIn("identify_bees", with_marker["config"])
         self.assertNotIn("marker_method", with_marker["config"])
-        self.assertEqual(with_marker["config"], without["config"])
 
     def test_custom_object_model_is_resolved_by_pk(self):
         model = CustomModel.objects.create(

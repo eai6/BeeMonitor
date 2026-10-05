@@ -922,9 +922,11 @@ def _exec_analyze_colony_activity(step, run, context, inputs, index):
 def _exec_identify_species(step, run, context, inputs, index):
     """Report the species each track was classified as.
 
-    The GPU wrote the winner into the tracking CSV's taxon column during the
-    tracking pass (voting across every frame), so this is a pure read — the
-    taxon_confidence / taxon_votes columns say how firm each call was.
+    The GPU worker classified every crop of every track after tracking and
+    wrote each track's winner into the tracking CSV's taxon column, so this is
+    a pure read — taxon_votes / taxon_vote_share say how firm each call was.
+    When there is nothing, the worker's own account of why
+    (summary_stats["identification"]["species"]) is the note.
     """
     from . import ops
 
@@ -937,10 +939,25 @@ def _exec_identify_species(step, run, context, inputs, index):
     return {
         "artifact": "table", "table_kind": "species",
         "identified_tracks": 0, "unique_taxa": 0, "rows": [],
-        "note": "No species labels in the tracking data. Species classification "
-                "runs during tracking, so this pipeline has to be re-run with "
-                "this node present for the worker to produce them.",
+        "note": _species_note(result),
     }
+
+
+def _species_note(result):
+    """Why a run has no species, from what the worker recorded."""
+    stats = (result or {}).get("summary_stats") or {}
+    status = (stats.get("identification") or {}).get("species")
+    if not status:
+        return ("No species labels in the tracking data. Species are identified "
+                "on the GPU after tracking, so this pipeline has to be re-run "
+                "with this node present.")
+    model = "BioCLIP" if status.get("model") == "bioclip" else "BeeMachine"
+    if not status.get("loaded"):
+        return f"{model} could not be loaded: {status.get('error') or 'unknown error'}."
+    if not status.get("tracks"):
+        return f"{model} was ready, but the run saved no track crops to classify."
+    return (f"{model} classified {status.get('crops', 0)} crops from "
+            f"{status.get('tracks', 0)} tracks but named no species.")
 
 
 def _exec_identify_marker(step, run, context, inputs, index):
@@ -1210,25 +1227,28 @@ def _run_tracking_for(step):
 
 
 def _pipeline_species(step, steps):
-    """Species-classification settings from a downstream Identify Species node.
+    """Species model from a downstream Identify Species node, or None.
 
-    Unlike the marker flag this was replaced with, these keys are consumed all
-    the way down: _spawn_gpu_job forwards them, the handler passes them to
-    CloudPipeline, and the tracker classifies with them. They belong in the
-    hashed job config precisely *because* they change the output — the taxon
-    column differs — so adding the node correctly forces a re-run instead of
-    serving a cached result computed without it.
+    Consumed all the way down: _spawn_gpu_job forwards it, the worker votes
+    every crop of every track with it after tracking. It belongs in the hashed
+    job config because it changes the output (the taxon column), so adding or
+    switching the node forces a re-run instead of serving a cached result.
     """
     for s in downstream_ids(step.get("id"), steps):
         if s.get("block_type") != "identify.species":
             continue
-        cfg = s.get("config") or {}
-        try:
-            floor = float(cfg.get("min_confidence", 0.5) or 0.5)
-        except (TypeError, ValueError):
-            floor = 0.5
-        return True, floor
-    return False, 0.5
+        model = str((s.get("config") or {}).get("model") or "beemachine").lower()
+        return model if model in ("beemachine", "bioclip") else "beemachine"
+    return None
+
+
+def _pipeline_markers(step, steps):
+    """Marker type from a downstream Read Marker node, or None. Same contract as
+    species: the worker decodes and votes every crop after tracking."""
+    for s in downstream_ids(step.get("id"), steps):
+        if s.get("block_type") == "identify.marker":
+            return (s.get("config") or {}).get("marker_type", "auto") or "auto"
+    return None
 
 
 def _pipeline_tracker(step, steps):
@@ -1318,10 +1338,14 @@ def build_detect_and_track_config(step, run, context, index):
         # Selected on the downstream MOT node; inert on the worker for now.
         "tracker": _pipeline_tracker(step, run.steps),
     }
-    wants_species, species_floor = _pipeline_species(step, run.steps)
-    if wants_species:
+    species_model = _pipeline_species(step, run.steps)
+    if species_model:
         config["identify_species"] = True
-        config["species_min_confidence"] = species_floor
+        config["species_classifier"] = species_model
+    marker_type = _pipeline_markers(step, run.steps)
+    if marker_type:
+        config["identify_markers"] = True
+        config["marker_type"] = marker_type
     legacy_ref = cfg.get("reference_source")
     if step.get("block_type") == "detect.objects" and legacy_ref:
         # Legacy graphs only: part of the hashed config so two pre-split Detectors
@@ -1330,12 +1354,6 @@ def build_detect_and_track_config(step, run, context, index):
     model_err = _resolve_custom_models(cfg, run, config)
     if model_err:
         return None, model_err
-    # NOTE: this used to set identify_bees/marker_method when an identify.marker
-    # node was present. Nothing consumed them — analysis.views._spawn_gpu_job
-    # builds the SageMaker payload key-by-key and drops them — while
-    # engine._gpu_cache_key hashes this whole dict, so their only observable
-    # effect was busting the StepResult cache and re-billing a full GPU run for a
-    # bit-identical result. Re-add them together with an actual marker decoder.
     # The Detector module carries its own reference config, so resolve it from
     # this step rather than walking upstream (nothing upstream of a Detector
     # produces an ROI). Legacy detect/track nodes still take theirs from an

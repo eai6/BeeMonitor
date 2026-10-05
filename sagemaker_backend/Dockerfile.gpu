@@ -70,6 +70,11 @@ from transformers import Sam3Model, Sam3Processor; \
 t=os.environ.get('HF_TOKEN') or None; \
 Sam3Processor.from_pretrained('facebook/sam3', token=t); \
 Sam3Model.from_pretrained('facebook/sam3', token=t)"
+# BioCLIP weights + the Tree-of-Life embeddings, baked in like SAM 3: the
+# worker runs offline. A custom label set only needs the model (its text
+# embeddings are built per job from the region's species).
+RUN python -c "from bioclip import TreeOfLifeClassifier, CustomLabelsClassifier; \
+TreeOfLifeClassifier(); CustomLabelsClassifier(['Apis mellifera'])"
 ENV HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1
 

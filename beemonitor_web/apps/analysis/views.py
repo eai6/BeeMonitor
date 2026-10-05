@@ -183,6 +183,22 @@ def _drain_queue() -> int:
     return spawned
 
 
+def _candidate_taxa(video) -> list:
+    """Species recorded near the video's device, for BioCLIP. ``[]`` (the
+    worker then uses the whole Tree of Life) when there is no location or the
+    lookup fails — an ID is never blocked on it."""
+    device = getattr(video, "device", None)
+    if device is None or device.lat is None or device.lon is None:
+        return []
+    try:
+        from apps.monitor.priors import region_taxa
+        month = video.recorded_at.month if video.recorded_at else None
+        return region_taxa(device.lat, device.lon, month)
+    except Exception:
+        logger.exception("candidate taxa lookup failed for video %s", video.pk)
+        return []
+
+
 def _spawn_gpu_job(job_pk: int) -> None:
     """Invoke the SageMaker Async endpoint for a single job.
 
@@ -258,15 +274,21 @@ def _spawn_gpu_job(job_pk: int) -> None:
         if job.config.get("detector_kind") == "sam3":
             payload["detector_kind"] = "sam3"
             payload["text_prompt"] = job.config.get("text_prompt", "") or "bee"
-        # Species classification runs inside the tracking pass; the worker fetches
-        # the BeeMachine model only when this flag is set.
+        # Species / marker identity: the worker votes every crop of each track
+        # after tracking. These keys are in the hashed job config; the
+        # candidate list below is not — it comes from iNaturalist/GBIF and
+        # drifts, and a re-run should not be forced by that.
         if job.config.get("identify_species"):
             payload["identify_species"] = True
+            classifier = job.config.get("species_classifier") or "beemachine"
+            payload["species_classifier"] = classifier
             if job.config.get("species_model_key"):
                 payload["species_model_key"] = job.config["species_model_key"]
-            if job.config.get("species_min_confidence") is not None:
-                payload["species_min_confidence"] = float(
-                    job.config["species_min_confidence"])
+            if classifier == "bioclip":
+                payload["candidate_taxa"] = _candidate_taxa(video)
+        if job.config.get("identify_markers"):
+            payload["identify_markers"] = True
+            payload["marker_type"] = job.config.get("marker_type") or "auto"
         # Recording start metadata → event timestamps; no filename convention needed.
         if video.recorded_at:
             payload["recorded_at"] = video.recorded_at.isoformat()

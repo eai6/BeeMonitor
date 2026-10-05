@@ -204,3 +204,53 @@ class TestSampleKeys:
         keys = [str(i) for i in range(100)]
         out = _sample_keys(keys, 5)
         assert out == ["0", "25", "50", "74", "99"]
+
+
+class TestIdentifyTracks:
+    """The worker writes each track's vote into the tracking CSV the platform reads."""
+
+    def _setup(self, tmp_path):
+        import cv2
+        import numpy as np
+        for tid in (1, 2):
+            d = tmp_path / "crops" / "clip" / f"track_{tid:04d}"
+            d.mkdir(parents=True)
+            for f in range(3):
+                cv2.imwrite(str(d / f"frame_{f:06d}.jpg"), np.zeros((40, 40, 3), np.uint8))
+        pd.DataFrame({
+            "frame": [0, 1, 0], "track_id": [1, 1, 2],
+            "taxon": ["bee", "bee", "bee"], "taxon_confidence": [None] * 3,
+            "taxon_votes": [0, 0, 0], "bee_id": [None] * 3,
+            "bee_id_method": [None] * 3, "bee_id_confidence": [0.0] * 3,
+        }).to_csv(tmp_path / "clip_tracking_results.csv", index=False)
+
+    def test_species_written_back_and_status_reported(self, tmp_path):
+        from cloud.wrapper.pipeline import identify_tracks
+        self._setup(tmp_path)
+
+        class Species:
+            def classify_images(self, images):
+                return [("Osmia lignaria", 0.4)] * len(images)
+
+        status = identify_tracks(tmp_path, species=Species(),
+                                 species_status={"model": "beemachine", "loaded": True})
+        df = pd.read_csv(tmp_path / "clip_tracking_results.csv")
+        assert set(df["taxon"]) == {"Osmia lignaria"}
+        assert set(df["taxon_votes"]) == {3}
+        assert status["species"]["identified"] == 2
+        assert status["species"]["crops"] == 6
+        assert (tmp_path / "track_votes.csv").exists()
+
+    def test_a_track_with_no_reading_keeps_the_detector_label(self, tmp_path):
+        from cloud.wrapper.pipeline import identify_tracks
+        self._setup(tmp_path)
+
+        class Species:
+            def classify_images(self, images):
+                return [None] * len(images)
+
+        identify_tracks(tmp_path, species=Species(),
+                        species_status={"model": "beemachine", "loaded": True})
+        df = pd.read_csv(tmp_path / "clip_tracking_results.csv")
+        assert set(df["taxon"]) == {"bee"}
+        assert set(df["taxon_votes"]) == {0}

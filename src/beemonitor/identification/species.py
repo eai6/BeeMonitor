@@ -245,6 +245,32 @@ class SpeciesIdentifier(BaseIdentifier):
         return results
 
 
+    def classify_images(self, images, batch: int = 64):
+        """Classify whole crops (BGR arrays), top-1 each, in batches.
+
+        Returns a list aligned with ``images``: ``(taxon, confidence)``, or None
+        where an image is missing or too small. Applies ``min_confidence`` like
+        every other path — build with ``min_confidence=0`` to let every crop
+        vote.
+        """
+        results = [None] * len(images)
+        usable = []
+        for i, image in enumerate(images):
+            if not self._usable(image):
+                continue
+            prepared = self.preprocess(image)
+            if prepared is not None:
+                usable.append((i, prepared[0]))
+        for start in range(0, len(usable), batch):
+            chunk = usable[start:start + batch]
+            scores = np.asarray(self._infer(np.stack([b for _i, b in chunk]).astype(np.float32)))
+            for row, (i, _b) in enumerate(chunk):
+                decoded = self._decode(scores[row])
+                if decoded:
+                    results[i] = (decoded[0], decoded[2])
+        return results
+
+
 class SpeciesVote:
     """Accumulate per-frame species readings for one trajectory.
 

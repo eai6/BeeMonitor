@@ -50,6 +50,68 @@ def _sample_keys(keys, n=MANIFEST_CROPS_PER_TRACK):
     return [keys[round(i * step)] for i in range(n)]
 
 
+def identify_tracks(output_dir, species=None, marker=None,
+                    species_status=None, marker_status=None):
+    """Vote species / marker over every crop of every track; write the result
+    into the tracking CSV and every crop's reading into track_votes.csv.
+
+    The tracking CSV keeps the columns the platform already reads: ``taxon``,
+    ``taxon_confidence``, ``taxon_votes`` (> 0 marks a real identification)
+    and ``bee_id`` / ``bee_id_method`` / ``bee_id_confidence``; the vote share
+    and crop counts are appended. Returns the status dict for summary_stats.
+    """
+    import pandas as pd
+    from beemonitor.identification.track_vote import vote_tracks
+
+    output_dir = Path(output_dir)
+    tracks, rows = vote_tracks(output_dir / "crops", species=species, marker=marker)
+    if rows:
+        pd.DataFrame(rows).to_csv(output_dir / "track_votes.csv", index=False)
+
+    result = {}
+    if species_status is not None:
+        s = dict(species_status)
+        s["tracks"] = len(tracks)
+        s["identified"] = sum(1 for t in tracks.values() if t.get("taxon"))
+        s["crops"] = sum(t.get("taxon_crops", 0) for t in tracks.values())
+        if s.get("loaded") and not tracks:
+            s["error"] = "no track crops to classify"
+        result["species"] = s
+    if marker_status is not None:
+        m = dict(marker_status)
+        m["tracks"] = len(tracks)
+        m["identified"] = sum(1 for t in tracks.values() if t.get("marker"))
+        m["crops"] = sum(t.get("marker_crops", 0) for t in tracks.values())
+        result["markers"] = m
+
+    tracking = next(iter(output_dir.glob("*_tracking_results.csv")), None)
+    if tracking is not None and tracks:
+        df = pd.read_csv(tracking)
+        if "track_id" in df.columns:
+            ids = df["track_id"]
+            def col(name, key, default=None):
+                df[name] = ids.map(lambda t: tracks.get(int(t), {}).get(key, default)
+                                   if pd.notna(t) else default)
+            if species is not None:
+                winners = {t for t, r in tracks.items() if r.get("taxon")}
+                keep = ids.map(lambda t: pd.notna(t) and int(t) in winners)
+                for name, key in (("taxon", "taxon"), ("taxon_confidence", "taxon_confidence")):
+                    new = ids.map(lambda t: tracks.get(int(t), {}).get(key) if pd.notna(t) else None)
+                    df[name] = new.where(keep, df.get(name))
+                col("taxon_votes", "taxon_votes", 0)
+                col("taxon_vote_share", "taxon_vote_share", 0.0)
+                col("taxon_crops", "taxon_crops", 0)
+            if marker is not None:
+                col("bee_id", "marker")
+                df["bee_id_method"] = df["bee_id"].map(
+                    lambda v: getattr(marker, "method", "marker") if pd.notna(v) and v else None)
+                col("bee_id_confidence", "marker_confidence")
+                col("bee_id_votes", "marker_votes", 0)
+                col("bee_id_vote_share", "marker_vote_share", 0.0)
+            df.to_csv(tracking, index=False)
+    return result
+
+
 @dataclass
 class PipelineResult:
     """Structured result returned after cloud processing."""
@@ -133,6 +195,10 @@ class CloudPipeline:
         species_model_key: str = "",
         species_min_confidence: float = 0.5,
         species_max_votes: int = 25,
+        species_classifier: str = "beemachine",
+        candidate_taxa: "list | None" = None,
+        identify_markers: bool = False,
+        marker_type: str = "auto",
     ) -> PipelineResult:
         """Run the full BeeMonitor pipeline on a video stored in S3.
 
@@ -174,19 +240,22 @@ class CloudPipeline:
             logger.info("[%s] Downloading custom bee model: %s", job_id, custom_bee_model_path)
             custom_bee_local = self._models.ensure_custom_model(custom_bee_model_path)
 
-        # BeeMachine species classifier — fetched only when asked for, since it
-        # is ~83 MB and most runs don't need it. A failure here must not sink the
-        # job: tracking is still useful without species labels.
-        species_local = ""
+        # Species and marker identity are decided AFTER tracking, by a vote over
+        # every saved crop of each track (_identify_tracks). Build the
+        # classifiers now so a missing model is known — and reported — up front.
+        # A failure here must not sink the job: tracking is still useful without
+        # species labels, but the reason goes in the result, never just the log.
+        species, species_status = None, None
         if identify_species:
-            key = species_model_key or os.environ.get(
-                "BEEMACHINE_MODEL_KEY", "v1/beemachine_v2s_300.onnx")
-            try:
-                species_local = self._models.ensure_custom_model(key)
-                logger.info("[%s] Species classifier ready: %s", job_id, species_local)
-            except Exception as exc:
-                logger.warning("[%s] Species classifier unavailable (%s) — "
-                               "continuing without species labels", job_id, exc)
+            species, species_status = self._species_classifier(
+                job_id, species_classifier, species_model_key, candidate_taxa)
+        marker, marker_status = None, None
+        if identify_markers:
+            from beemonitor.identification import build_identifier
+            marker = build_identifier(marker_type)
+            marker_status = {"marker_type": marker_type, "loaded": marker is not None}
+            if marker is None:
+                marker_status["error"] = f"no decoder for '{marker_type}' markers"
 
         # Nest/hotel-only jobs (run_tracking=False, e.g. the pipeline builder's
         # Detect Nest block) skip motion detection, tracking, events, and all
@@ -217,10 +286,14 @@ class CloudPipeline:
             end_frame=end_frame,
             detector_kind=detector_kind,
             text_prompt=text_prompt,
-            species_model=species_local,
-            species_min_confidence=species_min_confidence,
-            species_max_votes=species_max_votes,
         )
+
+        identification = None
+        if species_status is not None or marker_status is not None:
+            with _stage("identify"):
+                identification = identify_tracks(
+                    output_dir, species=species, marker=marker,
+                    species_status=species_status, marker_status=marker_status)
 
         with _stage("postprocess"):
             # Step 4 — Post-processing: foraging trips + interactions
@@ -337,6 +410,9 @@ class CloudPipeline:
         if crops_manifest:
             stats["crops_manifest"] = crops_manifest
             stats["crops_total"] = result_paths.get("crops_total", 0)
+        # What species / marker ID did, and why not when it didn't.
+        if identification is not None:
+            stats["identification"] = identification
 
         # Persist nest bounding boxes for future use (avoids re-detection)
         if nests and isinstance(nests, dict) and nests.get("nests"):
@@ -465,6 +541,34 @@ class CloudPipeline:
         key = f"{user_id}/{job_id}/nest_preview.jpg"
         self._storage.upload_file("processed", key, local)
         return key
+
+    def _species_classifier(self, job_id, kind, model_key, candidates):
+        """``(classifier, status)`` for the pipeline's species model.
+
+        Every crop votes (no confidence floor) — see track_vote.
+        """
+        kind = (kind or "beemachine").lower()
+        status = {"model": kind, "loaded": False}
+        try:
+            if kind == "bioclip":
+                from beemonitor.identification.bioclip import BioClipIdentifier
+                clf = BioClipIdentifier(candidates)
+                status["candidates"] = len(clf.labels)
+                status["label_set"] = "region" if clf.constrained else "tree_of_life"
+            else:
+                from beemonitor.identification.species import SpeciesIdentifier
+                key = model_key or os.environ.get(
+                    "BEEMACHINE_MODEL_KEY", "v1/beemachine_v2s_300.onnx")
+                clf = SpeciesIdentifier(model_path=self._models.ensure_custom_model(key),
+                                        min_confidence=0.0)
+                clf._runtime()   # load now: a bad model fails here, not per crop
+            status["loaded"] = True
+            logger.info("[%s] Species classifier ready: %s", job_id, status)
+            return clf, status
+        except Exception as exc:
+            logger.warning("[%s] Species classifier unavailable (%s)", job_id, exc)
+            status["error"] = str(exc)[:300]
+            return None, status
 
     def _run_analysis(
         self,
@@ -686,6 +790,13 @@ class CloudPipeline:
             blob_path = f"{prefix}/tracking_results.csv"
             self._storage.upload_file(container, blob_path, str(tracking_files[0]))
             uploaded["tracking_csv"] = blob_path
+
+        # Every crop's species / marker reading (the votes behind each track).
+        votes_file = output_dir / "track_votes.csv"
+        if votes_file.exists():
+            blob_path = f"{prefix}/track_votes.csv"
+            self._storage.upload_file(container, blob_path, str(votes_file))
+            uploaded["track_votes_csv"] = blob_path
 
         # Foraging trips CSV
         trips_files = list(output_dir.glob("foraging_trips.csv"))
