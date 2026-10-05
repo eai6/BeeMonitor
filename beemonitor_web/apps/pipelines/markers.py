@@ -1,7 +1,8 @@
 """Read individual bee markers from the per-track crops already in S3.
 
-Every tracking job uploads a handful of crops per track plus a ``track_crops.csv``
-index (``track_id, frame, crop_key``) — that has been happening since the "bee id
+Every tracking job uploads a crop of every frame each track was detected in,
+plus a ``track_crops.csv`` index (``track_id, frame, crop_key``; the job's
+manifest keeps an evenly spaced sample per track) — that has been happening since the "bee id
 feature" commit, whose actual contribution was collecting this training data. The
 decoder that was supposed to consume it never got written, so ``bee_id`` in the
 tracking CSV is always empty.

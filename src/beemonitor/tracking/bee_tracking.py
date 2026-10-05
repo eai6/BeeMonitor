@@ -106,6 +106,31 @@ def _decode_into(cap, start_frame, end_frame, frame_queue, stop_event):
                     break
 
 
+# Crops are the record a species or marker model reads later, so keep them close
+# to the decoded pixels.
+CROP_JPEG_QUALITY = 95
+
+
+def padded_box(bbox, width, height, padding=0.25, min_padding_px=16):
+    """``bbox`` grown by ``padding`` × its size on each side (at least
+    ``min_padding_px``), clamped to the frame, as ints — or None if empty."""
+    try:
+        x1, y1, x2, y2 = (float(v) for v in bbox[:4])
+    except (TypeError, ValueError):
+        return None
+    x1, x2 = sorted((x1, x2))
+    y1, y2 = sorted((y1, y2))
+    pad_x = max(min_padding_px, (x2 - x1) * padding)
+    pad_y = max(min_padding_px, (y2 - y1) * padding)
+    x1 = max(0, int(round(x1 - pad_x)))
+    y1 = max(0, int(round(y1 - pad_y)))
+    x2 = min(int(width), int(round(x2 + pad_x)))
+    y2 = min(int(height), int(round(y2 + pad_y)))
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return x1, y1, x2, y2
+
+
 def _iter_frames(cap, start_frame, end_frame):
     """``(frame_num, frame)`` in order, decoded ahead on a reader thread.
 
@@ -197,7 +222,13 @@ class BeeTracking:
         # Crop saving for identification training
         save_crops: bool = False,
         crop_output_dir: Optional[str] = None,
-        crops_per_track: int = 5,
+        crops_per_track: int = 0,
+        # Margin added around each saved crop, as a fraction of the box's own
+        # width/height per side, with a floor in pixels. The detector's box is
+        # tight on the body, so an unpadded crop clips legs, antennae and wing
+        # edges — the details a small bee is identified by.
+        crop_padding: float = 0.25,
+        crop_min_padding_px: int = 16,
         # Pluggable detector: pass an injected BaseDetector (e.g. Sam3Detector)
         # to replace YOLO; default None builds the YOLO detector below.
         detector=None,
@@ -225,7 +256,9 @@ class BeeTracking:
             Crop saving (for identification training data):
                 save_crops: Whether to save bbox crops of tracked bees
                 crop_output_dir: Directory to save crops (default: ./crops)
-                crops_per_track: Number of crops to save per track (default: 5)
+                crops_per_track: Max crops per track; 0 (default) = every frame
+                    the track was detected in
+                crop_padding / crop_min_padding_px: margin around each crop
         """
         logger.info("Initializing BeeTracking (v2.4 YOLO-only with adaptive tracker + identification)")
         
@@ -299,6 +332,8 @@ class BeeTracking:
         self.save_crops = save_crops
         self.crop_output_dir = crop_output_dir or './crops'
         self.crops_per_track = crops_per_track
+        self.crop_padding = max(0.0, float(crop_padding))
+        self.crop_min_padding_px = max(0, int(crop_min_padding_px))
         self.track_crop_counts = {}  # track_id -> number of crops saved
         
         # Two-mode system state
@@ -507,61 +542,67 @@ class BeeTracking:
         vote = self.species_votes.get(track_id)
         return vote.winner() if vote else None
 
-    def _save_track_crops(self, frame: np.ndarray, tracks: List[Dict], frame_num: int):
-        """
-        Save bbox crops for tracked bees (for identification training data).
-        
-        Args:
-            frame: Full video frame
-            tracks: List of confirmed tracks
-            frame_num: Current frame number
+    def _save_track_crops(self, frame: np.ndarray, frame_num: int):
+        """Save a padded crop of every track detected in this frame.
+
+        Every frame a track was *detected* in gets a crop, from its first
+        frame. A frame where the tracker only predicted the bee (no detection,
+        ``time_since_update > 0``) gets none: the stored box is from an earlier
+        frame and the bee has moved, so the crop would be of the wrong place.
+
+        A track has no id until it is confirmed (``min_hits``), so the crops of
+        its tentative frames wait on the track object and are written under its
+        id once it is confirmed. A track that dies tentative was noise; its
+        crops go with it.
         """
         import os
-        
-        if not self.save_crops or not tracks:
+
+        if not self.save_crops or self.tracker is None:
             return
-        
+
         h, w = frame.shape[:2]
-        
-        for track in tracks:
-            track_id = track['track_id']
-            
-            # Check if we've saved enough crops for this track
-            # crops_per_track <= 0 keeps EVERY frame of the trajectory — the full
-            # record, so historical footage can be re-classified by a future
-            # model without re-running the GPU. One S3 PUT per crop.
-            saved = self.track_crop_counts.get(track_id, 0)
-            if self.crops_per_track > 0 and saved >= self.crops_per_track:
+        for track in self.tracker.tracks:
+            if track.time_since_update != 0:
+                continue  # predicted, not detected, this frame
+
+            box = padded_box(track.last_bbox, w, h,
+                             self.crop_padding, self.crop_min_padding_px)
+            if box is None:
                 continue
-            
-            # Extract bbox
-            x1 = max(0, int(track['x1']))
-            y1 = max(0, int(track['y1']))
-            x2 = min(w, int(track['x2']))
-            y2 = min(h, int(track['y2']))
-            
-            if x1 >= x2 or y1 >= y2:
-                continue
-            
-            # Crop bee region
+            x1, y1, x2, y2 = box
             crop = frame[y1:y2, x1:x2]
-            
             if crop.size == 0:
                 continue
-            
-            # Save crop: crops/track_{id}/frame_{num}.jpg
-            track_dir = os.path.join(self.crop_output_dir, f'track_{track_id:04d}')
-            os.makedirs(track_dir, exist_ok=True)
-            
-            crop_path = os.path.join(track_dir, f'frame_{frame_num:06d}.jpg')
-            success = cv2.imwrite(crop_path, crop)
-            
-            if success:
-                self.track_crop_counts[track_id] = saved + 1
-                logger.info(f"Saved crop {saved + 1}/{self.crops_per_track} for track {track_id}: {crop_path}")
-            else:
-                logger.warning(f"Failed to save crop: {crop_path}")
-    
+
+            pending = getattr(track, "_pending_crops", None)
+            if not track.is_confirmed:
+                if pending is None:
+                    pending = track._pending_crops = []
+                pending.append((frame_num, crop.copy()))
+                continue
+
+            if pending:
+                for pending_frame, pending_crop in pending:
+                    self._write_crop(track.id, pending_frame, pending_crop)
+                track._pending_crops = []
+            self._write_crop(track.id, frame_num, crop)
+
+    def _write_crop(self, track_id: int, frame_num: int, crop: np.ndarray):
+        """Write one crop to crops/track_{id}/frame_{num}.jpg, honouring
+        ``crops_per_track`` (0 = no cap)."""
+        import os
+
+        saved = self.track_crop_counts.get(track_id, 0)
+        if self.crops_per_track > 0 and saved >= self.crops_per_track:
+            return
+        track_dir = os.path.join(self.crop_output_dir, f'track_{track_id:04d}')
+        os.makedirs(track_dir, exist_ok=True)
+        crop_path = os.path.join(track_dir, f'frame_{frame_num:06d}.jpg')
+        if cv2.imwrite(crop_path, crop, [int(cv2.IMWRITE_JPEG_QUALITY), CROP_JPEG_QUALITY]):
+            self.track_crop_counts[track_id] = saved + 1
+        else:
+            logger.warning(f"Failed to save crop: {crop_path}")
+
     def process_frame(
         self,
         frame: np.ndarray,
@@ -629,12 +670,16 @@ class BeeTracking:
                     batched = self.yolo_detector.detect_batch(
                         [f for _, f in buffered])
 
-                    for (buf_frame_num, _), yolo_detections in zip(buffered, batched):
+                    for (buf_frame_num, buf_frame), yolo_detections in zip(buffered, batched):
                         buf_detections = to_tracker_rows(yolo_detections)
 
                         # Update tracker with lookback detections
                         if self.tracker is not None:
                             buf_tracks = self.tracker.update(buf_detections, buf_frame_num)
+                            # These frames are real detections too — the start
+                            # of the bee's arrival — so they get crops.
+                            if self.save_crops:
+                                self._save_track_crops(buf_frame, buf_frame_num)
                             lookback_results.append({
                                 'frame_num': buf_frame_num,
                                 'detections': buf_detections,
@@ -696,8 +741,8 @@ class BeeTracking:
             self._classify_species(frame, tracks)
 
         # Save crops for identification training
-        if self.save_crops and tracks:
-            self._save_track_crops(frame, tracks, frame_num)
+        if self.save_crops and self.tracker is not None:
+            self._save_track_crops(frame, frame_num)
         
         result = {
             'frame_num': frame_num,

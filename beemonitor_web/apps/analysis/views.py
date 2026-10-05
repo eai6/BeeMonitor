@@ -1749,7 +1749,8 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
                     track_crops.append({"track_id": track_id, "crops": thumbs})
                     total_crops += len(thumbs)
         ctx["track_crops"] = track_crops
-        ctx["total_crops"] = total_crops
+        # The manifest holds a sample per track; the real count rides beside it.
+        ctx["total_crops"] = stats.get("crops_total") or total_crops
         if result.crops_csv_path:
             ctx["crops_csv_url"] = _generate_presigned_url(result.crops_csv_path)
 

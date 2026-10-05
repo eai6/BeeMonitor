@@ -462,7 +462,11 @@ class TrackingConfig:
     force_yolo_for_tracking: bool = True
 
     save_crops = True
-    crops_per_track = 10
+    # 0 = a crop from every frame each track was detected in (not just the
+    # first few, which are usually the bee flying in, motion-blurred).
+    crops_per_track = 0
+    crop_padding = 0.25        # margin per side, as a fraction of the box
+    crop_min_padding_px = 16
 
     # Event-classifier confidence cutoff (EventProcessor). 0.6 = best F1 on the
     # eval set (96% precision / 90% recall); lower to ~0.3-0.4 to recover recall

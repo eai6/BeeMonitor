@@ -36,6 +36,20 @@ def _stage(name: str):
         yield
 
 
+# Crops per track kept in the job's summary_stats manifest (the job page and the
+# marker reader use it). Every crop is still in S3 and in track_crops.csv.
+MANIFEST_CROPS_PER_TRACK = 12
+CROP_UPLOAD_WORKERS = 16
+
+
+def _sample_keys(keys, n=MANIFEST_CROPS_PER_TRACK):
+    """Up to ``n`` keys spread evenly across the track, first and last kept."""
+    if len(keys) <= n:
+        return list(keys)
+    step = (len(keys) - 1) / (n - 1)
+    return [keys[round(i * step)] for i in range(n)]
+
+
 @dataclass
 class PipelineResult:
     """Structured result returned after cloud processing."""
@@ -322,6 +336,7 @@ class CloudPipeline:
         # Per-track crop keys ({track_id: [crop S3 keys]}) for later species ID.
         if crops_manifest:
             stats["crops_manifest"] = crops_manifest
+            stats["crops_total"] = result_paths.get("crops_total", 0)
 
         # Persist nest bounding boxes for future use (avoids re-detection)
         if nests and isinstance(nests, dict) and nests.get("nests"):
@@ -686,12 +701,16 @@ class CloudPipeline:
             self._storage.upload_file(container, blob_path, str(interactions_files[0]))
             uploaded["interactions_csv"] = blob_path
 
-        # Per-track crops — upload every crop the tracker saved so a species
-        # model can run on them later. Emits a track_crops.csv index and a
-        # {track_id: [crop keys]} manifest.
+        # Per-track crops — upload every crop the tracker saved (one per frame
+        # each track was detected in) so a species or marker model can run on
+        # them later. track_crops.csv indexes all of them; the manifest that
+        # rides in summary_stats carries only an evenly spaced sample per track
+        # (see _sample_keys), since a clip can now have thousands.
         import csv as _csv
-        crops_manifest: dict[str, list] = {}
+        from concurrent.futures import ThreadPoolExecutor
+        all_keys: dict[str, list] = {}
         crop_rows = []
+        uploads = []
         for crop_path in sorted(output_dir.glob("crops/**/*.jpg")):
             # .../crops/<video_stem>/track_NNNN/frame_MMMMMM.jpg
             parts = crop_path.parts
@@ -703,10 +722,18 @@ class CloudPipeline:
             except (IndexError, ValueError):
                 continue
             blob_path = f"{prefix}/crops/{track_dir}/{crop_path.name}"
-            self._storage.upload_file(container, blob_path, str(crop_path),
-                                      content_type="image/jpeg")
-            crops_manifest.setdefault(track_id, []).append(blob_path)
+            uploads.append((blob_path, str(crop_path)))
+            all_keys.setdefault(track_id, []).append(blob_path)
             crop_rows.append((track_id, crop_path.stem.replace("frame_", ""), blob_path))
+        if uploads:
+            # Small objects, one PUT each: latency-bound, so upload in parallel
+            # (boto3 clients are thread-safe). list() re-raises any failure.
+            with ThreadPoolExecutor(max_workers=CROP_UPLOAD_WORKERS) as pool:
+                list(pool.map(
+                    lambda u: self._storage.upload_file(container, u[0], u[1],
+                                                        content_type="image/jpeg"),
+                    uploads))
+        crops_manifest = {t: _sample_keys(keys) for t, keys in all_keys.items()}
         if crop_rows:
             csv_local = output_dir / "track_crops.csv"
             with open(csv_local, "w", newline="") as fh:
@@ -717,6 +744,7 @@ class CloudPipeline:
             self._storage.upload_file(container, crops_csv_key, str(csv_local))
             uploaded["crops_csv"] = crops_csv_key
             uploaded["crops_manifest"] = crops_manifest
+            uploaded["crops_total"] = len(crop_rows)
             logger.info("[%s] uploaded %d crops across %d tracks",
                         job_id, len(crop_rows), len(crops_manifest))
 

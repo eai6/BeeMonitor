@@ -233,7 +233,9 @@ class BeeMonitor:
             iou_threshold=tracker_params['iou_threshold'],
             # Crop saving for identification training
             save_crops=getattr(self.config.tracking, 'save_crops', False),
-            crops_per_track=getattr(self.config.tracking, 'crops_per_track', 10),
+            crops_per_track=getattr(self.config.tracking, 'crops_per_track', 0),
+            crop_padding=getattr(self.config.tracking, 'crop_padding', 0.25),
+            crop_min_padding_px=getattr(self.config.tracking, 'crop_min_padding_px', 16),
             detector=detector,
             species_classifier=species_classifier,
             species_max_votes=getattr(

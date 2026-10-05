@@ -190,3 +190,17 @@ class TestLayout:
     def test_model_nests_fill_in_but_the_roi_stays(self, clip):
         layout = self._fill(clip, {"hotel": (10, 10, 20, 20), "nests": {"a": (1, 2, 3, 4)}})
         assert layout == {"hotel": (0, 0, 320, 240), "nests": {"a": (1, 2, 3, 4)}}
+
+
+class TestSampleKeys:
+    """The job manifest keeps a spread of each track's crops, not the first N."""
+
+    def test_short_lists_pass_through(self):
+        from cloud.wrapper.pipeline import _sample_keys
+        assert _sample_keys(["a", "b"], 12) == ["a", "b"]
+
+    def test_long_lists_keep_first_last_and_spread(self):
+        from cloud.wrapper.pipeline import _sample_keys
+        keys = [str(i) for i in range(100)]
+        out = _sample_keys(keys, 5)
+        assert out == ["0", "25", "50", "74", "99"]
