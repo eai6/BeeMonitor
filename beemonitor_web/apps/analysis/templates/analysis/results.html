@@ -296,7 +296,11 @@
         {% elif t.ident.taxon_crops %}<span class="ml-2 text-gray-400">no species read from {{ t.ident.taxon_crops }} crops</span>{% endif %}
         {% if t.ident.marker %}<span class="ml-2 text-gray-900">marker {{ t.ident.marker }}</span>
           <span class="text-gray-400">· {{ t.ident.marker_votes }}/{{ t.ident.marker_crops }} crops</span>{% endif %}
-        <span class="text-gray-400">· showing {{ t.crops|length }} of the track's crops</span></p>
+        <span class="text-gray-400" data-crop-count>· {% if t.total and t.total > t.crops|length %}best {{ t.crops|length }} of {{ t.total }} crops{% else %}{{ t.crops|length }} crops{% endif %}</span>
+        {% if not t.total or t.total > t.crops|length %}
+        <button type="button" class="ml-2 text-teal-600 hover:underline" data-show-all
+                data-url="{% url 'analysis:track_crops' job.pk t.track_id %}">Show all{% if t.total %} {{ t.total }}{% endif %}</button>
+        {% endif %}</p>
       <div class="flex gap-2 overflow-x-auto pb-1" data-crop-strip
            data-label="Track {{ t.track_id }}{% if t.ident.taxon %} · {{ t.ident.taxon }}{% endif %}{% if t.ident.marker %} · marker {{ t.ident.marker }}{% endif %}">
         {% for url in t.crops %}
@@ -346,17 +350,55 @@
   }
   function open() { viewer.classList.remove('hidden'); viewer.classList.add('flex'); }
   function close() { viewer.classList.add('hidden'); viewer.classList.remove('flex'); img.removeAttribute('src'); }
-  document.querySelectorAll('[data-crop-strip]').forEach(function (strip) {
+  // Delegated, so crops loaded by "Show all" open here too.
+  document.addEventListener('click', function (e) {
+    const a = e.target.closest('[data-crop]');
+    if (!a) return;
+    const strip = a.closest('[data-crop-strip]');
+    if (!strip) return;
+    e.preventDefault();
     const links = Array.from(strip.querySelectorAll('[data-crop]'));
-    links.forEach(function (a, n) {
-      a.addEventListener('click', function (e) {
-        e.preventDefault();
-        urls = links.map(function (l) { return l.href; });
-        i = n;
-        document.getElementById('cv-label').textContent = strip.dataset.label;
-        open();
-        show();
-      });
+    urls = links.map(function (l) { return l.href; });
+    i = links.indexOf(a);
+    document.getElementById('cv-label').textContent = strip.dataset.label;
+    open();
+    show();
+  });
+
+  // "Show all": load every crop of the track (frame order) into its strip.
+  document.querySelectorAll('[data-show-all]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      const row = btn.closest('div');
+      const strip = row.querySelector('[data-crop-strip]');
+      btn.disabled = true;
+      btn.textContent = 'Loading…';
+      fetch(btn.dataset.url, {credentials: 'same-origin'})
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          const crops = data.crops || [];
+          if (!crops.length) { btn.textContent = 'No more crops stored'; return; }
+          strip.innerHTML = '';
+          strip.classList.remove('overflow-x-auto');
+          strip.classList.add('flex-wrap');
+          crops.forEach(function (c) {
+            const link = document.createElement('a');
+            link.href = c.url;
+            link.className = 'shrink-0';
+            link.setAttribute('data-crop', '');
+            link.title = 'frame ' + c.frame + (c.sharpness != null ? ' · sharpness ' + c.sharpness : '');
+            const img = document.createElement('img');
+            img.src = c.url;
+            img.loading = 'lazy';
+            img.alt = 'frame ' + c.frame;
+            img.className = 'h-20 w-20 object-contain bg-gray-50 rounded border border-gray-200 hover:border-amber-400';
+            link.appendChild(img);
+            strip.appendChild(link);
+          });
+          const count = row.querySelector('[data-crop-count]');
+          if (count) count.textContent = '· all ' + crops.length + ' crops, in frame order';
+          btn.remove();
+        })
+        .catch(function () { btn.disabled = false; btn.textContent = 'Show all (retry)'; });
     });
   });
   document.getElementById('cv-prev').onclick = function (e) { e.stopPropagation(); i = (i - 1 + urls.length) % urls.length; show(); };

@@ -192,18 +192,22 @@ class TestLayout:
         assert layout == {"hotel": (0, 0, 320, 240), "nests": {"a": (1, 2, 3, 4)}}
 
 
-class TestSampleKeys:
-    """The job manifest keeps a spread of each track's crops, not the first N."""
+class TestBestCrops:
+    """The job page shows each track's sharpest crops first, in frame order."""
 
-    def test_short_lists_pass_through(self):
-        from cloud.wrapper.pipeline import _sample_keys
-        assert _sample_keys(["a", "b"], 12) == ["a", "b"]
+    def test_sharpest_kept_in_frame_order(self):
+        from cloud.wrapper.pipeline import _best_keys
+        rows = [(0, "a", 1.0), (1, "b", 9.0), (2, "c", 5.0), (3, "d", 7.0)]
+        assert _best_keys(rows, 2) == ["b", "d"]
 
-    def test_long_lists_keep_first_last_and_spread(self):
-        from cloud.wrapper.pipeline import _sample_keys
-        keys = [str(i) for i in range(100)]
-        out = _sample_keys(keys, 5)
-        assert out == ["0", "25", "50", "74", "99"]
+    def test_blur_scores_lower(self, tmp_path):
+        import cv2
+        import numpy as np
+        from cloud.wrapper.pipeline import _sharpness
+        sharp = (np.indices((64, 64)).sum(axis=0) % 2 * 255).astype(np.uint8)
+        cv2.imwrite(str(tmp_path / "s.png"), sharp)
+        cv2.imwrite(str(tmp_path / "b.png"), cv2.GaussianBlur(sharp, (9, 9), 3))
+        assert _sharpness(tmp_path / "s.png") > _sharpness(tmp_path / "b.png")
 
 
 class TestIdentifyTracks:

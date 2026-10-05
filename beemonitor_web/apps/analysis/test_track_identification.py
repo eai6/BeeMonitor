@@ -52,3 +52,36 @@ class SpeciesNoteTests(TestCase):
 
     def test_old_runs_are_told_to_re_run(self):
         self.assertIn("re-run", _species_note({"summary_stats": {}}))
+
+
+class TrackCropsViewTests(TestCase):
+    """"Show all crops" returns every crop of one track, in frame order."""
+
+    def setUp(self):
+        import tempfile
+        from apps.analysis.models import Job, JobResult
+        self.user = User.objects.create_user("tc", password="x")
+        self.client.force_login(self.user)
+        video = Video.objects.create(user=self.user, title="c", storage_key="tc/c.mp4",
+                                     file_size_bytes=1)
+        self.job = Job.objects.create(user=self.user, video=video, status="completed")
+        f = tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False)
+        f.write("track_id,frame,crop_key,sharpness\n"
+                "3,7,k/t3/f7.jpg,4.0\n3,2,k/t3/f2.jpg,9.5\n4,1,k/t4/f1.jpg,1.0\n")
+        f.close()
+        JobResult.objects.create(job=self.job, crops_csv_path=f.name)
+
+    def test_one_track_in_frame_order(self):
+        with mock.patch("apps.analysis.views._generate_presigned_url",
+                        side_effect=lambda k: "https://s3/" + k):
+            r = self.client.get(f"/analysis/{self.job.pk}/tracks/3/crops.json")
+        crops = r.json()["crops"]
+        self.assertEqual([c["frame"] for c in crops], [2, 7])
+        self.assertEqual(crops[0]["url"], "https://s3/k/t3/f2.jpg")
+        self.assertEqual(crops[0]["sharpness"], 9.5)
+
+    def test_other_users_cannot_list_crops(self):
+        other = User.objects.create_user("tc2", password="x")
+        self.client.force_login(other)
+        r = self.client.get(f"/analysis/{self.job.pk}/tracks/3/crops.json")
+        self.assertEqual(r.status_code, 404)

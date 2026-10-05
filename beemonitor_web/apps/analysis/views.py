@@ -10,7 +10,7 @@ from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
-from django.http import Http404, HttpResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.views import View
 from django.views.generic import DetailView, FormView, ListView, TemplateView
 
@@ -1772,8 +1772,13 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
                 keys = manifest[track_id] or []
                 thumbs = [u for k in keys if (u := _generate_presigned_url(k))]
                 if thumbs:
-                    track_crops.append({"track_id": track_id, "crops": thumbs,
-                                        "ident": by_track.get(str(track_id)) or {}})
+                    track_crops.append({
+                        "track_id": track_id, "crops": thumbs,
+                        "ident": by_track.get(str(track_id)) or {},
+                        # How many the track has in all (worker records it;
+                        # None on older jobs, which still get the button).
+                        "total": (stats.get("crops_per_track") or {}).get(str(track_id)),
+                    })
                     total_crops += len(thumbs)
         ctx["track_crops"] = track_crops
         # The manifest holds a sample per track; the real count rides beside it.
@@ -2451,6 +2456,35 @@ def _fetch_weather_data(start_date: str, end_date: str, lat: float = 40.79, lon:
     except Exception as e:
         logger.warning("Weather fetch failed: %s", e)
         return {"hourly": [], "daily": []}
+
+
+class TrackCropsView(LoginRequiredMixin, View):
+    """Every crop of one track, in frame order, as presigned URLs.
+
+    The job page shows each track's best crops (summary_stats manifest); this
+    is what "Show all crops" loads, on demand, from track_crops.csv — a track
+    can have hundreds, so they are never all presigned up front.
+    """
+
+    def get(self, request, pk, track_id):
+        from apps.pipelines.ops import _read_csv
+
+        job = get_object_or_404(Job, pk=pk, video__in=Video.accessible(request.user))
+        result = getattr(job, "result", None)
+        df = _read_csv(getattr(result, "crops_csv_path", "") or "") if result else None
+        crops = []
+        if df is not None and len(df) and {"track_id", "crop_key"} <= set(df.columns):
+            rows = df[df["track_id"].astype(str) == str(track_id)]
+            if "frame" in rows.columns:
+                rows = rows.sort_values("frame")
+            for _, r in rows.iterrows():
+                url = _generate_presigned_url(r["crop_key"])
+                if url:
+                    item = {"url": url, "frame": int(r["frame"]) if "frame" in r else None}
+                    if "sharpness" in r and r["sharpness"] == r["sharpness"]:
+                        item["sharpness"] = round(float(r["sharpness"]), 1)
+                    crops.append(item)
+        return JsonResponse({"track_id": track_id, "crops": crops})
 
 
 class JobPrimitiveCsvView(LoginRequiredMixin, View):
