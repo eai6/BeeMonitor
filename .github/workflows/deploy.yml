@@ -74,6 +74,10 @@ jobs:
         run: python manage.py test
 
       - name: Cloud unit tests (moto-backed S3)
+        # The worker's identify_tracks imports beemonitor.identification (cv2 +
+        # numpy only, both installed above); in the image it's on /opt/program.
+        env:
+          PYTHONPATH: src
         run: python -m pytest cloud/tests/ -v -o "addopts="
 
   # The BeeMonitor library (src/beemonitor) — detectors, tracker, identification.

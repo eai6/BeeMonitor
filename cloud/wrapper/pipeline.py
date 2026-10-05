@@ -83,6 +83,12 @@ def identify_tracks(output_dir, species=None, marker=None,
         m["identified"] = sum(1 for t in tracks.values() if t.get("marker"))
         m["crops"] = sum(t.get("marker_crops", 0) for t in tracks.values())
         result["markers"] = m
+    # Each track's call, small enough to ride in summary_stats so the job page
+    # can label every crop strip without reading the CSV.
+    keep = ("taxon", "taxon_confidence", "taxon_votes", "taxon_crops", "taxon_vote_share",
+            "marker", "marker_votes", "marker_crops", "marker_vote_share")
+    result["by_track"] = {str(t): {k: v for k, v in r.items() if k in keep}
+                          for t, r in tracks.items()}
 
     tracking = next(iter(output_dir.glob("*_tracking_results.csv")), None)
     if tracking is not None and tracks:
@@ -413,6 +419,8 @@ class CloudPipeline:
         # What species / marker ID did, and why not when it didn't.
         if identification is not None:
             stats["identification"] = identification
+        if result_paths.get("track_votes_csv"):
+            stats["track_votes_csv"] = result_paths["track_votes_csv"]
 
         # Persist nest bounding boxes for future use (avoids re-detection)
         if nests and isinstance(nests, dict) and nests.get("nests"):

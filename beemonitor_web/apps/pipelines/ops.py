@@ -1111,11 +1111,18 @@ def species_identities(df):
         confidence = None
         if conf_col is not None and grp[conf_col].notna().any():
             confidence = round(float(grp[conf_col].dropna().mean()), 3)
-        rows.append({
+        row = {
             "track": _as_native(tid), "taxon": taxon,
             "confidence": confidence, "votes": votes,
             "frames": int(len(grp)),
-        })
+        }
+        # Crop-vote runs (memory/42) also say how many crops were read and the
+        # winner's share of the readings.
+        for col, key in (("taxon_crops", "crops"), ("taxon_vote_share", "vote_share")):
+            c = _pick(df, [col])
+            if c is not None and grp[c].notna().any():
+                row[key] = _as_native(grp[c].dropna().iloc[0])
+        rows.append(row)
         seen.add(taxon)
     if not rows:
         return None

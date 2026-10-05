@@ -283,18 +283,26 @@
     <h2 class="text-lg font-medium text-gray-900">Track Crops ({{ track_crops|length }} tracks · {{ total_crops }} crops)</h2>
     <div class="flex gap-4 items-center">
       {% if crops_csv_url %}<a href="{{ crops_csv_url }}" download class="text-sm text-teal-600 hover:underline">Crop index CSV</a>{% endif %}
+      {% if track_votes_url %}<a href="{{ track_votes_url }}" download class="text-sm text-teal-600 hover:underline" title="What the species / marker model read from every crop">Per-crop votes CSV</a>{% endif %}
       <button @click="show = !show" class="text-sm text-gray-500 hover:text-gray-700"><span x-show="!show">Show</span><span x-show="show">Hide</span></button>
     </div>
   </div>
   <div x-show="show" class="px-6 py-4 space-y-4">
     {% for t in track_crops %}
     <div>
-      <p class="text-xs font-medium text-gray-500 mb-1">Track {{ t.track_id }} <span class="text-gray-400">· {{ t.crops|length }} crops</span></p>
-      <div class="flex gap-2 overflow-x-auto pb-1">
+      <p class="text-xs font-medium text-gray-500 mb-1">Track {{ t.track_id }}
+        {% if t.ident.taxon %}<span class="ml-2 text-gray-900 italic">{{ t.ident.taxon }}</span>
+          <span class="text-gray-400" title="Crops that voted for this species, of all crops the model read">· {{ t.ident.taxon_votes }}/{{ t.ident.taxon_crops }} crops voted for it</span>
+        {% elif t.ident.taxon_crops %}<span class="ml-2 text-gray-400">no species read from {{ t.ident.taxon_crops }} crops</span>{% endif %}
+        {% if t.ident.marker %}<span class="ml-2 text-gray-900">marker {{ t.ident.marker }}</span>
+          <span class="text-gray-400">· {{ t.ident.marker_votes }}/{{ t.ident.marker_crops }} crops</span>{% endif %}
+        <span class="text-gray-400">· showing {{ t.crops|length }} of the track's crops</span></p>
+      <div class="flex gap-2 overflow-x-auto pb-1" data-crop-strip
+           data-label="Track {{ t.track_id }}{% if t.ident.taxon %} · {{ t.ident.taxon }}{% endif %}{% if t.ident.marker %} · marker {{ t.ident.marker }}{% endif %}">
         {% for url in t.crops %}
-        <a href="{{ url }}" target="_blank" class="shrink-0">
+        <a href="{{ url }}" class="shrink-0" data-crop>
           <img src="{{ url }}" alt="track {{ t.track_id }} crop" loading="lazy"
-               class="h-20 w-20 object-cover rounded border border-gray-200 hover:border-amber-400">
+               class="h-20 w-20 object-contain bg-gray-50 rounded border border-gray-200 hover:border-amber-400">
         </a>
         {% endfor %}
       </div>
@@ -302,6 +310,65 @@
     {% endfor %}
   </div>
 </div>
+
+{% comment %}
+  Crop viewer: a crop opens here, over the page, not in a new tab. ← / → step
+  through the same track's crops, Esc or a click outside closes. Pixels are
+  shown unsmoothed so the fine detail the crop actually holds is what you see.
+{% endcomment %}
+<div id="crop-viewer" hidden class="fixed inset-0 z-50 bg-black/85 flex flex-col items-center justify-center p-4">
+  <div class="w-full max-w-5xl flex items-center justify-between text-white text-sm mb-2">
+    <span id="cv-label" class="truncate"></span>
+    <span class="flex items-center gap-2 shrink-0">
+      <span id="cv-count" class="text-gray-300 text-xs"></span>
+      <a id="cv-open" href="#" target="_blank" class="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20">Original ↗</a>
+      <button type="button" id="cv-close" class="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20" title="Close (Esc)">✕</button>
+    </span>
+  </div>
+  <div class="flex items-center gap-3 w-full max-w-5xl justify-center">
+    <button type="button" id="cv-prev" class="text-white text-2xl px-3 py-6 rounded hover:bg-white/10" title="Previous crop (←)">‹</button>
+    <img id="cv-img" alt="crop" class="max-h-[75vh] max-w-full object-contain bg-gray-900"
+         style="image-rendering: pixelated; min-width: 320px; min-height: 320px;">
+    <button type="button" id="cv-next" class="text-white text-2xl px-3 py-6 rounded hover:bg-white/10" title="Next crop (→)">›</button>
+  </div>
+</div>
+<script>
+(function () {
+  const viewer = document.getElementById('crop-viewer');
+  if (!viewer) return;
+  const img = document.getElementById('cv-img');
+  let urls = [], i = 0;
+  function show() {
+    img.src = urls[i];
+    document.getElementById('cv-open').href = urls[i];
+    document.getElementById('cv-count').textContent = (i + 1) + ' / ' + urls.length;
+  }
+  function close() { viewer.hidden = true; img.removeAttribute('src'); }
+  document.querySelectorAll('[data-crop-strip]').forEach(function (strip) {
+    const links = Array.from(strip.querySelectorAll('[data-crop]'));
+    links.forEach(function (a, n) {
+      a.addEventListener('click', function (e) {
+        e.preventDefault();
+        urls = links.map(function (l) { return l.href; });
+        i = n;
+        document.getElementById('cv-label').textContent = strip.dataset.label;
+        viewer.hidden = false;
+        show();
+      });
+    });
+  });
+  document.getElementById('cv-prev').onclick = function (e) { e.stopPropagation(); i = (i - 1 + urls.length) % urls.length; show(); };
+  document.getElementById('cv-next').onclick = function (e) { e.stopPropagation(); i = (i + 1) % urls.length; show(); };
+  document.getElementById('cv-close').onclick = close;
+  viewer.addEventListener('click', function (e) { if (e.target === viewer) close(); });
+  document.addEventListener('keydown', function (e) {
+    if (viewer.hidden) return;
+    if (e.key === 'Escape') close();
+    else if (e.key === 'ArrowLeft') document.getElementById('cv-prev').click();
+    else if (e.key === 'ArrowRight') document.getElementById('cv-next').click();
+  });
+})();
+</script>
 {% endif %}
 
 {% else %}

@@ -1761,6 +1761,10 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
 
         # Per-track crops (for later species ID): presign each track's crop keys.
         manifest = stats.get("crops_manifest") or {}
+        # Each track's species / marker vote (worker, after tracking).
+        by_track = (stats.get("identification") or {}).get("by_track") or {}
+        if stats.get("track_votes_csv"):
+            ctx["track_votes_url"] = _generate_presigned_url(stats["track_votes_csv"])
         track_crops = []
         total_crops = 0
         if manifest:
@@ -1768,7 +1772,8 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
                 keys = manifest[track_id] or []
                 thumbs = [u for k in keys if (u := _generate_presigned_url(k))]
                 if thumbs:
-                    track_crops.append({"track_id": track_id, "crops": thumbs})
+                    track_crops.append({"track_id": track_id, "crops": thumbs,
+                                        "ident": by_track.get(str(track_id)) or {}})
                     total_crops += len(thumbs)
         ctx["track_crops"] = track_crops
         # The manifest holds a sample per track; the real count rides beside it.
