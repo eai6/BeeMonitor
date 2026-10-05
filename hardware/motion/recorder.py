@@ -44,7 +44,8 @@ import cv2
 
 from motion.config import (
     log, RECORD_DIR, WORK_DIR, MAIN_W, MAIN_H, LORES_W, LORES_H, FPS,
-    OAK_MAIN_W, OAK_MAIN_H, OAK_FPS, OAK_BITRATE_KBPS,
+    OAK_MAIN_W, OAK_MAIN_H, OAK_FPS, OAK_BITRATE_KBPS, OAK_CODEC,
+    OAK_LUMA_DENOISE, OAK_CHROMA_DENOISE, OAK_SHARPNESS, OAK_MAX_EXPOSURE_US,
     PRE_ROLL, POST_ROLL, MAX_SEGMENT, WARMUP_SECONDS, TIMESTAMP_OVERLAY,
     DETECT_EVERY_N, BG_RESET_INTERVAL,
     CALIB_FILE, TUNING_FILE, ROI_OVERRIDE_FILE, ROI_POLYGON_FILE,
@@ -183,10 +184,15 @@ def _open_oak():
                     "without dropping frames (motion/oak.py). Recording UNFLIPPED "
                     "— mount the OAK the right way up.")
     cam = OakCamera(main_wh, (LORES_W, LORES_H), OAK_FPS, PRE_ROLL,
-                    bitrate_kbps=OAK_BITRATE_KBPS)
+                    bitrate_kbps=OAK_BITRATE_KBPS, codec=OAK_CODEC,
+                    isp={"luma_denoise": OAK_LUMA_DENOISE,
+                         "chroma_denoise": OAK_CHROMA_DENOISE,
+                         "sharpness": OAK_SHARPNESS,
+                         "max_exposure_us": OAK_MAX_EXPOSURE_US})
     cam.start()
-    log.info("camera: OAK %s (%s) over USB %s", cam.camera_properties["Product"],
-             cam.camera_properties["Model"], cam.camera_properties["Usb"])
+    log.info("camera: OAK %s (%s) over USB %s, %s at %s", cam.camera_properties["Product"],
+             cam.camera_properties["Model"], cam.camera_properties["Usb"], cam.codec,
+             f"{OAK_BITRATE_KBPS} kbit/s CBR" if OAK_BITRATE_KBPS else "auto bitrate")
     return cam, None, cam.clip_output, None, cam_profile, main_wh, OAK_FPS
 
 
@@ -301,7 +307,7 @@ def _record_loop(cam, encoder, circ, config, cam_profile, lens_pos, roi, roi_pol
     def _open_segment(now_mono: float, reason: str):
         nonlocal encoding, seg_start, cur_h264, cur_mp4, triggers
         nonlocal act_uid, act_started, act_cands, act_last_cap
-        cur_h264, cur_mp4 = _snippet_paths(datetime.now())
+        cur_h264, cur_mp4 = _snippet_paths(datetime.now(), getattr(cam, "codec", "h264"))
         circ.fileoutput = str(cur_h264)
         circ.start()
         encoding = True

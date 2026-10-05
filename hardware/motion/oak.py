@@ -115,13 +115,17 @@ class ClipOutput:
 
 class OakCamera:
     def __init__(self, main_wh, lores_wh, fps: int, pre_roll: float, *,
-                 bitrate_kbps: int = 0):
+                 bitrate_kbps: int = 0, codec: str = "h264", isp: dict | None = None):
         import depthai as dai
         self._dai = dai
         self.main_wh = tuple(main_wh)
         self.lores_wh = tuple(lores_wh)
         self.fps = fps
         self.clip_output = ClipOutput(pre_roll)
+        self.codec = "h265" if str(codec).lower() in ("h265", "hevc") else "h264"
+        # {"luma_denoise", "chroma_denoise", "sharpness", "max_exposure_us"};
+        # sent once the pipeline runs (start()).
+        self.isp = dict(isp or {})
         self._error: Exception | None = None
         self._running = False
 
@@ -130,10 +134,14 @@ class OakCamera:
 
         # All outputs at `fps` — see the module docstring for why.
         main = cam.requestOutput(self.main_wh, dai.ImgFrame.Type.NV12, fps=fps)
+        profile = (dai.VideoEncoderProperties.Profile.H265_MAIN if self.codec == "h265"
+                   else dai.VideoEncoderProperties.Profile.H264_MAIN)
         h264 = self.pipeline.create(dai.node.VideoEncoder).build(
-            main, frameRate=fps, profile=dai.VideoEncoderProperties.Profile.H264_MAIN,
-            keyframeFrequency=fps)
+            main, frameRate=fps, profile=profile, keyframeFrequency=fps)
         if bitrate_kbps > 0:
+            # A fixed rate: VBR spends less on calm frames, which is where the
+            # small static bee at a tube entrance lives.
+            h264.setRateControlMode(dai.VideoEncoderProperties.RateControlMode.CBR)
             h264.setBitrateKbps(bitrate_kbps)
         # Stills on request: the script forwards the newest main frame to the
         # JPEG encoder once per trigger, so the encoder is idle between asks.
@@ -171,6 +179,8 @@ class OakCamera:
             "Model": str(sensor).lower(),
             "Product": device.getProductName() or device.getDeviceName(),
             "Usb": device.getUsbSpeed().name,
+            "Codec": self.codec,
+            "BitrateKbps": int(bitrate_kbps),
         }
         self._pump = threading.Thread(target=self._pump_h264, name="oak-h264", daemon=True)
 
@@ -179,6 +189,28 @@ class OakCamera:
         self.pipeline.start()
         self._running = True
         self._pump.start()
+        self._apply_isp()
+
+    def _apply_isp(self) -> None:
+        """Denoise / sharpness / exposure cap from config; -1 or 0 = leave it."""
+        isp = self.isp
+        ctrl = self._dai.CameraControl()
+        applied = {}
+        for key, setter in (("luma_denoise", "setLumaDenoise"),
+                            ("chroma_denoise", "setChromaDenoise"),
+                            ("sharpness", "setSharpness")):
+            v = isp.get(key, -1)
+            if v is not None and int(v) >= 0:
+                v = max(0, min(4, int(v)))
+                getattr(ctrl, setter)(v)
+                applied[key] = v
+        cap = int(isp.get("max_exposure_us") or 0)
+        if cap > 0:
+            ctrl.setAutoExposureLimit(cap)
+            applied["max_exposure_us"] = cap
+        if applied:
+            self._ctrl_q.send(ctrl)
+            log.info("OAK ISP: %s", applied)
 
     def stop(self) -> None:
         self._running = False

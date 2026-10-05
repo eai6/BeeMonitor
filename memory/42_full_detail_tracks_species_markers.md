@@ -1,7 +1,9 @@
 # 42 · Keep fine detail on the OAK; species + marker ID from every crop of a track
 
-Status: **Part B built** (2026-10-05; needs a GPU image build + tag bump). Part A (OAK) next, tested on one unit. Track crops are already padded and saved for
-every detected frame (commit 149794b, not yet in a GPU image).
+Status (2026-10-05): **Part B built** (species/marker votes over crops; GPU
+image + tag bump pending). **Part A code built** — OAK detail settings are in
+the device software as per-unit config; **next: run the test on the OAK unit**
+(runbook below), then pick defaults.
 
 ## Goal
 
@@ -88,3 +90,79 @@ New: after tracking, on the GPU worker, over the saved crops:
   identify_markers (now consumed, so it re-runs the GPU job);
   `_candidate_taxa` sends the region list for BioCLIP (not hashed).
 - GPU image: pybioclip + baked BioCLIP / ToL weights.
+
+
+## Built (Part A) — OAK detail settings
+
+All per-unit, in `/etc/beemonitor/uploader.env` (read by
+`beemonitor-recorder.service`). Unset = today's behaviour exactly.
+
+| variable | values | what it does |
+|---|---|---|
+| `BEEMONITOR_OAK_CODEC` | `h264` (default) / `h265` | encoder profile; H.265 work files are `.h265`, remuxed with `-f hevc -tag:v hvc1` |
+| `BEEMONITOR_OAK_BITRATE_KBPS` | `0` (auto) or kbit/s | CBR at that rate (`setRateControlMode(CBR)` + `setBitrateKbps`) |
+| `BEEMONITOR_OAK_LUMA_DENOISE` | `-1` (default) or 0..4 | ISP luma denoise |
+| `BEEMONITOR_OAK_CHROMA_DENOISE` | `-1` or 0..4 | ISP chroma denoise |
+| `BEEMONITOR_OAK_SHARPNESS` | `-1` or 0..4 | ISP sharpening |
+| `BEEMONITOR_OAK_MAX_EXPOSURE_US` | `0` (no cap) or µs | auto-exposure shutter limit (`setAutoExposureLimit`) |
+
+Code: `hardware/motion/config.py` (settings), `motion/oak.py`
+(`OakCamera(codec=, bitrate_kbps=, isp=)`, `_apply_isp()` after start),
+`motion/remux.py` (HEVC remux), `motion/recorder.py` (wiring + log line
+`camera: OAK … h264 at 60000 kbit/s CBR`). Test tool:
+`hardware/oak_quality_test.py`. Unit tests: `hardware/test_oak_settings.py`.
+All depthai calls checked against depthai 3.10.0 stubs; **none run on an OAK
+yet** — that is the point of the runbook.
+
+## Runbook for the OAK unit (for Claude on the Pi)
+
+Goal: find the most detail this unit's OAK can record without dropping frames,
+and set it. Large files are fine; losing fine detail is not. Report the numbers
+back (results.json + which PNGs look sharpest) so the defaults can be chosen.
+
+1. **Update the unit** to a commit that has `hardware/oak_quality_test.py`
+   (dashboard → device → Update, or however this unit is updated). Confirm:
+   `python3 hardware/test_oak_settings.py` prints "all OAK settings checks passed".
+2. **Point the camera at the real scene** (the hotel / flowers, in daylight).
+   Fine texture matters — that is what is being judged.
+3. **Stop the recorder** (it holds the OAK):
+   `sudo systemctl stop beemonitor-recorder`
+4. **Sweep codec × bitrate**, camera defaults otherwise (~4 min), from the
+   `hardware/` directory with the recorder's venv python:
+   `python3 oak_quality_test.py`
+   Output: one line per setting (OK/DROP, fps, dropped %, Mbit/s, MB/min) and
+   `oak_quality/<time>/` with an `.mp4` + a lossless `.png` per setting.
+   - A setting that DROPs or FAILs (encoder "out of resources") is too high.
+   - Note the highest OK bitrate for h264 and for h265 separately.
+5. **ISP + shutter**, at the best codec/bitrate from step 4, e.g.:
+   `python3 oak_quality_test.py --codecs h265 --bitrates 100000 --isp 0,0,0`
+   `python3 oak_quality_test.py --codecs h265 --bitrates 100000 --isp 0,0,0 --max-exposure-us 1000`
+   `python3 oak_quality_test.py --codecs h265 --bitrates 100000 --isp 0,1,0 --max-exposure-us 2000`
+   Compare the PNGs at 100 % zoom on the textured area: crisp texture without
+   smearing is the goal; some grain from denoise 0 is expected and fine. With
+   an exposure cap, check the scene isn't too dark/noisy in shade.
+6. **Set the chosen values** in `/etc/beemonitor/uploader.env`, e.g.
+   ```
+   BEEMONITOR_OAK_CODEC=h265
+   BEEMONITOR_OAK_BITRATE_KBPS=100000
+   BEEMONITOR_OAK_LUMA_DENOISE=0
+   BEEMONITOR_OAK_CHROMA_DENOISE=0
+   BEEMONITOR_OAK_SHARPNESS=0
+   BEEMONITOR_OAK_MAX_EXPOSURE_US=1000
+   ```
+   then `sudo systemctl start beemonitor-recorder` and check
+   `journalctl -u beemonitor-recorder -n 50` shows
+   `camera: OAK … h265 at 100000 kbit/s CBR` and `OAK ISP: {...}` and no
+   "H.264 stream died" / "delivered nothing" errors.
+7. **Watch real clips for a while**: wave at the camera; a clip should land in
+   `RECORD_DIR/<day>/` and upload. Check:
+   - `ffprobe` on a clip: codec, ~20 fps, expected bitrate;
+   - SD card use (`df -h`) — at 100 Mbit/s a minute of clip is ~750 MB;
+   - the clip plays on the platform's clip page. **H.265 caveat:** Chrome /
+     Edge play HEVC only with hardware decode, Firefox not at all; Safari does.
+     If it won't play in the user's browser, say so — the cloud then needs an
+     H.264 preview transcode (not built yet), or fall back to h264.
+8. **Report back**: results.json from steps 4–5, the chosen env values, SD
+   use per hour of recording, and whether clips play on the platform.
+
+To undo: remove those lines from uploader.env and restart the recorder.

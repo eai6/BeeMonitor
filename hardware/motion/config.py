@@ -89,9 +89,33 @@ CAMERA_BACKEND = os.environ.get("BEEMONITOR_CAMERA", "auto").strip().lower()
 OAK_MAIN_W = _env_int("BEEMONITOR_OAK_MAIN_W", 4032)
 OAK_MAIN_H = _env_int("BEEMONITOR_OAK_MAIN_H", 3040)
 OAK_FPS = _env_int("BEEMONITOR_OAK_FPS", 20)
-# H.264 bitrate on the OAK, kbit/s. 0 = the encoder's own choice (measured on
-# an OAK-1-AF: ~7 Mbit/s at 1080p25, ~17 at 4K25, ~13.6 at 12 MP 20 fps).
+# Fine detail on the OAK (memory/42 part A). The system exists to identify
+# small bees from crops of these clips, so detail lost in encoding is lost for
+# good. All of these are per-unit settings in /etc/beemonitor/uploader.env;
+# hardware/oak_quality_test.py measures what a unit's encoder can hold.
+#
+# Codec: "h264" (default; plays in every browser) or "h265" (HEVC: more detail
+# per bit on the same encoder, but Chrome/Edge play it only with hardware
+# decode and Firefox not at all). The encoder tops out at 248 MPix/s either way
+# — 12 MP at 20 fps is the ceiling.
+OAK_CODEC = os.environ.get("BEEMONITOR_OAK_CODEC", "h264").strip().lower()
+# Bitrate, kbit/s, constant (CBR). 0 = the encoder's own choice (measured on an
+# OAK-1-AF: ~7 Mbit/s at 1080p25, ~17 at 4K25, ~13.6 at 12 MP 20 fps — about
+# 0.06 bit/pixel, which quantises fine texture away). ~60000 is ~0.25 bit/px;
+# set the highest value the quality test shows the encoder holding at OAK_FPS.
 OAK_BITRATE_KBPS = _env_int("BEEMONITOR_OAK_BITRATE_KBPS", 0)
+# ISP processing, 0..4 each; -1 leaves the camera's default. Denoise smooths
+# away fine texture; sharpening adds edge halos that look like detail but
+# aren't. For crops we want neither: 0 / 0 / 0 (expect more noise, and so more
+# bits at a given quality).
+OAK_LUMA_DENOISE = _env_int("BEEMONITOR_OAK_LUMA_DENOISE", -1)
+OAK_CHROMA_DENOISE = _env_int("BEEMONITOR_OAK_CHROMA_DENOISE", -1)
+OAK_SHARPNESS = _env_int("BEEMONITOR_OAK_SHARPNESS", -1)
+# Longest shutter auto-exposure may use, microseconds; 0 = no cap. A bee
+# crossing the frame smears over many pixels at 1/20 s — blur no codec can
+# undo. ~1000 (1/1000 s) freezes it; auto-exposure raises gain to compensate,
+# so dim scenes get noisier.
+OAK_MAX_EXPOSURE_US = _env_int("BEEMONITOR_OAK_MAX_EXPOSURE_US", 0)
 # OAK lens position, 0..255 (the OAK's raw scale, NOT dioptres like
 # BEEMONITOR_LENS_POSITION). Empty = autofocus once at startup and hold it.
 # camera.json's "oak_lens" wins over this.
