@@ -157,14 +157,16 @@ the same licence as the Ultralytics YOLO it builds on.
 
 ### Cite
 
-If you use BeeMonitor in your research, please cite:
+If you use BeeMonitor in your research, please cite the [preprint on bioRxiv](https://www.biorxiv.org/content/10.64898/2026.07.10.737879v1):
 
 ```bibtex
 @article{amoah2026beemonitor,
   title={BeeMonitor: Automated IoT video surveillance hardware and an AI-powered video processing software for monitoring the behavior of solitary, cavity-nesting bees},
   author={Amoah, Edward I. and Sanjel, Santosh and Boyle, Natalie K. and Grozinger, Christina M.},
+  journal={bioRxiv},
   year={2026},
-  url={https://github.com/eai6/BeeMonitor}
+  doi={10.64898/2026.07.10.737879},
+  url={https://www.biorxiv.org/content/10.64898/2026.07.10.737879v1}
 }
 ```
 

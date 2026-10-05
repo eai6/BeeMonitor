@@ -8,6 +8,10 @@ BeeMonitor started as a camera trap for bee hotels. It is now a general system: 
 whether from a BeeMonitor unit or another camera, goes through the same pipeline and comes
 out as two tables, **events** and **interactions**.
 
+!!! abstract "Preprint"
+    The BeeMonitor system and its validation are described in our preprint on
+    [bioRxiv](https://www.biorxiv.org/content/10.64898/2026.07.10.737879v1).
+
 ## Two tables, any question
 
 Every pipeline produces the same two tables:
@@ -34,7 +38,8 @@ AGPLv3 on [GitHub](https://github.com/eai6/BeeMonitor). See [About](about.md) to
 
 ## Accuracy
 
-Validated on bee hotels: 110 minutes of video with 300 hand-annotated foraging events.
+Validated on bee hotels: 110 minutes of video with 300 hand-annotated foraging events
+([preprint](https://www.biorxiv.org/content/10.64898/2026.07.10.737879v1)).
 
 | Mode | Precision | Recall | F1 |
 |---|---|---|---|
