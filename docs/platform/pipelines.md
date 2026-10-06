@@ -25,13 +25,7 @@ Runs that use the GPU (Detect, Track, Identify species) use your account's credi
 
 ## See the output
 
-**Runs** lists every run and batch. A run shows each step's output: the events and interactions tables,
-counts, and **CSV** downloads. A batch page combines its clips (tracks, events, interactions, GPU time)
-and has **Download batch data** for all of them. The columns are documented in
-[Results](results.md).
-
-When clips fail, the batch page groups them by cause. You can rerun only the failed clips or the whole
-batch. A rerun is a new batch, and the old one is kept for comparison.
+Every run and batch is listed under [Runs](runs.md), with its tables and CSV downloads.
 
 ## Steps
 

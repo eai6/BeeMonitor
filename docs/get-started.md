@@ -33,7 +33,7 @@ question needs.
 | Block | What it does |
 |---|---|
 | **Input** | What the pipeline runs on: a **Video Input** (clips) or a **Photo Input** (unit photos and uploaded JPEG, PNG, TIFF, HEIC). |
-| **Detect** | Finds one kind of thing in the frames (bees, wasps, flies, flowers, nest tubes) with a built-in model, [your own](platform/annotation.md), or SAM 3 with a text prompt. Every frame, or a sample of frames for things that don't move. |
+| **Detect** | Finds one kind of thing in the frames (bees, wasps, flies, flowers, nest tubes) with a built-in model, [your own](platform/training.md), or SAM 3 with a text prompt. Every frame, or a sample of frames for things that don't move. |
 | **Reference** | What behaviour is measured against: the device's saved ROI and reference objects (nest tubes, flowers, pollen tubes), or objects a detector finds in the video. |
 | **Track** | Links each animal's detections from frame to frame. Choose the tracker (BeeTrack, ByteTrack, BoT-SORT, OC-SORT, SFSORT) and tune it. |
 | **Analyze** | Turns detections or tracks into numbers: detection counts (totals, distinct objects, over time), events (enter / exit) and interactions (visits, encounters, dwell time). |
@@ -72,4 +72,4 @@ Each row names a track, and the tracking table gives every track its **species**
 its **individual ID**. Join them on the track and you have what each animal did *and* what it was and which
 one: *a* Bombus impatiens *(individual red-blue) left tube 3 at 12.4 s.* Foraging trips come from events;
 visits and time on a flower or in an assay zone come from interactions, by species or by individual
-([Results](platform/results.md)).
+([Runs](platform/runs.md#the-tables)).

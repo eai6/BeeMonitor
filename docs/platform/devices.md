@@ -35,4 +35,9 @@ copies of everything already uploaded; the cloud copies are kept.
 
 ## Sharing
 
-**Share** a device with a *viewer* (sees data) or a *manager* (also changes settings).
+On the device page, **Share** with a username or email:
+
+| Role | Can |
+|---|---|
+| Viewer | See the device, its clips, photos and results |
+| Manager | Also change camera, recording and processing settings |

@@ -64,7 +64,10 @@ nav:
       - Devices: platform/devices.md
       - Videos: platform/videos.md
       - Pipelines: platform/pipelines.md
-      - Results: platform/results.md
-      - Annotation & sharing: platform/annotation.md
+      - Runs: platform/runs.md
+      - Annotations: platform/annotations.md
+      - Training: platform/training.md
+      - Browse: platform/browse.md
       - API: platform/api.md
+      - Account: platform/account.md
   - About: about.md

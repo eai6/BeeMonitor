@@ -25,7 +25,7 @@ Behaviour comes out as two tables:
 
 Foraging trips come from events; visits and time on a flower, which pollen tube in a lab assay gets more
 (and longer) bee interactions, and encounters between insects come from interactions. See
-[Results](platform/results.md).
+[Runs](platform/runs.md#the-tables).
 
 ## Start here
 

@@ -54,7 +54,7 @@ Contributions are welcome, including new study setups, hardware variants, models
   unit, include the camera, the Pi model and what the device page shows under Health.
 - **Share a setup**: if you used BeeMonitor for a new kind of study, open an issue describing the camera
   setup, the reference and how you read the tables, so others can reuse it.
-- **Share data and models**: [publish](platform/annotation.md#publish) a labelled project or a trained model
+- **Share data and models**: [publish](platform/browse.md) a labelled project or a trained model
   so others can build on it.
 - **Improve the docs**: every page has an edit button (the pencil, top right) that opens the Markdown source
   on GitHub.

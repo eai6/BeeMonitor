@@ -1,4 +1,34 @@
-# Results
+# Runs
+
+**Runs** lists everything you've run. Running a pipeline on one clip is a *run*; running it on several clips
+at once is a *batch*, one run per clip. The list is grouped into **Still running**, **With failures**,
+**All completed** and **Single runs**.
+
+## A batch
+
+The batch page combines its clips:
+
+- **Summary:** how many clips finished or failed, and the units and sites they came from.
+- **Downloads:** one CSV per table for every clip in the batch, each row labelled with its clip, device,
+  site and absolute time: **Detections**, **Tracking**, **Tracks**, **Events** and **Interactions**, plus
+  **Photos** for a photo batch. Only tables the batch produced are offered.
+- **Per clip:** each clip's status, counts and a link to its run.
+
+When clips fail, the page groups them by cause. You can rerun only the failed clips or the whole batch.
+A rerun is a new batch, and the old one is kept for comparison.
+
+## A run
+
+A run shows each step and its output. **Results →** opens the clip's results:
+
+- the original video, and an annotated copy with boxes and track IDs;
+- the **Tracks**, **Tracking**, **Events** and **Interactions** tables, each with a CSV download;
+- **Track crops**: each track's sharpest crops, labelled with its species and marker. **Show all** loads
+  every crop, and clicking one enlarges it in place.
+
+A photo's run shows the photo with a box on every insect, each insect's crop and species, and the counts.
+
+## The tables
 
 Tracking produces two tables, and every study is answered from them. BeeMonitor doesn't have a separate
 "foraging" or "flower" analysis. Time on a flower is a sum over interactions, and a foraging trip is a pair of
@@ -14,7 +44,7 @@ and exit events.
 
 Beside them, the **Tracks** table lists each animal once, with its species and marker ID.
 
-## Events
+### Events
 
 | Column | Meaning |
 |---|---|
@@ -27,7 +57,7 @@ Beside them, the **Tracks** table lists each animal once, with its species and m
 | `target_kind` | `reference` |
 | `source` | `gpu` (the entry/exit classifier) or `derived` (computed from the tracks and the reference) |
 
-## Interactions
+### Interactions
 
 | Column | Meaning |
 |---|---|
@@ -43,7 +73,7 @@ Beside them, the **Tracks** table lists each animal once, with its species and m
 The columns are a fixed contract. New columns may be added at the end, but existing ones are never renamed or
 reordered, so your scripts keep working.
 
-## Tracks
+### Tracks
 
 One row per track: when it was seen and what it was. Species and marker IDs come from a vote over every
 crop of the track (the **Identify species** and **Read bee marker** steps). They're blank when the pipeline
@@ -99,8 +129,8 @@ trips = ev[(ev.action == "exit") & (ev.next_action == "enter")].assign(
     trip_sec=lambda d: d.next_time - d.time_sec)[["target", "time_sec", "trip_sec"]]
 ```
 
-The run and batch pages show these tables with summaries, and you can always download them as CSV to
-derive your own measures.
+The run and batch pages show these tables, and you can always download them as CSV to derive your own
+measures.
 
 ## Provenance and limits
 
