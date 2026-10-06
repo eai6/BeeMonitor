@@ -13,6 +13,11 @@ Authorization: Bearer <your key>
 
 Base URL: `https://beemonitor.edwardamoah.com/api/v1/`
 
+<figure markdown>
+  ![The Developer Portal: key counts, a Create API Key form, the list of keys with Revoke, and recent API usage](../assets/platform/api-keys.png)
+  <figcaption>The API page. Revoke a key here when you no longer need it.</figcaption>
+</figure>
+
 ## Endpoints
 
 | Method | Path | Does |

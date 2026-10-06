@@ -9,5 +9,10 @@ the owner can change them.
 - **Models**: a published model can be chosen in your own pipeline's **Detect** step. Its card records the
   dataset it was trained on and how large that dataset was at training time.
 
+<figure markdown>
+  ![Shared publicly: one published dataset card with its classes, frames, boxes, clips and hotels, and Take a copy](../assets/platform/browse.png)
+  <figcaption>Browse: a published dataset.</figcaption>
+</figure>
+
 To publish your own, use **Publish** on an [annotation project](annotations.md#publishing-a-project) or a
 [trained model](training.md#custom-models).

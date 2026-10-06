@@ -3,12 +3,26 @@
 A pipeline is a chain of steps run on each clip: detect, track, measure against a reference. It doesn't
 name a clip; you choose the clips when you run it. The [steps and templates](#steps) are listed below.
 
-<!-- SCREENSHOT: the pipeline builder -->
 
 ## Build one
 
-**Pipelines → New**, or start from a template (Foraging trips, Flower / ROI visitation, Pollen assay,
-Interactions, Individual bee IDs). Drag steps from the palette and connect them.
+**Pipelines** lists your pipelines. **+ New pipeline** starts one, from scratch or from a template
+(Foraging trips, Flower / ROI visitation, Pollen assay, Interactions, Individual bee IDs). **Run history**
+goes to [Runs](runs.md).
+
+<figure markdown>
+  ![The Pipelines page: four pipelines, each with its description, step count, Edit and Delete](../assets/platform/pipelines-list.png)
+  <figcaption>Pipelines.</figcaption>
+</figure>
+
+In the editor, drag blocks from the palette onto the canvas, connect each output to the next block's input,
+and set each block's options on the node. **Save** keeps it.
+
+<figure markdown>
+  ![The pipeline editor: Video Input wired to Detect (SAM 3, bee), then MOT tracking (BeeTrack), then Identify Species (BioCLIP, minimum mean confidence 0.25)](../assets/platform/pipeline-editor.png)
+  <figcaption>A biodiversity-monitoring pipeline: detect bees, track them, and name each track's species.</figcaption>
+</figure>
+
 
 ## Run it
 

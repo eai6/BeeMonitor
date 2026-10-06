@@ -18,13 +18,25 @@ Your models then appear in a pipeline's **Detect** step.
 
 Training typically takes 500 to 5,000 GPU seconds, depending on the number of frames, epochs and tier.
 
+<figure markdown>
+  ![The New Training Job form: annotation project, job name, base model, training frames, classes, epochs, image size, batch size, validation split and GPU tier](../assets/platform/training-new.png)
+  <figcaption>New training job.</figcaption>
+</figure>
+
 ## A training job
 
-The job page shows its configuration, the frames used, and, when it finishes:
+The job page shows its configuration and status, and, when it finishes:
 
-- **Detection quality** per epoch (higher is better) and **training loss** (lower is better);
+- **Training metrics** on the held-back frames: mAP50, mAP50-95, precision and recall, and how they changed
+  over the epochs;
 - **Validation predictions**: the model's boxes on held-back frames, to check by eye;
 - the **resulting model**, ready to choose in a pipeline.
+
+<figure markdown>
+  ![A finished training job: configuration, status, metrics (mAP50 0.803, precision 0.815, recall 0.825) and the resulting model](../assets/platform/training-job.png)
+  <figcaption>A finished training job.</figcaption>
+</figure>
+
 
 ## Custom models
 

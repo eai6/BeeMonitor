@@ -1,30 +1,65 @@
 # Runs
 
-**Runs** lists everything you've run. Running a pipeline on one clip is a *run*; running it on several clips
-at once is a *batch*, one run per clip. The list is grouped into **Still running**, **With failures**,
-**All completed** and **Single runs**.
+**Runs** lists everything you've run, newest first. Running a pipeline on several clips at once is a
+*batch*, one run per clip. Each row shows the pipeline, how many clips, when, and how many finished or
+failed. Filter by **With failures**, **Still running** or **All completed**, and open one with **Results →**.
+
+<figure markdown>
+  ![The Runs page: a list of launches, each with a progress bar, done and failed counts, and Results](../assets/platform/runs-list.png)
+  <figcaption>Runs.</figcaption>
+</figure>
 
 ## A batch
 
 The batch page combines its clips:
 
-- **Summary:** how many clips finished or failed, and the units and sites they came from.
-- **Downloads:** one CSV per table for every clip in the batch, each row labelled with its clip, device,
-  site and absolute time: **Detections**, **Tracking**, **Tracks**, **Events** and **Interactions**, plus
-  **Photos** for a photo batch. Only tables the batch produced are offered.
-- **Per clip:** each clip's status, counts and a link to its run.
+- **Outcome:** how many clips finished or failed, how many references were found, and the GPU time.
+- **Run these clips through another pipeline:** a new batch over the same clips. Detection and tracking
+  are reused where the new pipeline asks for the same thing, so a pipeline that differs only downstream
+  costs no GPU time.
+- **Download batch data:** one CSV per table for every clip in the batch, each row labelled with its clip,
+  device, site and absolute time: **Detections**, **Tracking**, **Tracks**, **Events** and
+  **Interactions**, plus **Photos** for a photo batch. Only tables the batch produced are offered.
+- **Per clip:** each clip's outcome, tracks, events, interactions, length and GPU time.
 
-When clips fail, the page groups them by cause. You can rerun only the failed clips or the whole batch.
-A rerun is a new batch, and the old one is kept for comparison.
+<figure markdown>
+  ![A batch page: outcome, a form to run the clips through another pipeline, the download buttons, and one row per clip](../assets/platform/batch.png)
+  <figcaption>A batch of three clips.</figcaption>
+</figure>
 
-## A run
+When clips fail, the page groups them by cause. You can rerun only the failed clips or the whole batch
+(**Re-run all**). A rerun is a new batch, and the old one is kept for comparison.
 
-A run shows each step and its output. **Results →** opens the clip's results:
+Click a clip to play its annotated video in place, with each track's box and ID and the reference objects;
+**Show original** switches to the clip as recorded, and **Earlier** and **Later** step through the batch.
 
-- the original video, and an annotated copy with boxes and track IDs;
-- the **Tracks**, **Tracking**, **Events** and **Interactions** tables, each with a CSV download;
-- **Track crops**: each track's sharpest crops, labelled with its species and marker. **Show all** loads
-  every crop, and clicking one enlarges it in place.
+<figure markdown>
+  ![A clip playing inside the batch page: numbered reference boxes and track IDs over a goldenrod patch](../assets/platform/run.png)
+  <figcaption>A clip in its batch, annotated: reference objects 1 and 2, and every track with its ID.</figcaption>
+</figure>
+
+## A clip's results
+
+**Full results** (or **crops & CSVs →** on a clip's row) opens the clip's results page:
+
+- counts of tracks, events and interactions, its length and GPU time;
+- the original video beside an annotated copy;
+- downloads of every table, the crop index and the annotated video;
+- the **Tracks**, **Tracking**, **Events** and **Interactions** tables, each with its own CSV download.
+
+<figure markdown>
+  ![A results page: count tiles, original and annotated videos, downloads, and the Tracks table with species per track](../assets/platform/results-tracks.png)
+  <figcaption>A clip's results. The Tracks table names each track's species, or unidentified when the vote was too weak.</figcaption>
+</figure>
+
+**Track crops** shows each track's sharpest 12 crops, with its species, how many crops voted for it and
+their mean confidence. **Show all** loads every crop, and clicking a crop enlarges it in place. **Per-crop
+votes CSV** has what the model read from each crop.
+
+<figure markdown>
+  ![Track crops: rows of bee crops per track, each labelled with its species, vote count and mean confidence](../assets/platform/track-crops.png)
+  <figcaption>Track crops, labelled by species vote.</figcaption>
+</figure>
 
 A photo's run shows the photo with a box on every insect, each insect's crop and species, and the counts.
 

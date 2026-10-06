@@ -10,6 +10,19 @@ or a hotel the built-in models haven't seen. Once a project is labelled, [train 
 3. **Clips → Sample & label**: the GPU finds the busiest frames of each clip and labels them with SAM 3.
 4. **Frames to review**: check each frame. Keep, move or delete boxes, and add anything it missed.
 
+<figure markdown>
+  ![An annotation project: clips, labelled frames and reviewed frames, the review queue, filters, and a grid of frames to review](../assets/platform/annotations-project.png)
+  <figcaption>A project with 7,188 labelled frames, three of them reviewed so far.</figcaption>
+</figure>
+
+In the editor, pick the **Active class** and draw boxes; **Min confidence** hides weak auto-labels, which are
+dropped on save. **Mark empty** records a frame with no insect.
+
+<figure markdown>
+  ![The annotation editor: a bee hotel frame with one box, and panels for active class, minimum confidence, boxes and saving](../assets/platform/annotation-editor.png)
+  <figcaption>The annotation editor.</figcaption>
+</figure>
+
 **Export** downloads the labelled dataset in YOLO format.
 
 ## Working as a team
