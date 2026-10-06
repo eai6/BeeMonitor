@@ -4,7 +4,7 @@ config:
   beemonitor-sagemaker:instance-type: ml.g4dn.xlarge
   # Image tag in ECR to deploy. CI bumps this after a successful push;
   # for now :latest tracks the most recent main build.
-  beemonitor-sagemaker:image-tag: 499e94d5224d010caaeb5af1b5b3d50b82cd01e2
+  beemonitor-sagemaker:image-tag: 229985e8c95cdae9edd04571aa99b045641f8ceb
   # Two-pass deploy: pass 1 (false) creates ECR + buckets + IAM only,
   # then CI builds the GPU image, then flip to true to create the
   # SageMaker Model / EndpointConfig / Endpoint / autoscaling.
