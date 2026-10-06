@@ -1067,6 +1067,16 @@ def batch_combined_csv(request, batch_id, kind):
         fields = ["photo_id", "taken_at", "run_id", "insect", "class", "confidence",
                   "species", "species_confidence", "x", "y", "w", "h"]
         return _csv_response(f"photos_batch_{str(batch_id)[:8]}.csv", fields, rows)
+    if kind == "tracks":
+        from . import tracks
+        sources, _ = aggregate.collect_sources(_batch_runs(request, batch_id))
+        rows = tracks.batch_track_rows(sources, aggregate.read_processed_csv,
+                                       aggregate._provenance)
+        if not rows:
+            messages.info(request, "No tracks in this batch — its pipeline has no tracking step.")
+            return redirect("pipelines:batch_detail", batch_id=batch_id)
+        return _csv_response(f"tracks_batch_{str(batch_id)[:8]}.csv",
+                             aggregate.PROVENANCE_FIELDS + tracks.TRACK_FIELDS, rows)
     path_key = {"events": "events_csv_path",
                 "tracking": "tracking_csv_path",
                 "interactions": "interactions_csv_path",
@@ -1088,8 +1098,8 @@ def batch_combined_csv(request, batch_id, kind):
         messages.warning(
             request,
             f"No {kind} could be computed for this batch. That usually means no "
-            "reference reached the analyzer — draw an ROI, use the device nest "
-            "layout, or wire a Detect node for the reference class into it. The "
+            "reference reached the analyzer — save the device's ROI and reference "
+            "objects, or wire a Detect node for the reference class into it. The "
             "Tracking CSV is unaffected.")
         return redirect("pipelines:batch_detail", batch_id=batch_id)
 

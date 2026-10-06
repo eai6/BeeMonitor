@@ -1738,8 +1738,16 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         # large flower is in neither its table nor this one.
         from apps.pipelines import executors as pipeline_executors
         from apps.pipelines import primitives
+        from apps.pipelines import tracks as track_tables
 
-        interaction_rows = pipeline_executors.primitives_for_job(job, "interactions")
+        # One row per track with its species and marker, the pipeline's floor
+        # applied; the same identity rides on the events and interactions rows.
+        tracks_rows, by_track, floor = job_tracks(job, ctx["tracking_data"])
+        ctx["tracks_data"] = _rows_as_table(tracks_rows, track_tables.TRACK_FIELDS)
+
+        interaction_rows = track_tables.primitive_with_identity(
+            "interactions", pipeline_executors.primitives_for_job(job, "interactions"),
+            by_track, floor)
         ctx["interactions_data"] = _rows_as_table(
             interaction_rows, primitives.INTERACTION_FIELDS)
         # Events are computed unconditionally, the same as interactions. They
@@ -1751,7 +1759,9 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         # (events_from_gpu), so an empty computed table means there was nothing
         # to show.
         ctx["events_data"] = _rows_as_table(
-            pipeline_executors.primitives_for_job(job, "events"),
+            track_tables.primitive_with_identity(
+                "events", pipeline_executors.primitives_for_job(job, "events"),
+                by_track, floor),
             primitives.EVENT_FIELDS)
 
         # The base measurements this clip produced, not derived answers.
@@ -2528,16 +2538,26 @@ class JobPrimitiveCsvView(LoginRequiredMixin, View):
         from apps.pipelines import executors as pipeline_executors
         from apps.pipelines import primitives
 
-        if kind not in ("events", "interactions"):
+        from apps.pipelines import tracks as track_tables
+
+        if kind not in ("events", "interactions", "tracks"):
             raise Http404("Unknown table.")
         job = get_object_or_404(Job, pk=pk)
         if job.user_id != request.user.id and not Video.accessible(
                 request.user).filter(pk=job.video_id).exists():
             raise Http404("No such job.")
 
-        rows = pipeline_executors.primitives_for_job(job, kind)
-        fields = (primitives.EVENT_FIELDS if kind == "events"
-                  else primitives.INTERACTION_FIELDS)
+        result = getattr(job, "result", None)
+        tracking = (_load_csv_from_storage(getattr(result, "tracking_csv_path", "") or "")
+                    if kind == "tracks" else {})
+        tracks_rows, by_track, floor = job_tracks(job, tracking)
+        if kind == "tracks":
+            rows, fields = tracks_rows, track_tables.TRACK_FIELDS
+        else:
+            rows = track_tables.primitive_with_identity(
+                kind, pipeline_executors.primitives_for_job(job, kind), by_track, floor)
+            fields = (primitives.EVENT_FIELDS if kind == "events"
+                      else primitives.INTERACTION_FIELDS)
         table = _rows_as_table(rows, fields)
 
         response = HttpResponse(content_type="text/csv")
@@ -2547,6 +2567,25 @@ class JobPrimitiveCsvView(LoginRequiredMixin, View):
         writer.writerow(table["headers"])
         writer.writerows(table["rows"])
         return response
+
+
+def job_tracks(job, tracking):
+    """``(track rows, by_track, species floor)`` for one job. ``tracking`` is the
+    ``_load_csv_from_storage`` table of its tracking CSV."""
+    from apps.pipelines import executors as pipeline_executors
+    from apps.pipelines import tracks as track_tables
+    from apps.pipelines.ops import fps_with_source
+
+    result = getattr(job, "result", None)
+    if result is None:
+        return [], {}, 0.0
+    by_track = track_tables.by_track_of(result)
+    run = pipeline_executors._run_for_job(job)
+    floor = track_tables.species_floor(run.steps if run else None)
+    headers = tracking.get("headers") or []
+    frames = [dict(zip(headers, r)) for r in tracking.get("rows") or []]
+    fps = fps_with_source(result.summary_stats or {}, job.video)[0]
+    return track_tables.track_rows(frames, by_track, floor, fps), by_track, floor
 
 
 def _rows_as_table(rows, preferred_fields=()):

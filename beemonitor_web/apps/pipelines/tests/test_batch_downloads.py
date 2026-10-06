@@ -30,13 +30,14 @@ class AvailableDownloadTests(SimpleTestCase):
 
         kinds = [d["kind"] for d in aggregate.available_downloads(sources)]
 
-        self.assertEqual(kinds, ["tracking", "events", "interactions"])
+        self.assertEqual(kinds, ["tracking", "tracks", "events", "interactions"])
 
-    def test_a_batch_that_wrote_everything_offers_all_four(self):
+    def test_a_batch_that_wrote_everything_offers_all_five(self):
         sources = [source(detections_csv_path="d.csv", tracking_csv_path="t.csv",
                           events_csv_path="e.csv", interactions_csv_path="i.csv")]
 
-        self.assertEqual(len(aggregate.available_downloads(sources)), 4)
+        # The four base tables plus Tracks (one row per track, with identity).
+        self.assertEqual(len(aggregate.available_downloads(sources)), 5)
 
     def test_a_batch_with_no_tracking_offers_no_primitives(self):
         sources = [source(detections_csv_path="d.csv")]

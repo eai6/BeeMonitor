@@ -12,6 +12,8 @@ events. You derive what your study needs.
 Both come from one pass over the tracks, so they always agree: an interaction's start and end *are* its enter
 and exit events.
 
+Beside them, the **Tracks** table lists each animal once, with its species and marker ID.
+
 ## Events
 
 | Column | Meaning |
@@ -40,6 +42,27 @@ and exit events.
 
 The columns are a fixed contract. New columns may be added at the end, but existing ones are never renamed or
 reordered, so your scripts keep working.
+
+## Tracks
+
+One row per track: when it was seen and what it was. Species and marker IDs come from a vote over every
+crop of the track (the **Identify species** and **Read bee marker** steps). They're blank when the pipeline
+has neither step.
+
+| Column | Meaning |
+|---|---|
+| `track_id` | The track, as in the other tables |
+| `class` | What the detector called it |
+| `first_frame`, `last_frame`, `start_sec`, `end_sec`, `duration_sec` | When it was in view |
+| `frames_seen` | Frames it was detected in |
+| `species`, `species_confidence` | The winning species and its mean confidence. `unidentified` when that is below the pipeline's minimum |
+| `species_best_guess` | The model's call for an `unidentified` track |
+| `species_votes`, `species_vote_share` | Crops that voted for it, and their share of all crops |
+| `marker_id`, `marker_votes`, `marker_vote_share` | The marker read on the most crops |
+
+The same `species` and `marker_id` columns are added to the events, interactions and tracking downloads,
+for the track each row is about. On an interaction between two insects, the second one's are `b_species`
+and `b_marker_id`.
 
 ## From the tables to your question
 

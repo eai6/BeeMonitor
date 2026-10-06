@@ -216,6 +216,8 @@ def available_downloads(sources, runs=()):
     if any((s.get("result") or {}).get("tracking_csv_path") for s in sources):
         analyzed.update(PRIMITIVE_KINDS)
 
+    from . import tracks
+
     out = []
     for kind, path_key, label, hint in BASE_TABLES:
         clips = sum(1 for s in sources if (s.get("result") or {}).get(path_key))
@@ -228,6 +230,15 @@ def available_downloads(sources, runs=()):
         elif clips:
             out.append({"kind": kind, "label": label, "hint": hint,
                         "clips": clips, "analyzed": False})
+        if kind == "tracking":
+            with_tracks = sum(1 for s in sources
+                              if (s.get("result") or {}).get("tracking_csv_path")
+                              or tracks.by_track_of(s.get("result") or {}))
+            if with_tracks:
+                out.append({"kind": "tracks", "label": "Tracks", "clips": with_tracks,
+                            "analyzed": False,
+                            "hint": "One row per track: when it was seen, its species "
+                                    "and marker ID (by vote over its crops)."})
     return out
 
 
@@ -315,6 +326,11 @@ def primitive_csv(runs, kind):
             outputs = [{"rows": rows}]
         result = run_gpu_result(run)
         fps = max(fps_with_source(result, video)[0], 1.0)
+        from . import tracks
+        by_track, floor = tracks.by_track_of(result), tracks.species_floor(run.steps)
+        outputs = [{**o, "rows": tracks.primitive_with_identity(kind, o.get("rows") or [],
+                                                                 by_track, floor)}
+                   for o in outputs]
         src = {"video": video, "title": video.title or f"Video {video.pk}",
                "recorded_at": video.recorded_at}
         provenance = _provenance(src)
@@ -339,6 +355,8 @@ def combined_csv(sources, path_key):
 
     Returns (fieldnames, rows); fieldnames is None when nothing was readable.
     """
+    from . import tracks
+
     fieldnames = None
     all_rows = []
     for src in sources:
@@ -348,8 +366,13 @@ def combined_csv(sources, path_key):
         rows = read_processed_csv(blob)
         if not rows:
             continue
+        if path_key == "tracking_csv_path":
+            # Each track's species and marker, with the pipeline's floor applied.
+            rows = tracks.with_identity(rows, tracks.by_track_of(src["result"]),
+                                        tracks.species_floor(src["run"].steps))
         if fieldnames is None:
-            fieldnames = PROVENANCE_FIELDS + [c for c in rows[0].keys()]
+            fieldnames = PROVENANCE_FIELDS[:]
+        fieldnames += [c for c in rows[0].keys() if c not in fieldnames]
         provenance = _provenance(src)
         for row in rows:
             frame = _frame_number(row)

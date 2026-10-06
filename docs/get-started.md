@@ -25,6 +25,11 @@ A pipeline is a computer-vision analysis you assemble from blocks in the **Pipel
 onto the canvas and connect each block's output to the next block's input. Use as few or as many as your
 question needs.
 
+<figure markdown>
+  ![The pipeline editor: Video Input wired to a Detect node (SAM 3, "bee"), then MOT tracking (BeeTrack), then Identify Species (BioCLIP, minimum mean confidence 0.25)](assets/platform/pipeline-editor.png)
+  <figcaption>A biodiversity-monitoring pipeline: detect bees, track them, and name each track's species.</figcaption>
+</figure>
+
 | Block | What it does |
 |---|---|
 | **Input** | What the pipeline runs on: a **Video Input** (clips) or a **Photo Input** (unit photos and uploaded JPEG, PNG, TIFF, HEIC). |
