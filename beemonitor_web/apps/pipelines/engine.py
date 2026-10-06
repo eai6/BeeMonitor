@@ -46,6 +46,16 @@ def _gpu_cache_key(run, step, context, index):
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _empty_photo_result(run, step, context, index, output):
+    """A cached photo-detection output with no photo in it — what a worker
+    without the detect_photo task returned. Never worth replaying."""
+    built, _err = executors.build_job_config(step, run, context, index)
+    if not built or (built.get("config") or {}).get("task") != "detect_photo":
+        return False
+    stats = ((output or {}).get("result") or {}).get("summary_stats") or {}
+    return not stats.get("photo")
+
+
 def _persist_step_result(user, cache_key, block_type, output):
     """Cache a successful step output for cross-run reuse (strips _-prefixed meta)."""
     if not cache_key:
@@ -174,6 +184,9 @@ def advance_run(run_pk):
                     key = _gpu_cache_key(run, step, context, index)
                     cached = (StepResult.objects.filter(user=run.user, cache_key=key).first()
                               if key and not run.fresh else None)
+                    if cached and _empty_photo_result(run, step, context, index, cached.output):
+                        cached.delete()     # cached before the worker could do photos
+                        cached = None
                     if cached:
                         out = dict(cached.output)
                         out["_cache_key"] = key
@@ -303,8 +316,18 @@ def on_job_finished(job):
             context = dict(run.context or {})
             job_status = getattr(job, "status", "")
 
+            result = _job_result_summary(job) if job_status == "completed" else {}
+            if (job_status == "completed" and config.get("task") == "detect_photo"
+                    and not (result.get("summary_stats") or {}).get("photo")):
+                # A worker without the detect_photo task treats the photo as a
+                # clip and "completes" with nothing. Caching that would serve the
+                # empty answer to every rerun, so it is a failure instead.
+                job_status = "failed"
+                job.error_message = ("The GPU worker returned no photo result — it is "
+                                     "running an image without photo detection. Deploy "
+                                     "the current GPU image, then rerun.")
+
             if job_status == "completed":
-                result = _job_result_summary(job)
                 out = dict(context.get(step_id, {}))
                 out.update({"result": result, "pending": False, "job_id": job.pk})
                 context[step_id] = out

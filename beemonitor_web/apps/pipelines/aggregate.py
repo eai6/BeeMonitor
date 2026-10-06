@@ -48,9 +48,10 @@ def clamp_trip_bounds(min_raw, max_raw):
 
 
 def run_video_id(run):
-    """The video pk this run was launched on (from its frozen input.video step)."""
+    """The video (or photo) pk this run was launched on, from its frozen input
+    step — photos are rows of the same table (memory/45)."""
     for s in (run.steps or []):
-        if s.get("block_type") == "input.video":
+        if s.get("block_type") in ("input.video", "input.photo"):
             vid = (s.get("config") or {}).get("video_id")
             if str(vid).isdigit():
                 return int(vid)

@@ -228,6 +228,9 @@ def run_pipeline(request, pk):
     if any(s.get("block_type") == "input.video" for s in pipeline.steps):
         messages.info(request, "Pick the videos to run this pipeline on.")
         return redirect(f"{reverse('analysis:processing')}?pipeline={pipeline.pk}")
+    if any(s.get("block_type") == "input.photo" for s in pipeline.steps):
+        messages.info(request, "Pick the photos to run this pipeline on.")
+        return redirect(f"{reverse('analysis:processing')}?kind=photo&pipeline={pipeline.pk}")
 
     run = PipelineRun.objects.create(pipeline=pipeline, user=request.user)
     engine.start_run(run)
@@ -408,7 +411,8 @@ def rerun(request, pk, run_id):
     old = get_object_or_404(PipelineRun, pk=run_id, user=request.user)
     pipeline = old.pipeline
     video_id = next(((s.get("config") or {}).get("video_id")
-                     for s in (old.steps or []) if s.get("block_type") == "input.video"), None)
+                     for s in (old.steps or [])
+                     if s.get("block_type") in ("input.video", "input.photo")), None)
     steps = engine.steps_with_video(pipeline, video_id) if video_id else (pipeline.steps or [])
     run = PipelineRun.objects.create(pipeline=pipeline, user=request.user)
     engine.start_run(run, steps=steps)

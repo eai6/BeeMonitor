@@ -160,3 +160,40 @@ class PhotoTabRunTests(TestCase):
         r = self.client.get("/analysis/processing/?kind=photo")
         titles = [p.title for p in r.context["pipelines"]]
         self.assertEqual(titles, ["ph"])
+
+
+class OldWorkerTests(TestCase):
+    """A worker without detect_photo treats a photo as a clip and 'completes'
+    with nothing; that must fail, not be cached."""
+
+    def setUp(self):
+        self.user = User.objects.create_user("ow", password="x")
+        self.photo = Video.everything.create(user=self.user, title="p", storage_key="1/p.jpg",
+                                             file_size_bytes=1, kind=Video.Kind.PHOTO)
+        self.pipeline = Pipeline.objects.create(user=self.user, title="photos", steps=photo_steps())
+
+    def test_an_empty_photo_result_fails_and_is_not_cached(self):
+        from types import SimpleNamespace
+
+        from apps.pipelines import engine
+        from apps.pipelines.models import StepResult
+
+        steps = steps_with_video_steps(photo_steps(), self.photo.pk)
+        run = PipelineRun.objects.create(pipeline=self.pipeline, user=self.user, steps=steps,
+                                         context={"d": {"_cache_key": "k"}})
+        job = SimpleNamespace(pk=1, status="completed", error_message="",
+                              config={"pipeline_run_id": run.pk, "pipeline_step_id": "d",
+                                      "task": "detect_photo"})
+        with mock.patch.object(engine, "_job_result_summary",
+                               return_value={"summary_stats": {"unique_tracks": 0}}), \
+                mock.patch.object(engine, "advance_run"):
+            engine.on_job_finished(job)
+        run.refresh_from_db()
+        self.assertEqual(run.step_status["d"], PipelineRun.STEP_FAILED)
+        self.assertIn("photo detection", run.context["d"]["error"])
+        self.assertFalse(StepResult.objects.filter(cache_key="k").exists())
+
+    def test_the_run_and_batch_find_the_photo(self):
+        from apps.pipelines import aggregate
+        run = PipelineRun(steps=steps_with_video_steps(photo_steps(), self.photo.pk))
+        self.assertEqual(aggregate.run_video_id(run), self.photo.pk)
