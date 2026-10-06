@@ -653,3 +653,34 @@ class TrackerSettingsTests(ExecutorTestCase):
                                            "beetrack_iou_threshold": 0.9}),
                          {"iou_threshold": 0.5})
         self.assertEqual(tracker_settings({"tracker": "sfsort", "sfsort_central_timeout": ""}), {})
+
+
+class SpeciesFloorTests(ExecutorTestCase):
+    """Identify species: a minimum mean confidence for the winning species."""
+
+    summary = {"identified_tracks": 3, "unique_taxa": 2, "rows": [
+        {"track": 1, "taxon": "Bombus_impatiens", "confidence": 0.41, "votes": 66},
+        {"track": 2, "taxon": "Syrphidae", "confidence": 0.18, "votes": 45},
+        {"track": 3, "taxon": "Bombus_impatiens", "confidence": 0.25, "votes": 8}]}
+
+    def test_below_the_floor_is_unidentified_with_its_guess_kept(self):
+        from apps.pipelines.executors import apply_species_floor
+        out = apply_species_floor(self.summary, 0.25)
+        self.assertEqual([r["taxon"] for r in out["rows"]],
+                         ["Bombus_impatiens", "unidentified", "Bombus_impatiens"])
+        self.assertEqual(out["rows"][1]["best_guess"], "Syrphidae")
+        self.assertEqual((out["identified_tracks"], out["unique_taxa"], out["below_threshold"]),
+                         (2, 1, 1))
+
+    def test_no_floor_changes_nothing(self):
+        from apps.pipelines.executors import apply_species_floor
+        self.assertIs(apply_species_floor(self.summary, 0), self.summary)
+
+    def test_floor_is_not_part_of_the_gpu_job(self):
+        """Changing it must re-read, never re-run the GPU."""
+        from apps.pipelines.executors import _pipeline_species
+        steps = [{"id": "d", "block_type": "detect.objects"},
+                 {"id": "s", "block_type": "identify.species",
+                  "config": {"model": "beemachine", "min_mean_confidence": 0.3},
+                  "inputs": {"tracks": "d"}}]
+        self.assertEqual(_pipeline_species(steps[0], steps), "beemachine")

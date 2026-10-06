@@ -935,12 +935,47 @@ def _exec_identify_species(step, run, context, inputs, index):
     df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
     summary = ops.species_identities(df) if df is not None else None
     if summary is not None and summary.get("rows"):
-        return {"artifact": "table", "table_kind": "species", **summary}
+        floor = _number((step.get("config") or {}).get("min_mean_confidence"), 0.0)
+        return {"artifact": "table", "table_kind": "species",
+                **apply_species_floor(summary, floor)}
     return {
         "artifact": "table", "table_kind": "species",
         "identified_tracks": 0, "unique_taxa": 0, "rows": [],
         "note": _species_note(result),
     }
+
+
+UNIDENTIFIED = "unidentified"
+
+
+def _number(value, default):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def apply_species_floor(summary, floor):
+    """Mark tracks whose winning species' mean confidence is below ``floor``
+    unidentified, keeping the model's call as ``best_guess``. Counts follow."""
+    if not floor or floor <= 0:
+        return summary
+    rows, taxa, below = [], set(), 0
+    for row in summary.get("rows") or []:
+        conf = row.get("confidence")
+        if conf is None or conf < floor:
+            row = {**row, "best_guess": row.get("taxon"), "taxon": UNIDENTIFIED}
+            below += 1
+        else:
+            taxa.add(row["taxon"])
+        rows.append(row)
+    out = {**summary, "rows": rows, "identified_tracks": len(rows) - below,
+           "unique_taxa": len(taxa), "min_mean_confidence": floor,
+           "below_threshold": below}
+    if below:
+        out["note"] = (f"{below} track(s) unidentified: the winning species' mean "
+                       f"confidence was below {floor:g}. Their best guess is kept.")
+    return out
 
 
 def _species_note(result):

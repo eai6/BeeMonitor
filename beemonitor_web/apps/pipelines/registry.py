@@ -765,6 +765,19 @@ BLOCK_REGISTRY = {
                     {"value": "bioclip", "label": "BioCLIP (species near the device)"},
                 ],
             },
+            {
+                # Applied when results are read, not on the GPU: every crop
+                # still votes, and the track's call — the winner's mean
+                # confidence over its votes — must reach this to be kept.
+                # Below it the track is reported unidentified, best guess
+                # kept. Changing it re-reads; it never re-runs the GPU job.
+                "name": "min_mean_confidence",
+                "label": "Minimum mean confidence of the winning species",
+                "field_type": "number",
+                "required": False,
+                "default": 0,
+                "choices": None,
+            },
         ],
     },
     "identify.marker": {

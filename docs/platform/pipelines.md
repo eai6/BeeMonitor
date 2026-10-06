@@ -41,7 +41,7 @@ batch. A rerun is a new batch, and the old one is kept for comparison.
 | **Events** | One row per enter or exit of a reference. |
 | **Interactions** | One row per episode of contact: insect with reference (a visit), insect with insect, or both. |
 | **Detection count** | Distinct objects, most common count per frame, totals, per frame, or binned over time. |
-| **Identify species** | After tracking, classifies every saved crop of each track and gives the track the species with the most votes. Model: BeeMachine (354 bee taxa) or BioCLIP (limited to species recorded near the device). |
+| **Identify species** | After tracking, classifies every saved crop of each track and gives the track the species with the most votes. Model: BeeMachine (354 bee taxa) or BioCLIP (limited to species recorded near the device). A minimum mean confidence (of the crops that voted for the winner) marks weaker calls unidentified. |
 | **Read bee marker** | The same vote, over every crop, for each track's paint mark, to tell individuals apart. |
 
 ### Templates

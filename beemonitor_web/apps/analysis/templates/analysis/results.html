@@ -293,6 +293,7 @@
       <p class="text-xs font-medium text-gray-500 mb-1">Track {{ t.track_id }}
         {% if t.ident.taxon %}<span class="ml-2 text-gray-900 italic">{{ t.ident.taxon }}</span>
           <span class="text-gray-400" title="Crops that voted for this species, of all crops the model read">· {{ t.ident.taxon_votes }}/{{ t.ident.taxon_crops }} crops voted for it</span>
+          {% if t.ident.taxon_confidence is not None %}<span class="text-gray-400" title="Mean confidence of the crops that voted for this species — what the pipeline's minimum confidence is compared with">· mean confidence {{ t.ident.taxon_confidence|floatformat:2 }}</span>{% endif %}
         {% elif t.ident.taxon_crops %}<span class="ml-2 text-gray-400">no species read from {{ t.ident.taxon_crops }} crops</span>{% endif %}
         {% if t.ident.marker %}<span class="ml-2 text-gray-900">marker {{ t.ident.marker }}</span>
           <span class="text-gray-400">· {{ t.ident.marker_votes }}/{{ t.ident.marker_crops }} crops</span>{% endif %}
