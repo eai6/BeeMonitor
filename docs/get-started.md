@@ -29,7 +29,7 @@ question needs.
 |---|---|
 | **Input** | What the pipeline runs on: a **Video Input** (clips) or a **Photo Input** (unit photos and uploaded JPEG, PNG, TIFF, HEIC). |
 | **Detect** | Finds one kind of thing in the frames (bees, wasps, flies, flowers, nest tubes) with a built-in model, [your own](platform/annotation.md), or SAM 3 with a text prompt. Every frame, or a sample of frames for things that don't move. |
-| **Reference** | What behaviour is measured against: the nest tubes drawn on a unit, or regions you draw (a flower, an arena zone). |
+| **Reference** | What behaviour is measured against: the device's saved ROI and reference objects (nest tubes, flowers, pollen tubes), or objects a detector finds in the video. |
 | **Track** | Links each animal's detections from frame to frame. Choose the tracker (BeeTrack, ByteTrack, BoT-SORT, OC-SORT, SFSORT) and tune it. |
 | **Analyze** | Turns detections or tracks into numbers: detection counts (totals, distinct objects, over time), events (enter / exit) and interactions (visits, encounters, dwell time). |
 | **Identity** | Names each track: its species (BeeMachine or BioCLIP) and, for marked bees, its individual ID. Every crop of the track votes. |
@@ -42,7 +42,7 @@ Some of the pipelines this makes:
 | How many insects are there in a clip | Video Input → Detect → Analyze: detection count |
 | What species is each insect that passes (biodiversity monitoring) | Input → Detect → Track → Identity: species |
 | Foraging trips at a nest hotel | Input → Detect → Track → Reference (the unit's tubes) → Analyze: events |
-| Visits and time on each flower, or each zone of an assay | Input → Detect → Track → Reference (drawn regions) → Analyze: interactions |
+| Visits and time on each flower, or each zone of an assay | Input → Detect → Track → Reference (saved layout, or Detect) → Analyze: interactions |
 | Which marked bee did what | Input → Detect → Track → Identity: marker, plus any of the above |
 
 On photos, Detect, Reference, Detection count and Identity work; tracking and everything built on it need

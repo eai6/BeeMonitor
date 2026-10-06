@@ -126,7 +126,7 @@ their reason.
     <div class="flex justify-between text-xs py-0.5">
       <span class="text-gray-500">References</span>
       {% if references.source == "graph" %}
-      <span class="text-gray-900" title="From the pipeline's own reference node — a drawn ROI or the device's nest layout.">{{ references.count }} defined</span>
+      <span class="text-gray-900" title="From the pipeline's own reference node — the device's saved layout or a detected reference.">{{ references.count }} defined</span>
       {% elif references.source == "detected" %}
       <span class="text-gray-900" title="None defined in the pipeline, so the analyzer used what the detector found.">{{ references.count }} detected</span>
       {% elif references.unplaceable %}

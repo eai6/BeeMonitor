@@ -40,7 +40,7 @@ batch. A rerun is a new batch, and the old one is kept for comparison.
 | **Video** / **Photo** | The clip, or the photo, being analysed. Every pipeline starts from one of the two. |
 | **Detect** | Finds one class in each frame with YOLO (fast) or SAM 3 (text prompt, slower). Can analyse every frame (needed for tracking) or a sample of frames (for objects that don't move). |
 | **MOT: Track objects** | Links detections into tracks. Choose the algorithm — BeeTrack (default), ByteTrack, BoT-SORT, OC-SORT or SFSORT — and tune its settings on the node. Runs inside the same GPU pass as Detect, on whatever Detect found. |
-| **Reference: Saved layout** | The device's saved ROI and nest tubes, or regions you draw. No GPU needed. |
+| **Reference: Saved layout** | The device's saved ROI and reference objects (nest tubes, flowers, pollen tubes), set on the device page under Edit ROI & reference objects. No GPU needed. For objects that move, or clips without a device, wire a Detect node to the analyzer's reference input instead. |
 | **Events** | One row per enter or exit of a reference. |
 | **Interactions** | One row per episode of contact: insect with reference (a visit), insect with insect, or both. |
 | **Detection count** | Distinct objects, most common count per frame, totals, per frame, or binned over time. |
@@ -54,8 +54,8 @@ Each template is the same few steps put together in a different way:
 | Template | Steps |
 |---|---|
 | **Foraging trips** | Video → Detect (bee) → Track → Reference (device layout) → Events |
-| **Flower / ROI visitation** | Video → Detect (bee) → Track → Reference (drawn regions) → Interactions (insect ↔ reference) |
-| **Pollen assay** | Video → Detect (bee) → Track → Reference (one drawn region per pollen tube) → Interactions (insect ↔ reference) |
+| **Flower / ROI visitation** | Video → Detect (bee) → Track → Reference (saved layout: the flowers) → Interactions (insect ↔ reference) |
+| **Pollen assay** | Video → Detect (bee) → Track → Reference (saved layout: one reference object per pollen tube) → Interactions (insect ↔ reference) |
 | **Interactions** | Video → Detect (bee) → Track; Detect (nest) as the reference → Interactions (all) |
 | **Individual bee IDs** | Video → Detect (bee) → Track → Read bee marker |
 

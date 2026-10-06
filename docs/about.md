@@ -126,7 +126,7 @@ chosen when uploading. Optional.
 recording inside the ROI.
 
 **Reference / reference object**: what behaviour is measured against, such as a nest tube, a flower or a
-drawn region.
+pollen tube. It comes from the device's saved layout, or from a detector that finds it in the video.
 
 **Layout**: a device's ROI plus its reference objects. Every change is kept as a new version, so older clips
 are analysed with the layout they were recorded with.

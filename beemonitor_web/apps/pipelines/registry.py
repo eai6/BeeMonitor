@@ -395,17 +395,19 @@ BLOCK_REGISTRY = {
     },
 
     # ── Reference geometry (not a detection) ──────────────────────────────────
-    # The hotel/nest layout drawn in the ROI editor, or regions drawn here, are
-    # saved coordinates — nothing needs detecting. Keeping them out of the Detect
-    # node is what lets Detect mean exactly one thing.
+    # A reference is either the layout saved on the device page (its ROI and
+    # reference objects, drawn in the ROI editor there) or objects a Detect node
+    # finds — wired to the analyzer's reference port. There is no drawing in the
+    # pipeline: the "drawn" source stays only so pipelines saved with it run.
     "reference.layout": {
         "display_name": "Reference — Saved Layout",
-        "description": "Use coordinates you already have as the reference an "
-                       "analyzer measures against: the device's saved bee-hotel "
-                       "ROI and nest tubes, or region(s) drawn here. No detection "
-                       "and no GPU. To find the reference in the video instead, "
-                       "use a Detect node and wire it to the analyzer's reference "
-                       "port.",
+        "description": "The device's saved layout: its ROI and reference objects "
+                       "(nest tubes, flowers, pollen tubes…) drawn on the device "
+                       "page under Edit ROI & reference objects — the version in "
+                       "use when each clip or photo was recorded. No GPU. For "
+                       "clips without a device, or objects that move, detect the "
+                       "reference instead: a Detect node for that class wired to "
+                       "the analyzer's reference input.",
         "category": "roi",
         "icon": "📐",
         "input_type": "video",
@@ -420,8 +422,7 @@ BLOCK_REGISTRY = {
                 "required": True,
                 "default": "device_layout",
                 "choices": [
-                    {"value": "device_layout", "label": "The device's saved hotel + nest tubes"},
-                    {"value": "drawn", "label": "Region(s) I draw"},
+                    {"value": "device_layout", "label": "The device's saved ROI + reference objects"},
                 ],
             },
             {
@@ -533,7 +534,7 @@ BLOCK_REGISTRY = {
     "analyze.events": {
         "display_name": "Events",
         "description": "When something entered or exited something — a nest tube, "
-                       "a drawn region, a flower. One row per crossing, with the "
+                       "a flower, a pollen tube. One row per crossing, with the "
                        "frame, the subject and what it crossed into.",
         "category": "analyze",
         "icon": "🚪",

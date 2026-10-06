@@ -148,12 +148,14 @@ def resolve_reference(step, run, context, index):
     # only reads boxes still works, and one that reads points excludes the
     # background the box swept in.
     hotel_roi, hotel_polygon, nest_layout = None, None, None
-    video_out = find_artifact("video", run.steps, index, context)
+    # A clip's, or a photo's, device — photos share the table (memory/45).
+    video_out = (find_artifact("video", run.steps, index, context)
+                 or find_artifact("photo", run.steps, index, context))
     if video_out:
         try:
             from apps.videos.models import Video
 
-            video = Video.objects.select_related("device").get(pk=video_out["video_id"])
+            video = Video.everything.select_related("device").get(pk=video_out["video_id"])
             device = getattr(video, "device", None)
             if device is not None:
                 # The layout in use when this clip was recorded, not today's.
@@ -232,9 +234,15 @@ def detected_reference(step, run, context, index):
     result = out.get("result") or {}
     label = detector_label(step)
 
+    photo = (result.get("summary_stats") or {}).get("photo")
+    if photo is not None:
+        boxes = photo_reference_boxes(photo, label)
+        return ({"artifact": "roi", "source": "detected", "label": label,
+                 "regions": [{"box": b} for b in boxes]} if boxes else {})
+
     df = ops.load_detections_df(result)
     if df is None:
-        df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
+        df = ops.load_tracking_df(result)
     boxes = ops.boxes_for_label(df, label) if df is not None else []
     if boxes:
         return {"artifact": "roi", "source": "detected", "label": label,
@@ -971,8 +979,9 @@ UNIDENTIFIED = "unidentified"
 
 
 def photo_detection_count(photo, regions=None):
-    """Detection count on one photo: per class, and per drawn region when the
-    pipeline has a reference (a box's centre inside the region's shape)."""
+    """Detection count on one photo: per class, and per reference region when
+    the pipeline has one — the device's saved layout or a Detect node's boxes
+    (a box's centre inside the region's shape)."""
     from . import ops
 
     dets = photo.get("detections") or []
@@ -991,6 +1000,18 @@ def photo_detection_count(photo, regions=None):
             per_region.append({"region": i + 1, "count": inside})
         out["regions"] = per_region
     return out
+
+
+def photo_reference_boxes(photo, label=""):
+    """A photo's detections of ``label`` as 0..1 reference boxes — the flowers
+    or tubes a Detect node found, for the analyzers to measure against. The job
+    only looked for its own classes, so with no class match every box counts."""
+    dets = photo.get("detections") or []
+    want = (label or "").strip().lower()
+    hits = [d for d in dets if (d.get("class") or "").lower() == want] if want else []
+    w, h = float(photo.get("width") or 1), float(photo.get("height") or 1)
+    return [[d["x"] / w, d["y"] / h, (d["x"] + d["w"]) / w, (d["y"] + d["h"]) / h]
+            for d in (hits or dets)]
 
 
 def photo_species(photo, floor=0.0):

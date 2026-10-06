@@ -100,6 +100,23 @@ class RunTests(TestCase):
         self.assertEqual([r["taxon"] for r in sp["rows"]], ["Bombus impatiens", "unidentified"])
         self.assertEqual(sp["rows"][1]["best_guess"], "Syrphidae")
 
+    def test_a_detect_node_is_the_reference_on_a_photo(self):
+        flowers = {"width": 4000, "height": 3000, "detections": [
+            {"x": 0, "y": 0, "w": 2000, "h": 1500, "class": "flower", "confidence": 0.9}]}
+        steps = steps_with_video_steps(photo_steps(
+            {"id": "f", "block_type": "detect.objects", "config": {"label": "flower"},
+             "inputs": {"video": "p"}},
+            {"id": "c", "block_type": "analyze.detection_count", "config": {"metric": "total"},
+             "inputs": {"detections": "d", "rois": "f"}}), self.photo.pk)
+        ctx = {"p": {"artifact": "photo", "video_id": self.photo.pk},
+               "d": {"result": {"summary_stats": {"photo": PHOTO}}},
+               "f": {"result": {"summary_stats": {"photo": flowers}}}}
+        run = self._run(steps, ctx)
+        ref = executors.find_reference(steps, 3, ctx, run)
+        self.assertEqual(ref["regions"], [{"box": [0.0, 0.0, 0.5, 0.5]}])
+        out = executors._exec_analyze_detection_count(steps[3], run, ctx, {"detections": ctx["d"]}, 3)
+        self.assertEqual(out["regions"], [{"region": 1, "count": 1}])
+
     def test_batch_summary_and_csv_rows(self):
         run = self._run(steps_with_video_steps(photo_steps(), self.photo.pk),
                         {"d": {"result": {"summary_stats": {"photo": PHOTO}}}})

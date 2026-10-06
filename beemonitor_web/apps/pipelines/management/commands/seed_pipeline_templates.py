@@ -53,13 +53,17 @@ TEMPLATES = [
     },
     {
         "title": "Flower / ROI visitation",
-        "description": "Track insects and count unique visits to a region you draw "
-                       "(a flower, a patch, a nest entrance).",
+        "description": "Track insects and count visits to each flower (or patch, "
+                       "nest entrance) and how long they stay. Draw the flowers "
+                       "as reference objects on the device page.",
         "steps": [
             _s("v", "input.video"),
             _s("d", "detect.objects", _detect("bee"), {"video": "v"}),
             _s("m", "track.mot", _MOT, {"detections": "d"}),
-            _s("r", "reference.layout", {"source": "drawn", "regions": "[]"}, {"video": "v"}),
+            # The flowers are the device's saved reference objects (device page →
+            # Edit ROI & reference objects), in the version the clip was
+            # recorded with.
+            _s("r", "reference.layout", {"source": "device_layout"}, {"video": "v"}),
             # A visit is an insect interacting with a reference.
             _s("g", "analyze.interactions", {"interaction_type": "organism_reference"},
                {"tracks": "m", "rois": "r"}),
@@ -78,16 +82,16 @@ TEMPLATES = [
     {
         "title": "Pollen assay",
         "description": "Compare two or more pollen tubes in a lab arena: how many times "
-                       "bees interact with each tube, and for how long. Draw one "
-                       "region per tube.",
+                       "bees interact with each tube, and for how long. Draw each "
+                       "tube as a reference object on the device page.",
         "steps": [
             _s("v", "input.video"),
             _s("d", "detect.objects", _detect("bee"), {"video": "v"}),
             _s("m", "track.mot", _MOT, {"detections": "d"}),
-            # Drawn, not detected: the tubes sit still in the arena, so regions
-            # drawn once hold for every trial, need no GPU, and need no model
-            # trained on pollen tubes. A sampled Detect can't feed a reference.
-            _s("r", "reference.layout", {"source": "drawn", "regions": "[]"}, {"video": "v"}),
+            # The tubes are the device's saved reference objects: they sit still
+            # in the arena, so one layout holds for every trial, needs no GPU and
+            # no model trained on pollen tubes.
+            _s("r", "reference.layout", {"source": "device_layout"}, {"video": "v"}),
             # Each row is one bee-tube episode; per tube, rows = number of
             # interactions and sum(duration_sec) = time spent.
             _s("i", "analyze.interactions", {"interaction_type": "organism_reference"},
