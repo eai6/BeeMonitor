@@ -14,11 +14,19 @@ worker process.
 from __future__ import annotations
 
 import logging
+import os
 from functools import lru_cache
 
 import cv2
 
 logger = logging.getLogger(__name__)
+
+# Importing pybioclip sets TORCH_FORCE_WEIGHTS_ONLY_LOAD=true for the whole
+# process unless it is already set. That overrides the weights_only=False
+# Ultralytics passes, so every YOLO checkpoint the worker loads after the first
+# BioCLIP job fails to unpickle. Our weights come from our own bucket; keep
+# torch's normal behaviour. Set before any bioclip import, and in the image.
+os.environ.setdefault("TORCH_FORCE_WEIGHTS_ONLY_LOAD", "0")
 
 
 def _device() -> str:

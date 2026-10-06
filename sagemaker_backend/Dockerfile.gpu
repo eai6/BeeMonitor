@@ -75,6 +75,9 @@ Sam3Model.from_pretrained('facebook/sam3', token=t)"
 # embeddings are built per job from the region's species).
 RUN python -c "from bioclip import TreeOfLifeClassifier, CustomLabelsClassifier; \
 TreeOfLifeClassifier(); CustomLabelsClassifier(['Apis mellifera'])"
+# pybioclip forces weights-only torch.load process-wide unless this is set,
+# which breaks every Ultralytics .pt load after a BioCLIP job.
+ENV TORCH_FORCE_WEIGHTS_ONLY_LOAD=0
 ENV HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1
 
