@@ -15,7 +15,7 @@ You need an account on [beemonitor.edwardamoah.com](https://beemonitor.edwardamo
 
 - **Build a BeeMonitor unit** ([Build a unit](hardware/index.md)), then add it on the platform's [Add a device](https://beemonitor.edwardamoah.com/devices/enrollment) page. It records
   only when insects are active, uploads the clips itself, and lets you control it remotely.
-- **Use video you already have** from any camera: **Processing → Upload videos**, any size, with an
+- **Use video you already have** from any camera: **Videos → Upload videos**, any size, with an
   optional site and recording time ([Videos](platform/videos.md#upload-from-any-camera)), or through the
   [API](platform/api.md).
 
@@ -32,7 +32,7 @@ A pipeline takes each clip through the same stages:
 - **Reference** is what behaviour is measured against: the nest tubes drawn on a unit, regions you draw
   (a flower, an arena zone), or objects detected in the video.
 
-Start from a template under **Pipelines** and run it from **Processing** on the clips you choose
+Start from a template under **Pipelines** and run it from **Videos** on the clips you choose
 ([Pipelines](platform/pipelines.md)).
 
 ## 3. Read the results

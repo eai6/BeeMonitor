@@ -5,11 +5,11 @@
 ### From a BeeMonitor unit
 
 An enrolled unit uploads its clips and photos by itself (see [Build a unit](../hardware/index.md)). They
-appear under **Processing**, already linked to the device, its location and the layout it was recorded with.
+appear under **Videos**, already linked to the device, its location and the layout it was recorded with.
 
 ### Upload from any camera
 
-**Processing → Upload videos.** Drop in any number of files of any size (MP4, MOV, MKV, AVI, H.264). They go
+**Videos → Upload videos.** Drop in any number of files of any size (MP4, MOV, MKV, AVI, H.264). They go
 straight from your browser to storage in parts: if the connection drops or you close the tab, add the same
 files again and they pick up where they stopped.
 
@@ -20,7 +20,7 @@ files again and they pick up where they stopped.
 - **Where (optional).** Pick a saved site, add a new one (a name, and a pin on the map if you want), or
   leave it empty. A site with a location gives BioCLIP its list of local species. If the clips came off a
   unit's card, choose that device instead.
-- **Label.** A batch name to find these clips again (**Batch** filter in Processing).
+- **Label.** A batch name to find these clips again (**Batch** filter in Videos).
 - **Afterwards.** Choose a pipeline to run on the new clips — straight away when the last file lands, or
   with one click.
 - Files you already uploaded (same name and size) are skipped unless you say otherwise. AVI files are
@@ -32,10 +32,10 @@ The [API](api.md) uploads clips and runs pipelines from a script or a notebook.
 
 ## Browsing videos and photos
 
-**Processing** shows your clips by day, filtered by hotel, date, hour of day and search.
+**Videos** shows your clips by day, filtered by hotel, date, hour of day and search.
 Switch to **Photos** for the periodic full-resolution photos.
 
-<!-- SCREENSHOT: the Processing hub -->
+<!-- SCREENSHOT: the Videos page -->
 
 - Hover a clip to preview it; click to open it.
 - Select clips, choose a pipeline, **Run pipeline** ([Pipelines](pipelines.md)).

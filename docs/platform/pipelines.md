@@ -12,7 +12,7 @@ Interactions, Individual bee IDs). Drag steps from the palette and connect them.
 
 ## Run it
 
-- **On clips:** in **Processing**, select clips (or all that match the filter), choose the pipeline and
+- **On clips:** in **Videos**, select clips (or all that match the filter), choose the pipeline and
   **Run pipeline**. Each clip becomes a run, and together they form a batch.
 - **On a schedule:** on the device page, under **Scheduled processing**, run a pipeline on each day's new
   clips.

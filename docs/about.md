@@ -29,7 +29,7 @@ flowchart LR
 |---|---|---|
 | `hardware/` | Device software: motion-gated recording, uploader, health telemetry, enrolment, updates, cellular; BOM and enclosure STLs in `hardware/enclosure/` | Python, picamera2 / DepthAI, systemd |
 | `src/beemonitor/` | The core analysis engine: detection, BeeTrack tracking, event classification, outputs. Usable on its own as a Python package | Python, Ultralytics YOLO, OpenCV |
-| `beemonitor_web/` | The platform: devices, Processing, the pipeline builder and engine, annotation, training, publishing, the API | Django, PostgreSQL, Tailwind |
+| `beemonitor_web/` | The platform: devices, videos, the pipeline builder and engine, annotation, training, publishing, the API | Django, PostgreSQL, Tailwind |
 | `sagemaker_backend/` | GPU workers: detection + tracking, SAM 3 sampling and labelling, BeeMachine species ID, model training | Docker, PyTorch, AWS SageMaker |
 | `cloud/` | Storage and ingestion connectors (S3, GCS, Google Drive) | Python |
 | `models/` | Model weights: bee detector, nest detector, entry/exit classifier | |

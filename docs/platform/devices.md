@@ -21,7 +21,7 @@
 - **Full-resolution photos** (64 MP OwlSight or OAK cameras):
     - **On motion: 5 photos, then video** — five photos at every trigger, then the clip. They show on that
       clip's page.
-    - **Also periodically** — a photo every 15, 30 or 60 minutes. They show under **Photos** in Processing.
+    - **Also periodically** — a photo every 15, 30 or 60 minutes. They show under **Photos** in Videos.
     - **Take one now**.
 
 ## Health

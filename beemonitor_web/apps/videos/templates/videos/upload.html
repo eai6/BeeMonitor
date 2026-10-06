@@ -14,7 +14,7 @@
 <form id="csrf-form">{% csrf_token %}</form>
 
 <div class="max-w-7xl mx-auto" id="upload-app">
-  <a href="{% url 'analysis:processing' %}" class="text-sm text-amber-700 hover:underline">&larr; Processing</a>
+  <a href="{% url 'analysis:processing' %}" class="text-sm text-amber-700 hover:underline">&larr; Videos</a>
   <h1 class="text-2xl font-bold text-gray-900 mt-1">Upload videos</h1>
   <p class="text-sm text-gray-600 mb-5">From any camera. Large files upload in parts; if the connection drops or you close the tab, add the same files again and they pick up where they stopped.</p>
 
@@ -64,7 +64,7 @@
 
       <section class="bg-white border border-gray-200 rounded-lg p-5 space-y-3">
         <h2 class="font-semibold">Label</h2>
-        <label class="block text-sm font-medium">Batch name <span class="font-normal text-gray-500">(to find these again in Processing)</span>
+        <label class="block text-sm font-medium">Batch name <span class="font-normal text-gray-500">(to find these again in Videos)</span>
           <input type="text" id="batch" maxlength="120" class="mt-1 w-full border border-gray-300 rounded px-3 py-2 text-sm">
         </label>
       </section>
@@ -94,7 +94,7 @@
         <p class="text-sm text-gray-700" id="after-text"></p>
         <div class="flex flex-wrap gap-2">
           <button type="button" id="run-now" class="h-11 px-4 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm hidden">Run pipeline</button>
-          <a id="open-processing" href="{% url 'analysis:processing' %}" class="h-11 px-4 inline-flex items-center rounded-lg border border-gray-300 text-sm hover:bg-gray-50">Open in Processing</a>
+          <a id="open-processing" href="{% url 'analysis:processing' %}" class="h-11 px-4 inline-flex items-center rounded-lg border border-gray-300 text-sm hover:bg-gray-50">Open in Videos</a>
           <a href="{% url 'videos:upload' %}" class="h-11 px-4 inline-flex items-center rounded-lg border border-gray-300 text-sm hover:bg-gray-50">Upload more</a>
         </div>
       </section>
@@ -436,7 +436,7 @@
     $('open-processing').href = PROCESSING_URL + (label ? '?batch=' + encodeURIComponent(label) : '');
     $('after').classList.remove('hidden');
     $('after-title').textContent = `${ok.length} file${ok.length === 1 ? '' : 's'} uploaded` + (failed ? ` · ${failed} failed` : '');
-    $('after-text').textContent = label ? `They are in Processing under the batch "${label}".` : 'They are in Processing.';
+    $('after-text').textContent = label ? `They are in Videos under the batch "${label}".` : 'They are in Videos.';
     const ids = ok.map((f) => f.videoId).filter(Boolean);
     const runBtn = $('run-now');
     runBtn.classList.toggle('hidden', !$('pipeline').value || !ids.length);
