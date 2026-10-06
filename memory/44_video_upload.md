@@ -1,6 +1,6 @@
 # 44 · Video upload as a first-class feature
 
-Status: **plan** (2026-10-06) — awaiting decisions below, then a design canvas.
+Status: **design** (2026-10-06) — canvas https://claude.ai/artifact/QsHBrSL4Teyhz6wXLqi8vw ; awaiting go-ahead to build.
 
 ## Ask
 "We should have a real video upload feature on the platform" — clips from any
@@ -42,3 +42,21 @@ camera, not only BeeMonitor units (today the docs can only say "through the API"
 1. Files over 5 GiB — do you expect them (long continuous recordings)?
 2. Recording time — set per batch, read from the file, or both (file first)?
 3. Sites with a map location, reusable — yes, or keep free-text names?
+
+## Decisions (2026-10-06)
+- All of 1–7 in scope; files can exceed 5 GiB → S3 multipart, resumable.
+- Recording time, robust, in order: file metadata (creation_time) → a
+  timestamp anywhere in the filename (several common formats) → the batch's
+  "recording started" (optionally back-to-back) → upload time. Each clip
+  records its source (file / name / set by you / upload) so it can be fixed.
+- Site optional: pick a saved site (name + lat/lon), create one, or none;
+  nothing may depend on having one (BioCLIP falls back to Tree of Life).
+
+## Design (canvas)
+1 Upload: drop zone; per-file recorded-at with source chip; duplicate
+  skipped; Where (site, device), When (fallback start, back-to-back), batch
+  label. 2 Uploading: overall + per-file part progress, resumed after a drop,
+  AVI converted after upload; "Run a pipeline on these" (optionally auto-start),
+  Open in Processing (batch filter preselected). 3 Processing: Upload button in
+  the header; Batch / Source filters; "Recording time unknown" filter.
+  4 New site dialog: name required, map pin or lat/lon, current location.
