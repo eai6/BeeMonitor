@@ -137,3 +137,10 @@ Troubleshooting), Use the platform (Devices · Videos · Pipelines · Results ·
 Annotation & sharing · API), About (open source, contributing, methods,
 glossary, license). Keep it this flat; add sections to a page before adding
 a page.
+
+## v4 (2026-10-06): Build a unit = the assembly manual
+Build a unit is one page mirroring the user's Hardware Assembly Manual v1.0
+(PDF in docs/assets, photos docs/assets/build/fig01-14). Setup/troubleshooting
+pages removed (flashing lives on the platform's Add a device page).
+Open: part 5 (power connector) is required but no step uses it — the user will
+redesign it later; leave the docs as they are until then.
