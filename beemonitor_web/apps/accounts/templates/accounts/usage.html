@@ -80,33 +80,6 @@
   </div>
 </div>
 
-<!-- GPU Usage Breakdown -->
-{% if gpu_stats %}
-<div class="bg-white shadow rounded-lg p-6 mb-6">
-  <h2 class="text-lg font-medium text-gray-900 mb-4">GPU Usage by Tier</h2>
-  <table class="min-w-full text-sm">
-    <thead>
-      <tr class="border-b border-gray-200">
-        <th class="py-2 text-left text-gray-500">GPU</th>
-        <th class="py-2 text-right text-gray-500">Jobs</th>
-        <th class="py-2 text-right text-gray-500">GPU Time</th>
-        <th class="py-2 text-right text-gray-500">Cost</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for stat in gpu_stats %}
-      <tr class="border-b border-gray-100">
-        <td class="py-2 font-medium">{{ stat.gpu_tier|default:"A10G" }}</td>
-        <td class="py-2 text-right">{{ stat.count }}</td>
-        <td class="py-2 text-right">{% if stat.total_seconds %}{{ stat.total_seconds|floatformat:0 }}s{% else %}--{% endif %}</td>
-        <td class="py-2 text-right">${{ stat.total_cost|default:"0"|floatformat:2 }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-{% endif %}
-
 <!-- Lifetime Stats -->
 <div class="bg-white shadow rounded-lg p-6 mb-6">
   <h2 class="text-lg font-medium text-gray-900 mb-4">Lifetime Stats</h2>

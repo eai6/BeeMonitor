@@ -405,7 +405,7 @@ class TrainingCreateView(LoginRequiredMixin, CreateView):
             form.cleaned_data.get("epochs", 50),
             form.cleaned_data.get("image_size", 640),
             form.cleaned_data.get("batch_size", 16),
-            form.cleaned_data.get("gpu_tier", "A10G"),
+            form.instance.gpu_tier,
         )
 
         response = super().form_valid(form)

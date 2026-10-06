@@ -14,12 +14,12 @@ Your models then appear in a pipeline's **Detect** step.
 | **Training frames** | All frames, or **Human-reviewed only**: just the frames you checked, so the labels are better but there are fewer of them. You can also skip frames that contain none of the chosen classes |
 | **Base model** | Fine-tune an existing model (recommended, best for new footage), or train from scratch |
 | **Val split** | The share of frames held back to measure the model |
-| **GPU tier** | Higher tiers train faster and cost more credits |
 
-Training typically takes 500 to 5,000 GPU seconds, depending on the number of frames, epochs and tier.
+Training runs on an A10G GPU and typically takes 500 to 5,000 GPU seconds, depending on the number of
+frames and epochs.
 
 <figure markdown>
-  ![The New Training Job form: annotation project, job name, base model, training frames, classes, epochs, image size, batch size, validation split and GPU tier](../assets/platform/training-new.png)
+  ![The New Training Job form: annotation project, job name, base model, training frames, classes, epochs, image size, batch size, and validation split](../assets/platform/training-new.png)
   <figcaption>New training job.</figcaption>
 </figure>
 

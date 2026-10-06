@@ -31,7 +31,7 @@ class TrainingCreateForm(forms.ModelForm):
         model = TrainingJob
         fields = ["project", "name", "base_model", "frame_filter",
                   "frames_with_class",
-                  "epochs", "image_size", "batch_size", "val_percent", "gpu_tier"]
+                  "epochs", "image_size", "batch_size", "val_percent"]
         widgets = {
             "name": forms.TextInput(attrs={
                 "class": "w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500",
@@ -64,20 +64,10 @@ class TrainingCreateForm(forms.ModelForm):
                 "min": 5,
                 "max": 50,
             }),
-            "gpu_tier": forms.Select(attrs={
-                "class": "w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500",
-            }),
         }
 
-    # Training is per-instance-hour (no scale-to-zero), so restrict to the
-    # affordable single-GPU instances — drop L40S/A100 (ml.p4d.24xlarge is
-    # ~$37/hr). Labels name the SageMaker instance each maps to (see
-    # training/views.py _INSTANCE_BY_TIER).
-    TRAINING_GPU_CHOICES = [
-        ("T4", "T4 — ml.g4dn.xlarge (cheapest, slower)"),
-        ("L4", "L4 — ml.g6.xlarge (balanced)"),
-        ("A10G", "A10G — ml.g5.xlarge (fast, recommended)"),
-    ]
+    # No GPU choice: every training job runs on the A10G (ml.g5.xlarge), the
+    # model's default gpu_tier. Picking a GPU was a setting nobody needed.
 
     def __init__(self, *args, user=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -86,9 +76,6 @@ class TrainingCreateForm(forms.ModelForm):
             # viewer capability, and the training run spends the trainer's own
             # GPU budget rather than the project owner's.
             self.fields["project"].queryset = AnnotationProject.accessible(user)
-        self.fields["gpu_tier"].choices = self.TRAINING_GPU_CHOICES
-        if not self.initial.get("gpu_tier"):
-            self.initial["gpu_tier"] = "A10G"
 
         # Fine-tune sources (the production bee model + the user's ready
         # custom/trained models) and from-scratch architectures share the

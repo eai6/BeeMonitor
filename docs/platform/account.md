@@ -9,7 +9,6 @@ training.
 |---|---|
 | **Monthly credits** | This month's allowance and what remains |
 | **Monthly spend** | What this month's GPU work has cost |
-| **GPU usage by tier** | GPU time on each tier |
 | **Lifetime stats** | Jobs submitted and completed, and total GPU time |
 | **Plan comparison** | What each plan includes: video hours per month, concurrent GPU jobs |
 | **Have a promo code?** | Redeem a code for credits, and see the codes you've used |

@@ -67,18 +67,6 @@ class UsageDashboardView(LoginRequiredMixin, TemplateView):
         ctx["failed_jobs"] = jobs.filter(status=Job.Status.FAILED).count()
         ctx["processing_jobs"] = jobs.filter(status=Job.Status.PROCESSING).count()
 
-        # Cost breakdown by GPU tier
-        gpu_stats = (
-            completed.values("gpu_tier")
-            .annotate(
-                count=Count("id"),
-                total_seconds=Sum("execution_seconds"),
-                total_cost=Sum("compute_cost_usd"),
-            )
-            .order_by("-count")
-        )
-        ctx["gpu_stats"] = list(gpu_stats)
-
         # Monthly cost data for chart
         from django.db.models.functions import TruncMonth
         monthly_costs = (

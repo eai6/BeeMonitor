@@ -71,15 +71,10 @@
         </div>
       </div>
       <p class="-mt-2 mb-4 text-xs text-gray-500">Val Split: percent of frames held out for evaluation (metrics + validation predictions); the rest train the model.</p>
-      <div class="mb-6">
-        <label for="id_gpu_tier" class="block text-sm font-medium text-gray-700 mb-1">GPU Tier</label>
-        {{ form.gpu_tier }}
-        <p class="mt-1 text-xs text-gray-500">Higher tiers train faster but cost more credits.</p>
-      </div>
 
       <!-- Estimated cost hint -->
       <div class="bg-amber-50 border border-amber-200 rounded p-3 mb-6 text-sm text-amber-800">
-        Training cost depends on dataset size, epochs, and GPU tier. Typical training runs use 500-5000 GPU seconds.
+        Training time depends on the number of frames and epochs. Typical training runs use 500-5000 GPU seconds.
       </div>
 
       <div class="flex space-x-3">
