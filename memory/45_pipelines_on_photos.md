@@ -1,7 +1,7 @@
 # 45 · Pipelines on photos
 
-Status: **plan** (2026-10-06) — supersedes memory/40 part 2's design (written
-before photos moved into the videos table). Awaiting decisions, then a canvas.
+Status: **design** (2026-10-06) — supersedes memory/40 part 2's design (written
+before photos moved into the videos table).
 
 ## Ask
 "Pipelines should run on photos too" — e.g. count insects in an image with
@@ -48,3 +48,10 @@ Detect alone, or name the species of each insect in a photo.
 2. One pipeline for both (input block switches clip/photo), or separate
    photo pipelines?
 3. Tiling automatic above a size, or a setting on Detect?
+
+## Decisions (2026-10-06)
+1. Photos from units AND any camera (upload page: JPEG/PNG/TIFF/HEIC, time
+   from EXIF DateTimeOriginal → name → batch time → upload time).
+2. Separate input blocks: a pipeline starts from Video Input or Photo Input;
+   the editor offers only blocks that fit.
+3. Tiling automatic whenever the photo is larger than the detector's input.
