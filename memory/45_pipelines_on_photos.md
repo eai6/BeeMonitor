@@ -1,6 +1,6 @@
 # 45 · Pipelines on photos
 
-Status: **design** (2026-10-06) — supersedes memory/40 part 2's design (written
+Status: **design** (2026-10-06) — canvas https://claude.ai/artifact/8mJzQDZbGeXvvWDwqZgUy4 ; awaiting go-ahead — supersedes memory/40 part 2's design (written
 before photos moved into the videos table).
 
 ## Ask
