@@ -23,21 +23,50 @@ def pool(qs):
     return qs.filter(reviewed=False, assigned_to__isnull=True)
 
 
+def reviewers(project):
+    """Who reviewed the project's frames: ``({user_id: (username, n)}, unrecorded)``.
+
+    By ``reviewed_by``, not ``assigned_to``. Saving a frame from the unassigned
+    pool reviews it without assigning it, so counting reviews through
+    assignments missed every one of those and the per-person numbers did not
+    add up to the project's total. ``unrecorded`` is reviews with no reviewer
+    on record (made before it was recorded).
+    """
+    rows = (Annotation.objects.filter(project=project, reviewed=True)
+            .order_by().values("reviewed_by_id", "reviewed_by__username")
+            .annotate(n=Count("id")))
+    by_user, unrecorded = {}, 0
+    for r in rows:
+        if r["reviewed_by_id"] is None:
+            unrecorded += r["n"]
+        else:
+            by_user[r["reviewed_by_id"]] = (r["reviewed_by__username"], r["n"])
+    return by_user, unrecorded
+
+
 def workloads(project):
-    """Per person: frames assigned, how many they have reviewed, what is left."""
+    """Per person: frames assigned, how many of those are reviewed, what is
+    left — and ``reviewed_total``, every frame they reviewed, assigned or not.
+    People who reviewed frames but hold no assignment are included."""
     rows = (Annotation.objects.filter(project=project, assigned_to__isnull=False)
             .order_by().values("assigned_to_id", "assigned_to__username")
             .annotate(n_assigned=Count("id"),
                       n_reviewed=Count("id", filter=Q(reviewed=True))))
+    done, _ = reviewers(project)
+    loads = {r["assigned_to_id"]: (r["assigned_to__username"], r["n_assigned"], r["n_reviewed"])
+             for r in rows}
+    for uid, (name, _n) in done.items():
+        loads.setdefault(uid, (name, 0, 0))
     out = []
-    for r in sorted(rows, key=lambda r: r["assigned_to__username"].lower()):
+    for uid, (name, assigned, reviewed) in sorted(loads.items(), key=lambda kv: kv[1][0].lower()):
         out.append({
-            "user_id": r["assigned_to_id"],
-            "username": r["assigned_to__username"],
-            "assigned": r["n_assigned"],
-            "reviewed": r["n_reviewed"],
-            "left": r["n_assigned"] - r["n_reviewed"],
-            "pct": round(100 * r["n_reviewed"] / r["n_assigned"]) if r["n_assigned"] else 0,
+            "user_id": uid,
+            "username": name,
+            "assigned": assigned,
+            "reviewed": reviewed,
+            "reviewed_total": done.get(uid, (name, 0))[1],
+            "left": assigned - reviewed,
+            "pct": round(100 * reviewed / assigned) if assigned else 0,
         })
     return out
 

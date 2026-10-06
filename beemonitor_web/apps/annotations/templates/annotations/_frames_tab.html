@@ -10,11 +10,11 @@
   {% for w in workloads %}
   <a href="?who={{ w.user_id }}"
      class="flex items-center gap-2 pl-1.5 pr-3 py-1.5 rounded-lg border {% if frame_filter.who == w.user_id|stringformat:'s' %}border-amber-600 bg-amber-50{% else %}border-gray-300 bg-white hover:bg-gray-50{% endif %}"
-     title="{{ w.reviewed }} of {{ w.assigned }} reviewed">
+     title="{% if w.assigned %}{{ w.reviewed }} of the {{ w.assigned }} frames assigned to {% if w.is_you %}you{% else %}{{ w.username }}{% endif %} are reviewed. {% endif %}{{ w.reviewed_total }} frame{{ w.reviewed_total|pluralize }} reviewed by {% if w.is_you %}you{% else %}them{% endif %} in all, including frames taken from the unassigned pool.">
     <span class="w-6 h-6 rounded-full text-white text-[11px] font-bold flex items-center justify-center" style="background: {{ w.dot }}">{{ w.username|slice:":1"|upper }}</span>
     <span class="flex flex-col gap-1 min-w-[8rem]">
       <span class="text-[12.5px] font-semibold text-gray-900">{% if w.is_you %}You{% else %}{{ w.username }}{% endif %}
-        <span class="font-normal text-gray-500">&middot; {{ w.reviewed }} of {{ w.assigned }}</span></span>
+        <span class="font-normal text-gray-500">&middot; {% if w.assigned %}{{ w.reviewed }} of {{ w.assigned }} assigned{% else %}no frames assigned{% endif %}{% if w.reviewed_total != w.reviewed %} &middot; {{ w.reviewed_total }} reviewed{% endif %}</span></span>
       <span class="h-1 bg-gray-200 rounded-full overflow-hidden"><span class="block h-1 bg-amber-600" style="width: {{ w.pct }}%"></span></span>
     </span>
   </a>

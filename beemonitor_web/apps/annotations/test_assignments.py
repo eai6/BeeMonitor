@@ -115,6 +115,26 @@ class WorkloadTests(AssignmentTestCase):
         self.assertEqual((w["username"], w["assigned"], w["reviewed"], w["left"], w["pct"]),
                          ("jill", 4, 2, 2, 50))
 
+    def test_reviews_from_the_pool_count_for_the_reviewer(self):
+        """Saving an unassigned frame reviews it without assigning it; those
+        reviews must still count, or the people never add up to the total."""
+        self.clip(frames=4)
+        self.frames().filter(frame_number__in=[0, 10]).update(assigned_to=self.jill)
+        self.frames().filter(frame_number=0).update(reviewed=True, reviewed_by=self.jill)
+        # Two more from the pool, by jill; one with no reviewer on record.
+        self.frames().filter(frame_number=20).update(reviewed=True, reviewed_by=self.jill)
+        self.frames().filter(frame_number=30).update(reviewed=True)
+        [w] = assignments.workloads(self.project)
+        self.assertEqual((w["assigned"], w["reviewed"], w["reviewed_total"]), (2, 1, 2))
+        by_user, unrecorded = assignments.reviewers(self.project)
+        self.assertEqual((by_user[self.jill.pk][1], unrecorded), (2, 1))
+
+    def test_someone_who_only_reviewed_pool_frames_still_shows(self):
+        self.clip(frames=2)
+        self.frames().filter(frame_number=0).update(reviewed=True, reviewed_by=self.jill)
+        [w] = assignments.workloads(self.project)
+        self.assertEqual((w["username"], w["assigned"], w["reviewed_total"]), ("jill", 0, 1))
+
     def test_the_pool_is_unreviewed_and_unheld(self):
         self.clip(frames=3)
         self.frames().filter(frame_number=0).update(assigned_to=self.jill)

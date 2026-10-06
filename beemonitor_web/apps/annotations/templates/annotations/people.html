@@ -59,8 +59,9 @@
         <i class="bg-amber-600" style="width: {{ p.load.pct }}%"></i>
       </span>
       <span class="block text-[10.5px] text-gray-500 mt-1">
-        {{ p.load.reviewed }} of {{ p.load.assigned }} frame{{ p.load.assigned|pluralize }} reviewed
-        {% if p.load.left %}&middot; {{ p.load.left }} left{% endif %}
+        {% if p.load.assigned %}{{ p.load.reviewed }} of {{ p.load.assigned }} assigned frame{{ p.load.assigned|pluralize }} reviewed
+        {% if p.load.left %}&middot; {{ p.load.left }} left{% endif %}{% else %}nothing assigned{% endif %}
+        {% if p.load.reviewed_total != p.load.reviewed %}&middot; {{ p.load.reviewed_total }} reviewed in all{% endif %}
       </span>
       {% else %}
       <span class="text-[10.5px] text-gray-400 italic">nothing assigned</span>

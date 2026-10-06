@@ -283,6 +283,9 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
             w["is_you"] = w["user_id"] == user.id
         ctx["workloads"] = loads
         ctx["mine"] = next((w for w in loads if w["is_you"]), None)
+        # The Reviewed tile's breakdown: every review, by who made it.
+        ctx["review_breakdown"] = [w for w in loads if w["reviewed_total"]]
+        ctx["review_unrecorded"] = assign_mod.reviewers(project)[1]
         ctx["unassigned"] = assign_mod.unassigned_count(project)
 
         if tab == "frames":

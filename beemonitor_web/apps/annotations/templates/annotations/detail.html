@@ -122,6 +122,11 @@
       <div class="h-1.5 bg-amber-600" style="width: {{ metrics.pct_reviewed }}%"></div>
     </div>
     <p class="text-xs text-gray-500 mt-1.5">{{ metrics.to_review }} to review{% if metrics.assigned %} &middot; {{ metrics.assigned }} of them assigned{% endif %}</p>
+    {% if review_breakdown or review_unrecorded %}
+    <p class="text-xs text-gray-500 mt-1" title="Every reviewed frame, by who reviewed it — including frames reviewed from the unassigned pool.">
+      By {% for w in review_breakdown %}{% if w.is_you %}you{% else %}{{ w.username }}{% endif %} {{ w.reviewed_total }}{% if not forloop.last or review_unrecorded %} &middot; {% endif %}{% endfor %}{% if review_unrecorded %}not recorded {{ review_unrecorded }}{% endif %}
+    </p>
+    {% endif %}
   </div>
 </div>
 
