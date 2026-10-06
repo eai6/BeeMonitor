@@ -119,7 +119,8 @@ haven't been validated separately yet. Check a sample of your own results before
 **Video / clip**: one recording. A unit cuts its recordings into clips, one per burst of motion or one every
 10 minutes in continuous mode.
 
-**Site**: where a video was recorded. Set from the device's location, or given when uploading through the API.
+**Site**: where a video was recorded. A unit's location, or a saved site (name and optional map location)
+chosen when uploading. Optional.
 
 **ROI (region of interest)**: the part of the picture that matters. On a unit, motion only starts a
 recording inside the ROI.

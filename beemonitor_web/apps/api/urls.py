@@ -8,6 +8,8 @@ from .frames import DeviceFrameView
 from .heartbeat import DeviceCommandView, DeviceHeartbeatView
 from .uploads import UploadCompleteView, UploadInitiateView
 from .web_uploads import WebUploadCompleteView, WebUploadInitiateView
+from .multipart import (MultipartAbortView, MultipartCompleteView, MultipartInitiateView,
+                        MultipartPartsView, MultipartSignView, UploadCheckView)
 from .pipelines import (
     BlocksView,
     PipelineCloneView,
@@ -65,6 +67,13 @@ urlpatterns = [
     # csrf_exempt so a stolen URL alone can't be used cross-site.
     path("web-uploads/initiate", WebUploadInitiateView.as_view(), name="web-uploads-initiate"),
     path("web-uploads/complete", WebUploadCompleteView.as_view(), name="web-uploads-complete"),
+    # Any-size, resumable browser uploads (S3 multipart, memory/44).
+    path("web-uploads/multipart/initiate", MultipartInitiateView.as_view(), name="mp-initiate"),
+    path("web-uploads/multipart/sign", MultipartSignView.as_view(), name="mp-sign"),
+    path("web-uploads/multipart/parts", MultipartPartsView.as_view(), name="mp-parts"),
+    path("web-uploads/multipart/complete", MultipartCompleteView.as_view(), name="mp-complete"),
+    path("web-uploads/multipart/abort", MultipartAbortView.as_view(), name="mp-abort"),
+    path("web-uploads/check", UploadCheckView.as_view(), name="upload-check"),
     # ── Public pipeline API (P1) — build + run pipelines from Colab (memory/24) ──
     path("pipelines/blocks/", BlocksView.as_view(), name="pl-blocks"),
     path("pipelines/validate/", PipelineValidateView.as_view(), name="pl-validate"),

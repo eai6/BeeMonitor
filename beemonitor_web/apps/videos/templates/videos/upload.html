@@ -1,169 +1,452 @@
 {% extends "base.html" %}
-{% block title %}Upload Video - BeeMonitor{% endblock %}
+{% block title %}Upload videos - BeeMonitor{% endblock %}
 
 {% block content %}
-<div class="max-w-lg mx-auto">
-  <h1 class="text-2xl font-bold text-gray-900 mb-2">Upload Video</h1>
-  <p class="text-sm text-gray-500 mb-6">
-    The file is uploaded directly from your browser to S3 — it never passes through the BeeMonitor server.
-    Have several files? <a href="{% url 'videos:batch_upload' %}" class="text-amber-600 hover:underline">Use batch upload</a>.
-  </p>
+{% comment %}
+  memory/44. Files go straight from the browser to S3 in parts
+  (apps/api/multipart.py): any size, and a file added again after a dropped
+  connection or a closed tab resumes from the parts S3 already has. Each
+  file's recording time comes from the file itself, then its name, then the
+  start time typed here, then the upload time — and says which.
+{% endcomment %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<form id="csrf-form">{% csrf_token %}</form>
 
-  <div class="bg-white shadow rounded-lg p-6">
-    <form id="csrf-form">{% csrf_token %}</form>
+<div class="max-w-7xl mx-auto" id="upload-app">
+  <a href="{% url 'analysis:processing' %}" class="text-sm text-amber-700 hover:underline">&larr; Processing</a>
+  <h1 class="text-2xl font-bold text-gray-900 mt-1">Upload videos</h1>
+  <p class="text-sm text-gray-600 mb-5">From any camera. Large files upload in parts; if the connection drops or you close the tab, add the same files again and they pick up where they stopped.</p>
 
-    <div class="mb-4">
-      <label for="title" class="block text-sm font-medium text-gray-700 mb-1">Title</label>
-      <input type="text" id="title" required maxlength="300"
-             class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
-    </div>
-
-    <div class="mb-4">
-      <label for="deviceSelect" class="block text-sm font-medium text-gray-700 mb-1">Device (optional)</label>
-      <select id="deviceSelect"
-              class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
-        <option value="">— no device —</option>
-        {% for d in devices %}
-        <option value="{{ d.id }}">{{ d.name }}{% if d.location %} ({{ d.location }}){% endif %}</option>
-        {% endfor %}
-      </select>
-      <p class="mt-1 text-xs text-gray-500">Attribute this clip to a device (e.g. a USB copy) so it shows on the device page, in device filters, and inherits its location.</p>
-    </div>
-
-    <div class="mb-4">
-      <label for="siteInput" class="block text-sm font-medium text-gray-700 mb-1">Site / location (optional)</label>
-      <input type="text" id="siteInput" maxlength="120" placeholder="e.g. Mendel's Garden, Plot B"
-             class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
-      <p class="mt-1 text-xs text-gray-500">For clips not from a device. Groups the video under a site so it shows in the site filter. If a device is selected, its location is used unless you set one here.</p>
-    </div>
-
-    <div class="mb-4">
-      <label for="video_file" class="block text-sm font-medium text-gray-700 mb-1">Video File</label>
-      <input type="file" id="video_file" accept="video/mp4,video/x-matroska,video/quicktime,.h264" required
-             class="w-full border border-gray-300 rounded px-3 py-2 text-sm file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:text-sm file:bg-amber-50 file:text-amber-700">
-      <p class="mt-1 text-xs text-gray-500">.mp4 / .mov / .mkv / .h264 — up to 5 GiB.</p>
-    </div>
-
-    <div id="progress" class="mb-4 hidden">
-      <div class="flex items-center justify-between mb-1">
-        <span class="text-sm font-medium text-gray-700" id="progress-label">Uploading…</span>
-        <span class="text-sm text-gray-500" id="progress-pct">0%</span>
+  <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)] gap-6 items-start">
+    <!-- files -->
+    <section class="bg-white border border-gray-200 rounded-lg">
+      <label id="drop" for="file-input"
+             class="m-5 border-2 border-dashed border-gray-300 rounded-lg p-7 flex flex-col items-center gap-1.5 bg-gray-50 cursor-pointer hover:border-amber-500">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="text-amber-700" aria-hidden="true"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+        <span class="font-semibold">Drop video files here</span>
+        <span class="text-sm text-gray-600">or click to choose &middot; MP4, MOV, MKV, AVI, H.264 &middot; any size</span>
+        <input type="file" id="file-input" multiple accept=".mp4,.mov,.mkv,.avi,.h264,video/*" class="sr-only">
+      </label>
+      <div id="summary" class="px-5 pb-2 text-sm text-gray-600 hidden"></div>
+      <div id="rows"></div>
+      <div class="flex flex-wrap gap-4 px-5 py-3 text-xs text-gray-600 border-t border-gray-100">
+        <span><b class="text-green-800">From file</b> written into the video by the camera</span>
+        <span><b class="text-blue-800">From name</b> found in the file name</span>
+        <span><b class="text-purple-800">Set by you</b> the start time on the right</span>
+        <span><b class="text-amber-800">Upload time</b> nothing better found</span>
       </div>
-      <div class="w-full bg-gray-200 rounded-full h-2.5">
-        <div id="progress-bar" class="bg-amber-600 h-2.5 rounded-full transition-all" style="width: 0%"></div>
+    </section>
+
+    <!-- options -->
+    <aside class="flex flex-col gap-4">
+      <section class="bg-white border border-gray-200 rounded-lg p-5 space-y-3">
+        <h2 class="font-semibold">Where <span class="font-normal text-sm text-gray-500">&middot; optional</span></h2>
+        <label class="block text-sm font-medium">Site
+          <select id="site" class="mt-1 w-full border border-gray-300 rounded px-3 py-2 text-sm bg-white"></select>
+        </label>
+        <p class="text-xs text-gray-600">A site with a location lets BioCLIP choose among species recorded nearby. Without one, everything still works.</p>
+        <label class="block text-sm font-medium">Device <span class="font-normal text-gray-500">(only if these came off a unit's card)</span>
+          <select id="device" class="mt-1 w-full border border-gray-300 rounded px-3 py-2 text-sm bg-white">
+            <option value="">None</option>
+            {% for d in devices %}<option value="{{ d.id }}">{{ d.name }}{% if d.location %} ({{ d.location }}){% endif %}</option>{% endfor %}
+          </select>
+        </label>
+      </section>
+
+      <section class="bg-white border border-gray-200 rounded-lg p-5 space-y-3">
+        <h2 class="font-semibold">When <span class="font-normal text-sm text-gray-500">&middot; for files with no time of their own</span></h2>
+        <label class="block text-sm font-medium">Recording started
+          <input type="datetime-local" id="user-time" step="1" class="mt-1 w-full border border-gray-300 rounded px-3 py-2 text-sm">
+        </label>
+        <p class="text-xs text-gray-600">Used only when neither the file nor its name has a time. Leave it empty and those files use their upload time, marked so you can find and fix them later.</p>
+      </section>
+
+      <section class="bg-white border border-gray-200 rounded-lg p-5 space-y-3">
+        <h2 class="font-semibold">Label</h2>
+        <label class="block text-sm font-medium">Batch name <span class="font-normal text-gray-500">(to find these again in Processing)</span>
+          <input type="text" id="batch" maxlength="120" class="mt-1 w-full border border-gray-300 rounded px-3 py-2 text-sm">
+        </label>
+      </section>
+
+      <section class="bg-white border border-gray-200 rounded-lg p-5 space-y-3">
+        <h2 class="font-semibold">Afterwards</h2>
+        <label class="block text-sm font-medium">Run a pipeline on these
+          <select id="pipeline" class="mt-1 w-full border border-gray-300 rounded px-3 py-2 text-sm bg-white">
+            <option value="">Don't run anything yet</option>
+            {% if pipelines %}<optgroup label="Your pipelines">{% for p in pipelines %}<option value="{{ p.pk }}">{{ p.title }}</option>{% endfor %}</optgroup>{% endif %}
+            {% if templates %}<optgroup label="Templates">{% for p in templates %}<option value="{{ p.pk }}">{{ p.title }}</option>{% endfor %}</optgroup>{% endif %}
+          </select>
+        </label>
+        <label class="flex items-center gap-2 text-sm">
+          <input type="checkbox" id="autostart" class="w-4 h-4">
+          Start it automatically when the last file finishes
+        </label>
+      </section>
+
+      <button type="button" id="go" disabled
+              class="h-12 rounded-lg bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-semibold">Choose files to upload</button>
+      <p id="go-note" class="text-xs text-gray-600 text-center"></p>
+
+      <!-- after -->
+      <section id="after" class="hidden bg-white border border-green-200 rounded-lg p-5 space-y-3">
+        <h2 class="font-semibold" id="after-title">Done</h2>
+        <p class="text-sm text-gray-700" id="after-text"></p>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" id="run-now" class="h-11 px-4 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm hidden">Run pipeline</button>
+          <a id="open-processing" href="{% url 'analysis:processing' %}" class="h-11 px-4 inline-flex items-center rounded-lg border border-gray-300 text-sm hover:bg-gray-50">Open in Processing</a>
+          <a href="{% url 'videos:upload' %}" class="h-11 px-4 inline-flex items-center rounded-lg border border-gray-300 text-sm hover:bg-gray-50">Upload more</a>
+        </div>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<!-- new site -->
+<div id="site-dialog" class="hidden fixed inset-0 z-50 bg-black/50 items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="site-dialog-title">
+  <div class="bg-white rounded-xl w-full max-w-3xl p-6 space-y-4">
+    <div class="flex items-center justify-between">
+      <h2 id="site-dialog-title" class="text-lg font-semibold">New site</h2>
+      <button type="button" id="site-close" aria-label="Close" class="w-9 h-9 text-xl text-gray-600 hover:text-gray-900">&times;</button>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] gap-5">
+      <div>
+        <div id="site-map" class="h-72 rounded-lg border border-gray-200 z-0"></div>
+        <p class="text-xs text-gray-600 mt-1">Click the map to drop the pin.</p>
+      </div>
+      <div class="space-y-3">
+        <label class="block text-sm font-medium">Name
+          <input type="text" id="site-name" maxlength="200" class="mt-1 w-full border border-gray-300 rounded px-3 py-2 text-sm">
+        </label>
+        <div class="grid grid-cols-2 gap-2">
+          <label class="block text-sm font-medium">Latitude
+            <input type="text" id="site-lat" inputmode="decimal" class="mt-1 w-full border border-gray-300 rounded px-3 py-2 text-sm">
+          </label>
+          <label class="block text-sm font-medium">Longitude
+            <input type="text" id="site-lon" inputmode="decimal" class="mt-1 w-full border border-gray-300 rounded px-3 py-2 text-sm">
+          </label>
+        </div>
+        <button type="button" id="site-here" class="w-full h-10 rounded border border-gray-300 text-sm hover:bg-gray-50">Use my current location</button>
+        <label class="block text-sm font-medium">Notes <span class="font-normal text-gray-500">(optional)</span>
+          <input type="text" id="site-notes" maxlength="500" class="mt-1 w-full border border-gray-300 rounded px-3 py-2 text-sm">
+        </label>
+        <p class="text-xs text-gray-600">Only the name is required. The location gives BioCLIP its local species list.</p>
+        <p id="site-error" class="text-sm text-red-700"></p>
       </div>
     </div>
-
-    <div id="error" class="mb-4 hidden bg-red-50 border border-red-200 rounded p-3 text-sm text-red-700"></div>
-
-    <div class="flex gap-3">
-      <button id="upload-btn" type="button"
-              class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">
-        Upload
-      </button>
-      <a href="{% url 'videos:list' %}" class="px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Cancel</a>
+    <div class="flex justify-end gap-2">
+      <button type="button" id="site-cancel" class="h-11 px-4 rounded-lg border border-gray-300 text-sm hover:bg-gray-50">Cancel</button>
+      <button type="button" id="site-save" class="h-11 px-4 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm">Save site</button>
     </div>
   </div>
 </div>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
-  // Direct browser -> S3 upload. Same /api/v1/web-uploads/{initiate,complete}
-  // endpoints, browser-session-authed (so the API key isn't required).
-  const csrftoken = document.querySelector('input[name=csrfmiddlewaretoken]').value;
+(function () {
+  const CSRF = document.querySelector('input[name=csrfmiddlewaretoken]').value;
+  const API = '/api/v1/web-uploads/';
+  const SITES_URL = "{% url 'videos:sites' %}";
+  const RUN_URL = "{% url 'pipelines:run_on_videos' %}";
+  const PROCESSING_URL = "{% url 'analysis:processing' %}";
+  const PARALLEL_PARTS = 4;
+  let sites = {{ sites_json|safe }};
+  const files = [];                 // {file, name, size, time, source, dupe, status, done, videoId}
+  let running = false;
 
-  const titleEl = document.getElementById('title');
-  const fileEl = document.getElementById('video_file');
-  const btn = document.getElementById('upload-btn');
-  const progressEl = document.getElementById('progress');
-  const progressBar = document.getElementById('progress-bar');
-  const progressPct = document.getElementById('progress-pct');
-  const progressLabel = document.getElementById('progress-label');
-  const errorEl = document.getElementById('error');
+  const $ = (id) => document.getElementById(id);
+  const fmtSize = (b) => b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : (b / 1e6).toFixed(0) + ' MB';
+  const pad = (n) => String(n).padStart(2, '0');
+  const fmtTime = (d) => d ? `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}` : '';
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+  const post = (url, body) => fetch(url, {method: 'POST', credentials: 'same-origin',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF}, body: JSON.stringify(body)})
+    .then(async (r) => { const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.detail || j.error || r.statusText); return j; });
 
-  function showError(msg) {
-    errorEl.textContent = msg;
-    errorEl.classList.remove('hidden');
-  }
-
-  function setProgress(pct, label) {
-    progressEl.classList.remove('hidden');
-    progressBar.style.width = pct + '%';
-    progressPct.textContent = pct + '%';
-    if (label) progressLabel.textContent = label;
-  }
-
-  async function postJson(url, body) {
-    const r = await fetch(url, {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CSRFToken': csrftoken,
-      },
-      body: JSON.stringify(body),
-    });
-    if (!r.ok) {
-      const t = await r.text();
-      throw new Error(`${r.status}: ${t.slice(0, 300)}`);
+  // ---- recording time ------------------------------------------------------
+  // Same shapes the server recognises (Video.find_timestamp).
+  const TS = /(?<!\d)(20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})[ T_\-.]?(\d{2})[-_.:h]?(\d{2})(?:[-_.:m]?(\d{2}))?(?!\d)/g;
+  function timeFromName(name) {
+    for (const m of name.matchAll(TS)) {
+      const [y, mo, d, h, mi, s] = m.slice(1).map((v) => +(v || 0));
+      const t = new Date(Date.UTC(y, mo - 1, d, h, mi, s));
+      if (t.getUTCMonth() === mo - 1 && t.getUTCDate() === d && h < 24 && mi < 60 && s < 60) return t;
     }
-    return r.json();
+    return null;
   }
-
-  function putToS3(url, file, onProgress) {
-    // XHR (not fetch) so we get upload progress events cross-browser.
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open('PUT', url);
-      xhr.setRequestHeader('Content-Type', file.type || 'video/mp4');
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) onProgress(Math.floor((e.loaded / e.total) * 100));
-      };
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) resolve();
-        else reject(new Error(`S3 PUT ${xhr.status}: ${xhr.responseText.slice(0, 300)}`));
-      };
-      xhr.onerror = () => reject(new Error('S3 PUT network error'));
-      xhr.send(file);
-    });
-  }
-
-  btn.addEventListener('click', async () => {
-    errorEl.classList.add('hidden');
-    const title = titleEl.value.trim();
-    const file = fileEl.files[0];
-    if (!title || !file) {
-      showError('Title and file are required.');
-      return;
-    }
-    btn.disabled = true;
+  async function slice(file, start, len) { return new DataView(await file.slice(start, start + len).arrayBuffer()); }
+  // MP4 / MOV: the movie header's creation time, seconds since 1904 (UTC).
+  async function timeFromFile(file) {
+    if (!/\.(mp4|mov|m4v)$/i.test(file.name)) return null;
     try {
-      setProgress(0, 'Requesting upload URL…');
-      const init = await postJson('/api/v1/web-uploads/initiate', {
-        filename: file.name,
-        size_bytes: file.size,
-        content_type: file.type || 'video/mp4',
-      });
+      let off = 0;
+      for (let i = 0; i < 64 && off + 8 <= file.size; i++) {
+        const h = await slice(file, off, 16);
+        let size = h.getUint32(0);
+        const type = String.fromCharCode(h.getUint8(4), h.getUint8(5), h.getUint8(6), h.getUint8(7));
+        if (size === 1) size = Number(h.getBigUint64(8));
+        if (size === 0) size = file.size - off;
+        if (size < 8) return null;
+        if (type === 'moov') {
+          const len = Math.min(size, 64 * 1024 * 1024);
+          const box = new Uint8Array(await file.slice(off, off + len).arrayBuffer());
+          for (let j = 8; j + 24 < box.length; j++) {
+            if (box[j] === 0x6d && box[j + 1] === 0x76 && box[j + 2] === 0x68 && box[j + 3] === 0x64) { // 'mvhd'
+              const dv = new DataView(box.buffer, j + 4);
+              const secs = dv.getUint8(0) === 1 ? Number(dv.getBigUint64(4)) : dv.getUint32(4);
+              if (!secs) return null;
+              const t = new Date((secs - 2082844800) * 1000);
+              const now = Date.now();
+              return (t.getUTCFullYear() >= 2000 && t.getTime() <= now + 86400000) ? t : null;
+            }
+          }
+          return null;
+        }
+        off += size;
+      }
+    } catch (e) { /* unreadable header: fall through to the name */ }
+    return null;
+  }
+  function userTime() {
+    const v = $('user-time').value;
+    return v ? new Date(v + (v.length === 16 ? ':00' : '') + 'Z') : null;
+  }
+  function resolveTime(f) {
+    if (f.fileTime) return [f.fileTime, 'file'];
+    if (f.nameTime) return [f.nameTime, 'filename'];
+    const u = userTime();
+    if (u) return [u, 'user'];
+    return [null, 'upload_time'];
+  }
+  const CHIP = {file: ['From file', 'bg-green-100 text-green-800'], filename: ['From name', 'bg-blue-100 text-blue-800'],
+                user: ['Set by you', 'bg-purple-100 text-purple-800'], upload_time: ['Upload time', 'bg-amber-100 text-amber-800']};
 
-      setProgress(0, 'Uploading to S3…');
-      await putToS3(init.upload_url, file, (pct) => setProgress(pct, 'Uploading to S3…'));
-
-      setProgress(100, 'Finalizing…');
-      const body = {
-        storage_key: init.storage_key,
-        file_size_bytes: file.size,
-        title: title,
-      };
-      const deviceEl = document.getElementById('deviceSelect');
-      if (deviceEl && deviceEl.value) body.device_id = deviceEl.value;
-      const siteEl = document.getElementById('siteInput');
-      if (siteEl && siteEl.value.trim()) body.site_name = siteEl.value.trim();
-      await postJson('/api/v1/web-uploads/complete', body);
-      window.location.href = "{% url 'videos:list' %}";
-    } catch (e) {
-      showError(e.message || String(e));
-      btn.disabled = false;
-      progressEl.classList.add('hidden');
+  // ---- files ---------------------------------------------------------------
+  const ALLOWED = /\.(mp4|mov|mkv|avi|h264)$/i;
+  async function addFiles(list) {
+    const fresh = [];
+    for (const file of list) {
+      if (!ALLOWED.test(file.name)) continue;
+      if (files.some((f) => f.name === file.name && f.size === file.size)) continue;
+      const f = {file, name: file.name, size: file.size, nameTime: timeFromName(file.name), fileTime: null,
+                 dupe: null, status: 'ready', done: 0};
+      files.push(f); fresh.push(f);
     }
+    render();
+    for (const f of fresh) { f.fileTime = await timeFromFile(f.file); render(); }
+    if (fresh.length) {
+      try {
+        const {duplicates} = await post(API + 'check', {files: fresh.map((f) => ({name: f.name, size: f.size}))});
+        for (const d of duplicates) {
+          const f = files.find((x) => x.name === d.name && x.size === d.size);
+          if (f) { f.dupe = d; f.skip = true; }
+        }
+      } catch (e) { /* the check is a courtesy; never block on it */ }
+      render();
+    }
+  }
+  function render() {
+    const active = files.filter((f) => !f.skip);
+    const total = active.reduce((a, f) => a + f.size, 0);
+    $('summary').classList.toggle('hidden', !files.length);
+    $('summary').textContent = `${files.length} file${files.length === 1 ? '' : 's'} · ${fmtSize(total)}`
+      + (files.length - active.length ? ` · ${files.length - active.length} already uploaded, skipped` : '');
+    $('rows').innerHTML = files.map((f, i) => {
+      const [t, src] = resolveTime(f);
+      const [label, cls] = CHIP[src];
+      const pct = f.size ? Math.round(100 * f.done / f.size) : 0;
+      const state = f.skip ? 'Skipped' : ({ready: '', uploading: pct + '%', resumed: 'Resumed · ' + pct + '%', done: 'Done', failed: 'Failed'}[f.status] || '');
+      return `<div class="grid grid-cols-[minmax(0,2.2fr)_90px_minmax(0,1.9fr)_70px] items-center gap-2 px-5 py-3 border-t border-gray-100 text-sm ${f.skip ? 'opacity-60' : ''}">
+        <div class="min-w-0"><div class="truncate font-medium">${esc(f.name)}</div>
+          ${f.dupe ? `<div class="text-xs text-amber-800">Already uploaded on ${esc(f.dupe.uploaded_at.slice(0, 10))}${f.skip ? ' · will be skipped' : ''} · <button type="button" data-i="${i}" class="underline dupe-toggle">${f.skip ? 'upload anyway' : 'skip it'}</button></div>` : ''}
+          ${f.error ? `<div class="text-xs text-red-700">${esc(f.error)}</div>` : ''}
+          ${f.status !== 'ready' && !f.skip ? `<div class="mt-1 h-1.5 rounded bg-gray-200 overflow-hidden"><div class="h-full ${f.status === 'failed' ? 'bg-red-500' : 'bg-amber-600'}" style="width:${pct}%"></div></div>` : ''}</div>
+        <span class="text-gray-600">${fmtSize(f.size)}</span>
+        <div class="flex items-center gap-2 flex-wrap"><span class="tabular-nums">${t ? fmtTime(t) : 'upload time'}</span>
+          <span class="text-[11px] font-semibold px-2 py-0.5 rounded-full ${cls}">${label}</span></div>
+        <div class="text-right text-xs font-semibold text-gray-700">${state || (running ? '' : `<button type="button" aria-label="Remove ${esc(f.name)}" data-i="${i}" class="remove w-8 h-8 text-lg text-gray-500 hover:text-gray-900">&times;</button>`)}</div>
+      </div>`;
+    }).join('');
+    const go = $('go');
+    if (!running) {
+      go.disabled = !active.length;
+      go.textContent = active.length ? `Upload ${active.length} file${active.length === 1 ? '' : 's'} · ${fmtSize(total)}` : 'Choose files to upload';
+    }
+  }
+  $('rows').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-i]');
+    if (!b || running) return;
+    const f = files[+b.dataset.i];
+    if (b.classList.contains('remove')) files.splice(+b.dataset.i, 1);
+    else if (b.classList.contains('dupe-toggle')) f.skip = !f.skip;
+    render();
   });
+  $('file-input').addEventListener('change', (e) => { addFiles(e.target.files); e.target.value = ''; });
+  const drop = $('drop');
+  ['dragover', 'dragenter'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('border-amber-500'); }));
+  ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, () => drop.classList.remove('border-amber-500')));
+  drop.addEventListener('drop', (e) => { e.preventDefault(); addFiles(e.dataTransfer.files); });
+  $('user-time').addEventListener('input', render);
+  const now = new Date();
+  $('batch').value = `Upload ${now.toLocaleDateString(undefined, {month: 'short', day: 'numeric'})} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+
+  // ---- sites ---------------------------------------------------------------
+  function renderSites(selected) {
+    $('site').innerHTML = '<option value="">No site</option>'
+      + sites.map((s) => `<option value="${s.id}">${esc(s.name)}${s.lat != null ? ` · ${s.lat.toFixed(2)}, ${s.lon.toFixed(2)}` : ''}</option>`).join('')
+      + '<option value="__new">+ New site…</option>';
+    $('site').value = selected || '';
+  }
+  renderSites();
+  let map = null, pin = null, lastSite = '';
+  function setPin(lat, lon) {
+    $('site-lat').value = lat.toFixed(5); $('site-lon').value = lon.toFixed(5);
+    if (!map) return;
+    if (pin) pin.setLatLng([lat, lon]); else pin = L.marker([lat, lon]).addTo(map);
+  }
+  function openSiteDialog() {
+    const d = $('site-dialog'); d.classList.remove('hidden'); d.classList.add('flex');
+    $('site-error').textContent = '';
+    $('site-name').focus();
+    if (!map && typeof L !== 'undefined') {
+      map = L.map('site-map').setView([40.8, -77.86], 4);
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19,
+        attribution: '&copy; OpenStreetMap contributors'}).addTo(map);
+      map.on('click', (e) => setPin(e.latlng.lat, e.latlng.lng));
+    }
+    setTimeout(() => map && map.invalidateSize(), 50);
+  }
+  function closeSiteDialog() {
+    const d = $('site-dialog'); d.classList.add('hidden'); d.classList.remove('flex');
+  }
+  $('site').addEventListener('change', () => {
+    if ($('site').value === '__new') { $('site').value = lastSite; openSiteDialog(); } else lastSite = $('site').value;
+  });
+  $('site-close').onclick = closeSiteDialog;
+  $('site-cancel').onclick = closeSiteDialog;
+  $('site-here').onclick = () => navigator.geolocation && navigator.geolocation.getCurrentPosition(
+    (p) => { setPin(p.coords.latitude, p.coords.longitude); map && map.setView([p.coords.latitude, p.coords.longitude], 14); },
+    () => { $('site-error').textContent = 'Location is not available in this browser.'; });
+  $('site-save').onclick = async () => {
+    try {
+      const {site} = await post(SITES_URL, {name: $('site-name').value, lat: $('site-lat').value,
+                                            lon: $('site-lon').value, notes: $('site-notes').value});
+      sites = sites.filter((s) => s.id !== site.id).concat([site]).sort((a, b) => a.name.localeCompare(b.name));
+      lastSite = String(site.id); renderSites(lastSite); closeSiteDialog();
+    } catch (e) { $('site-error').textContent = e.message; }
+  };
+
+  // ---- upload --------------------------------------------------------------
+  const resumeKey = (f) => `bm-upload:${f.name}:${f.size}:${f.file.lastModified}`;
+  function putPart(url, blob, onProgress) {
+    return new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest();
+      x.open('PUT', url);
+      x.upload.onprogress = (e) => onProgress(e.loaded);
+      x.onload = () => (x.status >= 200 && x.status < 300)
+        ? resolve(x.getResponseHeader('ETag')) : reject(new Error('S3 said ' + x.status));
+      x.onerror = () => reject(new Error('network error'));
+      x.send(blob);
+    });
+  }
+  async function withRetry(fn, tries = 5) {
+    for (let i = 0; ; i++) {
+      try { return await fn(); } catch (e) { if (i >= tries - 1) throw e; await new Promise((r) => setTimeout(r, 1000 * 2 ** i)); }
+    }
+  }
+  async function uploadFile(f) {
+    f.error = null;
+    let session = null;
+    try { session = JSON.parse(localStorage.getItem(resumeKey(f)) || 'null'); } catch (e) { session = null; }
+    const have = new Map();
+    if (session) {
+      try {
+        const {parts} = await post(API + 'multipart/parts', session);
+        parts.forEach((p) => have.set(p.part_number, p.etag));
+        f.status = 'resumed';
+      } catch (e) { session = null; }
+    }
+    if (!session) {
+      const s = await post(API + 'multipart/initiate', {filename: f.name, size_bytes: f.size,
+                                                        content_type: f.file.type || 'video/mp4'});
+      session = {storage_key: s.storage_key, upload_id: s.upload_id, part_size: s.part_size};
+      try { localStorage.setItem(resumeKey(f), JSON.stringify(session)); } catch (e) {}
+      f.status = 'uploading';
+    }
+    const ps = session.part_size, count = Math.ceil(f.size / ps);
+    const sizeOf = (n) => Math.min(ps, f.size - (n - 1) * ps);
+    const live = new Map();
+    const base = () => [...have.keys()].reduce((a, n) => a + sizeOf(n), 0);
+    const todo = [];
+    for (let n = 1; n <= count; n++) if (!have.has(n)) todo.push(n);
+    f.done = base(); render();
+    while (todo.length) {
+      const batch = todo.splice(0, 100);
+      const {urls} = await post(API + 'multipart/sign', {...session, part_numbers: batch});
+      let next = 0;
+      const worker = async () => {
+        while (next < batch.length) {
+          const n = batch[next++];
+          const blob = f.file.slice((n - 1) * ps, (n - 1) * ps + sizeOf(n));
+          const etag = await withRetry(() => putPart(urls[n], blob, (loaded) => {
+            live.set(n, loaded); f.done = base() + [...live.values()].reduce((a, b) => a + b, 0); render();
+          }));
+          live.delete(n); have.set(n, etag); f.done = base(); render();
+        }
+      };
+      await Promise.all(Array.from({length: PARALLEL_PARTS}, worker));
+    }
+    const body = {...session, file_size_bytes: f.size, original_filename: f.name,
+      parts: [...have.entries()].map(([part_number, etag]) => ({part_number, etag})),
+      file_recorded_at: f.fileTime ? f.fileTime.toISOString() : null,
+      user_recorded_at: userTime() ? userTime().toISOString() : null,
+      site_id: $('site').value || null, device_id: $('device').value || null, batch: $('batch').value};
+    const video = await post(API + 'multipart/complete', body);
+    try { localStorage.removeItem(resumeKey(f)); } catch (e) {}
+    f.videoId = video.video_id; f.status = 'done'; f.done = f.size; render();
+  }
+  window.addEventListener('beforeunload', (e) => { if (running) { e.preventDefault(); e.returnValue = ''; } });
+
+  async function runPipeline(ids) {
+    const form = new URLSearchParams({pipeline: $('pipeline').value});
+    ids.forEach((id) => form.append('video_ids', id));
+    const r = await fetch(RUN_URL, {method: 'POST', credentials: 'same-origin', body: form,
+      headers: {'X-CSRFToken': CSRF, 'X-Requested-With': 'XMLHttpRequest'}});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.batch_url) throw new Error(j.error || 'Could not start the pipeline.');
+    window.location = j.batch_url;
+  }
+
+  $('go').onclick = async () => {
+    const queue = files.filter((f) => !f.skip && f.status !== 'done');
+    if (!queue.length) return;
+    running = true; $('go').disabled = true; $('go').textContent = 'Uploading…';
+    $('go-note').textContent = 'Keep this tab open. If it closes, add the same files again to resume.';
+    render();
+    for (const f of queue) {
+      try { await uploadFile(f); } catch (e) { f.status = 'failed'; f.error = e.message + ' — add the file again to resume.'; render(); }
+    }
+    running = false;
+    const ok = files.filter((f) => f.status === 'done');
+    const failed = files.filter((f) => f.status === 'failed').length;
+    $('go').textContent = failed ? `Retry ${failed} failed file${failed === 1 ? '' : 's'}` : 'Uploaded';
+    $('go').disabled = !failed; $('go-note').textContent = '';
+    const label = $('batch').value.trim();
+    $('open-processing').href = PROCESSING_URL + (label ? '?batch=' + encodeURIComponent(label) : '');
+    $('after').classList.remove('hidden');
+    $('after-title').textContent = `${ok.length} file${ok.length === 1 ? '' : 's'} uploaded` + (failed ? ` · ${failed} failed` : '');
+    $('after-text').textContent = label ? `They are in Processing under the batch "${label}".` : 'They are in Processing.';
+    const ids = ok.map((f) => f.videoId).filter(Boolean);
+    const runBtn = $('run-now');
+    runBtn.classList.toggle('hidden', !$('pipeline').value || !ids.length);
+    runBtn.onclick = () => runPipeline(ids).catch((e) => { $('after-text').textContent = e.message; });
+    if ($('autostart').checked && $('pipeline').value && ids.length && !failed) {
+      $('after-text').textContent = 'Starting the pipeline…';
+      runPipeline(ids).catch((e) => { $('after-text').textContent = e.message; });
+    }
+    render();
+  };
+})();
 </script>
 {% endblock %}

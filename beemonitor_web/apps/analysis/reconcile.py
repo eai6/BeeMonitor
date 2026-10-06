@@ -125,6 +125,14 @@ def reconcile_all(limit: int = 500) -> dict:
     except Exception:
         logger.exception("frame sampling poll failed")
 
+    # Uploaded AVIs → MP4 on the GPU endpoint (memory/44).
+    try:
+        from apps.videos import transcode
+
+        transcode.tick()
+    except Exception:
+        logger.exception("transcode tick failed")
+
     # Per-device pipeline schedules — this loop is the only clock in the
     # deployment, so a due schedule launches here or nowhere.
     sched = {"due": 0, "launched_runs": 0}

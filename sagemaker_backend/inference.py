@@ -137,6 +137,8 @@ def predict_fn(payload, pipeline):
         return {**_pre_annotate(payload, pipeline), **_timings(profiler)}
     if payload.get("task") == "annotate_video":
         return {**_annotate_video(payload, pipeline), **_timings(profiler)}
+    if payload.get("task") == "transcode":
+        return {**_transcode(payload, pipeline), **_timings(profiler)}
 
     job_id = payload["job_id"]
     user_id = str(payload["user_id"])
@@ -248,6 +250,46 @@ def output_fn(prediction, accept):
 # ---------------------------------------------------------------------------
 # Pre-annotation (AI-assisted) — sampled-frame YOLO detection
 # ---------------------------------------------------------------------------
+
+def _transcode(payload, pipeline) -> dict:
+    """An uploaded AVI (or other non-MP4) as an MP4 next to it (memory/44).
+
+    H.264 / HEVC video is re-wrapped without re-encoding — lossless and quick.
+    Anything else (MJPEG from trail cameras, MPEG-4 Part 2…) is re-encoded
+    with libx264 at CRF 18, visually lossless. Audio is dropped: the analysis
+    never uses it and AVI audio codecs often don't fit in MP4. The platform
+    switches the clip to ``output_key`` once it exists.
+    """
+    import subprocess
+    import tempfile
+
+    src_key, out_key = payload["video_blob_path"], payload["output_key"]
+    started = time.time()
+    with tempfile.TemporaryDirectory() as tmp:
+        src = os.path.join(tmp, "in" + os.path.splitext(src_key)[1])
+        dst = os.path.join(tmp, "out.mp4")
+        pipeline._storage.download_file("raw-videos", src_key, src)
+        codec = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=codec_name", "-of", "csv=p=0", src],
+            capture_output=True, text=True, check=False).stdout.strip().lower()
+        if codec in ("h264", "hevc"):
+            mode, video = "copy", ["-c:v", "copy"] + (["-tag:v", "hvc1"] if codec == "hevc" else [])
+        else:
+            mode, video = "encode", ["-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                                     "-pix_fmt", "yuv420p"]
+        cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", src, "-map", "0:v:0", *video,
+               "-an", "-movflags", "+faststart", dst]
+        done = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if done.returncode != 0 or not os.path.exists(dst) or os.path.getsize(dst) == 0:
+            raise RuntimeError(f"ffmpeg failed ({codec or 'unknown codec'}): {done.stderr[-400:]}")
+        pipeline._storage.upload_file("raw-videos", out_key, dst, content_type="video/mp4")
+        size = os.path.getsize(dst)
+    logger.info("transcode %s -> %s (%s, %s) in %.1fs", src_key, out_key, codec, mode,
+                time.time() - started)
+    return {"status": "completed", "job_id": payload["job_id"], "output_key": out_key,
+            "codec": codec, "mode": mode, "size_bytes": size}
+
 
 def _pre_annotate(payload, pipeline) -> dict:
     """Run the bee detector on sampled frames; return boxes to seed annotations.

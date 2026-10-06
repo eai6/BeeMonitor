@@ -95,13 +95,37 @@
         <p class="text-[11px] text-gray-400 leading-4">Same hours every day in the range — e.g. midday foraging across a week.</p>
       </div>
 
+      <!-- uploads (memory/44): batch label, where clips came from, unknown times -->
+      <div class="space-y-1.5">
+        <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Uploads</div>
+        {% if opts.batches %}
+        <label class="block text-[11px] text-gray-500">Batch
+          <select name="batch" class="mt-0.5 w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]" onchange="this.form.submit()">
+            <option value="">All batches</option>
+            {% for b in opts.batches %}<option value="{{ b }}" {% if f.batch == b %}selected{% endif %}>{{ b }}</option>{% endfor %}
+          </select>
+        </label>
+        {% endif %}
+        <label class="block text-[11px] text-gray-500">From
+          <select name="origin" class="mt-0.5 w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]" onchange="this.form.submit()">
+            <option value="">Units and uploads</option>
+            <option value="unit" {% if f.origin == "unit" %}selected{% endif %}>Units only</option>
+            <option value="upload" {% if f.origin == "upload" %}selected{% endif %}>Uploads only</option>
+          </select>
+        </label>
+        <label class="flex items-center gap-2 text-[13px] text-gray-700 px-1 py-1">
+          <input type="checkbox" name="time" value="unknown" {% if f.time == "unknown" %}checked{% endif %} onchange="this.form.submit()">
+          Recording time unknown
+        </label>
+      </div>
+
       <!-- search -->
       <div class="space-y-1.5">
         <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Search</div>
         <input name="q" value="{{ f.q }}" placeholder="Clip id…" class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
       </div>
 
-      {% for k, v in f.items %}{% if v and k not in "device,confirmed,from,to,hfrom,hto,q,analysis" %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
+      {% for k, v in f.items %}{% if v and k not in "device,confirmed,from,to,hfrom,hto,q,analysis,batch,origin,time" %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
       <button type="submit" class="w-full bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded text-sm font-medium">Apply</button>
 
 <script>

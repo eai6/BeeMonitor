@@ -10,6 +10,7 @@ urlpatterns = [
     path("", RedirectView.as_view(pattern_name="analysis:processing", permanent=False), name="list"),
     path("upload/", views.VideoUploadView.as_view(), name="upload"),
     path("batch-upload/", views.VideoBatchUploadView.as_view(), name="batch_upload"),
+    path("sites/", views.SiteListCreateView.as_view(), name="sites"),
     path("<int:pk>/", views.VideoDetailView.as_view(), name="detail"),
     # Media for the review grid: a presign is spent per clip actually
     # looked at, not per clip listed.

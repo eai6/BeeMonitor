@@ -21,6 +21,44 @@ class ClipManager(models.Manager):
         return super().get_queryset().filter(kind=Video.Kind.VIDEO)
 
 
+class Site(models.Model):
+    """A place clips were recorded, reusable across uploads (memory/44).
+
+    Optional everywhere: a clip may have a site, a device, both or neither.
+    The location, when given, is what BioCLIP's local species list is built
+    from for clips that didn't come off a unit (a unit has its own lat/lon).
+    """
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name="sites")
+    name = models.CharField(max_length=200)
+    lat = models.FloatField(null=True, blank=True)
+    lon = models.FloatField(null=True, blank=True)
+    notes = models.CharField(max_length=500, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [models.UniqueConstraint(fields=["user", "name"], name="site_unique_per_user")]
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def has_location(self) -> bool:
+        return self.lat is not None and self.lon is not None
+
+
+# A date-time anywhere in a file name, in the shapes cameras and people use:
+# 2026-10-04_09_12_40, 20261004_091240, 2026-10-04T09-12-40, 2026_10_04 09.12.40,
+# IMG_20261004_091240, VID-20261004-091240. Digits must not run on either side,
+# so a counter like GX010231 never reads as a date.
+_ANY_TIMESTAMP = re.compile(
+    r"(?<!\d)(?P<y>20\d{2})[-_.]?(?P<mo>\d{2})[-_.]?(?P<d>\d{2})"
+    r"[ T_\-.]?(?P<h>\d{2})[-_.:h]?(?P<mi>\d{2})(?:[-_.:m]?(?P<s>\d{2}))?(?!\d)"
+)
+
+
 class Video(models.Model):
     class Kind(models.TextChoices):
         VIDEO = "video", "Video"
@@ -53,6 +91,10 @@ class Video(models.Model):
         blank=True,
         related_name="videos",
     )
+    # Where it was recorded, when the uploader chose a saved site. site_name
+    # stays the display/filter value (it is also set without a Site).
+    site = models.ForeignKey(Site, on_delete=models.SET_NULL, null=True, blank=True,
+                             related_name="videos")
     title = models.CharField(max_length=300)
     storage_key = models.CharField(max_length=500)
     file_size_bytes = models.BigIntegerField()
@@ -219,7 +261,23 @@ class Video(models.Model):
             except (ValueError, OverflowError):
                 pass
 
+        # Anywhere in the name, any of the common shapes (no site then).
+        dt = Video.find_timestamp(basename)
+        if dt:
+            return "", dt
         return "", None
+
+    @staticmethod
+    def find_timestamp(text):
+        """The first plausible date-time in ``text`` (UTC), or None."""
+        for m in _ANY_TIMESTAMP.finditer(text or ""):
+            try:
+                dt = datetime(int(m["y"]), int(m["mo"]), int(m["d"]), int(m["h"]),
+                              int(m["mi"]), int(m["s"] or 0), tzinfo=dt_timezone.utc)
+            except (ValueError, OverflowError):
+                continue
+            return dt
+        return None
 
     @staticmethod
     def resolve_recorded_at(explicit, filename=""):
@@ -229,7 +287,10 @@ class Video(models.Model):
         with no record of which was used:
 
         - ``"device"``  — an ISO timestamp the recorder sent. Trustworthy.
+        - ``"file"``    — the video's own metadata (MP4/MOV creation time),
+          read in the browser at upload (``resolve_upload_recorded_at``).
         - ``"filename"`` — parsed from the clip's name. Trustworthy.
+        - ``"user"``    — a start time the uploader typed for the batch.
         - ``"upload_time"`` — wall-clock at ingest. **Not a recording time.**
           A device that buffered a backlog offline and flushed it on reconnect
           stamps every clip with the flush time, so they land on the wrong day
@@ -247,6 +308,37 @@ class Video(models.Model):
             if parsed:
                 return parsed, "filename"
         return _tz.now().astimezone(dt_timezone.utc), "upload_time"
+
+    @staticmethod
+    def resolve_upload_recorded_at(file_time=None, filename="", user_time=None):
+        """``(recorded_at, source)`` for a browser upload (memory/44): the
+        file's own metadata, then the file name, then the uploader's start
+        time, then the upload time. A file time outside 2000..now+1 day is a
+        camera with an unset clock and is ignored."""
+        from datetime import timedelta
+        from django.utils import timezone as _tz
+        from django.utils.dateparse import parse_datetime
+
+        def _aware(value):
+            dt = parse_datetime(value) if isinstance(value, str) else value
+            if dt is None:
+                return None
+            if _tz.is_naive(dt):
+                dt = dt.replace(tzinfo=dt_timezone.utc)
+            return dt.astimezone(dt_timezone.utc)
+
+        now = _tz.now()
+        ft = _aware(file_time) if file_time else None
+        if ft and datetime(2000, 1, 1, tzinfo=dt_timezone.utc) <= ft <= now + timedelta(days=1):
+            return ft, "file"
+        if filename:
+            _site, parsed = Video.parse_timestamp_from_filename(filename)
+            if parsed:
+                return parsed, "filename"
+        ut = _aware(user_time) if user_time else None
+        if ut:
+            return ut, "user"
+        return now.astimezone(dt_timezone.utc), "upload_time"
 
     @property
     def recorded_at_is_measured(self) -> bool:

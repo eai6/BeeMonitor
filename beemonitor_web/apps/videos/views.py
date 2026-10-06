@@ -4,7 +4,7 @@ import re
 
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.http import Http404, HttpResponse, HttpResponseRedirect
+from django.http import Http404, HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.views import View
 from django.views.generic import DetailView, ListView, TemplateView
@@ -157,32 +157,31 @@ def _user_devices(user):
 
 
 class VideoUploadView(LoginRequiredMixin, TemplateView):
-    """Just renders the upload page.
-
-    The page's JS calls /api/v1/web-uploads/initiate, PUTs directly to S3,
-    then calls /api/v1/web-uploads/complete — bytes never pass through
-    this Django process. See apps/api/web_uploads.py.
+    """The upload page (memory/44): any number of files of any size, uploaded
+    in parts straight from the browser to S3 (apps/api/multipart.py), each
+    with a recording time from the file, its name or the uploader, and an
+    optional site, device and batch label. Bytes never pass through Django.
     """
     template_name = "videos/upload.html"
 
     def get_context_data(self, **kwargs):
+        import json as _json
+        from apps.pipelines.models import Pipeline
+        from .models import Site
         ctx = super().get_context_data(**kwargs)
-        ctx["devices"] = _user_devices(self.request.user)
+        user = self.request.user
+        ctx["devices"] = _user_devices(user)
+        ctx["sites_json"] = _json.dumps([_site_json(s) for s in Site.objects.filter(user=user)])
+        ctx["pipelines"] = Pipeline.objects.filter(user=user, is_template=False).order_by("title")
+        ctx["templates"] = Pipeline.objects.filter(is_template=True).order_by("title")
         return ctx
 
 
-class VideoBatchUploadView(LoginRequiredMixin, TemplateView):
-    """Just renders the batch upload page.
+class VideoBatchUploadView(LoginRequiredMixin, View):
+    """The old batch page; the upload page now takes any number of files."""
 
-    Same direct-to-S3 flow as VideoUploadView; the page loops over each
-    selected file client-side and reports per-file progress.
-    """
-    template_name = "videos/batch_upload.html"
-
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        ctx["devices"] = _user_devices(self.request.user)
-        return ctx
+    def get(self, request):
+        return redirect("videos:upload")
 
 
 class VideoThumbnailView(LoginRequiredMixin, View):
@@ -512,3 +511,46 @@ class VideoBatchDeviceDeleteView(LoginRequiredMixin, View):
         else:
             messages.warning(request, "None of the selected videos came from a device.")
         return redirect("videos:list")
+
+
+class SiteListCreateView(LoginRequiredMixin, View):
+    """The user's sites (GET) and a new one (POST, JSON) for the upload page."""
+
+    def get(self, request):
+        from .models import Site
+        return JsonResponse({"sites": [_site_json(s) for s in Site.objects.filter(user=request.user)]})
+
+    def post(self, request):
+        import json as _json
+        from .models import Site
+        try:
+            data = _json.loads(request.body or b"{}")
+        except ValueError:
+            return JsonResponse({"error": "Invalid JSON."}, status=400)
+        name = str(data.get("name") or "").strip()[:200]
+        if not name:
+            return JsonResponse({"error": "A site needs a name."}, status=400)
+
+        def _coord(key, lo, hi):
+            raw = data.get(key)
+            if raw in (None, ""):
+                return None
+            value = float(str(raw).replace("\u2212", "-"))
+            if not lo <= value <= hi:
+                raise ValueError
+            return value
+        try:
+            lat, lon = _coord("lat", -90, 90), _coord("lon", -180, 180)
+        except (TypeError, ValueError):
+            return JsonResponse({"error": "Latitude is -90 to 90 and longitude -180 to 180."}, status=400)
+        site, created = Site.objects.get_or_create(
+            user=request.user, name=name,
+            defaults={"lat": lat, "lon": lon, "notes": str(data.get("notes") or "")[:500]})
+        if not created and (lat is not None and lon is not None):
+            site.lat, site.lon = lat, lon
+            site.save(update_fields=["lat", "lon"])
+        return JsonResponse({"site": _site_json(site)}, status=201 if created else 200)
+
+
+def _site_json(site):
+    return {"id": site.id, "name": site.name, "lat": site.lat, "lon": site.lon, "notes": site.notes}

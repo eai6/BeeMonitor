@@ -36,7 +36,8 @@ def _unsanitize_site(value: str) -> str:
 # ``kind`` (clips | photos) picks the queryset rather than filtering it — see
 # ProcessingHubView — so apply_video_filters ignores it.
 VIDEO_FILTER_KEYS = ("device", "site", "year", "month", "day", "hour",
-                     "hfrom", "hto", "from", "to", "q", "analysis", "kind")
+                     "hfrom", "hto", "from", "to", "q", "analysis", "kind",
+                     "batch", "origin", "time")
 
 
 def _values(params, key):
@@ -126,6 +127,21 @@ def apply_video_filters(qs, params):
             else:
                 qs = qs.filter(recorded_at__lte=dt)
 
+    # Upload batch label, where clips came from, and clips whose recording time
+    # fell back to the upload time (memory/44) — the ones to check or fix.
+    if params.get("batch"):
+        qs = qs.filter(metadata__batch=params.get("batch"))
+    origin = params.get("origin")
+    if origin == "upload":
+        qs = qs.filter(metadata__uploaded_via="web")
+    elif origin == "unit":
+        # Not .exclude(): a clip without the key compares as NULL and would
+        # be dropped too, and units never set it.
+        from django.db.models import Q as _Q
+        qs = qs.filter(_Q(metadata__uploaded_via__isnull=True) | ~_Q(metadata__uploaded_via="web"))
+    if params.get("time") == "unknown":
+        qs = qs.filter(metadata__recorded_at_source="upload_time")
+
     # "Not yet analyzed" — the review question a run usually answers, and the
     # one thing the hub could show but never filter on.
     analysis = params.get("analysis")
@@ -173,7 +189,21 @@ def filter_options(user_videos):
         # The full clock for the time-of-day window, unlike "hours", which
         # lists only hours that happen to have footage.
         "hours24": list(range(24)),
+        # Upload batch labels, newest first (memory/44).
+        "batches": _batches(user_videos),
     }
+
+
+def _batches(user_videos, limit=50):
+    seen, out = set(), []
+    for label in (user_videos.filter(metadata__has_key="batch").order_by("-uploaded_at")
+                  .values_list("metadata__batch", flat=True)[:2000]):
+        if label and label not in seen:
+            seen.add(label)
+            out.append(label)
+            if len(out) >= limit:
+                break
+    return out
 
 
 def group_by_day(videos, dots):

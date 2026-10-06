@@ -187,13 +187,18 @@ def _candidate_taxa(video) -> list:
     """Species recorded near the video's device, for BioCLIP. ``[]`` (the
     worker then uses the whole Tree of Life) when there is no location or the
     lookup fails — an ID is never blocked on it."""
-    device = getattr(video, "device", None)
-    if device is None or device.lat is None or device.lon is None:
+    # A unit's own location first, else the upload's saved site (memory/44).
+    place = None
+    for candidate in (getattr(video, "device", None), getattr(video, "site", None)):
+        if candidate is not None and candidate.lat is not None and candidate.lon is not None:
+            place = candidate
+            break
+    if place is None:
         return []
     try:
         from apps.monitor.priors import region_taxa
         month = video.recorded_at.month if video.recorded_at else None
-        return region_taxa(device.lat, device.lon, month)
+        return region_taxa(place.lat, place.lon, month)
     except Exception:
         logger.exception("candidate taxa lookup failed for video %s", video.pk)
         return []

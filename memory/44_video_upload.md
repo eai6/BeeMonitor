@@ -1,6 +1,6 @@
 # 44 · Video upload as a first-class feature
 
-Status: **design** (2026-10-06) — canvas https://claude.ai/artifact/QsHBrSL4Teyhz6wXLqi8vw ; awaiting go-ahead to build.
+Status: **built** (2026-10-06) — canvas https://claude.ai/artifact/QsHBrSL4Teyhz6wXLqi8vw . AVI conversion needs the GPU image (task "transcode") deployed.
 
 ## Ask
 "We should have a real video upload feature on the platform" — clips from any
@@ -60,3 +60,24 @@ camera, not only BeeMonitor units (today the docs can only say "through the API"
   Open in Processing (batch filter preselected). 3 Processing: Upload button in
   the header; Batch / Source filters; "Recording time unknown" filter.
   4 New site dialog: name required, map pin or lat/lon, current location.
+
+## Changes from the design (user, 2026-10-06)
+- No "back-to-back" timing: a file's time is from the file, its name, the
+  batch start time, or the upload time — nothing else.
+- AVI accepted, converted to MP4 after upload.
+- Auto-start: run the chosen pipeline when the last file lands; opt-in.
+
+## Built
+- Site model + Video.site (videos 0011); /videos/sites/ GET/POST JSON.
+- apps/api/multipart.py: initiate / sign / parts / complete / abort / check;
+  create_uploaded_video (metadata: recorded_at_source, original_filename,
+  uploaded_via=web, batch, needs_transcode). Video.find_timestamp +
+  resolve_upload_recorded_at (file → filename → user → upload_time).
+- Upload page rewritten (videos/upload.html): reads MP4/MOV mvhd creation
+  time and filename time in the browser, duplicate check, resumable parts
+  (localStorage session per file), 4 parallel parts with retry, site dialog
+  (Leaflet), Afterwards: run pipeline / auto-start. Old batch page redirects.
+- Processing: Upload videos button; filters batch / origin / time=unknown.
+- BioCLIP candidates: device location, else the video's site.
+- AVI: apps/videos/transcode.py (reconciler tick) + worker task "transcode"
+  (copy for h264/hevc, else libx264 CRF 18, no audio).
