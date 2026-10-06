@@ -28,7 +28,7 @@ from interactions between two tracks. See [Results](platform/results.md).
 <div class="grid cards" markdown>
 
 - **[Get started](get-started.md)**: get video in, run a pipeline, read the results.
-- **[Build a unit](hardware/index.md)**: parts, enclosure, assembly, setup and deployment.
+- **[Build a unit](hardware/index.md)**: parts, costs and ten assembly steps, with a printable manual.
 - **[Use the platform](platform/index.md)**: devices, videos, pipelines, annotation, API.
 
 </div>

@@ -4,7 +4,7 @@
 
 ### From a BeeMonitor unit
 
-An enrolled unit uploads its clips and photos by itself (see [Set up & deploy](../hardware/setup.md)). They
+An enrolled unit uploads its clips and photos by itself (see [Build a unit](../hardware/index.md)). They
 appear under **Processing**, already linked to the device, its location and the layout it was recorded with.
 
 ### From code

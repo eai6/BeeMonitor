@@ -58,11 +58,7 @@ validation:
 nav:
   - Home: index.md
   - Get started: get-started.md
-  - Build a unit:
-      - hardware/index.md
-      - Build: hardware/build.md
-      - Set up & deploy: hardware/setup.md
-      - Troubleshooting: hardware/troubleshooting.md
+  - Build a unit: hardware/index.md
   - Use the platform:
       - platform/index.md
       - Devices: platform/devices.md
