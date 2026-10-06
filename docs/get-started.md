@@ -5,8 +5,8 @@ the lab.
 
 ```mermaid
 flowchart LR
-  S["<b>1. Get video in</b><br/>unit · API"] --> P["<b>2. Run a pipeline</b><br/>detect → track → identify · reference"]
-  P --> R["<b>3. Read the results</b><br/>events · interactions · species · IDs"]
+  S["<b>1. Get video in</b><br/>unit · upload · API"] --> P["<b>2. Build a pipeline</b><br/>connect blocks"]
+  P --> R["<b>3. Read the results</b><br/>counts · tracks · species · events"]
 ```
 
 ## 1. Get video in
@@ -19,33 +19,46 @@ You need an account on [beemonitor.edwardamoah.com](https://beemonitor.edwardamo
   optional site and recording time ([Videos](platform/videos.md#upload-from-any-camera)), or through the
   [API](platform/api.md).
 
-## 2. Run a pipeline
+## 2. Build a pipeline
 
-A pipeline takes each clip through the same stages:
+A pipeline is a computer-vision analysis you assemble from blocks in the **Pipelines** editor: drag blocks
+onto the canvas and connect each block's output to the next block's input. Use as few or as many as your
+question needs.
 
-- **Detect** finds what you study in every frame, such as bees, wasps or flies. Use a built-in model,
-  [your own](platform/annotation.md), or SAM 3 with a text prompt.
-- **Track** links the detections of each animal from frame to frame. Choose the tracker (BeeTrack,
-  ByteTrack, BoT-SORT, OC-SORT or SFSORT) and tune it.
-- **Identify** names each track: its **species** (BeeMachine or BioCLIP) and, for marked bees, its
-  **individual ID** from the paint mark. Every crop of the track votes; the track takes the winner.
-- **Reference** is what behaviour is measured against: the nest tubes drawn on a unit, regions you draw
-  (a flower, an arena zone), or objects detected in the video.
+| Block | What it does |
+|---|---|
+| **Input** | The clip the pipeline runs on. |
+| **Detect** | Finds one kind of thing in the frames (bees, wasps, flies, flowers, nest tubes) with a built-in model, [your own](platform/annotation.md), or SAM 3 with a text prompt. Every frame, or a sample of frames for things that don't move. |
+| **Reference** | What behaviour is measured against: the nest tubes drawn on a unit, or regions you draw (a flower, an arena zone). |
+| **Track** | Links each animal's detections from frame to frame. Choose the tracker (BeeTrack, ByteTrack, BoT-SORT, OC-SORT, SFSORT) and tune it. |
+| **Analyze** | Turns detections or tracks into numbers: detection counts (totals, distinct objects, over time), events (enter / exit) and interactions (visits, encounters, dwell time). |
+| **Identity** | Names each track: its species (BeeMachine or BioCLIP) and, for marked bees, its individual ID. Every crop of the track votes. |
 
-Start from a template under **Pipelines** and run it from **Videos** on the clips you choose
-([Pipelines](platform/pipelines.md)).
+Some of the pipelines this makes:
+
+| You want | Blocks |
+|---|---|
+| How many insects are there | Input → Detect → Analyze: detection count |
+| What species is each insect that passes (biodiversity monitoring) | Input → Detect → Track → Identity: species |
+| Foraging trips at a nest hotel | Input → Detect → Track → Reference (the unit's tubes) → Analyze: events |
+| Visits and time on each flower, or each zone of an assay | Input → Detect → Track → Reference (drawn regions) → Analyze: interactions |
+| Which marked bee did what | Input → Detect → Track → Identity: marker, plus any of the above |
+
+Start from a template or from scratch, save it, then run it from **Videos** on the clips you choose, or on
+every new clip from a unit on a schedule ([Pipelines](platform/pipelines.md)).
 
 ## 3. Read the results
 
-Every pipeline writes two tables:
+Each block adds what it measured to the run, as a table you can view and download as CSV: counts per clip
+or over time, tracks, species and IDs per track, events and interactions.
+
+Pipelines that track animals against a reference produce two tables that answer most behavioural questions:
 
 - **Events**: something entered or exited something. *A bee left tube 3 at 12.4 s.*
 - **Interactions**: two things were together for a while. *A bee was on the flower from 3.0 s to 9.5 s.*
 
 Each row names a track, and the tracking table gives every track its **species** and, for marked bees,
-its **individual ID**. Join the two on the track and you have what each animal did relative to the
-reference *and* what it was and which one: *a* Bombus impatiens *(individual red-blue) left tube 3 at
-12.4 s.*
-
-Your question is a read over them: foraging trips come from events, and visits, time on a flower or time in
-an assay zone come from interactions, by species or by individual ([Results](platform/results.md)).
+its **individual ID**. Join them on the track and you have what each animal did *and* what it was and which
+one: *a* Bombus impatiens *(individual red-blue) left tube 3 at 12.4 s.* Foraging trips come from events;
+visits and time on a flower or in an assay zone come from interactions, by species or by individual
+([Results](platform/results.md)).

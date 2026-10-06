@@ -97,7 +97,7 @@ less data, which makes uploading practical.
 
 ### From tracks to behaviour
 
-One pass over the tracks and the [reference](get-started.md#2-run-a-pipeline) finds **episodes**: the
+One pass over the tracks and the [reference](get-started.md#2-build-a-pipeline) finds **episodes**: the
 contiguous runs of frames in which a track is inside a reference or near another track. A short gap
 (15 frames by default) doesn't break an episode. Each episode becomes an **interaction**, and its start and
 end become **enter** and **exit** events. Because both tables come from the same pass, they always agree.

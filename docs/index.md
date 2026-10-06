@@ -4,24 +4,28 @@
 
 ![A BeeMonitor unit](assets/beemonitor_hardware.png)
 
-BeeMonitor started as a camera trap for bee hotels. It is now a general system: any video of insects,
-whether from a BeeMonitor unit or another camera, goes through the same pipeline and comes
-out as two tables, **events** and **interactions**.
+BeeMonitor started as a camera trap for bee hotels. It is now a general system: video of insects from a
+BeeMonitor unit or any other camera, analysed with computer-vision pipelines you build from blocks —
+detect, track, identify species and individuals, and measure behaviour.
 
 !!! abstract "Preprint"
     The BeeMonitor system and its validation are described in our preprint on
     [bioRxiv](https://www.biorxiv.org/content/10.64898/2026.07.10.737879v1).
 
-## Two tables, any question
+## Pipelines from blocks
 
-Every pipeline produces the same two tables:
+Connect the blocks your question needs: count insects with **Detect** alone; add **Track** and **Identify**
+to name the species of every insect that passes; add a **Reference** (nest tubes, a flower, an arena zone)
+and **Analyze** to measure behaviour against it. See [Get started](get-started.md#2-build-a-pipeline).
+
+Behaviour comes out as two tables:
 
 - **Events**: something entered or exited something. *A bee left tube 3 at 12.4 s.*
 - **Interactions**: two things were together for a while. *A bee was on the flower from 3.0 s to 9.5 s.*
 
-You then derive what your study needs from them: foraging trips at a nest hotel from events; visits and time
-on a flower, or which pollen tube in a lab assay gets more (and longer) bee interactions, from interactions; encounters between insects
-from interactions between two tracks. See [Results](platform/results.md).
+Foraging trips come from events; visits and time on a flower, which pollen tube in a lab assay gets more
+(and longer) bee interactions, and encounters between insects come from interactions. See
+[Results](platform/results.md).
 
 ## Start here
 
