@@ -13,7 +13,7 @@ flowchart LR
 
 You need an account on [beemonitor.edwardamoah.com](https://beemonitor.edwardamoah.com). Then either:
 
-- **Build a BeeMonitor unit** ([Build a unit](hardware/index.md)), then add it on the platform's Add a device page. It records
+- **Build a BeeMonitor unit** ([Build a unit](hardware/index.md)), then add it on the platform's [Add a device](https://beemonitor.edwardamoah.com/devices/enrollment) page. It records
   only when insects are active, uploads the clips itself, and lets you control it remotely.
 - **Use video you already have** from any camera: upload it through the [API](platform/api.md).
 
