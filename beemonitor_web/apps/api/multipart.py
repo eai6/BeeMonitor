@@ -34,7 +34,10 @@ from config.storage import get_s3_client
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_EXTENSIONS = {".mp4", ".mov", ".mkv", ".h264", ".avi"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".h264", ".avi"}
+# Photos from any camera become kind=photo rows (memory/45).
+PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".heic", ".heif"}
+ALLOWED_EXTENSIONS = VIDEO_EXTENSIONS | PHOTO_EXTENSIONS
 MIN_PART = 16 * 1024 * 1024          # S3 minimum is 5 MiB; 16 keeps part counts sane
 MAX_PARTS = 9000                     # S3 allows 10,000; leave headroom
 SIGN_TTL = 6 * 60 * 60
@@ -73,7 +76,8 @@ class MultipartInitiateView(_Base):
         if not filename or size <= 0:
             return Response({"detail": "filename and a positive size_bytes are required."}, status=400)
         if PurePosixPath(filename).suffix.lower() not in ALLOWED_EXTENSIONS:
-            return Response({"detail": "Videos must be .mp4, .mov, .mkv, .avi or .h264."}, status=400)
+            return Response({"detail": "Upload videos (.mp4, .mov, .mkv, .avi, .h264) or photos "
+                                       "(.jpg, .png, .tif, .heic)."}, status=400)
 
         key = f"{request.user.pk}/{uuid.uuid4().hex[:12]}/{filename}"
         wrapper, s3, bucket = _s3()
@@ -169,7 +173,7 @@ class MultipartCompleteView(_Base):
             video = create_uploaded_video(request.user, key, size, request.data)
         except ValueError as e:
             return Response({"detail": str(e)}, status=400)
-        return Response({"video_id": video.id, "title": video.title,
+        return Response({"video_id": video.id, "kind": video.kind, "title": video.title,
                          "recorded_at": video.recorded_at.isoformat() if video.recorded_at else None,
                          "recorded_at_source": video.metadata.get("recorded_at_source"),
                          "site_name": video.site_name}, status=201)
@@ -233,14 +237,18 @@ def create_uploaded_video(user, storage_key, size, data):
     batch = str(data.get("batch") or "").strip()[:120]
     if batch:
         metadata["batch"] = batch
-    if PurePosixPath(original).suffix.lower() == ".avi":
+    suffix = PurePosixPath(original).suffix.lower()
+    is_photo = suffix in PHOTO_EXTENSIONS
+    if suffix == ".avi":
         metadata["needs_transcode"] = True
 
-    video = Video.objects.create(
+    video = Video.everything.create(
         user=user, device=device, site=site, title=title[:300], storage_key=storage_key,
         file_size_bytes=size, status=Video.Status.READY, recorded_at=recorded_at,
-        site_name=site_name[:200], metadata=metadata)
-    queue_thumbnail(video)
+        site_name=site_name[:200], metadata=metadata,
+        kind=Video.Kind.PHOTO if is_photo else Video.Kind.VIDEO)
+    if not is_photo:
+        queue_thumbnail(video)          # photos show from the file itself
     logger.info("browser upload: user=%s video=%s %s MB time=%s", user.pk, video.id,
                 size // (1024 * 1024), source)
     return video

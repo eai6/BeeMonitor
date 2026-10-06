@@ -37,7 +37,15 @@ def _videos_for(schedule):
     if start is not None:
         params["from"] = start.isoformat()
 
-    qs = apply_video_filters(Video.manageable(schedule.user), params)
+    # A pipeline that starts from a Photo Input runs on the device's photos
+    # in the window instead of its clips (memory/45).
+    from apps.pipelines.registry import pipeline_input_kind
+    if pipeline_input_kind(schedule.pipeline.steps) == "photo":
+        base = Video.manageable(schedule.user, photos=True).filter(
+            kind=Video.Kind.PHOTO, parent__isnull=True)
+    else:
+        base = Video.manageable(schedule.user)
+    qs = apply_video_filters(base, params)
     return qs.order_by("-recorded_at", "-uploaded_at")
 
 

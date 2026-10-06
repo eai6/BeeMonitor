@@ -172,8 +172,13 @@ class VideoUploadView(LoginRequiredMixin, TemplateView):
         user = self.request.user
         ctx["devices"] = _user_devices(user)
         ctx["sites_json"] = _json.dumps([_site_json(s) for s in Site.objects.filter(user=user)])
-        ctx["pipelines"] = Pipeline.objects.filter(user=user, is_template=False).order_by("title")
-        ctx["templates"] = Pipeline.objects.filter(is_template=True).order_by("title")
+        from apps.pipelines.registry import pipeline_input_kind
+        for key, qs in (("pipelines", Pipeline.objects.filter(user=user, is_template=False)),
+                        ("templates", Pipeline.objects.filter(is_template=True))):
+            items = list(qs.order_by("title"))
+            for p in items:
+                p.input_kind = pipeline_input_kind(p.steps)   # video | photo
+            ctx[key] = items
         return ctx
 
 

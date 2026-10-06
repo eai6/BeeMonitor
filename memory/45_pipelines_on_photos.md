@@ -1,6 +1,6 @@
 # 45 · Pipelines on photos
 
-Status: **design** (2026-10-06) — canvas https://claude.ai/artifact/8mJzQDZbGeXvvWDwqZgUy4 ; awaiting go-ahead — supersedes memory/40 part 2's design (written
+Status: **built** (2026-10-06) — canvas https://claude.ai/artifact/8mJzQDZbGeXvvWDwqZgUy4 . Needs the GPU image (task detect_photo, pillow-heif) deployed — supersedes memory/40 part 2's design (written
 before photos moved into the videos table).
 
 ## Ask
@@ -55,3 +55,24 @@ Detect alone, or name the species of each insect in a photo.
 2. Separate input blocks: a pipeline starts from Video Input or Photo Input;
    the editor offers only blocks that fit.
 3. Tiling automatic whenever the photo is larger than the detector's input.
+
+## Built
+- Worker: `_detect_photo` (task "detect_photo"), shared `_frame_detector`
+  (YOLO/SAM 3), `_read_photo` (OpenCV, else Pillow + pillow-heif);
+  `beemonitor/detection/tiling.py` (1280 px tiles, 20 % overlap; merge drops a
+  box mostly inside a bigger same-class box): 64 MP → 63 tiles, 12 MP → 12.
+  Padded crop per insect + 1600 px preview in the processed bucket; species on
+  the crops via CloudPipeline._species_classifier. Result → summary_stats.photo.
+- Platform: `input.photo` block (output "photo"); detect.objects and
+  reference.layout accept photo; `registry.photo_errors` refuses NEEDS_VIDEO
+  blocks and mixed inputs; `pipeline_input_kind`. Engine binds photos into
+  input.photo. `build_photo_detection_config`; submit_gpu_step uses
+  Video.everything; spawn forwards task/classes, never chunks a photo.
+  Detection count / Identify species read summary_stats.photo
+  (`photo_detection_count`, `photo_species`).
+- Videos → Photos: run controls (photo pipelines only), run_on_videos kind=photo
+  (photos without a parent clip); schedules use photos for photo pipelines.
+- Results: run page `photo_view` (boxes over the preview, crops, species);
+  batch page photo summary (per photo over time, species totals) + photos CSV.
+- Uploads: JPEG/PNG/TIFF/HEIC → kind=photo; EXIF DateTimeOriginal read in the
+  browser (JPEG/TIFF; HEIC falls to name → batch → upload time).

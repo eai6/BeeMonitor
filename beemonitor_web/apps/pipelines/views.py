@@ -256,8 +256,21 @@ def run_on_videos(request):
     pipeline = Pipeline.objects.filter(pk=request.POST.get("pipeline")).first()
     if not pipeline or not (pipeline.is_template or pipeline.user_id == request.user.id):
         return _fail("Choose a pipeline to run.")
-    if not any(s.get("block_type") == "input.video" for s in (pipeline.steps or [])):
+    from .registry import pipeline_input_kind
+    photos = request.POST.get("kind") == "photo"
+    if photos and pipeline_input_kind(pipeline.steps) != "photo":
+        return _fail("That pipeline starts from a video; choose one that starts from a Photo Input.")
+    if not photos and not any(s.get("block_type") == "input.video" for s in (pipeline.steps or [])):
         return _fail("That pipeline has no video input to run on.")
+
+    def _source():
+        # Photos are rows of the same table, kind=photo (memory/45).
+        if photos:
+            # The Photos tab's set: periodic and uploaded photos, not the burst
+            # photos that belong to a clip.
+            return Video.manageable(request.user, photos=True).filter(
+                kind=Video.Kind.PHOTO, parent__isnull=True)
+        return Video.manageable(request.user)
 
     # "Run on all filtered" — re-apply the hub's filter server-side so the whole
     # filtered set runs, not just the (capped) list rendered on the page. Capped
@@ -269,7 +282,7 @@ def run_on_videos(request):
     over_cap = 0
     if request.POST.get("all_filtered"):
         from apps.analysis.views import apply_video_filters
-        vqs = apply_video_filters(Video.manageable(request.user), request.POST)
+        vqs = apply_video_filters(_source(), request.POST)
         total = vqs.count()
         vqs = vqs.order_by("-recorded_at", "-uploaded_at")
         videos = list(vqs[:MAX_BATCH] if MAX_BATCH else vqs)
@@ -278,7 +291,7 @@ def run_on_videos(request):
         video_ids = request.POST.getlist("video_ids")
         if not video_ids:
             return _fail("No videos selected.")
-        vqs = Video.manageable(request.user).filter(pk__in=video_ids)
+        vqs = _source().filter(pk__in=video_ids)
         videos = list(vqs[:MAX_BATCH] if MAX_BATCH else vqs)
     if not videos:
         return _fail("No videos match the current filter.")
@@ -570,7 +583,46 @@ def run_detail(request, pk, run_id):
         # Re-analysing needs a cached GPU result to feed the new analyzer, and
         # only the owner may spend anything on this run's behalf.
         "can_reanalyze": run.user_id == request.user.id and run.status == "completed",
+        "photo_view": photo_view(run),
     })
+
+
+def photo_view(run, floor=None):
+    """What the run page shows for a photo run (memory/45): the preview with a
+    box per insect (as % of the photo, so they scale with the image), and each
+    insect's crop, class and species. None for clip runs."""
+    from config.storage import presigned_get
+
+    from .executors import UNIDENTIFIED, _number
+
+    photo = None
+    for out in (run.context or {}).values():
+        photo = ((out or {}).get("result") or {}).get("summary_stats", {}).get("photo") if isinstance(out, dict) else None
+        if photo:
+            break
+    if not photo:
+        return None
+    if floor is None:
+        species_step = next((s for s in run.steps or [] if s.get("block_type") == "identify.species"), None)
+        floor = _number(((species_step or {}).get("config") or {}).get("min_mean_confidence"), 0.0)
+    w, h = float(photo.get("width") or 1), float(photo.get("height") or 1)
+    insects = []
+    for d in photo.get("detections") or []:
+        conf = d.get("species_confidence")
+        named = d.get("species") and conf is not None and not (floor and conf < floor)
+        insects.append({
+            "id": d.get("id"), "class": d.get("class"), "confidence": d.get("confidence"),
+            "species": d.get("species") if named else (UNIDENTIFIED if d.get("species") else ""),
+            "best_guess": d.get("species") if (d.get("species") and not named) else "",
+            "species_confidence": conf,
+            "left": round(100 * d["x"] / w, 2), "top": round(100 * d["y"] / h, 2),
+            "width": round(100 * d["w"] / w, 2), "height": round(100 * d["h"] / h, 2),
+            "crop_url": presigned_get(d["crop_key"], container="processed") if d.get("crop_key") else None,
+        })
+    return {"preview_url": presigned_get(photo.get("preview_key"), container="processed")
+            if photo.get("preview_key") else None,
+            "width": int(w), "height": int(h), "tiles": photo.get("tiles"), "insects": insects,
+            "named": len({i["species"] for i in insects if i["species"] and i["species"] != UNIDENTIFIED})}
 
 
 @login_required
@@ -863,7 +915,13 @@ def batch_detail(request, batch_id):
     # from S3 — for panels that are now gone. Trips are a read over the events
     # table, and the table is a download.
 
+    species_step = next((s for s in (runs[0].steps or []) if s.get("block_type") == "identify.species"), None) if runs else None
+    from .executors import _number
+    photo_summary = aggregate.photo_summary(
+        runs, _number(((species_step or {}).get("config") or {}).get("min_mean_confidence"), 0.0))
+
     return render(request, "pipelines/batch.html", {
+        "photo_summary": photo_summary,
         "rows": rows,
         "outcome": outcome,
         "failure_groups": failure_groups,
@@ -1003,6 +1061,12 @@ def _backfill_interactions_paths(sources):
 def batch_combined_csv(request, batch_id, kind):
     from . import aggregate
 
+    if kind == "photos":
+        runs = _batch_runs(request, batch_id)
+        rows = aggregate.photo_rows(runs)
+        fields = ["photo_id", "taken_at", "run_id", "insect", "class", "confidence",
+                  "species", "species_confidence", "x", "y", "w", "h"]
+        return _csv_response(f"photos_batch_{str(batch_id)[:8]}.csv", fields, rows)
     path_key = {"events": "events_csv_path",
                 "tracking": "tracking_csv_path",
                 "interactions": "interactions_csv_path",

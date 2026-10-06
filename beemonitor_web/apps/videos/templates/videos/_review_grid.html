@@ -47,7 +47,7 @@
                 <svg class="w-7 h-7 drop-shadow" viewBox="0 0 24 24" fill="rgba(255,255,255,0.85)"><path d="M8 5v14l11-7z"/></svg>
               </div>
               {% endif %}
-              {% if can_select and not v.is_photo %}
+              {% if can_select %}
               <input type="checkbox" name="video_ids" value="{{ v.pk }}" id="cb-{{ v.pk }}"
                      class="vid-cb absolute top-1.5 left-1.5 rounded border-gray-300 z-10">
               {% endif %}

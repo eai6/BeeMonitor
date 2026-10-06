@@ -58,6 +58,41 @@ their reason.
   {% endif %}
 </div>
 
+{% if photo_summary %}
+{% comment %}A batch of photo runs (memory/45).{% endcomment %}
+<section class="bg-white border border-gray-200 rounded-lg p-5 mb-6 space-y-4">
+  <div class="flex items-baseline justify-between gap-3 flex-wrap">
+    <h2 class="text-lg font-semibold">Photos · {{ photo_summary.photos|length }} photos · {{ photo_summary.insects }} insects · {{ photo_summary.named }} species</h2>
+    <a href="{% url 'pipelines:batch_combined_csv' batch_id=batch_id kind='photos' %}" class="text-sm text-amber-700 hover:underline">Download photos CSV</a>
+  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] gap-6">
+    <div>
+      <h3 class="text-sm font-semibold mb-2">Insects per photo, over time</h3>
+      <div class="h-40 flex items-end gap-1 border-b border-gray-300">
+        {% for p in photo_summary.photos %}
+        <a href="{% url 'pipelines:run_detail' pk=pipeline.pk run_id=p.run_id %}" title="{{ p.taken_at|slice:':16' }} · {{ p.count }} insects"
+           class="flex-1 min-w-[3px] bg-sky-700 hover:bg-amber-600 rounded-t" style="height: {{ p.bar }}%"></a>
+        {% endfor %}
+      </div>
+      <div class="flex justify-between text-[11px] text-gray-600 mt-1">
+        <span>{{ photo_summary.photos.0.taken_at|slice:":10" }}</span>
+        <span>{% with last=photo_summary.photos|last %}{{ last.taken_at|slice:":10" }}{% endwith %}</span>
+      </div>
+    </div>
+    <div class="space-y-2">
+      <h3 class="text-sm font-semibold">Species</h3>
+      {% for sp in photo_summary.species %}
+      <div class="grid grid-cols-[minmax(0,1fr)_120px_40px] gap-2 items-center text-sm">
+        <span class="truncate {% if sp.name != 'unidentified' %}italic{% endif %}">{{ sp.name }}</span>
+        <span class="h-2.5 bg-gray-200 rounded-full overflow-hidden"><span class="block h-full bg-sky-700" style="width: {{ sp.bar }}%"></span></span>
+        <span class="text-right tabular-nums">{{ sp.count }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endif %}
+
 {% comment %}
   Outcome sits beside what you would do next rather than alone in a 300px
   column with the rest of the row empty. When something failed the failure
@@ -484,5 +519,6 @@ setTimeout(function(){
   });
 })();
 </script>
+
 
 {% endblock %}

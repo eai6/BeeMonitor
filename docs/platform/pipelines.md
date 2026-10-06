@@ -14,8 +14,11 @@ Interactions, Individual bee IDs). Drag steps from the palette and connect them.
 
 - **On clips:** in **Videos**, select clips (or all that match the filter), choose the pipeline and
   **Run pipeline**. Each clip becomes a run, and together they form a batch.
+- **On photos:** in **Videos → Photos**, the same, with pipelines that start from a **Photo Input**. Each
+  photo's run shows the photo with a box on every insect, each insect's crop and species, and the counts;
+  the batch shows insects per photo over time, species totals and a photos CSV.
 - **On a schedule:** on the device page, under **Scheduled processing**, run a pipeline on each day's new
-  clips.
+  clips — or, for a photo pipeline, its new photos.
 - **From code:** see [API](api.md).
 
 Runs that use the GPU (Detect, Track, Identify species) use your account's credits.
@@ -34,7 +37,7 @@ batch. A rerun is a new batch, and the old one is kept for comparison.
 
 | Step | What it does |
 |---|---|
-| **Video** | The clip being analysed. Every pipeline starts here. |
+| **Video** / **Photo** | The clip, or the photo, being analysed. Every pipeline starts from one of the two. |
 | **Detect** | Finds one class in each frame with YOLO (fast) or SAM 3 (text prompt, slower). Can analyse every frame (needed for tracking) or a sample of frames (for objects that don't move). |
 | **MOT: Track objects** | Links detections into tracks. Choose the algorithm — BeeTrack (default), ByteTrack, BoT-SORT, OC-SORT or SFSORT — and tune its settings on the node. Runs inside the same GPU pass as Detect, on whatever Detect found. |
 | **Reference: Saved layout** | The device's saved ROI and nest tubes, or regions you draw. No GPU needed. |

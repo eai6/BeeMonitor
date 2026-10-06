@@ -230,3 +230,21 @@ class TranscodeTests(TestCase):
         from apps.videos import transcode
         with override_settings(SAGEMAKER_ENDPOINT_NAME=""):
             self.assertEqual(transcode.dispatch(), 0)
+
+
+class PhotoUploadTests(MultipartTests):
+    """Photos from any camera upload the same way and become kind=photo."""
+
+    def test_a_jpeg_becomes_a_photo_with_its_exif_time(self):
+        r = self._post("multipart/initiate", {"filename": "IMG_0042.JPG", "size_bytes": 5_000_000})
+        self.assertEqual(r.status_code, 200)
+        key = f"{self.user.pk}/abc/IMG_0042.JPG"
+        r = self._post("multipart/complete", {
+            "storage_key": key, "upload_id": "U1", "file_size_bytes": 5_000_000,
+            "original_filename": "IMG_0042.JPG", "parts": [{"part_number": 1, "etag": "e"}],
+            "file_recorded_at": "2026-10-04T09:12:40Z"})
+        self.assertEqual(r.json()["kind"], "photo")
+        photo = Video.everything.get(pk=r.json()["video_id"])
+        self.assertEqual(photo.kind, Video.Kind.PHOTO)
+        self.assertEqual(photo.metadata["recorded_at_source"], "file")
+        self.assertFalse(Video.objects.filter(pk=photo.pk).exists())   # clips-only manager

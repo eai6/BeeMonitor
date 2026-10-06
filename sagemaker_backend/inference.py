@@ -139,6 +139,8 @@ def predict_fn(payload, pipeline):
         return {**_annotate_video(payload, pipeline), **_timings(profiler)}
     if payload.get("task") == "transcode":
         return {**_transcode(payload, pipeline), **_timings(profiler)}
+    if payload.get("task") == "detect_photo":
+        return {**_detect_photo(payload, pipeline), **_timings(profiler)}
 
     job_id = payload["job_id"]
     user_id = str(payload["user_id"])
@@ -291,26 +293,102 @@ def _transcode(payload, pipeline) -> dict:
             "codec": codec, "mode": mode, "size_bytes": size}
 
 
-def _pre_annotate(payload, pipeline) -> dict:
-    """Run the bee detector on sampled frames; return boxes to seed annotations.
+def _read_photo(path):
+    """A photo as a BGR array: OpenCV for JPEG/PNG/TIFF, Pillow (+ HEIF) else."""
+    import cv2
+    import numpy as np
 
-    Mirrors the legacy Modal ``pre_annotate_video``: sample every Nth frame, run
-    the bee/wasp detector, keep only boxes whose class is in the project's
-    classes (mapping to the project's class_id), save each hit frame's JPEG to
-    the processed bucket, and return the frame list. Nest boxes stay manual.
+    image = cv2.imread(path, cv2.IMREAD_COLOR)
+    if image is not None:
+        return image
+    from PIL import Image, ImageOps
+    try:
+        import pillow_heif
+        pillow_heif.register_heif_opener()
+    except ImportError:
+        pass
+    with Image.open(path) as im:
+        rgb = ImageOps.exif_transpose(im).convert("RGB")
+        return cv2.cvtColor(np.asarray(rgb), cv2.COLOR_RGB2BGR)
+
+
+def _detect_photo(payload, pipeline) -> dict:
+    """Detect, crop and (optionally) name every insect in one photo (memory/45).
+
+    Large photos are tiled (beemonitor.detection.tiling) so small insects keep
+    their pixels. Each detection gets a padded crop in the processed bucket;
+    with ``identify_species`` each crop is classified once (BeeMachine or
+    BioCLIP, the same classifiers tracks use). Also saves a 1600 px preview
+    for the results page, which draws the boxes over it.
     """
     import tempfile
     import cv2
+    from beemonitor.detection.tiling import detect_tiled
+    from beemonitor.tracking.bee_tracking import padded_box
 
     started = time.time()
-    video_blob_path = payload["video_blob_path"]
-    classes = payload.get("classes") or ["bee", "wasp", "nest"]
-    sample_interval = max(1, int(payload.get("sample_interval", 10)))
-    max_frames = int(payload.get("max_frames", 300))
-    conf = float(payload.get("confidence_threshold", 0.15))
+    job_id, user_id = payload["job_id"], str(payload["user_id"])
+    classes = [c for c in (payload.get("classes") or ["bee"]) if c]
     class_index = {c.lower(): i for i, c in enumerate(classes)}
-
+    conf = float(payload.get("confidence_threshold", 0.25))
     storage = pipeline._storage
+    prefix = f"{user_id}/{job_id}"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        src = os.path.join(tmp, "photo" + os.path.splitext(payload["video_blob_path"])[1].lower())
+        storage.download_file("raw-videos", payload["video_blob_path"], src)
+        image = _read_photo(src)
+        height, width = image.shape[:2]
+        detect = _frame_detector(payload, pipeline, classes, class_index, conf)
+        boxes, tiles = detect_tiled(image, detect)
+
+        crops, detections = [], []
+        for i, b in enumerate(sorted(boxes, key=lambda b: (b["y"], b["x"]))):
+            x1, y1, x2, y2 = padded_box((b["x"], b["y"], b["x"] + b["w"], b["y"] + b["h"]), width, height)
+            crop = image[y1:y2, x1:x2]
+            key = f"{prefix}/photo_crops/{i + 1:04d}.jpg"
+            path = os.path.join(tmp, f"crop{i}.jpg")
+            cv2.imwrite(path, crop, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+            storage.upload_file("processed", key, path, content_type="image/jpeg")
+            crops.append(crop)
+            detections.append({"id": i + 1, "x": b["x"], "y": b["y"], "w": b["w"], "h": b["h"],
+                               "class": b.get("class"), "confidence": b.get("confidence"),
+                               "crop_key": key})
+
+        scale = min(1.0, 1600.0 / max(width, height))
+        preview = cv2.resize(image, (int(width * scale), int(height * scale)),
+                             interpolation=cv2.INTER_AREA) if scale < 1 else image
+        preview_path, preview_key = os.path.join(tmp, "preview.jpg"), f"{prefix}/photo_preview.jpg"
+        cv2.imwrite(preview_path, preview, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+        storage.upload_file("processed", preview_key, preview_path, content_type="image/jpeg")
+
+    species_status = None
+    if payload.get("identify_species") and crops:
+        clf, species_status = pipeline._species_classifier(
+            job_id, payload.get("species_classifier", "beemachine"),
+            payload.get("species_model_key", ""), payload.get("candidate_taxa"))
+        if clf is not None:
+            for det, reading in zip(detections, clf.classify_images(crops)):
+                if reading:
+                    det["species"], det["species_confidence"] = reading[0], round(float(reading[1]), 4)
+            species_status["identified"] = sum(1 for d in detections if d.get("species"))
+    elif payload.get("identify_species"):
+        species_status = {"model": payload.get("species_classifier", "beemachine"),
+                          "loaded": False, "error": "no insects detected"}
+
+    logger.info("detect_photo %s: %dx%d, %d tiles, %d detections in %.1fs", job_id, width,
+                height, tiles, len(detections), time.time() - started)
+    return {"status": "completed", "job_id": job_id,
+            "photo": {"width": width, "height": height, "tiles": tiles, "preview_key": preview_key,
+                      "detections": detections, "species_status": species_status}}
+
+
+def _frame_detector(payload, pipeline, classes, class_index, conf):
+    """``detect(frame) -> [{x, y, w, h, class, class_id, confidence}]`` for one
+    BGR frame: SAM 3 prompted with ``classes`` or YOLO (a custom model when the
+    payload names one, else the built-in bee model), keeping only boxes of
+    ``classes``. Shared by sampled detection and photo detection.
+    """
     # Detector: SAM 3 text-prompt (default for pre-annotation) or YOLO. Both
     # yield the same per-frame box list via ``_detect`` so the sampling/save
     # loop below is detector-agnostic.
@@ -371,6 +449,31 @@ def _pre_annotate(payload, pipeline) -> dict:
                         "confidence": round(float(box.conf[0]), 3),
                     })
             return out
+
+    return _detect
+
+
+def _pre_annotate(payload, pipeline) -> dict:
+    """Run the bee detector on sampled frames; return boxes to seed annotations.
+
+    Mirrors the legacy Modal ``pre_annotate_video``: sample every Nth frame, run
+    the bee/wasp detector, keep only boxes whose class is in the project's
+    classes (mapping to the project's class_id), save each hit frame's JPEG to
+    the processed bucket, and return the frame list. Nest boxes stay manual.
+    """
+    import tempfile
+    import cv2
+
+    started = time.time()
+    video_blob_path = payload["video_blob_path"]
+    classes = payload.get("classes") or ["bee", "wasp", "nest"]
+    sample_interval = max(1, int(payload.get("sample_interval", 10)))
+    max_frames = int(payload.get("max_frames", 300))
+    conf = float(payload.get("confidence_threshold", 0.15))
+    class_index = {c.lower(): i for i, c in enumerate(classes)}
+
+    storage = pipeline._storage
+    _detect = _frame_detector(payload, pipeline, classes, class_index, conf)
 
     frames_out = []
     checked = total_detections = 0

@@ -251,6 +251,21 @@ def detected_reference(step, run, context, index):
 
 # ── Local executors ───────────────────────────────────────────────────────────
 
+def _exec_input_photo(step, run, context, inputs, index):
+    """The run's photo (memory/45) — a row of the videos table, kind=photo."""
+    from apps.videos.models import Video
+
+    photo_id = (step.get("config") or {}).get("video_id")
+    if not photo_id:
+        return {"error": "No photo selected."}
+    try:
+        photo = Video.manageable(run.user, photos=True).get(pk=photo_id, kind=Video.Kind.PHOTO)
+    except (Video.DoesNotExist, ValueError, TypeError):
+        return {"error": f"Photo {photo_id} not found, or not yours to analyze."}
+    return {"artifact": "photo", "video_id": photo.pk, "storage_key": photo.storage_key,
+            "title": photo.title or f"Photo {photo.pk}"}
+
+
 def _exec_input_video(step, run, context, inputs, index):
     from apps.videos.models import Video
 
@@ -765,6 +780,10 @@ def _exec_analyze_detection_count(step, run, context, inputs, index):
 
     label = _upstream_label(inputs)
 
+    photo = (result.get("summary_stats") or {}).get("photo")
+    if photo is not None:
+        return photo_detection_count(photo, boxes)
+
     # Sampled detection returns per-frame boxes rather than CSVs. Distinct and
     # modal only mean anything there: they answer "how many objects are there",
     # not "how many detections were made".
@@ -932,10 +951,13 @@ def _exec_identify_species(step, run, context, inputs, index):
 
     up = inputs.get("tracks") or _first_upstream_result(inputs)
     result = (up or {}).get("result", {})
+    floor = _number((step.get("config") or {}).get("min_mean_confidence"), 0.0)
+    photo = (result.get("summary_stats") or {}).get("photo")
+    if photo is not None:
+        return {"artifact": "table", "table_kind": "species", **photo_species(photo, floor)}
     df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
     summary = ops.species_identities(df) if df is not None else None
     if summary is not None and summary.get("rows"):
-        floor = _number((step.get("config") or {}).get("min_mean_confidence"), 0.0)
         return {"artifact": "table", "table_kind": "species",
                 **apply_species_floor(summary, floor)}
     return {
@@ -946,6 +968,57 @@ def _exec_identify_species(step, run, context, inputs, index):
 
 
 UNIDENTIFIED = "unidentified"
+
+
+def photo_detection_count(photo, regions=None):
+    """Detection count on one photo: per class, and per drawn region when the
+    pipeline has a reference (a box's centre inside the region's shape)."""
+    from . import ops
+
+    dets = photo.get("detections") or []
+    w, h = float(photo.get("width") or 1), float(photo.get("height") or 1)
+    by_class = {}
+    for d in dets:
+        by_class[d.get("class") or "object"] = by_class.get(d.get("class") or "object", 0) + 1
+    rows = [{"class": c, "count": n} for c, n in sorted(by_class.items())]
+    out = {"artifact": "table", "table_kind": "detection_count", "metric": "photo",
+           "detections": len(dets), "rows": rows, "tiles": photo.get("tiles")}
+    if regions:
+        per_region = []
+        for i, shape in enumerate(regions):
+            inside = sum(1 for d in dets if ops.in_any_box(
+                (d["x"] + d["w"] / 2) / w, (d["y"] + d["h"] / 2) / h, [shape]))
+            per_region.append({"region": i + 1, "count": inside})
+        out["regions"] = per_region
+    return out
+
+
+def photo_species(photo, floor=0.0):
+    """One row per insect in a photo: its species and confidence; below
+    ``floor`` it is unidentified, best guess kept."""
+    rows, taxa, below = [], set(), 0
+    for d in photo.get("detections") or []:
+        taxon, conf = d.get("species"), d.get("species_confidence")
+        row = {"insect": d.get("id"), "class": d.get("class"), "taxon": taxon or UNIDENTIFIED,
+               "confidence": conf, "crop_key": d.get("crop_key")}
+        if not taxon or conf is None or (floor and conf < floor):
+            row["taxon"] = UNIDENTIFIED
+            if taxon:
+                row["best_guess"] = taxon
+            below += 1
+        else:
+            taxa.add(taxon)
+        rows.append(row)
+    out = {"identified_tracks": len(rows) - below, "unique_taxa": len(taxa), "rows": rows,
+           "unit": "insect"}
+    status = photo.get("species_status")
+    if not rows:
+        out["note"] = "No insects were detected in this photo."
+    elif status and not status.get("loaded"):
+        out["note"] = f"Species model could not be loaded: {status.get('error') or 'unknown error'}."
+    elif below and floor:
+        out["note"] = f"{below} insect(s) below the minimum confidence {floor:g}; best guess kept."
+    return out
 
 
 def _number(value, default):
@@ -1061,6 +1134,7 @@ def _exec_output(step, run, context, inputs, index):
 
 LOCAL_EXECUTORS = {
     "input.video": _exec_input_video,
+    "input.photo": _exec_input_photo,
     # ── The three-module palette ──
     "reference.layout": lambda s, r, c, i, idx: resolve_reference(s, r, c, idx) or {
         "artifact": "roi", "source": (s.get("config") or {}).get("source", "device_layout"),
@@ -1364,9 +1438,38 @@ def build_job_config(step, run, context, index):
     sampled Detect node produces a completely different job (and result shape)
     from a tracking one, and routing it anywhere else would let the two drift.
     """
+    if step.get("block_type") == "detect.objects" and find_artifact("photo", run.steps, index, context):
+        return build_photo_detection_config(step, run, context, index)
     if step.get("block_type") == "detect.objects" and is_sampled(step):
         return build_sampled_detection_config(step, run, context, index)
     return build_detect_and_track_config(step, run, context, index)
+
+
+def build_photo_detection_config(step, run, context, index):
+    """Job config for Detect on a photo — the worker's ``detect_photo`` task
+    (memory/45): tiled detection, a crop per insect, and species on the crops
+    when an Identify species node follows. One node, one class, like sampled
+    detection."""
+    photo = find_artifact("photo", run.steps, index, context)
+    cfg = step.get("config") or {}
+    label = detector_label(step)
+    if not label:
+        return None, "This Detect node needs to know what to detect."
+    raw_family = cfg.get("model_family") or "yolo"
+    config = {
+        "task": "detect_photo",
+        "classes": [p.strip() for p in label.split(",") if p.strip()],
+        "detector_kind": "sam3" if str(raw_family).lower() == "sam3" else "yolo",
+        "confidence_threshold": float(cfg.get("confidence", 0.25) or 0.25),
+    }
+    species_model = _pipeline_species(step, run.steps)
+    if species_model:
+        config["identify_species"] = True
+        config["species_classifier"] = species_model
+    model_err = _resolve_custom_models(cfg, run, config)
+    if model_err:
+        return None, model_err
+    return {"video_id": photo["video_id"], "config": config}, None
 
 
 def build_detect_and_track_config(step, run, context, index):
@@ -1472,7 +1575,8 @@ def submit_gpu_step(run, step, context, index):
     from apps.analysis.models import Job
 
     try:
-        video = Video.objects.get(pk=built["video_id"])
+        # .everything: a Photo Input's photo is a row of the same table.
+        video = Video.everything.get(pk=built["video_id"])
     except Video.DoesNotExist:
         return "error", {"error": "Source video vanished before job spawn."}
 

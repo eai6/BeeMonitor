@@ -84,7 +84,7 @@ class HiddenBlockTests(SimpleTestCase):
     def test_palette_is_the_three_modules_plus_input_and_identity(self):
         palette = {b["type"] for c in get_categories() for b in c["blocks"]}
         self.assertEqual(palette, {
-            "input.video",
+            "input.video", "input.photo",
             "detect.objects",
             "reference.layout",
             "track.mot",

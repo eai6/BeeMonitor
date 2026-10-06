@@ -9,12 +9,13 @@ appear under **Videos**, already linked to the device, its location and the layo
 
 ### Upload from any camera
 
-**Videos → Upload videos.** Drop in any number of files of any size (MP4, MOV, MKV, AVI, H.264). They go
+**Videos → Upload videos.** Drop in any number of videos (MP4, MOV, MKV, AVI, H.264) or photos (JPEG, PNG,
+TIFF, HEIC), of any size. They go
 straight from your browser to storage in parts: if the connection drops or you close the tab, add the same
 files again and they pick up where they stopped.
 
 - **When it was recorded.** Each file's time is taken from, in order: the file itself (MP4/MOV cameras write
-  it), a date-time in the file name (`2026-10-04_09_12_40`, `20261004_091240`, `IMG_20261004_091240`…), the
+  it; for photos, the EXIF capture time), a date-time in the file name (`2026-10-04_09_12_40`, `20261004_091240`, `IMG_20261004_091240`…), the
   start time you type for the batch, and finally the upload time. The page shows which one each file got;
   clips left on the upload time can be found later with the **Recording time unknown** filter.
 - **Where (optional).** Pick a saved site, add a new one (a name, and a pin on the map if you want), or

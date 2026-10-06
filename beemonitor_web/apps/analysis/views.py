@@ -183,6 +183,13 @@ def _drain_queue() -> int:
     return spawned
 
 
+def _pipelines_for(kind, pipelines):
+    """The pipelines that can run on clips (Video Input) or photos (Photo Input)."""
+    from apps.pipelines.registry import pipeline_input_kind
+    want = "photo" if kind == "photo" else "video"
+    return [p for p in pipelines if pipeline_input_kind(p.steps) == want]
+
+
 def _candidate_taxa(video) -> list:
     """Species recorded near the video's device, for BioCLIP. ``[]`` (the
     worker then uses the whole Tree of Life) when there is no location or the
@@ -270,6 +277,10 @@ def _spawn_gpu_job(job_pk: int) -> None:
         # Sampled detection (static objects: nest tubes, flowers) runs the
         # worker's pre_annotate task over a handful of frames instead of the
         # full tracking pass — a different task with a different result shape.
+        if job.config.get("task") == "detect_photo":
+            # Tiled detection on one photo (memory/45); species keys follow below.
+            payload["task"] = "detect_photo"
+            payload["classes"] = job.config.get("classes") or ["bee"]
         if job.config.get("task") == "pre_annotate":
             payload["task"] = "pre_annotate"
             for k in ("classes", "sample_interval", "max_frames", "selection"):
@@ -514,7 +525,8 @@ def _launch_gpu(payload, video, mid):
     drives to completion."""
     detector_kind = payload.get("detector_kind", "yolo")
     endpoint = _tracking_endpoint(detector_kind)  # SAM 3 tracking → g5, YOLO → g4dn
-    ranges = _chunk_ranges(video, detector_kind)
+    # A photo task is one image: never chunked.
+    ranges = None if payload.get("task") == "detect_photo" else _chunk_ranges(video, detector_kind)
     if not ranges:
         input_uri = _put_inference_payload(mid, payload)
         output_uri, failure_uri = _invoke_endpoint_async(mid, input_uri, endpoint)
@@ -732,8 +744,9 @@ class ProcessingHubView(LoginRequiredMixin, View):
             # 0/None means "no cap" (the template treats it as unlimited).
             "pipeline_max_batch": getattr(settings, "PIPELINE_MAX_BATCH", 50000),
             # Pipelines to run on the selected videos (replaces the fixed recipe).
-            "pipelines": Pipeline.objects.filter(user=request.user, is_template=False).order_by("title"),
-            "pipeline_templates": Pipeline.objects.filter(is_template=True).order_by("title"),
+            # Only pipelines that start from the matching input (memory/45).
+            "pipelines": _pipelines_for(kind, Pipeline.objects.filter(user=request.user, is_template=False).order_by("title")),
+            "pipeline_templates": _pipelines_for(kind, Pipeline.objects.filter(is_template=True).order_by("title")),
         })
 
     def post(self, request):
@@ -1347,6 +1360,9 @@ def _apply_result_to_job(job, result: dict) -> None:
     # them in summary_stats (already a JSONField that passes through untouched)
     # so the pipeline step can read them without a new column.
     summary = dict(result.get("summary_stats") or {})
+    # A photo's detections, crops and species (memory/45).
+    if result.get("photo") is not None:
+        summary["photo"] = result["photo"]
     if result.get("frames") is not None:
         summary["sampled_frames"] = result["frames"]
         summary["sampled_selection"] = result.get("selection", "uniform")

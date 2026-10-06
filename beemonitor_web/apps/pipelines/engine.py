@@ -58,10 +58,11 @@ def _persist_step_result(user, cache_key, block_type, output):
 
 
 def steps_with_video_steps(steps, video_id):
-    """A copy of ``steps`` with every ``input.video`` step bound to a video."""
+    """A copy of ``steps`` with every ``input.video`` (or ``input.photo``) step
+    bound to a clip (or photo) — both are rows of the videos table."""
     out = copy.deepcopy(steps or [])
     for step in out:
-        if step.get("block_type") == "input.video":
+        if step.get("block_type") in ("input.video", "input.photo"):
             step.setdefault("config", {})["video_id"] = str(video_id)
     return out
 

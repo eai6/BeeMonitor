@@ -54,7 +54,7 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
     the DOM, since HTML forms cannot nest. "Apply" above is the FILTER submit;
     this is a separate action.
     {% endcomment %}
-    {% if can_manage_any and videos and kind != "photo" %}
+    {% if can_manage_any and videos %}
     <div class="border-t border-gray-200 px-4 py-3 space-y-2">
       <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Pipeline to run</div>
       <select name="pipeline" form="run-form" class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
@@ -106,14 +106,13 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
     <form method="post" action="{% url 'pipelines:run_on_videos' %}" id="run-form" class="flex-1 flex flex-col min-h-0">
       {% csrf_token %}
       <input type="hidden" name="all_filtered" id="all-filtered-flag" value="">
+      <input type="hidden" name="kind" value="{{ kind }}">
       {% for k, v in f.items %}{% if v %}{% if k == "device" %}{% for d in v %}<input type="hidden" name="device" value="{{ d }}">{% endfor %}{% else %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endif %}{% endfor %}
 
       <!-- toolbar -->
       <div class="flex items-center justify-between gap-4 px-5 py-3 bg-white border-b border-gray-200">
         <div class="flex items-center gap-3.5">
-          {% if kind == "photo" %}
-          <span class="text-sm text-gray-500">{{ video_count }} photo{{ video_count|pluralize }} &middot; periodic and on request</span>
-          {% elif can_manage_any %}
+          {% if can_manage_any %}
           <label class="flex items-center gap-2 text-sm text-gray-700">
             <input type="checkbox" id="select-all" class="rounded border-gray-300"> Select all {{ video_count }}
           </label>

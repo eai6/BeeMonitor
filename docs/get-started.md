@@ -27,7 +27,7 @@ question needs.
 
 | Block | What it does |
 |---|---|
-| **Input** | The clip the pipeline runs on. |
+| **Input** | What the pipeline runs on: a **Video Input** (clips) or a **Photo Input** (unit photos and uploaded JPEG, PNG, TIFF, HEIC). |
 | **Detect** | Finds one kind of thing in the frames (bees, wasps, flies, flowers, nest tubes) with a built-in model, [your own](platform/annotation.md), or SAM 3 with a text prompt. Every frame, or a sample of frames for things that don't move. |
 | **Reference** | What behaviour is measured against: the nest tubes drawn on a unit, or regions you draw (a flower, an arena zone). |
 | **Track** | Links each animal's detections from frame to frame. Choose the tracker (BeeTrack, ByteTrack, BoT-SORT, OC-SORT, SFSORT) and tune it. |
@@ -38,14 +38,20 @@ Some of the pipelines this makes:
 
 | You want | Blocks |
 |---|---|
-| How many insects are there | Input → Detect → Analyze: detection count |
+| How many insects are in each photo, and which species | Photo Input → Detect → Analyze: detection count, + Identity: species |
+| How many insects are there in a clip | Video Input → Detect → Analyze: detection count |
 | What species is each insect that passes (biodiversity monitoring) | Input → Detect → Track → Identity: species |
 | Foraging trips at a nest hotel | Input → Detect → Track → Reference (the unit's tubes) → Analyze: events |
 | Visits and time on each flower, or each zone of an assay | Input → Detect → Track → Reference (drawn regions) → Analyze: interactions |
 | Which marked bee did what | Input → Detect → Track → Identity: marker, plus any of the above |
 
-Start from a template or from scratch, save it, then run it from **Videos** on the clips you choose, or on
-every new clip from a unit on a schedule ([Pipelines](platform/pipelines.md)).
+On photos, Detect, Reference, Detection count and Identity work; tracking and everything built on it need
+a video, and the editor says so. Large photos (a 64 MP unit photo) are cut into overlapping tiles for
+detection automatically, so a small bee is still found.
+
+Start from a template or from scratch, save it, then run it from **Videos** on the clips (or, under
+**Photos**, the photos) you choose, or on everything new from a unit on a schedule
+([Pipelines](platform/pipelines.md)).
 
 ## 3. Read the results
 

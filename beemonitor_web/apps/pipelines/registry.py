@@ -23,6 +23,7 @@ See ``memory/23_pipeline_builder_port_design.md`` for the design.
 ARTIFACT_TYPES = {
     "none":         "Nothing",
     "video":        "Video",
+    "photo":        "Photo",
     "frames":       "Image set / frames",
     "roi":          "Region(s) of interest",
     "detections":   "Per-frame detections",
@@ -131,6 +132,21 @@ BLOCK_REGISTRY = {
         "output_type": "video",
         "backend": "local",
         # No config — the video is injected per run (engine.steps_with_video).
+        "config_fields": [],
+    },
+    "input.photo": {
+        "display_name": "Photo Input",
+        "description": "The photo the pipeline runs on: a unit's photos or ones "
+                       "you uploaded (JPEG, PNG, TIFF, HEIC). Chosen at run time "
+                       "from Videos → Photos. Detect, Reference, Detection count "
+                       "and Identify species work on photos; tracking and the "
+                       "blocks built on it need a video.",
+        "category": "input",
+        "icon": "🖼️",
+        "input_type": "none",
+        "output_type": "photo",
+        "backend": "local",
+        # No config — the photo is injected per run (engine.steps_with_video).
         "config_fields": [],
     },
     "input.image_set": {
@@ -296,6 +312,7 @@ BLOCK_REGISTRY = {
         "category": "detect",
         "icon": "🎯",
         "input_type": "video",
+        "accepts": ["video", "photo"],
         "output_type": "detections",
         "backend": "gpu",
         "config_fields": [
@@ -392,6 +409,7 @@ BLOCK_REGISTRY = {
         "category": "roi",
         "icon": "📐",
         "input_type": "video",
+        "accepts": ["video", "photo"],
         "output_type": "roi",
         "backend": "local",
         "config_fields": [
@@ -1141,6 +1159,43 @@ def get_blocks_by_category(category, include_hidden=True):
     }
 
 
+# Blocks that need movement over time, so never follow a Photo Input.
+NEEDS_VIDEO = {
+    "track.mot": "tracking links an insect across frames",
+    "track.bee": "tracking links an insect across frames",
+    "analyze.events": "entries and exits are measured across frames",
+    "analyze.interactions": "an interaction lasts over several frames",
+    "analyze.interaction": "an interaction lasts over several frames",
+    "analyze.foraging_trips": "trips are measured across frames",
+    "analyze.visitation": "a visit lasts over several frames",
+    "analyze.colony_activity": "activity is measured over time",
+    "identify.marker": "markers are read along a track",
+}
+
+
+def photo_errors(steps):
+    """Pipelines start from a video OR a photo; on a photo, only blocks that make
+    sense for a single image (memory/45)."""
+    kinds = {s.get("block_type") for s in steps}
+    if "input.photo" not in kinds:
+        return []
+    errors = []
+    if "input.video" in kinds:
+        errors.append("A pipeline starts from a Video Input or a Photo Input, not both.")
+    for i, s in enumerate(steps):
+        why = NEEDS_VIDEO.get(s.get("block_type"))
+        if why:
+            name = BLOCK_REGISTRY.get(s["block_type"], {}).get("display_name", s["block_type"])
+            errors.append(f"Step {i + 1} ({name}) needs a video — {why}. "
+                          f"Use a Video Input for it.")
+    return errors
+
+
+def pipeline_input_kind(steps) -> str:
+    """'photo' when the pipeline starts from a Photo Input, else 'video'."""
+    return "photo" if any(s.get("block_type") == "input.photo" for s in steps or []) else "video"
+
+
 def validate_steps(steps):
     """Validate a list of pipeline steps; return a list of human-readable errors.
 
@@ -1211,4 +1266,4 @@ def validate_steps(steps):
                     f"'{' or '.join(in_types)}' but the previous step produces "
                     f"'{prev_out}'."
                 )
-    return errors
+    return errors + photo_errors(steps)

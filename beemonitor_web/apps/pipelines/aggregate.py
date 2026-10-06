@@ -92,7 +92,7 @@ def collect_sources(runs):
 
     video_ids = [vid for r in runs if (vid := run_video_id(r)) is not None]
     videos = {v.pk: v for v in
-              Video.objects.filter(pk__in=video_ids).select_related("device")}
+              Video.everything.filter(pk__in=video_ids).select_related("device")}
 
     sources, skipped = [], []
     for run in runs:
@@ -294,7 +294,7 @@ def primitive_csv(runs, kind):
 
     video_ids = [vid for r in runs if (vid := run_video_id(r)) is not None]
     videos = {v.pk: v for v in
-              Video.objects.filter(pk__in=video_ids).select_related("device")}
+              Video.everything.filter(pk__in=video_ids).select_related("device")}
 
     all_rows = []
     for run in runs:
@@ -604,7 +604,7 @@ def batch_rows(runs):
     from apps.videos.models import Video
 
     video_ids = [v for r in runs if (v := run_video_id(r)) is not None]
-    videos = {v.pk: v for v in Video.objects.filter(pk__in=video_ids).select_related("device")}
+    videos = {v.pk: v for v in Video.everything.filter(pk__in=video_ids).select_related("device")}
     job_ids = [j for r in runs if (j := run_job_id(r)) is not None]
     jobs = {j.pk: j for j in Job.objects.filter(pk__in=job_ids)}
     results = {r.job_id: r for r in JobResult.objects.filter(job_id__in=job_ids)}
@@ -996,3 +996,69 @@ def analyzer_results(runs):
         results.append(entry)
     results.sort(key=lambda r: -r["clips"])
     return results
+
+
+
+# ── Photo batches (memory/45) ─────────────────────────────────────────────────
+
+def photo_rows(runs):
+    """One row per detected insect across a batch of photo runs:
+    photo id, taken at, insect, class, detector confidence, species, its
+    confidence. Empty when the batch is not photo runs."""
+    from apps.videos.models import Video
+
+    out = []
+    per_run = []
+    for run in runs:
+        photo = None
+        for step_out in (run.context or {}).values():
+            if isinstance(step_out, dict):
+                photo = ((step_out.get("result") or {}).get("summary_stats") or {}).get("photo")
+                if photo:
+                    break
+        if photo is None:
+            continue
+        pid = next((int((s.get("config") or {}).get("video_id") or 0) for s in run.steps or []
+                    if s.get("block_type") == "input.photo"), 0)
+        per_run.append((run, pid, photo))
+    videos = {v.pk: v for v in Video.everything.filter(pk__in=[p for _r, p, _ph in per_run])}
+    for run, pid, photo in per_run:
+        v = videos.get(pid)
+        taken = v.recorded_at.isoformat() if v and v.recorded_at else ""
+        for d in photo.get("detections") or []:
+            out.append({"photo_id": pid, "taken_at": taken, "run_id": str(run.pk),
+                        "insect": d.get("id"), "class": d.get("class"),
+                        "confidence": d.get("confidence"), "species": d.get("species") or "",
+                        "species_confidence": d.get("species_confidence"),
+                        "x": d.get("x"), "y": d.get("y"), "w": d.get("w"), "h": d.get("h")})
+        if not photo.get("detections"):
+            out.append({"photo_id": pid, "taken_at": taken, "run_id": str(run.pk), "insect": None})
+    return out
+
+
+def photo_summary(runs, floor=0.0):
+    """Counts per photo over time and species totals for a photo batch, or None."""
+    rows = photo_rows(runs)
+    if not rows:
+        return None
+    per_photo, species = {}, {}
+    for r in rows:
+        key = (r["taken_at"], r["photo_id"], r["run_id"])
+        per_photo.setdefault(key, 0)
+        if r.get("insect") is None:
+            continue
+        per_photo[key] += 1
+        conf = r.get("species_confidence")
+        name = r["species"] if r["species"] and conf is not None and not (floor and conf < floor) \
+            else "unidentified"
+        species[name] = species.get(name, 0) + 1
+    photos = [{"taken_at": k[0], "photo_id": k[1], "run_id": k[2], "count": n}
+              for k, n in sorted(per_photo.items())]
+    peak = max([p["count"] for p in photos] or [1]) or 1
+    for p in photos:
+        p["bar"] = round(100 * p["count"] / peak)
+    top = max(species.values() or [1])
+    return {"photos": photos, "insects": sum(p["count"] for p in photos),
+            "species": [{"name": n, "count": c, "bar": round(100 * c / top)}
+                        for n, c in sorted(species.items(), key=lambda kv: -kv[1])],
+            "named": sum(1 for n in species if n != "unidentified")}
