@@ -39,9 +39,29 @@ def _stage(name: str):
 # Crops per track kept in the job's summary_stats manifest — the job page shows
 # these first, and "Show all" loads the rest from track_crops.csv.
 MANIFEST_CROPS_PER_TRACK = 12
+# Crops uploaded per track when the job identifies species or markers: every
+# crop still votes on the worker, but only these sharpest leave it ("Show all").
+# Without identification the tracker keeps MANIFEST_CROPS_PER_TRACK and that is
+# all there is. A clip uploaded ~90k crops one PUT at a time — most of its run.
+UPLOAD_CROPS_PER_TRACK = 50
 # Matches botocore's default connection pool (10): more threads than that just
 # queue on the pool and log "Connection pool is full" for every crop.
 CROP_UPLOAD_WORKERS = 10
+
+
+def _crop_sharpness_index(crops_root: Path) -> dict:
+    """{crop path: sharpness} from the tracker's sharpness.csv files, so crops
+    need not be read back to be ranked."""
+    import csv as _csv
+    index = {}
+    for f in crops_root.glob("**/sharpness.csv"):
+        with open(f, newline="") as fh:
+            for row in _csv.DictReader(fh):
+                try:
+                    index[str((f.parent / row["crop"]).resolve())] = float(row["sharpness"])
+                except (KeyError, ValueError):
+                    continue
+    return index
 
 
 def _sharpness(path) -> float:
@@ -308,6 +328,7 @@ class CloudPipeline:
             text_prompt=text_prompt,
             tracker=tracker,
             tracker_params=tracker_params,
+            identify=identify_species or identify_markers,
         )
 
         identification = None
@@ -620,6 +641,7 @@ class CloudPipeline:
         species_max_votes: int = 25,
         tracker: str = "beetrack",
         tracker_params: "dict | None" = None,
+        identify: bool = False,
     ):
         """Build a BeeMonitor Config, instantiate, and run."""
         from beemonitor.core.config import Config, ModelConfig
@@ -654,6 +676,9 @@ class CloudPipeline:
         # Association algorithm + its settings, from the pipeline's MOT step.
         config.tracking.tracker = (tracker or "beetrack").lower()
         config.tracking.tracker_params = dict(tracker_params or {})
+        # Every crop votes when species / markers are identified; otherwise the
+        # crops are only the track page's thumbnails, so keep its 12 sharpest.
+        config.tracking.crops_keep_sharpest = 0 if identify else MANIFEST_CROPS_PER_TRACK
         config.output.save_visualizations = visualize
         # Recording start metadata (video.recorded_at) — event timestamps come
         # from this, so uploads with arbitrary filenames work (the legacy
@@ -842,16 +867,15 @@ class CloudPipeline:
             self._storage.upload_file(container, blob_path, str(interactions_files[0]))
             uploaded["interactions_csv"] = blob_path
 
-        # Per-track crops — upload every crop the tracker saved (one per frame
-        # each track was detected in) so a species or marker model can run on
-        # them later. track_crops.csv indexes all of them; the manifest that
-        # rides in summary_stats carries only an evenly spaced sample per track
-        # (the sharpest, _best_keys), since a clip can now have thousands.
+        # Per-track crops — each track's UPLOAD_CROPS_PER_TRACK sharpest (the
+        # tracker kept only 12 when nothing identifies). Votes already ran on
+        # every crop on this machine. track_crops.csv indexes what was
+        # uploaded; the manifest in summary_stats carries the 12 sharpest.
         import csv as _csv
         from concurrent.futures import ThreadPoolExecutor
+        sharpness = _crop_sharpness_index(output_dir / "crops")
         per_track: dict[str, list] = {}
-        crop_rows = []
-        uploads = []
+        local_by_key = {}
         for crop_path in sorted(output_dir.glob("crops/**/*.jpg")):
             # .../crops/<video_stem>/track_NNNN/frame_MMMMMM.jpg
             parts = crop_path.parts
@@ -864,10 +888,15 @@ class CloudPipeline:
                 continue
             blob_path = f"{prefix}/crops/{track_dir}/{crop_path.name}"
             frame = int(crop_path.stem.replace("frame_", "") or 0)
-            sharp = round(_sharpness(crop_path), 2)
-            uploads.append((blob_path, str(crop_path)))
-            per_track.setdefault(track_id, []).append((frame, blob_path, sharp))
-            crop_rows.append((track_id, frame, blob_path, sharp))
+            sharp = sharpness.get(str(crop_path.resolve()))
+            if sharp is None:
+                sharp = _sharpness(crop_path)
+            local_by_key[blob_path] = str(crop_path)
+            per_track.setdefault(track_id, []).append((frame, blob_path, round(sharp, 2)))
+        per_track = {t: sorted(sorted(rows, key=lambda r: r[2], reverse=True)[:UPLOAD_CROPS_PER_TRACK])
+                     for t, rows in per_track.items()}
+        crop_rows = [(t, f, k, s) for t, rows in per_track.items() for f, k, s in rows]
+        uploads = [(k, local_by_key[k]) for _t, _f, k, _s in crop_rows]
         if uploads:
             # Small objects, one PUT each: latency-bound, so upload in parallel
             # (boto3 clients are thread-safe). list() re-raises any failure.

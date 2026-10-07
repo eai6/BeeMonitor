@@ -210,6 +210,36 @@ class TestBestCrops:
         assert _sharpness(tmp_path / "s.png") > _sharpness(tmp_path / "b.png")
 
 
+class TestCropUploads:
+    """Only each track's sharpest crops leave the worker."""
+
+    def test_at_most_the_cap_per_track_ranked_by_the_trackers_scores(self, tmp_path, monkeypatch):
+        import cloud.wrapper.pipeline as pl
+        from cloud.wrapper.pipeline import CloudPipeline
+
+        monkeypatch.setattr(pl, "UPLOAD_CROPS_PER_TRACK", 2)
+        clip = tmp_path / "crops" / "clip"
+        d = clip / "track_0001"
+        d.mkdir(parents=True)
+        for f in range(4):
+            (d / f"frame_{f:06d}.jpg").write_bytes(b"x")
+        (clip / "sharpness.csv").write_text(
+            "crop,sharpness\n" + "".join(
+                f"track_0001/frame_{f:06d}.jpg,{s}\n" for f, s in [(0, 1), (1, 9), (2, 5), (3, 7)]))
+        storage = MagicMock()
+        cfg = MagicMock()
+        pipe = CloudPipeline(storage_client=storage, storage_config=cfg,
+                             model_manager=MagicMock(), local_work_dir=str(tmp_path / "w"))
+
+        out = pipe._upload_results("j", "u", tmp_path, str(tmp_path / "clip.mp4"))
+
+        crop_puts = sorted(c.args[1] for c in storage.upload_file.call_args_list
+                           if c.args[1].endswith(".jpg"))
+        assert crop_puts == ["u/j/crops/track_0001/frame_000001.jpg",
+                             "u/j/crops/track_0001/frame_000003.jpg"]
+        assert out["crops_total"] == 2
+
+
 class TestIdentifyTracks:
     """The worker writes each track's vote into the tracking CSV the platform reads."""
 

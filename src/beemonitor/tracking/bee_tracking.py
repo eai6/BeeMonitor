@@ -111,6 +111,16 @@ def _decode_into(cap, start_frame, end_frame, frame_queue, stop_event):
 CROP_JPEG_QUALITY = 95
 
 
+def crop_sharpness(crop: np.ndarray) -> float:
+    """Variance of the Laplacian of the crop's greyscale — high for a crisp
+    crop, low for a motion-blurred or out-of-focus one. Only compared within a
+    track, so its scale doesn't matter."""
+    if crop is None or crop.size == 0:
+        return 0.0
+    grey = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+    return float(cv2.Laplacian(grey, cv2.CV_64F).var())
+
+
 def padded_box(bbox, width, height, padding=0.25, min_padding_px=16):
     """``bbox`` grown by ``padding`` × its size on each side (at least
     ``min_padding_px``), clamped to the frame, as ints — or None if empty."""
@@ -223,6 +233,7 @@ class BeeTracking:
         save_crops: bool = False,
         crop_output_dir: Optional[str] = None,
         crops_per_track: int = 0,
+        crops_keep_sharpest: int = 0,
         # Margin added around each saved crop, as a fraction of the box's own
         # width/height per side, with a floor in pixels. The detector's box is
         # tight on the body, so an unpadded crop clips legs, antennae and wing
@@ -262,6 +273,9 @@ class BeeTracking:
                 crop_output_dir: Directory to save crops (default: ./crops)
                 crops_per_track: Max crops per track; 0 (default) = every frame
                     the track was detected in
+                crops_keep_sharpest: Keep only the N sharpest crops of each
+                    track, replacing the blurriest as sharper ones arrive;
+                    0 (default) = keep every crop
                 crop_padding / crop_min_padding_px: margin around each crop
         """
         logger.info("Initializing BeeTracking (v2.4 YOLO-only with adaptive tracker + identification)")
@@ -338,6 +352,12 @@ class BeeTracking:
         self.save_crops = save_crops
         self.crop_output_dir = crop_output_dir or './crops'
         self.crops_per_track = crops_per_track
+        self.crops_keep_sharpest = max(0, int(crops_keep_sharpest or 0))
+        # track_id -> min-heap of (sharpness, frame, path) of the crops on disk.
+        self._crop_heaps = {}
+        # path -> sharpness of every crop on disk, written beside the crops
+        # (sharpness.csv) so the uploader never has to read them back.
+        self._crop_sharpness = {}
         self.crop_padding = max(0.0, float(crop_padding))
         self.crop_min_padding_px = max(0, int(crop_min_padding_px))
         self.track_crop_counts = {}  # track_id -> number of crops saved
@@ -437,6 +457,8 @@ class BeeTracking:
         
         # Reset crop counts for new video
         self.track_crop_counts = {}
+        self._crop_heaps = {}
+        self._crop_sharpness = {}
         
         # Extract video name for per-video crop folders
         video_name = os.path.splitext(os.path.basename(video_path))[0]
@@ -606,19 +628,56 @@ class BeeTracking:
 
     def _write_crop(self, track_id: int, frame_num: int, crop: np.ndarray):
         """Write one crop to crops/track_{id}/frame_{num}.jpg, honouring
-        ``crops_per_track`` (0 = no cap)."""
+        ``crops_per_track`` (0 = no cap) and ``crops_keep_sharpest``.
+
+        With ``crops_keep_sharpest`` the crop is scored before it is encoded: a
+        track already holding N sharper ones never writes it, and a sharper one
+        replaces the track's blurriest on disk. A clip saved ~90k crops a track
+        page shows 12 of; JPEG-encoding and uploading the rest was most of the
+        job's time.
+        """
+        import heapq
         import os
 
         saved = self.track_crop_counts.get(track_id, 0)
         if self.crops_per_track > 0 and saved >= self.crops_per_track:
             return
+        sharpness = crop_sharpness(crop)
+        keep = self.crops_keep_sharpest
+        heap = self._crop_heaps.setdefault(track_id, [])
+        if keep and len(heap) >= keep and sharpness <= heap[0][0]:
+            return
         track_dir = os.path.join(self.crop_output_dir, f'track_{track_id:04d}')
         os.makedirs(track_dir, exist_ok=True)
         crop_path = os.path.join(track_dir, f'frame_{frame_num:06d}.jpg')
-        if cv2.imwrite(crop_path, crop, [int(cv2.IMWRITE_JPEG_QUALITY), CROP_JPEG_QUALITY]):
-            self.track_crop_counts[track_id] = saved + 1
-        else:
+        if not cv2.imwrite(crop_path, crop, [int(cv2.IMWRITE_JPEG_QUALITY), CROP_JPEG_QUALITY]):
             logger.warning(f"Failed to save crop: {crop_path}")
+            return
+        self._crop_sharpness[crop_path] = sharpness
+        if keep:
+            if len(heap) >= keep:
+                _s, _f, dropped = heapq.heapreplace(heap, (sharpness, frame_num, crop_path))
+                self._crop_sharpness.pop(dropped, None)
+                try:
+                    os.remove(dropped)
+                except OSError:
+                    pass
+                return  # one in, one out: the count is unchanged
+            heapq.heappush(heap, (sharpness, frame_num, crop_path))
+        self.track_crop_counts[track_id] = saved + 1
+
+    def _write_crop_sharpness(self):
+        """sharpness.csv beside the crops: relative path, sharpness."""
+        import csv
+        import os
+
+        if not self._crop_sharpness:
+            return
+        with open(os.path.join(self.crop_output_dir, "sharpness.csv"), "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["crop", "sharpness"])
+            for path, s in sorted(self._crop_sharpness.items()):
+                w.writerow([os.path.relpath(path, self.crop_output_dir), round(s, 2)])
 
     def process_frame(
         self,
@@ -931,6 +990,7 @@ class BeeTracking:
             num_tracks = len(self.track_crop_counts)
             abs_crop_dir = os.path.abspath(self.crop_output_dir)
             logger.info(f"Saved {total_crops} crops for {num_tracks} tracks in: {abs_crop_dir}")
+            self._write_crop_sharpness()
         
         # Convert results to DataFrame
         import pandas as pd

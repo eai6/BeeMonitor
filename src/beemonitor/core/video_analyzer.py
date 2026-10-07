@@ -240,6 +240,7 @@ class BeeMonitor:
             # Crop saving for identification training
             save_crops=getattr(self.config.tracking, 'save_crops', False),
             crops_per_track=getattr(self.config.tracking, 'crops_per_track', 0),
+            crops_keep_sharpest=getattr(self.config.tracking, 'crops_keep_sharpest', 0),
             crop_padding=getattr(self.config.tracking, 'crop_padding', 0.25),
             crop_min_padding_px=getattr(self.config.tracking, 'crop_min_padding_px', 16),
             tracker_kind=tracker_kind,

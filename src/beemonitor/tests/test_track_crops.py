@@ -38,12 +38,15 @@ class _FakeTracker:
         self.tracks = tracks
 
 
-def _tracking(tmp, tracks, crops_per_track=0):
+def _tracking(tmp, tracks, crops_per_track=0, keep_sharpest=0):
     # Built without __init__ — that loads YOLO weights; crops don't need it.
     bt = object.__new__(BeeTracking)
     bt.save_crops = True
     bt.crop_output_dir = tmp
     bt.crops_per_track = crops_per_track
+    bt.crops_keep_sharpest = keep_sharpest
+    bt._crop_heaps = {}
+    bt._crop_sharpness = {}
     bt.crop_padding = 0.25
     bt.crop_min_padding_px = 16
     bt.track_crop_counts = {}
@@ -108,6 +111,56 @@ class SaveTrackCropsTests(unittest.TestCase):
                 track.update((100, 100, 140, 130, 0.9, "yolo", "bee"), f)
                 bt._save_track_crops(self.frame, f)
             self.assertEqual(len(_saved(tmp)[f"track_{track.id:04d}"]), 2)
+
+
+
+class KeepSharpestTests(unittest.TestCase):
+    """Without identification a track keeps only its N sharpest crops."""
+
+    @staticmethod
+    def _frame(sharp):
+        # Checkerboard where the box is (sharp) or flat grey (blurry).
+        frame = np.full((480, 640, 3), 128, dtype=np.uint8)
+        if sharp:
+            board = (np.indices((80, 80)).sum(axis=0) % 2 * 255).astype(np.uint8)
+            frame[80:160, 80:160] = board[..., None]
+        return frame
+
+    def test_only_the_sharpest_stay_on_disk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            track = _track(min_hits=1)
+            bt = _tracking(tmp, [track], keep_sharpest=2)
+            sharp_frames = {3, 5}
+            for f in range(8):
+                track.update((100, 100, 140, 130, 0.9, "yolo", "bee"), f)
+                bt._save_track_crops(self._frame(f in sharp_frames), f)
+            self.assertEqual(_saved(tmp)[f"track_{track.id:04d}"],
+                             ["frame_000003.jpg", "frame_000005.jpg"])
+            self.assertEqual(bt.track_crop_counts[track.id], 2)
+
+    def test_scores_are_written_beside_the_crops(self):
+        import csv
+        with tempfile.TemporaryDirectory() as tmp:
+            track = _track(min_hits=1)
+            bt = _tracking(tmp, [track], keep_sharpest=1)
+            for f in range(3):
+                track.update((100, 100, 140, 130, 0.9, "yolo", "bee"), f)
+                bt._save_track_crops(self._frame(f == 1), f)
+            bt._write_crop_sharpness()
+            with open(os.path.join(tmp, "sharpness.csv")) as fh:
+                rows = list(csv.DictReader(fh))
+            self.assertEqual([r["crop"] for r in rows],
+                             [os.path.join(f"track_{track.id:04d}", "frame_000001.jpg")])
+            self.assertGreater(float(rows[0]["sharpness"]), 0)
+
+    def test_zero_keeps_every_crop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            track = _track(min_hits=1)
+            bt = _tracking(tmp, [track], keep_sharpest=0)
+            for f in range(5):
+                track.update((100, 100, 140, 130, 0.9, "yolo", "bee"), f)
+                bt._save_track_crops(self._frame(False), f)
+            self.assertEqual(len(_saved(tmp)[f"track_{track.id:04d}"]), 5)
 
 
 if __name__ == "__main__":

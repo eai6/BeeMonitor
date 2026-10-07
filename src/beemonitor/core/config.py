@@ -474,6 +474,10 @@ class TrackingConfig:
     # 0 = a crop from every frame each track was detected in (not just the
     # first few, which are usually the bee flying in, motion-blurred).
     crops_per_track = 0
+    # >0 = keep only the N sharpest crops of each track (scored as each crop is
+    # cut, so a blurrier one is never written). 0 = keep every crop — what a
+    # species / marker vote needs. The cloud worker sets it per job.
+    crops_keep_sharpest = 0
     crop_padding = 0.25        # margin per side, as a fraction of the box
     crop_min_padding_px = 16
 
