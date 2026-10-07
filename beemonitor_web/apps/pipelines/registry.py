@@ -81,10 +81,13 @@ TRACKER_SETTING_PREFIX = {
 }
 
 
-def _tf(name, label, default, show, field_type="number", choices=None, worker_default=None):
+def _tf(name, label, default, show, field_type="number", choices=None, worker_default=None,
+        help=""):
     field = {"name": name, "label": label, "field_type": field_type, "required": False,
              "default": default, "choices": choices,
              "show_if": {"field": "tracker", "value": show}}
+    if help:
+        field["help"] = help
     if worker_default is not None:
         # The worker's own value when nothing is sent. Set where the builder's
         # default differs from it, so the builder's default is still sent.
@@ -98,11 +101,24 @@ TRACKER_FIELDS = [
     # ~6 bees in view, 0.5 / 0.3 split them into 304 tracks, median 1.8 s; most
     # replacement tracks began ~1.1 s after the last detection, 9 px from where
     # the old one ended — the same bee, missed for a second.
-    _tf("beetrack_max_age_seconds", "Keep a lost track (seconds)", 2.0, "beetrack",
-        worker_default=0.5),
-    _tf("beetrack_min_hits_seconds", "Confirm a track after (seconds)", 0.0, "beetrack"),
-    _tf("beetrack_max_resurrection_seconds", "Revive a dead track within (seconds)", 1.0, "beetrack",
-        worker_default=0.3),
+    #
+    # One lost-track setting. BeeTrack had two that did the same job — keep a
+    # lost track 2 s, then "revive" it from a dead pool for 1 s more under a
+    # stricter radius. Replayed on four pollen-assay clips, keeping it 3 s with
+    # no revive stage gave as few tracks or fewer on every clip (103-114 vs
+    # 112-117), so the revive stage is off (executors.tracker_settings) and
+    # the one setting covers the whole time.
+    _tf("beetrack_max_age_seconds", "Keep a lost track (seconds)", 3.0, "beetrack",
+        worker_default=0.5,
+        help="How long the tracker keeps looking for a bee it has stopped seeing — "
+             "behind something, out of focus, a missed detection. If the bee is "
+             "seen again within this time it keeps its id; after it, it would get "
+             "a new one."),
+    _tf("beetrack_min_hits_seconds", "Confirm a track after (seconds)", 0.0, "beetrack",
+        help="How long something must keep being detected before it gets an id. "
+             "0 = a single detection is enough. A higher value ignores flickers "
+             "of noise (a shadow detected for a frame or two) but a real bee's "
+             "first moments are held back until it is confirmed."),
     _tf("beetrack_iou_threshold", "Match overlap (IoU)", 0.25, "beetrack"),
 
     _tf("byte_track_high_thresh", "High-score threshold", 0.25, "bytetrack,botsort"),
@@ -569,7 +585,11 @@ BLOCK_REGISTRY = {
                 # Seconds, turned into frames with each clip's own fps: the
                 # same setting then means the same time on any camera.
                 "name": "gap_seconds",
-                "label": "Gap tolerance (seconds)",
+                "label": "Rejoin if back within (seconds)",
+                "help": ("Not the tracker: this is about one bee's contact. If a bee "
+                         "steps out of a reference (or out of range of another bee) "
+                         "and comes back within this time, it stays one interaction "
+                         "instead of two. The tracker keeps the bee's id either way."),
                 "field_type": "number",
                 "required": False,
                 "default": 0.6,
@@ -617,7 +637,11 @@ BLOCK_REGISTRY = {
                 # Seconds, turned into frames with each clip's own fps: the
                 # same setting then means the same time on any camera.
                 "name": "gap_seconds",
-                "label": "Gap tolerance (seconds)",
+                "label": "Rejoin if back within (seconds)",
+                "help": ("Not the tracker: this is about one bee's contact. If a bee "
+                         "steps out of a reference (or out of range of another bee) "
+                         "and comes back within this time, it stays one interaction "
+                         "instead of two. The tracker keeps the bee's id either way."),
                 "field_type": "number",
                 "required": False,
                 "default": 0.6,
@@ -630,6 +654,9 @@ BLOCK_REGISTRY = {
                 # episode back together, so it filters contacts, not pieces.
                 "name": "min_seconds",
                 "label": "Minimum interaction length (seconds)",
+                "help": ("Contacts shorter than this are not counted — a bee walking "
+                         "across a reference, a box flickering onto a neighbour. "
+                         "0 counts everything."),
                 "field_type": "number",
                 "required": False,
                 "default": 0,

@@ -66,3 +66,28 @@ class MigrationTests(TestCase):
         self.assertEqual(cfg["t"], {"tracker": "ocsort", "ocsort_max_age_seconds": "1.2",
                                     "ocsort_min_hits_seconds": "0.12"})
         self.assertEqual(cfg["d"], {"sample_seconds": "1.2"})
+
+
+class OneLostTrackSettingTests(TestCase):
+    def test_keep_and_revive_add_up_into_keep(self):
+        user = get_user_model().objects.create_user("k", password="x")
+        p = Pipeline.objects.create(user=user, title="P", steps=[
+            {"id": "t", "block_type": "track.mot", "config": {
+                "tracker": "beetrack", "beetrack_max_age_seconds": "2.0",
+                "beetrack_max_resurrection_seconds": "1.0"}},
+            {"id": "u", "block_type": "track.mot", "config": {
+                "tracker": "beetrack", "beetrack_max_age_seconds": "0.5",
+                "beetrack_max_resurrection_seconds": "0.3"}},
+        ])
+        import_module("apps.pipelines.migrations.0008_one_lost_track_setting").forwards(django_apps, None)
+        p.refresh_from_db()
+        cfg = {s["id"]: s["config"] for s in p.steps}
+        self.assertEqual(cfg["t"], {"tracker": "beetrack", "beetrack_max_age_seconds": "3"})
+        self.assertEqual(cfg["u"]["beetrack_max_age_seconds"], "0.8")
+        self.assertNotIn("beetrack_max_resurrection_seconds", cfg["u"])
+
+    def test_the_editor_has_no_revive_setting_and_explains_the_rest(self):
+        names = {f["name"]: f for f in registry.TRACKER_FIELDS}
+        self.assertNotIn("beetrack_max_resurrection_seconds", names)
+        self.assertTrue(names["beetrack_max_age_seconds"].get("help"))
+        self.assertTrue(names["beetrack_min_hits_seconds"].get("help"))

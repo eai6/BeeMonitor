@@ -1483,6 +1483,11 @@ def tracker_settings(mot_config: dict) -> dict:
         elif value == default:
             continue
         out[name[len(prefix):]] = value
+    if kind == "beetrack":
+        # The revive stage is retired: "Keep a lost track" covers the whole
+        # time (registry.TRACKER_FIELDS). The worker's own default would
+        # revive for 0.3 s more, so say 0.
+        out["max_resurrection_seconds"] = 0.0
     return out
 
 

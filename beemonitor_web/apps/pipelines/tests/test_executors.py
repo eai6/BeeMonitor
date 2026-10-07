@@ -636,17 +636,16 @@ class TrackerSettingsTests(ExecutorTestCase):
 
     def test_settings_matching_the_worker_are_not_sent(self):
         cfg = self._with_mot({"tracker": "beetrack", "beetrack_max_age_seconds": 0.5,
-                              "beetrack_max_resurrection_seconds": "0.3",
                               "byte_track_buffer": 99})
         self.assertEqual(cfg["tracker"], "beetrack")
-        self.assertNotIn("tracker_params", cfg)
+        # Only the retired revive stage, switched off.
+        self.assertEqual(cfg["tracker_params"], {"max_resurrection_seconds": 0.0})
 
-    def test_untouched_beetrack_sends_the_longer_track_memory(self):
-        """The builder's 2.0 / 1.0 differ from the worker's 0.5 / 0.3, so they
-        are sent — and the job hashes apart from runs made on the old ones."""
+    def test_untouched_beetrack_keeps_a_lost_track_3_seconds_with_no_revive(self):
+        """One lost-track setting: 3 s, and the worker's revive stage off."""
         cfg = self._with_mot({"tracker": "beetrack"})
         self.assertEqual(cfg["tracker_params"],
-                         {"max_age_seconds": 2.0, "max_resurrection_seconds": 1.0})
+                         {"max_age_seconds": 3.0, "max_resurrection_seconds": 0.0})
 
     def test_chosen_tracker_sends_only_its_changed_settings(self):
         cfg = self._with_mot({"tracker": "botsort", "byte_track_buffer": "60",

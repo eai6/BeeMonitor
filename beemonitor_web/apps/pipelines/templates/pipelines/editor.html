@@ -14,6 +14,7 @@
   .pl-body { display: flex; flex-direction: column; gap: 5px; }
   .pl-field { display: flex; flex-direction: column; gap: 2px; }
   .pl-lab { font-size: 10px; color: #6b7280; }
+  .pl-help { cursor: help; color: #9ca3af; }
   /* Port labels: input dots get a label to their left, output dots to their
      right, so it's clear what connects where (e.g. video/rois in, tracks out). */
   .drawflow .drawflow-node .inputs .input,
@@ -166,7 +167,8 @@ function nodeHtml(b, config){
     // show_if: {field, value} — field only visible when another field equals value.
     const sif = f.show_if ? ` data-showif-field="${esc(f.show_if.field)}" data-showif-value="${esc(f.show_if.value)}"` : '';
     return `<div class="pl-field" data-field="${esc(f.name)}"${sif}>`
-         + `<label class="pl-lab">${esc(f.label)}${f.required?' *':''}</label>`
+         + `<label class="pl-lab"${f.help?` title="${esc(f.help)}"`:''}>${esc(f.label)}${f.required?' *':''}`
+         + (f.help?` <span class="pl-help" title="${esc(f.help)}" aria-label="${esc(f.help)}">ⓘ</span>`:'') + `</label>`
          + ctrl(f, config?config[f.name]:undefined) + `</div>`;
   }).join('');
   const inC = typeChip(b.input_type), outC = typeChip(b.output_type);
