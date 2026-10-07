@@ -109,8 +109,12 @@ class BeeMonitor:
         results.to_csv(output_folder=output_folder)
         logger.info(f"✓ Saved CSV results to {output_folder}")
         
-        results.save_video(output_folder=output_folder)
-        logger.info(f"✓ Saved visualization video to {output_folder}")
+        # Only when asked. It re-reads and re-encodes the whole clip on the CPU
+        # after tracking — 13+ minutes on a 14.5k-frame 1080p clip — and ran on
+        # every cloud job even though the worker pins visualize=False.
+        if visualize:
+            results.save_video(output_folder=output_folder)
+            logger.info(f"✓ Saved visualization video to {output_folder}")
         logger.info(f"Analysis complete: {len(events)} events detected")
         
         return results
