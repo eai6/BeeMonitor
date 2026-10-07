@@ -72,7 +72,7 @@ infers it from a cache they cannot see.
 </div>
 {% endif %}
 
-{% if photo_view %}{% include "pipelines/_photo_view.html" %}{% endif %}
+{% if photo_view %}{% include "pipelines/_photo_view.html" %}{% include "analysis/_crop_viewer.html" %}{% endif %}
 
 <div id="run-steps">
   {% include "pipelines/_run_status.html" %}

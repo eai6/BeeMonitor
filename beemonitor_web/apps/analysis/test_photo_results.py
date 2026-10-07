@@ -31,6 +31,8 @@ class PhotoResultsTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Bombus impatiens")
         self.assertNotContains(resp, "Generate annotated video")
+        self.assertContains(resp, 'id="crop-viewer"', count=1)
+        self.assertContains(resp, "data-crop ")
 
     def test_the_job_detail_page_opens(self):
         resp = self.client.get(reverse("analysis:detail", kwargs={"pk": self.job.pk}))

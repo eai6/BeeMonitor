@@ -1,0 +1,70 @@
+{% comment %}
+  Crop viewer: a crop opens here, over the page, not in a new tab. ← / → step
+  through the crops of the same strip, Esc or a click outside closes. Pixels are
+  shown unsmoothed so the fine detail the crop actually holds is what you see.
+
+  Any page can use it: a link marked data-crop inside an element marked
+  data-crop-strip (its data-label names the strip; a crop's own data-label, when
+  it has one, names that crop). Delegated, so strips added later open here too.
+  Its keys are taken first, so a page's own ← / → wait until it is closed.
+{% endcomment %}
+{# Hidden with the .hidden class, not the hidden attribute: .flex would override the attribute. #}
+<div id="crop-viewer" class="hidden fixed inset-0 z-50 bg-black/85 flex-col items-center justify-center p-4">
+  <div class="w-full max-w-5xl flex items-center justify-between text-white text-sm mb-2">
+    <span id="crop-label" class="truncate"></span>
+    <span class="flex items-center gap-2 shrink-0">
+      <span id="crop-count" class="text-gray-300 text-xs"></span>
+      <a id="crop-open" href="#" target="_blank" class="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20">Original ↗</a>
+      <button type="button" id="crop-close" class="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20" title="Close (Esc)">✕</button>
+    </span>
+  </div>
+  <div class="flex items-center gap-3 w-full max-w-5xl justify-center">
+    <button type="button" id="crop-prev" class="text-white text-2xl px-3 py-6 rounded hover:bg-white/10" title="Previous crop (←)">‹</button>
+    <img id="crop-img" alt="crop" class="max-h-[75vh] max-w-full object-contain bg-gray-900"
+         style="image-rendering: pixelated; min-width: 320px; min-height: 320px;">
+    <button type="button" id="crop-next" class="text-white text-2xl px-3 py-6 rounded hover:bg-white/10" title="Next crop (→)">›</button>
+  </div>
+</div>
+<script>
+(function () {
+  const viewer = document.getElementById('crop-viewer');
+  if (!viewer) return;
+  const img = document.getElementById('crop-img');
+  let links = [], label = '', i = 0;
+  function show() {
+    const a = links[i];
+    img.src = a.href;
+    document.getElementById('crop-open').href = a.href;
+    document.getElementById('crop-label').textContent = a.dataset.label || label;
+    document.getElementById('crop-count').textContent = (i + 1) + ' / ' + links.length;
+  }
+  function open() { viewer.classList.remove('hidden'); viewer.classList.add('flex'); }
+  function close() { viewer.classList.add('hidden'); viewer.classList.remove('flex'); img.removeAttribute('src'); }
+  function step(d) { i = (i + d + links.length) % links.length; show(); }
+  document.addEventListener('click', function (e) {
+    const a = e.target.closest('[data-crop]');
+    if (!a) return;
+    const strip = a.closest('[data-crop-strip]');
+    if (!strip) return;
+    e.preventDefault();
+    links = Array.from(strip.querySelectorAll('[data-crop]'));
+    label = strip.dataset.label || '';
+    i = links.indexOf(a);
+    open();
+    show();
+  });
+  document.getElementById('crop-prev').onclick = function (e) { e.stopPropagation(); step(-1); };
+  document.getElementById('crop-next').onclick = function (e) { e.stopPropagation(); step(1); };
+  document.getElementById('crop-close').onclick = close;
+  viewer.addEventListener('click', function (e) { if (e.target === viewer) close(); });
+  window.addEventListener('keydown', function (e) {
+    if (viewer.classList.contains('hidden')) return;
+    if (e.key === 'Escape') close();
+    else if (e.key === 'ArrowLeft') step(-1);
+    else if (e.key === 'ArrowRight') step(1);
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
+})();
+</script>

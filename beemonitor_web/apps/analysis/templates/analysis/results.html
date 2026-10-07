@@ -9,6 +9,7 @@
 
 {% if photo_view %}
 {% include "pipelines/_photo_view.html" %}
+{% include "analysis/_crop_viewer.html" %}
 
 {% elif result %}
 
@@ -355,56 +356,9 @@
   </div>
 </div>
 
-{% comment %}
-  Crop viewer: a crop opens here, over the page, not in a new tab. ← / → step
-  through the same track's crops, Esc or a click outside closes. Pixels are
-  shown unsmoothed so the fine detail the crop actually holds is what you see.
-{% endcomment %}
-{# Hidden with the .hidden class, not the hidden attribute: .flex would override the attribute. #}
-<div id="crop-viewer" class="hidden fixed inset-0 z-50 bg-black/85 flex-col items-center justify-center p-4">
-  <div class="w-full max-w-5xl flex items-center justify-between text-white text-sm mb-2">
-    <span id="cv-label" class="truncate"></span>
-    <span class="flex items-center gap-2 shrink-0">
-      <span id="cv-count" class="text-gray-300 text-xs"></span>
-      <a id="cv-open" href="#" target="_blank" class="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20">Original ↗</a>
-      <button type="button" id="cv-close" class="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20" title="Close (Esc)">✕</button>
-    </span>
-  </div>
-  <div class="flex items-center gap-3 w-full max-w-5xl justify-center">
-    <button type="button" id="cv-prev" class="text-white text-2xl px-3 py-6 rounded hover:bg-white/10" title="Previous crop (←)">‹</button>
-    <img id="cv-img" alt="crop" class="max-h-[75vh] max-w-full object-contain bg-gray-900"
-         style="image-rendering: pixelated; min-width: 320px; min-height: 320px;">
-    <button type="button" id="cv-next" class="text-white text-2xl px-3 py-6 rounded hover:bg-white/10" title="Next crop (→)">›</button>
-  </div>
-</div>
+{% include "analysis/_crop_viewer.html" %}
 <script>
 (function () {
-  const viewer = document.getElementById('crop-viewer');
-  if (!viewer) return;
-  const img = document.getElementById('cv-img');
-  let urls = [], i = 0;
-  function show() {
-    img.src = urls[i];
-    document.getElementById('cv-open').href = urls[i];
-    document.getElementById('cv-count').textContent = (i + 1) + ' / ' + urls.length;
-  }
-  function open() { viewer.classList.remove('hidden'); viewer.classList.add('flex'); }
-  function close() { viewer.classList.add('hidden'); viewer.classList.remove('flex'); img.removeAttribute('src'); }
-  // Delegated, so crops loaded by "Show all" open here too.
-  document.addEventListener('click', function (e) {
-    const a = e.target.closest('[data-crop]');
-    if (!a) return;
-    const strip = a.closest('[data-crop-strip]');
-    if (!strip) return;
-    e.preventDefault();
-    const links = Array.from(strip.querySelectorAll('[data-crop]'));
-    urls = links.map(function (l) { return l.href; });
-    i = links.indexOf(a);
-    document.getElementById('cv-label').textContent = strip.dataset.label;
-    open();
-    show();
-  });
-
   // "Show all": load every crop of the track (frame order) into its strip.
   document.querySelectorAll('[data-show-all]').forEach(function (btn) {
     btn.addEventListener('click', function () {
@@ -440,16 +394,6 @@
         })
         .catch(function () { btn.disabled = false; btn.textContent = 'Show all (retry)'; });
     });
-  });
-  document.getElementById('cv-prev').onclick = function (e) { e.stopPropagation(); i = (i - 1 + urls.length) % urls.length; show(); };
-  document.getElementById('cv-next').onclick = function (e) { e.stopPropagation(); i = (i + 1) % urls.length; show(); };
-  document.getElementById('cv-close').onclick = close;
-  viewer.addEventListener('click', function (e) { if (e.target === viewer) close(); });
-  document.addEventListener('keydown', function (e) {
-    if (viewer.classList.contains('hidden')) return;
-    if (e.key === 'Escape') close();
-    else if (e.key === 'ArrowLeft') document.getElementById('cv-prev').click();
-    else if (e.key === 'ArrowRight') document.getElementById('cv-next').click();
   });
 })();
 </script>

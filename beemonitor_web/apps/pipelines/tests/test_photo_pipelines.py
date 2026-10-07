@@ -241,6 +241,16 @@ class PhotoBatchPageTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Bombus impatiens")
         self.assertNotContains(resp, "<html")
+        # Each crop opens in the shared crop viewer, labelled with its insect.
+        self.assertContains(resp, "data-crop-strip")
+        self.assertContains(resp, 'data-label="Insect 1 · Bombus impatiens')
+
+    def test_the_batch_page_has_the_crop_viewer(self):
+        from django.urls import reverse
+
+        resp = self.client.get(reverse("pipelines:batch_detail", kwargs={"batch_id": self.batch_id}))
+
+        self.assertContains(resp, 'id="crop-viewer"', count=1)
 
     def test_the_batch_pipeline_is_offered_first(self):
         from django.urls import reverse
