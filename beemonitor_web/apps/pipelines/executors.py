@@ -510,11 +510,32 @@ def _run_video(run):
     return Video.objects.filter(pk=vid).first() if vid else None
 
 
-def _gap_frames(step, default=15):
+DEFAULT_GAP_SECONDS = 0.6
+
+
+def _gap_frames(step, fps):
+    """The node's gap tolerance in frames of this clip.
+
+    Set in seconds (``gap_seconds``) so it means the same time on any camera.
+    A run launched before that holds ``gap_frames`` in its frozen steps, and is
+    honoured as it was.
+    """
+    cfg = step.get("config") or {}
     try:
-        return max(int(float((step.get("config") or {}).get("gap_frames", default))), 0)
+        if cfg.get("gap_seconds") not in (None, ""):
+            return max(int(round(float(cfg["gap_seconds"]) * float(fps or 25))), 0)
+        if cfg.get("gap_frames") not in (None, ""):
+            return max(int(float(cfg["gap_frames"])), 0)
     except (TypeError, ValueError):
-        return default
+        pass
+    return int(round(DEFAULT_GAP_SECONDS * float(fps or 25)))
+
+
+def _min_seconds(step):
+    try:
+        return max(float((step.get("config") or {}).get("min_seconds") or 0), 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _proximity_radius(step):
@@ -651,7 +672,7 @@ def _exec_analyze_events(step, run, context, inputs, index):
 
     rows = primitives.events_from_gpu(ops.load_events_df(result), fps)
     if tidy is not None and refs:
-        episodes = ops.compute_episodes(tidy, refs, gap_frames=_gap_frames(step))
+        episodes = ops.compute_episodes(tidy, refs, gap_frames=_gap_frames(step, fps))
         rows = primitives.events_from_episodes(episodes, fps) + rows
         rows.sort(key=lambda r: (r["frame"], r["action"], str(r["subject"])))
 
@@ -688,7 +709,7 @@ def _exec_analyze_interactions(step, run, context, inputs, index):
         step, run, context, inputs, index)
     want = (step.get("config") or {}).get("interaction_type", "all")
 
-    gap = _gap_frames(step)
+    gap = _gap_frames(step, fps)
     rows = primitives.interactions_from_gpu(ops.load_interactions_df(result), fps)
 
     if tidy is not None:
@@ -721,6 +742,10 @@ def _exec_analyze_interactions(step, run, context, inputs, index):
         rows = [r for r in rows if r["b_kind"] == primitives.ORGANISM]
     elif want == "organism_reference":
         rows = [r for r in rows if r["b_kind"] == primitives.REFERENCE]
+    floor = _min_seconds(step)
+    if floor:
+        rows = [r for r in rows
+                if r.get("duration_sec") is not None and float(r["duration_sec"]) >= floor]
     rows.sort(key=lambda r: (r["start_frame"] is None, r["start_frame"], str(r["a"])))
 
     out = {
@@ -899,7 +924,7 @@ def _exec_analyze_visitation(step, run, context, inputs, index):
                     "note": "No reference upstream, and the detector found none — "
                             "draw an ROI, use the device nest layout, or wire a "
                             "Detect node for the reference class into the analyzer."}
-        summary = ops.compute_visitation(tidy, refs, fps)
+        summary = ops.compute_visitation(tidy, refs, fps, gap_frames=_gap_frames(step, fps))
         # Carried so the page can say "dwell times assume 30 fps" instead of
         # presenting a guessed rate as a measurement.
         return {"artifact": "table", "table_kind": "visitation",
@@ -1257,6 +1282,29 @@ def _resolve_custom_models(cfg, run, config):
     return None
 
 
+def _sample_interval_frames(cfg, video_out, clamp):
+    """The node's sampling interval in frames of its clip.
+
+    Set in seconds (``sample_seconds``); a node saved before that holds
+    ``sample_interval`` in frames and keeps it.
+    """
+    if cfg.get("sample_seconds") in (None, "") and cfg.get("sample_interval") not in (None, ""):
+        return clamp("sample_interval", 30, 1, 600)
+    from apps.videos.models import Video
+
+    fps = 25.0
+    video = Video.everything.filter(pk=video_out.get("video_id")).only("fps").first()
+    try:
+        fps = float(getattr(video, "fps", None) or 25.0)
+    except (TypeError, ValueError):
+        pass
+    try:
+        seconds = float(cfg.get("sample_seconds") or 1.2)
+    except (TypeError, ValueError):
+        seconds = 1.2
+    return max(1, min(600, int(round(seconds * fps))))
+
+
 def is_sampled(step):
     """True when a Detect node analyses sampled frames rather than every one."""
     return (step.get("config") or {}).get("analyse") == "sampled"
@@ -1300,7 +1348,7 @@ def build_sampled_detection_config(step, run, context, index):
         # the tracking path there is no shared result to filter afterwards.
         "classes": [p.strip() for p in label.split(",") if p.strip()],
         "detector_kind": "sam3" if str(raw_family).lower() == "sam3" else "yolo",
-        "sample_interval": _clamp("sample_interval", 30, 1, 600),
+        "sample_interval": _sample_interval_frames(cfg, video_out, _clamp),
         "max_frames": _clamp("max_frames", 20, 1, 300),
         "confidence_threshold": float(cfg.get("confidence", 0.4) or 0.4),
         "selection": "uniform",
@@ -1379,6 +1427,15 @@ def _pipeline_markers(step, steps):
     return None
 
 
+# old frame-count field -> (its seconds field, the worker's frame parameter)
+LEGACY_FRAME_SETTINGS = {
+    "byte_track_buffer": ("byte_track_buffer_seconds", "track_buffer"),
+    "ocsort_max_age": ("ocsort_max_age_seconds", "max_age"),
+    "ocsort_min_hits": ("ocsort_min_hits_seconds", "min_hits"),
+    "ocsort_delta_t": ("ocsort_delta_t_seconds", "delta_t"),
+}
+
+
 def tracker_settings(mot_config: dict) -> dict:
     """The selected tracker's settings from a MOT node's config, prefix
     stripped, coerced to numbers, and only where they differ from the default.
@@ -1389,10 +1446,21 @@ def tracker_settings(mot_config: dict) -> dict:
     kind = (cfg.get("tracker") or "beetrack").lower()
     prefixes = TRACKER_SETTING_PREFIX.get(kind, ())
     out = {}
+    # A config saved before durations moved to seconds (a run's frozen steps)
+    # holds frame counts under the old names; the worker still takes those.
+    legacy = set()
+    for old, (new, param) in LEGACY_FRAME_SETTINGS.items():
+        if any(old.startswith(p) for p in prefixes) and cfg.get(old) not in (None, "") \
+                and cfg.get(new) in (None, ""):
+            try:
+                out[param] = int(float(cfg[old]))
+                legacy.add(new)
+            except (TypeError, ValueError):
+                pass
     for field in TRACKER_FIELDS:
         name = field["name"]
         prefix = next((p for p in prefixes if name.startswith(p)), None)
-        if prefix is None:
+        if prefix is None or name in legacy:
             continue
         value = cfg.get(name)
         # Compared with what the worker would use unsent: where the builder's

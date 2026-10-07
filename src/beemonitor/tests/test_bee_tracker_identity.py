@@ -43,6 +43,20 @@ class BeeTrackerIdentityTests(unittest.TestCase):
         cx = t.tracks[0].centroid[0]
         self.assertLess(cx - 570, 150)  # undamped it would be ~900 px further on
 
+    def test_ids_have_no_gaps_when_duplicate_boxes_are_dropped(self):
+        t = tracker()
+        seen = set()
+        for f in range(30):
+            # Every few frames the detector puts a second box on bee A: a new
+            # track, removed as a duplicate. It must not use up an id.
+            dets = [box(300, 300), box(700, 300)]
+            if f % 3 == 0:
+                dets.append(box(302, 301))
+            seen.update(r["track_id"] for r in t.update(dets, f))
+        self.assertEqual(sorted(seen), list(range(1, len(seen) + 1)))
+        # And none was handed out to a track nobody ever saw.
+        self.assertEqual(Track._next_confirmed_id - 1, len(seen))
+
 
 if __name__ == "__main__":
     unittest.main()

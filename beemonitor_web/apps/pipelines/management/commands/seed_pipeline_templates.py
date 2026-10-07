@@ -47,7 +47,7 @@ TEMPLATES = [
             # Trips are a read over the events table — pair exit(tube) with the
             # next enter(tube) — so the pipeline records events and the trip
             # pairing happens at review time, across clips.
-            _s("f", "analyze.events", {"event_confidence": 0.6, "gap_frames": 15},
+            _s("f", "analyze.events", {"event_confidence": 0.6, "gap_seconds": 0.6},
                {"tracks": "m", "rois": "r"}),
         ],
     },

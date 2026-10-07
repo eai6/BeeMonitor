@@ -657,9 +657,12 @@ class TrackerSettingsTests(ExecutorTestCase):
 
     def test_settings_helper(self):
         from apps.pipelines.executors import tracker_settings
+        # Durations are always sent, in seconds; the worker converts them
+        # with the clip's fps.
         self.assertEqual(tracker_settings({"tracker": "ocsort", "ocsort_iou_threshold": "0.5",
                                            "beetrack_iou_threshold": 0.9}),
-                         {"iou_threshold": 0.5})
+                         {"iou_threshold": 0.5, "max_age_seconds": 1.2,
+                          "min_hits_seconds": 0.12, "delta_t_seconds": 0.12})
         self.assertEqual(tracker_settings({"tracker": "sfsort", "sfsort_central_timeout": ""}), {})
 
 

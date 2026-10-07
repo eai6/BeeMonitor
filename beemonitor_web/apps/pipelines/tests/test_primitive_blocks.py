@@ -158,6 +158,13 @@ class InteractionsBlockTests(PrimitiveBlockTestCase):
         # 20 frames then 10 frames, at 25 fps.
         self.assertEqual(sorted(r["duration_sec"] for r in out["rows"]), [0.4, 0.8])
 
+    def test_a_minimum_length_drops_the_shorter_contacts(self):
+        out = self._execute("analyze.interactions", {"min_seconds": 0.5})
+
+        # The 0.4 s stay is under the minimum; the 0.8 s one counts.
+        self.assertEqual([r["duration_sec"] for r in out["rows"]], [0.8])
+        self.assertEqual(out["organism_reference"], 1)
+
     def test_the_visits_filter_keeps_only_reference_episodes(self):
         out = self._execute("analyze.interactions",
                             {"interaction_type": "organism_reference"})

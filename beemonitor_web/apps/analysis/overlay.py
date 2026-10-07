@@ -17,7 +17,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Bump when the payload's shape changes: the stored copy is keyed on it.
-VERSION = 1
+VERSION = 2  # 2: regions named "reference <n>"
 
 
 def _f(value):
@@ -74,7 +74,7 @@ def _regions(config: dict) -> list[dict]:
             x1, y1, x2, y2 = nest["box"]
             pts = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
         if pts and len(pts) >= 3:
-            out.append({"label": f"nest {nest.get('id', '')}".strip(), "points": pts})
+            out.append({"label": f"reference {nest.get('id', '')}".strip(), "points": pts})
     return out
 
 

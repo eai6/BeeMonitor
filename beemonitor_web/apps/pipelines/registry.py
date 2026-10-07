@@ -108,7 +108,11 @@ TRACKER_FIELDS = [
     _tf("byte_track_high_thresh", "High-score threshold", 0.25, "bytetrack,botsort"),
     _tf("byte_track_low_thresh", "Low-score threshold (second pass)", 0.1, "bytetrack,botsort"),
     _tf("byte_new_track_thresh", "New-track threshold", 0.25, "bytetrack,botsort"),
-    _tf("byte_track_buffer", "Keep a lost track (frames)", 30, "bytetrack,botsort"),
+    # Seconds, like every duration here; the worker turns them into frames with
+    # each clip's own fps. Always sent (worker_default can never match), since
+    # the library's own value is in frames.
+    _tf("byte_track_buffer_seconds", "Keep a lost track (seconds)", 1.2, "bytetrack,botsort",
+        worker_default=-1.0),
     _tf("byte_match_thresh", "Match threshold", 0.8, "bytetrack,botsort"),
     _tf("botsort_gmc_method", "Camera-motion compensation", "sparseOptFlow", "botsort",
         field_type="select", choices=[
@@ -117,10 +121,13 @@ TRACKER_FIELDS = [
             {"value": "none", "label": "None (fixed camera)"}]),
 
     _tf("ocsort_det_thresh", "Detection threshold", 0.25, "ocsort"),
-    _tf("ocsort_max_age", "Keep a lost track (frames)", 30, "ocsort"),
-    _tf("ocsort_min_hits", "Confirm a track after (frames)", 3, "ocsort"),
+    _tf("ocsort_max_age_seconds", "Keep a lost track (seconds)", 1.2, "ocsort",
+        worker_default=-1.0),
+    _tf("ocsort_min_hits_seconds", "Confirm a track after (seconds)", 0.12, "ocsort",
+        worker_default=-1.0),
     _tf("ocsort_iou_threshold", "Match overlap (IoU)", 0.3, "ocsort"),
-    _tf("ocsort_delta_t", "Velocity look-back (frames)", 3, "ocsort"),
+    _tf("ocsort_delta_t_seconds", "Velocity look-back (seconds)", 0.12, "ocsort",
+        worker_default=-1.0),
     _tf("ocsort_inertia", "Direction-consistency weight", 0.2, "ocsort"),
 
     _tf("sfsort_high_th", "High-score threshold", 0.6, "sfsort"),
@@ -386,11 +393,11 @@ BLOCK_REGISTRY = {
                 ],
             },
             {
-                "name": "sample_interval",
-                "label": "Sample every Nth frame",
+                "name": "sample_seconds",
+                "label": "Sample every (seconds)",
                 "field_type": "number",
                 "required": False,
-                "default": 30,
+                "default": 1.2,
                 "choices": None,
                 "show_if": {"field": "analyse", "value": "sampled"},
             },
@@ -559,11 +566,13 @@ BLOCK_REGISTRY = {
                 # Detectors drop frames. Without tolerance a single missed
                 # frame reads as an exit followed immediately by a re-entry,
                 # which doubles every event count.
-                "name": "gap_frames",
-                "label": "Gap tolerance (frames)",
+                # Seconds, turned into frames with each clip's own fps: the
+                # same setting then means the same time on any camera.
+                "name": "gap_seconds",
+                "label": "Gap tolerance (seconds)",
                 "field_type": "number",
                 "required": False,
-                "default": 15,
+                "default": 0.6,
                 "choices": None,
             },
             {
@@ -605,11 +614,25 @@ BLOCK_REGISTRY = {
                 ],
             },
             {
-                "name": "gap_frames",
-                "label": "Gap tolerance (frames)",
+                # Seconds, turned into frames with each clip's own fps: the
+                # same setting then means the same time on any camera.
+                "name": "gap_seconds",
+                "label": "Gap tolerance (seconds)",
                 "field_type": "number",
                 "required": False,
-                "default": 15,
+                "default": 0.6,
+                "choices": None,
+            },
+            {
+                # Shorter episodes are dropped: a bee crossing a tube for a
+                # few frames, a box flickering onto a neighbour. 0 keeps all.
+                # Applied after the gap tolerance has joined a returning bee's
+                # episode back together, so it filters contacts, not pieces.
+                "name": "min_seconds",
+                "label": "Minimum interaction length (seconds)",
+                "field_type": "number",
+                "required": False,
+                "default": 0,
                 "choices": None,
             },
             {

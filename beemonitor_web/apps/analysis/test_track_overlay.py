@@ -46,12 +46,12 @@ class PayloadTests(SimpleTestCase):
                  "nest_layout": [{"id": 3, "box": [0.2, 0.2, 0.3, 0.3]}]})
         self.assertEqual(p["tracks"]["1"]["species"], "Osmia")
         self.assertEqual(p["events"], [[1, 1, "enter", "nest 3"]])
-        self.assertEqual([r["label"] for r in p["regions"]], ["hotel", "nest 3"])
+        self.assertEqual([r["label"] for r in p["regions"]], ["hotel", "reference 3"])
         self.assertEqual(len(p["rows"]), 4 * 7)
 
     def test_stored_beside_the_tracking_csv(self):
         self.assertEqual(overlay.stored_path("1/pl_x/tracking_results.csv"),
-                         "1/pl_x/overlay_v1.json.gz")
+                         "1/pl_x/overlay_v2.json.gz")
 
 
 class EndpointTests(TestCase):
@@ -86,7 +86,7 @@ class EndpointTests(TestCase):
         payload = json.loads(gzip.decompress(r.content))
         self.assertEqual(len(payload["rows"]), 4 * 7)
         stored = s3.upload_stream.call_args
-        self.assertEqual(stored.args[1], "1/pl_x/overlay_v1.json.gz")
+        self.assertEqual(stored.args[1], "1/pl_x/overlay_v2.json.gz")
 
     def test_a_stored_payload_is_served_without_rebuilding(self):
         body = overlay.encode({"v": 1, "rows": [], "tracks": {}})

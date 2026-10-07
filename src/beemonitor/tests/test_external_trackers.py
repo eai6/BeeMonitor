@@ -66,3 +66,15 @@ class ExternalTrackerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SecondsSettingsTests(unittest.TestCase):
+    def test_seconds_become_this_clips_frames(self):
+        from beemonitor.tracking.mot.external import _frames_from_seconds
+        self.assertEqual(_frames_from_seconds("bytetrack", {"track_buffer_seconds": 1.2}, 25),
+                         {"track_buffer": 30})
+        self.assertEqual(_frames_from_seconds("ocsort", {"max_age_seconds": 2, "min_hits_seconds": 0.12,
+                                                         "delta_t_seconds": 0.12}, 30),
+                         {"max_age": 60, "min_hits": 4, "delta_t": 4})
+        # Never zero frames: 0 would drop a track the first frame it is missed.
+        self.assertEqual(_frames_from_seconds("ocsort", {"min_hits_seconds": 0}, 25), {"min_hits": 1})

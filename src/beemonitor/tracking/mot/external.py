@@ -173,6 +173,30 @@ def _ultralytics_tracker(kind, params, fps):
         return cls(args)
 
 
+# Settings the platform sends in seconds, so they mean the same time on any
+# camera, and the frame-count parameter each becomes for this clip's fps.
+SECONDS_TO_FRAMES = {
+    "bytetrack": {"track_buffer_seconds": "track_buffer"},
+    "botsort": {"track_buffer_seconds": "track_buffer"},
+    "ocsort": {"max_age_seconds": "max_age", "min_hits_seconds": "min_hits",
+               "delta_t_seconds": "delta_t"},
+}
+
+
+def _frames_from_seconds(kind, params, fps):
+    """``params`` with each ``*_seconds`` setting turned into its frame count."""
+    out = dict(params or {})
+    for sec_key, frame_key in SECONDS_TO_FRAMES.get(kind, {}).items():
+        value = out.pop(sec_key, None)
+        if value is None:
+            continue
+        try:
+            out[frame_key] = max(1, int(round(float(value) * fps)))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 class ExternalTracker:
     """A standard tracker that BeeTracking can use in place of BeeTracker."""
 
@@ -182,9 +206,10 @@ class ExternalTracker:
         if kind not in TRACKERS:
             raise ValueError(f"unknown tracker {kind!r}; choose one of {TRACKERS}")
         self.kind = kind
+        self.fps = float(fps or 30.0)
+        params = _frames_from_seconds(kind, params, self.fps)
         self.params = {**DEFAULTS[kind], **{k: v for k, v in (params or {}).items()
                                             if k in DEFAULTS[kind] and v is not None}}
-        self.fps = float(fps or 30.0)
         self.frame = None              # set per frame; BoT-SORT's GMC reads it
         self._views: dict[int, TrackView] = {}
         self._classes: dict[str, int] = {}

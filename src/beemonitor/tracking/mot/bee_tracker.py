@@ -456,7 +456,11 @@ class BeeTracker:
         Returns:
             True if track is likely a duplicate
         """
-        if not track.is_confirmed:
+        # hits, not is_confirmed: reading is_confirmed assigns the track its id,
+        # and a track removed here would have used one up — ids ran 1, 2, 5,
+        # 9... with hundreds missing, each a duplicate box deleted the frame it
+        # appeared.
+        if track.hits < track.min_hits:
             return False
         # Only a track on this frame's detection can be a duplicate. A lost
         # track that another bee walks past is a different bee waiting to be
@@ -471,19 +475,11 @@ class BeeTracker:
         
         track_pos = np.array(track.centroid)
         
-        # Check against all confirmed tracks
-        for other_id in self.confirmed_track_ids:
-            if other_id == track.id:
+        # Check against the other confirmed tracks
+        for other_track in self.tracks:
+            if other_track is track or other_track.id is None:
                 continue
-            
-            # Find the other track
-            other_track = None
-            for t in self.tracks:
-                if t.id == other_id:
-                    other_track = t
-                    break
-            
-            if other_track is None:
+            if other_track.id not in self.confirmed_track_ids:
                 continue
             
             # Check distance
