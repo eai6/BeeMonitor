@@ -532,14 +532,13 @@ if deploy_endpoint:
             ),
         ],
         async_inference_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigArgs(
-            # Videos per instance. One YOLO tracking job barely uses the T4 (the
-            # work is mostly CPU/IO), so pack several per instance to clear big
-            # batches faster. Safe now that the annotated-video memory leak is
-            # fixed (was the 2026-07-06 OOM) and each invocation is isolated
-            # (own temp dir + own YOLO instance). Kept <= the container's
-            # gunicorn --threads 4 so a thread stays free for /ping health.
+            # One video per instance. Three per g4dn.xlarge shared its 4 vCPUs
+            # — decode, tracking and crop JPEG work are CPU — and each ran at
+            # ~12 fps (2026-10-07: three 14.5k-frame clips, 20 min of tracking
+            # each). Throughput comes from instances instead: the policy below
+            # scales to one per queued job, up to max-capacity.
             client_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigClientConfigArgs(
-                max_concurrent_invocations_per_instance=3,
+                max_concurrent_invocations_per_instance=1,
             ),
             output_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigOutputConfigArgs(
                 s3_output_path=pulumi.Output.concat("s3://", output_bucket.bucket, "/"),
@@ -587,7 +586,10 @@ if deploy_endpoint:
         service_namespace=autoscaling_target.service_namespace,
         target_tracking_scaling_policy_configuration=aws.appautoscaling
             .PolicyTargetTrackingScalingPolicyConfigurationArgs(
-                target_value=5.0,  # avg in-flight requests per instance
+                # One job per instance (client_config above), so one queued or
+                # running job per instance. At 5 a 4-job batch never left one
+                # instance and ran back to back.
+                target_value=1.0,
                 customized_metric_specification=aws.appautoscaling
                     .PolicyTargetTrackingScalingPolicyConfigurationCustomizedMetricSpecificationArgs(
                         metric_name="ApproximateBacklogSizePerInstance",
@@ -784,7 +786,9 @@ if deploy_sam3:
         service_namespace=sam3_target.service_namespace,
         target_tracking_scaling_policy_configuration=aws.appautoscaling
             .PolicyTargetTrackingScalingPolicyConfigurationArgs(
-                target_value=5.0,
+                # One job per instance, so one queued or running job each —
+                # at 5, fewer than five SAM 3 jobs shared a single instance.
+                target_value=1.0,
                 customized_metric_specification=aws.appautoscaling
                     .PolicyTargetTrackingScalingPolicyConfigurationCustomizedMetricSpecificationArgs(
                         metric_name="ApproximateBacklogSizePerInstance",
