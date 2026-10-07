@@ -30,32 +30,6 @@ their reason.
       {% if rows.0.run.started_at %}· run {{ rows.0.run.started_at|date:"j M, H:i" }}{% endif %}
     </p>
   </div>
-  {% if can_rerun %}
-  <div class="flex items-center gap-2 shrink-0">
-    <form method="post" action="{% url 'pipelines:batch_rerun' batch_id=batch_id %}">
-      {% csrf_token %}
-      <input type="hidden" name="scope" value="all">
-      {% comment %}
-      Fresh: the cache is keyed on clip + config, not on the analyzer build, so
-      a plain re-run after a fix would hand back the old result.
-      {% endcomment %}
-      <input type="hidden" name="fresh" value="1">
-      <button type="submit" class="border border-gray-300 bg-white rounded px-3.5 py-2 text-sm text-gray-700 hover:bg-gray-50"
-              title="Re-runs every clip from scratch, ignoring cached results — the honest way to measure a change">
-        Re-run all {{ outcome.total }}
-      </button>
-    </form>
-    {% if outcome.failed %}
-    <form method="post" action="{% url 'pipelines:batch_rerun' batch_id=batch_id %}">
-      {% csrf_token %}
-      <input type="hidden" name="scope" value="failed">
-      <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white rounded px-4 py-2 text-sm font-medium">
-        Re-run {{ outcome.failed }} failed
-      </button>
-    </form>
-    {% endif %}
-  </div>
-  {% endif %}
 </div>
 
 {% comment %}
@@ -159,12 +133,12 @@ their reason.
     {% if photos %}<input type="hidden" name="kind" value="photo">{% endif %}
     <div class="min-w-[240px]">
       <label for="rerun-pipeline" class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
-        Run these {{ rerun_videos|length }} {% if photos %}photo{% else %}clip{% endif %}{{ rerun_videos|length|pluralize }} through another pipeline
+        Run these {{ rerun_videos|length }} {% if photos %}photo{% else %}clip{% endif %}{{ rerun_videos|length|pluralize }} through a pipeline
       </label>
       <select name="pipeline" id="rerun-pipeline"
               class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
         {% for p in rerun_pipelines %}
-        <option value="{{ p.pk }}">{{ p.title }}{% if p.is_template %} (template){% endif %}</option>
+        <option value="{{ p.pk }}">{{ p.title }}{% if p.pk == pipeline.pk %} (this batch's){% elif p.is_template %} (template){% endif %}</option>
         {% endfor %}
       </select>
     </div>
@@ -172,12 +146,20 @@ their reason.
             class="bg-amber-600 hover:bg-amber-700 text-white rounded px-4 py-2 text-sm font-medium">
       Run
     </button>
+    {% comment %}
+      The cache is keyed on clip + config, not on the build, so re-running the
+      same pipeline after a fix would otherwise hand back the old result.
+    {% endcomment %}
+    <label class="flex items-center gap-1.5 text-xs text-gray-600 py-2"
+           title="Ignore cached results and run the GPU steps again — the honest way to measure a change">
+      <input type="checkbox" name="fresh" value="1"> From scratch
+    </label>
     <p class="text-xs text-gray-500 flex-1 min-w-[220px]">
       {% if photos %}Starts a new batch over the same photos; this one keeps its results. Detection
-      is reused where the new pipeline asks for the same thing, so a pipeline that
-      only differs downstream costs no GPU time.{% else %}Starts a new batch over the same clips; this one keeps its results. Detection
-      and tracking are reused where the new pipeline asks for the same thing, so a
-      pipeline that only differs downstream costs no GPU time.{% endif %}
+      is reused where the pipeline asks for the same thing, so a pipeline that
+      only differs downstream costs no GPU time — unless you run from scratch.{% else %}Starts a new batch over the same clips; this one keeps its results. Detection
+      and tracking are reused where the pipeline asks for the same thing, so a
+      pipeline that only differs downstream costs no GPU time — unless you run from scratch.{% endif %}
     </p>
   </form>
   </div>
@@ -193,12 +175,12 @@ their reason.
     {% if photos %}<input type="hidden" name="kind" value="photo">{% endif %}
     <div class="min-w-[240px]">
       <label for="rerun-pipeline" class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
-        Run these {{ rerun_videos|length }} {% if photos %}photo{% else %}clip{% endif %}{{ rerun_videos|length|pluralize }} through another pipeline
+        Run these {{ rerun_videos|length }} {% if photos %}photo{% else %}clip{% endif %}{{ rerun_videos|length|pluralize }} through a pipeline
       </label>
       <select name="pipeline" id="rerun-pipeline"
               class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
         {% for p in rerun_pipelines %}
-        <option value="{{ p.pk }}">{{ p.title }}{% if p.is_template %} (template){% endif %}</option>
+        <option value="{{ p.pk }}">{{ p.title }}{% if p.pk == pipeline.pk %} (this batch's){% elif p.is_template %} (template){% endif %}</option>
         {% endfor %}
       </select>
     </div>
@@ -206,12 +188,20 @@ their reason.
             class="bg-amber-600 hover:bg-amber-700 text-white rounded px-4 py-2 text-sm font-medium">
       Run
     </button>
+    {% comment %}
+      The cache is keyed on clip + config, not on the build, so re-running the
+      same pipeline after a fix would otherwise hand back the old result.
+    {% endcomment %}
+    <label class="flex items-center gap-1.5 text-xs text-gray-600 py-2"
+           title="Ignore cached results and run the GPU steps again — the honest way to measure a change">
+      <input type="checkbox" name="fresh" value="1"> From scratch
+    </label>
     <p class="text-xs text-gray-500 flex-1 min-w-[220px]">
       {% if photos %}Starts a new batch over the same photos; this one keeps its results. Detection
-      is reused where the new pipeline asks for the same thing, so a pipeline that
-      only differs downstream costs no GPU time.{% else %}Starts a new batch over the same clips; this one keeps its results. Detection
-      and tracking are reused where the new pipeline asks for the same thing, so a
-      pipeline that only differs downstream costs no GPU time.{% endif %}
+      is reused where the pipeline asks for the same thing, so a pipeline that
+      only differs downstream costs no GPU time — unless you run from scratch.{% else %}Starts a new batch over the same clips; this one keeps its results. Detection
+      and tracking are reused where the pipeline asks for the same thing, so a
+      pipeline that only differs downstream costs no GPU time — unless you run from scratch.{% endif %}
     </p>
   </form>
 </div>

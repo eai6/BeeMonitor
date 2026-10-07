@@ -59,11 +59,13 @@ class BatchPageControlTests(TestCase):
         self.assertIn(reverse("pipelines:run_on_videos"), html)
         self.assertIn(f'value="{self.video.pk}"', html)
 
-    def test_the_pipeline_that_already_ran_is_not_offered(self):
+    def test_the_pipeline_that_already_ran_is_offered_first(self):
+        """Re-running the batch's own pipeline happens in the same box."""
         resp = self._page()
 
         titles = [p.title for p in resp.context["rerun_pipelines"]]
-        self.assertNotIn("Ran This", titles)
+        self.assertEqual(titles[0], "Ran This")
+        self.assertEqual(titles.count("Ran This"), 1)
         self.assertIn("Something Else", titles)
 
     def test_templates_are_offered_too(self):

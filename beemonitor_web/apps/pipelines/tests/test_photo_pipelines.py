@@ -241,3 +241,34 @@ class PhotoBatchPageTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Bombus impatiens")
         self.assertNotContains(resp, "<html")
+
+    def test_the_batch_pipeline_is_offered_first(self):
+        from django.urls import reverse
+
+        resp = self.client.get(reverse("pipelines:batch_detail", kwargs={"batch_id": self.batch_id}))
+
+        self.assertEqual(resp.context["rerun_pipelines"][0], self.pipeline)
+        self.assertContains(resp, "(this batch")
+        self.assertNotContains(resp, "Re-run all")
+
+    def test_photos_rerun_through_the_box(self):
+        from django.urls import reverse
+
+        with mock.patch("apps.pipelines.engine.launch_batch",
+                        return_value=(self.batch_id, [self.photo.pk], 0)) as launch:
+            self.client.post(reverse("pipelines:run_on_videos"), {
+                "pipeline": self.pipeline.pk, "kind": "photo",
+                "video_ids": [self.photo.pk], "fresh": "1"})
+
+        self.assertEqual(list(launch.call_args.args[1]), [self.photo])
+        self.assertTrue(launch.call_args.kwargs["fresh"])
+
+    def test_a_cause_rerun_finds_the_photos(self):
+        from django.urls import reverse
+
+        with mock.patch("apps.pipelines.engine.launch_batch",
+                        return_value=(self.batch_id, [self.photo.pk], 0)) as launch:
+            self.client.post(reverse("pipelines:batch_rerun", kwargs={"batch_id": self.batch_id}),
+                             {"scope": "all"})
+
+        self.assertEqual(launch.call_args.args[1], [self.photo])

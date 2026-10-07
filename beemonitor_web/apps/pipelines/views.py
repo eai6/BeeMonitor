@@ -299,7 +299,10 @@ def run_on_videos(request):
     if not videos:
         return _fail("No videos match the current filter.")
     # Groups this launch for aggregate results (combined CSVs, cross-video trips).
-    batch_id, launched, invalid = engine.launch_batch(pipeline, videos, request.user)
+    # fresh: the cache is keyed on clip + config, not on the build, so running
+    # the same pipeline again after a fix would hand back the old result.
+    batch_id, launched, invalid = engine.launch_batch(
+        pipeline, videos, request.user, fresh=request.POST.get("fresh") == "1")
 
     # The GPU steps were created QUEUED. Kick the queue once for the whole batch:
     # spawn up to the global SageMaker cap now, leave the rest QUEUED for the
@@ -943,12 +946,15 @@ def batch_detail(request, batch_id):
                       "hint": "One row per insect: photo, time taken, box, class, "
                               "species and its confidence."}]
 
-    # Re-runs go through a pipeline that starts from the same kind of input.
+    # Re-runs go through a pipeline that starts from the same kind of input,
+    # this batch's own first — re-running it is the commonest choice.
     rerun_pipelines = [p for p in (Pipeline.objects
                                    .filter(Q(user=request.user) | Q(is_template=True))
                                    .exclude(pk=runs[0].pipeline_id if runs else None)
                                    .order_by("-is_template", "title"))
                        if pipeline_input_kind(p.steps) == kind]
+    if runs and (runs[0].pipeline.user_id == request.user.id or runs[0].pipeline.is_template):
+        rerun_pipelines.insert(0, runs[0].pipeline)
 
     # No cross-video aggregation here any more. The page used to pair trips and
     # build activity charts on every load — up to 300 clips' events CSVs read
@@ -1028,7 +1034,7 @@ def batch_rerun(request, batch_id):
         return redirect("pipelines:batch_detail", batch_id=batch_id)
 
     from apps.videos.models import Video
-    videos = list(Video.manageable(request.user).filter(pk__in=video_ids))
+    videos = list(Video.manageable(request.user, photos=True).filter(pk__in=video_ids))
     if not videos:
         messages.error(request, "Those clips are no longer yours to run.")
         return redirect("pipelines:batch_detail", batch_id=batch_id)
