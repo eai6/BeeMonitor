@@ -33,6 +33,13 @@ _DEFAULT_INSTANCE = "ml.g5.xlarge"
 _MAX_TRAIN_SECONDS = 4 * 60 * 60  # SageMaker StoppingCondition cap
 
 
+def ultralytics_weights(base_model: str) -> str:
+    """The Ultralytics weights name for a base model. YOLO11's files are
+    yolo11n.pt, not yolov11n.pt — the stored value predates that, and sent as
+    is the trainer could not find it."""
+    return {"yolov11n": "yolo11n", "yolov11s": "yolo11s"}.get(base_model, base_model)
+
+
 def _boto3(service: str):
     import boto3
     from botocore.config import Config
@@ -295,7 +302,7 @@ def _spawn_training_job(job_pk: int) -> None:
         manifest = {
             "job_id": str(job.pk),
             "user_id": str(job.user_id),
-            "base_model": job.base_model,
+            "base_model": ultralytics_weights(job.base_model),
             "init_weights_key": job.init_weights_key,  # fine-tune source (models bucket), "" = scratch
             "epochs": job.epochs,
             "imgsz": job.image_size,

@@ -18,6 +18,9 @@ class TrainingJob(models.Model):
         YOLOV8M = "yolov8m", "YOLOv8m (Medium)"
         YOLOV11N = "yolov11n", "YOLOv11n (Nano)"
         YOLOV11S = "yolov11s", "YOLOv11s (Small)"
+        YOLO26N = "yolo26n", "YOLO26n (Nano)"
+        YOLO26S = "yolo26s", "YOLO26s (Small)"
+        YOLO26M = "yolo26m", "YOLO26m (Medium)"
 
     class FrameFilter(models.TextChoices):
         ALL = "all", "All annotated frames"
