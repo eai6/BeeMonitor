@@ -46,7 +46,7 @@ on a Pi 4 CPU, with very few DL runs**.
 Related: [[15_monitoring_agent_design]] (cloud BioCLIP species ID — the layer
 this feeds), [[10_cellular_telemetry_design]] (crop transport + daily cap),
 the `motion/` package refactor that created the `motion/confirm.py` seam, and
-the on-Pi reality in `claude-memory/pi-torch-must-be-cpu-wheel.md`.
+the on-Pi reality in `hardware/claude-memory/pi-torch-must-be-cpu-wheel.md`.
 
 ---
 

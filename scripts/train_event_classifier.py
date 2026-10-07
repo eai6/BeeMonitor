@@ -17,10 +17,14 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import os
+
+# Paths are relative to the repository. The evaluation videos and the manual
+# annotations are not in the repo (see research/README.md); put them in data/.
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 import sys
 
 # Add beemonitor to path
-sys.path.insert(0, '/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6')
+sys.path.insert(0, os.path.join(REPO, 'src'))
 
 from beemonitor.processing import EventProcessor
 from beemonitor.core.config import Config
@@ -45,9 +49,9 @@ config = Config.default()
 nest_model = YOLO(config.models.nest_detection)
 detector = NestDetector(nest_model, config)
 
-input_data = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/data/CVPR_Evaluation_Video_Data"
-output_folder = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/output/CVPR_Output"
-manual_csv = '/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/data/Manual_Foraging_Events_Observation.csv'
+input_data = os.path.join(REPO, "data/CVPR_Evaluation_Video_Data")
+output_folder = os.path.join(REPO, "output/CVPR_Output")
+manual_csv = os.path.join(REPO, "data/Manual_Foraging_Events_Observation.csv")
 
 files = os.listdir(input_data)
 files = [os.path.join(input_data, file) for file in files if 'mp4' in file]

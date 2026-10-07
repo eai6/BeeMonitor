@@ -5,8 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "beemonitor"
 version = "1.0.0"
-description = "Computer vision system for monitoring solitary bee activity"
-readme = "README.md"
+description = "Detection, tracking and behaviour analysis of pollinators in video (BeeMonitor analysis engine)"
+readme = "src/README.md"
 authors = [
     {name = "Edward Amoah", email = "eai6@psu.edu"}
 ]
@@ -53,7 +53,7 @@ docs = [
 
 [project.urls]
 Homepage = "https://github.com/eai6/BeeMonitor"
-Documentation = "https://github.com/eai6/BeeMonitor"
+Documentation = "https://eai6.github.io/BeeMonitor/"
 Repository = "https://github.com/eai6/BeeMonitor"
 "Bug Tracker" = "https://github.com/eai6/BeeMonitor/issues"
 

@@ -1,216 +1,179 @@
 # BeeMonitor
 
-**An open-source machine learning system for automated monitoring of cavity-nesting solitary bees**
+**Open-source field hardware and a cloud platform for studying pollinator behaviour from video.**
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![YOLO26](https://img.shields.io/badge/YOLO-26-green.svg)](https://github.com/ultralytics/ultralytics)
+[![Test & Deploy](https://github.com/eai6/BeeMonitor/actions/workflows/deploy.yml/badge.svg)](https://github.com/eai6/BeeMonitor/actions/workflows/deploy.yml)
+[![Docs](https://github.com/eai6/BeeMonitor/actions/workflows/docs.yml/badge.svg)](https://eai6.github.io/BeeMonitor/)
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![Preprint](https://img.shields.io/badge/bioRxiv-preprint-b31b1b.svg)](https://www.biorxiv.org/content/10.64898/2026.07.10.737879v1)
 
-**Documentation: https://eai6.github.io/BeeMonitor/** — build a unit and use the platform.
+**[Documentation](https://eai6.github.io/BeeMonitor/)** ·
+**[Platform](https://beemonitor.edwardamoah.com)** ·
+**[Preprint](https://www.biorxiv.org/content/10.64898/2026.07.10.737879v1)**
 
-BeeMonitor is an integrated hardware and software system for automated video surveillance and AI-powered analysis of cavity-nesting solitary bee activity at bee hotels. The system extracts entry/exit events from nesting tubes without requiring individual bee marking.
+<img src="docs/assets/beemonitor_hardware.png" alt="A BeeMonitor field unit" width="420">
 
-![alt text](beemonitor_hardware.png)
+BeeMonitor started as a camera trap for bee hotels and grew into a general system. Field units built
+from a Raspberry Pi record insects when they move and upload the clips. Clips and photos from any other
+camera can be uploaded too. On the platform, researchers build computer-vision pipelines from blocks:
+detect, track, identify species and individual bees, and measure behaviour. Results come out as tables
+they can analyse in R or Python.
 
-## Performance
+<img src="docs/assets/platform/pipeline-editor.png" alt="The pipeline editor: video input, detection, multi-object tracking and species identification connected as blocks" width="800">
 
-Evaluated on 110 minutes of video containing 300 manually annotated foraging events:
+## What it does
 
-| Mode | Precision | Recall | F1 Score | Processing Speed |
-|------|-----------|--------|----------|------------------|
-| **Full Tracking** | 93.9% | 87.7% | **0.907** | 2.3× real-time |
-| **Two-Mode Adaptive** | 92.0% | 84.3% | 0.880 | **0.8× real-time** |
+- **Field units:** a Raspberry Pi with a high-resolution camera (Pi camera, 64 MP OwlSight or Luxonis OAK),
+  on solar power or mains. It records when something moves inside a region you draw, and uploads over
+  Wi-Fi or cellular. The units report their health and update their software remotely, and each one is
+  enrolled with its own key.
+- **Pipelines from blocks:** detection (fine-tuned YOLO, SAM 3 with a text prompt, or your own trained
+  model), multi-object tracking (BeeTrack, ByteTrack, BoT-SORT, OC-SORT or SFSORT), species ID (BeeMachine
+  or BioCLIP, by vote over every crop of a track), marker reading for individual bees, and behaviour
+  measured against reference objects such as nest tubes, flowers or pollen tubes.
+- **Behaviour as two tables:** *events* (something entered or left something) and *interactions* (two
+  things were together for a while), plus one row per track with its species and marker. Foraging trips,
+  flower visits and the results of lab assays are all computed from these tables.
+- **Photos as well as video:** large photos are split into tiles so small insects aren't lost, and each
+  insect gets a crop and a species.
+- **Annotation and training:** sample the busiest frames of each clip, pre-label them with SAM 3, review
+  them as a team, then fine-tune a detector and use it in a pipeline. Datasets and models can be
+  published for others to copy.
+- **REST API:** upload, run pipelines and fetch results from a notebook.
 
-*Benchmarked on Apple M3 Pro (18GB) with 4 parallel workers and MPS acceleration.*
+<img src="docs/assets/platform/results-tracks.png" alt="A clip's results: original and annotated video, downloads, and a table with one row per track and its species" width="800">
 
-## Features
+## Architecture
 
-### Software Pipeline
-- **YOLO26 Object Detection** — End-to-end NMS-free detection with up to 43% faster CPU inference
-- **BeeTrack MOT Algorithm** — Custom multiple-object tracking optimized for fast-moving insects
-- **ML Event Classifier** — Random Forest classifier distinguishes real events from noise
-- **Two-Mode Adaptive Processing** — Motion detection skips idle periods for 2.9× speedup
-- **Batch Processing** — Parallel video processing with configurable workers
+```mermaid
+flowchart LR
+  subgraph Field["Field unit (Raspberry Pi)"]
+    R[Motion-gated recorder] --> UP[Uploader]
+    T[Telemetry and updates]
+  end
+  subgraph AWS
+    W["Web platform<br/>Django on App Runner"]
+    S[(S3: clips, photos, results)]
+    DB[(PostgreSQL)]
+    G["GPU workers<br/>SageMaker async endpoints"]
+    TR["Training jobs<br/>SageMaker"]
+  end
+  UP -- clips, photos --> S
+  T -- health --> W
+  W <--> DB
+  W -- pipeline jobs --> G
+  G <--> S
+  W -- training --> TR
+  TR --> S
+```
 
-### Hardware System (~$595 USD)
-- Raspberry Pi 4 + Witty Pi 4 power management
-- Raspberry Pi HQ Camera (30 fps, 1080p)
-- Solar panel + LiFePO4 battery for off-grid deployment
-- Weatherproof 3D-printed enclosure
+- **Web platform** (`beemonitor_web/`): Django and Django REST Framework. It covers devices, uploads
+  (resumable multipart to S3), the pipeline editor and its execution engine, annotation, training,
+  publishing and the API.
+- **GPU workers** (`sagemaker_backend/`): Docker images for SageMaker asynchronous inference. One endpoint
+  runs detection, tracking, species ID, photo detection and transcoding; another runs SAM 3. Both scale
+  to zero when idle.
+- **Analysis engine** (`src/beemonitor/`): the Python package that does the detection, tracking and
+  event work. The GPU workers run it, and you can also use it on its own.
+- **Infrastructure** (`infra/`): Pulumi for the whole AWS stack. GitHub Actions run the tests, build and
+  push images, deploy the web app, publish signed device updates and build these docs.
 
-## Installation
+## Repository map
 
-### Requirements
-- Python 3.10+
-- macOS, Linux, or Windows
-- GPU recommended (CUDA, MPS, or ROCm) but not required
+| Folder | What it is |
+|---|---|
+| [`hardware/`](hardware/) | Device software: recording, uploader, telemetry, enrolment, remote updates, cellular; enclosure and bill of materials |
+| [`src/beemonitor/`](src/) | Analysis engine (Python package): detection, BeeTrack and other trackers, event classifier, species ID |
+| [`beemonitor_web/`](beemonitor_web/) | The web platform (Django) |
+| [`sagemaker_backend/`](sagemaker_backend/) | GPU worker images and the training container |
+| [`cloud/`](cloud/) | The wrapper the GPU worker runs: storage, ingestion, result packaging |
+| [`infra/`](infra/) | Infrastructure as code (Pulumi, AWS) |
+| [`desktop/`](desktop/) | Offline desktop app for analysing bee-hotel videos without the cloud (PyQt6) |
+| [`models/`](models/) | Released weights: bee detector, nest detector, entry/exit classifier |
+| [`research/`](research/) | Data and notebooks behind the preprint |
+| [`docs/`](docs/) | The documentation site (MkDocs Material) |
+| [`memory/`](memory/) | Design notes: one per feature, with the problem, options, decision and plan |
+| [`examples/`](examples/) | Two short sample clips |
+| [`scripts/`](scripts/) | Tools for training the event classifier and for camera setup |
 
-### Install from Source
+## Quick start
+
+**Use the platform.** Sign up at [beemonitor.edwardamoah.com](https://beemonitor.edwardamoah.com), upload
+a clip, and run a template pipeline. See [Get started](https://eai6.github.io/BeeMonitor/get-started/).
+
+**Build a unit.** Parts, costs and a ten-step assembly guide with a printable manual:
+[Build a unit](https://eai6.github.io/BeeMonitor/hardware/).
+
+**Run the analysis engine locally** (Python 3.10+):
 
 ```bash
-git clone https://github.com/eai6/BeeMonitor.git
-cd BeeMonitor
-
-# Install the CPU build of PyTorch first (avoids pulling the large
-# NVIDIA/CUDA packages, and is required on Raspberry Pi — the default
-# wheels SIGILL on the Pi's ARM CPU).
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-
-# Then install BeeMonitor and the rest of its dependencies.
+git clone https://github.com/eai6/BeeMonitor.git && cd BeeMonitor
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu   # or a CUDA build
 pip install -e .
 ```
 
-This installs all remaining dependencies including Ultralytics, OpenCV, and scikit-learn.
+```python
+from beemonitor import BeeMonitor
+from beemonitor.core.config import Config
 
-> **Note:** Always install `torch`/`torchvision` from the CPU index above before
-> `pip install -e .`. If you let pip resolve PyTorch on its own it will download
-> the CUDA build, which wastes several GB on machines without an NVIDIA GPU and
-> crashes YOLO inference on the Raspberry Pi (illegal-instruction / `status=4`).
-> On a machine with a real NVIDIA GPU, install the matching CUDA build from
-> <https://pytorch.org/get-started/locally/> instead.
+monitor = BeeMonitor(config=Config.default())
+results = monitor.analyze_video("examples/mendels_2024-05-08_15_57_03.mp4",
+                                output_folder="output/")
+print(results.events)   # one row per entry or exit, with the nest and the frame
+```
 
-### Verify Installation
+More in [`src/README.md`](src/README.md).
+
+## Accuracy
+
+Validated on bee hotels against 110 minutes of video with 300 hand-annotated foraging events
+([preprint](https://www.biorxiv.org/content/10.64898/2026.07.10.737879v1)):
+
+| Mode | Precision | Recall | F1 |
+|---|---|---|---|
+| Full tracking | 93.9% | 87.7% | 0.907 |
+| Two-mode adaptive | 92.0% | 84.3% | 0.880 |
+
+## Development
 
 ```bash
-python -c "from beemonitor import BeeMonitor; print('✓ BeeMonitor installed')"
+# Analysis engine
+PYTHONPATH=src python -m pytest src/beemonitor/tests
+
+# Web platform
+cd beemonitor_web && pip install -r requirements/development.txt
+DJANGO_SETTINGS_MODULE=config.settings.development python manage.py test
+
+# Docs
+pip install -r docs/requirements.txt && mkdocs serve
 ```
 
-## Quick Start
-
-### Analyze a Single Video
-
-```python
-from beemonitor import BeeMonitor
-from beemonitor.core.config import Config
-
-# Load default configuration
-config = Config.default()
-
-# Initialize monitor
-monitor = BeeMonitor(config=config)
-
-# Analyze video
-results = monitor.analyze_video(
-    video_path="path/to/video.mp4",
-    output_folder="output/"
-)
-
-# Access detected events
-print(f"Detected {len(results.events)} events")
-for event in results.events:
-    print(f"  {event.action} at nest {event.nest} (frame {event.frame_number})")
-```
-
-### Batch Processing
-
-```python
-from beemonitor import BeeMonitor
-from beemonitor.core.config import Config
-from pathlib import Path
-import concurrent.futures
-
-config = Config.default()
-video_folder = Path("videos/")
-output_folder = Path("output/")
-
-def process_video(video_path):
-    monitor = BeeMonitor(config=config)  # Fresh instance per video
-    return monitor.analyze_video(str(video_path), str(output_folder / video_path.stem))
-
-videos = list(video_folder.glob("*.mp4"))
-
-with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-    results = list(executor.map(process_video, videos))
-```
-
-## Algorithm Details
-
-### YOLO26 Object Detection
-
-BeeMonitor uses fine-tuned YOLO26 models for bee and nest detection. Key advantages of YOLO26:
-
-- **End-to-end NMS-free inference** — No post-processing required, simplifying deployment
-- **Up to 43% faster CPU inference** — Critical for edge devices like Raspberry Pi
-- **Improved small object detection** — Better accuracy for fast-moving bees
-- **Simplified export** — DFL removal improves compatibility across platforms
-
-We fine-tuned separate models for:
-1. **Nest detection** — Identifies 60-tube grid layout (runs once per video)
-2. **Bee detection** — Locates bees in each frame (confidence threshold 0.25)
-
-### BeeTrack MOT
-
-BeeTrack is a tracking-by-detection algorithm optimized for fast-moving insects:
-
-1. **Adaptive Kalman Filter** — Position prediction with velocity smoothing
-2. **Hungarian Assignment** — Optimal detection-to-track association
-3. **Track Lifecycle Management** — Handles occlusions with resurrection capability
-
-Key innovations:
-- **Adaptive thresholds** scale with detected bee size and video FPS
-- **Distance clamping** prevents wild predictions during rapid direction changes
-- **Track resurrection** recovers temporarily lost tracks within 0.5s window
-
-### Two-Mode Adaptive Processing
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Motion Detection Mode                │
-│  • Lightweight blob detection on ROI                    │
-│  • Skip YOLO inference when no motion                   │
-│  • Maintain 0.5s lookback buffer                        │
-└─────────────────────────┬───────────────────────────────┘
-                          │ Motion detected
-                          ▼
-┌─────────────────────────────────────────────────────────┐
-│                    Full Tracking Mode                   │
-│  • YOLO26 detection on full frame (NMS-free)            │
-│  • BeeTrack MOT processing                              │
-│  • Process lookback buffer first                        │
-│  • 30-frame cooldown before returning to motion mode    │
-└─────────────────────────────────────────────────────────┘
-```
-
-### ML Event Classification
-
-The event classifier extracts 20 features from trajectory segments:
-
-| Category | Features |
-|----------|----------|
-| **Trajectory Shape** | length, path_length, displacement, tortuosity |
-| **Speed Profile** | avg, max, std, cv, start/middle/end speed, decel_ratio |
-| **Nest Proximity** | start_to_nest, end_to_nest, approach_ratio |
-| **Position Variance** | x_var, y_var |
-| **Direction** | vertical_movement, horizontal_movement, is_entry |
-
-## Hardware Setup
-
-See [HARDWARE.md](hardware/README.md) for detailed assembly instructions.
+Every push to `main` runs the engine, worker and web test suites before anything deploys.
 
 ## Citation
-
-If you use BeeMonitor in your research, please cite:
 
 ```bibtex
 @article{amoah2026beemonitor,
   title={BeeMonitor: Automated IoT video surveillance hardware and an AI-powered video processing software for monitoring the behavior of solitary, cavity-nesting bees},
-  author={Amoah, Edward I.,Sanjel Santosh, Boyle Natalie K., and Grozinger Christina M.},
+  author={Amoah, Edward I. and Sanjel, Santosh and Boyle, Natalie K. and Grozinger, Christina M.},
+  journal={bioRxiv},
   year={2026},
-  url={https://github.com/eai6/BeeMonitor.git}
+  doi={10.64898/2026.07.10.737879},
+  url={https://www.biorxiv.org/content/10.64898/2026.07.10.737879v1}
 }
 ```
 
 ## License
 
-AGPL License. See [LICENSE](LICENSE) for details.
+[AGPL-3.0](LICENSE): the hardware designs, device software, platform and analysis code.
 
 ## Acknowledgements
 
-- NSF Research Traineeship Program (INSECT NET, Grant 2243979)
-- USDA NIFA Hatch and Smith-Lever Appropriations (Projects PEN04943, PEN08801)
-- Penn State Joan Luerssen Faculty Enhancement Fund
+NSF Research Traineeship Program (INSECT NET, Grant 2243979) · USDA NIFA Hatch and Smith-Lever
+Appropriations (PEN04943, PEN08801) · Penn State Joan Luerssen Faculty Enhancement Fund.
 
 ## Contact
 
-- **Author:** Edward Amoah
-- **Email:** eai6@psu.edu
-- **Lab:** [Grozinger Lab](https://www.grozingerlab.com/), INSECT-NET, Penn State University
+Edward Amoah · [eai6@psu.edu](mailto:eai6@psu.edu) ·
+[Grozinger Lab](https://www.grozingerlab.com/), Penn State University ·
+[Issues](https://github.com/eai6/BeeMonitor/issues)

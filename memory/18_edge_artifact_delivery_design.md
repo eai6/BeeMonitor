@@ -66,7 +66,7 @@ image's payload), [[10_cellular_telemetry_design]] (the cellular-safe update
 path + heartbeat command this rewrites), [[16_remote_scheduling_design]] /
 [[12_device_dashboard_telemetry_v2]] (same command/heartbeat plumbing),
 [[17_bee_confirmation_design]] (new edge code that ships in this artifact), and
-the on-Pi reality in `claude-memory/pi-torch-must-be-cpu-wheel.md`.
+the on-Pi reality in `hardware/claude-memory/pi-torch-must-be-cpu-wheel.md`.
 
 ---
 

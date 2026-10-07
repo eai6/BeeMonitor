@@ -50,7 +50,7 @@ beemonitor-mobile/android/
 # Docker
 *.log
 # motion_replay.py generated snippets
-short_videos/replay_snippets/
+examples/replay_snippets/
 
 images/in
 
@@ -64,3 +64,8 @@ models/beemachine/
 *.h5
 *.onnx
 site/
+
+# Local assistant settings and tool caches
+.claude/
+runs/
+.pytest_cache/

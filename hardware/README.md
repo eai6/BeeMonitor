@@ -301,7 +301,7 @@ cp ~/BeeMonitor/hardware/calibration.sample.json \
    /home/beemonitor/Desktop/cameraOutput/calibration.json
 ```
 
-> The seed is derived from the repo's `short_videos` samples (lores 640×480). It
+> The seed is derived from the repo's `examples` clips (lores 640×480). It
 > is just a **starting point** — the daily `beemonitor-calibrate` job overwrites
 > it with values learned from this unit's own snippets, so it self-tunes to the
 > actual camera framing. If your unit recorded at a different resolution or framing,

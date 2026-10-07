@@ -31,7 +31,7 @@ beemonitor_web/static-generated/
 data/
 output/
 runs/
-short_videos/
+examples/
 research/
 notebooks/
 publication/

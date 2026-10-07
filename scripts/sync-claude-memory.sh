@@ -4,7 +4,7 @@
 # Live store (auto-loaded by Claude, local to the machine):
 #   ~/.claude/projects/<encoded-repo-path>/memory/
 # Repo backup (committed, travels with the repo):
-#   <repo>/claude-memory/
+#   <repo>/hardware/claude-memory/
 #
 # Usage:
 #   scripts/sync-claude-memory.sh            # backup:  live  -> repo  (default)
@@ -17,7 +17,7 @@ set -euo pipefail
 
 # Repo root from this script's location (works regardless of cwd).
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REPO_DIR="$REPO/claude-memory"
+REPO_DIR="$REPO/hardware/claude-memory"
 
 # Claude encodes the project path by replacing '/' with '-' (so /home/x/Foo ->
 # -home-x-Foo). Allow an explicit override via CLAUDE_MEMORY_DIR.

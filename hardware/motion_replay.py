@@ -8,10 +8,10 @@ the *same* segmentation state machine (warmup -> detect-every-N -> pre-roll /
 post-roll / max-segment), but sourced from a video file and writing snippets
 with ffmpeg. Use it to sanity-check what clips the gate would cut from a sample.
 
-    python3 hardware/motion_replay.py short_videos/clip.mp4
-    python3 hardware/motion_replay.py short_videos/clip.mp4 --out /tmp/snips --warmup 1.0
-    python3 hardware/motion_replay.py short_videos/clip.mp4 --roi 120,40,520,300
-    python3 hardware/motion_replay.py short_videos/clip.mp4 --full-frame
+    python3 hardware/motion_replay.py examples/clip.mp4
+    python3 hardware/motion_replay.py examples/clip.mp4 --out /tmp/snips --warmup 1.0
+    python3 hardware/motion_replay.py examples/clip.mp4 --roi 120,40,520,300
+    python3 hardware/motion_replay.py examples/clip.mp4 --full-frame
 
 Like production, it first runs the hotel detector (`nest_detection.pt`) on the
 clip's first frame, scales that hotel box into lores coords, and confines the

@@ -5,6 +5,7 @@ based on both video resolution AND the hotel box position/distance from camera.
 Now includes adaptive tracker configuration for FPS and resolution-independent tracking.
 """
 
+import os
 import yaml
 from pathlib import Path
 from typing import List, Optional, Tuple, Callable, Dict, Any
@@ -111,22 +112,23 @@ class VideoConfig:
 
 
 
+def _models_dir() -> Path:
+    """Where the released weights live: ``$BEEMONITOR_MODELS_DIR``, else the
+    repository's ``models/`` folder (src/beemonitor/core -> repo root)."""
+    env = os.environ.get("BEEMONITOR_MODELS_DIR")
+    return Path(env) if env else Path(__file__).resolve().parents[3] / "models"
+
+
 @dataclass
 class ModelConfig:
-    """Model paths configuration."""
-    nest_detection: str = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/nest_detection.pt"
-    tracking : str = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/bee_tracking.pt"
-    blob_noise_classifier: str = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/blob_noise_classifier.pth"
+    """Model paths configuration. The GPU worker sets these per job; the
+    defaults are the weights shipped in ``models/``."""
+    nest_detection: str = field(default_factory=lambda: str(_models_dir() / "nest_detection.pt"))
+    tracking: str = field(default_factory=lambda: str(_models_dir() / "bee_tracking.pt"))
+    blob_noise_classifier: str = field(default_factory=lambda: str(_models_dir() / "blob_noise_classifier.pth"))
     bee_classifier: Optional[str] = None
-    event_classifier: Optional[str] = "/Users/edwardamoah/Documents/GitHub/BeeMonitor_eai6/models/event_classifier_model.pkl"
-
-
-
-    # nest_detection: str = "/storage/home/eai6/BeeMonitor_eai6/models/nest_detection.pt"
-    # tracking : str = "/storage/home/eai6/BeeMonitor_eai6/models/bee_tracking.pt"
-    # blob_noise_classifier: str = "/storage/home/eai6/BeeMonitor_eai6/models/blob_noise_classifier.pth"
-    # bee_classifier: Optional[str] = None
-    # event_classifier: Optional[str] = "/storage/home/eai6/BeeMonitor_eai6/models/event_classifier_model.pkl"
+    event_classifier: Optional[str] = field(
+        default_factory=lambda: str(_models_dir() / "event_classifier_model.pkl"))
 
 @dataclass  
 class HotelBoxConfig:
