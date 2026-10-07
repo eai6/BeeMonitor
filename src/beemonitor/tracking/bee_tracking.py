@@ -797,6 +797,17 @@ class BeeTracking:
         if self.tracker is not None:
             self._give_frame(frame)
             tracks = self.tracker.update(detections, frame_num)
+            # A track confirmed this frame, at the frames it was seen in while
+            # it waited: reported like lookback frames, sorted into place later.
+            by_frame = {}
+            for bf_frame, row in getattr(self.tracker, 'backfill', None) or []:
+                by_frame.setdefault(bf_frame, []).append(row)
+            for bf_frame in sorted(by_frame):
+                lookback_results.append({
+                    'frame_num': bf_frame, 'detections': [], 'tracks': by_frame[bf_frame],
+                    'mode': 'tracking', 'num_detections': 0,
+                    'num_tracks': len(by_frame[bf_frame]),
+                })
             
             # Run identification on confirmed tracks
             if self.identifier and tracks:

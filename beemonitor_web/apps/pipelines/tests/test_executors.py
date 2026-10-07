@@ -639,13 +639,15 @@ class TrackerSettingsTests(ExecutorTestCase):
                               "byte_track_buffer": 99})
         self.assertEqual(cfg["tracker"], "beetrack")
         # Only the retired revive stage, switched off.
-        self.assertEqual(cfg["tracker_params"], {"max_resurrection_seconds": 0.0})
+        self.assertEqual(cfg["tracker_params"], {"min_hits_seconds": 0.2,
+                                                 "max_resurrection_seconds": 0.0})
 
     def test_untouched_beetrack_keeps_a_lost_track_3_seconds_with_no_revive(self):
         """One lost-track setting: 3 s, and the worker's revive stage off."""
         cfg = self._with_mot({"tracker": "beetrack"})
         self.assertEqual(cfg["tracker_params"],
-                         {"max_age_seconds": 3.0, "max_resurrection_seconds": 0.0})
+                         {"max_age_seconds": 3.0, "min_hits_seconds": 0.2,
+                          "max_resurrection_seconds": 0.0})
 
     def test_chosen_tracker_sends_only_its_changed_settings(self):
         cfg = self._with_mot({"tracker": "botsort", "byte_track_buffer": "60",

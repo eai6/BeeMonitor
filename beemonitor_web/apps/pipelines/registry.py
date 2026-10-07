@@ -114,11 +114,17 @@ TRACKER_FIELDS = [
              "behind something, out of focus, a missed detection. If the bee is "
              "seen again within this time it keeps its id; after it, it would get "
              "a new one."),
-    _tf("beetrack_min_hits_seconds", "Confirm a track after (seconds)", 0.0, "beetrack",
+    # 0.2 s: on four pollen-assay clips it took tracks from 105-115 to 58-87,
+    # most of the drop being sub-second flickers, with id swaps 0-1 per clip.
+    # (It split real bees until tentative tracks were matched after confirmed
+    # ones — bee_tracker.update.) The waiting frames are reported once the
+    # track is confirmed, so a bee's first moments are not lost.
+    _tf("beetrack_min_hits_seconds", "Confirm a track after (seconds)", 0.2, "beetrack",
+        worker_default=0.0,
         help="How long something must keep being detected before it gets an id. "
-             "0 = a single detection is enough. A higher value ignores flickers "
-             "of noise (a shadow detected for a frame or two) but a real bee's "
-             "first moments are held back until it is confirmed."),
+             "Filters flickers of noise (a shadow detected for a frame or two). "
+             "A real bee's frames from that wait are kept once it is confirmed. "
+             "0 = a single detection is enough."),
     _tf("beetrack_iou_threshold", "Match overlap (IoU)", 0.25, "beetrack"),
 
     _tf("byte_track_high_thresh", "High-score threshold", 0.25, "bytetrack,botsort"),

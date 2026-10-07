@@ -57,6 +57,45 @@ class BeeTrackerIdentityTests(unittest.TestCase):
         # And none was handed out to a track nobody ever saw.
         self.assertEqual(Track._next_confirmed_id - 1, len(seen))
 
+    def test_a_confirmed_track_gets_back_the_frames_it_waited_in(self):
+        Track.reset_id_counter()
+        t = BeeTracker(fps=25.0, frame_height=1080, max_age_seconds=3.0, min_hits_seconds=0.2,
+                       max_resurrection_seconds=0, bee_size=50)
+        reported, backfilled = [], []
+        for f in range(8):
+            reported += [(f, r["track_id"]) for r in t.update([box(300 + 5 * f, 300)], f)]
+            backfilled += [(bf, r["track_id"]) for bf, r in t.backfill]
+        first = reported[0][0]
+        self.assertGreater(first, 0)                       # held back while unconfirmed
+        self.assertEqual(sorted(backfilled), [(f, 1) for f in range(first)])
+
+    def test_noise_close_to_a_bee_cannot_take_its_detection(self):
+        """Confirmed tracks are matched first: a tentative flicker beside a bee
+        must not steal the bee's box and split the bee in two."""
+        Track.reset_id_counter()
+        t = BeeTracker(fps=25.0, frame_height=1080, max_age_seconds=3.0, min_hits_seconds=0.2,
+                       max_resurrection_seconds=0, bee_size=50)
+        for f in range(10):
+            t.update([box(300 + 4 * f, 300)], f)
+        for f in range(10, 30):
+            dets = [box(300 + 4 * f, 300)]
+            if f % 2 == 0:
+                dets.append(box(300 + 4 * f + 30, 310, conf=0.4))   # flicker next to it
+            out = {r["track_id"]: r for r in t.update(dets, f)}
+            # Bee 1 keeps its own box every frame.
+            self.assertIn(1, out)
+            self.assertAlmostEqual(out[1]["x1"], 300 + 4 * f - 25)
+
+    def test_a_track_cannot_jump_to_another_bee_across_the_frame(self):
+        Track.reset_id_counter()
+        t = BeeTracker(fps=25.0, frame_height=1080, max_age_seconds=3.0, min_hits_seconds=0.0,
+                       max_resurrection_seconds=0, bee_size=50)
+        for f in range(10):
+            t.update([box(300, 300)], f)
+        # Bee 1 is missed for a frame while a new bee appears 350 px away.
+        out = t.update([box(650, 300)], 10)
+        self.assertEqual([r["track_id"] for r in out if r["cx"] > 600], [2])
+
 
 if __name__ == "__main__":
     unittest.main()

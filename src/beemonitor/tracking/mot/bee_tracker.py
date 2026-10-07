@@ -128,6 +128,11 @@ class Track:
         self.last_source = detection[5] if len(detection) > 5 else 'unknown'
         self.last_detection_frame = frame_num
         self.start_frame = frame_num
+        # Detections seen before the track was confirmed. Not reported then —
+        # it might be noise — but they are the bee's first moments (often its
+        # exit from a nest), so they are handed back once it is confirmed.
+        self.pending = [(frame_num, tuple(bbox), self.last_confidence,
+                         self.last_source, detection[6] if len(detection) > 6 else 'bee')]
         
         # Taxonomic identification (from YOLO class label - always present)
         self.taxon = detection[6] if len(detection) > 6 else 'bee'
@@ -181,6 +186,11 @@ class Track:
         
         self.hits += 1
         self.time_since_update = 0
+        if self._id is None:
+            self.pending.append((frame_num, tuple(bbox),
+                                 float(detection[4]) if len(detection) > 4 else 0.0,
+                                 detection[5] if len(detection) > 5 else 'unknown',
+                                 detection[6] if len(detection) > 6 and detection[6] else self.taxon))
         self.last_bbox = tuple(bbox)
         self.last_confidence = float(detection[4]) if len(detection) > 4 else 0.0
         self.last_source = detection[5] if len(detection) > 5 else 'unknown'
@@ -307,6 +317,9 @@ class BeeTracker:
         
         self.tracks: List[Track] = []
         self.dead_tracks: List[Tuple[Track, int]] = []
+        # (frame, row) for tracks confirmed this update, at their earlier
+        # frames; read by BeeTracking after each update().
+        self.backfill: List[Tuple[int, dict]] = []
         self.frame_count = 0
         
         # Anti-duplicate tracking
@@ -446,6 +459,18 @@ class BeeTracker:
         
         return cost_matrix
     
+    # How far a track may reach for a detection: GATE_BASE bee-widths when it
+    # was seen last frame, GATE_PER_FRAME more for each frame it has been
+    # missed, up to match_distance_multiplier. A bee covers ~1 width a frame
+    # at most; the flat 8 widths (~400 px) let a track that missed its bee for
+    # one frame take another bee's detection across the frame — an id swap.
+    GATE_BASE = 3.0
+    GATE_PER_FRAME = 1.0
+
+    def _gate(self, track, max_distance):
+        widths = self.GATE_BASE + self.GATE_PER_FRAME * max(track.time_since_update - 1, 0)
+        return min(max_distance, self._get_bee_size() * widths)
+
     def _is_duplicate_track(self, track: Track) -> bool:
         """
         Check if track is a duplicate using ADAPTIVE distance threshold.
@@ -582,30 +607,32 @@ class BeeTracker:
         for track in self.tracks:
             track.predict()
         
-        # Calculate cost matrix
-        cost_matrix = self._get_cost_matrix(detections)
-        
-        # Hungarian assignment
+        # Hungarian assignment in two stages: confirmed tracks first, then
+        # tentative ones (not yet confirmed) on the detections left over. In
+        # one shared assignment a tentative track — often a flicker of noise
+        # beside a real bee — could take the bee's detection, the real track
+        # went unmatched and coasted, and the bee came back as a new track: a
+        # "Confirm a track after" above 0 split real bees instead of only
+        # holding noise back. Standard practice (SORT, ByteTrack).
         matched_tracks = set()
         matched_detections = set()
-        
+        cost_matrix = self._get_cost_matrix(detections)
         if cost_matrix.size > 0:
-            row_indices, col_indices = linear_sum_assignment(cost_matrix)
-            
-            for row, col in zip(row_indices, col_indices):
-                cost = cost_matrix[row, col]
-                
-                # Adaptive distance threshold
-                bee_size = self._get_bee_size()
-                max_distance = bee_size * self.match_distance_multiplier
-                
-                # IoU is already factored into cost, no need for hard gate
-                if cost < max_distance:
-                    track = self.tracks[row]
-                    detection = detections[col]
-                    track.update(detection, frame_num)
-                    matched_tracks.add(row)
-                    matched_detections.add(col)
+            max_distance = self._get_bee_size() * self.match_distance_multiplier
+            confirmed = [i for i, t in enumerate(self.tracks) if t.hits >= t.min_hits]
+            tentative = [i for i, t in enumerate(self.tracks) if t.hits < t.min_hits]
+            for stage in (confirmed, tentative):
+                cols = [j for j in range(len(detections)) if j not in matched_detections]
+                if not stage or not cols:
+                    continue
+                sub = cost_matrix[np.ix_(stage, cols)]
+                for r, c in zip(*linear_sum_assignment(sub)):
+                    # IoU is already factored into cost, no need for hard gate
+                    if sub[r, c] < self._gate(self.tracks[stage[r]], max_distance):
+                        row, col = stage[r], cols[c]
+                        self.tracks[row].update(detections[col], frame_num)
+                        matched_tracks.add(row)
+                        matched_detections.add(col)
         
         # Handle unmatched detections
         unmatched_detections = set(range(len(detections))) - matched_detections
@@ -623,6 +650,7 @@ class BeeTracker:
                 self.tracks.append(new_track)
         
         # Remove dead/duplicate tracks
+        self.backfill = []
         active_tracks = []
         for track in self.tracks:
             if track.is_dead:
@@ -635,6 +663,9 @@ class BeeTracker:
             else:
                 active_tracks.append(track)
                 if track.is_confirmed:
+                    if track.id not in self.confirmed_track_ids and track.pending:
+                        self.backfill.extend(self._backfill_rows(track, frame_num))
+                    track.pending = []
                     self.confirmed_track_ids.add(track.id)
         
         self.tracks = active_tracks
@@ -664,6 +695,23 @@ class BeeTracker:
         
         return results
     
+    @staticmethod
+    def _backfill_rows(track, frame_num):
+        """The just-confirmed track at the frames it was detected in before,
+        as ``(frame, row)`` — the same row shape ``update`` returns."""
+        rows = []
+        for frame, (x1, y1, x2, y2), conf, source, taxon in track.pending:
+            if frame >= frame_num:
+                continue          # this frame is reported as usual
+            rows.append((frame, {
+                'track_id': track.id, 'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
+                'cx': (x1 + x2) / 2, 'cy': (y1 + y2) / 2,
+                'confidence': conf, 'source': source, 'taxon': taxon,
+                'bee_id': None, 'bee_id_method': None, 'bee_id_confidence': 0.0,
+                'history': [],
+            }))
+        return rows
+
     def get_active_tracks(self):
         """Get all confirmed active tracks."""
         results = []

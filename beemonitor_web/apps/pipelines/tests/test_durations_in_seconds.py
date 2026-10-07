@@ -91,3 +91,19 @@ class OneLostTrackSettingTests(TestCase):
         self.assertNotIn("beetrack_max_resurrection_seconds", names)
         self.assertTrue(names["beetrack_max_age_seconds"].get("help"))
         self.assertTrue(names["beetrack_min_hits_seconds"].get("help"))
+
+
+class ConfirmDefaultMigrationTests(TestCase):
+    def test_untouched_zero_moves_to_0_2_and_a_choice_is_kept(self):
+        user = get_user_model().objects.create_user("c", password="x")
+        p = Pipeline.objects.create(user=user, title="P", steps=[
+            {"id": "a", "block_type": "track.mot",
+             "config": {"tracker": "beetrack", "beetrack_min_hits_seconds": "0"}},
+            {"id": "b", "block_type": "track.mot",
+             "config": {"tracker": "beetrack", "beetrack_min_hits_seconds": "0.5"}},
+        ])
+        import_module("apps.pipelines.migrations.0009_confirm_tracks_after_0_2s").forwards(django_apps, None)
+        p.refresh_from_db()
+        cfg = {s["id"]: s["config"] for s in p.steps}
+        self.assertEqual(cfg["a"]["beetrack_min_hits_seconds"], "0.2")
+        self.assertEqual(cfg["b"]["beetrack_min_hits_seconds"], "0.5")
