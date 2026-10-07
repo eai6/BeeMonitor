@@ -262,13 +262,3 @@ class PhotoBatchPageTests(TestCase):
 
         self.assertEqual(list(launch.call_args.args[1]), [self.photo])
         self.assertTrue(launch.call_args.kwargs["fresh"])
-
-    def test_a_cause_rerun_finds_the_photos(self):
-        from django.urls import reverse
-
-        with mock.patch("apps.pipelines.engine.launch_batch",
-                        return_value=(self.batch_id, [self.photo.pk], 0)) as launch:
-            self.client.post(reverse("pipelines:batch_rerun", kwargs={"batch_id": self.batch_id}),
-                             {"scope": "all"})
-
-        self.assertEqual(launch.call_args.args[1], [self.photo])

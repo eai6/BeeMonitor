@@ -101,14 +101,6 @@ their reason.
             {% if g.fixed %}<span class="text-[11px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700"
                   title="A fix for this shipped after this run — so re-running is worth doing">fixed since</span>{% endif %}
           </div>
-          {% if can_rerun and g.video_ids %}
-          <form method="post" action="{% url 'pipelines:batch_rerun' batch_id=batch_id %}" class="shrink-0">
-            {% csrf_token %}
-            <input type="hidden" name="scope" value="cause">
-            <input type="hidden" name="cause" value="{{ g.cause.key }}">
-            <button type="submit" class="text-xs text-amber-700 hover:underline whitespace-nowrap">Re-run these {{ g.count }}</button>
-          </form>
-          {% endif %}
         </div>
         <p class="mt-1.5 text-[11px] text-red-900 leading-4">{{ g.cause.detail }} <span class="text-red-700">{{ g.cause.action }}</span></p>
         {% comment %}
