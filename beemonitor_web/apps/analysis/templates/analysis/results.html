@@ -198,6 +198,7 @@
         {% endfor %}
       </tbody>
     </table>
+    {% if events_data.preview %}<p class="px-4 py-2 text-xs text-gray-500">Showing the first {{ events_data.preview }} of {{ events_data.total }} rows — download the CSV for all of them.</p>{% endif %}
   </div>
 </div>
 {% endif %}
@@ -272,6 +273,7 @@
         {% endfor %}
       </tbody>
     </table>
+    {% if tracking_data.preview %}<p class="px-4 py-2 text-xs text-gray-500">Showing the first {{ tracking_data.preview }} of {{ tracking_data.total }} rows — download the CSV for all of them.</p>{% endif %}
   </div>
 </div>
 {% endif %}
@@ -312,6 +314,7 @@
         {% endfor %}
       </tbody>
     </table>
+    {% if interactions_data.preview %}<p class="px-4 py-2 text-xs text-gray-500">Showing the first {{ interactions_data.preview }} of {{ interactions_data.total }} rows — download the CSV for all of them.</p>{% endif %}
   </div>
 </div>
 {% endif %}

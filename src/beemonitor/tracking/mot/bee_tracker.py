@@ -154,8 +154,17 @@ class Track:
             self._id = Track._next_confirmed_id
             Track._next_confirmed_id += 1
     
+    # While a track is lost its velocity decays by this much per frame. A
+    # missed bee is usually sitting still (in a nest, on a flower, out of
+    # focus), not flying on at its last speed; undamped, a lost track coasted
+    # hundreds of pixels — off the frame — in the 2 s it is kept, so the bee
+    # reappearing where it was got a new id.
+    LOST_VELOCITY_DECAY = 0.7
+
     def predict(self):
         """Predict next position."""
+        if self.time_since_update > 0:
+            self.kf.state[2:] *= self.LOST_VELOCITY_DECAY
         predicted_pos = self.kf.predict()
         self.age += 1
         self.time_since_update += 1
@@ -449,6 +458,12 @@ class BeeTracker:
         """
         if not track.is_confirmed:
             return False
+        # Only a track on this frame's detection can be a duplicate. A lost
+        # track that another bee walks past is a different bee waiting to be
+        # seen again; deleting it (which skipped the resurrection pool) split
+        # one bee into two ids every time another passed it at a nest entrance.
+        if track.time_since_update != 0:
+            return False
         
         # Get adaptive threshold
         bee_size = self._get_bee_size()
@@ -474,6 +489,11 @@ class BeeTracker:
             # Check distance
             other_pos = np.array(other_track.centroid)
             distance = np.linalg.norm(track_pos - other_pos)
+            # Two tracks each on their own detection are two bees, however
+            # close; a duplicate is a second box on the same bee, which overlaps.
+            if (other_track.time_since_update != 0
+                    or self._calculate_iou(track.last_bbox, other_track.last_bbox) < 0.5):
+                continue
             
             if distance < duplicate_threshold:
                 # Close tracks - check which is older/more stable

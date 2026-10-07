@@ -1778,6 +1778,17 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
                 by_track, floor),
             primitives.EVENT_FIELDS)
 
+        # The page shows the head of each long table; the CSV beside it has
+        # every row. A 10-minute clip's tracking table is ~100k rows x 17
+        # columns, and writing all of it into the HTML (hidden or not) made the
+        # page take minutes to load. Counts and tiles still read the totals.
+        for key in ("tracking_data", "events_data", "interactions_data"):
+            table = ctx.get(key) or {}
+            rows = table.get("rows") or []
+            if len(rows) > RESULTS_PREVIEW_ROWS:
+                table["rows"] = rows[:RESULTS_PREVIEW_ROWS]
+                table["preview"] = RESULTS_PREVIEW_ROWS
+
         # The base measurements this clip produced, not derived answers.
         # Entries/Exits/Nests/Trips were four ways of slicing the event table,
         # and on a pipeline that measured none of them they were four zeros —
@@ -2600,6 +2611,10 @@ def job_tracks(job, tracking):
     frames = [dict(zip(headers, r)) for r in tracking.get("rows") or []]
     fps = fps_with_source(result.summary_stats or {}, job.video)[0]
     return track_tables.track_rows(frames, by_track, floor, fps), by_track, floor
+
+
+# Rows rendered per table on a results page; downloads carry all of them.
+RESULTS_PREVIEW_ROWS = 500
 
 
 def _rows_as_table(rows, preferred_fields=()):
