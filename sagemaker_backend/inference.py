@@ -131,16 +131,18 @@ def predict_fn(payload, pipeline):
     if profiler is not None:
         profiler.reset()
 
-    if payload.get("task") == "sample_label":
-        return {**_sample_label_batch(payload, pipeline), **_timings(profiler)}
-    if payload.get("task") == "pre_annotate":
-        return {**_pre_annotate(payload, pipeline), **_timings(profiler)}
-    if payload.get("task") == "annotate_video":
-        return {**_annotate_video(payload, pipeline), **_timings(profiler)}
-    if payload.get("task") == "transcode":
-        return {**_transcode(payload, pipeline), **_timings(profiler)}
-    if payload.get("task") == "detect_photo":
-        return {**_detect_photo(payload, pipeline), **_timings(profiler)}
+    tasks = {"sample_label": _sample_label_batch, "pre_annotate": _pre_annotate,
+             "annotate_video": _annotate_video, "transcode": _transcode,
+             "detect_photo": _detect_photo}
+    task = tasks.get(payload.get("task"))
+    if task is not None:
+        started = time.time()
+        out = {**task(payload, pipeline), **_timings(profiler)}
+        # The instance was busy for the whole handler, and that is what the web
+        # app shows as GPU time and bills. A task that doesn't time itself
+        # (detect_photo didn't) reported none, so its runs showed 0s and cost 0.
+        out.setdefault("execution_seconds", round(time.time() - started, 2))
+        return out
 
     job_id = payload["job_id"]
     user_id = str(payload["user_id"])
