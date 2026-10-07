@@ -4,6 +4,8 @@ Job lookups read through ``Video.accessible``, which is clips only unless asked
 for photos, so the run page's "Full job results" link 404'd on every photo.
 """
 
+from unittest import mock
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
@@ -26,7 +28,9 @@ class PhotoResultsTests(TestCase):
         JobResult.objects.create(job=self.job, summary_stats={"photo": PHOTO})
 
     def test_the_results_page_shows_the_photo_and_its_insects(self):
-        resp = self.client.get(reverse("analysis:results", kwargs={"pk": self.job.pk}))
+        # Crop links need a presigned URL; CI has no AWS credentials.
+        with mock.patch("config.storage.presigned_get", return_value="https://s3/x"):
+            resp = self.client.get(reverse("analysis:results", kwargs={"pk": self.job.pk}))
 
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Bombus impatiens")
