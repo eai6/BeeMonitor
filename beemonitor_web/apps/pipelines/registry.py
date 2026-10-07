@@ -81,16 +81,28 @@ TRACKER_SETTING_PREFIX = {
 }
 
 
-def _tf(name, label, default, show, field_type="number", choices=None):
-    return {"name": name, "label": label, "field_type": field_type, "required": False,
-            "default": default, "choices": choices,
-            "show_if": {"field": "tracker", "value": show}}
+def _tf(name, label, default, show, field_type="number", choices=None, worker_default=None):
+    field = {"name": name, "label": label, "field_type": field_type, "required": False,
+             "default": default, "choices": choices,
+             "show_if": {"field": "tracker", "value": show}}
+    if worker_default is not None:
+        # The worker's own value when nothing is sent. Set where the builder's
+        # default differs from it, so the builder's default is still sent.
+        field["worker_default"] = worker_default
+    return field
 
 
 TRACKER_FIELDS = [
-    _tf("beetrack_max_age_seconds", "Keep a lost track (seconds)", 0.5, "beetrack"),
+    # 2.0 / 1.0 rather than the library's 0.5 / 0.3 (tuned on bee hotels, where
+    # a bee leaving the frame is gone). On a 10-minute pollen-assay clip with
+    # ~6 bees in view, 0.5 / 0.3 split them into 304 tracks, median 1.8 s; most
+    # replacement tracks began ~1.1 s after the last detection, 9 px from where
+    # the old one ended — the same bee, missed for a second.
+    _tf("beetrack_max_age_seconds", "Keep a lost track (seconds)", 2.0, "beetrack",
+        worker_default=0.5),
     _tf("beetrack_min_hits_seconds", "Confirm a track after (seconds)", 0.0, "beetrack"),
-    _tf("beetrack_max_resurrection_seconds", "Revive a dead track within (seconds)", 0.3, "beetrack"),
+    _tf("beetrack_max_resurrection_seconds", "Revive a dead track within (seconds)", 1.0, "beetrack",
+        worker_default=0.3),
     _tf("beetrack_iou_threshold", "Match overlap (IoU)", 0.25, "beetrack"),
 
     _tf("byte_track_high_thresh", "High-score threshold", 0.25, "bytetrack,botsort"),

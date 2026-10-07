@@ -1394,9 +1394,17 @@ def tracker_settings(mot_config: dict) -> dict:
     for field in TRACKER_FIELDS:
         name = field["name"]
         prefix = next((p for p in prefixes if name.startswith(p)), None)
-        if prefix is None or cfg.get(name) in (None, ""):
+        if prefix is None:
             continue
-        value, default = cfg[name], field["default"]
+        value = cfg.get(name)
+        # Compared with what the worker would use unsent: where the builder's
+        # default differs from it (worker_default), an unset field still sends
+        # the builder's default.
+        default = field.get("worker_default", field["default"])
+        if value in (None, ""):
+            if "worker_default" not in field:
+                continue
+            value = field["default"]
         if field["field_type"] == "number":
             try:
                 value = float(value)
@@ -1413,11 +1421,15 @@ def tracker_settings(mot_config: dict) -> dict:
 
 
 def _pipeline_tracker_settings(step, steps):
-    """Settings for the tracker chosen on the downstream MOT node."""
+    """Settings for the tracker chosen on the downstream MOT node.
+
+    Without one, the defaults: a Detect node sharing the GPU pass with a
+    tracked one (nests beside bees) must hash the same, or the pass runs twice.
+    """
     for s in downstream_ids(step.get("id"), steps):
         if s.get("block_type") == "track.mot":
             return tracker_settings(s.get("config") or {})
-    return {}
+    return tracker_settings({})
 
 
 def _pipeline_tracker(step, steps):
