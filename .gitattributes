@@ -1,3 +1,6 @@
 
 # Vendored static minisign binary (built by .github/workflows/build-minisign.yml)
 hardware/provision/minisign-* binary
+
+# Paper data and notebooks: keep them out of the GitHub language bar
+research/** linguist-documentation
