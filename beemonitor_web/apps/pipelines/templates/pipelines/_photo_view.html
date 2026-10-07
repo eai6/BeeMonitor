@@ -1,0 +1,36 @@
+{% comment %}A photo run (memory/45): boxes as % of the photo, so they sit on the
+  preview at any size; each insect's crop and species beside it.{% endcomment %}
+<div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] gap-5 mb-5">
+  <section class="bg-white border border-gray-200 rounded-lg p-3">
+    {% if photo_view.preview_url %}
+    <div class="relative">
+      <img src="{{ photo_view.preview_url }}" alt="The photo" class="w-full rounded">
+      {% for i in photo_view.insects %}
+      <div class="absolute border-2 border-amber-500 rounded-sm" style="left:{{ i.left }}%;top:{{ i.top }}%;width:{{ i.width }}%;height:{{ i.height }}%">
+        <span class="absolute -top-5 left-0 text-[11px] font-semibold text-white bg-amber-600 px-1 rounded whitespace-nowrap">{{ i.id }}{% if i.species %} {{ i.species }}{% endif %}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <p class="text-xs text-gray-600 mt-2">{{ photo_view.width }} × {{ photo_view.height }} px{% if photo_view.tiles and photo_view.tiles > 1 %} · detected on {{ photo_view.tiles }} overlapping tiles{% endif %}.</p>
+  </section>
+  <section class="bg-white border border-gray-200 rounded-lg p-4 space-y-3">
+    <div class="grid grid-cols-2 gap-3">
+      <div><div class="text-2xl font-bold">{{ photo_view.insects|length }}</div><div class="text-xs text-gray-600">detected</div></div>
+      <div><div class="text-2xl font-bold">{{ photo_view.named }}</div><div class="text-xs text-gray-600">species named</div></div>
+    </div>
+    <h2 class="font-semibold">Each insect</h2>
+    {% for i in photo_view.insects %}
+    <div class="grid grid-cols-[56px_minmax(0,1fr)_56px] gap-3 items-center">
+      {% if i.crop_url %}<a href="{{ i.crop_url }}" target="_blank"><img src="{{ i.crop_url }}" alt="insect {{ i.id }}" class="w-14 h-14 object-contain bg-gray-50 rounded border border-gray-200"></a>{% else %}<span></span>{% endif %}
+      <div class="min-w-0">
+        <div class="text-sm font-semibold {% if i.species and i.species != 'unidentified' %}italic{% endif %}">{{ i.species|default:i.class }}</div>
+        <div class="text-xs text-gray-600">insect {{ i.id }} · {{ i.class }}{% if i.best_guess %} · best guess {{ i.best_guess }}{% endif %}</div>
+      </div>
+      <span class="text-sm tabular-nums text-right">{% if i.species_confidence is not None %}{{ i.species_confidence|floatformat:2 }}{% endif %}</span>
+    </div>
+    {% empty %}
+    <p class="text-sm text-gray-600">No insects were detected in this photo.</p>
+    {% endfor %}
+  </section>
+</div>

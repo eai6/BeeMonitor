@@ -861,7 +861,7 @@ class JobDetailView(LoginRequiredMixin, DetailView):
     def get_queryset(self):
         # Read scope follows the VIDEO's device shares (viewer/manager see the
         # owner's runs on shared devices), not just who launched the job.
-        return (Job.objects.filter(video__in=Video.accessible(self.request.user))
+        return (Job.objects.filter(video__in=Video.accessible(self.request.user, photos=True))
                 .select_related("video"))
 
 
@@ -1677,7 +1677,7 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         # Device shares grant read access to results on the video's device.
         job = get_object_or_404(
             Job, pk=self.kwargs["pk"],
-            video__in=Video.accessible(self.request.user))
+            video__in=Video.accessible(self.request.user, photos=True))
         ctx["job"] = job
 
         try:
@@ -1685,6 +1685,20 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
             ctx["result"] = result
         except JobResult.DoesNotExist:
             ctx["result"] = None
+            return ctx
+
+        # A photo job (memory/45) has no clip, tracks or tables: it is the
+        # photo, its boxes and each insect's species, as on its run page.
+        if job.video.kind == Video.Kind.PHOTO:
+            from apps.pipelines import executors as pipeline_executors
+            from apps.pipelines import tracks as track_tables
+            from apps.pipelines.views import photo_view_of
+
+            photo = (result.summary_stats or {}).get("photo")
+            if photo:
+                run = pipeline_executors._run_for_job(job)
+                ctx["photo_view"] = photo_view_of(
+                    photo, track_tables.species_floor(run.steps if run else None))
             return ctx
 
         # Build paths — use DB values or construct from modal_job_id as fallback
@@ -2506,7 +2520,7 @@ class TrackCropsView(LoginRequiredMixin, View):
     def get(self, request, pk, track_id):
         from apps.pipelines.ops import _read_csv
 
-        job = get_object_or_404(Job, pk=pk, video__in=Video.accessible(request.user))
+        job = get_object_or_404(Job, pk=pk, video__in=Video.accessible(request.user, photos=True))
         result = getattr(job, "result", None)
         df = _read_csv(getattr(result, "crops_csv_path", "") or "") if result else None
         crops = []
@@ -2544,7 +2558,7 @@ class JobPrimitiveCsvView(LoginRequiredMixin, View):
             raise Http404("Unknown table.")
         job = get_object_or_404(Job, pk=pk)
         if job.user_id != request.user.id and not Video.accessible(
-                request.user).filter(pk=job.video_id).exists():
+                request.user, photos=True).filter(pk=job.video_id).exists():
             raise Http404("No such job.")
 
         result = getattr(job, "result", None)

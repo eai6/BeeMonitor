@@ -595,9 +595,7 @@ def photo_view(run, floor=None):
     """What the run page shows for a photo run (memory/45): the preview with a
     box per insect (as % of the photo, so they scale with the image), and each
     insect's crop, class and species. None for clip runs."""
-    from config.storage import presigned_get
-
-    from .executors import UNIDENTIFIED, _number
+    from .executors import _number
 
     photo = None
     for out in (run.context or {}).values():
@@ -609,6 +607,15 @@ def photo_view(run, floor=None):
     if floor is None:
         species_step = next((s for s in run.steps or [] if s.get("block_type") == "identify.species"), None)
         floor = _number(((species_step or {}).get("config") or {}).get("min_mean_confidence"), 0.0)
+    return photo_view_of(photo, floor)
+
+
+def photo_view_of(photo, floor=0.0):
+    """photo_view for one photo result (a job's summary_stats["photo"])."""
+    from config.storage import presigned_get
+
+    from .executors import UNIDENTIFIED
+
     w, h = float(photo.get("width") or 1), float(photo.get("height") or 1)
     insects = []
     for d in photo.get("detections") or []:
