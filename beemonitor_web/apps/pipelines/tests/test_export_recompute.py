@@ -89,7 +89,7 @@ class ExportRecomputeTests(TestCase):
     def test_the_bee_inside_the_tube_reaches_the_export(self):
         body = self._download("interactions")
 
-        self.assertIn("nest_1", body)
+        self.assertIn("reference_1", body)
         self.assertIn("reference", body)
         self.assertIn("inside", body)
 
@@ -105,7 +105,7 @@ class ExportRecomputeTests(TestCase):
 
         self.assertIn("enter", body)
         self.assertIn("exit", body)
-        self.assertIn("nest_1", body)
+        self.assertIn("reference_1", body)
 
     def test_recomputed_rows_still_carry_provenance(self):
         header, first = self._download("interactions").splitlines()[:2]

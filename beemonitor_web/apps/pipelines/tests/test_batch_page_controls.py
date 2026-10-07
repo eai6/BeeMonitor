@@ -324,7 +324,7 @@ class PrimitiveExportTests(TestCase):
         body = self._download("interactions")
 
         self.assertIn("organism", body)
-        self.assertIn("nest_1", body)
+        self.assertIn("reference_1", body)
         self.assertIn("inside", body)
 
     def test_exported_rows_carry_provenance_and_absolute_time(self):
@@ -354,8 +354,19 @@ class PrimitiveExportTests(TestCase):
 
         header = self._download("interactions").splitlines()[0]
 
-        self.assertIn("b_label", header)
         self.assertIn("min_distance", header)
+        # b_label only repeated b in words; one name per reference.
+        self.assertNotIn("b_label", header)
+
+    def test_references_export_under_one_name(self):
+        """A stored run's ``nest_1`` exports as ``reference_1``: not every
+        reference is a nest."""
+        self._run_with(self.INTERACTION)
+
+        body = self._download("interactions")
+
+        self.assertIn("reference_1", body)
+        self.assertNotIn("nest_1", body)
 
     def test_events_export_the_same_way(self):
         self._run_with({"artifact": "events", "table_kind": "events",
@@ -366,7 +377,7 @@ class PrimitiveExportTests(TestCase):
         body = self._download("events")
 
         self.assertIn("enter", body)
-        self.assertIn("nest_1", body)
+        self.assertIn("reference_1", body)
 
     def test_the_analyzer_table_is_flagged_on_the_page(self):
         self._run_with(self.INTERACTION)

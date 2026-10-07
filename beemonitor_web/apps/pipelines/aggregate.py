@@ -767,12 +767,15 @@ def _merge_per_reference(bucket, rows, count_key):
     makes the same tube comparable across clips. Labels come along so the page
     never has to invent one.
     """
+    from .ops import _reference_label
+    from .primitives import reference_id
+
     for row in rows or []:
-        ref_id = str(row.get("id", ""))
+        ref_id = str(reference_id(row.get("id", "")) or "")
         if not ref_id:
             continue
         entry = bucket.setdefault(ref_id, {
-            "id": ref_id, "label": row.get("label") or ref_id,
+            "id": ref_id, "label": _reference_label(ref_id),
             count_key: 0, "visitors": 0, "partners": 0, "dwell_sec": 0.0,
             "duration_sec": 0.0, "clips": 0,
         })
@@ -849,18 +852,21 @@ def aggregate_events(outputs):
     visitors are: track ids are unique only within one clip. Stated on the page
     rather than hidden.
     """
+    from .ops import _reference_label
+    from .primitives import reference_id
+
     per_ref, totals = {}, {"event_count": 0, "enter_count": 0,
                            "exit_count": 0, "subjects": 0}
     for out in outputs:
         for key in ("event_count", "enter_count", "exit_count", "subjects"):
             totals[key] += out.get(key, 0) or 0
         for row in out.get("per_reference") or []:
-            ref_id = str(row.get("id", ""))
+            ref_id = str(reference_id(row.get("id", "")) or "")
             if not ref_id:
                 continue
             entry = per_ref.setdefault(ref_id, {
-                "id": ref_id, "label": row.get("label") or ref_id,
-                "kind": row.get("kind", "reference"),
+                "id": ref_id, "label": _reference_label(ref_id),
+                "kind": "reference" if row.get("kind") in (None, "nest") else row["kind"],
                 "events": 0, "enter": 0, "exit": 0, "subjects": 0, "clips": 0,
             })
             for key in ("events", "enter", "exit", "subjects"):

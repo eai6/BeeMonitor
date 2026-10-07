@@ -121,9 +121,13 @@ class EventsBlockTests(PrimitiveBlockTestCase):
     def test_worker_nest_events_join_the_same_table_but_stay_labelled(self):
         out = self._execute("analyze.events", with_worker_events=True)
 
+        # Every target is a reference; the source column says whose it was.
         kinds = {r["target_kind"] for r in out["rows"]}
-        self.assertEqual(kinds, {"reference", "nest"})
+        self.assertEqual(kinds, {"reference"})
         self.assertEqual({r["source"] for r in out["rows"]}, {"derived", "gpu"})
+        worker = {r["target"] for r in out["rows"] if r["source"] == "gpu"}
+        self.assertEqual(worker, {"reference_9"})
+        self.assertFalse(any("target_label" in r for r in out["rows"]))
 
     def test_no_reference_says_so_instead_of_reporting_zero(self):
         steps = self._steps("analyze.events")

@@ -21,6 +21,7 @@ a downstream consumer never has to care which side of the wire a row came from
 -- only what ``source`` says about it.
 """
 
+import re
 import logging
 
 logger = logging.getLogger(__name__)
@@ -177,11 +178,11 @@ def events_from_gpu(df, fps):
             "subject": ops._as_native(r[cols["subject"]]) if cols["subject"] else "",
             "subject_kind": ORGANISM,
             "action": action,
-            "target": ops._as_native(target),
-            # The worker's targets are nests it found itself, not the user's
-            # references — kept distinct so a count of ROI visits can never
-            # silently absorb them.
-            "target_kind": "nest",
+            "target": reference_id(ops._as_native(target)),
+            # The worker's targets are references it found itself, not the
+            # user's — ``source`` (gpu vs derived) keeps the two apart, so a
+            # count of ROI visits can never silently absorb them.
+            "target_kind": REFERENCE,
             "source": GPU,
         })
     rows.sort(key=lambda r: (r["frame"], r["action"], str(r["subject"])))
@@ -237,7 +238,7 @@ def interactions_from_gpu(df, fps):
             "duration_sec": round(duration, 3) if duration is not None else None,
             "a": ops._as_native(r[cols["a"]]) if cols["a"] else "",
             "a_kind": ORGANISM,
-            "b": ops._as_native(partner),
+            "b": reference_id(ops._as_native(partner)) if to_reference else ops._as_native(partner),
             "b_kind": REFERENCE if to_reference else ORGANISM,
             "relation": PROXIMITY,
             "source": GPU,
@@ -314,6 +315,52 @@ def summarize_interactions(rows):
         "per_reference": per_reference,
         "rows": rows,
     }
+
+
+_REFERENCE_ID = re.compile(r"^(?:nest|region|reference|tube)[ _-]?(.+)$", re.IGNORECASE)
+
+
+def reference_id(value):
+    """Every reference's id, in one vocabulary: ``reference_<n>``.
+
+    A reference is a nest tube on a hotel, a flower, a drawn region — the
+    tables used to call each by what the first one was (``nest_5``), so a
+    flower came out as a nest. ``hotel`` stays itself: it is the whole hotel,
+    not one of the numbered references inside it.
+    """
+    if value is None:
+        return value
+    text = str(value).strip()
+    m = _REFERENCE_ID.match(text)
+    if m:
+        return f"reference_{m.group(1)}"
+    if text.isdigit():   # the worker's bare box id
+        return f"reference_{text}"
+    return value
+
+
+# The column each table names a reference in, and its kind column.
+_REFERENCE_COLUMNS = {"events": (("target", "target_kind"),),
+                      "interactions": (("b", "b_kind"),)}
+
+
+def tidy_references(kind, rows):
+    """Rows with every reference named ``reference_<n>``, and no label column.
+
+    The ``b_label`` / ``target_label`` columns repeated the id in words
+    ("Nest 5" beside ``nest_5``); one name per reference is enough. Applied on
+    the way out too, so runs computed under the old names export the new ones.
+    """
+    cols = _REFERENCE_COLUMNS.get(kind, ())
+    out = []
+    for row in rows or []:
+        row = {k: v for k, v in row.items() if k not in ("b_label", "target_label")}
+        for col, kind_col in cols:
+            if row.get(kind_col) in ("nest", REFERENCE):
+                row[kind_col] = REFERENCE
+                row[col] = reference_id(row.get(col))
+        out.append(row)
+    return out
 
 
 def label_references(rows, refs, key="b"):

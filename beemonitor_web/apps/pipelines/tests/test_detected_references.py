@@ -43,7 +43,7 @@ class DetectedReferenceTests(TestCase):
             result({"1": [0, 0, 192, 108], "2": [960, 540, 1152, 648]}), self.video)
 
         self.assertEqual(len(refs), 2)
-        self.assertEqual({r["id"] for r in refs}, {"nest_1", "nest_2"})
+        self.assertEqual({r["id"] for r in refs}, {"reference_1", "reference_2"})
 
     def test_pixel_boxes_are_normalised_by_the_measured_frame_size(self):
         refs = ops.detected_references(result({"1": [960, 540, 1920, 1080]}), self.video)
@@ -79,7 +79,7 @@ class DetectedReferenceTests(TestCase):
         # Both present: the tubes win, or every episode would be counted twice.
         both = result({"1": [0.1, 0.1, 0.3, 0.3]}, hotel=[0.0, 0.0, 1.0, 1.0])
         self.assertEqual([r["id"] for r in ops.detected_references(both, self.video)],
-                         ["nest_1"])
+                         ["reference_1"])
 
         only_hotel = result(hotel=[0.0, 0.0, 1.0, 1.0])
         self.assertEqual([r["id"] for r in ops.detected_references(only_hotel, self.video)],
@@ -95,7 +95,7 @@ class DetectedReferenceTests(TestCase):
             result({"1": [0.1, 0.1, 0.3, 0.3], "2": "nonsense", "3": [1, 2]}),
             self.video)
 
-        self.assertEqual([r["id"] for r in refs], ["nest_1"])
+        self.assertEqual([r["id"] for r in refs], ["reference_1"])
 
     def test_the_box_is_ordered_regardless_of_corner_order(self):
         refs = ops.detected_references(result({"1": [0.3, 0.3, 0.1, 0.1]}), self.video)

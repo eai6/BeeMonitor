@@ -187,6 +187,9 @@ def primitive_with_identity(kind, rows, by_track, floor=0.0):
     ``b`` when two insects met — that partner's identity goes in ``b_`` columns.
     A reference (a tube, a flower) has no identity and gets blanks.
     """
+    from .primitives import tidy_references
+
+    rows = tidy_references(kind, rows)
     if not has_identity(by_track):
         return rows
     subject = "subject" if kind == "events" else "a"

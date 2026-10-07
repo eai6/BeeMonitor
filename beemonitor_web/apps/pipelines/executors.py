@@ -654,7 +654,6 @@ def _exec_analyze_events(step, run, context, inputs, index):
         episodes = ops.compute_episodes(tidy, refs, gap_frames=_gap_frames(step))
         rows = primitives.events_from_episodes(episodes, fps) + rows
         rows.sort(key=lambda r: (r["frame"], r["action"], str(r["subject"])))
-    primitives.label_references(rows, refs, key="target")
 
     out = {
         "artifact": "events", "table_kind": "events",
@@ -723,7 +722,6 @@ def _exec_analyze_interactions(step, run, context, inputs, index):
     elif want == "organism_reference":
         rows = [r for r in rows if r["b_kind"] == primitives.REFERENCE]
     rows.sort(key=lambda r: (r["start_frame"] is None, r["start_frame"], str(r["a"])))
-    primitives.label_references(rows, refs, key="b")
 
     out = {
         "artifact": "table", "table_kind": "interactions",

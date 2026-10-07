@@ -139,7 +139,7 @@ class GpuNormalisationTests(SimpleTestCase):
         # ROI visits must not be able to absorb it silently.
         df = pd.DataFrame([{"frame": 1, "action": "Entry", "nest": "nest_1"}])
 
-        self.assertEqual(primitives.events_from_gpu(df, 25.0)[0]["target_kind"], "nest")
+        self.assertEqual(primitives.events_from_gpu(df, 25.0)[0]["target_kind"], "reference")
 
     def test_unrecognised_actions_are_dropped_not_guessed(self):
         df = pd.DataFrame([{"frame": 1, "action": "Hover", "nest": "n1"}])
@@ -168,7 +168,7 @@ class GpuNormalisationTests(SimpleTestCase):
 
         rows = primitives.interactions_from_gpu(df, fps=25.0)
 
-        self.assertEqual(rows[0]["b"], "nest_2")
+        self.assertEqual(rows[0]["b"], "reference_2")
         self.assertEqual(rows[0]["b_kind"], "reference")
 
     def test_a_missing_duration_is_recovered_from_the_frames(self):

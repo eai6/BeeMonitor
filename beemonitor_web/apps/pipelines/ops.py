@@ -290,22 +290,32 @@ def roi_references(roi_output):
     if hotel:
         _add("hotel", "Hotel", hotel, roi_output.get("hotel_polygon"))
 
+    # Tubes and drawn regions are all references: one numbering, reference_<n>.
+    # A tube keeps its layout id (stable across the batch's clips); a region
+    # keeps its own id unless a tube already holds that number.
+    taken = set()
+
+    def _numbered(wanted, fallback):
+        n = wanted if wanted not in (None, "") else fallback
+        while str(n) in taken:
+            n = (int(n) + 1) if str(n).isdigit() else f"{n}b"
+        taken.add(str(n))
+        return f"reference_{n}", f"Reference {n}"
+
     for n, tube in enumerate(roi_output.get("nest_layout") or [], start=1):
         if isinstance(tube, dict):
-            tube_id = tube.get("id", n)
-            _add(f"nest_{tube_id}", f"Nest {tube_id}", tube.get("box"), tube.get("points"))
+            ref_id, label = _numbered(tube.get("id"), n)
+            _add(ref_id, label, tube.get("box"), tube.get("points"))
         else:
-            _add(f"nest_{n}", f"Nest {n}", tube)
+            _add(*_numbered(None, n), tube)
 
     for n, region in enumerate(roi_output.get("regions") or [], start=1):
         if isinstance(region, dict):
-            # An editor that learns to name regions should put it in `name`;
-            # until then the index is the identity.
-            region_id = region.get("id", n)
-            label = region.get("name") or f"Region {region_id}"
-            _add(f"region_{region_id}", label, region.get("box"), region.get("points"))
+            ref_id, label = _numbered(region.get("id"), n)
+            # An editor that learns to name regions should put it in `name`.
+            _add(ref_id, region.get("name") or label, region.get("box"), region.get("points"))
         else:
-            _add(f"region_{n}", f"Region {n}", region)
+            _add(*_numbered(None, n), region)
 
     return refs
 
@@ -363,7 +373,12 @@ def detected_references(job_result, video=None):
     for box_id, box in boxes.items():
         shape = _norm(box)
         if shape:
-            refs.append({"id": f"nest_{box_id}", "label": _reference_label(box_id),
+            from .primitives import reference_id
+
+            ref_id = reference_id(box_id)
+            if not str(ref_id).startswith("reference_"):
+                ref_id = f"reference_{box_id}"
+            refs.append({"id": ref_id, "label": _reference_label(ref_id),
                          "box": shape, "points": None})
     if hotel and not refs:
         # Only when nothing finer was found — the hotel contains every tube, so
@@ -702,7 +717,7 @@ def _as_references(refs):
             continue
         box, points = (ref if len(ref) == 2 and not isinstance(ref[0], (int, float))
                        else (ref, None))
-        out.append({"id": f"region_{n}", "label": f"Region {n}",
+        out.append({"id": f"reference_{n}", "label": f"Reference {n}",
                     "box": tuple(box), "points": points})
     return out
 
@@ -928,6 +943,9 @@ def summarize_interactions(df, kind=None):
         ref_id = row.get("reference")
         if ref_id in (None, ""):
             continue          # an insect-to-insect interaction has no reference
+        from .primitives import reference_id
+
+        ref_id = reference_id(ref_id)
         bucket = per_ref.setdefault(str(ref_id), {
             "id": str(ref_id), "label": _reference_label(ref_id),
             "interactions": 0, "partners": set(), "duration_sec": 0.0,
@@ -958,17 +976,18 @@ def summarize_interactions(df, kind=None):
 
 
 def _reference_label(ref_id):
-    """A readable name for a reference id written by the worker.
+    """A readable name for a reference id: ``reference_3`` → "Reference 3".
 
-    The worker writes literals like ``nest_3``; the layout would call that
-    "Nest 3". Keeps the two vocabularies from diverging on screen until the
-    editor can carry a real name.
+    The worker writes literals like ``nest_3`` and a bare box id like ``3``;
+    every reference is called a reference, whatever it is (a tube, a flower).
     """
-    text = str(ref_id)
-    if text.startswith("nest_"):
-        return f"Nest {text[5:]}"
-    if text.startswith("region_"):
-        return f"Region {text[7:]}"
+    from .primitives import reference_id
+
+    text = str(reference_id(ref_id))
+    if text.startswith("reference_"):
+        return f"Reference {text[10:]}"
+    if text.isdigit():
+        return f"Reference {text}"
     return text
 
 
