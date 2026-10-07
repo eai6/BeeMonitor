@@ -248,3 +248,5 @@ class AnalysisResults:
         if 'nest' in self.events.columns:
             nest_counts = self.events.groupby('nest')['action'].value_counts().unstack(fill_value=0)
             stats['nest_activity'] = nest_counts.to_dict()
+
+        return stats
