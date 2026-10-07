@@ -1716,6 +1716,8 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
             ctx["events_csv_url"] = _generate_presigned_url(events_path)
         if tracking_path:
             ctx["tracking_csv_url"] = _generate_presigned_url(tracking_path)
+        ctx["overlay_url"] = (reverse("analysis:track_overlay", args=[job.pk])
+                              if tracking_path else "")
         if interactions_path:
             ctx["interactions_csv_url"] = _generate_presigned_url(interactions_path)
         if annotated_path:
@@ -2549,6 +2551,75 @@ class TrackCropsView(LoginRequiredMixin, View):
         return JsonResponse({"track_id": track_id, "crops": crops})
 
 
+class TrackOverlayView(LoginRequiredMixin, View):
+    """The tracks to draw over the original video, per frame (memory/46).
+
+    Built from the tracking CSV the first time a clip is opened and kept beside
+    it, so later views are one small S3 read. Fetched by the page after it has
+    loaded; nothing of it is in the HTML.
+    """
+
+    def get(self, request, pk):
+        import gzip as _gzip
+        import io as _io
+
+        from apps.pipelines import executors as pipeline_executors
+        from apps.pipelines import tracks as track_tables
+        from apps.pipelines.ops import fps_with_source
+
+        from . import overlay
+
+        job = get_object_or_404(Job, pk=pk, video__in=Video.accessible(request.user))
+        result = getattr(job, "result", None)
+        tracking_path = getattr(result, "tracking_csv_path", "") if result else ""
+        if not tracking_path:
+            raise Http404("This clip has no tracks.")
+
+        s3 = get_s3_client()
+        key = overlay.stored_path(tracking_path)
+        body = None
+        try:
+            buf = _io.BytesIO()
+            s3.download_to_stream("processed", key, buf)
+            body = buf.getvalue()
+        except Exception:  # noqa: BLE001 - not built yet
+            body = None
+
+        if not body:
+            buf = _io.BytesIO()
+            try:
+                s3.download_to_stream("processed", tracking_path, buf)
+            except Exception as e:  # noqa: BLE001
+                logger.error("overlay: tracking CSV unreadable (%s): %s", tracking_path, e)
+                raise Http404("This clip's tracks could not be read.")
+            text = buf.getvalue().decode("utf-8", "replace")
+            tracking = _load_csv_from_text(text)
+            tracks_rows, by_track, floor = job_tracks(job, tracking)
+            try:
+                events = track_tables.primitive_with_identity(
+                    "events", pipeline_executors.primitives_for_job(job, "events"),
+                    by_track, floor)
+            except Exception as e:  # noqa: BLE001 - boxes without events still help
+                logger.warning("overlay: events unavailable for job %s: %s", job.pk, e)
+                events = []
+            fps = fps_with_source(result.summary_stats or {}, job.video)[0]
+            body = overlay.encode(overlay.build(
+                text, tracks_rows, events, fps, job.config or {}))
+            try:
+                s3.upload_stream("processed", key, _io.BytesIO(body),
+                                 content_type="application/json")
+            except Exception as e:  # noqa: BLE001 - serve it anyway
+                logger.warning("overlay: could not store %s: %s", key, e)
+
+        if "gzip" in request.META.get("HTTP_ACCEPT_ENCODING", ""):
+            response = HttpResponse(body, content_type="application/json")
+            response["Content-Encoding"] = "gzip"
+        else:
+            response = HttpResponse(_gzip.decompress(body), content_type="application/json")
+        response["Cache-Control"] = "private, max-age=3600"
+        return response
+
+
 class JobPrimitiveCsvView(LoginRequiredMixin, View):
     """The computed events/interactions for one clip, as CSV.
 
@@ -2638,6 +2709,17 @@ def _rows_as_table(rows, preferred_fields=()):
         "rows": [[("" if r.get(h) is None else r.get(h)) for h in ordered] for r in rows],
         "total": len(rows),
     }
+
+
+def _load_csv_from_text(content: str) -> dict:
+    """A CSV's text as the headers + rows table ``_load_csv_from_storage`` returns."""
+    import csv
+    import io
+
+    reader = csv.reader(io.StringIO(content))
+    headers = next(reader, [])
+    rows = list(reader)
+    return {"headers": headers, "rows": rows, "total": len(rows)}
 
 
 def _load_csv_from_storage(blob_path: str, container: str = "processed") -> dict:

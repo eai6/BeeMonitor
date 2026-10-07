@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static %}
 {% block title %}Batch Results - BeeMonitor{% endblock %}
 
 {% comment %}
@@ -251,8 +252,8 @@ their reason.
     Reviewing a clip without leaving the batch. Scanning a day's footage means
     watching one clip after another, and a round trip to a detail page and back
     between each turns a minute of review into ten. The sources are lazy: the
-    proxy re-encodes the annotated video on demand and the stream view presigns
-    the original, so opening this page costs nothing until a row is clicked.
+    stream view presigns the original and the tracks drawn over it are fetched
+    when a row is opened, so this page costs nothing until a row is clicked.
   {% endcomment %}
   <div id="clip-viewer" hidden class="border-b border-gray-200 bg-gray-900">
     <div class="flex items-center justify-between px-4 py-2 text-white">
@@ -280,8 +281,13 @@ their reason.
                 class="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white" title="Close (Esc)">✕</button>
       </div>
     </div>
-    <video id="cv-video" controls autoplay muted playsinline
-           class="w-full bg-black" style="max-height:60vh"></video>
+    {% comment %}The clip with the run's tracks drawn over it as it plays
+      (memory/46); the stage turns as one when the unit is mounted upside down.{% endcomment %}
+    <div id="cv-stage" class="relative bg-black">
+      <video id="cv-video" controls autoplay muted playsinline
+             class="w-full bg-black block" style="max-height:60vh"></video>
+      <canvas id="cv-canvas" class="absolute left-0 top-0 pointer-events-none"></canvas>
+    </div>
     {% comment %}A photo row opens the photo, its boxes and each insect's
       species, fetched when opened (memory/45).{% endcomment %}
     <div id="cv-photo" hidden class="bg-gray-50 p-3"></div>
@@ -308,7 +314,7 @@ their reason.
        {% if r.video %}data-title="{{ r.when|date:"j M, H:i"|default:"clip" }}{% if r.video.device %} · {{ r.video.device.name }}{% endif %}"
        data-original="{% url 'videos:stream' r.video.pk %}"
        {% if photos and r.photo %}data-photo="{% url 'pipelines:run_photo' pk=pipeline.pk run_id=r.run.pk %}"{% endif %}
-       {% if r.result.annotated_video_path %}data-annotated="{% url 'analysis:video_proxy' r.job.pk %}"{% endif %}
+       {% if r.job and r.result.tracking_csv_path %}data-overlay="{% url 'analysis:track_overlay' r.job.pk %}"{% endif %}
        {% if r.job %}data-results="{% url 'analysis:results' r.job.pk %}"{% endif %}
        data-rotate="{% if r.video.device.rotate_180 %}1{% endif %}"{% endif %}>
     {% comment %}
@@ -398,6 +404,7 @@ setTimeout(function(){
 </script>
 {% endif %}
 
+<script src="{% static 'js/track_overlay.js' %}"></script>
 <script>
 // Clip review, inline. Scanning a day's footage is watching one clip after
 // another; a round trip to a detail page between each turns a minute of review
@@ -415,13 +422,17 @@ setTimeout(function(){
   var photoHtml = {};
   var rows   = Array.prototype.slice.call(document.querySelectorAll('.clip-row[data-original]'));
   var at = -1;
-  var showAnnotated = true;
+  var showTracks = true;
+  var stage = document.getElementById('cv-stage');
+  var overlay = window.TrackOverlay ? TrackOverlay(video, document.getElementById('cv-canvas')) : null;
+  var overlayUrl = null;
 
   // A photo row: the photo, its boxes and species, fetched once per photo.
   function renderPhoto(row, url) {
     video.pause();
     video.removeAttribute('src');
-    video.hidden = true;
+    stage.hidden = true;
+    if (overlay) { overlay.clear(); overlayUrl = null; }
     toggle.hidden = true;
     photoBox.hidden = false;
     note.textContent = '';
@@ -446,7 +457,7 @@ setTimeout(function(){
       renderPhoto(row, photoUrl);
     } else {
       photoBox.hidden = true;
-      video.hidden = false;
+      stage.hidden = false;
       renderVideo(row);
     }
 
@@ -462,26 +473,40 @@ setTimeout(function(){
   }
 
   function renderVideo(row) {
-    var annotated = row.getAttribute('data-annotated');
-    var useAnnotated = showAnnotated && !!annotated;
-    var src = useAnnotated ? annotated : row.getAttribute('data-original');
-
+    var src = row.getAttribute('data-original');
     if (video.getAttribute('src') !== src) {
       video.setAttribute('src', src);
       video.load();
       var playing = video.play();
       if (playing && playing.catch) playing.catch(function () {});
     }
-    // The clip's device may be mounted upside down. Both sources turn together:
-    // the overlay is drawn on the unrotated frames, so its boxes stay put.
-    video.classList.toggle('rotate-180', row.getAttribute('data-rotate') === '1');
+    // The clip's device may be mounted upside down: the video and the boxes
+    // turn together, so the boxes stay on their insects.
+    stage.classList.toggle('rotate-180', row.getAttribute('data-rotate') === '1');
 
-    // Only offer the switch when there is something to switch to.
-    toggle.hidden = !annotated;
-    toggle.textContent = useAnnotated ? 'Show original' : 'Show detections';
-    note.textContent = annotated
-      ? (useAnnotated ? 'Annotated — boxes and track IDs drawn by the run.' : 'Original clip, as recorded.')
-      : 'This run rendered no annotated video, so this is the original clip.';
+    var url = row.getAttribute('data-overlay');
+    toggle.hidden = !url || !overlay;
+    toggle.textContent = showTracks ? 'Hide tracks' : 'Show tracks';
+    if (!url || !overlay) {
+      if (overlay) { overlay.clear(); overlayUrl = null; }
+      note.textContent = 'This run produced no tracks, so this is the clip as recorded.';
+      return;
+    }
+    if (!showTracks) {
+      overlay.clear(); overlayUrl = null;
+      note.textContent = 'The clip as recorded.';
+      return;
+    }
+    if (overlayUrl === url) return;
+    overlayUrl = url;
+    note.textContent = 'Loading the tracks…';
+    overlay.load(url)
+      .then(function () {
+        if (overlayUrl === url) note.textContent = 'Boxes and track ids drawn from this run as the clip plays · dashed = the tracker lost the insect. Full results has the per-track view.';
+      })
+      .catch(function () {
+        if (overlayUrl === url) note.textContent = 'Could not load the tracks; this is the clip as recorded.';
+      });
   }
 
   function open(index) {
@@ -497,6 +522,7 @@ setTimeout(function(){
     video.pause();
     video.removeAttribute('src');
     video.load();
+    if (overlay) { overlay.clear(); overlayUrl = null; }
     rows.forEach(function (r) { r.classList.remove('bg-amber-50'); });
     at = -1;
   }
@@ -514,7 +540,7 @@ setTimeout(function(){
   document.getElementById('cv-prev').addEventListener('click', function () { step(1); });
   document.getElementById('cv-next').addEventListener('click', function () { step(-1); });
   document.getElementById('cv-close').addEventListener('click', close);
-  toggle.addEventListener('click', function () { showAnnotated = !showAnnotated; render(); });
+  toggle.addEventListener('click', function () { showTracks = !showTracks; render(); });
 
   document.addEventListener('keydown', function (e) {
     if (viewer.hidden) return;

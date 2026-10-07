@@ -124,22 +124,23 @@ class InlineClipReviewTests(TestCase):
             reverse("pipelines:batch_detail", kwargs={"batch_id": self.batch_id})
         ).content.decode()
 
-    def test_the_row_carries_both_sources(self):
-        html = self._html()
-
-        self.assertIn(
-            reverse("videos:stream", kwargs={"pk": self.video.pk}), html)
-        self.assertIn(
-            reverse("analysis:video_proxy", kwargs={"pk": self.job.pk}), html)
-
-    def test_a_run_without_an_annotated_video_offers_only_the_original(self):
-        self.result.annotated_video_path = ""
-        self.result.save(update_fields=["annotated_video_path"])
+    def test_the_row_carries_the_clip_and_its_tracks(self):
+        """The viewer plays the original with the run's tracks drawn over it
+        (memory/46), so a row carries both, and no rendered video."""
+        self.result.tracking_csv_path = "cv/tracking.csv"
+        self.result.save(update_fields=["tracking_csv_path"])
 
         html = self._html()
 
         self.assertIn(reverse("videos:stream", kwargs={"pk": self.video.pk}), html)
+        self.assertIn(reverse("analysis:track_overlay", kwargs={"pk": self.job.pk}), html)
         self.assertNotIn("data-annotated=", html)
+
+    def test_a_run_without_tracks_offers_only_the_original(self):
+        html = self._html()
+
+        self.assertIn(reverse("videos:stream", kwargs={"pk": self.video.pk}), html)
+        self.assertNotIn("data-overlay=", html)
 
     def test_the_viewer_is_present_and_starts_hidden(self):
         html = self._html()
