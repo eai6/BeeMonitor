@@ -569,7 +569,7 @@ def _viewable_run_or_404(request, run_id):
     from apps.videos.models import Video
     from . import aggregate
     vid = aggregate.run_video_id(run)
-    if vid is not None and Video.accessible(request.user).filter(pk=vid).exists():
+    if vid is not None and Video.accessible(request.user, photos=True).filter(pk=vid).exists():
         return run
     raise Http404("No such run.")
 
@@ -595,19 +595,31 @@ def photo_view(run, floor=None):
     """What the run page shows for a photo run (memory/45): the preview with a
     box per insect (as % of the photo, so they scale with the image), and each
     insect's crop, class and species. None for clip runs."""
-    from .executors import _number
+    from . import aggregate
 
-    photo = None
-    for out in (run.context or {}).values():
-        photo = ((out or {}).get("result") or {}).get("summary_stats", {}).get("photo") if isinstance(out, dict) else None
-        if photo:
-            break
+    photo = aggregate.run_photo(run)
     if not photo:
         return None
-    if floor is None:
-        species_step = next((s for s in run.steps or [] if s.get("block_type") == "identify.species"), None)
-        floor = _number(((species_step or {}).get("config") or {}).get("min_mean_confidence"), 0.0)
-    return photo_view_of(photo, floor)
+    return photo_view_of(photo, _species_floor(run.steps) if floor is None else floor)
+
+
+def _species_floor(steps):
+    """The Identify Species node's minimum mean confidence, 0 without one."""
+    from .executors import _number
+
+    species_step = next((s for s in steps or [] if s.get("block_type") == "identify.species"), None)
+    return _number(((species_step or {}).get("config") or {}).get("min_mean_confidence"), 0.0)
+
+
+@login_required
+def run_photo(request, pk, run_id):
+    """A photo run's photo, boxes and species as a fragment: the batch page's
+    viewer fetches it when a photo row is opened, so the page presigns nothing
+    up front."""
+    view = photo_view(_viewable_run_or_404(request, run_id))
+    if view is None:
+        raise Http404("This run has no photo.")
+    return render(request, "pipelines/_photo_view.html", {"photo_view": view})
 
 
 def photo_view_of(photo, floor=0.0):
@@ -831,7 +843,7 @@ def _batch_runs(request, batch_id):
     from apps.videos.models import Video
     from . import aggregate
     accessible = set(
-        Video.accessible(request.user)
+        Video.accessible(request.user, photos=True)
         .filter(pk__in=[v for r in runs if (v := aggregate.run_video_id(r)) is not None])
         .values_list("pk", flat=True))
     runs = [r for r in runs
@@ -913,26 +925,38 @@ def batch_detail(request, batch_id):
     for row in rows:
         if probes >= PROBES_PER_RENDER:
             break
-        if row["video"] and not row["video"].duration_seconds:
+        # A photo has no length to measure.
+        if (row["video"] and not row["video"].duration_seconds
+                and row["video"].kind != row["video"].Kind.PHOTO):
             probe_on_demand(row["video"])
             probes += 1
-    rerun_pipelines = (Pipeline.objects
-                       .filter(Q(user=request.user) | Q(is_template=True))
-                       .exclude(pk=runs[0].pipeline_id if runs else None)
-                       .order_by("-is_template", "title"))
+    # A photo batch (memory/45) has no clips, tracks or tables: each row is a
+    # photo, its insects and species, and its one download is the photos CSV.
+    from .registry import pipeline_input_kind
+    kind = pipeline_input_kind(runs[0].steps) if runs else "video"
+    if kind == "photo":
+        floor = _species_floor(runs[0].steps)
+        for row in rows:
+            row["photo"] = aggregate.photo_counts(row["run"], floor)
+        skipped_sources = []
+        downloads = [{"kind": "photos", "label": "Photos", "analyzed": False,
+                      "hint": "One row per insect: photo, time taken, box, class, "
+                              "species and its confidence."}]
+
+    # Re-runs go through a pipeline that starts from the same kind of input.
+    rerun_pipelines = [p for p in (Pipeline.objects
+                                   .filter(Q(user=request.user) | Q(is_template=True))
+                                   .exclude(pk=runs[0].pipeline_id if runs else None)
+                                   .order_by("-is_template", "title"))
+                       if pipeline_input_kind(p.steps) == kind]
 
     # No cross-video aggregation here any more. The page used to pair trips and
     # build activity charts on every load — up to 300 clips' events CSVs read
     # from S3 — for panels that are now gone. Trips are a read over the events
     # table, and the table is a download.
 
-    species_step = next((s for s in (runs[0].steps or []) if s.get("block_type") == "identify.species"), None) if runs else None
-    from .executors import _number
-    photo_summary = aggregate.photo_summary(
-        runs, _number(((species_step or {}).get("config") or {}).get("min_mean_confidence"), 0.0))
-
     return render(request, "pipelines/batch.html", {
-        "photo_summary": photo_summary,
+        "photos": kind == "photo",
         "rows": rows,
         "outcome": outcome,
         "failure_groups": failure_groups,

@@ -26,7 +26,7 @@ their reason.
       <span class="text-xs text-gray-400">batch {{ batch_id|stringformat:"s"|slice:":8" }}{% for d in batch_devices %} · <a href="{% url 'devices:detail' d.pk %}" class="hover:underline hover:text-amber-700">{{ d.name }}</a>{% if d.location %} <span class="text-gray-300">({{ d.location }})</span>{% endif %}{% endfor %}</span>
     </div>
     <p class="text-sm text-gray-500 mt-1">
-      {{ outcome.total }} clip{{ outcome.total|pluralize }}
+      {{ outcome.total }} {% if photos %}photo{% else %}clip{% endif %}{{ outcome.total|pluralize }}
       {% if rows.0.run.started_at %}· run {{ rows.0.run.started_at|date:"j M, H:i" }}{% endif %}
     </p>
   </div>
@@ -57,41 +57,6 @@ their reason.
   </div>
   {% endif %}
 </div>
-
-{% if photo_summary %}
-{% comment %}A batch of photo runs (memory/45).{% endcomment %}
-<section class="bg-white border border-gray-200 rounded-lg p-5 mb-6 space-y-4">
-  <div class="flex items-baseline justify-between gap-3 flex-wrap">
-    <h2 class="text-lg font-semibold">Photos · {{ photo_summary.photos|length }} photos · {{ photo_summary.insects }} insects · {{ photo_summary.named }} species</h2>
-    <a href="{% url 'pipelines:batch_combined_csv' batch_id=batch_id kind='photos' %}" class="text-sm text-amber-700 hover:underline">Download photos CSV</a>
-  </div>
-  <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] gap-6">
-    <div>
-      <h3 class="text-sm font-semibold mb-2">Insects per photo, over time</h3>
-      <div class="h-40 flex items-end gap-1 border-b border-gray-300">
-        {% for p in photo_summary.photos %}
-        <a href="{% url 'pipelines:run_detail' pk=pipeline.pk run_id=p.run_id %}" title="{{ p.taken_at|slice:':16' }} · {{ p.count }} insects"
-           class="flex-1 min-w-[3px] bg-sky-700 hover:bg-amber-600 rounded-t" style="height: {{ p.bar }}%"></a>
-        {% endfor %}
-      </div>
-      <div class="flex justify-between text-[11px] text-gray-600 mt-1">
-        <span>{{ photo_summary.photos.0.taken_at|slice:":10" }}</span>
-        <span>{% with last=photo_summary.photos|last %}{{ last.taken_at|slice:":10" }}{% endwith %}</span>
-      </div>
-    </div>
-    <div class="space-y-2">
-      <h3 class="text-sm font-semibold">Species</h3>
-      {% for sp in photo_summary.species %}
-      <div class="grid grid-cols-[minmax(0,1fr)_120px_40px] gap-2 items-center text-sm">
-        <span class="truncate {% if sp.name != 'unidentified' %}italic{% endif %}">{{ sp.name }}</span>
-        <span class="h-2.5 bg-gray-200 rounded-full overflow-hidden"><span class="block h-full bg-sky-700" style="width: {{ sp.bar }}%"></span></span>
-        <span class="text-right tabular-nums">{{ sp.count }}</span>
-      </div>
-      {% endfor %}
-    </div>
-  </div>
-</section>
-{% endif %}
 
 {% comment %}
   Outcome sits beside what you would do next rather than alone in a 300px
@@ -191,9 +156,10 @@ their reason.
         class="flex items-end gap-3 flex-wrap">
     {% csrf_token %}
     {% for vid in rerun_videos %}<input type="hidden" name="video_ids" value="{{ vid }}">{% endfor %}
+    {% if photos %}<input type="hidden" name="kind" value="photo">{% endif %}
     <div class="min-w-[240px]">
       <label for="rerun-pipeline" class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
-        Run these {{ rerun_videos|length }} clip{{ rerun_videos|length|pluralize }} through another pipeline
+        Run these {{ rerun_videos|length }} {% if photos %}photo{% else %}clip{% endif %}{{ rerun_videos|length|pluralize }} through another pipeline
       </label>
       <select name="pipeline" id="rerun-pipeline"
               class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
@@ -207,9 +173,11 @@ their reason.
       Run
     </button>
     <p class="text-xs text-gray-500 flex-1 min-w-[220px]">
-      Starts a new batch over the same clips; this one keeps its results. Detection
+      {% if photos %}Starts a new batch over the same photos; this one keeps its results. Detection
+      is reused where the new pipeline asks for the same thing, so a pipeline that
+      only differs downstream costs no GPU time.{% else %}Starts a new batch over the same clips; this one keeps its results. Detection
       and tracking are reused where the new pipeline asks for the same thing, so a
-      pipeline that only differs downstream costs no GPU time.
+      pipeline that only differs downstream costs no GPU time.{% endif %}
     </p>
   </form>
   </div>
@@ -222,9 +190,10 @@ their reason.
         class="flex items-end gap-3 flex-wrap">
     {% csrf_token %}
     {% for vid in rerun_videos %}<input type="hidden" name="video_ids" value="{{ vid }}">{% endfor %}
+    {% if photos %}<input type="hidden" name="kind" value="photo">{% endif %}
     <div class="min-w-[240px]">
       <label for="rerun-pipeline" class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
-        Run these {{ rerun_videos|length }} clip{{ rerun_videos|length|pluralize }} through another pipeline
+        Run these {{ rerun_videos|length }} {% if photos %}photo{% else %}clip{% endif %}{{ rerun_videos|length|pluralize }} through another pipeline
       </label>
       <select name="pipeline" id="rerun-pipeline"
               class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
@@ -238,9 +207,11 @@ their reason.
       Run
     </button>
     <p class="text-xs text-gray-500 flex-1 min-w-[220px]">
-      Starts a new batch over the same clips; this one keeps its results. Detection
+      {% if photos %}Starts a new batch over the same photos; this one keeps its results. Detection
+      is reused where the new pipeline asks for the same thing, so a pipeline that
+      only differs downstream costs no GPU time.{% else %}Starts a new batch over the same clips; this one keeps its results. Detection
       and tracking are reused where the new pipeline asks for the same thing, so a
-      pipeline that only differs downstream costs no GPU time.
+      pipeline that only differs downstream costs no GPU time.{% endif %}
     </p>
   </form>
 </div>
@@ -329,20 +300,32 @@ their reason.
     </div>
     <video id="cv-video" controls autoplay muted playsinline
            class="w-full bg-black" style="max-height:60vh"></video>
+    {% comment %}A photo row opens the photo, its boxes and each insect's
+      species, fetched when opened (memory/45).{% endcomment %}
+    <div id="cv-photo" hidden class="bg-gray-50 p-3"></div>
     <p id="cv-note" class="px-4 py-1.5 text-[11px] text-gray-400"></p>
   </div>
 
+  {% if photos %}
+  <div class="grid grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_88px] gap-0 px-4 py-2 border-b border-gray-100 text-[11px] font-semibold text-gray-500">
+    <div></div><div>Photo</div><div>Outcome</div>
+    <div class="text-right">Insects</div><div class="text-right">Species</div>
+    <div class="text-right">GPU time</div>
+  </div>
+  {% else %}
   <div class="grid grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_96px_80px_88px] gap-0 px-4 py-2 border-b border-gray-100 text-[11px] font-semibold text-gray-500">
     <div></div><div>Clip</div><div>Outcome</div>
     <div class="text-right">Tracks</div><div class="text-right">Events</div>
     <div class="text-right">Interactions</div>
     <div class="text-right">Length</div><div class="text-right">GPU time</div>
   </div>
+  {% endif %}
 
   {% for r in rows %}
-  <div class="clip-row grid grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_96px_80px_88px] items-center px-4 py-2 border-b border-gray-100 hover:bg-gray-50"
+  <div class="clip-row grid {% if photos %}grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_88px]{% else %}grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_96px_80px_88px]{% endif %} items-center px-4 py-2 border-b border-gray-100 hover:bg-gray-50"
        {% if r.video %}data-title="{{ r.when|date:"j M, H:i"|default:"clip" }}{% if r.video.device %} · {{ r.video.device.name }}{% endif %}"
        data-original="{% url 'videos:stream' r.video.pk %}"
+       {% if photos and r.photo %}data-photo="{% url 'pipelines:run_photo' pk=pipeline.pk run_id=r.run.pk %}"{% endif %}
        {% if r.result.annotated_video_path %}data-annotated="{% url 'analysis:video_proxy' r.job.pk %}"{% endif %}
        {% if r.job %}data-results="{% url 'analysis:results' r.job.pk %}"{% endif %}
        data-rotate="{% if r.video.device.rotate_180 %}1{% endif %}"{% endif %}>
@@ -354,7 +337,7 @@ their reason.
     {% endcomment %}
     <div>
       {% if r.video %}
-      <button type="button" class="cv-open block" title="Watch this clip">
+      <button type="button" class="cv-open block" title="{% if photos %}View this photo{% else %}Watch this clip{% endif %}">
         <img src="{% url 'videos:thumbnail' r.video.pk %}" alt="" loading="lazy"
              class="w-12 rounded object-cover" style="aspect-ratio:16/9" onerror="this.remove()">
       </button>
@@ -367,7 +350,7 @@ their reason.
     {% endcomment %}
     <div class="text-[13px] font-medium text-gray-900 min-w-0">
       {% if r.video %}
-      <button type="button" class="cv-open hover:underline text-left block truncate w-full" title="Watch this clip">
+      <button type="button" class="cv-open hover:underline text-left block truncate w-full" title="{% if photos %}View this photo{% else %}Watch this clip{% endif %}">
         {{ r.when|date:"H:i"|default:"—" }}
       </button>
       {% if r.video.device %}<span class="block text-[10px] text-gray-400 truncate" title="{{ r.video.device.name }}">{{ r.video.device.name }}</span>{% endif %}
@@ -385,9 +368,14 @@ their reason.
       {% if r.job %}
       <a href="{% url 'analysis:results' r.job.pk %}"
          class="text-[11px] text-amber-700 hover:underline shrink-0 ml-auto"
-         title="Per-track crops, the raw CSVs and the full breakdown for this clip">crops &amp; CSVs →</a>
+         title="{% if photos %}The photo, its boxes and each insect's species{% else %}Per-track crops, the raw CSVs and the full breakdown for this clip{% endif %}">{% if photos %}full results →{% else %}crops &amp; CSVs →{% endif %}</a>
       {% endif %}
     </div>
+    {% if photos %}
+    <div class="text-right text-[13px] {% if r.photo %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.photo %}{{ r.photo.insects }}{% else %}—{% endif %}</div>
+    <div class="text-right text-[13px] {% if r.photo %}text-gray-900{% else %}text-gray-300{% endif %}"
+         title="Distinct species named at or above the pipeline's minimum confidence">{% if r.photo %}{{ r.photo.named }}{% else %}—{% endif %}</div>
+    {% else %}
     <div class="text-right text-[13px] {% if r.result %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.result %}{{ r.result.unique_tracks }}{% else %}—{% endif %}</div>
     {% comment %}
       Events and interactions come from this run's analyzers, the same source as
@@ -402,6 +390,7 @@ their reason.
     <div class="text-right text-[13px] {% if r.primitives.interactions is None %}text-gray-300{% else %}text-gray-900{% endif %}"
          {% if r.primitives.interactions is None %}title="This pipeline ran no interactions analyzer"{% endif %}>{% if r.primitives.interactions is None %}—{% else %}{{ r.primitives.interactions }}{% endif %}</div>
     <div class="text-right text-xs text-gray-500">{% if r.video.duration_seconds %}{{ r.video.duration_seconds|duration_min }}{% else %}—{% endif %}</div>
+    {% endif %}
     <div class="text-right text-xs text-gray-500">{% if r.gpu_seconds %}{{ r.gpu_seconds|duration_min }}{% else %}—{% endif %}</div>
   </div>
   {% endfor %}
@@ -440,13 +429,57 @@ setTimeout(function(){
   var note   = document.getElementById('cv-note');
   var toggle = document.getElementById('cv-toggle');
   var resultsLink = document.getElementById('cv-results');
+  var photoBox = document.getElementById('cv-photo');
+  var photoHtml = {};
   var rows   = Array.prototype.slice.call(document.querySelectorAll('.clip-row[data-original]'));
   var at = -1;
   var showAnnotated = true;
 
+  // A photo row: the photo, its boxes and species, fetched once per photo.
+  function renderPhoto(row, url) {
+    video.pause();
+    video.removeAttribute('src');
+    video.hidden = true;
+    toggle.hidden = true;
+    photoBox.hidden = false;
+    note.textContent = '';
+    if (photoHtml[url]) { photoBox.innerHTML = photoHtml[url]; return; }
+    photoBox.innerHTML = '<p class="text-sm text-gray-500 p-4">Loading the photo…</p>';
+    fetch(url, {credentials: 'same-origin'})
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+      .then(function (html) {
+        photoHtml[url] = html;
+        if (rows[at] === row) photoBox.innerHTML = html;
+      })
+      .catch(function () {
+        if (rows[at] === row) photoBox.innerHTML = '<p class="text-sm text-red-700 p-4">Could not load this photo.</p>';
+      });
+  }
+
   function render() {
     var row = rows[at];
     if (!row) return;
+    var photoUrl = row.getAttribute('data-photo');
+    if (photoUrl) {
+      renderPhoto(row, photoUrl);
+    } else {
+      photoBox.hidden = true;
+      video.hidden = false;
+      renderVideo(row);
+    }
+
+    title.textContent = row.getAttribute('data-title') || '';
+    pos.textContent = (at + 1) + ' of ' + rows.length;
+
+    var results = row.getAttribute('data-results');
+    resultsLink.hidden = !results;
+    if (results) resultsLink.setAttribute('href', results);
+
+    rows.forEach(function (r) { r.classList.remove('bg-amber-50'); });
+    row.classList.add('bg-amber-50');
+  }
+
+  function renderVideo(row) {
     var annotated = row.getAttribute('data-annotated');
     var useAnnotated = showAnnotated && !!annotated;
     var src = useAnnotated ? annotated : row.getAttribute('data-original');
@@ -461,22 +494,12 @@ setTimeout(function(){
     // the overlay is drawn on the unrotated frames, so its boxes stay put.
     video.classList.toggle('rotate-180', row.getAttribute('data-rotate') === '1');
 
-    title.textContent = row.getAttribute('data-title') || '';
-    pos.textContent = (at + 1) + ' of ' + rows.length;
-
     // Only offer the switch when there is something to switch to.
     toggle.hidden = !annotated;
     toggle.textContent = useAnnotated ? 'Show original' : 'Show detections';
     note.textContent = annotated
       ? (useAnnotated ? 'Annotated — boxes and track IDs drawn by the run.' : 'Original clip, as recorded.')
       : 'This run rendered no annotated video, so this is the original clip.';
-
-    var results = row.getAttribute('data-results');
-    resultsLink.hidden = !results;
-    if (results) resultsLink.setAttribute('href', results);
-
-    rows.forEach(function (r) { r.classList.remove('bg-amber-50'); });
-    row.classList.add('bg-amber-50');
   }
 
   function open(index) {

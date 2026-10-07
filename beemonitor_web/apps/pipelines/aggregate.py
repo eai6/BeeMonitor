@@ -1025,6 +1025,16 @@ def analyzer_results(runs):
 
 # ── Photo batches (memory/45) ─────────────────────────────────────────────────
 
+def run_photo(run):
+    """The photo result a photo run's Detect step wrote (memory/45), or None."""
+    for step_out in (run.context or {}).values():
+        if isinstance(step_out, dict):
+            photo = ((step_out.get("result") or {}).get("summary_stats") or {}).get("photo")
+            if photo:
+                return photo
+    return None
+
+
 def photo_rows(runs):
     """One row per detected insect across a batch of photo runs:
     photo id, taken at, insect, class, detector confidence, species, its
@@ -1034,12 +1044,7 @@ def photo_rows(runs):
     out = []
     per_run = []
     for run in runs:
-        photo = None
-        for step_out in (run.context or {}).values():
-            if isinstance(step_out, dict):
-                photo = ((step_out.get("result") or {}).get("summary_stats") or {}).get("photo")
-                if photo:
-                    break
+        photo = run_photo(run)
         if photo is None:
             continue
         pid = next((int((s.get("config") or {}).get("video_id") or 0) for s in run.steps or []
@@ -1060,29 +1065,16 @@ def photo_rows(runs):
     return out
 
 
-def photo_summary(runs, floor=0.0):
-    """Counts per photo over time and species totals for a photo batch, or None."""
-    rows = photo_rows(runs)
-    if not rows:
+def photo_counts(run, floor=0.0):
+    """Insects detected and species named in one photo run, or None for a clip
+    run — the photo batch's row numbers. Below ``floor`` a species is not named,
+    as on the run page."""
+    photo = run_photo(run)
+    if photo is None:
         return None
-    per_photo, species = {}, {}
-    for r in rows:
-        key = (r["taken_at"], r["photo_id"], r["run_id"])
-        per_photo.setdefault(key, 0)
-        if r.get("insect") is None:
-            continue
-        per_photo[key] += 1
-        conf = r.get("species_confidence")
-        name = r["species"] if r["species"] and conf is not None and not (floor and conf < floor) \
-            else "unidentified"
-        species[name] = species.get(name, 0) + 1
-    photos = [{"taken_at": k[0], "photo_id": k[1], "run_id": k[2], "count": n}
-              for k, n in sorted(per_photo.items())]
-    peak = max([p["count"] for p in photos] or [1]) or 1
-    for p in photos:
-        p["bar"] = round(100 * p["count"] / peak)
-    top = max(species.values() or [1])
-    return {"photos": photos, "insects": sum(p["count"] for p in photos),
-            "species": [{"name": n, "count": c, "bar": round(100 * c / top)}
-                        for n, c in sorted(species.items(), key=lambda kv: -kv[1])],
-            "named": sum(1 for n in species if n != "unidentified")}
+    named = set()
+    for d in photo.get("detections") or []:
+        conf = d.get("species_confidence")
+        if d.get("species") and conf is not None and not (floor and conf < floor):
+            named.add(d["species"])
+    return {"insects": len(photo.get("detections") or []), "named": len(named)}

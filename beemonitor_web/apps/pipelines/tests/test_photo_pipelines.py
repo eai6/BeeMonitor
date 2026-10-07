@@ -123,9 +123,8 @@ class RunTests(TestCase):
         run.save()
         rows = aggregate.photo_rows([run])
         self.assertEqual(len(rows), 2)
-        summary = aggregate.photo_summary([run], 0.25)
-        self.assertEqual(summary["insects"], 2)
-        self.assertEqual({s["name"] for s in summary["species"]}, {"Bombus impatiens", "unidentified"})
+        # Syrphidae is below the 0.25 floor, so one of the two is named.
+        self.assertEqual(aggregate.photo_counts(run, 0.25), {"insects": 2, "named": 1})
 
 
 class PhotoTabRunTests(TestCase):
@@ -197,3 +196,48 @@ class OldWorkerTests(TestCase):
         from apps.pipelines import aggregate
         run = PipelineRun(steps=steps_with_video_steps(photo_steps(), self.photo.pk))
         self.assertEqual(aggregate.run_video_id(run), self.photo.pk)
+
+
+class PhotoBatchPageTests(TestCase):
+    """A photo batch reads as photos: no video player, no clip columns."""
+
+    def setUp(self):
+        import uuid
+
+        self.user = User.objects.create_user("pb", password="x")
+        self.client.force_login(self.user)
+        self.photo = Video.everything.create(user=self.user, title="p", storage_key="1/p.jpg",
+                                             file_size_bytes=1, kind=Video.Kind.PHOTO)
+        steps = steps_with_video_steps(photo_steps(
+            {"id": "s", "block_type": "identify.species",
+             "config": {"min_mean_confidence": 0.25}, "inputs": {"tracks": "d"}}), self.photo.pk)
+        self.pipeline = Pipeline.objects.create(user=self.user, title="photos", steps=steps)
+        self.batch_id = uuid.uuid4()
+        self.run = PipelineRun.objects.create(
+            pipeline=self.pipeline, user=self.user, batch_id=self.batch_id, steps=steps,
+            status="completed",
+            context={"p": {"artifact": "photo", "video_id": self.photo.pk},
+                     "d": {"result": {"summary_stats": {"photo": PHOTO}}}})
+
+    def test_rows_count_insects_and_species(self):
+        from django.urls import reverse
+
+        resp = self.client.get(reverse("pipelines:batch_detail", kwargs={"batch_id": self.batch_id}))
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context["rows"][0]["photo"], {"insects": 2, "named": 1})
+        self.assertContains(resp, "data-photo=")
+        self.assertNotContains(resp, "Interactions</div>")
+        self.assertNotContains(resp, "Insects per photo")
+        self.assertEqual([d["kind"] for d in resp.context["downloads"]], ["photos"])
+
+    def test_the_viewer_fragment_is_the_photo(self):
+        from django.urls import reverse
+
+        with mock.patch("config.storage.presigned_get", return_value="https://s3/x"):
+            resp = self.client.get(reverse("pipelines:run_photo", kwargs={
+                "pk": self.pipeline.pk, "run_id": self.run.pk}))
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Bombus impatiens")
+        self.assertNotContains(resp, "<html")
