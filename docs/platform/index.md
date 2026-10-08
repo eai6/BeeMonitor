@@ -3,6 +3,12 @@
 Everything happens at [beemonitor.edwardamoah.com](https://beemonitor.edwardamoah.com). These pages follow
 the menu bar, left to right.
 
+<figure markdown>
+  ![The platform after signing in: the green menu bar with BeeMonitor, Videos, Pipelines, Runs, Annotations, Training and Browse on the left and API, your name and Logout on the right, above the Devices page](../assets/platform/platform-home.png)
+  <figcaption>The menu bar. <b>BeeMonitor</b> (your home page, Devices), then Videos, Pipelines, Runs,
+  Annotations, Training and Browse; on the right, API and your name (Account). Each has a page below.</figcaption>
+</figure>
+
 <div class="grid cards" markdown>
 
 - **[Devices](devices.md)**: the **BeeMonitor** logo, your home page. Each unit's camera, ROI and reference
