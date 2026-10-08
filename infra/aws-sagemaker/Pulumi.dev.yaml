@@ -10,6 +10,9 @@ config:
   # SageMaker Model / EndpointConfig / Endpoint / autoscaling.
   beemonitor-sagemaker:deploy-endpoint: "true"
   beemonitor-sagemaker:max-capacity: "4"
+  # Clips per video instance at once. 2 is under test (2026-10-08); set "1"
+  # and `pulumi up` to go back to one clip per instance.
+  beemonitor-sagemaker:invocations-per-instance: "2"
   # SAM 3 auto-labeler (GPU async, scale-to-zero). Image baked with SAM 3 + DINOv2.
   beemonitor-sagemaker:deploy-sam3: "true"
   # One SAM 3 job per instance (see client_config in __main__.py), so throughput

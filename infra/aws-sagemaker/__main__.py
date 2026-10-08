@@ -50,6 +50,11 @@ instance_type = config.get("instance-type") or "ml.g4dn.xlarge"
 image_tag = config.get("image-tag") or "latest"
 deploy_endpoint = config.get_bool("deploy-endpoint") or False
 max_capacity = config.get_int("max-capacity") or 2
+# Clips each video instance runs at once. One clip uses ~1.3 of a g4dn.xlarge's
+# 4 vCPUs and ~23% of its T4 (98-clip batch, 2026-10-08), so a second fits; a
+# third starved gunicorn's /ping on 2026-10-07. Back to one: set this to 1 and
+# `pulumi up` — the endpoint rolls to a config named for it.
+invocations_per_instance = config.get_int("invocations-per-instance") or 1
 # SAM 3 auto-labeler (GPU async, scale-to-zero). GPU + large weights, so default to
 # g5.xlarge (24 GB A10G). Only runs at label time, so max-capacity stays small.
 deploy_sam3 = config.get_bool("deploy-sam3") or False
@@ -497,7 +502,9 @@ if deploy_endpoint:
     # name must change for the replace-then-update roll to work — same-name
     # re-creation collides with the retained old config).
     CONFIG_REV = "r5"
-    tag_slug = f"{tag_slug}-{CONFIG_REV}"
+    # The concurrency is in the name too, so changing it rolls the endpoint the
+    # same way an image bump does, in either direction.
+    tag_slug = f"{tag_slug}-{CONFIG_REV}-c{invocations_per_instance}"
 
     model = aws.sagemaker.Model(
         "model",
@@ -532,13 +539,13 @@ if deploy_endpoint:
             ),
         ],
         async_inference_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigArgs(
-            # One video per instance. Three per g4dn.xlarge shared its 4 vCPUs
-            # — decode, tracking and crop JPEG work are CPU — and each ran at
-            # ~12 fps (2026-10-07: three 14.5k-frame clips, 20 min of tracking
-            # each). Throughput comes from instances instead: the policy below
-            # scales to one per queued job, up to max-capacity.
+            # Clips per instance (config invocations-per-instance). Three per
+            # g4dn.xlarge shared its 4 vCPUs — decode, tracking and crop JPEG
+            # work are CPU — and each ran at ~12 fps (2026-10-07: three
+            # 14.5k-frame clips, 20 min of tracking each). One runs at ~24 fps
+            # using a third of the CPU, so two is the setting under test.
             client_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigClientConfigArgs(
-                max_concurrent_invocations_per_instance=1,
+                max_concurrent_invocations_per_instance=invocations_per_instance,
             ),
             output_config=aws.sagemaker.EndpointConfigurationAsyncInferenceConfigOutputConfigArgs(
                 s3_output_path=pulumi.Output.concat("s3://", output_bucket.bucket, "/"),
@@ -586,10 +593,11 @@ if deploy_endpoint:
         service_namespace=autoscaling_target.service_namespace,
         target_tracking_scaling_policy_configuration=aws.appautoscaling
             .PolicyTargetTrackingScalingPolicyConfigurationArgs(
-                # One job per instance (client_config above), so one queued or
-                # running job per instance. At 5 a 4-job batch never left one
-                # instance and ran back to back.
-                target_value=1.0,
+                # As many queued jobs per instance as it runs at once (client
+                # config above), so an instance is added only when the ones up
+                # are full. At 5 a 4-job batch never left one instance and ran
+                # back to back.
+                target_value=float(invocations_per_instance),
                 customized_metric_specification=aws.appautoscaling
                     .PolicyTargetTrackingScalingPolicyConfigurationCustomizedMetricSpecificationArgs(
                         metric_name="ApproximateBacklogSizePerInstance",
