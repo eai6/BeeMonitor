@@ -10,6 +10,8 @@ urlpatterns = [
     path("videos/", include("apps.videos.urls")),
     path("analysis/", include("apps.analysis.urls")),
     path("pipelines/", include("apps.pipelines.urls")),
+    # Public batch share links: no login (memory/47).
+    path("s/", include("apps.pipelines.public_urls")),
     path("sources/", include("apps.sources.urls")),
     path("devices/", include("apps.devices.urls")),
     path("activity/", include("apps.monitor.urls")),

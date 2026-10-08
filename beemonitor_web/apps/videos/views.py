@@ -200,31 +200,41 @@ class VideoThumbnailView(LoginRequiredMixin, View):
 
     def get(self, request, pk):
         video = get_object_or_404(Video.accessible(request.user, photos=True), pk=pk)
-        if video.is_photo:
-            # The device's own 1280 px preview, in raw-videos beside the photo.
-            key = (video.metadata or {}).get("thumb_key") or video.storage_key
-            from config.storage import get_s3_client
-            try:
-                return HttpResponseRedirect(
-                    get_s3_client().generate_presigned_url("raw-videos", key))
-            except Exception:
-                logger.exception("Failed to presign photo preview %s", pk)
-                raise Http404("Could not read the photo.")
-        key = video.thumbnail_key
-        if not key:
-            # Uploaded before stills existed. Make one now and keep it, so the
-            # grid fills in as it is browsed instead of waiting on a backfill.
-            from .thumbnails import extract_on_demand
-            key = extract_on_demand(video)
-        if not key:
-            raise Http404("No still for this clip.")
-        from config.storage import get_s3_client
+        return thumbnail_redirect(video)
+
+
+def thumbnail_redirect(video, expiry_hours=None):
+    """A redirect to the clip's still (or a photo's preview), presigned.
+
+    Shared by the signed-in grid and a public batch share link, which passes a
+    short ``expiry_hours``.
+    """
+    pk = video.pk
+    from config.storage import get_s3_client
+    extra = (expiry_hours,) if expiry_hours else ()  # else the client's default
+    if video.is_photo:
+        # The device's own 1280 px preview, in raw-videos beside the photo.
+        key = (video.metadata or {}).get("thumb_key") or video.storage_key
         try:
-            url = get_s3_client().generate_presigned_url("processed", key)
+            return HttpResponseRedirect(
+                get_s3_client().generate_presigned_url("raw-videos", key, *extra))
         except Exception:
-            logger.exception("Failed to presign thumbnail for video %s", pk)
-            raise Http404("Could not read the still.")
-        return HttpResponseRedirect(url)
+            logger.exception("Failed to presign photo preview %s", pk)
+            raise Http404("Could not read the photo.")
+    key = video.thumbnail_key
+    if not key:
+        # Uploaded before stills existed. Make one now and keep it, so the
+        # grid fills in as it is browsed instead of waiting on a backfill.
+        from .thumbnails import extract_on_demand
+        key = extract_on_demand(video)
+    if not key:
+        raise Http404("No still for this clip.")
+    try:
+        url = get_s3_client().generate_presigned_url("processed", key, *extra)
+    except Exception:
+        logger.exception("Failed to presign thumbnail for video %s", pk)
+        raise Http404("Could not read the still.")
+    return HttpResponseRedirect(url)
 
 
 class VideoStreamView(LoginRequiredMixin, View):
@@ -237,16 +247,22 @@ class VideoStreamView(LoginRequiredMixin, View):
 
     def get(self, request, pk):
         video = get_object_or_404(Video.accessible(request.user, photos=True), pk=pk)
-        blob_path = video.storage_key or ""
-        if not blob_path or blob_path.startswith("s3://"):
-            raise Http404("This clip has no stored file yet.")
-        from config.storage import get_s3_client
-        try:
-            url = get_s3_client().generate_presigned_url("raw-videos", blob_path)
-        except Exception:
-            logger.exception("Failed to presign video %s", pk)
-            raise Http404("Could not read the clip.")
-        return HttpResponseRedirect(url)
+        return stream_redirect(video)
+
+
+def stream_redirect(video, expiry_hours=None):
+    """A redirect to the raw clip, presigned (a share link passes a short expiry)."""
+    blob_path = video.storage_key or ""
+    if not blob_path or blob_path.startswith("s3://"):
+        raise Http404("This clip has no stored file yet.")
+    from config.storage import get_s3_client
+    extra = (expiry_hours,) if expiry_hours else ()  # else the client's default
+    try:
+        url = get_s3_client().generate_presigned_url("raw-videos", blob_path, *extra)
+    except Exception:
+        logger.exception("Failed to presign video %s", video.pk)
+        raise Http404("Could not read the clip.")
+    return HttpResponseRedirect(url)
 
 
 class VideoDetailView(LoginRequiredMixin, DetailView):

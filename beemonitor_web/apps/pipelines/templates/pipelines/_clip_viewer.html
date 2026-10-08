@@ -1,0 +1,41 @@
+{% comment %}The inline clip player shared by the batch page and its public share
+  link (memory/46, 47). Driven by static/js/clip_viewer.js from rows carrying
+  data-original / data-overlay / data-results / data-photo / data-rotate.{% endcomment %}
+  <div id="clip-viewer" hidden class="border-b border-gray-200 bg-gray-900">
+    <div class="flex items-center justify-between px-4 py-2 text-white">
+      <div class="flex items-center gap-3 min-w-0">
+        <span id="cv-title" class="text-sm font-medium truncate"></span>
+        <span id="cv-pos" class="text-[11px] text-gray-400 whitespace-nowrap"></span>
+      </div>
+      <div class="flex items-center gap-1.5">
+        {% comment %}
+          The inline viewer answers "what does this clip look like"; the full
+          page answers "what else is in it" — per-track crops, the raw CSVs,
+          the species table. Reviewing in place should not mean losing the way
+          through to it.
+        {% endcomment %}
+        <a id="cv-results" href="#" hidden
+           class="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white whitespace-nowrap"
+           title="Crops, CSVs and the full per-clip breakdown">Full results ↗</a>
+        <button type="button" id="cv-toggle" hidden
+                class="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white"></button>
+        <button type="button" id="cv-prev"
+                class="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white" title="Earlier clip (←)">← Earlier</button>
+        <button type="button" id="cv-next"
+                class="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white" title="Later clip (→)">Later →</button>
+        <button type="button" id="cv-close"
+                class="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white" title="Close (Esc)">✕</button>
+      </div>
+    </div>
+    {% comment %}The clip with the run's tracks drawn over it as it plays
+      (memory/46); the stage turns as one when the unit is mounted upside down.{% endcomment %}
+    <div id="cv-stage" class="relative bg-black">
+      <video id="cv-video" controls autoplay muted playsinline
+             class="w-full bg-black block" style="max-height:60vh"></video>
+      <canvas id="cv-canvas" class="absolute left-0 top-0 pointer-events-none"></canvas>
+    </div>
+    {% comment %}A photo row opens the photo, its boxes and each insect's
+      species, fetched when opened (memory/45).{% endcomment %}
+    <div id="cv-photo" hidden class="bg-gray-50 p-3"></div>
+    <p id="cv-note" class="px-4 py-1.5 text-[11px] text-gray-400"></p>
+  </div>

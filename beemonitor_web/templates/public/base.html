@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-50">
+{% comment %}
+For pages anyone can open without signing in (a batch share link, memory/47).
+No app menu, no service worker and no messages: a visitor has no account, and
+every link out of here would only send them to a login page.
+{% endcomment %}
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <title>{% block title %}BeeMonitor{% endblock %}</title>
+  <meta name="theme-color" content="#16a34a">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            // Same brand palette as base.html: green under the "amber" key.
+            amber: {
+              50: '#f0fdf4', 100: '#dcfce7', 200: '#bbf7d0', 300: '#86efac',
+              400: '#4ade80', 500: '#22c55e', 600: '#16a34a', 700: '#15803d',
+              800: '#166534', 900: '#14532d',
+            }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="h-full">
+  <header class="bg-white border-b border-gray-200">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-3">
+      <span class="font-bold text-amber-700">BeeMonitor</span>
+      <span class="text-xs text-gray-700 bg-gray-100 rounded-full px-2.5 py-1">{% block badge %}Shared results · read-only{% endblock %}</span>
+    </div>
+  </header>
+  <main class="max-w-6xl mx-auto px-4 sm:px-6 py-8">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="border-t border-gray-200 mt-12">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 py-4 text-center text-xs text-gray-600">
+      {% block footer %}Shared from BeeMonitor. The owner can turn this link off at any time.{% endblock %}
+    </div>
+  </footer>
+</body>
+</html>

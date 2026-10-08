@@ -146,3 +146,41 @@ class StepResult(models.Model):
 
     def __str__(self):
         return f"{self.block_type} [{self.cache_key[:8]}]"
+
+
+class BatchShare(models.Model):
+    """A public, read-only link to one batch's results (memory/47).
+
+    Anyone holding ``token`` can view the batch without signing in: its summary,
+    contact time per reference, clip list with tracks over the video, and the
+    combined CSVs. Nothing else — no re-run, no GPU time, no error text, and no
+    site or location unless the owner turns that on.
+
+    The token is kept in the clear because the owner must be able to copy the
+    link again; it is a capability URL, like a document share link. Turning a
+    link off stamps ``revoked_at``; turning sharing on again makes a NEW token,
+    so a link that was passed around stays dead.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    batch_id = models.UUIDField(db_index=True)
+    token = models.CharField(max_length=64, unique=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="batch_shares"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    show_videos = models.BooleanField(default=True)
+    show_locations = models.BooleanField(default=False)
+    view_count = models.PositiveIntegerField(default=0)
+    last_viewed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            # At most one live link per batch.
+            models.UniqueConstraint(fields=["batch_id"], condition=models.Q(revoked_at=None),
+                                    name="uniq_live_share_per_batch"),
+        ]
+
+    def __str__(self):
+        return f"share {str(self.batch_id)[:8]} ({'off' if self.revoked_at else 'on'})"

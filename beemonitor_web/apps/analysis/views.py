@@ -2560,64 +2560,72 @@ class TrackOverlayView(LoginRequiredMixin, View):
     """
 
     def get(self, request, pk):
-        import gzip as _gzip
-        import io as _io
-
-        from apps.pipelines import executors as pipeline_executors
-        from apps.pipelines import tracks as track_tables
-        from apps.pipelines.ops import fps_with_source
-
-        from . import overlay
-
         job = get_object_or_404(Job, pk=pk, video__in=Video.accessible(request.user))
-        result = getattr(job, "result", None)
-        tracking_path = getattr(result, "tracking_csv_path", "") if result else ""
-        if not tracking_path:
-            raise Http404("This clip has no tracks.")
+        return overlay_response(request, job)
 
-        s3 = get_s3_client()
-        key = overlay.stored_path(tracking_path)
+
+def overlay_response(request, job, cache_control="private, max-age=3600"):
+    """One job's overlay payload, built and stored on first use (memory/46).
+
+    Shared by the signed-in clip pages and a public batch share link.
+    """
+    import gzip as _gzip
+    import io as _io
+
+    from apps.pipelines import executors as pipeline_executors
+    from apps.pipelines import tracks as track_tables
+    from apps.pipelines.ops import fps_with_source
+
+    from . import overlay
+
+    result = getattr(job, "result", None)
+    tracking_path = getattr(result, "tracking_csv_path", "") if result else ""
+    if not tracking_path:
+        raise Http404("This clip has no tracks.")
+
+    s3 = get_s3_client()
+    key = overlay.stored_path(tracking_path)
+    body = None
+    try:
+        buf = _io.BytesIO()
+        s3.download_to_stream("processed", key, buf)
+        body = buf.getvalue()
+    except Exception:  # noqa: BLE001 - not built yet
         body = None
+
+    if not body:
+        buf = _io.BytesIO()
         try:
-            buf = _io.BytesIO()
-            s3.download_to_stream("processed", key, buf)
-            body = buf.getvalue()
-        except Exception:  # noqa: BLE001 - not built yet
-            body = None
+            s3.download_to_stream("processed", tracking_path, buf)
+        except Exception as e:  # noqa: BLE001
+            logger.error("overlay: tracking CSV unreadable (%s): %s", tracking_path, e)
+            raise Http404("This clip's tracks could not be read.")
+        text = buf.getvalue().decode("utf-8", "replace")
+        tracking = _load_csv_from_text(text)
+        tracks_rows, by_track, floor = job_tracks(job, tracking)
+        try:
+            events = track_tables.primitive_with_identity(
+                "events", pipeline_executors.primitives_for_job(job, "events"),
+                by_track, floor)
+        except Exception as e:  # noqa: BLE001 - boxes without events still help
+            logger.warning("overlay: events unavailable for job %s: %s", job.pk, e)
+            events = []
+        fps = fps_with_source(result.summary_stats or {}, job.video)[0]
+        body = overlay.encode(overlay.build(
+            text, tracks_rows, events, fps, job.config or {}))
+        try:
+            s3.upload_stream("processed", key, _io.BytesIO(body),
+                             content_type="application/json")
+        except Exception as e:  # noqa: BLE001 - serve it anyway
+            logger.warning("overlay: could not store %s: %s", key, e)
 
-        if not body:
-            buf = _io.BytesIO()
-            try:
-                s3.download_to_stream("processed", tracking_path, buf)
-            except Exception as e:  # noqa: BLE001
-                logger.error("overlay: tracking CSV unreadable (%s): %s", tracking_path, e)
-                raise Http404("This clip's tracks could not be read.")
-            text = buf.getvalue().decode("utf-8", "replace")
-            tracking = _load_csv_from_text(text)
-            tracks_rows, by_track, floor = job_tracks(job, tracking)
-            try:
-                events = track_tables.primitive_with_identity(
-                    "events", pipeline_executors.primitives_for_job(job, "events"),
-                    by_track, floor)
-            except Exception as e:  # noqa: BLE001 - boxes without events still help
-                logger.warning("overlay: events unavailable for job %s: %s", job.pk, e)
-                events = []
-            fps = fps_with_source(result.summary_stats or {}, job.video)[0]
-            body = overlay.encode(overlay.build(
-                text, tracks_rows, events, fps, job.config or {}))
-            try:
-                s3.upload_stream("processed", key, _io.BytesIO(body),
-                                 content_type="application/json")
-            except Exception as e:  # noqa: BLE001 - serve it anyway
-                logger.warning("overlay: could not store %s: %s", key, e)
-
-        if "gzip" in request.META.get("HTTP_ACCEPT_ENCODING", ""):
-            response = HttpResponse(body, content_type="application/json")
-            response["Content-Encoding"] = "gzip"
-        else:
-            response = HttpResponse(_gzip.decompress(body), content_type="application/json")
-        response["Cache-Control"] = "private, max-age=3600"
-        return response
+    if "gzip" in request.META.get("HTTP_ACCEPT_ENCODING", ""):
+        response = HttpResponse(body, content_type="application/json")
+        response["Content-Encoding"] = "gzip"
+    else:
+        response = HttpResponse(_gzip.decompress(body), content_type="application/json")
+    response["Cache-Control"] = cache_control
+    return response
 
 
 class JobPrimitiveCsvView(LoginRequiredMixin, View):

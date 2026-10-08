@@ -966,7 +966,16 @@ def batch_detail(request, batch_id):
     # from S3 — for panels that are now gone. Trips are a read over the events
     # table, and the table is a download.
 
+    # The public link (memory/47): only the launcher can turn it on or off.
+    from . import sharing
+    can_share = sharing.owns_batch(request.user, batch_id)
+    share = sharing.live_share(batch_id) if can_share else None
+
     return render(request, "pipelines/batch.html", {
+        "can_share": can_share,
+        "share": share,
+        "share_url": (request.build_absolute_uri(reverse("public_batch", args=[share.token]))
+                      if share else ""),
         "photos": kind == "photo",
         "rows": rows,
         "outcome": outcome,
@@ -983,6 +992,27 @@ def batch_detail(request, batch_id):
         "skipped_sources": skipped_sources,
         "batch_devices": batch_devices,
     })
+
+
+@login_required
+@require_POST
+def batch_share(request, batch_id):
+    """Turn a batch's public link on (or update what it shows), or off."""
+    from . import sharing
+
+    if not sharing.owns_batch(request.user, batch_id):
+        raise Http404("No such batch.")
+    if request.POST.get("action") == "off":
+        sharing.turn_off(batch_id)
+        messages.info(request, "Public link turned off. Anyone who opens it now sees that it isn't shared.")
+    else:
+        was_on = sharing.live_share(batch_id) is not None
+        sharing.turn_on(request.user, batch_id,
+                        show_videos=request.POST.get("show_videos") == "on",
+                        show_locations=request.POST.get("show_locations") == "on")
+        messages.success(request, "Sharing settings saved." if was_on else
+                         "Public link is on. Anyone with the link can view these results.")
+    return redirect(reverse("pipelines:batch_detail", args=[batch_id]) + "#share")
 
 
 def _csv_response(filename, fieldnames, rows):
@@ -1038,57 +1068,15 @@ def _backfill_interactions_paths(sources):
 
 @login_required
 def batch_combined_csv(request, batch_id, kind):
-    from . import aggregate
+    from . import sharing
 
-    if kind == "photos":
-        runs = _batch_runs(request, batch_id)
-        rows = aggregate.photo_rows(runs)
-        fields = ["photo_id", "taken_at", "run_id", "insect", "class", "confidence",
-                  "species", "species_confidence", "x", "y", "w", "h"]
-        return _csv_response(f"photos_batch_{str(batch_id)[:8]}.csv", fields, rows)
-    if kind == "tracks":
-        from . import tracks
-        sources, _ = aggregate.collect_sources(_batch_runs(request, batch_id))
-        rows = tracks.batch_track_rows(sources, aggregate.read_processed_csv,
-                                       aggregate._provenance)
-        if not rows:
-            messages.info(request, "No tracks in this batch — its pipeline has no tracking step.")
-            return redirect("pipelines:batch_detail", batch_id=batch_id)
-        return _csv_response(f"tracks_batch_{str(batch_id)[:8]}.csv",
-                             aggregate.PROVENANCE_FIELDS + tracks.TRACK_FIELDS, rows)
-    path_key = {"events": "events_csv_path",
-                "tracking": "tracking_csv_path",
-                "interactions": "interactions_csv_path",
-                "detections": "detections_csv_path"}.get(kind)
-    if not path_key:
-        raise Http404("Unknown CSV kind.")
     runs = _batch_runs(request, batch_id)
-
-    # Events and interactions come from the analyzers, recomputed if need be.
-    # They must NOT silently fall back to the worker's own file: that one
-    # matches an insect to a reference by centroid distance under a flat 50 px,
-    # so a bee inside a large flower never appears in it, and a download that
-    # quietly hands back a different answer is worse than one that fails.
-    if kind in aggregate.PRIMITIVE_KINDS:
-        fieldnames, rows = aggregate.primitive_csv(runs, kind)
-        if fieldnames:
-            return _csv_response(f"{kind}_batch_{str(batch_id)[:8]}.csv",
-                                 fieldnames, rows)
-        messages.warning(
-            request,
-            f"No {kind} could be computed for this batch. That usually means no "
-            "reference reached the analyzer — save the device's ROI and reference "
-            "objects, or wire a Detect node for the reference class into it. The "
-            "Tracking CSV is unaffected.")
-        return redirect("pipelines:batch_detail", batch_id=batch_id)
-
-    sources, _ = aggregate.collect_sources(runs)
-    if path_key == "interactions_csv_path":
-        _backfill_interactions_paths(sources)
-    fieldnames, rows = aggregate.combined_csv(sources, path_key)
-    if fieldnames is None:
+    try:
+        filename, fieldnames, rows = sharing.batch_csv(runs, batch_id, kind)
+    except KeyError:
+        raise Http404("Unknown CSV kind.")
+    except sharing.EmptyExport as e:
         # Friendlier than a bare 404: back to the batch page with the reason.
-        messages.info(request, f"No {kind} data available for this batch — "
-                               "none of its completed runs produced that CSV.")
+        messages.warning(request, str(e))
         return redirect("pipelines:batch_detail", batch_id=batch_id)
-    return _csv_response(f"{kind}_batch_{str(batch_id)[:8]}.csv", fieldnames, rows)
+    return _csv_response(filename, fieldnames, rows)

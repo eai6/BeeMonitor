@@ -1,0 +1,129 @@
+{% extends "public/base.html" %}
+{% load static batch_extras %}
+{% block title %}{{ pipeline.title }} - shared results{% endblock %}
+{% comment %}
+A batch's results for anyone with its share link (memory/47). Read-only and
+self-contained: every URL on this page is under the link, so nothing here
+sends a visitor to a login page. Left out on purpose: re-run, GPU time, error
+text, and site or location unless the owner shared them.
+{% endcomment %}
+{% block content %}
+<div class="mb-5">
+  <h1 class="text-2xl font-bold text-gray-900">{{ pipeline.title }}</h1>
+  <p class="text-sm text-gray-600 mt-1">
+    {{ outcome.total }} {% if photos %}photo{% else %}clip{% endif %}{{ outcome.total|pluralize }}
+    {% for d in devices %} · {{ d.name }}{% if share.show_locations and d.location %} ({{ d.location }}){% endif %}{% endfor %}
+    {% if first_when %} · recorded {{ first_when|date:"j M Y" }}{% if last_when|date:"Ymd" != first_when|date:"Ymd" %} – {{ last_when|date:"j M Y" }}{% endif %}{% endif %}
+  </p>
+</div>
+
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
+  <div class="bg-white shadow rounded-lg p-4">
+    <div class="text-xs text-gray-600">{% if photos %}Photos{% else %}Clips{% endif %} analysed</div>
+    <div class="text-2xl font-semibold text-gray-900">{{ outcome.completed }} of {{ outcome.total }}</div>
+  </div>
+  {% if contact %}
+  <div class="bg-white shadow rounded-lg p-4">
+    <div class="text-xs text-gray-600">Bee–reference interactions</div>
+    <div class="text-2xl font-semibold text-gray-900">{{ contact.interactions }}</div>
+  </div>
+  <div class="bg-white shadow rounded-lg p-4">
+    <div class="text-xs text-gray-600">Total contact time</div>
+    <div class="text-2xl font-semibold text-gray-900">{{ contact.contact_sec|floatformat:1 }} s</div>
+  </div>
+  {% endif %}
+</div>
+
+{% if running %}
+<div class="bg-blue-50 border border-blue-200 rounded p-3 mb-5 text-sm text-blue-800">
+  {{ running }} {% if photos %}photo{% else %}clip{% endif %}{{ running|pluralize }} still processing. Reload the page later for the full results.
+</div>
+{% endif %}
+
+<div class="bg-white shadow rounded-lg p-4 sm:p-5 mb-5">
+  <div class="flex items-center justify-between flex-wrap gap-3 mb-3">
+    <h2 class="text-[15px] font-semibold text-gray-900">{% if contact %}Contact time by reference{% else %}Download the data{% endif %}</h2>
+    <div class="flex flex-wrap gap-2">
+      {% for d in downloads %}
+      <a href="{% url 'public_batch_csv' token d.kind %}" title="{{ d.hint }}"
+         class="text-[13px] px-3 py-2 rounded-md border border-gray-300 text-gray-800 hover:bg-gray-50 whitespace-nowrap">{{ d.label }} CSV</a>
+      {% endfor %}
+    </div>
+  </div>
+  {% if contact %}
+  <div class="overflow-x-auto">
+    <table class="w-full text-[13px]">
+      <thead>
+        <tr class="text-left text-gray-600">
+          <th class="font-normal py-1.5 pr-3">Reference</th>
+          <th class="font-normal py-1.5 pr-3 w-1/2"><span class="sr-only">Contact time bar</span></th>
+          <th class="font-normal py-1.5 pr-3 text-right">Interactions</th>
+          <th class="font-normal py-1.5 pr-3 text-right">Contact</th>
+          <th class="font-normal py-1.5 text-right">Share</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in contact.per_reference %}
+        <tr class="border-t border-gray-100">
+          <td class="py-2 pr-3 whitespace-nowrap text-gray-900">{{ r.id }}</td>
+          <td class="py-2 pr-3"><div class="h-2.5 rounded-full bg-amber-100"><div class="h-2.5 rounded-full bg-amber-700" style="width: {{ r.bar_pct }}%"></div></div></td>
+          <td class="py-2 pr-3 text-right text-gray-900">{{ r.interactions }}</td>
+          <td class="py-2 pr-3 text-right text-gray-900 whitespace-nowrap">{{ r.duration_sec|floatformat:1 }} s</td>
+          <td class="py-2 text-right text-gray-900">{{ r.share_pct }}%</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5" class="py-3 text-gray-600">No bee touched a reference in these clips.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+
+<div class="bg-white shadow rounded-lg overflow-hidden">
+  {% if share.show_videos and not photos %}{% include "pipelines/_clip_viewer.html" %}{% endif %}
+  <div class="overflow-x-auto">
+    <div class="min-w-[560px]">
+      <div class="grid grid-cols-[60px_minmax(0,1fr)_110px_80px_100px_80px] px-4 py-2 border-b border-gray-100 text-[11px] font-semibold text-gray-600">
+        <div></div><div>{% if photos %}Photo{% else %}Clip{% endif %}</div><div>Outcome</div>
+        <div class="text-right">Tracks</div><div class="text-right">Contact</div><div class="text-right">Length</div>
+      </div>
+      {% for r in rows %}
+      <div class="clip-row grid grid-cols-[60px_minmax(0,1fr)_110px_80px_100px_80px] items-center px-4 py-2 border-b border-gray-100"
+           {% if r.video and share.show_videos and not photos %}data-title="{{ r.when|date:"j M, H:i"|default:"clip" }}{% if r.video.device %} · {{ r.video.device.name }}{% endif %}"
+           data-original="{% url 'public_video' token r.video.pk %}"
+           {% if r.job and r.result.tracking_csv_path %}data-overlay="{% url 'public_overlay' token r.job.pk %}"{% endif %}
+           data-rotate="{% if r.video.device.rotate_180 %}1{% endif %}"{% endif %}>
+        <div>
+          {% if r.video and share.show_videos %}
+          <button type="button" class="cv-open block" title="{% if photos %}Photo{% else %}Watch this clip{% endif %}">
+            <img src="{% url 'public_thumbnail' token r.video.pk %}" alt="" loading="lazy"
+                 class="w-12 rounded object-cover" style="aspect-ratio:16/9" onerror="this.remove()">
+          </button>
+          {% endif %}
+        </div>
+        <div class="min-w-0 text-[13px] text-gray-900">
+          {% if r.video and share.show_videos and not photos %}
+          <button type="button" class="cv-open hover:underline text-left">{{ r.when|date:"j M, H:i"|default:"—" }}</button>
+          {% else %}{{ r.when|date:"j M, H:i"|default:"—" }}{% endif %}
+          {% if r.video.device %}<span class="block text-[11px] text-gray-600 truncate">{{ r.video.device.name }}</span>{% endif %}
+        </div>
+        <div>
+          {% if r.status == "completed" %}<span class="text-[11px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-800">analysed</span>
+          {% elif r.status == "failed" %}<span class="text-[11px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-700">didn't finish</span>
+          {% else %}<span class="text-[11px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-800">processing</span>{% endif %}
+        </div>
+        <div class="text-right text-[13px] text-gray-900">{% if r.result %}{{ r.result.unique_tracks }}{% else %}—{% endif %}</div>
+        <div class="text-right text-[13px] text-gray-900">{% if r.contact_sec is not None %}{{ r.contact_sec|floatformat:1 }} s{% else %}—{% endif %}</div>
+        <div class="text-right text-xs text-gray-600">{% if r.video.duration_seconds %}{{ r.video.duration_seconds|duration_min }}{% else %}—{% endif %}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+{% if share.show_videos and not photos %}
+<script src="{% static 'js/track_overlay.js' %}"></script>
+<script src="{% static 'js/clip_viewer.js' %}"></script>
+{% endif %}
+{% endblock %}
