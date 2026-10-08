@@ -537,7 +537,9 @@ class BeeTracker:
         Returns:
             Resurrected track if successful, None otherwise
         """
-        if not self.dead_tracks:
+        # Revive off (0 s): nothing is kept to revive, and the time penalty
+        # below would divide by zero for a track that died this same frame.
+        if not self.dead_tracks or self.max_resurrection_frames <= 0:
             return None
         
         bbox = detection[:4]
@@ -655,7 +657,8 @@ class BeeTracker:
         for track in self.tracks:
             if track.is_dead:
                 # Move to dead tracks for potential resurrection
-                self.dead_tracks.append((track, frame_num))
+                if self.max_resurrection_frames > 0:
+                    self.dead_tracks.append((track, frame_num))
                 logger.debug(f"Track {track.id} died at frame {frame_num}")
             elif self._is_duplicate_track(track):
                 # Remove duplicate

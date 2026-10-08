@@ -96,6 +96,22 @@ class BeeTrackerIdentityTests(unittest.TestCase):
         out = t.update([box(650, 300)], 10)
         self.assertEqual([r["track_id"] for r in out if r["cx"] > 600], [2])
 
+    def test_revive_off_keeps_no_dead_tracks_and_never_divides_by_zero(self):
+        """Revive is sent as 0 s. A track that died this same frame used to be
+        tried for revival and divided by the 0-frame window (job
+        pl_3c9c3c5697ba4f: ZeroDivisionError)."""
+        Track.reset_id_counter()
+        t = BeeTracker(fps=25.0, frame_height=1080, max_age_seconds=0.2, min_hits_seconds=0.0,
+                       max_resurrection_seconds=0, bee_size=50)
+        for f in range(5):
+            t.update([box(300, 300)], f)
+        for f in range(5, 15):
+            t.update([], f)
+        self.assertEqual(t.dead_tracks, [])
+        # Even with a track planted in the pool, revival is off.
+        t.dead_tracks.append((Track(box(300, 300), 15), 15))
+        self.assertIsNone(t._try_resurrect(box(310, 300), 15))
+
 
 if __name__ == "__main__":
     unittest.main()
