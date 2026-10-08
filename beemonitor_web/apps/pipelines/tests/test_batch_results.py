@@ -291,6 +291,20 @@ class RunHistoryPagingTests(BatchPageTestCase):
 
         self.assertIn(run, solo)
 
+    def test_older_single_runs_are_reachable_by_page(self):
+        """Single runs stopped at the latest ten with no way back."""
+        runs = [PipelineRun.objects.create(pipeline=self.pipeline, user=self.user,
+                                           status="completed") for _ in range(12)]
+        oldest = min(runs, key=lambda r: (r.started_at, r.id))
+
+        first = self.client.get(reverse("pipelines:run_list")).context
+        second = self.client.get(reverse("pipelines:run_list"), {"solo_page": 2})
+
+        self.assertEqual(len(first["solo"]), 10)
+        self.assertEqual(second.context["solo_page"].number, 2)
+        self.assertIn(oldest, second.context["solo"])
+        self.assertContains(second, "Page 2 of 2")
+
     def test_each_batch_row_knows_its_pipeline(self):
         self._seed_real_batch()
 

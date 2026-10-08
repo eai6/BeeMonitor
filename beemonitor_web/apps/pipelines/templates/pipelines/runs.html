@@ -60,12 +60,12 @@ of pages away.
 {% if page.has_other_pages %}
 <div class="flex items-center justify-between mt-3 text-sm">
   <div>{% if page.has_previous %}
-    <a href="?page={{ page.previous_page_number }}{% if status_filter %}&status={{ status_filter }}{% endif %}"
+    <a href="?page={{ page.previous_page_number }}{% if status_filter %}&status={{ status_filter }}{% endif %}{% if solo_page.number > 1 %}&solo_page={{ solo_page.number }}{% endif %}"
        class="border border-gray-300 rounded px-3 py-1.5 text-gray-700 hover:bg-gray-50">← Newer</a>
   {% endif %}</div>
   <span class="text-xs text-gray-500">Page {{ page.number }} of {{ page.paginator.num_pages }} · {{ page.paginator.count }} launch{{ page.paginator.count|pluralize:"es" }}</span>
   <div>{% if page.has_next %}
-    <a href="?page={{ page.next_page_number }}{% if status_filter %}&status={{ status_filter }}{% endif %}"
+    <a href="?page={{ page.next_page_number }}{% if status_filter %}&status={{ status_filter }}{% endif %}{% if solo_page.number > 1 %}&solo_page={{ solo_page.number }}{% endif %}"
        class="border border-gray-300 rounded px-3 py-1.5 text-gray-700 hover:bg-gray-50">Older →</a>
   {% endif %}</div>
 </div>
@@ -83,7 +83,7 @@ of pages away.
 Runs launched on their own — one-click analysis, a single-clip pipeline run.
 They carry no batch id, so a batch-only list would lose them entirely.
 {% endcomment %}
-<h2 class="text-sm font-medium text-gray-500 uppercase mt-8 mb-2">Single runs</h2>
+<h2 id="single-runs" class="text-sm font-medium text-gray-500 uppercase mt-8 mb-2">Single runs</h2>
 <div class="bg-white shadow rounded-lg divide-y">
   {% for r in solo %}
   <a href="{% url 'pipelines:run_detail' pk=r.pipeline_id run_id=r.pk %}"
@@ -100,5 +100,20 @@ They carry no batch id, so a batch-only list would lose them entirely.
   </a>
   {% endfor %}
 </div>
+{% if solo_page.has_other_pages %}
+{% with keep=status_filter|yesno:"&status=,"|add:status_filter %}
+<div class="flex items-center justify-between mt-3 text-sm">
+  <div>{% if solo_page.has_previous %}
+    <a href="?solo_page={{ solo_page.previous_page_number }}&page={{ page.number }}{{ keep }}#single-runs"
+       class="border border-gray-300 rounded px-3 py-1.5 text-gray-700 hover:bg-gray-50">← Newer</a>
+  {% endif %}</div>
+  <span class="text-xs text-gray-500">Page {{ solo_page.number }} of {{ solo_page.paginator.num_pages }} · {{ solo_page.paginator.count }} single run{{ solo_page.paginator.count|pluralize }}</span>
+  <div>{% if solo_page.has_next %}
+    <a href="?solo_page={{ solo_page.next_page_number }}&page={{ page.number }}{{ keep }}#single-runs"
+       class="border border-gray-300 rounded px-3 py-1.5 text-gray-700 hover:bg-gray-50">Older →</a>
+  {% endif %}</div>
+</div>
+{% endwith %}
+{% endif %}
 {% endif %}
 {% endblock %}

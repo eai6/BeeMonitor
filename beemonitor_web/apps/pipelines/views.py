@@ -388,13 +388,18 @@ def run_list(request):
         b["pct_done"] = round(100 * b["done"] / b["count"]) if b["count"] else 0
 
     # Runs with no batch — one-click analysis and single-clip pipeline runs.
-    solo = list(mine.filter(batch_id=None).select_related("pipeline")
-                .order_by("-started_at", "-id")[:10])
+    # Paged on their own (?solo_page=): they used to stop at the latest ten,
+    # with no way back to anything older.
+    solo_page = Paginator(mine.filter(batch_id=None).select_related("pipeline")
+                          .order_by("-started_at", "-id"), 10
+                          ).get_page(request.GET.get("solo_page"))
+    solo = list(solo_page.object_list)
 
     return render(request, "pipelines/runs.html", {
         "batches": batch_rows,
         "page": page,
         "solo": solo,
+        "solo_page": solo_page,
         "status_filter": status_filter,
         "counts": {
             "all": mine.exclude(batch_id=None).values("batch_id").distinct().count(),
