@@ -461,7 +461,14 @@ def retry_step(request, pk, run_id, step_id):
         messages.warning(request, "That step isn't part of this run.")
         return redirect("pipelines:run_detail", pk=pk, run_id=run_id)
 
-    reset = _descendant_step_ids(steps, step_id)
+    reset = _reset_steps(run, _descendant_step_ids(steps, step_id))
+    engine.advance_run(run.pk)
+    messages.info(request, f"Retrying — reset {len(reset)} step(s).")
+    return redirect("pipelines:run_detail", pk=pk, run_id=run_id)
+
+
+def _reset_steps(run, reset):
+    """Set these steps back to pending, drop their outputs, and reopen the run."""
     status = dict(run.step_status or {})
     context = dict(run.context or {})
     for sid in reset:
@@ -473,9 +480,56 @@ def retry_step(request, pk, run_id, step_id):
     run.completed_at = None
     run.error_message = ""
     run.save(update_fields=["step_status", "context", "status", "completed_at", "error_message"])
-    engine.advance_run(run.pk)
-    messages.info(request, f"Retrying — reset {len(reset)} step(s).")
-    return redirect("pipelines:run_detail", pk=pk, run_id=run_id)
+    return reset
+
+
+def _failed_step_ids(run):
+    """The steps that failed on their own (not just because one above them did),
+    plus everything downstream of them."""
+    steps = run.steps or []
+    context = run.context or {}
+    reset = set()
+    for step in steps:
+        sid = step.get("id")
+        if run.step_state(sid) != PipelineRun.STEP_FAILED:
+            continue
+        if "Upstream step failed" in str((context.get(sid) or {}).get("error") or ""):
+            continue
+        reset |= _descendant_step_ids(steps, sid)
+    return reset
+
+
+@login_required
+@require_POST
+def batch_retry_failed(request, batch_id):
+    """Re-run a batch's failed clips IN PLACE, keeping them in this batch.
+
+    Starting a new batch over every clip to recover one that the GPU dropped
+    cost a whole batch of GPU time and split the results across two batches.
+    This resets only the failed steps of only the failed runs (optionally just
+    one cause's clips), so the batch fills in and its downloads stay whole.
+    """
+    from . import aggregate
+
+    wanted = {int(v) for v in request.POST.getlist("video_ids") if str(v).isdigit()}
+    runs = PipelineRun.objects.filter(batch_id=batch_id, user=request.user,
+                                      status=PipelineRun.Status.FAILED)
+    retried = 0
+    for run in runs:
+        if wanted and aggregate.run_video_id(run) not in wanted:
+            continue
+        reset = _failed_step_ids(run)
+        if not reset:
+            continue
+        _reset_steps(run, reset)
+        engine.advance_run(run.pk)
+        retried += 1
+    if retried:
+        messages.success(request, f"Re-running {retried} failed clip{'s' if retried != 1 else ''} "
+                                  "in this batch. The rest keep their results.")
+    else:
+        messages.info(request, "Nothing to re-run — no failed clips matched.")
+    return redirect("pipelines:batch_detail", batch_id=batch_id)
 
 
 def analyzer_options(run):

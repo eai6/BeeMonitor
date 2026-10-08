@@ -106,6 +106,21 @@ their reason.
         </div>
         <p class="mt-1.5 text-[11px] text-red-900 leading-4">{{ g.cause.detail }} <span class="text-red-700">{{ g.cause.action }}</span></p>
         {% comment %}
+          Just these clips, in this batch. The only way back used to be a new
+          batch over every clip — a whole batch of GPU time to recover one, and
+          the results split across two batches.
+        {% endcomment %}
+        {% if can_rerun and g.video_ids and g.cause.retryable is not False %}
+        <form method="post" action="{% url 'pipelines:batch_retry_failed' batch_id %}" class="mt-2">
+          {% csrf_token %}
+          {% for vid in g.video_ids %}<input type="hidden" name="video_ids" value="{{ vid }}">{% endfor %}
+          <button type="submit" class="text-xs font-medium px-3 py-1.5 rounded bg-red-700 text-white hover:bg-red-800">
+            Re-run {% if g.count == 1 %}this clip{% else %}these {{ g.count }} clips{% endif %}
+          </button>
+          <span class="text-[11px] text-red-900 ml-1.5">in this batch; the other clips keep their results</span>
+        </form>
+        {% endif %}
+        {% comment %}
           The recorded text, for the bucket that nothing matched. Its detail line
           has always promised this and the panel never rendered it, so the only
           place an unclassified failure could be read was a row's hover title.
