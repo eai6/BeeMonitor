@@ -23,25 +23,21 @@ CAUSES = [
     {
         "key": "endpoint_unresponsive",
         "match": ("could not get a response",),
-        "title": "The endpoint ran out of CPU",
+        "title": "The GPU instance went away mid-clip",
         "detail": (
-            "SageMaker gave up waiting for the container. The video endpoint "
-            "packs three invocations onto one ml.g4dn.xlarge — four vCPUs — and "
-            "tracking is mostly CPU, so three at once can commit the box and "
-            "nothing answers in time. Autoscaling only adds an instance once the "
-            "backlog per instance reaches five, so the crowding gets worse "
-            "before it gets better. Nothing was wrong with the clip."
+            "SageMaker lost the container while it was working, so the clip got "
+            "no answer. The usual cause is autoscaling removing the instance: "
+            "it sizes the endpoint from the queue, and a job that lands on an "
+            "endpoint that has been idle can be caught by a scale-in decided "
+            "on the idle minutes before the queue shows the new work. Each "
+            "instance runs one clip at a time, so this is not CPU crowding. "
+            "Nothing was wrong with the clip."
         ),
-        "action": "Re-run; a batch submitted all at once hits this on the ramp "
-                  "from zero instances.",
-        # NOT marked fixed. It said "one job per instance now, across four
-        # instances" and carried a fixed_at of 2026-09-09 — but that describes
-        # the SAM 3 endpoint (max_concurrent_invocations_per_instance=1), not
-        # this one, which still runs three. The real remedy, capping the CPU
-        # pools so one job cannot claim the box (6a16579), is committed and NOT
-        # deployed: infra/aws-sagemaker/Pulumi.dev.yaml pins image-tag 155d53c,
-        # which predates it. Claiming "fixed since" on a page where the failure
-        # just happened again is worse than saying nothing.
+        "action": "Re-run; the clip will get a fresh instance.",
+        # NOT marked fixed: the race is in AWS's scale-in, which a run can
+        # still lose. Job pl_c86ad9f107de4b (2026-10-08 00:04Z) was killed at
+        # frame 7500 by "Setting desired instance count to 0" at 00:00:10, on
+        # an endpoint woken by a deploy rather than by the queue.
     },
     {
         "key": "sam3_import_race",

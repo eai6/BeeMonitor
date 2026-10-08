@@ -61,14 +61,11 @@ class ClassifyTests(TestCase):
         self.assertFalse(mixed[0]["fixed"])
 
     def test_the_cpu_cause_claims_no_fix(self):
-        """It carried one, and the fix it described was never deployed.
+        """Instances being scaled away under a running clip can still happen.
 
-        The old text said "one job per instance now, across four instances" —
-        that is the SAM 3 endpoint's config. The video endpoint still packs
-        three invocations onto a four-vCPU box, and the change that would stop
-        one job claiming the cores (6a16579) sits behind an image tag Pulumi
-        has not been moved to. A "fixed since" badge on a page where the
-        failure just happened again is worse than no badge.
+        It once carried a "fixed since" for a fix that was never deployed; a
+        badge on a page where the failure just happened again is worse than
+        no badge.
         """
         recent = datetime(2026, 9, 10, 23, 59, tzinfo=dt_tz.utc)
 
