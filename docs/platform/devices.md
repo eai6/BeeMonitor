@@ -44,6 +44,11 @@ and uploads, and the state of every service the unit runs.
     - **Also periodically** — a photo every 15, 30 or 60 minutes. They show under **Photos** in Videos.
     - **Take one now**.
 
+<figure markdown>
+  ![The Recording panel: mode set to Continuous in 10-minute clips from 06:00 to 19:00, and Full-resolution photos with On motion (Video only or 5 photos, then video), Also periodically (Off, every 15, 30 or 60 minutes), Take one now and Free space on the device](../assets/platform/device-recording.png)
+  <figcaption>Recording on a device page: the mode and hours, then full-resolution photos.</figcaption>
+</figure>
+
 ## Health
 
 Storage, temperature, battery, connection and uploads, with a history chart under **Advanced settings**.
