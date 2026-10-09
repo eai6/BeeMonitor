@@ -32,6 +32,7 @@ import os
 import queue
 import threading
 
+from beemonitor import cancellation
 from beemonitor.core.profiling import PROFILER
 from beemonitor.detection.yolo_detector import YOLODetector
 from beemonitor.detection.blob_detector import BlobDetector
@@ -963,7 +964,8 @@ class BeeTracking:
         results = []
         frames_read = 0
 
-        for frame_num, frame in _iter_frames(cap, start_frame, end_frame):
+        frames = _iter_frames(cap, start_frame, end_frame)
+        for frame_num, frame in frames:
             frames_read += 1
             # Process frame
             result = self.process_frame(frame, frame_num, visualize=visualize)
@@ -987,6 +989,16 @@ class BeeTracking:
 
             if frames_read % 100 == 0:
                 logger.info(f"Processed {frames_read} frames")
+                # The owner cancelled this clip (memory/49): stop the reader
+                # thread and let go of the file, then unwind. A flag read only;
+                # the S3 look-up happens on the worker's watcher thread.
+                if cancellation.requested():
+                    frames.close()
+                    cap.release()
+                    if visualize and output_path:
+                        out.release()
+                    logger.info(f"Cancelled after {frames_read} frames")
+                    cancellation.check()
 
         cap.release()
         if visualize and output_path:

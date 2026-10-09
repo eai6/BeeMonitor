@@ -1,0 +1,31 @@
+{% comment %}
+Stop a batch's unfinished clips (memory/49). Only the launcher sees this, and
+only while something is still running. Cancelling tells the GPU too: a waiting
+clip is skipped, a running one stops within about 20 seconds.
+{% endcomment %}
+<div x-data="{ open: false }" x-effect="window.bmHoldRefresh = open" class="shrink-0">
+  <style>[x-cloak]{display:none !important}</style>
+  <button type="button" @click="open = true"
+          class="h-10 px-4 rounded-md text-sm font-semibold border border-red-300 bg-white text-red-700 hover:bg-red-50">
+    Cancel batch
+  </button>
+  <div x-show="open" x-cloak class="fixed inset-0 z-40 bg-gray-900/40 flex items-center justify-center p-4"
+       @keydown.escape.window="open = false" @click.self="open = false">
+    <div role="dialog" aria-modal="true" aria-labelledby="cancel-batch-title"
+         class="w-full max-w-md bg-white rounded-lg shadow-xl p-6 space-y-3">
+      <h2 id="cancel-batch-title" class="text-lg font-semibold text-gray-900">Cancel the rest of this batch?</h2>
+      <ul class="text-sm text-gray-800 space-y-1">
+        <li><b>{{ outcome.completed }} done</b> keep their results.</li>
+        <li><b>{{ running }} unfinished</b>: any running now stop within about 20 seconds; the rest are skipped without using the GPU.</li>
+      </ul>
+      <p class="text-[13px] text-gray-600">GPU time already spent is still billed. You can re-run the cancelled clips later from this page.</p>
+      <form method="post" action="{% url 'pipelines:batch_cancel' batch_id %}" class="flex justify-end gap-2 pt-1">
+        {% csrf_token %}
+        <button type="button" @click="open = false"
+                class="h-10 px-4 rounded-md text-sm border border-gray-300 bg-white text-gray-800 hover:bg-gray-50">Keep running</button>
+        <button type="submit"
+                class="h-10 px-4 rounded-md text-sm font-semibold bg-red-700 text-white hover:bg-red-800">Cancel {{ running }} clip{{ running|pluralize }}</button>
+      </form>
+    </div>
+  </div>
+</div>

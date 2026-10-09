@@ -648,6 +648,8 @@ def batch_rows(runs):
             "primitives": primitive_counts(run),
             "status": run.status,
             "error": run_error(run),
+            # Stopped by its owner (memory/49): shown apart from failures.
+            "cancelled": run.status == run.Status.FAILED and "Cancelled by user" in run_error(run),
             "when": video.recorded_at if video else None,
             # GPU time is spent whether or not the run produced anything — a
             # failure that burned an hour is worth seeing next to one that did
@@ -685,13 +687,18 @@ def batch_devices(rows):
 def batch_summary(rows):
     """Counts and money for the whole batch, including what failures cost."""
     completed = [r for r in rows if r["status"] == "completed"]
-    failed = [r for r in rows if r["status"] == "failed"]
+    cancelled = [r for r in rows if r["status"] == "failed" and r.get("cancelled")]
+    failed = [r for r in rows if r["status"] == "failed" and not r.get("cancelled")]
+    pct = (lambda n: round(100 * n / len(rows))) if rows else (lambda n: 0)
     return {
         "total": len(rows),
         "completed": len(completed),
         "failed": len(failed),
-        "running": len(rows) - len(completed) - len(failed),
-        "pct_ok": round(100 * len(completed) / len(rows)) if rows else 0,
+        "cancelled": len(cancelled),
+        "running": len(rows) - len(completed) - len(failed) - len(cancelled),
+        "pct_ok": pct(len(completed)),
+        "pct_failed": pct(len(failed)),
+        "pct_cancelled": pct(len(cancelled)),
         "gpu_seconds": round(sum(r["gpu_seconds"] for r in rows), 1),
         "gpu_seconds_failed": round(sum(r["gpu_seconds"] for r in failed), 1),
         "failed_video_ids": [r["video"].pk for r in failed if r["video"]],

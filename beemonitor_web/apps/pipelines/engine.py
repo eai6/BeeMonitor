@@ -222,6 +222,35 @@ def advance_run(run_pk):
         run.save()
 
 
+def cancel_run(run_pk, message):
+    """Stop a run where it is: every step not yet done fails with ``message``.
+
+    For a batch cancel (memory/49). Done steps keep their output; a step whose
+    GPU job was cancelled already failed through on_job_finished, so this only
+    reaches what was still pending. Idempotent.
+    """
+    with transaction.atomic():
+        try:
+            run = PipelineRun.objects.select_for_update().get(pk=run_pk)
+        except PipelineRun.DoesNotExist:
+            return
+        if run.is_terminal:
+            return
+        steps = run.steps or []
+        status = dict(run.step_status or {})
+        context = dict(run.context or {})
+        for step in steps:
+            sid = step.get("id")
+            if not sid or status.get(sid) in (PipelineRun.STEP_DONE, PipelineRun.STEP_FAILED):
+                continue
+            status[sid] = PipelineRun.STEP_FAILED
+            context[sid] = {**(context.get(sid) or {}), "error": message}
+        run.step_status = status
+        run.context = context
+        _finalize_if_terminal(run, steps, status)
+        run.save()
+
+
 def _finalize_if_terminal(run, steps, status):
     """Mark the run completed/failed once every step reaches a terminal state."""
     states = [status.get(s.get("id"), PipelineRun.STEP_PENDING) for s in steps if s.get("id")]

@@ -21,6 +21,15 @@ from datetime import datetime, timezone
 # Ordered: the first match wins, so put specific causes before general ones.
 CAUSES = [
     {
+        # Not a failure: the owner stopped these (memory/49). First, so a
+        # cancelled clip is never read as anything else.
+        "key": "cancelled",
+        "match": ("Cancelled by user",),
+        "title": "Cancelled by you",
+        "detail": "Stopped before they finished. Nothing was wrong with these clips.",
+        "action": "Re-run them when you're ready.",
+    },
+    {
         "key": "endpoint_unresponsive",
         "match": ("could not get a response",),
         "title": "The GPU instance went away mid-clip",

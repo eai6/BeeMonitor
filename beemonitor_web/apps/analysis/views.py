@@ -560,27 +560,19 @@ ACTIVE_JOB_STATUSES = [
 class JobCancelView(LoginRequiredMixin, View):
     """Cancel an in-flight job to free a GPU slot.
 
-    SageMaker async has no API to abort a queued/running request, so this marks
-    the Job cancelled (poller stops tracking it; a late result is ignored) and
-    fails any pipeline-run step waiting on it so the run doesn't hang. GPU time
-    already spent still bills.
+    SageMaker async has no API to abort a request, so this marks the Job
+    cancelled, fails any pipeline step waiting on it, and leaves a marker the
+    worker watches for: a queued clip is skipped, a running one stops within
+    about 20 seconds (memory/49). GPU time already spent still bills.
     """
 
     def post(self, request, pk):
         from django.shortcuts import redirect
-        from django.utils import timezone
+
+        from .cancelling import cancel_jobs
 
         job = get_object_or_404(Job, pk=pk, user=request.user)
-        if job.status in ACTIVE_JOB_STATUSES:
-            job.status = Job.Status.CANCELLED
-            job.completed_at = timezone.now()
-            job.error_message = "Cancelled by user."
-            job.save(update_fields=["status", "completed_at", "error_message"])
-            try:
-                from apps.pipelines import engine
-                engine.on_job_finished(job)
-            except Exception:
-                logger.exception("cancel: pipeline hook failed for job %s", pk)
+        if cancel_jobs([job]):
             messages.info(request, f"Cancelled analysis of '{job.video.title}'.")
         else:
             messages.warning(request, "That job already finished.")
@@ -592,20 +584,11 @@ class JobCancelAllView(LoginRequiredMixin, View):
 
     def post(self, request):
         from django.shortcuts import redirect
-        from django.utils import timezone
 
-        jobs = list(Job.objects.filter(user=request.user, status__in=ACTIVE_JOB_STATUSES))
-        for job in jobs:
-            job.status = Job.Status.CANCELLED
-            job.completed_at = timezone.now()
-            job.error_message = "Cancelled by user."
-            job.save(update_fields=["status", "completed_at", "error_message"])
-            try:
-                from apps.pipelines import engine
-                engine.on_job_finished(job)
-            except Exception:
-                logger.exception("cancel-all: pipeline hook failed for job %s", job.pk)
-        messages.info(request, f"Cancelled {len(jobs)} job(s).")
+        from .cancelling import cancel_jobs
+
+        n = cancel_jobs(Job.objects.filter(user=request.user, status__in=ACTIVE_JOB_STATUSES))
+        messages.info(request, f"Cancelled {n} job(s).")
         return redirect("analysis:processing")
 
 
@@ -1186,7 +1169,7 @@ def _poll_chunked_job(job, s3, age) -> int:
         try:
             body = s3.get_object(Bucket=p.netloc, Key=p.path.lstrip("/"))["Body"].read()
             res = _json.loads(body)
-            if res.get("status") == "failed":
+            if res.get("status") in ("failed", "cancelled"):
                 return _fail(f"Chunk {ch['i']} failed: {res.get('error_message', 'unknown')}")
             ch["result"] = res
             changed = True
@@ -1347,9 +1330,10 @@ def _apply_result_to_job(job, result: dict) -> None:
     """Write the SageMaker result JSON into JobResult + finalize the Job."""
     from django.utils import timezone
 
-    if result.get("status") == "failed":
+    if result.get("status") in ("failed", "cancelled"):
+        # "cancelled": the worker saw this job's cancel marker (memory/49).
         Job.objects.filter(pk=job.pk).update(
-            status="failed",
+            status=result["status"],
             error_message=result.get("error_message", "Unknown SM failure"),
             completed_at=timezone.now(),
         )

@@ -1050,6 +1050,40 @@ def batch_detail(request, batch_id):
 
 @login_required
 @require_POST
+def batch_cancel(request, batch_id):
+    """Stop a batch's unfinished clips (memory/49).
+
+    Finished clips keep their results. Each unfinished clip's GPU job is
+    cancelled — which now also tells the GPU, so a queued clip is skipped and a
+    running one stops within about 20 seconds — and its run is closed as
+    cancelled, so the in-place re-run can resume it later.
+    """
+    from apps.analysis.cancelling import ACTIVE, CANCELLED_MESSAGE, cancel_jobs
+    from apps.analysis.models import Job
+
+    from . import sharing
+
+    if not sharing.owns_batch(request.user, batch_id):
+        raise Http404("No such batch.")
+    runs = list(PipelineRun.objects.filter(
+        batch_id=batch_id, user=request.user,
+        status__in=[PipelineRun.Status.PENDING, PipelineRun.Status.RUNNING]))
+    job_ids = [out.get("job_id") for run in runs for out in (run.context or {}).values()
+               if isinstance(out, dict) and out.get("job_id")]
+    cancel_jobs(Job.objects.filter(pk__in=job_ids, status__in=ACTIVE))
+    for run in runs:
+        engine.cancel_run(run.pk, CANCELLED_MESSAGE)
+    if runs:
+        messages.success(request, f"Cancelled {len(runs)} clip{'s' if len(runs) != 1 else ''}. "
+                                  "Running clips stop within about 20 seconds; waiting "
+                                  "clips are skipped without using the GPU.")
+    else:
+        messages.info(request, "Nothing to cancel — every clip in this batch has finished.")
+    return redirect("pipelines:batch_detail", batch_id=batch_id)
+
+
+@login_required
+@require_POST
 def batch_share(request, batch_id):
     """Turn a batch's public link on (or update what it shows), or off."""
     from . import sharing

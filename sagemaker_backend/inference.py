@@ -151,51 +151,63 @@ def predict_fn(payload, pipeline):
     started = time.time()
     logger.info("predict_fn: job=%s video=%s", job_id, video_blob_path)
 
+    # Cancelled before it started (memory/49): SageMaker can't drop a queued
+    # request, so answer it in a second instead of processing the clip.
+    watcher = _cancel_watcher(job_id, pipeline)
+    if watcher is not None and watcher.cancelled_already():
+        logger.info("predict_fn: job %s was cancelled before it started", job_id)
+        return _cancelled(job_id, user_id, started, profiler)
+
     try:
-        result = pipeline.process(
-            job_id=job_id,
-            user_id=user_id,
-            video_blob_path=video_blob_path,
-            detection_mode=payload.get("detection_mode", "yolo"),
-            confidence_threshold=float(payload.get("confidence_threshold", 0.25)),
-            ml_threshold=float(payload.get("ml_threshold", 0.6)),
-            visualize=bool(payload.get("visualize", True)),
-            two_mode_tracking=bool(payload.get("two_mode_tracking", True)),
-            custom_nest_model_path=payload.get("custom_nest_model_path", "") or "",
-            custom_bee_model_path=payload.get("custom_bee_model_path", "") or "",
-            # Device-supplied hotel ROI + nest tubes (normalized); when both are
-            # present the run uses them and the nest model is the backup.
-            hotel_roi=payload.get("hotel_roi"),
-            # The ROI's traced outline, when the user drew a polygon: tracking is
-            # masked to it, so background inside the bounding box is ignored.
-            hotel_polygon=payload.get("hotel_polygon"),
-            nest_layout=payload.get("nest_layout"),
-            # False = nest/hotel-only fast path (skip tracking + events).
-            run_tracking=bool(payload.get("run_tracking", True)),
-            # Detector: "sam3" = text-prompt tracking (heavy), else YOLO.
-            detector_kind=payload.get("detector_kind", "yolo") or "yolo",
-            text_prompt=payload.get("text_prompt", "") or "",
-            # ISO recording start (video.recorded_at) — replaces the filename
-            # timestamp convention for event timestamps.
-            recorded_at=payload.get("recorded_at", "") or "",
-            # Chunked long videos: one frame range per invocation so no single
-            # GPU call exceeds the async platform's 1h cap. Absent = whole video.
-            start_frame=int(payload.get("start_frame", 0) or 0),
-            end_frame=int(payload["end_frame"]) if payload.get("end_frame") else None,
-            # Species / marker identity: voted over every crop of each track
-            # after tracking. BeeMachine (fetched only when on) or BioCLIP,
-            # constrained to the region's species when the platform sends them.
-            identify_species=bool(payload.get("identify_species", False)),
-            species_model_key=payload.get("species_model_key", "") or "",
-            species_classifier=payload.get("species_classifier", "beemachine") or "beemachine",
-            candidate_taxa=payload.get("candidate_taxa") or None,
-            identify_markers=bool(payload.get("identify_markers", False)),
-            marker_type=payload.get("marker_type", "auto") or "auto",
-            # MOT algorithm + settings from the pipeline (memory/43).
-            tracker=payload.get("tracker", "beetrack") or "beetrack",
-            tracker_params=payload.get("tracker_params") or None,
-        )
+        with (watcher if watcher is not None else _no_watch()):
+            result = pipeline.process(
+                job_id=job_id,
+                user_id=user_id,
+                video_blob_path=video_blob_path,
+                detection_mode=payload.get("detection_mode", "yolo"),
+                confidence_threshold=float(payload.get("confidence_threshold", 0.25)),
+                ml_threshold=float(payload.get("ml_threshold", 0.6)),
+                visualize=bool(payload.get("visualize", True)),
+                two_mode_tracking=bool(payload.get("two_mode_tracking", True)),
+                custom_nest_model_path=payload.get("custom_nest_model_path", "") or "",
+                custom_bee_model_path=payload.get("custom_bee_model_path", "") or "",
+                # Device-supplied hotel ROI + nest tubes (normalized); when both are
+                # present the run uses them and the nest model is the backup.
+                hotel_roi=payload.get("hotel_roi"),
+                # The ROI's traced outline, when the user drew a polygon: tracking is
+                # masked to it, so background inside the bounding box is ignored.
+                hotel_polygon=payload.get("hotel_polygon"),
+                nest_layout=payload.get("nest_layout"),
+                # False = nest/hotel-only fast path (skip tracking + events).
+                run_tracking=bool(payload.get("run_tracking", True)),
+                # Detector: "sam3" = text-prompt tracking (heavy), else YOLO.
+                detector_kind=payload.get("detector_kind", "yolo") or "yolo",
+                text_prompt=payload.get("text_prompt", "") or "",
+                # ISO recording start (video.recorded_at) — replaces the filename
+                # timestamp convention for event timestamps.
+                recorded_at=payload.get("recorded_at", "") or "",
+                # Chunked long videos: one frame range per invocation so no single
+                # GPU call exceeds the async platform's 1h cap. Absent = whole video.
+                start_frame=int(payload.get("start_frame", 0) or 0),
+                end_frame=int(payload["end_frame"]) if payload.get("end_frame") else None,
+                # Species / marker identity: voted over every crop of each track
+                # after tracking. BeeMachine (fetched only when on) or BioCLIP,
+                # constrained to the region's species when the platform sends them.
+                identify_species=bool(payload.get("identify_species", False)),
+                species_model_key=payload.get("species_model_key", "") or "",
+                species_classifier=payload.get("species_classifier", "beemachine") or "beemachine",
+                candidate_taxa=payload.get("candidate_taxa") or None,
+                identify_markers=bool(payload.get("identify_markers", False)),
+                marker_type=payload.get("marker_type", "auto") or "auto",
+                # MOT algorithm + settings from the pipeline (memory/43).
+                tracker=payload.get("tracker", "beetrack") or "beetrack",
+                tracker_params=payload.get("tracker_params") or None,
+            )
     except Exception as exc:
+        from beemonitor.cancellation import JobCancelled
+        if isinstance(exc, JobCancelled):
+            logger.info("predict_fn: job %s cancelled mid-clip", job_id)
+            return _cancelled(job_id, user_id, started, profiler)
         logger.exception("predict_fn: pipeline failed for job %s", job_id)
         return {
             "status": "failed",
@@ -211,6 +223,49 @@ def predict_fn(payload, pipeline):
     out["execution_seconds"] = round(time.time() - started, 2)
     out.update(_timings(profiler))
     return out
+
+
+CANCEL_CHECK_SECONDS = float(os.environ.get("BEEMONITOR_CANCEL_CHECK_SECONDS", "15"))
+
+
+def _cancel_watcher(job_id, pipeline):
+    """A watcher for this job's cancel marker, or None when there's no storage.
+
+    Best-effort: if it can't be built the clip simply runs to the end, as every
+    clip did before cancelling could stop one.
+    """
+    try:
+        from beemonitor.cancellation import Watcher
+
+        storage = getattr(pipeline, "_storage", None)
+        if storage is None:
+            return None
+        return Watcher(job_id, lambda key: storage.blob_exists("processed", key),
+                       interval=CANCEL_CHECK_SECONDS)
+    except Exception:  # noqa: BLE001
+        logger.warning("predict_fn: no cancel watcher for %s", job_id, exc_info=True)
+        return None
+
+
+class _no_watch:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _cancelled(job_id, user_id, started, profiler) -> dict:
+    """The answer for a cancelled clip. Nothing it computed is kept: a batch
+    never mixes half-clips with whole ones, and a re-run redoes the clip."""
+    return {
+        "status": "cancelled",
+        "job_id": job_id,
+        "user_id": user_id,
+        "error_message": "Cancelled by user.",
+        "execution_seconds": round(time.time() - started, 2),
+        **_timings(profiler),
+    }
 
 
 def _profiler():
