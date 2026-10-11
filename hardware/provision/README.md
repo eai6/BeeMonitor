@@ -98,9 +98,13 @@ sudo poweroff
 
 </details>
 
-> The device's stable `hw_id` is the **Pi CPU serial** (unique per board), so clones
-> self-enroll as distinct devices even though the image is identical — that's why
-> blanking `machine-id` is safe.
+> **The SD card is the unit.** On first enrollment each card makes its own random id
+> (`/etc/beemonitor/card_id`), and the platform matches on it. So clones enroll as
+> distinct devices even though the image is identical, and you can check many cards
+> in one Pi without them merging. Each new unit gets a name like **Amber Osmia** and
+> takes it as its hostname (`amber-osmia`), unless you set a hostname yourself.
+> The Pi's serial is still sent and shown on the device page, for information only.
+> `generalize.sh` removes the card id and resets the hostname to `beemonitor`.
 
 ### 1.3 Capture + shrink (on a Linux box)
 

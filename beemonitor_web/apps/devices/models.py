@@ -231,6 +231,11 @@ class Device(models.Model):
     # Hardware id (Pi serial), set during zero-touch enrollment so re-enrolling
     # the same physical unit maps back to the same Device instead of duplicating.
     hw_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    # The SD card's own random id, made on its first enrollment. The card is the
+    # unit: one Pi can check many cards without merging them into one device,
+    # and a card moved to another Pi stays the same unit. Blank = enrolled
+    # before cards had ids (matched on hw_id).
+    card_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
 
     # How the recorder captures within its window, pushed in the heartbeat
     # (the recorder hot-reloads it). motion = clips only when motion triggers

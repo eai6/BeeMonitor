@@ -8,9 +8,16 @@ key. On first boot this script:
      (/boot/firmware/beemonitor.conf — written by prepare-card.sh from any
      laptop), else from /etc/beemonitor/uploader.env,
   2. if BEEMONITOR_DEVICE_KEY is already set -> nothing to do,
-  3. else if a token is present -> POST it (+ this Pi's hardware id, hostname,
-     timezone) to /api/v1/devices/enroll, get a fresh device key, write it into
-     uploader.env, and clear the reusable token from the boot partition.
+  3. else if a token is present -> POST it (+ this card's own id, this Pi's
+     hardware id, hostname, timezone) to /api/v1/devices/enroll, get a fresh
+     device key, write it into uploader.env, and clear the reusable token from
+     the boot partition,
+  4. take the unit's name as this card's hostname ("amber-osmia") when the
+     hostname is still the golden image's generic one.
+
+The CARD is the unit: its id (CARD_ID_FILE) is made here on first enrollment
+and removed by generalize.sh, so one Pi can check many cards and each still
+enrolls as its own unit.
 
 Stdlib only (urllib), so it runs under the system python3 as root without the
 venv. Idempotent: re-running once a key exists is a no-op; the server maps a
@@ -27,6 +34,11 @@ import urllib.request
 from datetime import datetime
 
 ENV_FILE = os.environ.get("BEEMONITOR_ENV", "/etc/beemonitor/uploader.env")
+CARD_ID_FILE = os.environ.get("BEEMONITOR_CARD_ID_FILE", "/etc/beemonitor/card_id")
+
+# Hostnames every clone of the golden image shares. Must match
+# apps/devices/names.py GENERIC_HOSTNAMES on the platform.
+GENERIC_HOSTNAMES = {"", "beemonitor", "raspberrypi", "localhost", "pi"}
 
 # The per-card provisioning file lives on the FAT boot partition so it can be
 # written from any laptop (macOS/Windows/Linux) without ext4 tooling. Bookworm
@@ -132,6 +144,49 @@ def _hw_id():
         return ""
 
 
+def _card_id():
+    """This SD card's own random id, made the first time it's needed."""
+    try:
+        val = open(CARD_ID_FILE).read().strip()
+        if val:
+            return val
+    except OSError:
+        pass
+    import uuid
+    val = uuid.uuid4().hex
+    try:
+        os.makedirs(os.path.dirname(CARD_ID_FILE), exist_ok=True)
+        with open(CARD_ID_FILE, "w") as fh:
+            fh.write(val + "\n")
+    except OSError as e:
+        print(f"enroll: could not save card id (non-fatal): {e}", file=sys.stderr)
+    return val
+
+
+def _adopt_hostname(name):
+    """Use the unit's name as this card's hostname, if it still has the golden
+    image's generic one. Best-effort: a failure leaves the old hostname."""
+    current = socket.gethostname()
+    if not name or current.strip().lower() not in GENERIC_HOSTNAMES:
+        return
+    try:
+        subprocess.run(["hostnamectl", "set-hostname", name],
+                       capture_output=True, timeout=15, check=True)
+        # Keep sudo quiet: 127.0.1.1 must name the new hostname.
+        with open("/etc/hosts") as fh:
+            lines = fh.readlines()
+        out = [f"127.0.1.1\t{name}\n" if ln.startswith("127.0.1.1") else ln for ln in lines]
+        if not any(ln.startswith("127.0.1.1") for ln in lines):
+            out.append(f"127.0.1.1\t{name}\n")
+        tmp = "/etc/hosts.tmp"
+        with open(tmp, "w") as fh:
+            fh.writelines(out)
+        os.replace(tmp, "/etc/hosts")
+        print(f"enroll: hostname is now {name}")
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"enroll: could not set hostname (non-fatal): {e}", file=sys.stderr)
+
+
 def _timezone():
     out = {}
     try:
@@ -201,7 +256,8 @@ def main():
         print("enroll: could not determine a hardware id", file=sys.stderr)
         return 1
 
-    payload = {"token": token, "hw_id": hw_id, "hostname": socket.gethostname()}
+    payload = {"token": token, "hw_id": hw_id, "card_id": _card_id(),
+               "hostname": socket.gethostname()}
     payload.update(_timezone())
     body = json.dumps(payload).encode()
     url = api_base + "/api/v1/devices/enroll"
@@ -221,6 +277,7 @@ def main():
                     print("enroll: cleared enrollment token from boot partition")
                 print(f"enroll: provisioned device '{data.get('name')}' "
                       f"(id={data.get('device_id')}) — key written")
+                _adopt_hostname(data.get("hostname", ""))
                 return 0
             print("enroll: response had no device_key", file=sys.stderr)
             return 1

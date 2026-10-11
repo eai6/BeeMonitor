@@ -6,12 +6,15 @@
 #   * removes BEEMONITOR_DEVICE_KEY / BEEMONITOR_ENROLL_TOKEN from uploader.env
 #   * deletes any dropped boot-partition token (beemonitor.conf)
 #   * blanks machine-id and SSH host keys (regenerated per clone on first boot)
+#   * removes the card id and resets the hostname to "beemonitor", so each
+#     clone enrolls as its own unit and gets its own name
 #   * vacuums logs, clears test recordings + shell history
 #   * VERIFIES no key/token survives, then (optionally) powers off
 #
 # The image keeps only BEEMONITOR_API_BASE — the per-card token is dropped in later
-# (Part 2). The stable hw_id is the Pi CPU serial, so identical clones still enroll
-# as distinct devices, which is why blanking machine-id is safe.
+# (Part 2). Each card makes its own id on first enrollment (enroll.py), so the
+# card is the unit: identical clones enroll as distinct devices even when they
+# are all checked in the same Pi.
 #
 # Usage (on the reference Pi):
 #   sudo bash generalize.sh            # generalize, confirm, then power off
@@ -20,6 +23,7 @@
 set -u
 
 ENV_FILE="${BEEMONITOR_ENV_FILE:-/etc/beemonitor/uploader.env}"
+CARD_ID_FILE="${BEEMONITOR_CARD_ID_FILE:-/etc/beemonitor/card_id}"
 BOOT_CONFS=(/boot/firmware/beemonitor.conf /boot/beemonitor.conf)
 # Test clips to clear. README default + whatever RECORD_DIR points at, if set.
 RECORD_DIRS=(/home/beemonitor/Desktop/cameraOutput)
@@ -69,6 +73,12 @@ truncate -s 0 /etc/machine-id
 rm -f /var/lib/dbus/machine-id 2>/dev/null || true
 ln -sf /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null || true
 rm -f /etc/ssh/ssh_host_*
+# The card id IS the unit's identity; a clone must make its own.
+rm -f "$CARD_ID_FILE"
+# Back to the generic hostname, so each clone takes its unit's name on enrollment
+# instead of every clone shipping as this reference unit.
+hostnamectl set-hostname beemonitor 2>/dev/null || echo beemonitor > /etc/hostname
+sed -i 's/^127\.0\.1\.1[[:space:]].*/127.0.1.1\tbeemonitor/' /etc/hosts
 # Make sure host keys regenerate on next boot (service name varies by distro).
 systemctl enable regenerate-ssh-host-keys 2>/dev/null \
     || systemctl enable ssh-host-keys-regeneration 2>/dev/null || true
@@ -100,6 +110,7 @@ fi
 for f in "${BOOT_CONFS[@]}"; do
     [ -e "$f" ] && { echo "    ✗ boot token still present: $f" >&2; fail=1; }
 done
+[ -e "$CARD_ID_FILE" ] && { echo "    ✗ card id still present: $CARD_ID_FILE" >&2; fail=1; }
 if ! grep -Eq '^[[:space:]]*BEEMONITOR_API_BASE=' "$ENV_FILE"; then
     echo "    ! warning: BEEMONITOR_API_BASE is not set — enrollment needs it (or it comes from beemonitor.conf)." >&2
 fi
