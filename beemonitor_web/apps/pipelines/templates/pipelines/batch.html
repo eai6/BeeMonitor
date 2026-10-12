@@ -262,7 +262,7 @@ their reason.
   {% if skipped_sources %}
   <div class="px-4 py-1.5 border-b border-gray-200 bg-amber-50 text-[11px] text-amber-900">
     {{ skipped_sources|length }} clip{{ skipped_sources|pluralize }} not in the downloads above:
-    {% for s in skipped_sources %}{{ s.video }} ({{ s.reason }}){% if not forloop.last %}; {% endif %}{% endfor %}
+    {% for reason, n in skipped_reasons %}{{ n }} {{ reason }}{% if not forloop.last %} · {% endif %}{% endfor %}
   </div>
   {% endif %}
 

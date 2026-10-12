@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import uuid
+from collections import Counter
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -962,6 +963,9 @@ def batch_detail(request, batch_id):
     # the page has always thrown it away, so a clip that could not join an export
     # vanished from it with nothing on screen to say so — and a download that is
     # quietly missing clips is worse than one that says which.
+    #
+    # Counted by reason, not listed: a big batch printed every clip id here, a
+    # wall of hundreds of hex strings above the clip list.
     skipped_sources = skipped
 
     # Whether a reference reached the analyzer decided every count on this page
@@ -1044,6 +1048,7 @@ def batch_detail(request, batch_id):
         "running": sum(1 for r in runs if not r.is_terminal),
         "sources": sources,
         "skipped_sources": skipped_sources,
+        "skipped_reasons": Counter(s["reason"] for s in skipped_sources).most_common(),
         "batch_devices": batch_devices,
     })
 
