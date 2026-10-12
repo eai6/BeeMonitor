@@ -1,0 +1,97 @@
+{% comment %}
+  Filter and sort a batch's clips in the page (static/js/clip_filter.js).
+  Shared by the batch page and its public share page. Takes:
+    units   - the batch's devices ({pk, name}); the Unit menu shows for two or more
+    public  - the share page: no error text, no re-run, its own status chips
+    rerun   - offer "Re-run these N" (the batch page's re-run form follows the filter)
+  and reads photos, batch_days and outcome from the page.
+{% endcomment %}
+<div id="clip-filter" class="border-b border-gray-200 bg-gray-50">
+  {% if public %}
+  <div class="flex flex-wrap items-center gap-2 px-4 pt-2.5">
+    <button type="button" data-filter-status="all" aria-pressed="true" class="text-xs px-3 py-1.5 rounded-full bg-amber-600 text-white">All {{ outcome.total }}</button>
+    <button type="button" data-filter-status="completed" aria-pressed="false" class="text-xs px-3 py-1.5 rounded-full bg-gray-100 text-gray-700">Analysed {{ outcome.completed }}</button>
+    {% if outcome.failed or outcome.cancelled %}<button type="button" data-filter-status="failed" aria-pressed="false" class="text-xs px-3 py-1.5 rounded-full bg-gray-100 text-gray-700">Didn't finish {{ outcome.failed|add:outcome.cancelled }}</button>{% endif %}
+    {% if outcome.running %}<button type="button" data-filter-status="running" aria-pressed="false" class="text-xs px-3 py-1.5 rounded-full bg-gray-100 text-gray-700">Processing {{ outcome.running }}</button>{% endif %}
+  </div>
+  {% endif %}
+  <div class="flex flex-wrap items-center gap-2 px-4 py-2.5">
+    <label class="flex items-center gap-1.5 flex-[1_1_240px] min-w-0 h-9 px-2.5 bg-white border border-gray-300 rounded-md focus-within:border-amber-500">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6b7280" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+      <span class="sr-only">Search {% if photos %}photos{% else %}clips{% endif %}</span>
+      <input type="search" data-filter="q" autocomplete="off"
+             placeholder="{% if public %}Unit, date or time{% else %}Clip name, unit, date or time{% endif %}"
+             class="flex-1 min-w-0 border-0 outline-none bg-transparent text-[13px] p-0 focus:ring-0">
+    </label>
+    {% if units|length > 1 %}
+    <label class="flex items-center gap-1.5 text-xs text-gray-700">Unit
+      <select data-filter="unit" class="h-9 border border-gray-300 rounded-md px-2 text-[13px] bg-white">
+        <option value="">All units</option>
+        {% for u in units %}<option value="{{ u.pk }}">{{ u.name }}</option>{% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    {% if batch_days|length > 1 %}
+    <label class="flex items-center gap-1.5 text-xs text-gray-700">Day
+      <select data-filter="day" class="h-9 border border-gray-300 rounded-md px-2 text-[13px] bg-white">
+        <option value="">Any day</option>
+        {% for d in batch_days %}<option value="{{ d|date:"Y-m-d" }}">{{ d|date:"j M Y" }}</option>{% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    {% if not public or not photos %}
+    <button type="button" id="cf-more" aria-expanded="false" aria-controls="cf-results"
+            class="h-9 px-3 rounded-md border border-gray-300 bg-white text-[13px] text-gray-700 hover:border-amber-400">Results filters<span id="cf-results-badge"></span></button>
+    {% endif %}
+    <label class="flex items-center gap-1.5 text-xs text-gray-700">Sort
+      <select data-filter="sort" class="h-9 border border-gray-300 rounded-md px-2 text-[13px] bg-white">
+        <option value="new">Newest first</option>
+        <option value="old">Oldest first</option>
+        {% if photos %}{% if not public %}
+        <option value="insects">Most insects</option>
+        <option value="species">Most species</option>
+        {% endif %}{% else %}
+        <option value="tracks">Most tracks</option>
+        {% if public %}<option value="contact">Most contact time</option>
+        {% else %}<option value="events">Most events</option>
+        <option value="inter">Most interactions</option>
+        <option value="length">Longest</option>{% endif %}
+        {% endif %}
+      </select>
+    </label>
+  </div>
+
+  {% comment %} What the analysis found. A blank box filters nothing. {% endcomment %}
+  {% if not public or not photos %}
+  <div id="cf-results" hidden class="flex flex-wrap items-center gap-4 px-4 pb-2.5 text-xs text-gray-700">
+    {% if photos %}
+    <label class="flex items-center gap-1.5">Insects at least
+      <input type="number" min="0" data-filter-min="insects" class="w-16 h-8 border border-gray-300 rounded-md px-1.5 text-[13px]"></label>
+    <label class="flex items-center gap-1.5">Species at least
+      <input type="number" min="0" data-filter-min="species" class="w-16 h-8 border border-gray-300 rounded-md px-1.5 text-[13px]"></label>
+    {% else %}
+    <label class="flex items-center gap-1.5">Tracks at least
+      <input type="number" min="0" data-filter-min="tracks" class="w-16 h-8 border border-gray-300 rounded-md px-1.5 text-[13px]"></label>
+    {% if public %}
+    <label class="flex items-center gap-1.5">Contact at least
+      <input type="number" min="0" step="0.1" data-filter-min="contact" class="w-16 h-8 border border-gray-300 rounded-md px-1.5 text-[13px]"> s</label>
+    {% else %}
+    <label class="flex items-center gap-1.5">Events at least
+      <input type="number" min="0" data-filter-min="events" class="w-16 h-8 border border-gray-300 rounded-md px-1.5 text-[13px]"></label>
+    <label class="flex items-center gap-1.5">Interactions at least
+      <input type="number" min="0" data-filter-min="inter" class="w-16 h-8 border border-gray-300 rounded-md px-1.5 text-[13px]"></label>
+    {% endif %}
+    <label class="flex items-center gap-1.5">
+      <input type="checkbox" data-filter="empty" value="1"> Only clips with no tracks</label>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div class="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 py-2 border-t border-gray-200 bg-white text-xs text-gray-700">
+    <span>Showing <strong id="cf-shown">{{ rows|length }}</strong> of {{ rows|length }} {% if photos %}photo{% else %}clip{% endif %}{{ rows|length|pluralize }}</span>
+    <span data-filter-active hidden class="flex flex-wrap items-center gap-x-2">
+      · <button type="button" data-filter-clear class="text-amber-700 hover:underline">Clear filters</button>
+      {% if rerun %}· <a href="#rerun" class="text-amber-700 hover:underline">Re-run these <span data-rerun-shown></span> →</a>{% endif %}
+    </span>
+  </div>
+</div>

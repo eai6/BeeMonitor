@@ -74,6 +74,7 @@ def public_batch(request, token):
         "rows": rows,
         "outcome": outcome,
         "devices": devices,
+        "batch_days": aggregate.batch_days(rows),
         "contact": None if photos else sharing.contact_by_reference(runs),
         "downloads": downloads,
         "photos": photos,

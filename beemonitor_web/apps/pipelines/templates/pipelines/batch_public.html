@@ -1,5 +1,5 @@
 {% extends "public/base.html" %}
-{% load static batch_extras %}
+{% load static batch_extras l10n %}
 {% block title %}{{ pipeline.title }} - shared results{% endblock %}
 {% comment %}
 A batch's results for anyone with its share link (memory/47). Read-only and
@@ -81,6 +81,7 @@ text, and site or location unless the owner shared them.
 </div>
 
 <div class="bg-white shadow rounded-lg overflow-hidden">
+  {% if rows|length > 1 %}{% include "pipelines/_clip_filter.html" with units=devices public=True %}{% endif %}
   {% if share.show_videos and not photos %}{% include "pipelines/_clip_viewer.html" %}{% endif %}
   <div class="overflow-x-auto">
     <div class="min-w-[560px]">
@@ -90,6 +91,12 @@ text, and site or location unless the owner shared them.
       </div>
       {% for r in rows %}
       <div class="clip-row grid grid-cols-[60px_minmax(0,1fr)_110px_80px_100px_80px] items-center px-4 py-2 border-b border-gray-100"
+           data-f-status="{% if r.status == "completed" %}completed{% elif r.status == "failed" %}failed{% else %}running{% endif %}"
+           data-f-text="{{ r.video.device.name }} {{ r.when|date:"j M Y H:i" }}"
+           {% if r.video.device %}data-f-unit="{{ r.video.device.pk }}"{% endif %}
+           {% if r.when %}data-f-day="{{ r.when|date:"Y-m-d" }}"{% endif %}
+           {% if r.result %}data-f-tracks="{{ r.result.unique_tracks }}"{% endif %}
+           {% if r.contact_sec is not None %}data-f-contact="{{ r.contact_sec|unlocalize }}"{% endif %}
            {% if r.video and share.show_videos and not photos %}data-title="{{ r.when|date:"j M, H:i"|default:"clip" }}{% if r.video.device %} · {{ r.video.device.name }}{% endif %}"
            data-original="{% url 'public_video' token r.video.pk %}"
            {% if r.job and r.result.tracking_csv_path %}data-overlay="{% url 'public_overlay' token r.job.pk %}"{% endif %}
@@ -118,6 +125,9 @@ text, and site or location unless the owner shared them.
         <div class="text-right text-xs text-gray-600">{% if r.video.duration_seconds %}{{ r.video.duration_seconds|duration_min }}{% else %}—{% endif %}</div>
       </div>
       {% endfor %}
+      <div id="cf-empty" hidden class="px-4 py-8 text-center text-[13px] text-gray-600">
+        Nothing matches. <button type="button" data-filter-clear class="text-amber-700 hover:underline">Clear filters</button>
+      </div>
     </div>
   </div>
 </div>
@@ -126,4 +136,5 @@ text, and site or location unless the owner shared them.
 <script src="{% static 'js/track_overlay.js' %}"></script>
 <script src="{% static 'js/clip_viewer.js' %}"></script>
 {% endif %}
+<script src="{% static 'js/clip_filter.js' %}"></script>
 {% endblock %}

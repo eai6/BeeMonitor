@@ -684,6 +684,15 @@ def batch_devices(rows):
     return out
 
 
+def batch_days(rows):
+    """The local days this batch's clips were recorded on, newest first: the
+    options of the batch page's Day filter."""
+    from django.utils import timezone
+
+    return sorted({timezone.localtime(r["when"]).date() for r in rows if r.get("when")},
+                  reverse=True)
+
+
 def batch_summary(rows):
     """Counts and money for the whole batch, including what failures cost."""
     completed = [r for r in rows if r["status"] == "completed"]

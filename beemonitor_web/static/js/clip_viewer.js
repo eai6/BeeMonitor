@@ -13,7 +13,7 @@
   var photoBox = document.getElementById('cv-photo');
   var photoHtml = {};
   var rows   = Array.prototype.slice.call(document.querySelectorAll('.clip-row[data-original]'));
-  var at = -1;
+  var current = null;
   var showTracks = true;
   var stage = document.getElementById('cv-stage');
   var overlay = window.TrackOverlay ? TrackOverlay(video, document.getElementById('cv-canvas')) : null;
@@ -34,15 +34,22 @@
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
       .then(function (html) {
         photoHtml[url] = html;
-        if (rows[at] === row) photoBox.innerHTML = html;
+        if (current === row) photoBox.innerHTML = html;
       })
       .catch(function () {
-        if (rows[at] === row) photoBox.innerHTML = '<p class="text-sm text-red-700 p-4">Could not load this photo.</p>';
+        if (current === row) photoBox.innerHTML = '<p class="text-sm text-red-700 p-4">Could not load this photo.</p>';
       });
   }
 
+  // The rows a viewer can step through: the ones the filter (clip_filter.js)
+  // left showing, in the order it sorted them.
+  function visible() {
+    return Array.prototype.slice.call(document.querySelectorAll('.clip-row[data-original]'))
+      .filter(function (r) { return r.style.display !== 'none'; });
+  }
+
   function render() {
-    var row = rows[at];
+    var row = current;
     if (!row) return;
     var photoUrl = row.getAttribute('data-photo');
     if (photoUrl) {
@@ -54,7 +61,8 @@
     }
 
     title.textContent = row.getAttribute('data-title') || '';
-    pos.textContent = (at + 1) + ' of ' + rows.length;
+    var list = visible();
+    pos.textContent = (list.indexOf(row) + 1) + ' of ' + list.length;
 
     var results = row.getAttribute('data-results');
     resultsLink.hidden = !results;
@@ -101,9 +109,9 @@
       });
   }
 
-  function open(index) {
-    if (index < 0 || index >= rows.length) return;
-    at = index;
+  function open(row) {
+    if (!row) return;
+    current = row;
     viewer.hidden = false;
     render();
     viewer.scrollIntoView({block: 'nearest', behavior: 'smooth'});
@@ -116,17 +124,22 @@
     video.load();
     if (overlay) { overlay.clear(); overlayUrl = null; }
     rows.forEach(function (r) { r.classList.remove('bg-amber-50'); });
-    at = -1;
+    current = null;
   }
 
   // Rows are ordered newest-first, so "earlier" is further DOWN the list —
   // the same direction the review workspace uses. Going forward in the list
   // while the label says "earlier" is the bug that gets reported every time.
-  function step(delta) { open(Math.min(Math.max(at + delta, 0), rows.length - 1)); }
+  function step(delta) {
+    var list = visible();
+    if (!list.length) return;
+    var i = list.indexOf(current);
+    open(list[Math.min(Math.max(i + delta, 0), list.length - 1)]);
+  }
 
-  rows.forEach(function (row, i) {
+  rows.forEach(function (row) {
     row.querySelectorAll('.cv-open').forEach(function (btn) {
-      btn.addEventListener('click', function () { open(i); });
+      btn.addEventListener('click', function () { open(row); });
     });
   });
   document.getElementById('cv-prev').addEventListener('click', function () { step(1); });

@@ -1050,6 +1050,7 @@ def batch_detail(request, batch_id):
         "skipped_sources": skipped_sources,
         "skipped_reasons": Counter(s["reason"] for s in skipped_sources).most_common(),
         "batch_devices": batch_devices,
+        "batch_days": aggregate.batch_days(rows),
     })
 
 

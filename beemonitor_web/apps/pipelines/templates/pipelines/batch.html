@@ -12,7 +12,7 @@ cause with a re-run per cause, and per-run rows carrying either their numbers or
 their reason.
 {% endcomment %}
 
-{% load batch_extras %}
+{% load batch_extras l10n %}
 {% block content %}
 <div class="flex items-start justify-between gap-6 mb-4">
   <div class="min-w-0">
@@ -143,14 +143,15 @@ their reason.
   {% endif %}
   {% if can_rerun and rerun_videos and not failure_groups %}
   <div class="bg-white shadow rounded-lg p-4">
-  <form method="post" action="{% url 'pipelines:run_on_videos' %}"
-        class="flex items-end gap-3 flex-wrap">
+  <form method="post" action="{% url 'pipelines:run_on_videos' %}" id="rerun" data-rerun-form
+        class="flex items-end gap-3 flex-wrap scroll-mt-4">
     {% csrf_token %}
-    {% for vid in rerun_videos %}<input type="hidden" name="video_ids" value="{{ vid }}">{% endfor %}
+    {% comment %} The clip filter swaps these for the clips it shows. {% endcomment %}
+    <span data-rerun-ids>{% for vid in rerun_videos %}<input type="hidden" name="video_ids" value="{{ vid }}">{% endfor %}</span>
     {% if photos %}<input type="hidden" name="kind" value="photo">{% endif %}
     <div class="min-w-[240px]">
       <label for="rerun-pipeline" class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
-        Run these {{ rerun_videos|length }} {% if photos %}photo{% else %}clip{% endif %}{{ rerun_videos|length|pluralize }} through a pipeline
+        Run these <span data-rerun-count data-rerun-noun="{% if photos %}photo{% else %}clip{% endif %}">{{ rerun_videos|length }} {% if photos %}photo{% else %}clip{% endif %}{{ rerun_videos|length|pluralize }}</span> through a pipeline
       </label>
       <select name="pipeline" id="rerun-pipeline"
               class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
@@ -185,14 +186,15 @@ their reason.
 
 {% if can_rerun and rerun_videos and failure_groups %}
 <div class="bg-white shadow rounded-lg p-4 mb-6">
-  <form method="post" action="{% url 'pipelines:run_on_videos' %}"
-        class="flex items-end gap-3 flex-wrap">
+  <form method="post" action="{% url 'pipelines:run_on_videos' %}" id="rerun" data-rerun-form
+        class="flex items-end gap-3 flex-wrap scroll-mt-4">
     {% csrf_token %}
-    {% for vid in rerun_videos %}<input type="hidden" name="video_ids" value="{{ vid }}">{% endfor %}
+    {% comment %} The clip filter swaps these for the clips it shows. {% endcomment %}
+    <span data-rerun-ids>{% for vid in rerun_videos %}<input type="hidden" name="video_ids" value="{{ vid }}">{% endfor %}</span>
     {% if photos %}<input type="hidden" name="kind" value="photo">{% endif %}
     <div class="min-w-[240px]">
       <label for="rerun-pipeline" class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
-        Run these {{ rerun_videos|length }} {% if photos %}photo{% else %}clip{% endif %}{{ rerun_videos|length|pluralize }} through a pipeline
+        Run these <span data-rerun-count data-rerun-noun="{% if photos %}photo{% else %}clip{% endif %}">{{ rerun_videos|length }} {% if photos %}photo{% else %}clip{% endif %}{{ rerun_videos|length|pluralize }}</span> through a pipeline
       </label>
       <select name="pipeline" id="rerun-pipeline"
               class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
@@ -233,10 +235,12 @@ their reason.
 <!-- Per-run rows: the numbers when there are any, the reason when there are not -->
 <div class="bg-white shadow rounded-lg overflow-hidden mb-6">
   <div class="flex items-center gap-3 px-4 py-2.5 border-b border-gray-200">
-    <span class="text-xs px-2.5 py-1 rounded-full bg-amber-600 text-white">All {{ outcome.total }}</span>
-    {% if outcome.failed %}<span class="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-700">Failed {{ outcome.failed }}</span>{% endif %}
-    {% if outcome.cancelled %}<span class="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-700">Cancelled {{ outcome.cancelled }}</span>{% endif %}
-    <span class="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-700">Completed {{ outcome.completed }}</span>
+    {% comment %} Buttons: each shows only its clips (static/js/clip_filter.js). {% endcomment %}
+    <button type="button" data-filter-status="all" aria-pressed="true" class="text-xs px-2.5 py-1 rounded-full bg-amber-600 text-white">All {{ outcome.total }}</button>
+    <button type="button" data-filter-status="completed" aria-pressed="false" class="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-700">Completed {{ outcome.completed }}</button>
+    {% if outcome.failed %}<button type="button" data-filter-status="failed" aria-pressed="false" class="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-700">Failed {{ outcome.failed }}</button>{% endif %}
+    {% if outcome.cancelled %}<button type="button" data-filter-status="cancelled" aria-pressed="false" class="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-700">Cancelled {{ outcome.cancelled }}</button>{% endif %}
+    {% if outcome.running %}<button type="button" data-filter-status="running" aria-pressed="false" class="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-700">Running {{ outcome.running }}</button>{% endif %}
     <div class="flex-1"></div>
     {% comment %}
       The base tables, every clip in the batch concatenated and stamped with
@@ -280,6 +284,8 @@ their reason.
     stream view presigns the original and the tracks drawn over it are fetched
     when a row is opened, so this page costs nothing until a row is clicked.
   {% endcomment %}
+  {% if rows|length > 1 %}{% include "pipelines/_clip_filter.html" with units=batch_devices rerun=can_rerun %}{% endif %}
+
   {% include "pipelines/_clip_viewer.html" %}
 
   {% if photos %}
@@ -299,6 +305,16 @@ their reason.
 
   {% for r in rows %}
   <div class="clip-row grid {% if photos %}grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_88px]{% else %}grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_96px_80px_88px]{% endif %} items-center px-4 py-2 border-b border-gray-100 hover:bg-gray-50"
+       data-f-status="{% if r.status == "completed" %}completed{% elif r.cancelled %}cancelled{% elif r.status == "failed" %}failed{% else %}running{% endif %}"
+       data-f-text="{{ r.video.title }} {{ r.video.device.name }} {{ r.when|date:"j M Y H:i" }} {% if r.status == "failed" %}{{ r.error|failure_title }}{% endif %}"
+       {% if r.video %}data-f-video="{{ r.video.pk }}"{% endif %}
+       {% if r.video.device %}data-f-unit="{{ r.video.device.pk }}"{% endif %}
+       {% if r.when %}data-f-day="{{ r.when|date:"Y-m-d" }}"{% endif %}
+       {% if photos %}{% if r.photo %}data-f-insects="{{ r.photo.insects }}" data-f-species="{{ r.photo.named }}"{% endif %}
+       {% else %}{% if r.result %}data-f-tracks="{{ r.result.unique_tracks }}"{% endif %}
+       {% if r.primitives.events is not None %}data-f-events="{{ r.primitives.events }}"{% endif %}
+       {% if r.primitives.interactions is not None %}data-f-inter="{{ r.primitives.interactions }}"{% endif %}
+       {% if r.video.duration_seconds %}data-f-length="{{ r.video.duration_seconds|unlocalize }}"{% endif %}{% endif %}
        {% if r.video %}data-title="{{ r.when|date:"j M, H:i"|default:"clip" }}{% if r.video.device %} · {{ r.video.device.name }}{% endif %}"
        data-original="{% url 'videos:stream' r.video.pk %}"
        {% if photos and r.photo %}data-photo="{% url 'pipelines:run_photo' pk=pipeline.pk run_id=r.run.pk %}"{% endif %}
@@ -329,7 +345,7 @@ their reason.
       <button type="button" class="cv-open hover:underline text-left block truncate w-full" title="{% if photos %}View this photo{% else %}Watch this clip{% endif %}">
         {{ r.when|date:"H:i"|default:"—" }}
       </button>
-      {% if r.video.device %}<span class="block text-[10px] text-gray-400 truncate" title="{{ r.video.device.name }}">{{ r.video.device.name }}</span>{% endif %}
+      <span class="block text-[10px] text-gray-500 truncate" title="{% if r.video.device %}{{ r.video.device.name }} · {% endif %}{{ r.video.title }}">{% if r.video.device %}{{ r.video.device.name }} · {% endif %}{{ r.video.title }}</span>
       {% else %}—{% endif %}
     </div>
     <div class="flex items-center gap-2 min-w-0">
@@ -372,6 +388,9 @@ their reason.
     <div class="text-right text-xs text-gray-500">{% if r.gpu_seconds %}{{ r.gpu_seconds|duration_min }}{% else %}—{% endif %}</div>
   </div>
   {% endfor %}
+  <div id="cf-empty" hidden class="px-4 py-8 text-center text-[13px] text-gray-600">
+    Nothing matches. <button type="button" data-filter-clear class="text-amber-700 hover:underline">Clear filters</button>
+  </div>
 </div>
 
 {% comment %}
@@ -399,6 +418,7 @@ setTimeout(pollThenReload, 15000);
 
 <script src="{% static 'js/track_overlay.js' %}"></script>
 <script src="{% static 'js/clip_viewer.js' %}"></script>
+<script src="{% static 'js/clip_filter.js' %}"></script>
 
 
 {% if photos %}{% include "analysis/_crop_viewer.html" %}{% endif %}
