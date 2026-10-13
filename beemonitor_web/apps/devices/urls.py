@@ -36,6 +36,7 @@ urlpatterns = [
     path("<int:pk>/roi-editor/", views.DeviceRoiEditorView.as_view(), name="roi_editor"),
     path("<int:pk>/display-tz/", views.DeviceDisplayTzView.as_view(), name="display_tz"),
     path("<int:pk>/sync-clock/", views.DeviceSyncClockView.as_view(), name="sync_clock"),
+    path("<int:pk>/reboot/", views.DeviceRebootView.as_view(), name="reboot"),
     path("<int:pk>/request-image/", views.DeviceRequestImageView.as_view(), name="request_image"),
     path("<int:pk>/autofocus/", views.DeviceAutofocusView.as_view(), name="autofocus"),
     path("<int:pk>/latest-image.json", views.DeviceLatestImageView.as_view(), name="latest_image"),

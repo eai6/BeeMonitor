@@ -1039,6 +1039,21 @@ class DeviceSyncClockView(LoginRequiredMixin, View):
         return JsonResponse({"ok": True})
 
 
+class DeviceRebootView(LoginRequiredMixin, View):
+    """Queue a reboot. The device runs it when the command reaches it (telemetry
+    `reboot`, allowed by the beemonitor-reboot sudoers rule that an update
+    installs); a unit on older software logs it as unknown and carries on."""
+
+    def post(self, request, pk):
+        device = _device_or_403(request.user, pk, "manager")
+        device.pending_command = "reboot"
+        device.command_params = {}
+        device.save(update_fields=["pending_command", "command_params"])
+        messages.success(request, f"Reboot queued — {device.name} restarts on its next "
+                                  "check-in and is back in a minute or two.")
+        return redirect("devices:detail", pk=pk)
+
+
 class DeviceCellularView(LoginRequiredMixin, View):
     """Open the cellular egress firewall for remote debugging (rpi-connect), or
     re-gate it. Rides the telemetry command channel (the one thing always allowed

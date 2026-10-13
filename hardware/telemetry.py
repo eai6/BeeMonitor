@@ -1891,6 +1891,15 @@ def _handle_command(cmd: str, params: dict) -> None:
         global _last_rtc_sync
         _last_rtc_sync = 0.0
         _sync_rtc_from_internet()
+    elif cmd == "reboot":
+        # From the dashboard. Needs the beemonitor-reboot sudoers rule, which an
+        # update installs (provision.sh).
+        log.info("command: reboot — rebooting")
+        _run(["sync"], timeout=30)
+        r = _run(["sudo", "-n", "/usr/bin/systemctl", "reboot"], timeout=30)
+        if r is None or r.returncode != 0:
+            log.warning("command: reboot — not allowed (update the unit to install "
+                        "the beemonitor-reboot sudoers rule)")
     else:
         log.warning("ignoring unknown command: %s", cmd)
 

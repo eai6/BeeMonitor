@@ -96,7 +96,6 @@ class HealthHistoryTests(TestCase):
         self._beat({"storage_pct": 77.7, "cpu_temp_c": 63})
         html = self.client.get(reverse("devices:detail", args=[self.device.pk])).content.decode()
         self.assertIn("77.7%", html)
-        self.assertIn("Device health", html)
-        # Inside the collapsed Advanced settings, like the other sections.
-        self.assertLess(html.index("<details"), html.index("Device health"))
-        self.assertLess(html.index("Device health"), html.index("</details>"))
+        # The health charts are hidden from Advanced settings for now (the
+        # samples are still recorded and the template block kept).
+        self.assertNotIn('id="health-card"', html)
