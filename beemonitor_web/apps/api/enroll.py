@@ -92,6 +92,10 @@ class DeviceEnrollView(APIView):
         if device.hw_id != hw_id:
             device.hw_id = hw_id
             device.save(update_fields=["hw_id"])
+        # A card enrolling runs whatever code its image shipped with: update it on
+        # its first check-in (apps/devices/first_update.py).
+        device.update_after_enroll = True
+        device.save(update_fields=["update_after_enroll"])
 
         # Opportunistically capture reported metadata (timezone for the charts).
         updates = []

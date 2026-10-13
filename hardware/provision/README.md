@@ -193,6 +193,12 @@ This is all in the browser + Raspberry Pi Imager — no terminal.
 4. **Assemble the hardware, insert the card, power on.** On first boot the unit
    reads the token, registers itself, writes its own device key, clears the token
    from the boot partition, and starts recording. It appears on your Devices page.
+5. **It updates itself.** On its first check-in the platform sends the unit a
+   software update (latest `main` for a git install, the latest signed release
+   for a release install), so a card from an older image catches up without
+   anyone pressing Update. Among other things this installs camera detection,
+   which a 64MP Arducam needs: until then the recorder reports "No camera
+   found". When the Arducam only binds at boot, the update reboots the unit once.
 
 Re-flashing the same Pi later rebinds it to the **same** device (matched on the Pi
 serial) and rotates its key.

@@ -93,3 +93,73 @@ class NameTests(TestCase):
         for h in ("", "beemonitor", "BeeMonitor", "raspberrypi"):
             self.assertTrue(names.is_generic(h), h)
         self.assertFalse(names.is_generic("north-meadow"))
+
+
+class UpdateAfterEnrollTests(TestCase):
+    """A new card's first check-in updates its software. The golden image ages;
+    on an image older than camera detection a 64MP Arducam never came up."""
+
+    BEAT = "/api/v1/devices/heartbeat"
+
+    def setUp(self):
+        self.user = User.objects.create_user("up", password="x")
+        _, self.token = EnrollmentToken.create_token(self.user)
+
+    def _enroll(self, card="card-a"):
+        r = self.client.post(URL, {"token": self.token, "hw_id": "10000000f6da9015",
+                                   "hostname": "beemonitor", "card_id": card},
+                             content_type="application/json").json()
+        return r["device_id"], r["device_key"]
+
+    def _beat(self, key, code_commit):
+        import json
+        r = self.client.post(self.BEAT, {"metrics": json.dumps({"code_commit": code_commit})},
+                             HTTP_AUTHORIZATION=f"Bearer {key}")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def test_a_git_install_gets_latest_main_on_its_first_beat(self):
+        pk, key = self._enroll()
+
+        reply = self._beat(key, "f524764")
+
+        self.assertEqual(reply["command"], "update")
+        self.assertEqual(reply["params"], {"ref": "origin/main"})
+        self.assertFalse(Device.objects.get(pk=pk).update_after_enroll)
+
+    def test_only_the_first_beat(self):
+        _, key = self._enroll()
+        self._beat(key, "f524764")
+
+        self.assertNotEqual(self._beat(key, "f524764").get("command"), "update")
+
+    def test_a_release_install_gets_the_published_release(self):
+        from unittest import mock
+        pk, key = self._enroll()
+        descriptor = {"version": "v0.1.7", "url": "https://s3/x", "sha256": "ab", "sig": "", "reqs_hash": ""}
+
+        with mock.patch("apps.devices.views._resolve_edge_descriptor", return_value=descriptor):
+            reply = self._beat(key, "v0.1.6")
+
+        self.assertEqual(reply["command"], "update")
+        self.assertEqual(reply["params"]["version"], "v0.1.7")
+        self.assertEqual(Device.objects.get(pk=pk).update_target, "v0.1.7")
+
+    def test_a_release_install_already_on_the_latest_is_left_alone(self):
+        from unittest import mock
+        pk, key = self._enroll()
+        descriptor = {"version": "v0.1.6", "url": "u", "sha256": "ab", "sig": "", "reqs_hash": ""}
+
+        with mock.patch("apps.devices.views._resolve_edge_descriptor", return_value=descriptor):
+            reply = self._beat(key, "v0.1.6")
+
+        self.assertNotEqual(reply.get("command"), "update")
+        self.assertFalse(Device.objects.get(pk=pk).update_after_enroll)
+
+    def test_a_card_enrolling_again_updates_again(self):
+        pk, key = self._enroll()
+        self._beat(key, "f524764")
+
+        self._enroll()
+
+        self.assertTrue(Device.objects.get(pk=pk).update_after_enroll)

@@ -181,6 +181,11 @@ class Device(models.Model):
     # One-shot: auto-capture a first picture when the device first comes online
     # so the camera card isn't blank. Set once it's been requested.
     first_image_requested = models.BooleanField(default=False)
+    # One-shot: bring a newly enrolled card's software up to date on its first
+    # check-in. Cards are flashed from a golden image that ages; without this a
+    # new unit ran the image's old code until someone pressed Update, and on old
+    # images that meant no camera detection, so a 64MP Arducam never came up.
+    update_after_enroll = models.BooleanField(default=False)
 
     # ROI editor (normalized 0..1 coords, resolution-independent):
     #   roi_override = [x1, y1, x2, y2]  — the hotel/motion region, or None (auto)

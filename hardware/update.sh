@@ -37,6 +37,11 @@ UPDATE_UNIT="beemonitor-update.service"
 RESTART_UNITS=(beemonitor-recorder.service beemonitor-uploader.service beemonitor-telemetry.service)
 HEALTH_UNITS=(beemonitor-recorder.service beemonitor-uploader.service beemonitor-telemetry.service)
 HEALTH_WAIT="${BEEMONITOR_UPDATE_HEALTH_WAIT:-15}"
+# camera-autodetect.sh leaves this when the camera needs a boot-time fix and it
+# was told not to reboot (provision.sh runs it that way, mid-update).
+CAMERA_REBOOT_FLAG="${BEEMONITOR_CAMERA_REBOOT_FLAG:-/var/lib/beemonitor/camera-reboot-requested}"
+# Units that were already down before this update (filled in by cmd_apply).
+PRE_BROKEN=""
 
 # --- Artifact (symlink-release) layout ---------------------------------------
 BEEMON_HOME="${BEEMONITOR_HOME:-/home/beemonitor}"
@@ -242,6 +247,13 @@ cmd_apply() {  # phase B — beemonitor-update.service (root, offline)
     rm -f "$REQUEST_FILE"
     [ -n "${target:-}" ] || { log B "bad request file"; write_status error apply_failed "bad request"; exit 1; }
 
+    # Before anything changes: which units are already down. An update cannot be
+    # blamed for those, and rolling it back would keep the fix it may carry —
+    # a new card's recorder crash-looping on an Arducam its image cannot detect
+    # is fixed BY this update, often only after the reboot below.
+    PRE_BROKEN="$(_already_broken)"
+    [ -n "$PRE_BROKEN" ] && log B "already down before the update:$PRE_BROKEN (not counted against it)"
+
     # Sync root-owned system config (sudoers, units) from the repo BEFORE restart.
     if [ -f "$REPO_DIR/hardware/provision.sh" ]; then
         log B "provisioning system config from repo"
@@ -255,14 +267,36 @@ cmd_apply() {  # phase B — beemonitor-update.service (root, offline)
     fi
 }
 
+_already_broken() {  # -> units down or crash-looping right now (" name name")
+    local u n out=""
+    for u in "${HEALTH_UNITS[@]}"; do
+        # A crash loop is "active" between its restarts, so count restarts too.
+        n="$(systemctl show -p NRestarts --value "$u" 2>/dev/null)"
+        if ! systemctl is-active --quiet "$u" || [ "${n:-0}" -ge 3 ] 2>/dev/null; then
+            out="$out ${u%.service}"
+        fi
+    done
+    echo "$out"
+}
+
 _restart_and_check() {  # -> echoes the list of unhealthy units (empty = healthy)
     systemctl restart "${RESTART_UNITS[@]}" 2>/dev/null || true
     sleep "$HEALTH_WAIT"
     local bad=""
     for u in "${HEALTH_UNITS[@]}"; do
+        case " $PRE_BROKEN " in *" ${u%.service} "*) continue ;; esac
         systemctl is-active --quiet "$u" || bad="$bad ${u%.service}"
     done
     echo "$bad"
+}
+
+# The update is in and healthy; if the camera fix it carried only binds at boot,
+# reboot now rather than leave the unit without a camera until its next one.
+_reboot_if_requested() {
+    [ -f "$CAMERA_REBOOT_FLAG" ] || return 0
+    rm -f "$CAMERA_REBOOT_FLAG"
+    log B "camera detection set the camera up for the next boot — rebooting"
+    sync; systemctl reboot
 }
 
 _apply_git() {
@@ -270,7 +304,8 @@ _apply_git() {
     log B "restart for ${target:0:7} (rollback point ${prev:0:7})"
     local bad; bad="$(_restart_and_check)"
     if [ -z "$bad" ]; then
-        log B "healthy at ${target:0:7}"; write_status ok updated "updated to ${target:0:7}"; exit 0
+        log B "healthy at ${target:0:7}"; write_status ok updated "updated to ${target:0:7}"
+        _reboot_if_requested; exit 0
     fi
     log B "UNHEALTHY ($bad) — rolling back to ${prev:0:7}"
     git_r reset --hard "$prev" || log B "WARNING: git rollback failed"
@@ -299,6 +334,7 @@ _apply_artifact() {
     if [ -z "$bad" ]; then
         log B "healthy at $target"; write_status ok updated "updated to $target"
         _prune_releases "$target_dir" "$prev_dir"
+        _reboot_if_requested
         exit 0
     fi
     log B "UNHEALTHY ($bad) — rolling symlink back to ${prev:-$prev_dir}"

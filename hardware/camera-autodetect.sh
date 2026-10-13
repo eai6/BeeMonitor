@@ -56,6 +56,9 @@ CFG="${BEEMONITOR_BOOT_CONFIG:-/boot/firmware/config.txt}"
 OVERLAY_DIR="${BEEMONITOR_OVERLAY_DIR:-/boot/firmware/overlays}"
 STATE_DIR="${BEEMONITOR_STATE_DIR:-/var/lib/beemonitor}"
 STATE="$STATE_DIR/camera-autodetect.state"
+# Left when a boot-time fix is written but AUTOREBOOT is off: update.sh reboots
+# once the update that ran this is in (provision.sh runs it that way).
+REBOOT_FLAG="$STATE_DIR/camera-reboot-requested"
 AUTOREBOOT="${BEEMONITOR_CAMERA_AUTOREBOOT:-1}"
 MAX_REPAIRS=4          # two full unpin/pin cycles; more than that is a hardware fault
 SETTLE=2               # seconds for the driver to probe after dtoverlay
@@ -134,6 +137,7 @@ request_reboot() {
   state_set last_action "$why"
   if [ "$AUTOREBOOT" != "1" ]; then
     warn "BEEMONITOR_CAMERA_AUTOREBOOT=0 — config changed, reboot yourself to apply"
+    mkdir -p "$STATE_DIR" 2>/dev/null && : > "$REBOOT_FLAG" 2>/dev/null
     return 0
   fi
   warn "rebooting to apply: $why (repair $n/$MAX_REPAIRS)"
@@ -176,6 +180,7 @@ step "Looking for a camera"
 found=$(camera_model)
 if [ -n "$found" ]; then
   pass "$found enumerated — nothing to do"
+  [ "$mode" = probe ] || rm -f "$REBOOT_FLAG" 2>/dev/null
   state_set last_model "$found"
   state_set repairs 0            # whatever we last did, it worked
   exit 0
@@ -207,6 +212,7 @@ for entry in "${RUNTIME_CANDIDATES[@]}"; do
   if [ -n "$found" ]; then
     echo "bound: $found"
     pass "camera up via runtime dtoverlay=$ov${params:+ $params} — no reboot, nothing persisted"
+    rm -f "$REBOOT_FLAG" 2>/dev/null
     state_set last_model "$found"
     state_set last_action "runtime-overlay:$ov"
     state_set repairs 0

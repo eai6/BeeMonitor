@@ -203,6 +203,12 @@ def _open_picamera2():
     cam_profile = load_camera_profile()
     warn_if_unrotatable(cam_profile)
 
+    # Picamera2() with no camera dies on an empty list ("IndexError: list index
+    # out of range"), which is what the device page showed. Say what it means.
+    if not Picamera2.global_camera_info():
+        raise RuntimeError(
+            "No camera found. Check the ribbon cable; a 64MP Arducam also needs "
+            "camera detection (beemonitor-camera-detect), which a software update installs.")
     cam = Picamera2()
     config = cam.create_video_configuration(
         main={"size": (MAIN_W, MAIN_H)},

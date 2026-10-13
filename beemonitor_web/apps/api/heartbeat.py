@@ -178,6 +178,11 @@ class DeviceHeartbeatView(APIView):
             device.stream_expires_at = datetime.fromtimestamp(stream_until, tz=_tz.utc)
             device.save(update_fields=["stream_url", "stream_expires_at"])
 
+        # A newly enrolled card: bring its software up to date first. The image
+        # it was flashed from may predate fixes it needs (camera detection).
+        from apps.devices.first_update import queue_if_due
+        queue_if_due(device, metrics)
+
         # Auto-capture one picture the first time a device is online with no
         # image yet, so the camera card isn't blank. Fires once per device.
         if (not device.first_image_requested and not device.pending_command
