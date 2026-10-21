@@ -176,12 +176,17 @@ class CouponTests(CreditsTestCase):
 
 
 class EnsureSuperusersTests(TestCase):
-    def test_listed_users_are_promoted_and_missing_ones_skipped(self):
+    def promote(self, raw):
         from django.core.management import call_command
-        User.objects.create_user("eai6", password="x")
-        with mock.patch.dict("os.environ", {"BEEMONITOR_SUPERUSERS": "eai6, ghost"}):
+        with mock.patch.dict("os.environ", {"BEEMONITOR_SUPERUSERS": raw}):
             call_command("ensure_superusers")
-        u = User.objects.get(username="eai6")
+
+    def test_username_and_email_must_both_match(self):
+        User.objects.create_user("manager", email="owner@example.com", password="x")
+        self.promote("manager:someone-else@example.com, ghost:g@example.com, manager")
+        self.assertFalse(User.objects.get(username="manager").is_superuser)
+        self.promote("manager:OWNER@example.com")
+        u = User.objects.get(username="manager")
         self.assertTrue(u.is_superuser and u.is_staff)
         self.assertTrue(quota.is_unlimited(u))
 

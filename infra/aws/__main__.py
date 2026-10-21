@@ -836,6 +836,8 @@ if deploy_service:
         processed_bucket.bucket,
         models_bucket.bucket,
         user_configs_bucket.bucket,
+        # Secret, unset by default: see BEEMONITOR_SUPERUSERS below.
+        config.get_secret("superusers") or "",
     ).apply(lambda args: {
         "DJANGO_ENV": "production",
         # App Runner's internal health check probes with an unpredictable Host
@@ -878,9 +880,13 @@ if deploy_service:
         #   pulumi config set sampling-backend sagemaker && pulumi up
         # only after the endpoint runs an image with the sample_label task.
         "SAMPLING_BACKEND": config.get("sampling-backend") or "local",
-        # Platform managers: promoted to superuser on each container start
-        # (manage.py ensure_superusers). Promote-only; demote in Django admin.
-        "BEEMONITOR_SUPERUSERS": config.get("superusers") or "",
+        # One-time bootstrap of a platform manager (manage.py
+        # ensure_superusers), as "username:email". Set it as a SECRET, deploy,
+        # then remove it — it must not stay set, or a future account holding
+        # that username and email would be promoted:
+        #   pulumi config set --secret superusers "name:email" && pulumi up
+        #   pulumi config rm superusers && pulumi up
+        **({"BEEMONITOR_SUPERUSERS": args[8]} if args[8] else {}),
     })
 
     runtime_secrets = pulumi.Output.all(
