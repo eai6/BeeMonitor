@@ -520,43 +520,6 @@ class RegisterView(viewsets.ViewSet):
         return Response(_build_auth_response(user), status=status.HTTP_201_CREATED)
 
 
-class ResetPasswordView(viewsets.ViewSet):
-    """Reset password for a user by email (no auth required)."""
-
-    authentication_classes = []
-    permission_classes = []
-
-    def create(self, request):
-        from django.contrib.auth.models import User
-
-        email = request.data.get("email", "")
-        new_password = request.data.get("new_password", "")
-
-        if not email or not new_password:
-            return Response(
-                {"detail": "Email and new_password are required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if len(new_password) < 8:
-            return Response(
-                {"detail": "Password must be at least 8 characters."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Case-insensitive, and duplicate-safe: Django's User.email isn't unique,
-        # so .get() would 500 (MultipleObjectsReturned) on a repeated email. Match
-        # case-insensitively and reset the most recently-active matching account.
-        user = (User.objects.filter(email__iexact=email)
-                .order_by("-last_login", "-id").first())
-        if user is None:
-            # Don't reveal whether email exists
-            return Response({"detail": "If the email exists, the password has been reset."})
-
-        user.set_password(new_password)
-        user.save()
-        return Response({"detail": "If the email exists, the password has been reset."})
-
-
 class SyncJobsView(viewsets.ViewSet):
     """Force-sync processing jobs from Modal (admin fallback when poll times out)."""
 

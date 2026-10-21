@@ -31,7 +31,6 @@ from .views import (
     LoginView,
     ProfileView,
     RegisterView,
-    ResetPasswordView,
     SyncJobsView,
     VideoViewSet,
     WebhookViewSet,
@@ -48,7 +47,6 @@ router.register(r"health", HealthViewSet, basename="health")
 urlpatterns = [
     path("auth/login/", csrf_exempt(LoginView.as_view({"post": "create"})), name="auth-login"),
     path("auth/register/", csrf_exempt(RegisterView.as_view({"post": "create"})), name="auth-register"),
-    path("auth/reset-password/", csrf_exempt(ResetPasswordView.as_view({"post": "create"})), name="auth-reset-password"),
     path("auth/profile/", ProfileView.as_view({"get": "list"}), name="auth-profile"),
     path("jobs/sync/", SyncJobsView.as_view({"post": "create"}), name="jobs-sync"),
     # Pi-side video upload (Phase 3 of the AWS migration plan).
