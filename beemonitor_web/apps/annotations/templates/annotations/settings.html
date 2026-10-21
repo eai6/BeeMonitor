@@ -78,7 +78,7 @@
     <h2 class="text-sm font-medium text-red-700 mb-2">Danger zone</h2>
     <p class="text-xs text-gray-500 mb-3">Deleting a project removes it and all its annotations. This cannot be undone.</p>
     <form method="post" action="{% url 'annotations:delete' object.pk %}"
-          onsubmit="return confirm('Delete project “{{ object.name }}” and all {{ object.annotations.count }} annotation(s)? This cannot be undone.');">
+          onsubmit="return confirm('Delete project “{{ object.name|escapejs }}” and all {{ object.annotations.count }} annotation(s)? This cannot be undone.');">
       {% csrf_token %}
       <button type="submit" class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded text-sm font-medium">Delete project</button>
     </form>

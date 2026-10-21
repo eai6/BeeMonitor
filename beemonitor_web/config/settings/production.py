@@ -5,6 +5,12 @@ import os
 from config.settings.base import *  # noqa
 
 DEBUG = False
+
+# Fail closed. Anyone who knows the key can forge sessions and password-reset
+# links, and the development fallback is in the public repo.
+if SECRET_KEY in ("", INSECURE_DEV_SECRET_KEY):  # noqa: F405
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured("DJANGO_SECRET_KEY must be set in production.")
 ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "").split(",")
 
 DATABASES = {

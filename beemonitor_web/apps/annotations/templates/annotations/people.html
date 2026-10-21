@@ -71,7 +71,7 @@
     <div class="text-right">
       {% if can_manage_people and p.share %}
       <form method="post" action="{% url 'annotations:share_update' project.pk %}"
-            onsubmit="return confirm('Remove {{ p.user.username }}? Their assigned clips go back to the unassigned pool; the boxes they drew stay.');">
+            onsubmit="return confirm('Remove {{ p.user.username|escapejs }}? Their assigned clips go back to the unassigned pool; the boxes they drew stay.');">
         {% csrf_token %}
         <input type="hidden" name="share_id" value="{{ p.share.pk }}">
         <input type="hidden" name="remove" value="1">

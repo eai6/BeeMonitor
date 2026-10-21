@@ -2,7 +2,7 @@
 {% block title %}Add Data Source - BeeMonitor{% endblock %}
 
 {% block content %}
-<div class="max-w-2xl mx-auto" x-data="{ sourceType: '{{ form.source_type.value|default:'' }}' }">
+<div class="max-w-2xl mx-auto" x-data="{ sourceType: '{{ form.source_type.value|default:''|escapejs }}' }">
   <h1 class="text-2xl font-bold text-gray-900 mb-6">Add Data Source</h1>
   <div class="bg-white shadow rounded-lg p-6">
     <form method="post" autocomplete="off">

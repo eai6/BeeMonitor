@@ -174,8 +174,8 @@
   // Every shape is {box:[x1,y1,x2,y2], points:[[x,y],...]|null}, normalized 0..1.
   // A rectangle has no points; a polygon carries both, and its box is the
   // bounding box — so anything that only reads boxes still works.
-  var roi = {{ roi_json|safe }} || null;        // {box, points?} | null
-  var nests = {{ nests_json|safe }} || [];      // [{id, box, points?}]
+  var roi = {{ roi_json|js }} || null;        // {box, points?} | null
+  var nests = {{ nests_json|js }} || [];      // [{id, box, points?}]
   var ROI_COLOR = '#16a34a', NEST_COLOR = '#dc2626';
   var GRAB = 8;                                 // px radius for vertex grabbing
 

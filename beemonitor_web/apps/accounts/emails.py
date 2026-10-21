@@ -31,10 +31,14 @@ def send(kind, to, subject, body, html=None, user=None) -> EmailLog:
     try:
         msg.send()
     except Exception as e:  # SES rejections, throttling, network, bad config
-        logger.exception("email %s to %s failed", kind, to)
-        return EmailLog.objects.create(
+        # No address and no traceback in the application log: SES repeats the
+        # address in its error, and those logs are kept for months. The full
+        # error is in EmailLog, which only superusers can read.
+        log = EmailLog.objects.create(
             to=to, user=user, kind=kind, subject=subject[:255],
             status=EmailLog.Status.FAILED, error=str(e)[:2000])
+        logger.error("email %s failed (EmailLog %s, %s)", kind, log.pk, type(e).__name__)
+        return log
     # Anymail records SES's message id on the message; other backends don't.
     status = getattr(msg, "anymail_status", None)
     message_id = (getattr(status, "message_id", "") or "") if status else ""

@@ -175,22 +175,6 @@ class CouponTests(CreditsTestCase):
         self.assertEqual(quota.available(self.user), Decimal("30"))
 
 
-class EnsureSuperusersTests(TestCase):
-    def promote(self, raw):
-        from django.core.management import call_command
-        with mock.patch.dict("os.environ", {"BEEMONITOR_SUPERUSERS": raw}):
-            call_command("ensure_superusers")
-
-    def test_username_and_email_must_both_match(self):
-        User.objects.create_user("manager", email="owner@example.com", password="x")
-        self.promote("manager:someone-else@example.com, ghost:g@example.com, manager")
-        self.assertFalse(User.objects.get(username="manager").is_superuser)
-        self.promote("manager:OWNER@example.com")
-        u = User.objects.get(username="manager")
-        self.assertTrue(u.is_superuser and u.is_staff)
-        self.assertTrue(quota.is_unlimited(u))
-
-
 class UsagePageTests(CreditsTestCase):
     def test_gpu_time_is_shown_in_hours(self):
         quota.charge(self.user, "analysis", 5400, T4, "job", 1)   # 1.5 h

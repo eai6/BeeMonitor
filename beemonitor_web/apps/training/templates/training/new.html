@@ -87,10 +87,13 @@
 
 <script>
 (function() {
-  var MAP = {{ project_classes_json|default:"{}"|safe }};
+  var MAP = {{ project_classes_json|default:"{}"|js }};
   var projSel = document.getElementById("id_project");
   var box = document.getElementById("class-subset");
   if (!projSel || !box) return;
+
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (ch) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]; }); }
 
   // Preserve checked state across re-renders (e.g. after a validation error).
   function renderClasses() {
@@ -105,10 +108,10 @@
       var checked = (c in prev) ? prev[c] : true;  // default: all checked
       var id = "cls_" + c.replace(/[^a-zA-Z0-9]/g, "_");
       return '<label class="inline-flex items-center gap-1.5 text-sm text-gray-700">'
-           + '<input type="checkbox" name="class_subset" value="' + c + '" id="' + id + '"'
+           + '<input type="checkbox" name="class_subset" value="' + esc(c) + '" id="' + id + '"'
            + (checked ? " checked" : "")
            + ' class="rounded border-gray-300 text-amber-600 focus:ring-amber-500">'
-           + c + '</label>';
+           + esc(c) + '</label>';
     }).join("");
   }
   projSel.addEventListener("change", renderClasses);

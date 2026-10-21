@@ -77,6 +77,13 @@ class APIKeyCreateSerializer(serializers.Serializer):
 
 
 class VideoSerializer(serializers.ModelSerializer):
+    def validate_source(self, value):
+        # A video's source decides whose cloud credentials fetch it; only the
+        # owner's own sources may be attached.
+        if value is not None and value.user_id != self.context["request"].user.id:
+            raise serializers.ValidationError("No such source.")
+        return value
+
     class Meta:
         model = Video
         fields = [
@@ -186,6 +193,33 @@ class JobSerializer(serializers.ModelSerializer):
         return None
 
 
+MODEL_KEYS = (("custom_nest_model", "custom_nest_model_path"),
+              ("custom_bee_model", "custom_bee_model_path"))
+
+
+def resolve_custom_models(user, config):
+    """The job config with custom models checked against what ``user`` may run.
+
+    The worker downloads ``custom_*_model_path`` from the models bucket and
+    loads it, so the path must never be taken from the caller as-is: that ran
+    any tenant's private model. A model is given by id (``custom_nest_model``)
+    or by its storage path, and either must be one of ``CustomModel.usable``.
+    """
+    from apps.training.models import CustomModel
+
+    config = dict(config or {})
+    usable = CustomModel.usable(user)
+    for id_key, path_key in MODEL_KEYS:
+        model_id, path = config.pop(id_key, None), config.pop(path_key, None)
+        if not model_id and not path:
+            continue
+        found = (usable.filter(pk=model_id) if model_id else usable.filter(storage_key=path)).first()
+        if found is None:
+            raise serializers.ValidationError({id_key: "No such model, or you may not use it."})
+        config[path_key] = found.storage_key
+    return config
+
+
 class JobCreateSerializer(serializers.Serializer):
     video_id = serializers.PrimaryKeyRelatedField(
         queryset=Video.objects.all(),
@@ -197,6 +231,11 @@ class JobCreateSerializer(serializers.Serializer):
         if value.user != self.context["request"].user:
             raise serializers.ValidationError("You do not own this video.")
         return value
+
+    def validate_config(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("config must be an object.")
+        return resolve_custom_models(self.context["request"].user, value)
 
     def create(self, validated_data):
         from apps.accounts import quota
@@ -224,6 +263,11 @@ class BatchSubmitSerializer(serializers.Serializer):
     )
     config = serializers.JSONField(required=False, default=dict)
 
+    def validate_config(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("config must be an object.")
+        return resolve_custom_models(self.context["request"].user, value)
+
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
@@ -237,6 +281,18 @@ class RegisterSerializer(serializers.Serializer):
     username = serializers.CharField(max_length=150)
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True, min_length=8)
+
+    def validate(self, data):
+        # The same password rules as the web sign-up (AUTH_PASSWORD_VALIDATORS).
+        from django.contrib.auth.models import User
+        from django.contrib.auth.password_validation import validate_password
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        try:
+            validate_password(data["password"], User(username=data["username"], email=data["email"]))
+        except DjangoValidationError as e:
+            raise serializers.ValidationError({"password": list(e.messages)})
+        return data
 
 
 # ── Sources ───────────────────────────────────────────────────────────────────
@@ -259,24 +315,16 @@ class DataSourceSerializer(serializers.ModelSerializer):
 class DataSourceCreateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=200)
     source_type = serializers.ChoiceField(choices=DataSource.SourceType.choices)
-    credentials = serializers.DictField(child=serializers.CharField())
+    credentials = serializers.DictField(child=serializers.CharField(), write_only=True)
 
     def create(self, validated_data):
-        from django.core.serializers.json import DjangoJSONEncoder
-        import json
-
-        user = self.context["request"].user
-        # Store credentials as JSON-encoded bytes.  In production this should
-        # be encrypted with a KMS key before persisting.
-        raw_bytes = json.dumps(
-            validated_data["credentials"], cls=DjangoJSONEncoder
-        ).encode("utf-8")
+        from apps.sources.crypto import encrypt
 
         return DataSource.objects.create(
-            user=user,
+            user=self.context["request"].user,
             name=validated_data["name"],
             source_type=validated_data["source_type"],
-            config_encrypted=raw_bytes,
+            config_encrypted=encrypt(validated_data["credentials"]),
         )
 
 

@@ -5,7 +5,6 @@ cloud/ingestion connector for downloading files.
 
 from __future__ import annotations
 
-import json
 import logging
 import tempfile
 from typing import TYPE_CHECKING
@@ -149,5 +148,6 @@ def get_connector(source: DataSource) -> BaseConnector:
     if connector_cls is None:
         raise ValueError(f"Unsupported source type: {source.source_type}")
 
-    config = json.loads(bytes(source.config_encrypted).decode("utf-8"))
-    return connector_cls(config)
+    from .crypto import decrypt
+
+    return connector_cls(decrypt(source))

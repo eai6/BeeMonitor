@@ -26,10 +26,14 @@ if str(REPO_ROOT) not in sys.path:
 if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
-SECRET_KEY = os.environ.get(
-    "DJANGO_SECRET_KEY",
-    "django-insecure-dev-only-change-me-in-production",
-)
+# Public in the repo, so only ever good for local development: production
+# refuses to start with it (production.py).
+INSECURE_DEV_SECRET_KEY = "django-insecure-dev-only-change-me-in-production"
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", INSECURE_DEV_SECRET_KEY)
+
+# The site's own domain, for links in emails (password reset). Never taken from
+# the request's Host header, which the client chooses. Empty = use the request.
+SITE_DOMAIN = os.environ.get("SITE_DOMAIN", "")
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -103,11 +107,15 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
             ],
+            "builtins": ["config.template_filters"],
         },
     },
 ]
 
 WSGI_APPLICATION = "config.wsgi.application"
+
+# Django's backend plus a lockout after repeated failed sign-ins.
+AUTHENTICATION_BACKENDS = ["apps.accounts.throttle.ThrottledModelBackend"]
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},

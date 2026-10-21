@@ -64,7 +64,9 @@ class WebUploadInitiateView(APIView):
 
     def post(self, request):
         user = request.user
-        filename = request.data.get("filename", "")
+        # The last path segment only, as multipart.py does: "../" must not
+        # reach the S3 key.
+        filename = PurePosixPath(str(request.data.get("filename", ""))).name
         try:
             size_bytes = int(request.data.get("size_bytes", 0))
         except (TypeError, ValueError):

@@ -113,13 +113,29 @@ def launch_batch(pipeline, videos, user, fresh=False):
         run = PipelineRun.objects.create(
             pipeline=pipeline, user=user, batch_id=batch_id,
         )
-        start_run(run, steps=steps_for_video, fresh=fresh)
+        start_run(run, steps=steps_for_video, fresh=fresh, checked=True)
         launched.append(video.pk)
     return batch_id, launched, invalid
 
 
-def start_run(run, steps=None, fresh=False):
+def check_credits(user, steps):
+    """Refuse (``QuotaExceeded``) GPU work these steps would queue that doesn't
+    fit the user's credits. The clips are the ones bound to the input steps."""
+    from apps.accounts import quota
+    from apps.videos.models import Video
+
+    ids = [(s.get("config") or {}).get("video_id") for s in steps or []
+           if s.get("block_type") in ("input.video", "input.photo")]
+    videos = list(Video.everything.filter(pk__in=[i for i in ids if i]))
+    return quota.check(user, quota.pipeline_work(steps, videos))
+
+
+def start_run(run, steps=None, fresh=False, checked=False):
     """Kick a freshly-created run: freeze steps, init status, advance.
+
+    Checks credits first unless the caller already did for this launch
+    (``checked``, as ``launch_batch`` does for the whole batch). When they don't
+    fit, the run is deleted and ``QuotaExceeded`` raised: nothing started.
 
     ``steps`` overrides the pipeline's steps for this run (e.g. with a specific
     video injected); defaults to the pipeline's saved steps.
@@ -134,6 +150,13 @@ def start_run(run, steps=None, fresh=False):
     several places, and a non-dict value in there breaks them.
     """
     run.steps = steps if steps is not None else (run.pipeline.steps or [])
+    if not checked:
+        from apps.accounts import quota
+        try:
+            check_credits(run.user, run.steps)
+        except quota.QuotaExceeded:
+            run.delete()
+            raise
     run.step_status = {s["id"]: PipelineRun.STEP_PENDING for s in run.steps if s.get("id")}
     run.context = {}
     run.fresh = fresh

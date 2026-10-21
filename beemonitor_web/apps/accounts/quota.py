@@ -25,10 +25,11 @@ from __future__ import annotations
 import logging
 import statistics
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import IntegrityError, transaction
+from django.db.models import Sum
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,8 @@ FALLBACK_SECONDS_PER_UNIT = {
 }
 # A clip with no duration recorded is assumed to be a full 10-minute recording.
 DEFAULT_CLIP_SECONDS = 600.0
+# How long an approved launch holds its credits while it creates its jobs.
+HOLD_SECONDS = 60
 HISTORY = 200          # recent events an estimate is the median of
 MIN_HISTORY = 5        # fewer than this and the fallback is used
 
@@ -295,12 +298,24 @@ def check(user, items) -> Decimal:
     ``items`` is a list of ``Work`` (or a precomputed Decimal). Call it before
     creating any job, so nothing is half-started when it raises.
     """
+    from .models import CreditHold, UserProfile
+
     needed = items if isinstance(items, Decimal) else estimate(items)
     if is_unlimited(user) or needed <= 0:
         return needed
-    left = available(user) - pending(user)
-    if needed > left:
-        raise QuotaExceeded(needed, left, next_reset())
+    now = timezone.now()
+    with transaction.atomic():
+        # One check at a time per user, and what it approves is held until the
+        # jobs exist: otherwise launches sent together each see the whole
+        # balance and together spend several times it.
+        UserProfile.objects.select_for_update().filter(user=user).first()
+        CreditHold.objects.filter(user=user, expires_at__lte=now).delete()
+        held = CreditHold.objects.filter(user=user).aggregate(s=Sum("credits"))["s"] or Decimal(0)
+        left = available(user) - pending(user) - held
+        if needed > left:
+            raise QuotaExceeded(needed, left, next_reset())
+        CreditHold.objects.create(user=user, credits=needed,
+                                  expires_at=now + timedelta(seconds=HOLD_SECONDS))
     return needed
 
 

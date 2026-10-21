@@ -66,10 +66,24 @@ class LoggedPasswordResetForm(PasswordResetForm):
     """Django's reset form, sending through emails.send so every attempt is
     logged with SES's answer. The page still looks the same either way."""
 
+    def save(self, *args, domain_override=None, **kwargs):
+        # The link's domain is the site's own, never the request's Host header:
+        # a forged Host would otherwise mail the victim a link to another site
+        # carrying their reset token.
+        from django.conf import settings
+        return super().save(*args, domain_override=settings.SITE_DOMAIN or domain_override, **kwargs)
+
     def send_mail(self, subject_template_name, email_template_name, context,
                   from_email, to_email, html_email_template_name=None):
-        from .emails import send
+        from datetime import timedelta
 
+        from .emails import send
+        from .throttle import allow
+
+        # Five a day per address: the form is public, so without this anyone
+        # could fill a stranger's inbox (and spend the SES quota).
+        if not allow(f"reset:{to_email.lower()}", 5, timedelta(days=1)):
+            return
         subject = "".join(loader.render_to_string(subject_template_name, context).splitlines())
         body = loader.render_to_string(email_template_name, context)
         html = (loader.render_to_string(html_email_template_name, context)

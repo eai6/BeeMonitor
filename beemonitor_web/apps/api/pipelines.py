@@ -207,7 +207,14 @@ class PipelineRunView(APIView):
         if not isinstance(video_ids, list) or not video_ids:
             return Response({"detail": "video_ids (non-empty list) is required."}, status=400)
 
-        videos = Video.manageable(request.user).filter(pk__in=video_ids)
+        from apps.accounts import quota
+
+        videos = list(Video.manageable(request.user).filter(pk__in=video_ids))
+        # The whole request at once, before any run exists.
+        try:
+            quota.check(request.user, quota.pipeline_work(pipeline.steps, videos))
+        except quota.QuotaExceeded as e:
+            return Response({"detail": e.message}, status=402)
         launched, skipped = [], 0
         for video in videos:
             steps = engine.steps_with_video(pipeline, video.pk)
@@ -215,7 +222,7 @@ class PipelineRunView(APIView):
                 skipped += 1
                 continue
             run = PipelineRun.objects.create(pipeline=pipeline, user=request.user)
-            engine.start_run(run, steps=steps)
+            engine.start_run(run, steps=steps, checked=True)
             launched.append({"run_id": str(run.id), "video_id": video.pk, "status": run.status})
 
         if not launched:

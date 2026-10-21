@@ -272,7 +272,7 @@
 <script>
 (function () {
   var URL_ = "{% url 'devices:health' device.pk %}";
-  var CHARTS = {{ health_charts_json|safe }};
+  var CHARTS = {{ health_charts_json|js }};
   var HRANGE = '24h';
   var charts = {}, lastData = null;
 
@@ -923,7 +923,7 @@
     </form>
     {% if device.update_target %}
     <form method="post" action="{% url 'devices:cancel_update' device.pk %}"
-          onsubmit="return confirm('Cancel the queued update to {{ device.update_target }}? This clears the pending update. It will NOT stop an update already downloading on the device.')">
+          onsubmit="return confirm('Cancel the queued update to {{ device.update_target|escapejs }}? This clears the pending update. It will NOT stop an update already downloading on the device.')">
       {% csrf_token %}
       <button class="px-3 py-1.5 bg-white border border-red-300 text-red-700 hover:bg-red-50 rounded text-sm" title="Clear the queued update. Won't stop an update already downloading on the device.">Cancel update → {{ device.update_target|truncatechars:14 }}</button>
     </form>
@@ -1053,7 +1053,7 @@
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js" integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ" crossorigin="anonymous"></script>
 <script>
 (function () {
   // When loaded in custom mode, keep a sane preset fallback so "Clear" works.
@@ -1192,13 +1192,13 @@
         setText('m-device-time', d.device_time || '—');
         var ver = document.getElementById('m-version');
         if (ver) ver.innerHTML = d.code_commit
-          ? 'version <span class="font-mono font-medium text-gray-700">' + d.code_commit + '</span>'
+          ? 'version <span class="font-mono font-medium text-gray-700">' + esc(d.code_commit) + '</span>'
           : '<span class="text-gray-400">version unknown (waiting for a beat)</span>';
         var rec = document.getElementById('m-recordings');
         if (rec) {
           if (d.recordings_human) {
-            var h = 'Clips: <span class="font-medium text-gray-700">' + d.recordings_human + '</span>';
-            if (d.videos_recorded) h += ' · ' + d.videos_recorded + ' on device';
+            var h = 'Clips: <span class="font-medium text-gray-700">' + esc(d.recordings_human) + '</span>';
+            if (d.videos_recorded) h += ' · ' + esc(d.videos_recorded) + ' on device';
             rec.innerHTML = h;
           } else rec.innerHTML = '';
         }
@@ -1245,7 +1245,7 @@
         var wf = document.getElementById('m-wifi');
         if (wf) {
           if (d.wifi_enabled == null) wf.innerHTML = '<span class="text-gray-400">state unknown (waiting for a beat)</span>';
-          else if (d.wifi_enabled) wf.innerHTML = '<span class="inline-flex items-center gap-1">' + dot(true) + 'Radio on</span> ' + (d.wifi_ssid ? '· joined <span class="font-medium text-gray-700">' + d.wifi_ssid + '</span>' : '· not connected');
+          else if (d.wifi_enabled) wf.innerHTML = '<span class="inline-flex items-center gap-1">' + dot(true) + 'Radio on</span> ' + (d.wifi_ssid ? '· joined <span class="font-medium text-gray-700">' + esc(d.wifi_ssid) + '</span>' : '· not connected');
           else wf.innerHTML = '<span class="inline-flex items-center gap-1">' + dot(false) + 'Radio off</span>';
         }
         if (typeof window.renderWifiScan === 'function') window.renderWifiScan(d.wifi_scan);
@@ -1259,7 +1259,7 @@
         if (tr) {
           if (d.active_transport === 'wifi') tr.innerHTML = '· <span class="inline-flex items-center gap-1 text-green-700">' + dot(true) + 'via WiFi</span>';
           else if (d.active_transport === 'cellular') tr.innerHTML = '· <span class="inline-flex items-center gap-1 text-amber-700"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>via cellular</span>';
-          else if (d.active_transport) tr.innerHTML = '· via ' + d.active_transport;
+          else if (d.active_transport) tr.innerHTML = '· via ' + esc(d.active_transport);
           else tr.innerHTML = '';
         }
         setText('tele-label', d.telemetry_interval_label);
@@ -1269,7 +1269,7 @@
           if (d.videos.length) {
             vids.innerHTML = '<div class="bg-white shadow rounded-lg divide-y divide-gray-100">' +
               d.videos.map(function (v) {
-                return '<a href="' + v.url + '" class="flex items-center justify-between px-4 py-3 hover:bg-gray-50">' +
+                return '<a href="' + esc(v.url) + '" class="flex items-center justify-between px-4 py-3 hover:bg-gray-50">' +
                   '<span class="text-sm text-gray-900">' + esc(v.title) + '</span>' +
                   '<span class="text-xs text-gray-400">' + esc(v.when) + ' · ' + esc(v.status) + '</span></a>';
               }).join('') + '</div>';
@@ -1384,8 +1384,8 @@
   var ph = document.getElementById('cam-placeholder');
   var status = document.getElementById('cam-status');
   var ov = document.getElementById('cam-overlay');
-  var roi = {{ roi_json|safe }} || null;     // {box:[..norm], points:[[x,y],..]|null}
-  var nests = {{ nests_json|safe }} || [];   // [{id, box:[..norm], points?}]
+  var roi = {{ roi_json|js }} || null;     // {box:[..norm], points:[[x,y],..]|null}
+  var nests = {{ nests_json|js }} || [];   // [{id, box:[..norm], points?}]
 
   // Draw the SAVED hotel ROI (green) + nest holes (red, numbered) over a canvas at
   // size w×h. Shared with the fullscreen viewer. The device now sends a clean

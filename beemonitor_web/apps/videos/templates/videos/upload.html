@@ -151,7 +151,7 @@
   const RUN_URL = "{% url 'pipelines:run_on_videos' %}";
   const PROCESSING_URL = "{% url 'analysis:processing' %}";
   const PARALLEL_PARTS = 4;
-  let sites = {{ sites_json|safe }};
+  let sites = {{ sites_json|js }};
   const files = [];                 // {file, name, size, time, source, dupe, status, done, videoId}
   let running = false;
 

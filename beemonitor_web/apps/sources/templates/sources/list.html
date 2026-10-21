@@ -31,7 +31,7 @@
       </a>
       {% endif %}
       <form method="post" action="{% url 'sources:delete' source.pk %}"
-            onsubmit="return confirm('Delete source \'{{ source.name }}\'? This will remove stored credentials. This cannot be undone.')">
+            onsubmit="return confirm('Delete source \'{{ source.name|escapejs }}\'? This will remove stored credentials. This cannot be undone.')">
         {% csrf_token %}
         <button type="submit" class="px-3 py-1.5 bg-red-50 border border-red-200 rounded text-sm text-red-700 hover:bg-red-100">
           Delete

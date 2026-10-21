@@ -1,8 +1,6 @@
 import logging
-import os
 import uuid
 
-from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.shortcuts import get_object_or_404, redirect
@@ -11,32 +9,14 @@ from django.utils import timezone
 from django.views import View
 from django.views.generic import DetailView, FormView, ListView
 
-from cryptography.fernet import Fernet
-import json as _json
-
 from apps.videos.models import Video
 
+from .crypto import decrypt as _decrypt_credentials  # noqa: F401  (analysis.views uses it)
+from .crypto import encrypt, fernet as _get_fernet
 from .forms import SourceCreateForm
 from .models import DataSource
 
 logger = logging.getLogger(__name__)
-
-
-def _get_fernet() -> Fernet:
-    """SOC2 CC6.1: Encryption of sensitive data at rest."""
-    key = getattr(settings, "BEEMONITOR_CREDENTIAL_KEY", "") or os.environ.get("BEEMONITOR_CREDENTIAL_KEY", "")
-    if not key:
-        raise ValueError("BEEMONITOR_CREDENTIAL_KEY is not set.")
-    return Fernet(key.encode() if isinstance(key, str) else key)
-
-
-def _decrypt_credentials(source: DataSource) -> dict:
-    """Decrypt stored credentials for a source."""
-    fernet = _get_fernet()
-    raw = bytes(source.config_encrypted)
-    if not raw:
-        raise ValueError("No credentials stored for this source.")
-    return _json.loads(fernet.decrypt(raw).decode())
 
 
 class SourceListView(LoginRequiredMixin, ListView):
@@ -57,12 +37,12 @@ class SourceCreateView(LoginRequiredMixin, FormView):
         source_type = form.cleaned_data["source_type"]
 
         try:
-            fernet = _get_fernet()
+            _get_fernet()  # fails early when the key is missing
         except ValueError as e:
             messages.error(self.request, f"Security configuration error: {e}")
             return self.form_invalid(form)
 
-        encrypted = fernet.encrypt(_json.dumps(credentials).encode())
+        encrypted = encrypt(credentials)
 
         source = DataSource.objects.create(
             user=self.request.user,

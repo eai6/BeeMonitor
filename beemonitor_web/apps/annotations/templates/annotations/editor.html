@@ -160,9 +160,9 @@
   const VIDEO_ID = {{ video.pk }};
   const SAVE_URL = "{% url 'annotations:save' project.pk %}";
   const CSRF_TOKEN = "{{ csrf_token }}";
-  let CLASSES = {{ classes|safe }};
+  let CLASSES = {{ classes|js }};
   const currentFrame = {{ frame_number }};
-  let boxes = {{ boxes|safe }};
+  let boxes = {{ boxes|js }};
 
   const canvas = document.getElementById("annotation-canvas");
   const ctx = canvas.getContext("2d");
@@ -403,7 +403,7 @@
         + ' data-cid="' + cid + '" class="cls-thresh w-full accent-amber-600"></div>';
     }).join("");
   }
-  function esc(s) { return String(s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
   // Live update as any per-class slider moves — update in place (don't rebuild
   // the panel mid-drag, which would drop the slider being dragged).
   document.getElementById("class-thresholds").addEventListener("input", function(e) {
@@ -481,7 +481,7 @@
         + (passes ? '' : ' opacity-40') + '">'
         + '<div class="flex items-center gap-2">'
         + '<span class="w-3 h-3 rounded-full inline-block" style="background:' + color + '"></span>'
-        + '<span class="text-xs text-gray-700">' + box["class"] + (passes ? ' #' + n : '') + '</span>'
+        + '<span class="text-xs text-gray-700">' + esc(box["class"]) + (passes ? ' #' + n : '') + '</span>'
         + '<span class="text-xs text-gray-400">' + conf + '</span>'
         + '</div>'
         + '<button onclick="window._deleteBox(' + i + ')" class="text-red-400 hover:text-red-600 text-xs px-1">Del</button>'

@@ -279,6 +279,32 @@ class UsageEvent(models.Model):
         return f"{self.user_id} {self.kind} {self.credits} cr"
 
 
+class Attempt(models.Model):
+    """One rate-limited action (a password-reset email, a promo-code try), by
+    key: ``throttle.allow``. Rows older than a day are deleted as new ones come."""
+
+    key = models.CharField(max_length=200, db_index=True)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    def __str__(self):
+        return f"{self.key} {self.created_at:%Y-%m-%d %H:%M}"
+
+
+class CreditHold(models.Model):
+    """Credits ``quota.check`` just approved for a launch that is still creating
+    its jobs. Counted as spent until the jobs exist (and count themselves), so
+    two launches sent at the same moment can't both spend the same balance.
+    Expires on its own; nothing deletes it on success."""
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name="credit_holds")
+    credits = models.DecimalField(max_digits=12, decimal_places=4)
+    expires_at = models.DateTimeField(db_index=True)
+
+    def __str__(self):
+        return f"{self.user_id} holds {self.credits} until {self.expires_at:%H:%M:%S}"
+
+
 class EmailLog(models.Model):
     """Every email the platform tried to send, and whether SES took it.
 

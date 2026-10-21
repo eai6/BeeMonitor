@@ -28,12 +28,10 @@ class LoginView(AuthLoginView):
 
 
 class LogoutView(AuthLogoutView):
-    next_page = reverse_lazy("accounts:login")
-    http_method_names = ["get", "post", "options"]
+    """POST only (Django's default): a GET logout let any page sign you out
+    with an <img> tag."""
 
-    def get(self, request, *args, **kwargs):
-        """Allow GET logout for direct URL access (Django 5+ only allows POST)."""
-        return self.post(request, *args, **kwargs)
+    next_page = reverse_lazy("accounts:login")
 
 
 class RegisterView(CreateView):
@@ -198,9 +196,17 @@ class UsageDashboardView(LoginRequiredMixin, TemplateView):
 
 class RedeemCouponView(LoginRequiredMixin, View):
     def post(self, request):
+        from datetime import timedelta
+
+        from .throttle import allow
+
         code = request.POST.get("coupon_code", "").strip()
         if not code:
             messages.error(request, "Please enter a promo code.")
+            return redirect("accounts:usage")
+        # Codes are short: ten tries an hour per account stops guessing them.
+        if not allow(f"coupon:{request.user.pk}", 10, timedelta(hours=1)):
+            messages.error(request, "Too many promo code attempts. Try again in an hour.")
             return redirect("accounts:usage")
 
         try:

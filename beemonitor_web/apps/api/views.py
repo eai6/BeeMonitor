@@ -220,7 +220,7 @@ class JobViewSet(viewsets.ModelViewSet):
         from apps.analysis.models import compute_config_hash
         from apps.analysis.views import _spawn_gpu_batch
 
-        serializer = BatchSubmitSerializer(data=request.data)
+        serializer = BatchSubmitSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
 
         video_ids = serializer.validated_data["video_ids"]

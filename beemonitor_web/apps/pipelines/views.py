@@ -21,6 +21,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
+from apps.accounts import quota
 from apps.videos.models import Video
 
 from . import engine, executors
@@ -234,7 +235,11 @@ def run_pipeline(request, pk):
         return redirect(f"{reverse('analysis:processing')}?kind=photo&pipeline={pipeline.pk}")
 
     run = PipelineRun.objects.create(pipeline=pipeline, user=request.user)
-    engine.start_run(run)
+    try:
+        engine.start_run(run)
+    except quota.QuotaExceeded as e:
+        messages.error(request, e.message)
+        return redirect("pipelines:editor", pk=pk)
     return redirect("pipelines:run_detail", pk=pk, run_id=run.pk)
 
 
@@ -428,7 +433,11 @@ def rerun(request, pk, run_id):
                      if s.get("block_type") in ("input.video", "input.photo")), None)
     steps = engine.steps_with_video(pipeline, video_id) if video_id else (pipeline.steps or [])
     run = PipelineRun.objects.create(pipeline=pipeline, user=request.user)
-    engine.start_run(run, steps=steps)
+    try:
+        engine.start_run(run, steps=steps)
+    except quota.QuotaExceeded as e:
+        messages.error(request, e.message)
+        return redirect("pipelines:run_detail", pk=pipeline.pk, run_id=old.pk)
     return redirect("pipelines:run_detail", pk=pipeline.pk, run_id=run.pk)
 
 
@@ -618,7 +627,13 @@ def run_reanalyze(request, pk, run_id):
         return redirect("pipelines:run_detail", pk=pk, run_id=run_id)
 
     run = PipelineRun.objects.create(pipeline=old.pipeline, user=request.user)
-    engine.start_run(run, steps=steps)          # NOT fresh: reuse is the point
+    try:
+        # Usually free (the clip's tracking is cached), but checked anyway:
+        # with no cached result it would run the GPU.
+        engine.start_run(run, steps=steps)      # NOT fresh: reuse is the point
+    except quota.QuotaExceeded as e:
+        messages.error(request, e.message)
+        return redirect("pipelines:run_detail", pk=pk, run_id=run_id)
     messages.success(
         request,
         f"Re-analysing with {block.get('display_name', new_type)} — reuses this "

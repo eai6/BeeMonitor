@@ -30,7 +30,7 @@
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
   (function () {
-    var points = {{ map_points|safe }};
+    var points = {{ map_points|js }};
     if (!points.length || typeof L === 'undefined') return;
     var map = L.map('device-map', { scrollWheelZoom: false });
     // OSM blocks tile requests with no Referer, and Django's default
@@ -42,6 +42,8 @@
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
     }).addTo(map);
 
+    function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
     var bounds = [];
     points.forEach(function (p) {
       var color = !p.active ? '#9ca3af' : (p.online ? '#22c55e' : '#ef4444');
@@ -51,10 +53,10 @@
       var statusLabel = !p.active ? 'Revoked' : (p.online ? 'Online' : 'Offline');
       marker.bindPopup(
         '<div style="min-width:140px">' +
-        '<a href="' + p.url + '" style="font-weight:600;color:#111827">' + p.name + '</a>' +
-        (p.location ? '<div style="color:#6b7280;font-size:12px">' + p.location + '</div>' : '') +
+        '<a href="' + esc(p.url) + '" style="font-weight:600;color:#111827">' + esc(p.name) + '</a>' +
+        (p.location ? '<div style="color:#6b7280;font-size:12px">' + esc(p.location) + '</div>' : '') +
         '<div style="font-size:12px;margin-top:4px"><span style="color:' + color + '">&#9679;</span> ' +
-        statusLabel + ' &middot; ' + p.last_seen + '</div></div>'
+        statusLabel + ' &middot; ' + esc(p.last_seen) + '</div></div>'
       );
       bounds.push([p.lat, p.lon]);
     });
