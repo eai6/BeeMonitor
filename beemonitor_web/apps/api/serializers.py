@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
+from rest_framework.exceptions import APIException
 
 from apps.accounts.models import APIKey, UserProfile
 from apps.analysis.models import Job, JobResult
@@ -198,8 +199,21 @@ class JobCreateSerializer(serializers.Serializer):
         return value
 
     def create(self, validated_data):
+        from apps.accounts import quota
+
         user = self.context["request"].user
+        cfg = validated_data.get("config") or {}
+        try:
+            quota.check(user, [quota.video_work(validated_data["video"], cfg.get("detector_kind", "yolo"))])
+        except quota.QuotaExceeded as e:
+            raise OutOfCredits(e.message)
         return Job.objects.create(user=user, **validated_data)
+
+
+class OutOfCredits(APIException):
+    """402: the launch doesn't fit the user's GPU credits (apps/accounts/quota.py)."""
+    status_code = 402
+    default_code = "out_of_credits"
 
 
 class BatchSubmitSerializer(serializers.Serializer):

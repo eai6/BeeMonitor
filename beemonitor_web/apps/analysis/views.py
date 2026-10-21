@@ -742,6 +742,12 @@ class ProcessingHubView(LoginRequiredMixin, View):
         mode = request.POST.get("mode", "detect_and_track")
         if mode not in self.MODES:
             mode = "detect_and_track"
+        from apps.accounts import quota
+        try:
+            quota.check(request.user, [quota.video_work(video)])
+        except quota.QuotaExceeded as e:
+            messages.error(request, e.message)
+            return redirect(request.META.get("HTTP_REFERER") or "analysis:processing")
         job = Job.objects.create(
             user=request.user, video=video,
             config={"detection_mode": mode, "confidence_threshold": 0.25},
@@ -882,6 +888,13 @@ class JobCreateView(LoginRequiredMixin, FormView):
                     config[config_key] = cm.storage_key
                 except CustomModel.DoesNotExist:
                     pass
+
+        from apps.accounts import quota
+        try:
+            quota.check(self.request.user, [quota.video_work(form.cleaned_data["video"])])
+        except quota.QuotaExceeded as e:
+            form.add_error(None, e.message)
+            return self.form_invalid(form)
 
         job = Job.objects.create(
             user=self.request.user,
@@ -1134,6 +1147,15 @@ def poll_annotate_jobs(user) -> int:
             JobResult.objects.filter(job_id=job.pk).update(
                 annotated_video_path=result["annotated_video_path"])
             ann["status"] = "done"
+            try:
+                from apps.accounts import quota
+                from .pricing import instance_for_device
+                quota.charge(job.user, "annotated_video", result.get("execution_seconds"),
+                             instance_for_device(result.get("device")), "annotate",
+                             f"{job.pk}:{ann.get('started_at', '')}",
+                             units=float(job.video.duration_seconds or 0))
+            except Exception:
+                logger.exception("annotate charge failed for job %s", job.pk)
         else:
             ann["status"] = "failed"
             ann["error"] = str(result.get("error_message", ""))[:300]
@@ -1376,7 +1398,6 @@ def _apply_result_to_job(job, result: dict) -> None:
     # Priced from what the run reports it ran on — see apps/analysis/pricing.py.
     priced = price_run(result)
     exec_secs = priced["execution_seconds"]
-    credits_used = priced["credits"]
     cost_usd = priced["compute_cost_usd"]
 
     Job.objects.filter(pk=job.pk).update(
@@ -1390,9 +1411,16 @@ def _apply_result_to_job(job, result: dict) -> None:
     )
 
     try:
-        from apps.accounts.models import UserProfile
-        profile, _ = UserProfile.objects.get_or_create(user=job.user)
-        profile.charge(credits_used, gpu_seconds=exec_secs)
+        from apps.accounts import quota
+        cfg = job.config or {}
+        if cfg.get("task") == "detect_photo":
+            kind, units = "photo", 1
+        elif cfg.get("task") == "pre_annotate":
+            kind, units = "auto_label", int(cfg.get("max_frames") or 0)
+        else:
+            kind, units = "analysis", float(job.video.duration_seconds or 0)
+        quota.charge(job.user, kind, exec_secs, priced["instance_type"], "job", job.pk,
+                     units=units, cost_usd=cost_usd)
     except Exception as e:
         logger.error("Failed to charge credits for job %s: %s", job.pk, e)
 
@@ -1514,12 +1542,9 @@ class BatchJobView(LoginRequiredMixin, View):
                 except CustomModel.DoesNotExist:
                     pass
 
-        # Quota check
+        from apps.accounts import quota
         from apps.accounts.models import UserProfile
         profile, _ = UserProfile.objects.get_or_create(user=request.user)
-
-        # Estimate credits (1 credit ≈ 1 GPU-second)
-        est_credits_per_video = 349  # avg GPU-seconds per video
 
         # Build queryset — owner or device-manager (viewers excluded).
         if video_ids:
@@ -1557,13 +1582,12 @@ class BatchJobView(LoginRequiredMixin, View):
             messages.info(request, msg)
             return redirect("analysis:processing")
 
-        # Budget check
-        total_est_credits = est_credits_per_video * len(videos_to_process)
-        if not profile.has_budget(total_est_credits):
-            return _fail(
-                f"Insufficient credits. Need ~{total_est_credits:,} credits for "
-                f"{len(videos_to_process)} videos but only {profile.remaining_credits:,} "
-                "remaining this month.", status=402)
+        # Credits: refuse the whole batch up front rather than stop part-way.
+        try:
+            est_total_credits = quota.check(
+                request.user, [quota.video_work(v) for v in videos_to_process])
+        except quota.QuotaExceeded as e:
+            return _fail(e.message, status=402)
 
         # Concurrent job check — only block if already at GPU capacity
         active_count = Job.objects.filter(
@@ -1606,8 +1630,7 @@ class BatchJobView(LoginRequiredMixin, View):
         msg = f"Submitted {len(jobs_data)} video(s)."
         if skipped:
             msg += f" Skipped {skipped} already analyzed."
-        est_total_credits = len(jobs_data) * est_credits_per_video
-        msg += f" Estimated: ~{est_total_credits:,} credits"
+        msg += f" Estimated: about {quota.fmt(est_total_credits)}."
         if is_ajax:
             return JsonResponse({
                 "ok": True, "submitted": len(jobs_data), "skipped": skipped,
@@ -1860,6 +1883,14 @@ class GenerateAnnotatedVideoView(LoginRequiredMixin, View):
         tracking_path = getattr(result, "tracking_csv_path", "") if result else ""
         if not tracking_path:
             messages.warning(request, "This job has no tracking data to annotate.")
+            return redirect("analysis:results", pk=pk)
+
+        from apps.accounts import quota
+        try:
+            quota.check(request.user, [quota.Work(
+                "annotated_video", quota.VIDEO_INSTANCE, quota.clip_seconds(job.video))])
+        except quota.QuotaExceeded as e:
+            messages.error(request, e.message)
             return redirect("analysis:results", pk=pk)
 
         stats = (getattr(result, "summary_stats", {}) or {})

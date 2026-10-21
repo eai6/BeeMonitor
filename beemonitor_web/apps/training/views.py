@@ -415,6 +415,16 @@ class TrainingCreateView(LoginRequiredMixin, CreateView):
             form.instance.gpu_tier,
         )
 
+        from apps.accounts import quota
+        try:
+            quota.check(self.request.user, [quota.training_work(
+                quota._project_images(form.cleaned_data.get("project")),
+                form.cleaned_data.get("epochs") or 50,
+                _INSTANCE_BY_TIER.get(form.instance.gpu_tier, _DEFAULT_INSTANCE))])
+        except quota.QuotaExceeded as e:
+            form.add_error(None, e.message)
+            return self.form_invalid(form)
+
         response = super().form_valid(form)
         logger.info("[train:%s] TrainingJob saved (status=%s) — dispatching to SageMaker",
                     self.object.pk, self.object.status)
@@ -638,14 +648,14 @@ def poll_training_jobs(user=None) -> dict:
         else:
             logger.warning("[poll] job=%s completed but no storage_key in result", job.pk)
 
-        credits_used = int(exec_secs)
-        if credits_used > 0:
-            try:
-                from apps.accounts.models import UserProfile
-                profile, _ = UserProfile.objects.get_or_create(user=job.user)
-                profile.charge(credits_used, gpu_seconds=exec_secs)
-            except Exception as e:
-                logger.error("[poll] job=%s credit charge failed: %s", job.pk, e)
+        try:
+            from apps.accounts import quota
+            quota.charge(job.user, "training", exec_secs,
+                         _INSTANCE_BY_TIER.get(job.gpu_tier, _DEFAULT_INSTANCE),
+                         "training_job", job.pk,
+                         units=quota.training_work(quota._project_images(job.project), job.epochs).units)
+        except Exception as e:
+            logger.error("[poll] job=%s credit charge failed: %s", job.pk, e)
 
         completed += 1
 
@@ -817,7 +827,12 @@ class StartAdaptationView(LoginRequiredMixin, View):
         if not ids:
             messages.warning(request, "Select at least one video to adapt to.")
             return redirect(request.META.get("HTTP_REFERER", "training:adaptation"))
-        run = orchestrator.start_run(request.user, ids, scope=scope)
+        from apps.accounts import quota
+        try:
+            run = orchestrator.start_run(request.user, ids, scope=scope)
+        except quota.QuotaExceeded as e:
+            messages.error(request, e.message)
+            return redirect("training:adaptation")
         if run:
             messages.info(request, "Adaptation started: SAM 3 is relabeling, then it will fine-tune. Refresh to follow progress.")
         else:

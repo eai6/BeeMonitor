@@ -1,6 +1,7 @@
 from django import forms
-from django.contrib.auth.forms import UserCreationForm
+from django.contrib.auth.forms import PasswordResetForm, UserCreationForm
 from django.contrib.auth.models import User
+from django.template import loader
 
 from .models import Coupon
 
@@ -21,6 +22,21 @@ class UserRegistrationForm(UserCreationForm):
                 "An account with this email already exists. Try logging in or "
                 "resetting your password.")
         return email
+
+
+class LoggedPasswordResetForm(PasswordResetForm):
+    """Django's reset form, sending through emails.send so every attempt is
+    logged with SES's answer. The page still looks the same either way."""
+
+    def send_mail(self, subject_template_name, email_template_name, context,
+                  from_email, to_email, html_email_template_name=None):
+        from .emails import send
+
+        subject = "".join(loader.render_to_string(subject_template_name, context).splitlines())
+        body = loader.render_to_string(email_template_name, context)
+        html = (loader.render_to_string(html_email_template_name, context)
+                if html_email_template_name else None)
+        send("password_reset", to_email, subject, body, html=html, user=context.get("user"))
 
 
 class CouponForm(forms.ModelForm):

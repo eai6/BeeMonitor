@@ -78,29 +78,8 @@ class UserProfileTests(TestCase):
         self.assertEqual(self.profile.used_credits, 0)
         self.assertEqual(self.profile.remaining_credits, 3000)
 
-    def test_charge_deducts_credits(self):
-        self.profile.charge(100, gpu_seconds=100.0)
-        self.profile.refresh_from_db()
-        self.assertEqual(self.profile.used_credits, 100)
-        self.assertEqual(self.profile.remaining_credits, 2900)
-
-    def test_charge_accumulates(self):
-        self.profile.charge(100, gpu_seconds=100.0)
-        self.profile.charge(200, gpu_seconds=200.0)
-        self.profile.refresh_from_db()
-        self.assertEqual(self.profile.used_credits, 300)
-        self.assertEqual(self.profile.total_gpu_seconds, 300.0)
-        self.assertEqual(self.profile.total_jobs_submitted, 2)
-
-    def test_has_budget(self):
-        self.assertTrue(self.profile.has_budget(3000))
-        self.assertFalse(self.profile.has_budget(3001))
-
-    def test_credit_usage_pct(self):
-        self.assertEqual(self.profile.credit_usage_pct, 0)
-        self.profile.charge(1500)
-        self.profile.refresh_from_db()
-        self.assertEqual(self.profile.credit_usage_pct, 50)
+    # Charging and the budget check moved to apps/accounts/quota.py
+    # (apps/accounts/test_quota.py).
 
 
 # ── Video Tests ──────────────────────────────────────────────────────

@@ -111,7 +111,7 @@ class GpuSamplingTests(TestCase):
         sr.dispatch()
         batch = SamplingBatch.objects.get()
         self.aws.finish(batch, [self.clip(tasks[0], frames=((40, [("bee", 0.8), ("wasp", 0.5)]),))])
-        with mock.patch("apps.accounts.models.UserProfile.charge") as charge:
+        with mock.patch("apps.accounts.quota.charge") as charge:
             self.assertEqual(sr.collect(), 1)
             self.assertEqual(sr.collect(), 0)                    # already collected
         a = Annotation.objects.get()
@@ -123,7 +123,7 @@ class GpuSamplingTests(TestCase):
         self.assertEqual(t.motion["picked"], [1])
         self.assertEqual(SamplingBatch.objects.get().status, "collected")
         charge.assert_called_once()
-        self.assertEqual(charge.call_args.kwargs["gpu_seconds"], 12.5)
+        self.assertEqual(charge.call_args.args[2], 12.5)   # GPU-seconds
 
     def test_reviewed_frames_keep_their_boxes_and_replace_drops_only_untouched_frames(self):
         v = self.videos[0]
@@ -134,7 +134,7 @@ class GpuSamplingTests(TestCase):
         tasks = self.queue([v])
         sr.dispatch()
         self.aws.finish(SamplingBatch.objects.get(), [self.clip(tasks[0])])
-        with mock.patch("apps.accounts.models.UserProfile.charge"):
+        with mock.patch("apps.accounts.quota.charge"):
             sr.collect()
         human.refresh_from_db()
         self.assertEqual(human.boxes, [{"class": "wasp", "class_id": 1}])
@@ -155,7 +155,7 @@ class GpuSamplingTests(TestCase):
         self.aws.finish(SamplingBatch.objects.get(), [
             self.clip(tasks[0]),
             {"task_id": tasks[1].pk, "frames": [], "error": "ClientError: InvalidObjectState"}])
-        with mock.patch("apps.accounts.models.UserProfile.charge"):
+        with mock.patch("apps.accounts.quota.charge"):
             sr.collect()
         ok, bad = FrameSamplingTask.objects.get(pk=tasks[0].pk), FrameSamplingTask.objects.get(pk=tasks[1].pk)
         self.assertEqual((ok.status, bad.status), ("completed", "failed"))

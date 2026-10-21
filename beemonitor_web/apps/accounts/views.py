@@ -7,7 +7,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.contrib.auth.views import LoginView as AuthLoginView
 from django.contrib.auth.views import LogoutView as AuthLogoutView
 from django.db import transaction
-from django.db.models import Sum, Count
+from django.db.models import Count, F, Sum
 from django.shortcuts import redirect, get_object_or_404
 from django.urls import reverse_lazy
 from django.utils import timezone
@@ -15,7 +15,8 @@ from django.views.generic import CreateView, ListView, TemplateView, View
 
 from apps.analysis.models import Job, GPU_TIERS
 from .forms import UserRegistrationForm, CouponForm
-from .models import Coupon, CouponRedemption, UserProfile, TIER_LIMITS
+from . import quota
+from .models import Coupon, CouponRedemption, EmailLog, UserProfile, TIER_LIMITS
 
 
 class LoginView(AuthLoginView):
@@ -58,6 +59,25 @@ class UsageDashboardView(LoginRequiredMixin, TemplateView):
         profile, _ = UserProfile.objects.get_or_create(user=user)
         ctx["profile"] = profile
         ctx["tier_limits"] = TIER_LIMITS
+
+        # GPU credits (apps/accounts/quota.py) — the meter that gates GPU work.
+        left = quota.available(user)
+        profile.refresh_from_db()
+        allowance = quota.monthly_allowance(profile)
+        ctx["credits"] = {
+            "unlimited": quota.is_unlimited(user),
+            "left": left,
+            "allowance": allowance,
+            "monthly_used": profile.monthly_gpu_credits_used,
+            "granted": profile.granted_gpu_credits,
+            "pending": quota.pending(user),
+            "used_this_month": user.usage_events.filter(
+                created_at__date__gte=profile.credit_period_start).aggregate(
+                    n=Sum("credits"))["n"] or 0,
+            "monthly_pct": (min(100, int(profile.monthly_gpu_credits_used / allowance * 100))
+                            if allowance else 0),
+            "resets_on": quota.next_reset(),
+        }
 
         # Job stats
         jobs = Job.objects.filter(user=user)
@@ -124,10 +144,12 @@ class RedeemCouponView(LoginRequiredMixin, View):
             credits_added = 0
 
             if coupon.coupon_type == Coupon.CouponType.CREDITS:
+                # Granted credits never reset (quota.py); the old code added to
+                # the monthly limit, which a reset wiped.
                 credits_added = coupon.credits_amount
-                profile.monthly_credits += credits_added
-                profile.save(update_fields=["monthly_credits"])
-                messages.success(request, f"{credits_added} bonus credits added to your account!")
+                UserProfile.objects.filter(pk=profile.pk).update(
+                    granted_gpu_credits=F("granted_gpu_credits") + credits_added)
+                messages.success(request, f"{credits_added} credits added to your account.")
 
             elif coupon.coupon_type == Coupon.CouponType.TIER_UPGRADE:
                 new_tier = coupon.upgrade_tier
@@ -157,6 +179,51 @@ class RedeemCouponView(LoginRequiredMixin, View):
 class StaffRequiredMixin(UserPassesTestMixin):
     def test_func(self):
         return self.request.user.is_staff
+
+
+class SuperuserRequiredMixin(UserPassesTestMixin):
+    def test_func(self):
+        return self.request.user.is_superuser
+
+
+class EmailStatusView(LoginRequiredMixin, SuperuserRequiredMixin, TemplateView):
+    """Is email working? SES's own view of the account, plus what we tried to send."""
+
+    template_name = "accounts/email_status.html"
+
+    def get_context_data(self, **kwargs):
+        from datetime import timedelta
+
+        from .emails import ses_status
+
+        ctx = super().get_context_data(**kwargs)
+        since = timezone.now() - timedelta(days=7)
+        recent = EmailLog.objects.filter(created_at__gte=since)
+        ctx["ses"] = ses_status()
+        ctx["sent_7d"] = recent.filter(status=EmailLog.Status.SENT).count()
+        ctx["failed_7d"] = recent.filter(status=EmailLog.Status.FAILED).count()
+        ctx["logs"] = EmailLog.objects.select_related("user")[:100]
+        return ctx
+
+
+class EmailTestView(LoginRequiredMixin, SuperuserRequiredMixin, View):
+    """Send a test email to the signed-in superuser, through the real backend."""
+
+    def post(self, request):
+        from .emails import send
+
+        to = request.POST.get("to", "").strip() or request.user.email
+        if not to:
+            messages.error(request, "Your account has no email address to send to.")
+            return redirect("accounts:email_status")
+        log = send("test", to, "BeeMonitor test email",
+                   "This is a test email from BeeMonitor. If you can read it, email works.",
+                   user=request.user)
+        if log.status == EmailLog.Status.SENT:
+            messages.success(request, f"Sent a test email to {to}.")
+        else:
+            messages.error(request, f"Sending to {to} failed: {log.error}")
+        return redirect("accounts:email_status")
 
 
 class CouponListView(LoginRequiredMixin, StaffRequiredMixin, ListView):

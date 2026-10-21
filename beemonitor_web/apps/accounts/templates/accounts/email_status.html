@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Email - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-gray-900">Email</h1>
+  <p class="text-sm text-gray-600">Whether the platform can send email, and every email it tried to send.</p>
+</div>
+
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+  <div class="bg-white shadow rounded-lg p-5">
+    <p class="text-sm text-gray-600">Amazon SES</p>
+    {% if not ses.ok %}
+      <p class="text-lg font-bold text-gray-900">Unknown</p>
+      <p class="text-sm text-gray-600 break-words">{{ ses.error }}</p>
+    {% elif ses.production %}
+      <p class="text-lg font-bold text-green-700">Production</p>
+      <p class="text-sm text-gray-600">Delivers to any address.</p>
+    {% else %}
+      <p class="text-lg font-bold text-red-700">Sandbox</p>
+      <p class="text-sm text-gray-600">Only delivers to verified addresses. Everyone else's mail is rejected.
+        {% if ses.review_case %}Production-access case {{ ses.review_case }}.{% endif %}</p>
+    {% endif %}
+    {% if ses.ok %}<p class="text-sm text-gray-600 mt-1">{{ ses.sent_24h }} of {{ ses.max_24h }} sent in the last 24 h.</p>{% endif %}
+  </div>
+  <div class="bg-white shadow rounded-lg p-5">
+    <p class="text-sm text-gray-600">Last 7 days</p>
+    <p class="text-lg font-bold text-gray-900">{{ sent_7d }} sent</p>
+    <p class="text-sm {% if failed_7d %}text-red-700 font-semibold{% else %}text-gray-600{% endif %}">{{ failed_7d }} failed</p>
+  </div>
+  <div class="bg-white shadow rounded-lg p-5">
+    <p class="text-sm text-gray-600 mb-2">Send a test email</p>
+    <form method="post" action="{% url 'accounts:email_test' %}" class="flex gap-2">
+      {% csrf_token %}
+      <label class="sr-only" for="test-to">Send to</label>
+      <input id="test-to" type="email" name="to" value="{{ request.user.email }}"
+        class="flex-1 min-w-0 rounded-md border-gray-300 shadow-sm text-sm">
+      <button type="submit" class="px-3 py-2 bg-green-600 text-white text-sm font-medium rounded-md hover:bg-green-700">Send</button>
+    </form>
+  </div>
+</div>
+
+<div class="bg-white shadow rounded-lg p-6 overflow-x-auto">
+  <h2 class="text-lg font-medium text-gray-900 mb-4">Recent emails</h2>
+  {% if logs %}
+  <table class="min-w-full text-sm">
+    <thead>
+      <tr class="border-b border-gray-200 text-left text-gray-600">
+        <th class="py-2 pr-4">When</th><th class="py-2 pr-4">Kind</th><th class="py-2 pr-4">To</th>
+        <th class="py-2 pr-4">Status</th><th class="py-2">Detail</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for log in logs %}
+      <tr class="border-b border-gray-100 align-top">
+        <td class="py-2 pr-4 whitespace-nowrap">{{ log.created_at|date:"M d, H:i" }}</td>
+        <td class="py-2 pr-4">{{ log.kind }}</td>
+        <td class="py-2 pr-4">{{ log.to }}</td>
+        <td class="py-2 pr-4 font-semibold {% if log.status == 'failed' %}text-red-700{% else %}text-green-700{% endif %}">{{ log.get_status_display }}</td>
+        <td class="py-2 text-gray-600 break-words">{% if log.error %}{{ log.error|truncatechars:240 }}{% else %}{{ log.message_id }}{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="text-sm text-gray-600">No emails recorded yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

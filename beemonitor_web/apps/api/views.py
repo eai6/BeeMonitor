@@ -8,6 +8,7 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.accounts import quota
 from apps.accounts.models import APIKey
 from apps.analysis.models import Job, JobResult
 from apps.developer.models import UsageLog, WebhookEndpoint
@@ -242,6 +243,14 @@ class JobViewSet(viewsets.ModelViewSet):
                 {"detail": "No ready videos found for the given IDs."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # Credits, for the whole batch before any job exists. Counts every ready
+        # video, including ones the dedupe below then skips.
+        try:
+            quota.check(request.user, [quota.video_work(v, config.get("detector_kind", "yolo"))
+                                       for v in videos])
+        except quota.QuotaExceeded as e:
+            return Response({"detail": e.message}, status=status.HTTP_402_PAYMENT_REQUIRED)
 
         # Deduplicate: skip videos already analyzed with the same config
         jobs_data = []
@@ -671,4 +680,8 @@ class ProfileView(viewsets.ViewSet):
             "used_credits": profile.used_credits,
             "remaining_credits": profile.remaining_credits,
             "total_gpu_seconds": profile.total_gpu_seconds,
+            # The meter that gates GPU work (apps/accounts/quota.py); the
+            # *_credits fields above are the legacy GPU-second counters.
+            "gpu_credits_left": None if quota.is_unlimited(request.user)
+            else float(quota.available(request.user)),
         })

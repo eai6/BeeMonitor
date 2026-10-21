@@ -51,7 +51,7 @@ class PreAnnotationClaimTests(TestCase):
                            "execution_seconds": 20}).encode()
         s3 = mock.Mock()
         s3.get_object.return_value = {"Body": mock.Mock(read=lambda: body)}
-        with mock.patch("apps.accounts.models.UserProfile.charge") as charge:
+        with mock.patch("apps.accounts.quota.charge") as charge:
             self.assertTrue(views.finalize_preannotation_task(t, s3))
             t2 = PreAnnotationTask.objects.get(pk=t.pk)
             t2.status = "processing"          # a second process read the row before the first finished

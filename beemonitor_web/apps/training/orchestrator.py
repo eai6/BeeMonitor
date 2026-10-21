@@ -20,6 +20,7 @@ import threading
 logger = logging.getLogger(__name__)
 
 DEFAULT_MIN_MAP50 = 0.5
+RELABEL_FRAMES = 300  # frames SAM 3 labels per clip in the relabel step
 
 
 def _metric(metrics, *keys):
@@ -38,10 +39,16 @@ def start_run(user, video_ids, scope="default", min_map50=DEFAULT_MIN_MAP50):
 
     from .models import AdaptationRun
 
+    from apps.accounts import quota
+
     videos = list(Video.objects.filter(user=user, pk__in=video_ids))
     videos = [v for v in videos if v.storage_key]
     if not videos:
         return None
+    # The whole loop up front: SAM 3 relabels up to RELABEL_FRAMES per clip,
+    # then a YOLOv8n fine-tune at the default 50 epochs trains on those frames.
+    frames = RELABEL_FRAMES * len(videos)
+    quota.check(user, [quota.auto_label_work("sam3", frames), quota.training_work(frames, 50)])
 
     project = AnnotationProject.objects.create(
         user=user, name=f"Auto-adapt · {scope}", classes=["bee", "wasp", "nest"],
@@ -56,7 +63,7 @@ def start_run(user, video_ids, scope="default", min_map50=DEFAULT_MIN_MAP50):
     for v in videos:
         task = PreAnnotationTask.objects.create(
             user=user, project=project, video=v, labeler="sam3",
-            params={"sample_interval": 10, "max_frames": 300, "confidence": 0.3,
+            params={"sample_interval": 10, "max_frames": RELABEL_FRAMES, "confidence": 0.3,
                     "selection": "diverse", "nms_iou": 0.5, "max_detections": 100},
         )
         spawn_preannotation_async(task.pk)

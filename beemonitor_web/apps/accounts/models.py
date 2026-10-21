@@ -7,28 +7,35 @@ from django.utils import timezone
 
 
 # Tier limits
-# Credits are abstract units (1 credit ≈ 1 second of GPU time)
+# ``monthly_credits`` / ``max_video_hours_per_month`` are the legacy GPU-second
+# meter. The meter that gates GPU work is ``monthly_gpu_credits``: credits in the
+# unit of apps/accounts/quota.py (1 credit = 1 GPU-hour on the video machine),
+# None = unlimited. See memory/50_tiers_quotas_and_platform_admin.md.
 TIER_LIMITS = {
     "free": {
         "label": "Free",
+        "monthly_gpu_credits": 10,
         "monthly_credits": 3000,
         "max_concurrent_jobs": 10,
         "max_video_hours_per_month": 50,
     },
     "standard": {
         "label": "Standard",
+        "monthly_gpu_credits": 10,
         "monthly_credits": 25000,
         "max_concurrent_jobs": 50,
         "max_video_hours_per_month": 500,
     },
     "pro": {
         "label": "Pro",
+        "monthly_gpu_credits": None,
         "monthly_credits": 100000,
         "max_concurrent_jobs": 50,
         "max_video_hours_per_month": 5000,
     },
     "enterprise": {
         "label": "Enterprise",
+        "monthly_gpu_credits": None,
         "monthly_credits": 0,  # Unlimited
         "max_concurrent_jobs": 50,
         "max_video_hours_per_month": 0,  # Unlimited
@@ -74,6 +81,15 @@ class UserProfile(models.Model):
         help_text="Allow read-only cross-tenant access (analytics, debugging). Writes still owner-scoped.",
     )
 
+    # GPU credits (apps/accounts/quota.py). The month's free allowance comes
+    # from the tier; ``monthly_gpu_credits_used`` counts what was taken from it
+    # since ``credit_period_start``. ``granted_gpu_credits`` is what was granted
+    # on top (requests, promo codes) and never resets; it is spent after the
+    # month's allowance and may go slightly negative when a run overruns.
+    credit_period_start = models.DateField(null=True, blank=True)
+    monthly_gpu_credits_used = models.DecimalField(max_digits=12, decimal_places=4, default=0)
+    granted_gpu_credits = models.DecimalField(max_digits=12, decimal_places=4, default=0)
+
     # Legacy
     monthly_job_count = models.IntegerField(default=0)
     storage_used_bytes = models.BigIntegerField(default=0)
@@ -90,19 +106,6 @@ class UserProfile(models.Model):
         if self.monthly_credits == 0:
             return 0
         return min(100, int(self.used_credits / self.monthly_credits * 100))
-
-    def has_budget(self, estimated_credits: int) -> bool:
-        """Check if user has enough credits."""
-        if self.tier == self.Tier.ENTERPRISE:
-            return True
-        return self.remaining_credits >= estimated_credits
-
-    def charge(self, credits: int, gpu_seconds: float = 0):
-        """Deduct credits after a job completes."""
-        self.used_credits += credits
-        self.total_gpu_seconds += gpu_seconds
-        self.total_jobs_submitted += 1
-        self.save(update_fields=["used_credits", "total_gpu_seconds", "total_jobs_submitted"])
 
     def reset_monthly_credits(self):
         """Reset monthly usage."""
@@ -128,7 +131,7 @@ class Coupon(models.Model):
 
     code = models.CharField(max_length=50, unique=True)
     coupon_type = models.CharField(max_length=20, choices=CouponType.choices)
-    credits_amount = models.IntegerField(default=0, help_text="Bonus credits to add")
+    credits_amount = models.IntegerField(default=0, help_text="Credits to grant (1 credit = 1 GPU-hour on the video machine)")
     upgrade_tier = models.CharField(
         max_length=20,
         choices=UserProfile.Tier.choices,
@@ -223,3 +226,74 @@ class APIKey(models.Model):
             is_active=True,
         )
         return instance, raw_key
+
+
+class UsageEvent(models.Model):
+    """One charge for GPU work: what ran, on which machine, for how long.
+
+    Every credit a user spends is one of these, so the totals on the profile can
+    be checked against them, and estimates come from them (quota.estimate). The
+    (source_type, source_id) pair is unique, which is what makes charging a
+    finished job twice — two pollers, a retried collect — a no-op.
+    """
+
+    class Kind(models.TextChoices):
+        ANALYSIS = "analysis", "Video analysis"
+        PHOTO = "photo", "Photo detection"
+        ANNOTATED_VIDEO = "annotated_video", "Annotated video"
+        AUTO_LABEL = "auto_label", "Auto-label"
+        SAMPLING = "sampling", "Sampling"
+        TRAINING = "training", "Training"
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name="usage_events")
+    kind = models.CharField(max_length=20, choices=Kind.choices)
+    gpu_seconds = models.FloatField(help_text="Billed instance seconds")
+    instance_type = models.CharField(max_length=40)
+    credits = models.DecimalField(max_digits=12, decimal_places=4)
+    cost_usd = models.DecimalField(max_digits=12, decimal_places=4, default=0)
+    # Work done, in the kind's unit (quota.UNITS): seconds of footage, photos,
+    # frames, clips or image-epochs. Estimates are gpu_seconds per unit.
+    units = models.FloatField(default=0)
+    source_type = models.CharField(max_length=40)
+    source_id = models.CharField(max_length=80)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["source_type", "source_id"], name="usage_event_source_once"),
+        ]
+        indexes = [models.Index(fields=["kind", "instance_type", "-created_at"]),
+                   models.Index(fields=["user", "-created_at"])]
+
+    def __str__(self):
+        return f"{self.user_id} {self.kind} {self.credits} cr"
+
+
+class EmailLog(models.Model):
+    """Every email the platform tried to send, and whether SES took it.
+
+    Mail fails quietly: the password-reset page says "check your email" either
+    way, on purpose. This table is how anyone finds out it didn't go, and it is
+    what the footage-deletion notices must check before deleting anything.
+    """
+
+    class Status(models.TextChoices):
+        SENT = "sent", "Sent"
+        FAILED = "failed", "Failed"
+
+    to = models.EmailField()
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
+                             on_delete=models.SET_NULL, related_name="email_logs")
+    kind = models.CharField(max_length=40)
+    subject = models.CharField(max_length=255)
+    status = models.CharField(max_length=10, choices=Status.choices)
+    message_id = models.CharField(max_length=200, blank=True, default="")
+    error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.kind} to {self.to}: {self.status}"

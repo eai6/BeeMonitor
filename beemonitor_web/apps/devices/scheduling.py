@@ -67,9 +67,18 @@ def run_schedule(schedule):
         schedule.save(update_fields=["last_launched_count", "last_error"])
         return 0
 
-    batch_id, launched, invalid = engine.launch_batch(
-        schedule.pipeline, videos, schedule.user,
-    )
+    from apps.accounts.quota import QuotaExceeded
+    try:
+        batch_id, launched, invalid = engine.launch_batch(
+            schedule.pipeline, videos, schedule.user,
+        )
+    except QuotaExceeded as e:
+        # Out of credits: skip this window, say why on the schedule, try again
+        # next time it's due. The clips stay uploaded; only the GPU work waits.
+        schedule.last_launched_count = 0
+        schedule.last_error = e.message[:500]
+        schedule.save(update_fields=["last_launched_count", "last_error"])
+        return 0
     if launched:
         # The GPU steps were created QUEUED. One kick promotes up to the global
         # SageMaker cap now; the reconciler drains the rest on later passes.

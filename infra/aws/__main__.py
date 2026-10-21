@@ -740,6 +740,35 @@ aws.iam.RolePolicy(
     policy=task_secrets_policy_doc,
 )
 
+# Transactional email through SES (password reset, account notices). This
+# policy was first attached by hand under the same name; declaring it here
+# adopts it (PutRolePolicy overwrites by name) and adds ses:GetAccount, which
+# the Email status page (/accounts/email/) uses to show whether SES is still
+# sandboxed. The sending identity (beemonitor.edwardamoah.com, Easy DKIM) and
+# SES production access stay manual — see memory/21 and memory/50 §11 step 0.
+aws.iam.RolePolicy(
+    "apprunner-ses-send",
+    role=apprunner_instance_role.id,
+    name="beemonitor-ses-send",
+    policy=json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "SESSendTransactional",
+                "Effect": "Allow",
+                "Action": ["ses:SendEmail", "ses:SendRawEmail"],
+                "Resource": "*",
+            },
+            {
+                "Sid": "SESReadAccountStatus",
+                "Effect": "Allow",
+                "Action": ["ses:GetAccount"],
+                "Resource": "*",
+            },
+        ],
+    }),
+)
+
 apprunner_access_role = aws.iam.Role(
     "apprunner-access-role",
     name=f"{prefix}-apprunner-access-role",

@@ -991,6 +991,16 @@ class AddVideosView(LoginRequiredMixin, View):
         if not video_ids:
             messages.warning(request, "Nothing new to add — those clips are already in the project.")
             return redirect("annotations:detail", pk=project.pk)
+        # GPU sampling is checked against credits before anything is added, so
+        # a refused add leaves the project as it was. Web-process sampling is free.
+        from apps.accounts import quota
+        from . import sampling_remote
+        if sampling_remote.enabled():
+            try:
+                quota.check(request.user, [quota.sampling_work(len(video_ids))])
+            except quota.QuotaExceeded as e:
+                messages.error(request, e.message)
+                return redirect("annotations:add_videos_page", pk=project.pk)
         # Accessible, not owned: the picker lists clips from shared devices, so
         # restricting the add to owned ones silently drops half a selection.
         added_ids = list(Video.accessible(request.user).filter(pk__in=video_ids)
@@ -1615,9 +1625,10 @@ def finalize_preannotation_task(task, s3) -> bool:
 
     exec_secs = result.get("execution_seconds", 0) or 0
     try:
-        from apps.accounts.models import UserProfile
-        profile, _ = UserProfile.objects.get_or_create(user_id=task.user_id)
-        profile.charge(int(exec_secs) if exec_secs else 30, gpu_seconds=exec_secs or 30)
+        from apps.accounts import quota
+        quota.charge(task.user_id, "auto_label", exec_secs or 30,
+                     quota.auto_label_work(task.labeler, 0).instance, "preannotation_task", task.pk,
+                     units=int((task.params or {}).get("max_frames") or 0))
     except Exception as e:
         logger.error("pre-annotate credit charge failed task %s: %s", task.pk, e)
     logger.info("pre-annotate task %s complete: %d frames written", task.pk, created)
@@ -1715,6 +1726,13 @@ class PreAnnotateView(LoginRequiredMixin, View):
         video = get_object_or_404(project.videos.all(),
                                   pk=request.POST.get("video_id"))
 
+        from apps.accounts import quota
+        try:
+            quota.check(request.user, [quota.auto_label_work(
+                _labeler_opts(request)[0], _preannotate_opts(request)[1])])
+        except quota.QuotaExceeded as e:
+            messages.error(request, e.message)
+            return redirect("annotations:detail", pk=pk)
         task = _create_preannotation_task(request, project, video)
         spawn_preannotation_async(task.pk)
         engine = "SAM 3" if task.labeler == "sam3" else "AI"
@@ -2052,6 +2070,13 @@ class SampleFramesView(LoginRequiredMixin, View):
                 for key in ("method", "sample_interval", "max_frames", "min_gap_s", "roi", "replace")
                 if _field(key) is not None
             })
+        if params["method"] == sampling_remote.METHOD:
+            from apps.accounts import quota
+            try:
+                quota.check(request.user, [quota.sampling_work(len(videos))])
+            except quota.QuotaExceeded as e:
+                messages.error(request, e.message)
+                return redirect("annotations:detail", pk=pk)
         # Re-sampling a clip supersedes whatever was still queued for it.
         sampling_remote.supersede(project, [v.pk for v in videos])
         tasks = [FrameSamplingTask.objects.create(

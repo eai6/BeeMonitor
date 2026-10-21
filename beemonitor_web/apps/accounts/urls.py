@@ -2,6 +2,7 @@ from django.contrib.auth import views as auth_views
 from django.urls import path, reverse_lazy
 
 from . import views
+from .forms import LoggedPasswordResetForm
 
 app_name = "accounts"
 
@@ -12,6 +13,7 @@ password_reset_patterns = [
     path(
         "password_reset/",
         auth_views.PasswordResetView.as_view(
+            form_class=LoggedPasswordResetForm,
             template_name="accounts/password_reset_form.html",
             email_template_name="accounts/password_reset_email.html",
             subject_template_name="accounts/password_reset_subject.txt",
@@ -50,6 +52,8 @@ urlpatterns = [
     *password_reset_patterns,
     path("usage/", views.UsageDashboardView.as_view(), name="usage"),
     path("redeem-coupon/", views.RedeemCouponView.as_view(), name="redeem_coupon"),
+    path("email/", views.EmailStatusView.as_view(), name="email_status"),
+    path("email/test/", views.EmailTestView.as_view(), name="email_test"),
     path("coupons/", views.CouponListView.as_view(), name="coupons"),
     path("coupons/create/", views.CouponCreateView.as_view(), name="coupon_create"),
     path("coupons/<int:pk>/deactivate/", views.CouponDeactivateView.as_view(), name="coupon_deactivate"),

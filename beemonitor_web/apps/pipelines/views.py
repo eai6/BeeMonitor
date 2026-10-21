@@ -302,8 +302,12 @@ def run_on_videos(request):
     # Groups this launch for aggregate results (combined CSVs, cross-video trips).
     # fresh: the cache is keyed on clip + config, not on the build, so running
     # the same pipeline again after a fix would hand back the old result.
-    batch_id, launched, invalid = engine.launch_batch(
-        pipeline, videos, request.user, fresh=request.POST.get("fresh") == "1")
+    from apps.accounts.quota import QuotaExceeded
+    try:
+        batch_id, launched, invalid = engine.launch_batch(
+            pipeline, videos, request.user, fresh=request.POST.get("fresh") == "1")
+    except QuotaExceeded as e:
+        return _fail(e.message, status=402)
 
     # The GPU steps were created QUEUED. Kick the queue once for the whole batch:
     # spawn up to the global SageMaker cap now, leave the rest QUEUED for the

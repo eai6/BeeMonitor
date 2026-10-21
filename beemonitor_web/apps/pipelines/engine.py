@@ -95,8 +95,14 @@ def launch_batch(pipeline, videos, user, fresh=False):
     caller kicks ``analysis.views._drain_queue`` once so the batch drains in waves
     under the global SageMaker cap instead of flooding the endpoint.
 
+    Raises ``accounts.quota.QuotaExceeded`` before starting anything when the
+    batch doesn't fit the user's credits — never part of a batch.
+
     Returns ``(batch_id, launched_video_ids, invalid_count)``.
     """
+    from apps.accounts import quota
+
+    quota.check(user, quota.pipeline_work(pipeline.steps, videos))
     batch_id = uuid.uuid4()
     launched, invalid = [], 0
     for video in videos:

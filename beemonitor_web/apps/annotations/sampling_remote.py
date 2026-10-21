@@ -271,14 +271,14 @@ def _apply(batch, clip) -> float:
     return float((clip.get("seconds") or {}).get("scan_and_detect") or 0.0)
 
 
-def _charge(batch, seconds_by_user) -> None:
-    from apps.accounts.models import UserProfile
+def _charge(batch, seconds_by_user, clips_by_user=None) -> None:
+    from apps.accounts import quota
     for user_id, secs in seconds_by_user.items():
         if secs <= 0:
             continue
         try:
-            profile, _ = UserProfile.objects.get_or_create(user_id=user_id)
-            profile.charge(int(round(secs)), gpu_seconds=secs)
+            quota.charge(user_id, "sampling", secs, quota.SAM3_INSTANCE, "sampling_batch",
+                         f"{batch.batch_id}:{user_id}", units=(clips_by_user or {}).get(user_id, 0))
         except Exception:
             logger.exception("sampling batch %s credit charge failed", batch.batch_id)
 
@@ -330,18 +330,19 @@ def collect(limit: int = 20) -> int:
                 done += 1
                 continue
             result = json.loads(body)
-            seconds_by_user = {}
+            seconds_by_user, clips_by_user = {}, {}
             owners = dict(FrameSamplingTask.objects.filter(batch=batch).values_list("pk", "user_id"))
             for clip in result.get("clips") or []:
                 secs = _apply(batch, clip)
                 uid = owners.get(clip.get("task_id"))
                 if uid:
                     seconds_by_user[uid] = seconds_by_user.get(uid, 0.0) + secs
+                    clips_by_user[uid] = clips_by_user.get(uid, 0) + 1
             # Clips the GPU never mentioned (shouldn't happen): back in the queue.
             _retry_or_fail_leftovers(batch)
             SamplingBatch.objects.filter(pk=batch.pk).update(
                 status=SamplingBatch.Status.COLLECTED, finished_at=timezone.now())
-            _charge(batch, seconds_by_user)
+            _charge(batch, seconds_by_user, clips_by_user)
             done += 1
         except Exception:
             logger.exception("collecting sampling batch %s failed", batch.batch_id)

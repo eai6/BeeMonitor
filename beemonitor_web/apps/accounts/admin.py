@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
 from .dedupe import dedupe_all
-from .models import APIKey, Coupon, CouponRedemption, UserProfile
+from .models import APIKey, Coupon, CouponRedemption, EmailLog, UsageEvent, UserProfile
 
 User = get_user_model()
 admin.site.unregister(User)
@@ -34,9 +34,33 @@ class UserAdmin(BaseUserAdmin):
 
 @admin.register(UserProfile)
 class UserProfileAdmin(admin.ModelAdmin):
-    list_display = ("user", "organization", "tier", "monthly_job_count", "storage_used_bytes")
+    # Until the platform dashboard exists, credits are granted by editing
+    # granted_gpu_credits here (apps/accounts/quota.py).
+    list_display = ("user", "organization", "tier", "monthly_gpu_credits_used",
+                    "granted_gpu_credits", "credit_period_start")
     list_filter = ("tier",)
     search_fields = ("user__username", "user__email", "organization")
+
+
+@admin.register(UsageEvent)
+class UsageEventAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "user", "kind", "instance_type", "gpu_seconds", "credits", "units")
+    list_filter = ("kind", "instance_type")
+    search_fields = ("user__username", "source_id")
+    date_hierarchy = "created_at"
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(EmailLog)
+class EmailLogAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "kind", "to", "status")
+    list_filter = ("status", "kind")
+    search_fields = ("to",)
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(APIKey)
