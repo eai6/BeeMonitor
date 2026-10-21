@@ -95,10 +95,6 @@
       <p class="text-gray-500">Organization</p>
       <p class="text-xl font-bold">{{ profile.organization|default:"Not set" }}</p>
     </div>
-    <div>
-      <p class="text-gray-500">Max Concurrent Jobs</p>
-      <p class="text-xl font-bold">{{ profile.max_concurrent_jobs }}</p>
-    </div>
   </div>
 </div>
 
@@ -132,46 +128,33 @@
 </div>
 {% endif %}
 
-<!-- Monthly Cost Chart -->
+<!-- Credits per month -->
 <div class="bg-white shadow rounded-lg p-6 mb-6">
-  <h2 class="text-lg font-medium text-gray-900 mb-4">Monthly Spend</h2>
-  <canvas id="monthlyCostChart" height="200"></canvas>
+  <h2 class="text-lg font-medium text-gray-900 mb-4">Credits used per month</h2>
+  <canvas id="monthlyCreditsChart" height="200"></canvas>
 </div>
 
-<!-- Tier Comparison -->
+<!-- Plans -->
 <div class="bg-white shadow rounded-lg p-6">
-  <h2 class="text-lg font-medium text-gray-900 mb-4">Plan Comparison</h2>
+  <h2 class="text-lg font-medium text-gray-900 mb-4">Plans</h2>
   <table class="min-w-full text-sm">
     <thead>
       <tr class="border-b border-gray-200">
-        <th class="py-2 text-left text-gray-500">Feature</th>
-        <th class="py-2 text-center text-gray-500">Free</th>
+        <th class="py-2 text-left text-gray-500"></th>
         <th class="py-2 text-center text-gray-500">Standard</th>
         <th class="py-2 text-center text-gray-500">Pro</th>
-        <th class="py-2 text-center text-gray-500">Enterprise</th>
       </tr>
     </thead>
     <tbody>
       <tr class="border-b border-gray-100">
-        <td class="py-2">Free GPU credits / month</td>
-        <td class="py-2 text-center">10</td>
-        <td class="py-2 text-center">10 + granted</td>
-        <td class="py-2 text-center">Unlimited</td>
+        <td class="py-2">GPU credits</td>
+        <td class="py-2 text-center">10 free every month, more on request</td>
         <td class="py-2 text-center">Unlimited</td>
       </tr>
       <tr class="border-b border-gray-100">
-        <td class="py-2">Concurrent GPUs</td>
-        <td class="py-2 text-center">10</td>
-        <td class="py-2 text-center">50</td>
-        <td class="py-2 text-center">200</td>
-        <td class="py-2 text-center">500</td>
-      </tr>
-      <tr class="border-b border-gray-100">
-        <td class="py-2">Video Hours/Month</td>
-        <td class="py-2 text-center">50 hrs</td>
-        <td class="py-2 text-center">500 hrs</td>
-        <td class="py-2 text-center">5,000 hrs</td>
-        <td class="py-2 text-center">Unlimited</td>
+        <td class="py-2">Raw footage storage</td>
+        <td class="py-2 text-center">3 months, longer on request</td>
+        <td class="py-2 text-center">Kept while subscribed</td>
       </tr>
     </tbody>
   </table>
@@ -180,15 +163,15 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const data = JSON.parse('{{ monthly_costs_json|escapejs }}');
+    const data = JSON.parse('{{ monthly_credits_json|escapejs }}');
     if (data.length > 0) {
-        new Chart(document.getElementById('monthlyCostChart'), {
+        new Chart(document.getElementById('monthlyCreditsChart'), {
             type: 'bar',
             data: {
                 labels: data.map(d => d.month),
                 datasets: [{
-                    label: 'Cost ($)',
-                    data: data.map(d => d.cost),
+                    label: 'Credits',
+                    data: data.map(d => d.credits),
                     backgroundColor: 'rgba(22, 163, 74, 0.7)',
                     borderRadius: 4,
                 }]
@@ -196,7 +179,7 @@ document.addEventListener('DOMContentLoaded', function() {
             options: {
                 responsive: true,
                 scales: {
-                    y: { beginAtZero: true, title: { display: true, text: 'Cost ($)' } }
+                    y: { beginAtZero: true, title: { display: true, text: 'Credits' } }
                 },
                 plugins: { legend: { display: false } }
             }

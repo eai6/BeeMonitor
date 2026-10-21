@@ -198,3 +198,12 @@ class UsagePageTests(CreditsTestCase):
         r = self.client.get(reverse("accounts:usage"))
         self.assertContains(r, "1.5 GPU-hours")
         self.assertNotContains(r, "5400s")
+
+    def test_the_chart_is_in_credits_and_plans_are_standard_and_pro(self):
+        quota.charge(self.user, "analysis", 7200, T4, "job", 2)
+        self.client.force_login(self.user)
+        r = self.client.get(reverse("accounts:usage"))
+        self.assertIn('"credits": 2.0', r.context["monthly_credits_json"])
+        self.assertNotContains(r, "Cost ($)")
+        self.assertNotContains(r, "Concurrent")
+        self.assertNotContains(r, "Enterprise")

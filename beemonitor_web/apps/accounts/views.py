@@ -7,7 +7,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.contrib.auth.views import LoginView as AuthLoginView
 from django.contrib.auth.views import LogoutView as AuthLogoutView
 from django.db import transaction
-from django.db.models import Count, F, Sum
+from django.db.models import F, Sum
 from django.shortcuts import redirect, get_object_or_404
 from django.urls import reverse_lazy
 from django.utils import timezone
@@ -98,21 +98,16 @@ class UsageDashboardView(LoginRequiredMixin, TemplateView):
         ctx["failed_jobs"] = jobs.filter(status=Job.Status.FAILED).count()
         ctx["processing_jobs"] = jobs.filter(status=Job.Status.PROCESSING).count()
 
-        # Monthly cost data for chart
+        # Credits per month for the chart — every kind of GPU work, from
+        # UsageEvent. Users see credits, not dollars.
         from django.db.models.functions import TruncMonth
-        monthly_costs = (
-            completed.annotate(month=TruncMonth("completed_at"))
-            .values("month")
-            .annotate(cost=Sum("compute_cost_usd"), count=Count("id"))
-            .order_by("month")
+        monthly_credits = (
+            user.usage_events.annotate(month=TruncMonth("created_at"))
+            .values("month").annotate(credits=Sum("credits")).order_by("month")
         )
-        ctx["monthly_costs_json"] = json.dumps([
-            {
-                "month": m["month"].strftime("%Y-%m") if m["month"] else "unknown",
-                "cost": float(m["cost"] or 0),
-                "count": m["count"],
-            }
-            for m in monthly_costs
+        ctx["monthly_credits_json"] = json.dumps([
+            {"month": m["month"].strftime("%Y-%m"), "credits": round(float(m["credits"] or 0), 1)}
+            for m in monthly_credits
         ])
 
         # Coupon redemption history
