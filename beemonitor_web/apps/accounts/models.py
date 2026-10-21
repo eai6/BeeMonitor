@@ -16,28 +16,24 @@ TIER_LIMITS = {
         "label": "Free",
         "monthly_gpu_credits": 10,
         "monthly_credits": 3000,
-        "max_concurrent_jobs": 10,
         "max_video_hours_per_month": 50,
     },
     "standard": {
         "label": "Standard",
         "monthly_gpu_credits": 10,
         "monthly_credits": 25000,
-        "max_concurrent_jobs": 50,
         "max_video_hours_per_month": 500,
     },
     "pro": {
         "label": "Pro",
         "monthly_gpu_credits": None,
         "monthly_credits": 100000,
-        "max_concurrent_jobs": 50,
         "max_video_hours_per_month": 5000,
     },
     "enterprise": {
         "label": "Enterprise",
         "monthly_gpu_credits": None,
         "monthly_credits": 0,  # Unlimited
-        "max_concurrent_jobs": 50,
         "max_video_hours_per_month": 0,  # Unlimited
     },
 }
@@ -68,6 +64,8 @@ class UserProfile(models.Model):
     credit_reset_date = models.DateField(null=True, blank=True, help_text="Next monthly reset date")
 
     # Quotas
+    # Unused: there is no per-user GPU limit; the platform scales to the work
+    # and queues behind one global SageMaker cap (analysis.views._drain_queue).
     max_concurrent_jobs = models.IntegerField(default=10)
     total_jobs_submitted = models.IntegerField(default=0)
     total_gpu_seconds = models.FloatField(default=0, help_text="Lifetime GPU seconds consumed")
@@ -111,13 +109,9 @@ class UserProfile(models.Model):
         """Reset monthly usage."""
         limits = TIER_LIMITS.get(self.tier, TIER_LIMITS["free"])
         self.monthly_credits = limits["monthly_credits"]
-        self.max_concurrent_jobs = limits["max_concurrent_jobs"]
         self.used_credits = 0
         self.credit_reset_date = timezone.now().date() + timezone.timedelta(days=30)
-        self.save(update_fields=[
-            "monthly_credits", "max_concurrent_jobs",
-            "used_credits", "credit_reset_date",
-        ])
+        self.save(update_fields=["monthly_credits", "used_credits", "credit_reset_date"])
 
     @property
     def tier_limits(self) -> dict:

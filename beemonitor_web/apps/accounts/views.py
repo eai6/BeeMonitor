@@ -61,6 +61,86 @@ def _usage_totals(user, month_start):
             "lifetime_credits": life_cr, "lifetime_hours": life_h}
 
 
+class ProfileView(LoginRequiredMixin, TemplateView):
+    """Account → Profile: who you are, your email, your password.
+
+    One page, three forms; the submit button's ``action`` says which one.
+    """
+
+    template_name = "accounts/profile.html"
+
+    def get_context_data(self, **kwargs):
+        from django.contrib.auth.forms import PasswordChangeForm
+
+        from .forms import EmailChangeForm, ProfileForm
+
+        ctx = super().get_context_data(**kwargs)
+        user = self.request.user
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        ctx["profile"] = profile
+        ctx["unlimited"] = quota.is_unlimited(user)
+        ctx.setdefault("profile_form", ProfileForm(initial={
+            "first_name": user.first_name, "last_name": user.last_name,
+            "organization": profile.organization}))
+        ctx.setdefault("email_form", EmailChangeForm(user))
+        ctx.setdefault("password_form", PasswordChangeForm(user))
+        return ctx
+
+    def post(self, request):
+        from django.contrib.auth import update_session_auth_hash
+        from django.contrib.auth.forms import PasswordChangeForm
+
+        from .emails import send
+        from .forms import EmailChangeForm, ProfileForm
+
+        user = request.user
+        action = request.POST.get("action")
+        if action == "profile":
+            form = ProfileForm(request.POST)
+            if form.is_valid():
+                user.first_name = form.cleaned_data["first_name"]
+                user.last_name = form.cleaned_data["last_name"]
+                user.save(update_fields=["first_name", "last_name"])
+                UserProfile.objects.update_or_create(
+                    user=user, defaults={"organization": form.cleaned_data["organization"]})
+                messages.success(request, "Profile saved.")
+                return redirect("accounts:profile")
+            return self.render_to_response(self.get_context_data(profile_form=form))
+
+        if action == "email":
+            form = EmailChangeForm(user, request.POST)
+            if form.is_valid():
+                old = user.email
+                user.email = form.cleaned_data["new_email"]
+                user.save(update_fields=["email"])
+                if old:
+                    send("email_changed", old, "Your BeeMonitor email was changed",
+                         f"The email on your BeeMonitor account ({user.username}) was changed "
+                         f"from {old} to {user.email}.\n\nIf you didn't do this, reset your "
+                         "password and contact the BeeMonitor team.", user=user)
+                messages.success(request, f"Your email is now {user.email}.")
+                return redirect("accounts:profile")
+            return self.render_to_response(self.get_context_data(email_form=form))
+
+        if action == "password":
+            form = PasswordChangeForm(user, request.POST)
+            if form.is_valid():
+                form.save()
+                # Keeps this session; every other session's hash no longer
+                # matches, so they are signed out.
+                update_session_auth_hash(request, form.user)
+                if user.email:
+                    send("password_changed", user.email, "Your BeeMonitor password was changed",
+                         f"The password on your BeeMonitor account ({user.username}) was just "
+                         "changed. If you didn't do this, reset it from the sign-in page.",
+                         user=user)
+                messages.success(request, "Password changed. Other devices have been signed out.")
+                return redirect("accounts:profile")
+            return self.render_to_response(self.get_context_data(password_form=form))
+
+        return redirect("accounts:profile")
+
+
 class UsageDashboardView(LoginRequiredMixin, TemplateView):
     template_name = "accounts/usage.html"
 
@@ -162,8 +242,7 @@ class RedeemCouponView(LoginRequiredMixin, View):
                 limits = TIER_LIMITS.get(new_tier, TIER_LIMITS["free"])
                 profile.tier = new_tier
                 profile.monthly_credits = limits["monthly_credits"]
-                profile.max_concurrent_jobs = limits["max_concurrent_jobs"]
-                profile.save(update_fields=["tier", "monthly_credits", "max_concurrent_jobs"])
+                profile.save(update_fields=["tier", "monthly_credits"])
                 messages.success(
                     request,
                     f"Your account has been upgraded to {profile.get_tier_display()} for {coupon.upgrade_duration_days} days!",

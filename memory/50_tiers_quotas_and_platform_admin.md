@@ -37,11 +37,12 @@ Free and Standard are merged: Standard is what every account starts as, and "pay
 | When credits run out | New GPU work is blocked | Never |
 | Raw footage | **Deleted 3 months after upload**, unless longer storage is approved | Kept while subscribed |
 | Results (detections, tracks, events, crops, annotations) | Kept | Kept |
-| Concurrent GPU slots | 10 *(proposed)* | 50 (or set for that account) |
 | Features | **All** | **All** |
 | How they get it | Sign up | Request → you approve, with an end date (default one year) |
 
-You can override any limit for one account (credits, GPU slots, retention) on its dashboard page; that replaces Enterprise.
+You can override any limit for one account (credits, retention) on its dashboard page; that replaces Enterprise.
+
+**No per-user GPU limits (decided 2026-10-21).** The platform scales to the work for every user; jobs queue behind one platform-wide SageMaker cap (`SAGEMAKER_MAX_CONCURRENT`), which protects the endpoint and is never shown as a user limit. The per-user slot check and the "x/y slots" display were removed.
 
 The **super admin** sits outside the tiers: unlimited, never deleted, tracked like everyone else, and has the `/platform/` dashboard.
 
@@ -119,7 +120,7 @@ A new `apps/accounts/quota.py`:
 
 ```python
 estimate(kind, **work)                      # credits, from recent runs (§3)
-check(user, credits, slots=1)               # raises QuotaExceeded(reason, needed, left, resets_on)
+check(user, credits)                        # raises QuotaExceeded(reason, needed, left, resets_on)
 charge(user, kind, gpu_seconds, instance, source)   # writes a UsageEvent, updates cached totals
 ```
 
@@ -130,7 +131,6 @@ A test lists every entry point and fails if one doesn't call the gate.
 - **Monthly reset:** the 10 free credits reset on the 1st, applied on the next check after that. No cron job.
 - **Balances:** `monthly` (resets), then `granted` (from requests and promo codes, never expires), spent in that order.
 - **Tier expiry:** `tier_expires_at`, checked the same way.
-- **Concurrent slots:** counts work in progress across all job types.
 - **Pro / super admin:** `check` always passes, but `charge` still records everything.
 
 **Feedback:**
@@ -259,7 +259,8 @@ The design canvas shows this.
 
 Built so far (2026-10-21):
 - **Step 0** — `apps/accounts/emails.py` (`send` logs every attempt to `EmailLog`, never raises); password reset sends through it (`LoggedPasswordResetForm`); superuser page `/accounts/email/` shows SES sandbox status, 7-day sent/failed counts, recent emails and a "send test email" form; SES policy (+`ses:GetAccount`) declared in `infra/aws/__main__.py` (needs `pulumi up`).
-- **Step 1** — `apps/accounts/quota.py`: `CREDITS_PER_GPU_HOUR` (T4 1, L4 1.5, A10G 2, L40S 2.5); estimates = median GPU-seconds per unit over the last 200 `UsageEvent`s of that kind and machine (fallbacks until 5 exist); `check` before every launch counts queued/running work; `charge` is idempotent per source. Gated: analysis one-click / new job / batch / annotated video, pipeline launches (hub + device schedules), API job create + batch submit, training, adaptation, auto-label, GPU sampling (add clips + sample). Migration 0008 backfills `UsageEvent` from completed Jobs (history only, nobody charged) and converts credit coupons from GPU-seconds to credits. Concurrent-slot limits were left as they were (step 2). Until the dashboard exists, credits are granted by editing `granted_gpu_credits` in Django admin.
+- **Account → Profile** — `/accounts/`: username (read-only), plan, first/last name, organization; change email (current password, unique, old address notified); change password (keeps this session, signs out others, notice email); "email me a reset link". The nav username opens it; Usage & credits is its second tab. New-email confirmation waits for SES production access.
+- **Step 1** — `apps/accounts/quota.py`: `CREDITS_PER_GPU_HOUR` (T4 1, L4 1.5, A10G 2, L40S 2.5); estimates = median GPU-seconds per unit over the last 200 `UsageEvent`s of that kind and machine (fallbacks until 5 exist); `check` before every launch counts queued/running work; `charge` is idempotent per source. Gated: analysis one-click / new job / batch / annotated video, pipeline launches (hub + device schedules), API job create + batch submit, training, adaptation, auto-label, GPU sampling (add clips + sample). Migration 0008 backfills `UsageEvent` from completed Jobs (history only, nobody charged) and converts credit coupons from GPU-seconds to credits. Per-user concurrent-slot limits were then removed altogether (no per-user GPU limits). Until the dashboard exists, credits are granted by editing `granted_gpu_credits` in Django admin.
 
 0. **Email that works, and that we can see working** (prerequisite for deletion notices). Found 2026-10-21: SES is still in the **sandbox** (`ProductionAccessEnabled: false`, review case 178259218200517), so SES rejects mail to anyone not verified (`MessageRejected … jqc7119@psu.edu`, 2026-10-20 19:25 and 19:32 UTC) while the reset page still says "check your email". The domain (DKIM) and the `beemonitor-ses-send` IAM policy are fine, but both were set up by hand and aren't in Pulumi. Fix: get production access; record every send (`EmailLog`: to, kind, status, SES message id, error); show failures on the dashboard; add a "send test email" button; add the SES policy to Pulumi.
 1. Quota gate at every GPU entry point + estimates + `UsageEvent` + monthly reset. *(Closes the leak on its own.)*

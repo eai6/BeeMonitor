@@ -24,6 +24,44 @@ class UserRegistrationForm(UserCreationForm):
         return email
 
 
+class ProfileForm(forms.Form):
+    """Name and organization. The username is not editable: it is how people
+    sign in and how they are told apart in logs and on the admin dashboard."""
+
+    first_name = forms.CharField(max_length=150, required=False)
+    last_name = forms.CharField(max_length=150, required=False)
+    organization = forms.CharField(max_length=200, required=False)
+
+
+class EmailChangeForm(forms.Form):
+    """Change the account email. Needs the current password, and the address
+    must not belong to another account (password reset finds users by email).
+
+    No confirmation email to the new address yet: while SES is in its sandbox
+    it wouldn't arrive. The old address is told instead (memory/50)."""
+
+    new_email = forms.EmailField(label="New email")
+    current_password = forms.CharField(widget=forms.PasswordInput, label="Current password")
+
+    def __init__(self, user, *args, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+
+    def clean_current_password(self):
+        pw = self.cleaned_data["current_password"]
+        if not self.user.check_password(pw):
+            raise forms.ValidationError("That isn't your current password.")
+        return pw
+
+    def clean_new_email(self):
+        email = self.cleaned_data["new_email"].strip()
+        if email.lower() == (self.user.email or "").lower():
+            raise forms.ValidationError("That is already your email.")
+        if User.objects.filter(email__iexact=email).exclude(pk=self.user.pk).exists():
+            raise forms.ValidationError("Another account already uses this email.")
+        return email
+
+
 class LoggedPasswordResetForm(PasswordResetForm):
     """Django's reset form, sending through emails.send so every attempt is
     logged with SES's answer. The page still looks the same either way."""

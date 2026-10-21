@@ -34,14 +34,10 @@ class Command(BaseCommand):
         limits = TIER_LIMITS[tier]
         profile.tier = tier
         profile.monthly_credits = limits["monthly_credits"]
-        profile.max_concurrent_jobs = limits["max_concurrent_jobs"]
         profile.used_credits = 0
-        profile.save(update_fields=["tier", "monthly_credits", "max_concurrent_jobs", "used_credits"])
+        profile.save(update_fields=["tier", "monthly_credits", "used_credits"])
 
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"Updated {username}: {old_tier} -> {tier} "
-                f"(credits: {profile.monthly_credits}, "
-                f"concurrent: {profile.max_concurrent_jobs})"
-            )
-        )
+        monthly = limits.get("monthly_gpu_credits")
+        self.stdout.write(self.style.SUCCESS(
+            f"Updated {username}: {old_tier} -> {tier} "
+            f"(GPU credits: {'unlimited' if monthly is None else f'{monthly} free a month'})"))

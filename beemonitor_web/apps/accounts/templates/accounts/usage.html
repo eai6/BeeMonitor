@@ -2,9 +2,7 @@
 {% block title %}Usage & Credits - BeeMonitor{% endblock %}
 
 {% block content %}
-<div class="mb-6">
-  <h1 class="text-2xl font-bold text-gray-900">Usage & Credits</h1>
-</div>
+{% include "accounts/_account_tabs.html" with tab="usage" %}
 
 <!-- Credit Balance (apps/accounts/quota.py) -->
 <div class="bg-white shadow rounded-lg p-6 mb-6">

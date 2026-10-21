@@ -1,0 +1,11 @@
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-gray-900 mb-4">Account</h1>
+  <nav class="flex gap-1 border-b border-gray-200" aria-label="Account">
+    <a href="{% url 'accounts:profile' %}"
+      class="px-4 py-2.5 text-sm {% if tab == 'profile' %}font-semibold text-green-800 border-b-2 border-green-600{% else %}text-gray-700 hover:text-gray-900{% endif %}"
+      {% if tab == 'profile' %}aria-current="page"{% endif %}>Profile</a>
+    <a href="{% url 'accounts:usage' %}"
+      class="px-4 py-2.5 text-sm {% if tab == 'usage' %}font-semibold text-green-800 border-b-2 border-green-600{% else %}text-gray-700 hover:text-gray-900{% endif %}"
+      {% if tab == 'usage' %}aria-current="page"{% endif %}>Usage &amp; credits</a>
+  </nav>
+</div>

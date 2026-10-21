@@ -135,7 +135,8 @@ class AnalysisTests(TestCase):
         r = self.client.get(reverse("analysis:processing"))
         self.assertIn("recent_jobs", r.context)
         self.assertIn("active_jobs", r.context)
-        self.assertIn("slots_max", r.context)
+        # No per-user GPU slots: the platform scales to the work.
+        self.assertNotIn("slots_max", r.context)
 
     def test_hub_filters(self):
         r = self.client.get(reverse("analysis:processing") + "?site=test&year=2024")

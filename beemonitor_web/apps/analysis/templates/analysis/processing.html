@@ -92,7 +92,7 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
     {% if active_jobs %}
     <div class="bg-blue-50 border-b border-blue-100 px-5 py-2 flex items-center justify-between gap-3">
       <p class="text-xs text-blue-800">
-        {{ active_jobs|length }} job{{ active_jobs|pluralize }} running &middot; {{ slots_used }}/{{ slots_max }} slots
+        {{ active_jobs|length }} job{{ active_jobs|pluralize }} in progress
       </p>
       <form method="post" action="{% url 'analysis:cancel_all' %}"
             onsubmit="return confirm('Cancel all {{ active_jobs|length }} in-flight job(s)? Their pipeline runs will be marked failed.');">

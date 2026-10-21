@@ -50,6 +50,7 @@ urlpatterns = [
     path("logout/", views.LogoutView.as_view(), name="logout"),
     path("register/", views.RegisterView.as_view(), name="register"),
     *password_reset_patterns,
+    path("", views.ProfileView.as_view(), name="profile"),
     path("usage/", views.UsageDashboardView.as_view(), name="usage"),
     path("redeem-coupon/", views.RedeemCouponView.as_view(), name="redeem_coupon"),
     path("email/", views.EmailStatusView.as_view(), name="email_status"),

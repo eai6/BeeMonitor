@@ -558,7 +558,7 @@ ACTIVE_JOB_STATUSES = [
 
 
 class JobCancelView(LoginRequiredMixin, View):
-    """Cancel an in-flight job to free a GPU slot.
+    """Cancel an in-flight job.
 
     SageMaker async has no API to abort a request, so this marks the Job
     cancelled, fails any pipeline step waiting on it, and leaves a marker the
@@ -580,7 +580,7 @@ class JobCancelView(LoginRequiredMixin, View):
 
 
 class JobCancelAllView(LoginRequiredMixin, View):
-    """Cancel every in-flight job for this user (free all GPU slots)."""
+    """Cancel every in-flight job for this user."""
 
     def post(self, request):
         from django.shortcuts import redirect
@@ -705,8 +705,6 @@ class ProcessingHubView(LoginRequiredMixin, View):
             "videos": videos,
             "recent_jobs": recent_jobs,
             "active_jobs": active_jobs,
-            "slots_used": sum(1 for j in active_jobs if j.status == Job.Status.PROCESSING),
-            "slots_max": profile.max_concurrent_jobs,
             "video_count": qs.count(),
             "devices": devices,
             "roi_devices": roi_devices,
@@ -1588,15 +1586,6 @@ class BatchJobView(LoginRequiredMixin, View):
                 request.user, [quota.video_work(v) for v in videos_to_process])
         except quota.QuotaExceeded as e:
             return _fail(e.message, status=402)
-
-        # Concurrent job check — only block if already at GPU capacity
-        active_count = Job.objects.filter(
-            user=request.user, status=Job.Status.PROCESSING,
-        ).count()
-        if active_count >= profile.max_concurrent_jobs:
-            return _fail(
-                f"All {profile.max_concurrent_jobs} GPU slots are in use. Wait for "
-                "some to complete before submitting more.", status=429)
 
         # Create Job records
         jobs_data = []

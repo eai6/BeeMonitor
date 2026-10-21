@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Account - BeeMonitor{% endblock %}
+
+{% block content %}
+{% include "accounts/_account_tabs.html" with tab="profile" %}
+
+<div class="max-w-3xl space-y-6">
+
+  <!-- Profile -->
+  <form method="post" class="bg-white shadow rounded-lg p-6">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="profile">
+    <h2 class="text-lg font-medium text-gray-900 mb-4">Profile</h2>
+    {% if profile_form.non_field_errors %}<p class="text-sm text-red-700 mb-3">{{ profile_form.non_field_errors|join:" " }}</p>{% endif %}
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div>
+        <p class="text-sm font-medium text-gray-700 mb-1">Username</p>
+        <p class="rounded-md bg-gray-100 px-3 py-2 text-sm text-gray-900">{{ request.user.username }}</p>
+        <p class="text-xs text-gray-600 mt-1">Used to sign in. It can't be changed.</p>
+      </div>
+      <div>
+        <p class="text-sm font-medium text-gray-700 mb-1">Plan</p>
+        <p class="rounded-md bg-gray-100 px-3 py-2 text-sm text-gray-900">
+          {% if request.user.is_superuser %}Super admin{% else %}{{ profile.get_tier_display }}{% endif %}
+          · {% if unlimited %}unlimited credits{% else %}10 free credits a month{% endif %}
+        </p>
+      </div>
+      {% for field in profile_form %}
+      <div class="{% if field.name == 'organization' %}sm:col-span-2{% endif %}">
+        <label for="{{ field.id_for_label }}" class="block text-sm font-medium text-gray-700 mb-1">{{ field.label }}</label>
+        <input type="text" name="{{ field.html_name }}" id="{{ field.id_for_label }}" value="{{ field.value|default:'' }}"
+          {% if field.name == 'organization' %}placeholder="Lab, university or company"{% endif %}
+          class="w-full rounded-md border-gray-300 shadow-sm text-sm focus:border-green-600 focus:ring-green-600">
+        {% if field.errors %}<p class="text-xs text-red-700 mt-1">{{ field.errors|join:" " }}</p>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    <div class="flex justify-end mt-4">
+      <button type="submit" class="px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-md hover:bg-green-700">Save profile</button>
+    </div>
+  </form>
+
+  <!-- Email -->
+  <form method="post" class="bg-white shadow rounded-lg p-6">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="email">
+    <h2 class="text-lg font-medium text-gray-900 mb-2">Email</h2>
+    <p class="text-sm text-gray-900 mb-1"><strong>{{ request.user.email|default:"No email on this account" }}</strong></p>
+    <p class="text-xs text-gray-600 mb-4">Password reset links and account notices go here.</p>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div>
+        <label for="id_new_email" class="block text-sm font-medium text-gray-700 mb-1">New email</label>
+        <input type="email" name="new_email" id="id_new_email" value="{{ email_form.new_email.value|default:'' }}" autocomplete="email"
+          class="w-full rounded-md border-gray-300 shadow-sm text-sm focus:border-green-600 focus:ring-green-600">
+        {% if email_form.new_email.errors %}<p class="text-xs text-red-700 mt-1">{{ email_form.new_email.errors|join:" " }}</p>{% endif %}
+      </div>
+      <div>
+        <label for="id_email_current_password" class="block text-sm font-medium text-gray-700 mb-1">Current password</label>
+        <input type="password" name="current_password" id="id_email_current_password" autocomplete="current-password"
+          class="w-full rounded-md border-gray-300 shadow-sm text-sm focus:border-green-600 focus:ring-green-600">
+        {% if email_form.current_password.errors %}<p class="text-xs text-red-700 mt-1">{{ email_form.current_password.errors|join:" " }}</p>{% endif %}
+      </div>
+    </div>
+    <p class="text-xs text-gray-600 mt-3">Your old address is told when it changes. Each email can belong to one account only.</p>
+    <div class="flex justify-end mt-4">
+      <button type="submit" class="px-4 py-2 bg-white border border-gray-300 text-gray-900 text-sm font-medium rounded-md hover:bg-gray-50">Change email</button>
+    </div>
+  </form>
+
+  <!-- Password -->
+  <form method="post" class="bg-white shadow rounded-lg p-6">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="password">
+    <h2 class="text-lg font-medium text-gray-900 mb-4">Password</h2>
+    {% if password_form.non_field_errors %}<p class="text-sm text-red-700 mb-3">{{ password_form.non_field_errors|join:" " }}</p>{% endif %}
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      {% for field in password_form %}
+      <div>
+        <label for="{{ field.id_for_label }}" class="block text-sm font-medium text-gray-700 mb-1">{{ field.label }}</label>
+        <input type="password" name="{{ field.html_name }}" id="{{ field.id_for_label }}"
+          autocomplete="{% if field.name == 'old_password' %}current-password{% else %}new-password{% endif %}"
+          class="w-full rounded-md border-gray-300 shadow-sm text-sm focus:border-green-600 focus:ring-green-600">
+        {% if field.errors %}<p class="text-xs text-red-700 mt-1">{{ field.errors|join:" " }}</p>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    <div class="flex flex-wrap items-center justify-between gap-3 mt-4">
+      <p class="text-xs text-gray-600">Forgot it? <a href="{% url 'accounts:password_reset' %}" class="text-green-700 hover:underline">Email me a reset link</a> instead. Changing it keeps you signed in here and signs out your other devices.</p>
+      <button type="submit" class="px-4 py-2 bg-white border border-gray-300 text-gray-900 text-sm font-medium rounded-md hover:bg-gray-50">Change password</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
