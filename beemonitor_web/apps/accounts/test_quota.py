@@ -184,3 +184,12 @@ class EnsureSuperusersTests(TestCase):
         u = User.objects.get(username="eai6")
         self.assertTrue(u.is_superuser and u.is_staff)
         self.assertTrue(quota.is_unlimited(u))
+
+
+class UsagePageTests(CreditsTestCase):
+    def test_gpu_time_is_shown_in_hours(self):
+        quota.charge(self.user, "analysis", 5400, T4, "job", 1)   # 1.5 h
+        self.client.force_login(self.user)
+        r = self.client.get(reverse("accounts:usage"))
+        self.assertContains(r, "1.5 GPU-hours")
+        self.assertNotContains(r, "5400s")

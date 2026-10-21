@@ -48,6 +48,19 @@ class RegisterView(CreateView):
         return response
 
 
+def _usage_totals(user, month_start):
+    """Credits and GPU-hours, this month and lifetime, from UsageEvent. Users see
+    hours, never seconds."""
+    def totals(qs):
+        agg = qs.aggregate(cr=Sum("credits"), secs=Sum("gpu_seconds"))
+        return agg["cr"] or 0, (agg["secs"] or 0) / 3600
+
+    month_cr, month_h = totals(user.usage_events.filter(created_at__date__gte=month_start))
+    life_cr, life_h = totals(user.usage_events.all())
+    return {"used_this_month": month_cr, "hours_this_month": month_h,
+            "lifetime_credits": life_cr, "lifetime_hours": life_h}
+
+
 class UsageDashboardView(LoginRequiredMixin, TemplateView):
     template_name = "accounts/usage.html"
 
@@ -71,9 +84,7 @@ class UsageDashboardView(LoginRequiredMixin, TemplateView):
             "monthly_used": profile.monthly_gpu_credits_used,
             "granted": profile.granted_gpu_credits,
             "pending": quota.pending(user),
-            "used_this_month": user.usage_events.filter(
-                created_at__date__gte=profile.credit_period_start).aggregate(
-                    n=Sum("credits"))["n"] or 0,
+            **_usage_totals(user, profile.credit_period_start),
             "monthly_pct": (min(100, int(profile.monthly_gpu_credits_used / allowance * 100))
                             if allowance else 0),
             "resets_on": quota.next_reset(),
