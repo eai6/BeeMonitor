@@ -878,6 +878,9 @@ if deploy_service:
         #   pulumi config set sampling-backend sagemaker && pulumi up
         # only after the endpoint runs an image with the sample_label task.
         "SAMPLING_BACKEND": config.get("sampling-backend") or "local",
+        # Platform managers: promoted to superuser on each container start
+        # (manage.py ensure_superusers). Promote-only; demote in Django admin.
+        "BEEMONITOR_SUPERUSERS": config.get("superusers") or "",
     })
 
     runtime_secrets = pulumi.Output.all(

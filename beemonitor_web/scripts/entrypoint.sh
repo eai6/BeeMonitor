@@ -7,6 +7,9 @@ python manage.py migrate --noinput
 echo "Backfilling video timestamps..."
 python manage.py backfill_video_timestamps || true
 
+echo "Ensuring superusers..."
+python manage.py ensure_superusers || true
+
 echo "Ensuring admin tier..."
 python -c "
 import django, os

@@ -173,3 +173,14 @@ class CouponTests(CreditsTestCase):
         self.client.force_login(self.user)
         self.client.post(reverse("accounts:redeem_coupon"), {"coupon_code": "field"})
         self.assertEqual(quota.available(self.user), Decimal("30"))
+
+
+class EnsureSuperusersTests(TestCase):
+    def test_listed_users_are_promoted_and_missing_ones_skipped(self):
+        from django.core.management import call_command
+        User.objects.create_user("eai6", password="x")
+        with mock.patch.dict("os.environ", {"BEEMONITOR_SUPERUSERS": "eai6, ghost"}):
+            call_command("ensure_superusers")
+        u = User.objects.get(username="eai6")
+        self.assertTrue(u.is_superuser and u.is_staff)
+        self.assertTrue(quota.is_unlimited(u))
