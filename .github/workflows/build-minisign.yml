@@ -27,23 +27,42 @@ jobs:
   build:
     runs-on: ubuntu-24.04-arm   # native arm64 -> produces a Linux aarch64 ELF
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Build static minisign (aarch64)
+        # Inputs reach the script as env vars, never spliced into it.
+        env:
+          LIBSODIUM_VERSION: ${{ inputs.libsodium_version }}
+          MINISIGN_VERSION: ${{ inputs.minisign_version }}
         run: |
           set -euxo pipefail
+          # The binary ships to field units, so the sources are pinned by hash.
+          # libsodium's hash is from a tarball verified against its published
+          # minisign signature; minisign's matches the signed release source.
+          # A new version needs its hash added here.
+          case "$LIBSODIUM_VERSION" in
+            1.0.20) libsodium_sha256=ebb65ef6ca439333c2bb41a0c1990587288da07f6c7fd07cb3a18cc18d30ce19 ;;
+            *) echo "ERROR: no pinned sha256 for libsodium $LIBSODIUM_VERSION"; exit 1 ;;
+          esac
+          case "$MINISIGN_VERSION" in
+            0.11) minisign_sha256=74c2c78a1cd51a43a6c98f46a4eabefbc8668074ca9aa14115544276b663fc55 ;;
+            *) echo "ERROR: no pinned sha256 for minisign $MINISIGN_VERSION"; exit 1 ;;
+          esac
+
           sudo apt-get update
           sudo apt-get install -y build-essential wget file
           work="$(mktemp -d)"; cd "$work"
 
           # 1) static libsodium (no shared dep in the final binary)
-          wget -q "https://download.libsodium.org/libsodium/releases/libsodium-${{ inputs.libsodium_version }}.tar.gz"
-          tar xzf libsodium-*.tar.gz
+          wget -q "https://download.libsodium.org/libsodium/releases/libsodium-${LIBSODIUM_VERSION}.tar.gz" -O libsodium.tar.gz
+          echo "${libsodium_sha256}  libsodium.tar.gz" | sha256sum -c -
+          tar xzf libsodium.tar.gz
           ( cd libsodium-*/ && ./configure --enable-static --disable-shared --prefix="$work/sodium" >/dev/null \
               && make -j"$(nproc)" >/dev/null && make install >/dev/null )
 
           # 2) minisign, fully static
-          wget -q "https://github.com/jedisct1/minisign/archive/refs/tags/${{ inputs.minisign_version }}.tar.gz" -O minisign.tar.gz
+          wget -q "https://github.com/jedisct1/minisign/archive/refs/tags/${MINISIGN_VERSION}.tar.gz" -O minisign.tar.gz
+          echo "${minisign_sha256}  minisign.tar.gz" | sha256sum -c -
           tar xzf minisign.tar.gz
           cd minisign-*/
           cc -O2 -static -I"$work/sodium/include" src/*.c "$work/sodium/lib/libsodium.a" -o minisign

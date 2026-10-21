@@ -14,7 +14,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# upgrade: the slim base lags Debian security fixes, so patch OS packages at build.
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
         libpq-dev gcc \
         libglib2.0-0 \
         ffmpeg \
@@ -29,7 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python deps first so they cache across code changes.
 COPY beemonitor_web/requirements/ /app/beemonitor_web/requirements/
-RUN pip install --no-cache-dir -r /app/beemonitor_web/requirements/base.txt django-filter
+RUN pip install --no-cache-dir --require-hashes -r /app/beemonitor_web/requirements/base.lock
 
 # Application code — Django project plus the cloud package it imports.
 COPY beemonitor_web/ /app/beemonitor_web/
@@ -41,9 +43,11 @@ COPY src/ /app/src/
 
 # collectstatic at build time so we don't pay it on every container start;
 # whitenoise serves out of STATIC_ROOT (beemonitor_web/staticfiles).
+# Production settings refuse to start without DJANGO_SECRET_KEY; this placeholder
+# exists only for this build step and is never the runtime key.
 RUN cd /app/beemonitor_web && \
     mkdir -p staticfiles && \
-    python manage.py collectstatic --noinput 2>/dev/null || true
+    DJANGO_SECRET_KEY=build-only-collectstatic python manage.py collectstatic --noinput 2>/dev/null || true
 
 RUN chmod +x /app/beemonitor_web/scripts/entrypoint.sh
 

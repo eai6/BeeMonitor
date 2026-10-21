@@ -210,6 +210,11 @@ web_raw_videos_arn = f"arn:aws:s3:::beemonitor-{env}-raw-videos-{account_id}"
 web_processed_arn = f"arn:aws:s3:::beemonitor-{env}-processed-{account_id}"
 web_models_arn = f"arn:aws:s3:::beemonitor-{env}-models-{account_id}"
 
+
+def _ecr_repo_arn(name: str) -> str:
+    return f"arn:aws:ecr:{region}:{account_id}:repository/{name}"
+
+
 sagemaker_role = aws.iam.Role(
     "sagemaker-exec-role",
     name=f"{prefix}-exec-role",
@@ -262,15 +267,24 @@ sagemaker_role_policy = aws.iam.RolePolicy(
                 "Resource": [web_models_arn, f"{web_models_arn}/*"],
             },
             {
+                # GetAuthorizationToken has no resource-level scoping.
+                "Sid": "ECRAuth",
+                "Effect": "Allow",
+                "Action": ["ecr:GetAuthorizationToken"],
+                "Resource": "*",
+            },
+            {
                 "Sid": "ECRPull",
                 "Effect": "Allow",
                 "Action": [
-                    "ecr:GetAuthorizationToken",
                     "ecr:BatchCheckLayerAvailability",
                     "ecr:GetDownloadUrlForLayer",
                     "ecr:BatchGetImage",
                 ],
-                "Resource": "*",
+                "Resource": [
+                    _ecr_repo_arn(ECR_REPO_NAME),
+                    _ecr_repo_arn(SAM3_ECR_REPO_NAME),
+                ],
             },
             {
                 "Sid": "CloudWatch",
@@ -408,15 +422,21 @@ aws.iam.RolePolicy(
                     "Resource": [web_models_arn, f"{web_models_arn}/*"],
                 },
                 {
+                    # GetAuthorizationToken has no resource-level scoping.
+                    "Sid": "ECRAuth",
+                    "Effect": "Allow",
+                    "Action": ["ecr:GetAuthorizationToken"],
+                    "Resource": "*",
+                },
+                {
                     "Sid": "ECRPull",
                     "Effect": "Allow",
                     "Action": [
-                        "ecr:GetAuthorizationToken",
                         "ecr:BatchCheckLayerAvailability",
                         "ecr:GetDownloadUrlForLayer",
                         "ecr:BatchGetImage",
                     ],
-                    "Resource": "*",
+                    "Resource": _ecr_repo_arn(f"{prefix}-training"),
                 },
                 {
                     "Sid": "CloudWatch",
@@ -506,6 +526,7 @@ if deploy_endpoint:
     # same way an image bump does, in either direction.
     tag_slug = f"{tag_slug}-{CONFIG_REV}-c{invocations_per_instance}"
 
+    # Network isolation stays off: the container downloads model weights at start.
     model = aws.sagemaker.Model(
         "model",
         name=f"{prefix}-model-{tag_slug}",

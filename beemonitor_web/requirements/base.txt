@@ -1,5 +1,12 @@
+# What the web app needs, as ranges. Builds install base.lock (exact versions
+# and hashes, Linux, Python 3.12, nothing released in the last two weeks), so a
+# new release can't change production without a commit. After editing this:
+#   uv pip compile base.txt --python-version 3.12 \
+#     --python-platform x86_64-manylinux_2_28 --generate-hashes --no-header \
+#     --exclude-newer <two weeks ago, YYYY-MM-DD> -o base.lock
 django>=5.0
 djangorestframework>=3.14
+django-filter>=24.0
 django-cors-headers>=4.3
 celery>=5.3
 redis>=5.0

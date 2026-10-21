@@ -68,13 +68,31 @@ def _bucket(logical: str, area: str) -> aws.s3.BucketV2:
             protect=True,
         ),
     )
-    aws.s3.BucketPublicAccessBlock(
+    pab = aws.s3.BucketPublicAccessBlock(
         f"{logical}-pab",
         bucket=bucket.id,
         block_public_acls=True,
         block_public_policy=True,
         ignore_public_acls=True,
         restrict_public_buckets=True,
+    )
+    # Refuse plain-HTTP requests. Presigned URLs and the SDKs already use
+    # HTTPS; this makes it a guarantee rather than a default.
+    aws.s3.BucketPolicy(
+        f"{logical}-tls-only",
+        bucket=bucket.id,
+        policy=bucket.arn.apply(lambda arn: json.dumps({
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Sid": "DenyInsecureTransport",
+                "Effect": "Deny",
+                "Principal": "*",
+                "Action": "s3:*",
+                "Resource": [arn, f"{arn}/*"],
+                "Condition": {"Bool": {"aws:SecureTransport": "false"}},
+            }],
+        })),
+        opts=pulumi.ResourceOptions(depends_on=[pab]),
     )
     aws.s3.BucketServerSideEncryptionConfigurationV2(
         f"{logical}-sse",
@@ -110,8 +128,6 @@ user_configs_bucket = _bucket("user-configs", "user-configs")
 _web_origins = [
     "https://beemonitor.edwardamoah.com",
     "https://mqnafc3ejc.us-east-1.awsapprunner.com",
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
 ]
 aws.s3.BucketCorsConfigurationV2(
     "raw-videos-cors",
@@ -215,7 +231,7 @@ gh_role = aws.iam.Role(
                 "StringLike": {
                     f"{GH_PROVIDER}:sub": [
                         f"repo:{github_repo}:ref:refs/heads/main",
-                        f"repo:{github_repo}:ref:refs/tags/*",
+                        f"repo:{github_repo}:ref:refs/tags/v*",
                     ],
                 },
             },
@@ -296,25 +312,8 @@ aws.iam.RolePolicy(
 
 
 # ---------------------------------------------------------------------------
-# IAM — ECS task role (Django runtime)
+# IAM — runtime policy documents (attached to the App Runner instance role)
 # ---------------------------------------------------------------------------
-# What the running container is allowed to do. Phase 2b attaches this role
-# to the Fargate task definition. Phase 4 extends the policy with the
-# `sagemaker:InvokeEndpointAsync` permission.
-
-task_role = aws.iam.Role(
-    "ecs-task-role",
-    name=f"{prefix}-ecs-task",
-    description="Runtime role for the BeeMonitor Django container",
-    assume_role_policy=json.dumps({
-        "Version": "2012-10-17",
-        "Statement": [{
-            "Effect": "Allow",
-            "Principal": {"Service": "ecs-tasks.amazonaws.com"},
-            "Action": "sts:AssumeRole",
-        }],
-    }),
-)
 
 # S3: read/write the four BeeMonitor buckets. No wildcard across all buckets.
 task_s3_policy_doc = pulumi.Output.all(
@@ -340,37 +339,6 @@ task_s3_policy_doc = pulumi.Output.all(
         },
     ],
 }))
-
-aws.iam.RolePolicy(
-    "ecs-task-s3",
-    role=task_role.id,
-    name="s3-access",
-    policy=task_s3_policy_doc,
-)
-
-
-# ECS task execution role — what ECS itself uses to pull images and write
-# CloudWatch logs. Separate from the task role.
-exec_role = aws.iam.Role(
-    "ecs-exec-role",
-    name=f"{prefix}-ecs-exec",
-    description="ECS execution role (image pull + log delivery)",
-    assume_role_policy=json.dumps({
-        "Version": "2012-10-17",
-        "Statement": [{
-            "Effect": "Allow",
-            "Principal": {"Service": "ecs-tasks.amazonaws.com"},
-            "Action": "sts:AssumeRole",
-        }],
-    }),
-)
-
-aws.iam.RolePolicyAttachment(
-    "ecs-exec-managed",
-    role=exec_role.name,
-    policy_arn="arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
-)
-
 
 # ---------------------------------------------------------------------------
 # Secrets Manager — Django runtime secrets (values filled out-of-band)
@@ -470,7 +438,7 @@ aws.secretsmanager.SecretVersion(
     secret_string=config.require_secret("anthropic-api-key"),
 )
 
-# The task role needs to read these secrets at runtime. Restrict to the
+# The runtime role needs to read these secrets at startup. Restrict to the
 # five secret ARNs above.
 task_secrets_policy_doc = pulumi.Output.all(
     django_secret_key.arn, db_password_secret.arn,
@@ -488,13 +456,6 @@ task_secrets_policy_doc = pulumi.Output.all(
         "Resource": list(arns),
     }],
 }))
-
-aws.iam.RolePolicy(
-    "ecs-task-secrets",
-    role=task_role.id,
-    name="secrets-read",
-    policy=task_secrets_policy_doc,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -699,7 +660,11 @@ db_instance = aws.rds.Instance(
     publicly_accessible=False,
     multi_az=False,
     backup_retention_period=7,
-    skip_final_snapshot=True,        # dev — no need to retain on destroy
+    # The `dev` stack is production: keep a final snapshot and refuse
+    # deletion until protection is switched off deliberately.
+    deletion_protection=True,
+    skip_final_snapshot=False,
+    final_snapshot_identifier=f"{prefix}-db-final",
     apply_immediately=True,
     auto_minor_version_upgrade=True,
 )
@@ -708,8 +673,7 @@ db_instance = aws.rds.Instance(
 # ---------------------------------------------------------------------------
 # App Runner — instance role (runtime) and access role (ECR pull)
 # ---------------------------------------------------------------------------
-# These are App-Runner-specific. The ECS roles above stay around as a
-# placeholder in case we ever ship a heavier worker on Fargate.
+# These are App-Runner-specific.
 
 apprunner_instance_role = aws.iam.Role(
     "apprunner-instance-role",
@@ -724,7 +688,7 @@ apprunner_instance_role = aws.iam.Role(
     }),
 )
 
-# Same S3 policy the ECS task role uses — read/write the four BeeMonitor buckets.
+# Read/write the four BeeMonitor buckets.
 aws.iam.RolePolicy(
     "apprunner-s3-access",
     role=apprunner_instance_role.id,
@@ -757,7 +721,14 @@ aws.iam.RolePolicy(
                 "Sid": "SESSendTransactional",
                 "Effect": "Allow",
                 "Action": ["ses:SendEmail", "ses:SendRawEmail"],
-                "Resource": "*",
+                # identity/* rather than the domain alone: in the SES sandbox
+                # the recipient's identity is authorized too. The From
+                # condition stops the app sending as the personal verified
+                # addresses.
+                "Resource": f"arn:aws:ses:{region}:{account_id}:identity/*",
+                "Condition": {
+                    "StringLike": {"ses:FromAddress": "*@beemonitor.edwardamoah.com"},
+                },
             },
             {
                 "Sid": "SESReadAccountStatus",
@@ -836,15 +807,18 @@ if deploy_service:
         processed_bucket.bucket,
         models_bucket.bucket,
         user_configs_bucket.bucket,
-        # Secret, unset by default: see BEEMONITOR_SUPERUSERS below.
-        config.get_secret("superusers") or "",
     ).apply(lambda args: {
         "DJANGO_ENV": "production",
         # App Runner's internal health check probes with an unpredictable Host
         # header; the wildcard ALLOWED_HOSTS is safe because only the
-        # App Runner edge can reach the container.
+        # App Runner edge can reach the container, and password-reset links
+        # use SITE_DOMAIN rather than the Host header.
         "ALLOWED_HOSTS": "*",
-        "CSRF_TRUSTED_ORIGINS": "https://*.awsapprunner.com",
+        # Same-origin posts pass on whichever host serves the page; this only
+        # needs the custom domain, not every App Runner customer's origin.
+        "CSRF_TRUSTED_ORIGINS": "https://beemonitor.edwardamoah.com",
+        # Reset links must not be built from the request's Host header.
+        "SITE_DOMAIN": "beemonitor.edwardamoah.com",
         "AWS_REGION": region,
         "DB_HOST": args[0],
         "DB_PORT": str(args[1]),
@@ -880,13 +854,6 @@ if deploy_service:
         #   pulumi config set sampling-backend sagemaker && pulumi up
         # only after the endpoint runs an image with the sample_label task.
         "SAMPLING_BACKEND": config.get("sampling-backend") or "local",
-        # One-time bootstrap of a platform manager (manage.py
-        # ensure_superusers), as "username:email". Set it as a SECRET, deploy,
-        # then remove it — it must not stay set, or a future account holding
-        # that username and email would be promoted:
-        #   pulumi config set --secret superusers "name:email" && pulumi up
-        #   pulumi config rm superusers && pulumi up
-        **({"BEEMONITOR_SUPERUSERS": args[8]} if args[8] else {}),
     })
 
     runtime_secrets = pulumi.Output.all(
@@ -958,8 +925,6 @@ pulumi.export("ecr_repo_url", ecr_repo.repository_url)
 pulumi.export("ecr_repo_arn", ecr_repo.arn)
 
 pulumi.export("github_actions_role_arn", gh_role.arn)
-pulumi.export("ecs_task_role_arn", task_role.arn)
-pulumi.export("ecs_exec_role_arn", exec_role.arn)
 
 pulumi.export("secret_django_secret_key_arn", django_secret_key.arn)
 pulumi.export("secret_db_password_arn", db_password_secret.arn)
