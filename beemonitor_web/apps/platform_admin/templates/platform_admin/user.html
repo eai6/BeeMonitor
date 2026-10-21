@@ -1,0 +1,133 @@
+{% extends "platform_admin/_layout.html" %}
+{% block page_title %}{{ u.username }}{% endblock %}
+
+{% block platform %}
+<a href="{% url 'platform_admin:users' %}" class="text-sm text-green-700 hover:text-green-900">‹ Users</a>
+
+<div class="flex flex-wrap justify-between items-start gap-4">
+  <div class="flex flex-col gap-1">
+    <div class="flex flex-wrap items-center gap-2">
+      <h1 class="text-2xl font-bold text-gray-900">{{ u.username }}</h1>
+      <span class="px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-800 text-xs font-semibold">{{ tier }}</span>
+      <span class="text-sm font-semibold {% if status.1 == 'ok' %}text-green-700{% elif status.1 == 'warn' %}text-orange-700{% else %}text-gray-600{% endif %}">{{ status.0 }}</span>
+    </div>
+    <p class="text-sm text-gray-600">
+      {{ u.email|default:"no email" }}{% if u.get_full_name %} · {{ u.get_full_name }}{% endif %}{% if profile.organization %} · {{ profile.organization }}{% endif %}
+      · joined {{ u.date_joined|date:"M j, Y" }}
+      · last login {{ u.last_login|date:"M j, H:i"|default:"never" }}
+      · last seen {% if u.last_seen %}{{ u.last_seen|timesince }} ago{% else %}—{% endif %}
+    </p>
+  </div>
+  <div class="flex flex-wrap gap-2">
+    <form method="post" action="{% url 'platform_admin:user_action' u.pk 'reset' %}">{% csrf_token %}
+      <button type="submit" class="h-10 px-4 border border-gray-300 bg-white rounded-md text-sm font-semibold hover:bg-gray-50" {% if not u.email %}disabled title="No email address"{% endif %}>Send password reset</button></form>
+    {% if u.is_active %}
+    <form method="post" action="{% url 'platform_admin:user_action' u.pk 'suspend' %}" onsubmit="return confirm('Suspend {{ u.username|escapejs }}? They are signed out everywhere and can\'t sign in or use API keys until reactivated. Their units keep uploading.')">{% csrf_token %}
+      <button type="submit" class="h-10 px-4 border border-red-300 bg-white text-red-700 rounded-md text-sm font-semibold hover:bg-red-50" {% if u == request.user %}disabled title="You can't suspend yourself"{% endif %}>Suspend</button></form>
+    {% else %}
+    <form method="post" action="{% url 'platform_admin:user_action' u.pk 'reactivate' %}">{% csrf_token %}
+      <button type="submit" class="h-10 px-4 bg-green-600 text-white rounded-md text-sm font-semibold hover:bg-green-700">Reactivate</button></form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+  <div class="lg:col-span-2 flex flex-col gap-5">
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div class="bg-white shadow rounded-lg p-4"><p class="text-xs text-gray-600">Credits left</p>
+        {% if unlimited %}<p class="text-xl font-bold">Unlimited</p><p class="text-xs text-gray-600">tracked, never blocked</p>
+        {% else %}<p class="text-xl font-bold">{{ left|floatformat:1 }}</p><p class="text-xs text-gray-600">{{ allowance|floatformat:0 }} free a month · {{ profile.granted_gpu_credits|floatformat:1 }} granted{% if pending %} · {{ pending|floatformat:1 }} queued{% endif %}</p>{% endif %}</div>
+      <div class="bg-white shadow rounded-lg p-4"><p class="text-xs text-gray-600">Used this month</p><p class="text-xl font-bold">{{ u.month_credits|floatformat:1 }}</p><p class="text-xs text-gray-600">${{ u.month_cost|floatformat:2 }} GPU cost · renews {{ resets_on|date:"M j" }}</p></div>
+      <div class="bg-white shadow rounded-lg p-4"><p class="text-xs text-gray-600">Lifetime</p><p class="text-xl font-bold">{{ life_credits|floatformat:1 }} cr</p><p class="text-xs text-gray-600">{{ life_hours|floatformat:1 }} GPU-hours · ${{ life_cost|floatformat:0 }}</p></div>
+      <div class="bg-white shadow rounded-lg p-4"><p class="text-xs text-gray-600">Storage</p><p class="text-xl font-bold">{{ u.storage_bytes|filesizeformat }}</p><p class="text-xs text-gray-600">{{ u.clips }} clips · {{ u.units }} units</p></div>
+    </div>
+
+    <div class="bg-white shadow rounded-lg p-5 flex flex-col gap-3">
+      <h2 class="text-base font-semibold">Credits per week, last 12 weeks</h2>
+      {% include "platform_admin/_chart.html" %}
+    </div>
+
+    <div class="bg-white shadow rounded-lg p-5 flex flex-col gap-2">
+      <h2 class="text-base font-semibold">Recent GPU work</h2>
+      {% if usage %}
+      <div class="overflow-x-auto">
+      <table class="w-full text-sm whitespace-nowrap">
+        <thead><tr class="text-left text-gray-600"><th class="py-1.5 font-medium">When</th><th class="font-medium">What</th><th class="font-medium">GPU</th><th class="text-right font-medium">GPU-h</th><th class="text-right font-medium">Credits</th><th class="text-right font-medium">Cost</th></tr></thead>
+        <tbody>
+          {% for r in usage %}
+          <tr class="border-t border-gray-100"><td class="py-2 text-gray-700">{{ r.e.created_at|date:"M j, H:i" }}</td><td>{{ r.e.get_kind_display }}</td><td>{{ r.gpu }}</td><td class="text-right">{{ r.hours|floatformat:2 }}</td><td class="text-right">{{ r.e.credits|floatformat:2 }}</td><td class="text-right">${{ r.e.cost_usd|floatformat:2 }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% else %}<p class="text-sm text-gray-600">No GPU work yet.</p>{% endif %}
+    </div>
+  </div>
+
+  <div class="flex flex-col gap-5">
+    <form method="post" action="{% url 'platform_admin:user_action' u.pk 'grant' %}" class="bg-white shadow rounded-lg p-5 flex flex-col gap-3">{% csrf_token %}
+      <h2 class="text-base font-semibold">Grant credits</h2>
+      <p class="text-xs text-gray-600">Granted credits never expire and are spent after the month's free ones. A negative number takes credits away.</p>
+      <label class="flex flex-col gap-1 text-sm font-semibold text-gray-700">Credits
+        <input type="number" name="credits" step="0.1" required class="h-10 rounded-md border-gray-300 text-sm font-normal"></label>
+      <label class="flex flex-col gap-1 text-sm font-semibold text-gray-700">Reason (shown in the audit log)
+        <input type="text" name="reason" maxlength="300" class="h-10 rounded-md border-gray-300 text-sm font-normal"></label>
+      <button type="submit" class="h-11 bg-green-600 text-white rounded-md text-sm font-semibold hover:bg-green-700">Grant credits</button>
+    </form>
+
+    <form method="post" action="{% url 'platform_admin:user_action' u.pk 'tier' %}" class="bg-white shadow rounded-lg p-5 flex flex-col gap-3">{% csrf_token %}
+      <h2 class="text-base font-semibold">Plan</h2>
+      <p class="text-xs text-gray-600">Now {{ profile.get_tier_display }}{% if profile.tier_expires_at %}, ending {{ profile.tier_expires_at|date:"M j, Y" }}{% endif %}. When a plan ends the account drops to Standard and keeps its granted credits.{% if u.is_superuser %} Super admins are unlimited whatever their plan.{% endif %}</p>
+      <div class="grid grid-cols-2 gap-3">
+        <label class="flex flex-col gap-1 text-sm font-semibold text-gray-700">Plan
+          <select name="tier" class="h-10 rounded-md border-gray-300 text-sm font-normal">
+            {% for v, l in grantable_tiers %}<option value="{{ v }}" {% if profile.tier == v %}selected{% endif %}>{{ l }}</option>{% endfor %}
+          </select></label>
+        <label class="flex flex-col gap-1 text-sm font-semibold text-gray-700">Pro until
+          <input type="date" name="until" value="{% if profile.tier_expires_at %}{{ profile.tier_expires_at|date:'Y-m-d' }}{% else %}{{ pro_default_until }}{% endif %}" class="h-10 rounded-md border-gray-300 text-sm font-normal"></label>
+      </div>
+      <label class="flex flex-col gap-1 text-sm font-semibold text-gray-700">Reason
+        <input type="text" name="reason" maxlength="300" class="h-10 rounded-md border-gray-300 text-sm font-normal"></label>
+      <button type="submit" class="h-11 border border-gray-300 bg-white rounded-md text-sm font-semibold hover:bg-gray-50">Change plan</button>
+    </form>
+
+    <form method="post" action="{% url 'platform_admin:user_action' u.pk 'limits' %}" class="bg-white shadow rounded-lg p-5 flex flex-col gap-3">{% csrf_token %}
+      <h2 class="text-base font-semibold">Limits for this account</h2>
+      <label class="flex flex-col gap-1 text-sm font-semibold text-gray-700">Free credits each month
+        <input type="number" name="monthly_credits" step="0.1" min="0" value="{% if profile.monthly_gpu_credits_override is not None %}{{ profile.monthly_gpu_credits_override|floatformat:'-1' }}{% endif %}" placeholder="Plan default" class="h-10 rounded-md border-gray-300 text-sm font-normal"></label>
+      <p class="text-xs text-gray-600">Leave empty for the plan's default. Replaces it for this account only.</p>
+      <label class="flex flex-col gap-1 text-sm font-semibold text-gray-700">Reason
+        <input type="text" name="reason" maxlength="300" class="h-10 rounded-md border-gray-300 text-sm font-normal"></label>
+      <button type="submit" class="h-11 border border-gray-300 bg-white rounded-md text-sm font-semibold hover:bg-gray-50">Save limits</button>
+    </form>
+
+    <div class="bg-white shadow rounded-lg p-5 flex flex-col gap-2 text-sm">
+      <h2 class="text-base font-semibold">Units</h2>
+      {% for d in units %}
+      <div class="flex justify-between gap-2 border-t border-gray-100 pt-2"><span>{{ d.name }}</span><span class="text-gray-700">{% if d.last_seen_at %}checked in {{ d.last_seen_at|timesince }} ago{% else %}never checked in{% endif %}</span></div>
+      {% empty %}<p class="text-gray-600">No units.</p>{% endfor %}
+    </div>
+
+    <div class="bg-white shadow rounded-lg p-5 flex flex-col gap-2 text-sm">
+      <h2 class="text-base font-semibold">Sign-ins</h2>
+      {% for l in logins %}
+      <div class="flex flex-col border-t border-gray-100 pt-2">
+        <span class="flex justify-between"><span>{{ l.created_at|date:"M j, H:i" }}</span><span class="font-semibold {% if l.success %}text-green-700{% else %}text-orange-700{% endif %}">{% if l.success %}Signed in{% else %}Failed{% endif %} · {{ l.get_method_display }}</span></span>
+        <span class="text-gray-600 break-all">{{ l.ip|default:"" }} {{ l.user_agent|truncatechars:70 }}</span>
+      </div>
+      {% empty %}<p class="text-gray-600">None recorded yet (recording started with this dashboard).</p>{% endfor %}
+    </div>
+
+    <div class="bg-white shadow rounded-lg p-5 flex flex-col gap-2 text-sm">
+      <h2 class="text-base font-semibold">History</h2>
+      {% for a in history %}
+      <div class="border-t border-gray-100 pt-2">{{ a.created_at|date:"M j, Y" }} · {{ a.summary }}{% if a.actor %} <span class="text-gray-600">(by {{ a.actor.username }})</span>{% endif %}{% if a.reason %}<div class="text-gray-600">“{{ a.reason }}”</div>{% endif %}</div>
+      {% endfor %}
+      {% for r in redemptions %}
+      <div class="border-t border-gray-100 pt-2">{{ r.redeemed_at|date:"M j, Y" }} · redeemed {{ r.coupon.code }}{% if r.credits_added %} (+{{ r.credits_added }} credits){% elif r.new_tier != r.previous_tier %} ({{ r.previous_tier }} → {{ r.new_tier }}){% endif %}</div>
+      {% endfor %}
+      <div class="border-t border-gray-100 pt-2">{{ u.date_joined|date:"M j, Y" }} · signed up</div>
+    </div>
+  </div>
+</div>
+{% endblock %}

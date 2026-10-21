@@ -7,6 +7,8 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/v1/", include("apps.api.urls")),
     path("accounts/", include("apps.accounts.urls")),
+    # Super admin dashboard (memory/50 §8).
+    path("platform/", include("apps.platform_admin.urls")),
     path("videos/", include("apps.videos.urls")),
     path("analysis/", include("apps.analysis.urls")),
     path("pipelines/", include("apps.pipelines.urls")),

@@ -83,8 +83,20 @@ class CouponForm(forms.ModelForm):
         fields = [
             "code", "coupon_type", "credits_amount",
             "upgrade_tier", "upgrade_duration_days",
-            "max_redemptions", "is_active", "expires_at",
+            "max_redemptions", "is_active", "expires_at", "note",
         ]
         widgets = {
             "expires_at": forms.DateTimeInput(attrs={"type": "datetime-local"}),
         }
+
+    def clean(self):
+        data = super().clean()
+        if data.get("coupon_type") == Coupon.CouponType.CREDITS:
+            data["upgrade_tier"] = ""
+            if not data.get("credits_amount"):
+                self.add_error("credits_amount", "A credits code needs a number of credits.")
+        elif data.get("coupon_type") == Coupon.CouponType.TIER_UPGRADE:
+            data["credits_amount"] = 0
+            if not data.get("upgrade_tier"):
+                self.add_error("upgrade_tier", "Choose the plan this code gives.")
+        return data

@@ -87,6 +87,17 @@ class UserProfile(models.Model):
     credit_period_start = models.DateField(null=True, blank=True)
     monthly_gpu_credits_used = models.DecimalField(max_digits=12, decimal_places=4, default=0)
     granted_gpu_credits = models.DecimalField(max_digits=12, decimal_places=4, default=0)
+    # Set on the platform dashboard for one account: replaces the tier's free
+    # monthly credits (None = the tier's). A big customer is a Pro or Standard
+    # account with its own numbers, not a tier of its own.
+    monthly_gpu_credits_override = models.DecimalField(max_digits=12, decimal_places=4,
+                                                       null=True, blank=True)
+    # When a granted tier (Pro, a promo-code trial) ends; the account drops to
+    # Standard on the next credit check after it (quota._expire_tier).
+    tier_expires_at = models.DateTimeField(null=True, blank=True)
+    # Last web request or API call, written at most every 5 minutes
+    # (accounts.middleware.LastSeenMiddleware).
+    last_seen_at = models.DateTimeField(null=True, blank=True)
 
     # Legacy
     monthly_job_count = models.IntegerField(default=0)
@@ -115,7 +126,10 @@ class UserProfile(models.Model):
 
     @property
     def tier_limits(self) -> dict:
-        return TIER_LIMITS.get(self.tier, TIER_LIMITS["free"])
+        limits = TIER_LIMITS.get(self.tier, TIER_LIMITS["free"])
+        if self.monthly_gpu_credits_override is not None:
+            limits = {**limits, "monthly_gpu_credits": self.monthly_gpu_credits_override}
+        return limits
 
 
 class Coupon(models.Model):
@@ -139,6 +153,7 @@ class Coupon(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField(null=True, blank=True)
+    note = models.CharField(max_length=200, blank=True, default="", help_text="Only admins see it")
 
     def __str__(self):
         return f"{self.code} ({self.get_coupon_type_display()})"
@@ -291,3 +306,66 @@ class EmailLog(models.Model):
 
     def __str__(self):
         return f"{self.kind} to {self.to}: {self.status}"
+
+
+class LoginEvent(models.Model):
+    """One sign-in attempt, successful or not. IP and browser are kept 90 days
+    (``prune``); the platform dashboard shows them per user and as failed-login
+    bursts."""
+
+    class Method(models.TextChoices):
+        WEB = "web", "Web"
+        ADMIN = "admin", "Django admin"
+        API = "api", "API login"
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
+                             on_delete=models.CASCADE, related_name="login_events")
+    # What was typed, for failures that match no account.
+    username = models.CharField(max_length=254, blank=True, default="")
+    success = models.BooleanField()
+    method = models.CharField(max_length=10, choices=Method.choices, default=Method.WEB)
+    ip = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=300, blank=True, default="")
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    KEEP_DAYS = 90
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["user", "-created_at"])]
+
+    def __str__(self):
+        return f"{self.username or self.user_id} {'ok' if self.success else 'failed'} {self.created_at:%Y-%m-%d %H:%M}"
+
+    @classmethod
+    def prune(cls):
+        cls.objects.filter(created_at__lt=timezone.now() - timezone.timedelta(days=cls.KEEP_DAYS)).delete()
+
+
+class AdminAction(models.Model):
+    """The audit log: every change a platform admin makes to someone's account
+    (tier, credits, limits, suspension, password reset, promo codes), and the
+    changes the platform makes on its own (a tier running out)."""
+
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
+                              on_delete=models.SET_NULL, related_name="admin_actions")
+    target = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
+                               on_delete=models.SET_NULL, related_name="admin_actions_received")
+    action = models.CharField(max_length=40)
+    # One sentence a person reads in the log, written when it happened.
+    summary = models.CharField(max_length=300)
+    reason = models.CharField(max_length=300, blank=True, default="")
+    detail = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return self.summary
+
+    @classmethod
+    def record(cls, actor, action, summary, target=None, reason="", **detail):
+        return cls.objects.create(actor=actor if getattr(actor, "pk", None) else None,
+                                  target=target, action=action, summary=summary,
+                                  reason=reason, detail=detail)

@@ -1,0 +1,65 @@
+{% extends "platform_admin/_layout.html" %}
+{% block page_title %}Platform{% endblock %}
+
+{% block platform %}
+<div class="flex flex-wrap justify-between items-baseline gap-2">
+  <h1 class="text-2xl font-bold text-gray-900">Platform</h1>
+  <span class="text-sm text-gray-600">{{ o.month_start|date:"F Y" }} so far</span>
+</div>
+
+<div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3">
+  <div class="bg-white shadow rounded-lg p-4"><p class="text-xs text-gray-600">Users</p><p class="text-2xl font-bold">{{ o.users }}</p><p class="text-xs text-gray-600">+{{ o.new_this_week }} this week</p></div>
+  <div class="bg-white shadow rounded-lg p-4"><p class="text-xs text-gray-600">Active, 30 days</p><p class="text-2xl font-bold">{{ o.active_30d }}</p><p class="text-xs text-gray-600">{{ o.active_7d }} in the last 7 days</p></div>
+  <div class="bg-white shadow rounded-lg p-4"><p class="text-xs text-gray-600">Credits used</p><p class="text-2xl font-bold">{{ o.credits_month|floatformat:1 }}</p><p class="text-xs text-gray-600">{{ o.hours_month|floatformat:1 }} GPU-hours this month</p></div>
+  <div class="bg-white shadow rounded-lg p-4"><p class="text-xs text-gray-600">GPU cost</p><p class="text-2xl font-bold">${{ o.cost_month|floatformat:0 }}</p><p class="text-xs text-gray-600">this month, AWS</p></div>
+  <div class="bg-white shadow rounded-lg p-4"><p class="text-xs text-gray-600">Storage</p><p class="text-2xl font-bold">{{ o.storage_bytes|filesizeformat }}</p><p class="text-xs text-gray-600">uploaded clips and photos</p></div>
+  <div class="bg-white shadow rounded-lg p-4"><p class="text-xs text-gray-600">Failed jobs</p><p class="text-2xl font-bold">{{ o.failure_pct|floatformat:1 }}%</p><p class="text-xs text-gray-600">{{ o.failed_jobs }} this month, not charged</p></div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+  <div class="lg:col-span-2 bg-white shadow rounded-lg p-5 flex flex-col gap-3">
+    <h2 class="text-base font-semibold">Credits per week, by tier</h2>
+    {% include "platform_admin/_chart.html" %}
+  </div>
+  <div class="bg-white shadow rounded-lg p-5 flex flex-col gap-3 text-sm">
+    <h2 class="text-base font-semibold">Users by tier</h2>
+    {% for t in o.tiers %}<div class="flex justify-between"><span>{{ t.label }}</span><strong>{{ t.n }}</strong></div>{% endfor %}
+    <div class="flex justify-between"><span>Super admin</span><strong>{{ o.superusers }}</strong></div>
+    <div class="border-t border-gray-100 pt-3 flex flex-col gap-1.5 text-gray-700">
+      <div class="flex justify-between"><span>with granted credits</span><span>{{ o.with_granted }}</span></div>
+      <div class="flex justify-between"><span>with custom limits</span><span>{{ o.with_override }}</span></div>
+      <div class="flex justify-between"><span>plans ending in 30 days</span><span>{{ o.expiring_soon }}</span></div>
+    </div>
+    {% if o.by_kind %}
+    <div class="border-t border-gray-100 pt-3 flex flex-col gap-1.5">
+      <p class="font-semibold">This month, by kind</p>
+      {% for k in o.by_kind %}<div class="flex justify-between text-gray-700"><span>{{ k.kind }}</span><span>{{ k.credits|floatformat:1 }} cr · {{ k.hours|floatformat:1 }} h</span></div>{% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+  <div class="bg-white shadow rounded-lg p-5 flex flex-col gap-2">
+    <div class="flex justify-between items-center"><h2 class="text-base font-semibold">Top users this month</h2><a href="{% url 'platform_admin:users' %}" class="text-sm text-green-700 hover:text-green-900">All users</a></div>
+    {% if top %}
+    <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead><tr class="text-left text-gray-600"><th class="py-1.5 font-medium">User</th><th class="font-medium">Tier</th><th class="text-right font-medium">Credits</th><th class="text-right font-medium">Cost</th></tr></thead>
+      <tbody>
+        {% for r in top %}
+        <tr class="border-t border-gray-100"><td class="py-2"><a href="{% url 'platform_admin:user' r.user.pk %}" class="text-green-700 hover:text-green-900">{{ r.user.username }}</a></td><td>{{ r.tier }}</td><td class="text-right">{{ r.user.month_credits|floatformat:1 }}</td><td class="text-right">${{ r.user.month_cost|floatformat:0 }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}<p class="text-sm text-gray-600">No GPU work yet this month.</p>{% endif %}
+  </div>
+  <div class="bg-white shadow rounded-lg p-5 flex flex-col gap-2">
+    <div class="flex justify-between items-center"><h2 class="text-base font-semibold">Recent activity</h2><a href="{% url 'platform_admin:activity' %}" class="text-sm text-green-700 hover:text-green-900">Activity &amp; audit log</a></div>
+    {% for e in recent %}
+    <div class="flex gap-3 text-sm border-t border-gray-100 pt-2"><span class="w-24 shrink-0 text-gray-600">{{ e.at|date:"M j, H:i" }}</span><span class="{% if e.kind == 'login' %}text-orange-800{% endif %}">{{ e.text }}</span></div>
+    {% empty %}<p class="text-sm text-gray-600">Nothing yet.</p>{% endfor %}
+  </div>
+</div>
+{% endblock %}

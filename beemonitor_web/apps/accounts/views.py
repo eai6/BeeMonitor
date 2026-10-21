@@ -8,13 +8,13 @@ from django.contrib.auth.views import LoginView as AuthLoginView
 from django.contrib.auth.views import LogoutView as AuthLogoutView
 from django.db import transaction
 from django.db.models import F, Sum
-from django.shortcuts import redirect, get_object_or_404
+from django.shortcuts import redirect
 from django.urls import reverse_lazy
 from django.utils import timezone
-from django.views.generic import CreateView, ListView, TemplateView, View
+from django.views.generic import CreateView, TemplateView, View
 
 from apps.analysis.models import Job, GPU_TIERS
-from .forms import UserRegistrationForm, CouponForm
+from .forms import UserRegistrationForm
 from . import quota
 from .models import Coupon, CouponRedemption, EmailLog, UserProfile, TIER_LIMITS
 
@@ -242,7 +242,9 @@ class RedeemCouponView(LoginRequiredMixin, View):
                 limits = TIER_LIMITS.get(new_tier, TIER_LIMITS["free"])
                 profile.tier = new_tier
                 profile.monthly_credits = limits["monthly_credits"]
-                profile.save(update_fields=["tier", "monthly_credits"])
+                # The trial ends: quota.expire_tier drops it back to Standard.
+                profile.tier_expires_at = timezone.now() + timezone.timedelta(days=coupon.upgrade_duration_days)
+                profile.save(update_fields=["tier", "monthly_credits", "tier_expires_at"])
                 messages.success(
                     request,
                     f"Your account has been upgraded to {profile.get_tier_display()} for {coupon.upgrade_duration_days} days!",
@@ -259,11 +261,6 @@ class RedeemCouponView(LoginRequiredMixin, View):
             coupon.save(update_fields=["times_redeemed"])
 
         return redirect("accounts:usage")
-
-
-class StaffRequiredMixin(UserPassesTestMixin):
-    def test_func(self):
-        return self.request.user.is_staff
 
 
 class SuperuserRequiredMixin(UserPassesTestMixin):
@@ -311,35 +308,8 @@ class EmailTestView(LoginRequiredMixin, SuperuserRequiredMixin, View):
         return redirect("accounts:email_status")
 
 
-class CouponListView(LoginRequiredMixin, StaffRequiredMixin, ListView):
-    model = Coupon
-    template_name = "accounts/coupons.html"
-    context_object_name = "coupons"
-    ordering = ["-created_at"]
+class CouponListView(LoginRequiredMixin, SuperuserRequiredMixin, View):
+    """Promo codes moved to the platform dashboard (/platform/codes/)."""
 
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        ctx["form"] = CouponForm()
-        return ctx
-
-
-class CouponCreateView(LoginRequiredMixin, StaffRequiredMixin, View):
-    def post(self, request):
-        form = CouponForm(request.POST)
-        if form.is_valid():
-            form.save()
-            messages.success(request, f"Coupon '{form.instance.code}' created.")
-        else:
-            for field, errors in form.errors.items():
-                for error in errors:
-                    messages.error(request, f"{field}: {error}")
-        return redirect("accounts:coupons")
-
-
-class CouponDeactivateView(LoginRequiredMixin, StaffRequiredMixin, View):
-    def post(self, request, pk):
-        coupon = get_object_or_404(Coupon, pk=pk)
-        coupon.is_active = False
-        coupon.save(update_fields=["is_active"])
-        messages.success(request, f"Coupon '{coupon.code}' deactivated.")
-        return redirect("accounts:coupons")
+    def get(self, request):
+        return redirect("platform_admin:codes")

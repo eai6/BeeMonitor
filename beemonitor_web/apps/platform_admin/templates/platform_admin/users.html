@@ -1,0 +1,88 @@
+{% extends "platform_admin/_layout.html" %}
+{% block page_title %}Users{% endblock %}
+
+{% block platform %}
+<div class="flex flex-wrap justify-between items-center gap-2">
+  <h1 class="text-2xl font-bold text-gray-900">Users <span class="text-base font-medium text-gray-600">{{ total }}</span></h1>
+  <a href="?{{ query }}{% if query %}&{% endif %}format=csv" class="h-10 px-4 inline-flex items-center border border-gray-300 bg-white rounded-md text-sm font-semibold hover:bg-gray-50">Export CSV</a>
+</div>
+
+<form method="get" class="flex flex-wrap gap-2 items-end text-sm">
+  <label class="flex-1 min-w-[14rem]"><span class="sr-only">Search users</span>
+    <input type="search" name="q" value="{{ g.q }}" placeholder="Search name, email, organization" class="w-full h-10 rounded-md border-gray-300 shadow-sm text-sm"></label>
+  <label class="flex flex-col gap-1"><span class="text-xs text-gray-600">Tier</span>
+    <select name="tier" class="h-10 rounded-md border-gray-300 text-sm">
+      <option value="">All</option>
+      {% for v, l in tiers %}<option value="{{ v }}" {% if g.tier == v %}selected{% endif %}>{{ l }}</option>{% endfor %}
+      <option value="superuser" {% if g.tier == 'superuser' %}selected{% endif %}>Super admin</option>
+    </select></label>
+  <label class="flex flex-col gap-1"><span class="text-xs text-gray-600">Active</span>
+    <select name="active" class="h-10 rounded-md border-gray-300 text-sm">
+      <option value="">Any time</option>
+      <option value="7" {% if g.active == '7' %}selected{% endif %}>Last 7 days</option>
+      <option value="30" {% if g.active == '30' %}selected{% endif %}>Last 30 days</option>
+    </select></label>
+  <label class="flex flex-col gap-1"><span class="text-xs text-gray-600">Status</span>
+    <select name="status" class="h-10 rounded-md border-gray-300 text-sm">
+      <option value="">All</option>
+      <option value="active" {% if g.status == 'active' %}selected{% endif %}>Active</option>
+      <option value="out_of_credits" {% if g.status == 'out_of_credits' %}selected{% endif %}>Out of credits</option>
+      <option value="inactive" {% if g.status == 'inactive' %}selected{% endif %}>Inactive</option>
+      <option value="suspended" {% if g.status == 'suspended' %}selected{% endif %}>Suspended</option>
+    </select></label>
+  <label class="flex flex-col gap-1"><span class="text-xs text-gray-600">Sort by</span>
+    <select name="sort" class="h-10 rounded-md border-gray-300 text-sm">
+      <option value="credits" {% if g.sort == 'credits' or not g.sort %}selected{% endif %}>Credits this month</option>
+      <option value="lifetime" {% if g.sort == 'lifetime' %}selected{% endif %}>Lifetime GPU-hours</option>
+      <option value="storage" {% if g.sort == 'storage' %}selected{% endif %}>Storage</option>
+      <option value="clips" {% if g.sort == 'clips' %}selected{% endif %}>Clips</option>
+      <option value="units" {% if g.sort == 'units' %}selected{% endif %}>Units</option>
+      <option value="login" {% if g.sort == 'login' %}selected{% endif %}>Last login</option>
+      <option value="joined" {% if g.sort == 'joined' %}selected{% endif %}>Newest</option>
+      <option value="name" {% if g.sort == 'name' %}selected{% endif %}>Username</option>
+    </select></label>
+  <button type="submit" class="h-10 px-4 bg-green-600 text-white rounded-md font-semibold hover:bg-green-700">Apply</button>
+</form>
+
+<div class="bg-white shadow rounded-lg overflow-x-auto">
+  <table class="w-full text-sm whitespace-nowrap">
+    <thead>
+      <tr class="bg-gray-50 text-left text-gray-600">
+        <th class="px-3 py-2.5 font-semibold">User</th><th class="px-2 font-semibold">Tier</th>
+        <th class="px-2 font-semibold text-right">Credits this month</th><th class="px-2 font-semibold text-right">Lifetime GPU-h</th>
+        <th class="px-2 font-semibold text-right">Storage</th><th class="px-2 font-semibold text-right">Units</th>
+        <th class="px-2 font-semibold text-right">Clips</th><th class="px-2 font-semibold">Last login</th>
+        <th class="px-2 font-semibold">Last seen</th><th class="px-3 font-semibold">Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in page %}{% with u=r.user %}
+      <tr class="border-t border-gray-100">
+        <td class="px-3 py-2.5"><a href="{% url 'platform_admin:user' u.pk %}" class="font-semibold text-green-700 hover:text-green-900">{{ u.username }}</a>
+          <div class="text-gray-600">{{ u.email|default:"no email" }}{% if u.profile.organization %} · {{ u.profile.organization }}{% endif %}</div></td>
+        <td class="px-2">{{ r.tier }}</td>
+        <td class="px-2 text-right">{{ u.month_credits|floatformat:1 }}</td>
+        <td class="px-2 text-right">{{ r.hours|floatformat:1 }}</td>
+        <td class="px-2 text-right">{{ u.storage_bytes|filesizeformat }}</td>
+        <td class="px-2 text-right">{{ u.units }}</td>
+        <td class="px-2 text-right">{{ u.clips }}</td>
+        <td class="px-2 text-gray-700">{{ u.last_login|date:"M j, Y"|default:"never" }}</td>
+        <td class="px-2 text-gray-700">{% if u.last_seen %}{{ u.last_seen|timesince }} ago{% else %}—{% endif %}</td>
+        <td class="px-3 font-semibold {% if r.status.1 == 'ok' %}text-green-700{% elif r.status.1 == 'warn' %}text-orange-700{% else %}text-gray-600{% endif %}">{{ r.status.0 }}</td>
+      </tr>
+      {% endwith %}{% empty %}
+      <tr><td colspan="10" class="px-3 py-6 text-center text-gray-600">No users match.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if page.paginator.num_pages > 1 %}
+<div class="flex justify-between text-sm text-gray-600">
+  <span>Showing {{ page.start_index }}–{{ page.end_index }} of {{ total }}</span>
+  <span class="flex gap-4">
+    {% if page.has_previous %}<a href="?{{ query }}&page={{ page.previous_page_number }}" class="text-green-700">‹ Previous</a>{% endif %}
+    {% if page.has_next %}<a href="?{{ query }}&page={{ page.next_page_number }}" class="text-green-700">Next ›</a>{% endif %}
+  </span>
+</div>
+{% endif %}
+{% endblock %}

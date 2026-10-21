@@ -56,6 +56,4 @@ urlpatterns = [
     path("email/", views.EmailStatusView.as_view(), name="email_status"),
     path("email/test/", views.EmailTestView.as_view(), name="email_test"),
     path("coupons/", views.CouponListView.as_view(), name="coupons"),
-    path("coupons/create/", views.CouponCreateView.as_view(), name="coupon_create"),
-    path("coupons/<int:pk>/deactivate/", views.CouponDeactivateView.as_view(), name="coupon_deactivate"),
 ]

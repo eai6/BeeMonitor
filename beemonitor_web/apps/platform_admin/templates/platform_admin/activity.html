@@ -1,0 +1,57 @@
+{% extends "platform_admin/_layout.html" %}
+{% block page_title %}Activity{% endblock %}
+
+{% block platform %}
+<h1 class="text-2xl font-bold text-gray-900">Activity &amp; audit log</h1>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+  <div class="bg-white shadow rounded-lg p-5 flex flex-col gap-2 text-sm">
+    <h2 class="text-base font-semibold">Failed sign-ins, last 7 days</h2>
+    {% for f in failed %}<div class="flex justify-between border-t border-gray-100 pt-2"><span>{{ f.username|default:"(blank)" }}</span><span class="font-semibold {% if f.n >= 5 %}text-orange-700{% endif %}">{{ f.n }}</span></div>
+    {% empty %}<p class="text-gray-600">None.</p>{% endfor %}
+  </div>
+  <div class="bg-white shadow rounded-lg p-5 flex flex-col gap-2 text-sm">
+    <h2 class="text-base font-semibold">Out of credits</h2>
+    {% for u in out_of_credits %}<div class="border-t border-gray-100 pt-2"><a href="{% url 'platform_admin:user' u.pk %}" class="text-green-700 hover:text-green-900">{{ u.username }}</a></div>
+    {% empty %}<p class="text-gray-600">Nobody is blocked.</p>{% endfor %}
+  </div>
+  <div class="bg-white shadow rounded-lg p-5 flex flex-col gap-2 text-sm">
+    <h2 class="text-base font-semibold">Top users this month</h2>
+    {% for r in top %}<div class="flex justify-between border-t border-gray-100 pt-2"><a href="{% url 'platform_admin:user' r.user.pk %}" class="text-green-700 hover:text-green-900">{{ r.user.username }}</a><span>{{ r.user.month_credits|floatformat:1 }} cr</span></div>
+    {% empty %}<p class="text-gray-600">No GPU work yet this month.</p>{% endfor %}
+  </div>
+</div>
+
+<div class="bg-white shadow rounded-lg p-5 flex flex-col gap-2">
+  <h2 class="text-base font-semibold">Audit log</h2>
+  <div class="overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead><tr class="text-left text-gray-600"><th class="py-1.5 pr-3 font-medium whitespace-nowrap">When</th><th class="pr-3 font-medium">By</th><th class="pr-3 font-medium">What</th><th class="font-medium">Reason</th></tr></thead>
+    <tbody>
+      {% for a in audit %}
+      <tr class="border-t border-gray-100 align-top"><td class="py-2 pr-3 whitespace-nowrap text-gray-700">{{ a.created_at|date:"M j, H:i" }}</td><td class="pr-3">{{ a.actor.username|default:"platform" }}</td><td class="pr-3">{% if a.target %}<a href="{% url 'platform_admin:user' a.target.pk %}" class="text-green-700 hover:text-green-900">{{ a.summary }}</a>{% else %}{{ a.summary }}{% endif %}</td><td class="text-gray-600">{{ a.reason }}</td></tr>
+      {% empty %}<tr><td colspan="4" class="py-4 text-gray-600">No admin actions yet.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<div class="bg-white shadow rounded-lg p-5 flex flex-col gap-2">
+  <h2 class="text-base font-semibold">Recent sign-ins</h2>
+  <p class="text-xs text-gray-600">IP addresses and browsers are kept for 90 days.</p>
+  <div class="overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead><tr class="text-left text-gray-600"><th class="py-1.5 pr-3 font-medium whitespace-nowrap">When</th><th class="pr-3 font-medium">User</th><th class="pr-3 font-medium">Result</th><th class="pr-3 font-medium">Where</th><th class="font-medium">IP · browser</th></tr></thead>
+    <tbody>
+      {% for l in logins %}
+      <tr class="border-t border-gray-100 align-top"><td class="py-2 pr-3 whitespace-nowrap text-gray-700">{{ l.created_at|date:"M j, H:i" }}</td>
+        <td class="pr-3">{% if l.user %}<a href="{% url 'platform_admin:user' l.user.pk %}" class="text-green-700 hover:text-green-900">{{ l.user.username }}</a>{% else %}{{ l.username|default:"(blank)" }}{% endif %}</td>
+        <td class="pr-3 font-semibold {% if l.success %}text-green-700{% else %}text-orange-700{% endif %}">{% if l.success %}Signed in{% else %}Failed{% endif %}</td>
+        <td class="pr-3">{{ l.get_method_display }}</td>
+        <td class="text-gray-600 break-all">{{ l.ip|default:"" }} {{ l.user_agent|truncatechars:80 }}</td></tr>
+      {% empty %}<tr><td colspan="5" class="py-4 text-gray-600">None recorded yet.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}

@@ -45,6 +45,9 @@ class APIKeyAuthentication(BaseAuthentication):
             )
         except APIKey.DoesNotExist:
             raise AuthenticationFailed("Invalid or inactive API key.")
+        # A suspended account (platform dashboard) loses its API keys too.
+        if not api_key.user.is_active:
+            raise AuthenticationFailed("This account is suspended.")
 
         # Update last_used_at timestamp
         api_key.last_used_at = timezone.now()

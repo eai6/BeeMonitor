@@ -18,6 +18,7 @@
       </div>
       <div class="hidden md:flex md:items-center md:space-x-3">
         {% if user.is_authenticated %}
+        {% if user.is_superuser %}<a href="{% url 'platform_admin:overview' %}" class="bg-amber-800 hover:bg-amber-900 text-white px-3 py-1.5 rounded text-sm font-semibold">Platform</a>{% endif %}
         <a href="{% url 'developer:index' %}" class="text-amber-100 hover:text-white text-sm" title="API keys">API</a>
         <a href="{% url 'accounts:profile' %}" class="text-amber-100 hover:text-white text-sm" title="Account &amp; settings">{{ user.username }}</a>
         <form method="post" action="{% url 'accounts:logout' %}" class="inline">{% csrf_token %}<button type="submit" class="bg-amber-700 hover:bg-amber-800 text-white px-3 py-1.5 rounded text-sm">Logout</button></form>
@@ -47,6 +48,7 @@
       <a href="{% url 'training:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Training</a>
       <a href="{% url 'annotations:browse' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium" title="Datasets and models others have published">Browse</a>
       {% if user.is_authenticated %}
+      {% if user.is_superuser %}<a href="{% url 'platform_admin:overview' %}" class="block text-white px-3 py-2 rounded text-base font-semibold">Platform</a>{% endif %}
       <a href="{% url 'accounts:profile' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Account &amp; settings</a>
       <a href="{% url 'developer:index' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">API keys</a>
       <form method="post" action="{% url 'accounts:logout' %}">{% csrf_token %}<button type="submit" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium w-full text-left">Logout</button></form>

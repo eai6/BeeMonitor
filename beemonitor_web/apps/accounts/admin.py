@@ -34,8 +34,7 @@ class UserAdmin(BaseUserAdmin):
 
 @admin.register(UserProfile)
 class UserProfileAdmin(admin.ModelAdmin):
-    # Until the platform dashboard exists, credits are granted by editing
-    # granted_gpu_credits here (apps/accounts/quota.py).
+    # Grant credits from /platform/ instead: it writes the audit log.
     list_display = ("user", "organization", "tier", "monthly_gpu_credits_used",
                     "granted_gpu_credits", "credit_period_start")
     list_filter = ("tier",)

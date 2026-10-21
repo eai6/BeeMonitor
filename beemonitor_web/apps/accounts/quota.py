@@ -119,7 +119,24 @@ def is_unlimited(user) -> bool:
 def _profile(user):
     from .models import UserProfile
     profile, _ = UserProfile.objects.get_or_create(user=user)
+    expire_tier(profile)
     return profile
+
+
+def expire_tier(profile) -> bool:
+    """Drop a granted tier whose end date has passed back to Standard. Granted
+    credits are kept. Returns True if it changed anything."""
+    from .models import AdminAction, UserProfile
+
+    if not profile.tier_expires_at or profile.tier_expires_at > timezone.now():
+        return False
+    old = profile.get_tier_display()
+    profile.tier = UserProfile.Tier.STANDARD
+    profile.tier_expires_at = None
+    profile.save(update_fields=["tier", "tier_expires_at"])
+    AdminAction.record(None, "tier_expired", f"{profile.user.username}'s {old} plan ended; now Standard",
+                       target=profile.user, previous=old)
+    return True
 
 
 def _month_start(today: date | None = None) -> date:

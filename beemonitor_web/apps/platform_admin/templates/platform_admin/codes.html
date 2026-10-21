@@ -1,0 +1,55 @@
+{% extends "platform_admin/_layout.html" %}
+{% block page_title %}Promo codes{% endblock %}
+
+{% block platform %}
+<h1 class="text-2xl font-bold text-gray-900">Promo codes</h1>
+
+<form method="post" class="bg-white shadow rounded-lg p-5 flex flex-col gap-4" x-data="{ kind: '{{ form.coupon_type.value|default:'credits'|escapejs }}' }">
+  {% csrf_token %}
+  <h2 class="text-base font-semibold">New promo code</h2>
+  {% if form.errors %}<div class="rounded-md bg-red-50 text-red-800 p-3 text-sm">{% for field, errs in form.errors.items %}{% for e in errs %}<div>{% if field != '__all__' %}{{ field }}: {% endif %}{{ e }}</div>{% endfor %}{% endfor %}</div>{% endif %}
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+    <label class="flex flex-col gap-1 font-semibold text-gray-700">Code
+      <input type="text" name="code" value="{{ form.code.value|default:'' }}" required maxlength="50" class="h-10 rounded-md border-gray-300 font-mono font-normal"></label>
+    <label class="flex flex-col gap-1 font-semibold text-gray-700">Gives
+      <select name="coupon_type" x-model="kind" class="h-10 rounded-md border-gray-300 font-normal">
+        <option value="credits">+ credits</option>
+        <option value="tier_upgrade">Plan trial</option>
+      </select></label>
+    <label class="flex flex-col gap-1 font-semibold text-gray-700" x-show="kind === 'credits'">Credits
+      <input type="number" name="credits_amount" value="{{ form.credits_amount.value|default:'20' }}" min="0" class="h-10 rounded-md border-gray-300 font-normal"></label>
+    <label class="flex flex-col gap-1 font-semibold text-gray-700" x-show="kind === 'tier_upgrade'" x-cloak>Plan
+      <select name="upgrade_tier" class="h-10 rounded-md border-gray-300 font-normal">
+        {% for v, l in upgrade_tiers %}<option value="{{ v }}">{{ l }}</option>{% endfor %}
+      </select></label>
+    <label class="flex flex-col gap-1 font-semibold text-gray-700" x-show="kind === 'tier_upgrade'" x-cloak>For how many days
+      <input type="number" name="upgrade_duration_days" value="{{ form.upgrade_duration_days.value|default:'30' }}" min="1" class="h-10 rounded-md border-gray-300 font-normal"></label>
+    <label class="flex flex-col gap-1 font-semibold text-gray-700">Max uses (0 = no limit)
+      <input type="number" name="max_redemptions" value="{{ form.max_redemptions.value|default:'50' }}" min="0" class="h-10 rounded-md border-gray-300 font-normal"></label>
+    <label class="flex flex-col gap-1 font-semibold text-gray-700">Code expires
+      <input type="datetime-local" name="expires_at" class="h-10 rounded-md border-gray-300 font-normal"></label>
+    <label class="flex flex-col gap-1 font-semibold text-gray-700 sm:col-span-2">Note (only admins see it)
+      <input type="text" name="note" value="{{ form.note.value|default:'' }}" maxlength="200" class="h-10 rounded-md border-gray-300 font-normal"></label>
+  </div>
+  <input type="hidden" name="is_active" value="on">
+  <div class="flex justify-end"><button type="submit" class="h-11 px-5 bg-green-600 text-white rounded-md text-sm font-semibold hover:bg-green-700">Create code</button></div>
+</form>
+
+<div class="bg-white shadow rounded-lg overflow-x-auto">
+  <table class="w-full text-sm whitespace-nowrap">
+    <thead><tr class="bg-gray-50 text-left text-gray-600"><th class="px-4 py-2.5 font-semibold">Code</th><th class="px-2 font-semibold">Gives</th><th class="px-2 font-semibold text-right">Used</th><th class="px-2 font-semibold">Expires</th><th class="px-2 font-semibold">Note</th><th class="px-4"></th></tr></thead>
+    <tbody>
+      {% for c in codes %}
+      <tr class="border-t border-gray-100 {% if not c.is_valid %}text-gray-500{% endif %}">
+        <td class="px-4 py-2.5 font-mono font-semibold">{{ c.code }}</td>
+        <td class="px-2">{% if c.coupon_type == 'credits' %}+{{ c.credits_amount }} credits{% else %}{{ c.get_upgrade_tier_display }} for {{ c.upgrade_duration_days }} days{% endif %}</td>
+        <td class="px-2 text-right">{{ c.times_redeemed }}{% if c.max_redemptions %} of {{ c.max_redemptions }}{% endif %}</td>
+        <td class="px-2">{% if not c.is_active %}Deactivated{% elif c.expires_at %}{{ c.expires_at|date:"M j, Y" }}{% else %}—{% endif %}</td>
+        <td class="px-2 text-gray-600 whitespace-normal">{{ c.note }}</td>
+        <td class="px-4 py-2 text-right">{% if c.is_active %}<form method="post" action="{% url 'platform_admin:code_deactivate' c.pk %}">{% csrf_token %}<button type="submit" class="h-8 px-3 border border-gray-300 bg-white rounded-md text-sm hover:bg-gray-50">Deactivate</button></form>{% endif %}</td>
+      </tr>
+      {% empty %}<tr><td colspan="6" class="px-4 py-6 text-center text-gray-600">No promo codes yet.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

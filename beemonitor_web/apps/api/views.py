@@ -464,11 +464,11 @@ class LoginView(viewsets.ViewSet):
         password = serializer.validated_data["password"]
 
         # Try username first, then email lookup
-        user = authenticate(username=username_or_email, password=password)
+        user = authenticate(request, username=username_or_email, password=password)
         if user is None and "@" in username_or_email:
             try:
                 user_obj = User.objects.get(email=username_or_email)
-                user = authenticate(username=user_obj.username, password=password)
+                user = authenticate(request, username=user_obj.username, password=password)
             except User.DoesNotExist:
                 pass
 
@@ -483,6 +483,8 @@ class LoginView(viewsets.ViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        from apps.accounts.signals import record_login
+        record_login(request, user=user)
         return Response(_build_auth_response(user))
 
 
