@@ -85,6 +85,23 @@ def events_from_episodes(episodes, fps, source=DERIVED):
     return rows
 
 
+def events_from_nest_events(events, fps, source=DERIVED):
+    """``ops.compute_nest_events`` rows in the Event schema: "enter" is an
+    insect going into a reference, "exit" one coming out of it."""
+    rows = [{
+        "frame": int(ev["frame"]),
+        "time_sec": _sec(ev["frame"], fps),
+        "subject": ev["track"],
+        "subject_kind": ORGANISM,
+        "action": ev["action"],
+        "target": ev["reference"],
+        "target_kind": REFERENCE,
+        "source": source,
+    } for ev in events or []]
+    rows.sort(key=lambda r: (r["frame"], r["action"], str(r["subject"])))
+    return rows
+
+
 def interactions_from_episodes(episodes, fps, source=DERIVED):
     """Each episode as one organism-to-reference interaction."""
     rows = []

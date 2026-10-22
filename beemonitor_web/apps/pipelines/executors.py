@@ -567,11 +567,19 @@ def _gap_frames(step, fps):
     return int(round(DEFAULT_GAP_SECONDS * float(fps or 25)))
 
 
+# Interactions shorter than this are a passing insect, not a visit (memory/55).
+# Only when the node doesn't say: a saved 0 still counts everything.
+DEFAULT_MIN_SECONDS = 0.5
+
+
 def _min_seconds(step):
+    raw = (step.get("config") or {}).get("min_seconds")
+    if raw in (None, ""):
+        return DEFAULT_MIN_SECONDS
     try:
-        return max(float((step.get("config") or {}).get("min_seconds") or 0), 0.0)
+        return max(float(raw), 0.0)
     except (TypeError, ValueError):
-        return 0.0
+        return DEFAULT_MIN_SECONDS
 
 
 def _proximity_radius(step):
@@ -633,6 +641,14 @@ def primitives_for_job(job, kind):
         return []
 
     run = _run_for_job(job)
+    if run is not None:
+        # What the run itself counted — the same rows the batch table, its CSVs
+        # and studies read, so the clip's page can't say something else.
+        from .aggregate import analyzer_outputs
+
+        saved = [out for k, out in analyzer_outputs(run) if k == kind]
+        if saved:
+            return [row for out in saved for row in (out.get("rows") or [])]
     if run is None:
         payload = {f: getattr(result, f, None) for f in (
             "events_csv_path", "tracking_csv_path", "detections_csv_path",
@@ -708,8 +724,12 @@ def _exec_analyze_events(step, run, context, inputs, index):
 
     rows = primitives.events_from_gpu(ops.load_events_df(result), fps)
     if tidy is not None and refs:
-        episodes = ops.compute_episodes(tidy, refs, gap_frames=_gap_frames(step, fps))
-        rows = primitives.events_from_episodes(episodes, fps) + rows
+        # Going in and coming out, not every box a passing insect touched
+        # (memory/55); passing over is an interaction.
+        start, end = _window_frames(run, fps)
+        nest = ops.compute_nest_events(tidy, refs, fps, gap_frames=_gap_frames(step, fps),
+                                       start_frame=start, end_frame=end)
+        rows = primitives.events_from_nest_events(nest, fps) + rows
         rows.sort(key=lambda r: (r["frame"], r["action"], str(r["subject"])))
 
     out = {
@@ -729,6 +749,24 @@ def _exec_analyze_events(step, run, context, inputs, index):
                        "device nest layout, or wire a Detect node for the "
                        "reference class into the analyzer.")
     return out
+
+
+def _window_frames(run, fps):
+    """(first, last) frame of a chosen part of the clip (memory/53), from the
+    input step's start/end seconds; None for an edge that is the clip's own."""
+    cfg = {}
+    for st in run.steps or []:
+        if st.get("block_type") == "input.video":
+            cfg = st.get("config") or {}
+            break
+    fps = float(fps or 25)
+    try:
+        start = float(cfg.get("start_seconds") or 0)
+        end = cfg.get("end_seconds")
+        return (int(start * fps) if start > 0 else None,
+                int(float(end) * fps) if end not in (None, "") else None)
+    except (TypeError, ValueError):
+        return None, None
 
 
 def _exec_analyze_interactions(step, run, context, inputs, index):

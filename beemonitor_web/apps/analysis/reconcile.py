@@ -161,6 +161,15 @@ def reconcile_all(limit: int = 500) -> dict:
     except Exception:
         logger.exception("foraging summary sweep failed")
 
+    # Runs counted with older event rules, recounted from their saved
+    # tracks (memory/55): bounded batch per tick, no GPU.
+    recounted = 0
+    try:
+        from apps.pipelines import recount
+        recounted = recount.sweep()
+    except Exception:
+        logger.exception("event recount sweep failed")
+
     # Raw heartbeats older than a week: folded into the per-minute health
     # history, then deleted (bounded batch per tick; image beats are kept).
     beats_pruned = 0
@@ -187,6 +196,7 @@ def reconcile_all(limit: int = 500) -> dict:
             "schedules_due": sched.get("due", 0),
             "scheduled_runs": sched.get("launched_runs", 0),
             "trips_recomputed": trips_recomputed,
+            "runs_recounted": recounted,
             "beats_pruned": beats_pruned}
 
 

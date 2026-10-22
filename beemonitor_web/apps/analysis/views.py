@@ -1666,6 +1666,29 @@ class DownloadSpeciesCSVView(LoginRequiredMixin, View):
         return response
 
 
+class JobRecountView(LoginRequiredMixin, View):
+    """Recount this clip's events and interactions from its saved tracks,
+    against the clip's current layout (memory/55). No GPU, no credits."""
+
+    def post(self, request, pk):
+        from apps.pipelines import executors as pipeline_executors
+        from apps.pipelines.recount import recount_run
+
+        jobs = Job.objects.all() if request.user.is_superuser else Job.objects.filter(user=request.user)
+        job = get_object_or_404(jobs, pk=pk)
+        run = pipeline_executors._run_for_job(job)
+        if run is None:
+            messages.info(request, "This clip's events are counted each time its page opens.")
+        else:
+            counts = recount_run(run, min_seconds=pipeline_executors.DEFAULT_MIN_SECONDS)
+            if counts:
+                messages.success(request, "Recounted with the current layout: " + ", ".join(
+                    f"{n} {kind}" for kind, n in sorted(counts.items())) + ".")
+            else:
+                messages.warning(request, "Nothing to recount: this run has no events or interactions step.")
+        return redirect("analysis:results", pk=pk)
+
+
 class JobResultsView(LoginRequiredMixin, TemplateView):
     template_name = "analysis/results.html"
 
@@ -1813,9 +1836,14 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
              "color": "text-purple-600"},
         ]
         if job.video.duration_seconds:
-            tiles.append({"label": "Length",
-                          "value": duration_min(job.video.duration_seconds),
-                          "color": "text-gray-900"})
+            # Part of a clip (memory/53): the length analysed, of the whole.
+            window = _window_frames(job.config or {}, job.video)
+            value = duration_min(job.video.duration_seconds)
+            if window:
+                start = float((job.config or {}).get("start_seconds") or 0)
+                end = float((job.config or {}).get("end_seconds") or job.video.duration_seconds)
+                value = f"{duration_min(max(end - start, 0))} of {value}"
+            tiles.append({"label": "Length", "value": value, "color": "text-gray-900"})
         if job.execution_seconds:
             tiles.append({"label": "GPU time",
                           "value": duration_min(job.execution_seconds),

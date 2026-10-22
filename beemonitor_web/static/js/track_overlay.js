@@ -96,23 +96,48 @@
       return text;
     }
 
+    // "reference 12" -> "12": on a hotel with 60 tubes the full names ran
+    // into each other. Names the user typed ("hotel", "flower") stay whole.
+    function regionText(label) {
+      var m = /^(?:reference|nest|tube|region)[ _-]?(\d+)$/i.exec(label || '');
+      return m ? m[1] : (label || '');
+    }
+
     function drawRegions(L) {
       ctx.save();
       ctx.lineWidth = 1;
       ctx.setLineDash([5, 4]);
       ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-      ctx.fillStyle = 'rgba(255,255,255,0.8)';
-      ctx.font = '11px ui-monospace, monospace';
+      ctx.textBaseline = 'top';
       (data.regions || []).forEach(function (r) {
+        var x0 = Infinity, y0 = Infinity, x1 = -Infinity;
         ctx.beginPath();
         r.points.forEach(function (p, i) {
           var x = L.ox + p[0] * L.vw * L.s, y = L.oy + p[1] * L.vh * L.s;
+          x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x);
           if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y);
         });
         ctx.closePath();
         ctx.stroke();
-        var p0 = r.points[0];
-        ctx.fillText(r.label, L.ox + p0[0] * L.vw * L.s + 3, L.oy + p0[1] * L.vh * L.s + 12);
+        // The label sits inside the box's top-left corner and shrinks to fit
+        // its width; one that still can't fit is left off rather than drawn
+        // over its neighbours.
+        var text = regionText(r.label), size = 11;
+        if (!text) return;
+        ctx.font = size + 'px ui-monospace, monospace';
+        var w = ctx.measureText(text).width;
+        while (w + 4 > x1 - x0 && size > 8) {
+          size -= 1;
+          ctx.font = size + 'px ui-monospace, monospace';
+          w = ctx.measureText(text).width;
+        }
+        if (w + 4 > x1 - x0) return;
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(x0 + 1, y0 + 1, w + 4, size + 3);
+        ctx.fillStyle = 'rgba(255,255,255,0.95)';
+        ctx.fillText(text, x0 + 3, y0 + 2);
+        ctx.setLineDash([5, 4]);
       });
       ctx.restore();
     }

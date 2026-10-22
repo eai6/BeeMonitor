@@ -547,6 +547,83 @@ def compute_episodes(tidy, refs, gap_frames=15):
     return episodes
 
 
+# What makes an episode an entry or an emergence (memory/55).
+#
+# Seen from the front, a bee crossing a hotel passes over a dozen tube boxes on
+# the way; counting every box it touched as "enter + exit" turned one bee going
+# into one tube into twelve events. A bee that goes in DISAPPEARS: its track
+# ends on the tube. One that comes out APPEARS there. Those are the events;
+# passing over a tube is an interaction (with its duration), not an event.
+ENTRY_MIN_SECONDS = 0.2     # on the tube at least this long before vanishing
+HANDOFF_SECONDS = 1.0       # a new track this soon, this close = tracker lost it
+HANDOFF_DISTANCE = 0.05     # of frame width/height
+EDGE_SECONDS = 0.5          # tracks cut by a chosen window's start or end
+
+
+def compute_nest_events(tidy, refs, fps, gap_frames=15, start_frame=None, end_frame=None):
+    """Entries (a track that ends on a reference) and emergences (one that
+    starts on one), as ``[{track, reference, reference_label, frame, action}]``.
+
+    Not an entry: one that spent under ``ENTRY_MIN_SECONDS`` on the
+    reference, one followed within ``HANDOFF_SECONDS`` by a new track starting
+    close by (the tracker losing the insect and picking it up again), or —
+    when part of a clip was analysed — a track cut off by that window's end.
+    The same rules, mirrored, for emergences.
+
+    ``start_frame`` / ``end_frame`` are only the edges of a CHOSEN window. A
+    whole clip's own ends are real: a motion-triggered clip starts because a
+    bee came out and stops because one went in.
+    """
+    if tidy is None or len(tidy) == 0 or not refs:
+        return []
+    fps = float(fps or 25)
+    min_frames = max(int(round(ENTRY_MIN_SECONDS * fps)), 1)
+    handoff = int(round(HANDOFF_SECONDS * fps))
+    edge = int(round(EDGE_SECONDS * fps))
+    # min/max with the tracks' own extent, so frames counted from the window's
+    # start rather than the clip's can't put every track "at the edge".
+    cut_start = None if start_frame is None else min(int(start_frame), int(tidy["frame"].min()))
+    cut_end = None if end_frame is None else max(int(end_frame), int(tidy["frame"].max()))
+
+    ends, starts = {}, {}   # tid -> (frame, x, y)
+    for tid, grp in tidy.sort_values("frame").groupby("tid"):
+        tid = _as_native(tid)
+        starts[tid] = (int(grp["frame"].iloc[0]), float(grp["x"].iloc[0]), float(grp["y"].iloc[0]))
+        ends[tid] = (int(grp["frame"].iloc[-1]), float(grp["x"].iloc[-1]), float(grp["y"].iloc[-1]))
+
+    def _near(a, b):
+        return abs(a[1] - b[1]) <= HANDOFF_DISTANCE and abs(a[2] - b[2]) <= HANDOFF_DISTANCE
+
+    def _picked_up_again(tid):
+        end = ends[tid]
+        return any(o != tid and 0 <= st[0] - end[0] <= handoff and _near(end, st)
+                   for o, st in starts.items())
+
+    def _dropped_just_before(tid):
+        start = starts[tid]
+        return any(o != tid and 0 <= start[0] - en[0] <= handoff and _near(en, start)
+                   for o, en in ends.items())
+
+    events = []
+    for ep in compute_episodes(tidy, refs, gap_frames=gap_frames):
+        tid = ep["track"]
+        long_enough = ep["end_frame"] - ep["start_frame"] + 1 >= min_frames
+        base = {"track": tid, "reference": ep["reference"],
+                "reference_label": ep["reference_label"]}
+        # Within the gap tolerance of the track's own ends: a detector that
+        # missed the last frame or two still ends the track on the tube.
+        if (ep["end_frame"] >= ends[tid][0] - gap_frames and long_enough
+                and (cut_end is None or ends[tid][0] < cut_end - edge)
+                and not _picked_up_again(tid)):
+            events.append({**base, "frame": ends[tid][0], "action": "enter"})
+        if (ep["start_frame"] <= starts[tid][0] + gap_frames and long_enough
+                and (cut_start is None or starts[tid][0] > cut_start + edge)
+                and not _dropped_just_before(tid)):
+            events.append({**base, "frame": starts[tid][0], "action": "exit"})
+    events.sort(key=lambda e: (e["frame"], e["action"], str(e["reference"])))
+    return events
+
+
 # Proximity radius as a fraction of FRAME WIDTH, not pixels.
 #
 # The worker's InteractionAnalyzer uses a flat 50 px, which means the same

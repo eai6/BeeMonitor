@@ -96,12 +96,15 @@ class PrimitiveBlockTestCase(TestCase):
 
 
 class EventsBlockTests(PrimitiveBlockTestCase):
-    def test_two_stays_in_the_tube_produce_two_enters_and_two_exits(self):
+    def test_coming_out_and_going_back_in_are_the_events(self):
+        # Track 1 is on the tube when the clip starts (it came out), leaves,
+        # and vanishes on it at frame 69 (it went in). Its stay in between is
+        # an interaction, not an event (memory/55).
         out = self._execute("analyze.events")
 
         self.assertEqual(out["table_kind"], "events")
-        self.assertEqual(out["enter_count"], 2)
-        self.assertEqual(out["exit_count"], 2)
+        self.assertEqual([(r["action"], r["frame"]) for r in out["rows"]],
+                         [("exit", 0), ("enter", 69)])
         self.assertEqual(out["subjects"], 1)
 
     def test_seconds_use_the_clips_real_frame_rate(self):
@@ -146,17 +149,22 @@ class EventsBlockTests(PrimitiveBlockTestCase):
 
 class InteractionsBlockTests(PrimitiveBlockTestCase):
     def test_each_stay_is_one_interaction_with_the_reference(self):
-        out = self._execute("analyze.interactions")
+        out = self._execute("analyze.interactions", {"min_seconds": 0})
 
         self.assertEqual(out["table_kind"], "interactions")
         self.assertEqual(out["organism_reference"], 2)
         self.assertEqual(out["organism_organism"], 0)
 
     def test_duration_is_measured_at_the_clips_real_rate(self):
-        out = self._execute("analyze.interactions")
+        out = self._execute("analyze.interactions", {"min_seconds": 0})
 
         # 20 frames then 10 frames, at 25 fps.
         self.assertEqual(sorted(r["duration_sec"] for r in out["rows"]), [0.4, 0.8])
+
+    def test_by_default_contacts_under_half_a_second_are_dropped(self):
+        # A passing insect, not a visit.
+        out = self._execute("analyze.interactions")
+        self.assertEqual([r["duration_sec"] for r in out["rows"]], [0.8])
 
     def test_a_minimum_length_drops_the_shorter_contacts(self):
         out = self._execute("analyze.interactions", {"min_seconds": 0.5})
@@ -182,17 +190,19 @@ class InteractionsBlockTests(PrimitiveBlockTestCase):
 class PrimitivesAgreeTests(PrimitiveBlockTestCase):
     """The point of the collapse: the tables cannot disagree about a clip."""
 
-    def test_events_and_interactions_describe_the_same_episodes(self):
+    def test_every_event_is_an_end_of_an_interaction(self):
+        # Coming out is where a stay starts; going in is where one ends.
         events = self._execute("analyze.events")
-        interactions = self._execute("analyze.interactions")
+        interactions = self._execute("analyze.interactions", {"min_seconds": 0})
 
-        self.assertEqual(events["enter_count"], interactions["organism_reference"])
-        enters = sorted(r["frame"] for r in events["rows"] if r["action"] == "enter")
-        self.assertEqual(enters, sorted(r["start_frame"] for r in interactions["rows"]))
+        starts = {r["start_frame"] for r in interactions["rows"]}
+        ends = {r["end_frame"] for r in interactions["rows"]}
+        for r in events["rows"]:
+            self.assertIn(r["frame"], starts if r["action"] == "exit" else ends)
 
     def test_the_retired_visitation_block_agrees_with_the_primitives(self):
         visitation = self._execute("analyze.visitation")
-        interactions = self._execute("analyze.interactions")
+        interactions = self._execute("analyze.interactions", {"min_seconds": 0})
 
         self.assertEqual(visitation["total_visits"], interactions["organism_reference"])
         self.assertEqual(visitation["total_dwell_sec"],
@@ -295,8 +305,8 @@ class DetectedReferenceFallbackTests(PrimitiveBlockTestCase):
     summary_stats["nest_bboxes"] and no local analyzer read that key.
     """
 
-    def _execute_without_reference_node(self, block_type, result_extra):
-        steps = self._steps(block_type)
+    def _execute_without_reference_node(self, block_type, result_extra, config=None):
+        steps = self._steps(block_type, config)
         del steps[3]                      # no reference.layout node at all
         result = {
             "tracking_csv_path": self.tracking_csv,
@@ -318,7 +328,8 @@ class DetectedReferenceFallbackTests(PrimitiveBlockTestCase):
         self.detected = {"nest_bboxes": {"1": [192, 108, 576, 324]}}
 
     def test_interactions_now_find_the_detected_flowers(self):
-        out = self._execute_without_reference_node("analyze.interactions", self.detected)
+        out = self._execute_without_reference_node("analyze.interactions", self.detected,
+                                                   config={"min_seconds": 0})
 
         self.assertEqual(out["reference_source"], "detected")
         self.assertEqual(out["reference_count"], 1)
@@ -328,7 +339,7 @@ class DetectedReferenceFallbackTests(PrimitiveBlockTestCase):
         out = self._execute_without_reference_node("analyze.events", self.detected)
 
         self.assertEqual(out["reference_source"], "detected")
-        self.assertEqual(out["enter_count"], 2)
+        self.assertEqual((out["exit_count"], out["enter_count"]), (1, 1))
 
     def test_the_retired_visitation_block_benefits_without_rewiring(self):
         out = self._execute_without_reference_node("analyze.visitation", self.detected)

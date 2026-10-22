@@ -100,6 +100,10 @@ class PipelineRun(models.Model):
     # on the analyzer build, so a plain re-run after a GPU-side fix returns the
     # OLD result and reports success.
     fresh = models.BooleanField(default=False)
+    # Which version of the event/interaction rules this run's tables were
+    # counted with. Older runs are recounted from their saved tracks by the
+    # reconcile loop (apps/pipelines/recount.py), no GPU needed.
+    counting_rules = models.PositiveSmallIntegerField(default=2)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     execution_time_ms = models.IntegerField(null=True, blank=True)

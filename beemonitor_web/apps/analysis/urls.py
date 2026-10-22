@@ -23,6 +23,7 @@ urlpatterns = [
     path("<int:pk>/cancel/", views.JobCancelView.as_view(), name="cancel"),
     path("<int:pk>/", views.JobDetailView.as_view(), name="detail"),
     path("<int:pk>/results/", views.JobResultsView.as_view(), name="results"),
+    path("<int:pk>/results/recount/", views.JobRecountView.as_view(), name="recount"),
     path("<int:pk>/tracks/<int:track_id>/crops.json", views.TrackCropsView.as_view(),
          name="track_crops"),
     path("<int:pk>/overlay.json", views.TrackOverlayView.as_view(), name="track_overlay"),

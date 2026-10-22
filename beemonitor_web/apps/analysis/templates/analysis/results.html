@@ -22,6 +22,16 @@
   </div>
   {% endfor %}
 </div>
+{% if not photo_view and stat_tiles %}
+<div class="flex flex-wrap items-center gap-x-3 gap-y-2 -mt-4 mb-6 text-xs text-gray-600">
+  <span>Events are insects going into or coming out of a reference. Passing over one is an interaction, counted with its duration.</span>
+  {% if job.user_id == request.user.pk or request.user.is_superuser %}
+  <form method="post" action="{% url 'analysis:recount' job.pk %}">{% csrf_token %}
+    <button type="submit" class="font-semibold text-amber-700 hover:underline">Recount with the current layout</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
 
 <!-- The clip with its tracks drawn over it as it plays (memory/46) -->
 {% include "analysis/_track_overlay.html" %}

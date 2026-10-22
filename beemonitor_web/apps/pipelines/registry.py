@@ -576,9 +576,11 @@ BLOCK_REGISTRY = {
     # pipeline breaks, but they are not offered for new work.
     "analyze.events": {
         "display_name": "Events",
-        "description": "When something entered or exited something — a nest tube, "
-                       "a flower, a pollen tube. One row per crossing, with the "
-                       "frame, the subject and what it crossed into.",
+        "description": "When something went into a reference or came out of it — "
+                       "a bee disappearing into a nest tube, or appearing from one. "
+                       "One row per entry or exit, with the frame, the insect and "
+                       "the reference. Passing over a reference is an interaction, "
+                       "not an event.",
         "category": "analyze",
         "icon": "🚪",
         "input_type": "tracks",
@@ -667,7 +669,7 @@ BLOCK_REGISTRY = {
                          "0 counts everything."),
                 "field_type": "number",
                 "required": False,
-                "default": 0,
+                "default": 0.5,
                 "choices": None,
             },
             {

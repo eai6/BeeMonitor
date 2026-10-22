@@ -40,8 +40,10 @@ class GapToleranceTests(SimpleTestCase):
 class MinimumLengthTests(SimpleTestCase):
     def test_min_seconds_reads_the_node(self):
         self.assertEqual(executors._min_seconds(step(min_seconds="0.5")), 0.5)
-        self.assertEqual(executors._min_seconds(step()), 0.0)
-        self.assertEqual(executors._min_seconds(step(min_seconds="x")), 0.0)
+        self.assertEqual(executors._min_seconds(step(min_seconds=0)), 0.0)
+        # Not set: a passing insect isn't a visit (memory/55).
+        self.assertEqual(executors._min_seconds(step()), 0.5)
+        self.assertEqual(executors._min_seconds(step(min_seconds="x")), 0.5)
 
     def test_the_interactions_node_offers_it(self):
         names = [f["name"] for f in registry.BLOCK_REGISTRY["analyze.interactions"]["config_fields"]]
