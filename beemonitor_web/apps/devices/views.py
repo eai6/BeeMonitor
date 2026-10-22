@@ -1668,6 +1668,31 @@ def _norm_shape(raw):
     return _norm_box(raw), None
 
 
+def parse_layout_body(body):
+    """The ROI editor's save, cleaned: ``(roi_override, roi_polygon, nests)``.
+
+    Shared by the unit, site and clip editors (memory/52). Each reference keeps
+    its id, its outline, and the name it was given ("Flag C", "Hole 3")."""
+    roi_override, roi_polygon = _norm_shape(body.get("roi"))
+    nests = []
+    for n in (body.get("nests") or [])[:200]:
+        box, points = _norm_shape(n if isinstance(n, dict) else None)
+        if box is None:
+            continue
+        try:
+            nid = int(n.get("id"))
+        except (TypeError, ValueError):
+            nid = len(nests) + 1
+        nest = {"id": nid, "box": box}
+        if points:
+            nest["points"] = points
+        name = str(n.get("name") or "").strip()[:60]
+        if name:
+            nest["name"] = name
+        nests.append(nest)
+    return roi_override, roi_polygon, nests
+
+
 # Curated list for the display-tz dropdown (IANA names). "" = auto (device tz).
 COMMON_TIMEZONES = [
     "UTC", "America/New_York", "America/Chicago", "America/Denver",
@@ -1832,21 +1857,7 @@ class DeviceRoiEditorView(LoginRequiredMixin, View):
         except ValueError:
             return JsonResponse({"error": "Invalid JSON."}, status=400)
 
-        roi_override, roi_polygon = _norm_shape(body.get("roi"))
-
-        nests = []
-        for n in (body.get("nests") or [])[:200]:
-            box, points = _norm_shape(n if isinstance(n, dict) else None)
-            if box is None:
-                continue
-            try:
-                nid = int(n.get("id"))
-            except (TypeError, ValueError):
-                nid = len(nests) + 1
-            nest = {"id": nid, "box": box}
-            if points:
-                nest["points"] = points
-            nests.append(nest)
+        roi_override, roi_polygon, nests = parse_layout_body(body)
 
         device.roi_override = roi_override
         device.roi_polygon = roi_polygon

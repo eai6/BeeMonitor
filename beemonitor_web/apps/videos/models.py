@@ -405,3 +405,74 @@ class PendingDeviceDeletion(models.Model):
 
     def __str__(self) -> str:
         return f"pending device-delete dev={self.device_id} video={self.video_id}"
+
+
+class Layout(models.Model):
+    """A ROI and reference objects drawn for a **site** (every clip recorded
+    there) or for **one clip** (overrides its site), memory/52.
+
+    Same shape as a unit's layout (devices.Device): ``roi_override`` is a 0..1
+    box, ``roi_polygon`` its traced outline or None, ``nest_layout`` the
+    reference objects ``[{id, box, points?, name?}]``. Every save is a new
+    version; the latest is the one analysis uses
+    (devices.layouts.layout_for_video looks: clip, then site, then unit).
+    """
+
+    site = models.ForeignKey(Site, null=True, blank=True, on_delete=models.CASCADE,
+                             related_name="layouts")
+    video = models.ForeignKey("Video", null=True, blank=True, on_delete=models.CASCADE,
+                              related_name="layouts")
+    number = models.PositiveIntegerField()
+    roi_override = models.JSONField(null=True, blank=True)
+    roi_polygon = models.JSONField(null=True, blank=True)
+    nest_layout = models.JSONField(default=list, blank=True)
+    saved_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
+                                 on_delete=models.SET_NULL, related_name="+")
+    saved_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-number"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(models.Q(site__isnull=False, video__isnull=True)
+                           | models.Q(site__isnull=True, video__isnull=False)),
+                name="layout_site_or_video"),
+        ]
+
+    def __str__(self):
+        return f"{self.site or self.video} layout v{self.number}"
+
+    @property
+    def is_empty(self) -> bool:
+        return not (self.roi_override or self.nest_layout)
+
+    def summary(self) -> str:
+        parts = []
+        if self.roi_override:
+            parts.append("ROI")
+        n = len(self.nest_layout or [])
+        if n:
+            parts.append(f"{n} reference{'s' if n != 1 else ''}")
+        return " + ".join(parts) or "empty"
+
+    @classmethod
+    def current(cls, *, site=None, video=None):
+        qs = cls.objects.filter(site=site) if site is not None else cls.objects.filter(video=video)
+        return qs.order_by("-number").first()
+
+    @classmethod
+    def save_new(cls, *, site=None, video=None, roi=None, polygon=None, nests=None, user=None):
+        """Append a version unless it matches the latest. Returns the current one."""
+        from django.db import transaction
+
+        with transaction.atomic():
+            qs = cls.objects.select_for_update().filter(**({"site": site} if site is not None else {"video": video}))
+            latest = qs.order_by("-number").first()
+            nests = nests or []
+            if latest and latest.roi_override == roi and latest.roi_polygon == polygon \
+                    and (latest.nest_layout or []) == nests:
+                return latest
+            return cls.objects.create(
+                site=site, video=video, number=(latest.number + 1) if latest else 1,
+                roi_override=roi, roi_polygon=polygon, nest_layout=nests,
+                saved_by=user if getattr(user, "is_authenticated", False) else None)

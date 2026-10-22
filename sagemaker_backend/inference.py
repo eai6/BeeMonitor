@@ -178,6 +178,9 @@ def predict_fn(payload, pipeline):
                 # masked to it, so background inside the bounding box is ignored.
                 hotel_polygon=payload.get("hotel_polygon"),
                 nest_layout=payload.get("nest_layout"),
+                # False when the layout was drawn for a site or a clip: never
+                # fall back to the bee-hotel nest model (memory/52).
+                nest_fallback=payload.get("nest_fallback", True) is not False,
                 # False = nest/hotel-only fast path (skip tracking + events).
                 run_tracking=bool(payload.get("run_tracking", True)),
                 # Detector: "sam3" = text-prompt tracking (heavy), else YOLO.

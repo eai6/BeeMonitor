@@ -164,7 +164,7 @@ class TestLayout:
         assert layout["nests"] == {1: (0, 0, 160, 120)}
 
     @staticmethod
-    def _fill(clip, found):
+    def _fill(clip, found, fallback=True):
         """_fill_nests with the nest model stubbed. The stubs stand in for the
         whole import chain (ultralytics, beemonitor.*) so this runs in CI's
         cloud job, which installs neither."""
@@ -182,14 +182,21 @@ class TestLayout:
         mods["beemonitor.detection.nest_detector"].NestDetector = det
         with patch.dict(sys.modules, mods):
             return CloudPipeline._fill_nests(
-                CloudPipeline._build_manual_nests(clip, None, None), clip, "m.pt")
+                CloudPipeline._build_manual_nests(clip, None, None), clip, "m.pt",
+                fallback=fallback), det
 
     def test_no_nests_found_still_returns_a_layout(self, clip):
-        assert self._fill(clip, None) == {"hotel": (0, 0, 320, 240), "nests": {}}
+        assert self._fill(clip, None)[0] == {"hotel": (0, 0, 320, 240), "nests": {}}
 
     def test_model_nests_fill_in_but_the_roi_stays(self, clip):
-        layout = self._fill(clip, {"hotel": (10, 10, 20, 20), "nests": {"a": (1, 2, 3, 4)}})
+        layout, _ = self._fill(clip, {"hotel": (10, 10, 20, 20), "nests": {"a": (1, 2, 3, 4)}})
         assert layout == {"hotel": (0, 0, 320, 240), "nests": {"a": (1, 2, 3, 4)}}
+
+    def test_a_site_or_clip_layout_never_runs_the_hotel_model(self, clip):
+        # memory/52: ground nests are not a bee hotel; the model would invent tubes.
+        layout, det = self._fill(clip, {"nests": {"a": (1, 2, 3, 4)}}, fallback=False)
+        assert layout == {"hotel": (0, 0, 320, 240), "nests": {}}
+        det.assert_not_called()
 
 
 class TestBestCrops:

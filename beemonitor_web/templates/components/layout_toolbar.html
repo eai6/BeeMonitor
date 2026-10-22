@@ -1,0 +1,30 @@
+{% comment %} The layout editor's toolbar and drawing stage (unit, site or clip). Needs
+   ``image_url``. The script is components/layout_canvas_script.html. {% endcomment %}
+  <div id="toolbar" class="flex flex-wrap items-center gap-2 mb-3 text-sm">
+    <div class="inline-flex rounded-md overflow-hidden border border-gray-300">
+      <button data-mode="roi"  class="mode-btn px-3 py-1.5 bg-amber-600 text-white">ROI</button>
+      <button data-mode="nest" class="mode-btn px-3 py-1.5 bg-white text-gray-700">Add reference object</button>
+      <button data-mode="move" class="mode-btn px-3 py-1.5 bg-white text-gray-700">Move / edit</button>
+    </div>
+    <div class="inline-flex rounded-md overflow-hidden border border-gray-300" id="tools">
+      <button data-tool="rect" class="tool-btn px-3 py-1.5 bg-gray-800 text-white">Rectangle</button>
+      <button data-tool="poly" class="tool-btn px-3 py-1.5 bg-white text-gray-700">Polygon</button>
+    </div>
+    <button id="autonum" class="px-3 py-1.5 bg-white border border-gray-300 rounded text-gray-700 hover:bg-gray-50">Auto-number</button>
+    <button id="rename" class="px-3 py-1.5 bg-white border border-gray-300 rounded text-gray-700 hover:bg-gray-50" title="Name the selected reference object, e.g. Flag C or Hole 3">Rename</button>
+    <button id="del" class="px-3 py-1.5 bg-white border border-gray-300 rounded text-gray-700 hover:bg-gray-50">Delete selected</button>
+    <button id="clear-roi" class="px-3 py-1.5 bg-white border border-gray-300 rounded text-gray-700 hover:bg-gray-50">Clear ROI</button>
+    <button id="clear-nests" class="px-3 py-1.5 bg-white border border-gray-300 rounded text-gray-700 hover:bg-gray-50">Clear reference objects</button>
+    <button id="save" class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded">Save</button>
+    <span id="saved" class="text-xs text-green-700 hidden">Saved ✓</span>
+  </div>
+  <p id="hint" class="text-xs text-gray-500 mb-2">Drag to draw the ROI.</p>
+  <div id="viewing-banner" class="hidden mb-2 flex items-center gap-3 px-3 py-2 rounded border border-blue-200 bg-blue-50 text-xs text-blue-900">
+    <span id="viewing-text"></span>
+    <button type="button" id="viewing-back" class="ml-auto px-2.5 py-1 rounded border border-blue-300 bg-white text-blue-900 hover:bg-blue-50">Back to current</button>
+  </div>
+
+  <div id="stage" class="relative inline-block select-none" style="touch-action:none;">
+    <img id="bgimg" src="{{ image_url }}" alt="Frame to draw on" class="block max-w-full h-auto rounded">
+    <canvas id="cv" class="absolute top-0 left-0"></canvas>
+  </div>

@@ -975,7 +975,9 @@ def reference_summary(runs, rows):
     refs = [r for r in ops.roi_references(roi) if r["id"] != "hotel"] \
         or ops.roi_references(roi)
     if refs:
-        return {"count": len(refs), "source": "graph", "unplaceable": 0}
+        # Where the layout came from: this clip, its site or its unit (memory/52).
+        return {"count": len(refs), "source": "graph", "unplaceable": 0,
+                "label": (roi or {}).get("source_label", "")}
 
     # Nothing in the graph: what did the detector find?
     video = next((row["video"] for row in rows

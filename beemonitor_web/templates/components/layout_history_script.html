@@ -1,0 +1,41 @@
+{% comment %} Layout history list; needs ``versions_json`` and a #layout-history element. {% endcomment %}
+{{ versions_json|json_script:"layout-versions" }}
+<script>
+// Layout history list. Clicking a version previews it read-only on the picture
+// (window.viewLayout, defined by the editor below when there is a picture).
+(function () {
+  var box = document.getElementById('layout-history');
+  var BADGE = {
+    in_use: ['In use', 'bg-green-100 text-green-800'],
+    waiting: ['Waiting for device', 'bg-amber-100 text-amber-800'],
+    used: ['Used', 'bg-gray-100 text-gray-600'],
+    never_used: ['Never used', 'bg-gray-100 text-gray-500'],
+  };
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  window.renderLayoutHistory = function (versions, viewingNumber) {
+    window._layoutVersions = versions || [];
+    if (!versions || !versions.length) {
+      box.innerHTML = '<p class="text-xs text-gray-400">No layout saved yet.</p>';
+      return;
+    }
+    box.innerHTML = versions.map(function (v, i) {
+      var b = BADGE[v.state] || ['', ''];
+      var on = v.number === viewingNumber;
+      return '<button type="button" data-i="' + i + '" class="layout-v w-full text-left rounded-md border px-3 py-2 '
+        + (on ? 'border-blue-300 bg-blue-50' : 'border-gray-200 hover:bg-gray-50') + '">'
+        + '<div class="flex items-center gap-2"><span class="text-sm font-semibold text-gray-900">v' + v.number + '</span>'
+        + '<span class="text-[11px] font-medium px-2 rounded-full ' + b[1] + '">' + b[0] + '</span>'
+        + (on ? '<span class="text-[11px] text-blue-800">viewing</span>' : '') + '</div>'
+        + '<div class="text-xs text-gray-600 mt-0.5">' + esc(v.span) + '</div>'
+        + '<div class="text-[11px] text-gray-500 mt-0.5">' + esc(v.detail) + '</div></button>';
+    }).join('');
+    box.querySelectorAll('.layout-v').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        if (window.viewLayout) window.viewLayout(window._layoutVersions[+btn.dataset.i]);
+      });
+    });
+  };
+  renderLayoutHistory(JSON.parse(document.getElementById('layout-versions').textContent));
+})();
+</script>

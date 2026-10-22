@@ -11,6 +11,11 @@ urlpatterns = [
     path("upload/", views.VideoUploadView.as_view(), name="upload"),
     path("batch-upload/", views.VideoBatchUploadView.as_view(), name="batch_upload"),
     path("sites/", views.SiteListCreateView.as_view(), name="sites"),
+    # ROI and reference objects for sites and single clips (memory/52).
+    path("sites/manage/", views.SitesPageView.as_view(), name="sites_page"),
+    path("sites/<int:site_pk>/layout/", views.LayoutEditorView.as_view(), name="site_layout"),
+    path("<int:video_pk>/layout/", views.LayoutEditorView.as_view(), name="layout"),
+    path("<int:pk>/frame/", views.VideoFrameView.as_view(), name="frame"),
     path("<int:pk>/", views.VideoDetailView.as_view(), name="detail"),
     # Media for the review grid: a presign is spent per clip actually
     # looked at, not per clip listed.

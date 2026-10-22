@@ -56,19 +56,51 @@ def _clip_instant(video):
     return video.recorded_at - timedelta(minutes=off)
 
 
+EMPTY = {"roi_override": None, "roi_polygon": None, "nest_layout": [], "source": None, "source_label": ""}
+
+
 def layout_for_video(video) -> dict:
-    """``{roi_override, roi_polygon, nest_layout}`` in use when ``video`` was
-    recorded. Devices with no history fall back to their current layout."""
+    """The ROI and reference objects a clip is analysed with:
+    ``{roi_override, roi_polygon, nest_layout, source, source_label}``.
+
+    Looked up in order (memory/52): one drawn for **this clip**, then its
+    **site**'s, then its **unit**'s (the version in use when it was recorded;
+    devices with no history fall back to their current layout). ``source`` is
+    "video" / "site" / "device", or None when there is none.
+    """
+    from apps.videos.models import Layout
+
+    own = Layout.current(video=video) if getattr(video, "pk", None) else None
+    if own is not None:
+        return _as_dict(own, "video", f"this clip (v{own.number})")
+    site = getattr(video, "site", None)
+    if site is not None:
+        at_site = Layout.current(site=site)
+        if at_site is not None:
+            return _as_dict(at_site, "site", f"site {site.name} (v{at_site.number})")
+    return _device_layout(video)
+
+
+def _as_dict(layout, source, label):
+    return {"roi_override": layout.roi_override, "roi_polygon": layout.roi_polygon,
+            "nest_layout": layout.nest_layout or [], "source": source, "source_label": label}
+
+
+def _device_layout(video) -> dict:
     device = getattr(video, "device", None)
     if device is None:
-        return {"roi_override": None, "roi_polygon": None, "nest_layout": []}
+        return dict(EMPTY)
+    label = f"unit {device.name}"
     versions = device.layout_versions.all()
     if not versions.exists():
+        if not (device.roi_override or device.nest_layout):
+            return dict(EMPTY)
         return {"roi_override": device.roi_override, "roi_polygon": device.roi_polygon,
-                "nest_layout": device.nest_layout or []}
+                "nest_layout": device.nest_layout or [], "source": "device", "source_label": label}
     v = (versions.filter(applied_at__isnull=False, applied_at__lte=_clip_instant(video))
          .order_by("-applied_at", "-number").first())
     if v is None:  # recorded before any layout was in use on the device
-        return {"roi_override": None, "roi_polygon": None, "nest_layout": []}
+        return dict(EMPTY)
     return {"roi_override": v.roi_override, "roi_polygon": v.roi_polygon,
-            "nest_layout": v.nest_layout or []}
+            "nest_layout": v.nest_layout or [], "source": "device",
+            "source_label": f"{label} (v{v.number})"}

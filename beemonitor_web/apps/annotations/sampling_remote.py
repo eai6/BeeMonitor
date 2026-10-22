@@ -123,7 +123,7 @@ def _clip_payload(task) -> dict | None:
                            "the editor once to ingest it, then sample."))
         return None
     roi = polygon = None
-    if (task.params or {}).get("roi") == "device" and video.device_id:
+    if (task.params or {}).get("roi") == "device":   # its clip, site or unit layout
         layout = layout_for_video(video)
         roi, polygon = layout["roi_override"], layout["roi_polygon"]
     return {"task_id": task.pk, "video_blob_path": blob,

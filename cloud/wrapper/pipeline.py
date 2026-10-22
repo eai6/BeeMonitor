@@ -239,6 +239,7 @@ class CloudPipeline:
         marker_type: str = "auto",
         tracker: str = "beetrack",
         tracker_params: "dict | None" = None,
+        nest_fallback: bool = True,
     ) -> PipelineResult:
         """Run the full BeeMonitor pipeline on a video stored in S3.
 
@@ -303,7 +304,7 @@ class CloudPipeline:
         if not run_tracking:
             return self._nest_only(job_id, user_id, video_local, model_paths,
                                    custom_nest_local, hotel_roi, nest_layout,
-                                   hotel_polygon)
+                                   hotel_polygon, nest_fallback)
 
         # Step 3 — Build config and run analysis
         logger.info("[%s] Running BeeMonitor analysis", job_id)
@@ -329,6 +330,7 @@ class CloudPipeline:
             tracker=tracker,
             tracker_params=tracker_params,
             identify=identify_species or identify_markers,
+            nest_fallback=nest_fallback,
         )
 
         identification = None
@@ -504,13 +506,14 @@ class CloudPipeline:
 
     def _nest_only(self, job_id, user_id, video_local, model_paths,
                    custom_nest_local="", hotel_roi=None, nest_layout=None,
-                   hotel_polygon=None):
+                   hotel_polygon=None, nest_fallback=True):
         """Fast path for run_tracking=False: the device layout (ROI = whole
         frame when none was drawn), nests from the model when none were drawn.
         No motion detection, tracking model, events, or post-processing."""
         nests = self._fill_nests(
             self._build_manual_nests(video_local, hotel_roi, nest_layout, hotel_polygon),
-            video_local, custom_nest_local or model_paths.nest_detection, job_id)
+            video_local, custom_nest_local or model_paths.nest_detection, job_id,
+            fallback=nest_fallback)
 
         nest_bboxes = {}
         for nest_id, bbox in ((nests or {}).get("nests") or {}).items():
@@ -642,6 +645,7 @@ class CloudPipeline:
         tracker: str = "beetrack",
         tracker_params: "dict | None" = None,
         identify: bool = False,
+        nest_fallback: bool = True,
     ):
         """Build a BeeMonitor Config, instantiate, and run."""
         from beemonitor.core.config import Config, ModelConfig
@@ -697,7 +701,7 @@ class CloudPipeline:
         # found → "No nests detected") and report an empty run.
         manual_nests = self._fill_nests(
             self._build_manual_nests(video_local, hotel_roi, nest_layout, hotel_polygon),
-            video_local, config.models.nest_detection, "")
+            video_local, config.models.nest_detection, "", fallback=nest_fallback)
 
         from beemonitor import BeeMonitor
 
@@ -776,10 +780,15 @@ class CloudPipeline:
             return None
 
     @staticmethod
-    def _fill_nests(layout, video_local: str, nest_model_path: str, job_id: str = ""):
+    def _fill_nests(layout, video_local: str, nest_model_path: str, job_id: str = "",
+                    fallback: bool = True):
         """No tubes drawn → try the nest model (the backup). The ROI stays as
         drawn, or the whole frame. Finding none is fine: tracking still runs
-        over the ROI and the run reports bee activity with no nest events."""
+        over the ROI and the run reports bee activity with no nest events.
+
+        ``fallback=False`` skips the model: the layout was drawn for a site or a
+        clip (ground nests, flowers), where the bee-hotel model would invent
+        tubes that aren't there (memory/52)."""
         if layout is None:
             try:  # unreadable size: still the whole frame, by a second route
                 import cv2
@@ -792,7 +801,7 @@ class CloudPipeline:
             if not (w and h):
                 return None
             layout = {"hotel": (0, 0, w, h), "nests": {}}
-        if layout["nests"]:
+        if layout["nests"] or not fallback:
             return layout
         try:
             from ultralytics import YOLO

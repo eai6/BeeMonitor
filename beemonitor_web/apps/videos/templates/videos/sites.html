@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Sites - BeeMonitor{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto flex flex-col gap-5">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">Sites</h1>
+    <p class="text-sm text-gray-600">A site is a place you record without a unit. Its ROI and reference objects apply to
+      every clip recorded there; a single clip can still have its own. Units keep their layout on the unit's page.</p>
+  </div>
+
+  <form method="post" class="bg-white shadow rounded-lg p-4 flex flex-wrap items-end gap-3">
+    {% csrf_token %}
+    <label class="flex-1 min-w-[14rem] flex flex-col gap-1 text-sm font-semibold text-gray-700">New site
+      <input type="text" name="name" maxlength="200" required placeholder="e.g. North bank"
+             class="h-10 rounded-md border border-gray-300 px-3 text-sm font-normal"></label>
+    <button type="submit" class="h-10 px-4 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-sm font-semibold">Add site</button>
+  </form>
+
+  <div class="bg-white shadow rounded-lg overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead><tr class="bg-gray-50 text-left text-gray-600">
+        <th class="px-4 py-2.5 font-semibold">Site</th><th class="px-2 font-semibold text-right">Clips</th>
+        <th class="px-4 font-semibold">ROI &amp; references</th><th class="px-4"></th></tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr class="border-t border-gray-100">
+          <td class="px-4 py-3"><span class="font-semibold">{{ r.site.name }}</span>
+            <div class="text-gray-600">{% if r.site.has_location %}{{ r.site.lat|floatformat:2 }}, {{ r.site.lon|floatformat:2 }}{% else %}no location{% endif %}</div></td>
+          <td class="px-2 text-right tabular-nums">{{ r.site.clips }}</td>
+          <td class="px-4">{% if r.layout and not r.layout.is_empty %}{{ r.layout.summary }} · v{{ r.layout.number }}{% else %}<span class="font-semibold text-orange-700">None yet</span>{% endif %}</td>
+          <td class="px-4 text-right"><a href="{% url 'videos:site_layout' r.site.pk %}" class="font-semibold text-amber-700 hover:underline">{% if r.layout %}Edit{% else %}Draw{% endif %}</a></td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="4" class="px-4 py-6 text-center text-gray-600">No sites yet. Add one above, or pick or type a site when you upload clips.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

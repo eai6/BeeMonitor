@@ -148,30 +148,32 @@ def resolve_reference(step, run, context, index):
     # only reads boxes still works, and one that reads points excludes the
     # background the box swept in.
     hotel_roi, hotel_polygon, nest_layout = None, None, None
-    # A clip's, or a photo's, device — photos share the table (memory/45).
+    source, source_label = "device", ""
+    # A clip's, or a photo's, layout — photos share the table (memory/45).
     video_out = (find_artifact("video", run.steps, index, context)
                  or find_artifact("photo", run.steps, index, context))
     if video_out:
         try:
             from apps.videos.models import Video
 
-            video = Video.everything.select_related("device").get(pk=video_out["video_id"])
-            device = getattr(video, "device", None)
-            if device is not None:
-                # The layout in use when this clip was recorded, not today's.
-                from apps.devices.layouts import layout_for_video
-                layout = layout_for_video(video)
-                hotel_roi = layout["roi_override"]
-                hotel_polygon = layout["roi_polygon"]
-                nest_layout = layout["nest_layout"] or None
-        except Exception as exc:  # defensive — device linkage is optional
-            logger.info("detect.objects: could not read device layout: %s", exc)
+            video = Video.everything.select_related("device", "site").get(pk=video_out["video_id"])
+            # The clip's own layout, its site's, or its unit's as in use when
+            # it was recorded (memory/52).
+            from apps.devices.layouts import layout_for_video
+            layout = layout_for_video(video)
+            hotel_roi = layout["roi_override"]
+            hotel_polygon = layout["roi_polygon"]
+            nest_layout = layout["nest_layout"] or None
+            source, source_label = layout["source"] or "device", layout["source_label"]
+        except Exception as exc:  # defensive — layouts are optional
+            logger.info("detect.objects: could not read the clip's layout: %s", exc)
     return {
         "artifact": "roi",
         "hotel_roi": hotel_roi,
         "hotel_polygon": hotel_polygon,
         "nest_layout": nest_layout,
-        "source": "device",
+        "source": source,
+        "source_label": source_label,
     }
 
 
@@ -240,6 +242,16 @@ def detected_reference(step, run, context, index):
         return ({"artifact": "roi", "source": "detected", "label": label,
                  "regions": [{"box": b} for b in boxes]} if boxes else {})
 
+    # A sampled Detect (static objects: flags, nest holes) returns frames, not
+    # a detections table. Boxes seen on several frames are one object; numbered
+    # by position (top to bottom, then left to right) so the same flag keeps
+    # its id across a site's clips.
+    sampled = (result.get("summary_stats") or {}).get("sampled_frames")
+    if sampled:
+        refs = _sampled_references(sampled, label, run, index, context)
+        return ({"artifact": "roi", "source": "detected", "label": label, "nest_layout": refs}
+                if refs else {})
+
     df = ops.load_detections_df(result)
     if df is None:
         df = ops.load_tracking_df(result)
@@ -255,6 +267,26 @@ def detected_reference(step, run, context, index):
         return {"artifact": "roi", "source": "detected", "label": label,
                 "nest_layout": [{"box": b} for b in values if b]}
     return {}
+
+
+def _sampled_references(frames, label, run, index, context):
+    """Distinct objects in sampled detections, as 0..1 references with stable
+    ids. Empty when the clip's frame size was never measured (the boxes are in
+    pixels and can't be placed)."""
+    from apps.videos.models import Video
+
+    from . import ops
+
+    video_out = find_artifact("video", run.steps, index, context) or {}
+    video = Video.everything.filter(pk=video_out.get("video_id")).only("width", "height").first()
+    if not (video and video.width and video.height):
+        return []
+    w, h = float(video.width), float(video.height)
+    rows = ops.count_distinct_objects(frames, label)["rows"]
+    return [{"id": r["object"],
+             "box": [round(max(0.0, min(1.0, v)), 5)
+                     for v in (r["x1"] / w, r["y1"] / h, r["x2"] / w, r["y2"] / h)]}
+            for r in rows]
 
 
 # ── Local executors ───────────────────────────────────────────────────────────
@@ -311,15 +343,13 @@ def _exec_roi_nest_layout(step, run, context, inputs, index):
     try:
         from apps.videos.models import Video
 
-        video = Video.objects.select_related("device").get(pk=video_out["video_id"])
-        device = getattr(video, "device", None)
-        if device is not None:
-            # The layout in use when this clip was recorded, not today's.
-            from apps.devices.layouts import layout_for_video
-            layout = layout_for_video(video)
-            hotel_roi = layout["roi_override"]
-            hotel_polygon = layout["roi_polygon"]
-            nest_layout = layout["nest_layout"] or None
+        video = Video.objects.select_related("device", "site").get(pk=video_out["video_id"])
+        # The clip's own layout, its site's, or its unit's (memory/52).
+        from apps.devices.layouts import layout_for_video
+        layout = layout_for_video(video)
+        hotel_roi = layout["roi_override"]
+        hotel_polygon = layout["roi_polygon"]
+        nest_layout = layout["nest_layout"] or None
     except Exception as exc:  # defensive — device linkage is optional
         logger.info("roi.nest_layout: could not read device layout: %s", exc)
     return {
@@ -1660,6 +1690,9 @@ def build_detect_and_track_config(step, run, context, index):
             config["hotel_polygon"] = roi_out["hotel_polygon"]
         if roi_out.get("nest_layout"):
             config["nest_layout"] = roi_out["nest_layout"]
+        if roi_out.get("source") in ("site", "video"):
+            # Drawn for a site or a clip: never a bee hotel (memory/52).
+            config["nest_fallback"] = False
     # Part of the clip: in the config, so it is also in the cache key and a
     # 5-minute result never stands in for the whole clip's.
     for key in ("start_seconds", "end_seconds"):

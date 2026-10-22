@@ -48,7 +48,7 @@ Every run and batch is listed under [Runs](runs.md), with its tables and CSV dow
 | **Video** / **Photo** | The clip, or the photo, being analysed. Every pipeline starts from one of the two. |
 | **Detect** | Finds one class in each frame with YOLO (fast) or SAM 3 (text prompt, slower). Can analyse every frame (needed for tracking) or a sample of frames (for objects that don't move). |
 | **MOT: Track objects** | Links detections into tracks. Choose the algorithm — BeeTrack (default), ByteTrack, BoT-SORT, OC-SORT or SFSORT — and tune its settings on the node. Runs inside the same GPU pass as Detect, on whatever Detect found. |
-| **Reference: Saved layout** | The device's saved ROI and reference objects (nest tubes, flowers, pollen tubes), set on the device page under Edit ROI & reference objects. No GPU needed. For objects that move, or clips without a device, wire a Detect node to the analyzer's reference input instead. |
+| **Reference: Saved layout** | Each clip's saved ROI and reference objects (nest holes, flags, tubes, flowers): the clip's own if it has one, otherwise its site's, otherwise its unit's. Draw them from the clip page (**ROI & reference objects**), from **Videos → Sites**, or on the unit page. No GPU needed. For objects that move, wire a Detect node to the analyzer's reference input instead. |
 | **Events** | One row per enter or exit of a reference. |
 | **Interactions** | One row per episode of contact: insect with reference (a visit), insect with insect, or both. |
 | **Detection count** | Distinct objects, most common count per frame, totals, per frame, or binned over time. |

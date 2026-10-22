@@ -35,6 +35,15 @@
   {% endif %}
 </div>
 
+{% if layout %}
+<div class="bg-white shadow rounded-lg px-4 py-3 mb-4 flex flex-wrap items-center justify-between gap-3 text-sm">
+  <span><span class="font-semibold text-gray-900">ROI &amp; reference objects:</span>
+    {% if layout.source %}from {{ layout.source_label }} — {% if layout.roi_override %}ROI{% if layout.nest_layout %} + {% endif %}{% endif %}{% if layout.nest_layout %}{{ layout.nest_layout|length }} reference{{ layout.nest_layout|length|pluralize }}{% endif %}
+    {% else %}<span class="font-semibold text-orange-700">none</span> — visits can't be counted per nest or object.{% endif %}</span>
+  {% if can_edit_layout %}<a href="{% url 'videos:layout' video.pk %}" class="px-3 py-1.5 rounded {% if layout.source %}border border-gray-300 bg-white text-gray-800 hover:bg-gray-50{% else %}bg-amber-600 text-white hover:bg-amber-700{% endif %} font-semibold">{% if layout.source == "device" %}Draw for this clip or its site{% elif layout.source %}Edit{% else %}Draw{% endif %}</a>{% endif %}
+</div>
+{% endif %}
+
 {% if video.raw_deleted_at %}
 <div class="rounded-md bg-gray-100 border border-gray-300 px-4 py-3 mb-4 text-sm text-gray-800">The raw footage was deleted on {{ video.raw_deleted_at|date:"M j, Y" }} (kept 3 months on Standard). Its results below are kept; it can't be analysed again.</div>
 {% elif video.raw_delete_on %}

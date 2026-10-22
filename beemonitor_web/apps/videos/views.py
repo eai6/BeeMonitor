@@ -5,7 +5,9 @@ import re
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.http import Http404, HttpResponse, HttpResponseRedirect, JsonResponse
-from django.shortcuts import get_object_or_404, redirect
+from django.db import models
+from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views import View
 from django.views.generic import DetailView, ListView, TemplateView
 from .models import Video
@@ -283,6 +285,11 @@ class VideoDetailView(LoginRequiredMixin, DetailView):
         ctx["can_manage"] = video.managed_by(self.request.user)
         from apps.analysis.models import Job
         ctx["jobs"] = Job.objects.for_viewer(self.request.user).filter(video=video)
+        # Its ROI and reference objects, and where they come from (memory/52).
+        if not video.is_photo:
+            from apps.devices.layouts import layout_for_video
+            ctx["layout"] = layout_for_video(video)
+            ctx["can_edit_layout"] = Video.deletable(self.request.user).filter(pk=video.pk).exists()
         blob_path = video.storage_key
 
         # Presigned URL for playback (external-S3-ingested videos have no URL
@@ -577,3 +584,170 @@ class SiteListCreateView(LoginRequiredMixin, View):
 
 def _site_json(site):
     return {"id": site.id, "name": site.name, "lat": site.lat, "lon": site.lon, "notes": site.notes}
+
+
+# ── ROI and reference objects for sites and clips (memory/52) ────────────────
+
+class VideoFrameView(LoginRequiredMixin, View):
+    """One full-resolution frame of a clip at ``?t=`` seconds, for drawing on."""
+
+    def get(self, request, pk):
+        from django.http import HttpResponse
+
+        from .frames import frame_jpeg
+
+        video = get_object_or_404(Video.accessible(request.user), pk=pk)
+        try:
+            t = float(request.GET.get("t") or 0)
+        except ValueError:
+            t = 0.0
+        jpeg = frame_jpeg(video, t)
+        if jpeg is None:
+            return HttpResponse(status=404)
+        resp = HttpResponse(jpeg, content_type="image/jpeg")
+        resp["Cache-Control"] = "private, max-age=3600"
+        return resp
+
+
+def _layout_versions(layouts):
+    """The editor's history list for a site's or a clip's layout versions."""
+    from django.utils.formats import date_format
+    from django.utils.timezone import localtime
+
+    out = []
+    for i, v in enumerate(layouts):
+        n = len(v.nest_layout or [])
+        shape = "No ROI" if not v.roi_override else "Polygon ROI" if v.roi_polygon else "Rectangle ROI"
+        detail = f"{shape} · {n} reference object{'s' if n != 1 else ''}"
+        if v.saved_by:
+            detail += f" · {v.saved_by.get_username()}"
+        out.append({"number": v.number, "state": "in_use" if i == 0 else "used",
+                    "span": f"Saved {date_format(localtime(v.saved_at), 'M j, Y H:i')}",
+                    "detail": detail,
+                    "roi": ({"box": v.roi_override, "points": v.roi_polygon} if v.roi_override else None),
+                    "nests": v.nest_layout or []})
+    return out
+
+
+def _roi_shape(layout):
+    if not layout.get("roi_override"):
+        return None
+    shape = {"box": layout["roi_override"]}
+    if layout.get("roi_polygon"):
+        shape["points"] = layout["roi_polygon"]
+    return shape
+
+
+class LayoutEditorView(LoginRequiredMixin, View):
+    """Draw the ROI and reference objects for a clip (``video_pk``) or a site
+    (``site_pk``), on a full-resolution frame of a clip. Saving from a clip
+    goes to its site by default (every clip recorded there), or to the clip
+    alone; a clip whose site is only a name gets a site of that name."""
+
+    template_name = "videos/layout_editor.html"
+
+    def _target(self, request, video_pk=None, site_pk=None):
+        from .models import Site
+        if site_pk is not None:
+            site = get_object_or_404(Site, pk=site_pk, user=request.user)
+            clip = (Video.objects.filter(site=site, raw_deleted_at__isnull=True)
+                    .order_by("-recorded_at", "-uploaded_at").first())
+            return site, None, clip
+        # Editing a layout changes how the owner's clips are analysed: owner or
+        # unit manager only (not a platform admin looking at someone's clip).
+        video = get_object_or_404(Video.deletable(request.user).select_related("site", "device"), pk=video_pk)
+        return video.site, video, video
+
+    def get(self, request, video_pk=None, site_pk=None):
+        import json as _json
+
+        from apps.devices.layouts import layout_for_video
+
+        from .models import Layout
+
+        site, video, clip = self._target(request, video_pk, site_pk)
+        if video is not None:
+            current = layout_for_video(video)
+            own = Layout.objects.filter(video=video).select_related("saved_by")
+            history = _layout_versions(own) if own.exists() else _layout_versions(
+                Layout.objects.filter(site=site).select_related("saved_by")) if site else []
+        else:
+            latest = Layout.current(site=site)
+            current = ({"roi_override": latest.roi_override, "roi_polygon": latest.roi_polygon,
+                        "nest_layout": latest.nest_layout} if latest else
+                       {"roi_override": None, "roi_polygon": None, "nest_layout": []})
+            current["source_label"] = f"site {site.name}" if latest else ""
+            history = _layout_versions(Layout.objects.filter(site=site).select_related("saved_by"))
+        t = request.GET.get("t") or "0"
+        return render(request, self.template_name, {
+            "site": site, "video": video, "clip": clip,
+            "site_name": (site.name if site else (video.site_name if video else "")),
+            "site_clips": Video.objects.filter(site=site).count() if site else 0,
+            "image_url": (reverse("videos:frame", args=[clip.pk]) + f"?t={t}") if clip else "",
+            "t": t,
+            "source_label": current.get("source_label", ""),
+            "roi_json": _json.dumps(_roi_shape(current)),
+            "nests_json": _json.dumps(current.get("nest_layout") or []),
+            "versions_json": history,
+        })
+
+    def post(self, request, video_pk=None, site_pk=None):
+        import json as _json
+
+        from apps.devices.views import parse_layout_body
+
+        from .models import Layout, Site
+
+        site, video, _clip = self._target(request, video_pk, site_pk)
+        try:
+            body = _json.loads(request.body or "{}")
+        except ValueError:
+            return JsonResponse({"error": "Invalid JSON."}, status=400)
+        roi, polygon, nests = parse_layout_body(body)
+        scope = body.get("scope") or ("site" if site_pk is not None else "site" if (video and (site or video.site_name)) else "clip")
+        if video is not None and scope == "site" and site is None:
+            if not video.site_name:
+                return JsonResponse({"error": "This clip has no site. Save it for this clip only."}, status=400)
+            # A site that was only ever a typed name becomes a real one.
+            site, _ = Site.objects.get_or_create(user=video.user, name=video.site_name)
+            Video.everything.filter(user=video.user, site__isnull=True, site_name=video.site_name).update(site=site)
+        if scope == "site":
+            saved = Layout.save_new(site=site, roi=roi, polygon=polygon, nests=nests, user=request.user)
+            versions = _layout_versions(Layout.objects.filter(site=site).select_related("saved_by"))
+            n = Video.objects.filter(site=site).count()
+            message = f"Saved for every clip at {site.name} ({n})."
+        else:
+            saved = Layout.save_new(video=video, roi=roi, polygon=polygon, nests=nests, user=request.user)
+            versions = _layout_versions(Layout.objects.filter(video=video).select_related("saved_by"))
+            message = "Saved for this clip only."
+        return JsonResponse({"ok": True, "roi": saved.roi_override, "roi_polygon": saved.roi_polygon,
+                             "nests": saved.nest_layout, "versions": versions,
+                             "message": message + " New runs use it."})
+
+
+class SitesPageView(LoginRequiredMixin, View):
+    """Sites: places recorded without a unit, with their layouts (memory/52)."""
+
+    def get(self, request):
+        from django.db.models import Count
+
+        from .models import Layout, Site
+
+        sites = Site.objects.filter(user=request.user).annotate(
+            clips=Count("videos", filter=models.Q(videos__kind=Video.Kind.VIDEO)))
+        rows = [{"site": s, "layout": Layout.current(site=s)} for s in sites]
+        return render(request, "videos/sites.html", {"rows": rows})
+
+    def post(self, request):
+        from .models import Site
+
+        name = (request.POST.get("name") or "").strip()[:200]
+        if not name:
+            messages.error(request, "A site needs a name.")
+            return redirect("videos:sites_page")
+        site, created = Site.objects.get_or_create(user=request.user, name=name)
+        if created:
+            messages.success(request, f"Added {name}. Draw its ROI and reference objects next.")
+            return redirect("videos:site_layout", site_pk=site.pk)
+        messages.info(request, f"You already have a site called {name}.")
+        return redirect("videos:sites_page")

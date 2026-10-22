@@ -442,13 +442,14 @@ BLOCK_REGISTRY = {
     # pipeline: the "drawn" source stays only so pipelines saved with it run.
     "reference.layout": {
         "display_name": "Reference — Saved Layout",
-        "description": "The device's saved layout: its ROI and reference objects "
-                       "(nest tubes, flowers, pollen tubes…) drawn on the device "
-                       "page under Edit ROI & reference objects — the version in "
-                       "use when each clip or photo was recorded. No GPU. For "
-                       "clips without a device, or objects that move, detect the "
-                       "reference instead: a Detect node for that class wired to "
-                       "the analyzer's reference input.",
+        "description": "Each clip's saved layout: its ROI and reference objects "
+                       "(nest holes, flags, tubes, flowers…). The clip's own layout "
+                       "if it has one, else its site's, else its unit's (the "
+                       "version in use when it was recorded). Draw them from the "
+                       "clip page or Videos → Sites, or on the unit page. No GPU. "
+                       "For objects that move, detect the reference instead: a "
+                       "Detect node for that class wired to the analyzer's "
+                       "reference input.",
         "category": "roi",
         "icon": "📐",
         "input_type": "video",
@@ -463,7 +464,8 @@ BLOCK_REGISTRY = {
                 "required": True,
                 "default": "device_layout",
                 "choices": [
-                    {"value": "device_layout", "label": "The device's saved ROI + reference objects"},
+                    # Value kept: saved pipelines use it. memory/52.
+                    {"value": "device_layout", "label": "The clip's saved ROI + reference objects (clip, site or unit)"},
                 ],
             },
             {

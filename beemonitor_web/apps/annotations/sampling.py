@@ -168,7 +168,7 @@ def sample_frames_for_task(task):
 def _roi_for(task, params):
     """(box, polygon) in normalized coords to score motion inside, or (None, None)
     for the whole frame. The layout in use when the clip was recorded."""
-    if params.get("roi") != "device" or task.video.device_id is None:
+    if params.get("roi") != "device":   # the clip's own, its site's or its unit's layout
         return None, None
     from apps.devices.layouts import layout_for_video
     layout = layout_for_video(task.video)

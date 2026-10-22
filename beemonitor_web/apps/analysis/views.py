@@ -315,6 +315,9 @@ def _spawn_gpu_job(job_pk: int) -> None:
         # Recording start metadata → event timestamps; no filename convention needed.
         if video.recorded_at:
             payload["recorded_at"] = video.recorded_at.isoformat()
+        # A layout drawn for a site or a clip: no bee-hotel nest model (memory/52).
+        if job.config.get("nest_fallback") is False:
+            payload["nest_fallback"] = False
         # Part of the clip (memory/53): turned into frames by _launch_gpu.
         for key in ("start_seconds", "end_seconds"):
             if job.config.get(key) not in (None, ""):
@@ -386,6 +389,8 @@ def _spawn_gpu_batch(jobs_data: list, detection_mode: str, confidence: float,
                     payload["hotel_polygon"] = vcfg["hotel_polygon"]
                 if vcfg.get("nest_layout"):
                     payload["nest_layout"] = vcfg["nest_layout"]
+                if vcfg.get("nest_fallback") is False:
+                    payload["nest_fallback"] = False
                 payload["run_tracking"] = bool(vcfg.get("run_tracking", True))
                 if vcfg.get("ml_threshold") is not None:
                     payload["ml_threshold"] = float(vcfg["ml_threshold"])
@@ -1485,14 +1490,13 @@ def _notify_pipeline(job_pk) -> None:
 
 
 def _video_job_config(base: dict, video, use_device_roi: bool) -> dict:
-    """Per-video job config. When use_device_roi is on and the video's DEVICE had a
-    hotel ROI / nest tubes in use when the clip was recorded, inject them so the run uses the human-set
-    layout (the nest-detection model becomes a backup for videos/devices without
-    one). No-op when the device has nothing set. The SageMaker worker honours
-    ``hotel_roi`` / ``nest_layout`` when present."""
+    """Per-video job config. When use_device_roi is on and the clip has a drawn
+    layout — its own, its site's, or its unit's as in use when it was recorded
+    (memory/52) — inject it so the run uses the human-set layout (the
+    nest-detection model becomes a backup for clips without one). The SageMaker
+    worker honours ``hotel_roi`` / ``nest_layout`` when present."""
     cfg = dict(base)
-    if use_device_roi and getattr(video, "device", None) is not None:
-        # The layout in use when THIS clip was recorded, not today's.
+    if use_device_roi:
         from apps.devices.layouts import layout_for_video
         layout = layout_for_video(video)
         if layout["roi_override"]:
@@ -1502,8 +1506,12 @@ def _video_job_config(base: dict, video, use_device_roi: bool) -> dict:
             # it so background inside the bounding box is not analysed.
             cfg["hotel_polygon"] = layout["roi_polygon"]  # [[x,y], ...] normalized
         if layout["nest_layout"]:
-            # [{id, box:[x1,y1,x2,y2], points?:[[x,y], ...]}, ...]
+            # [{id, box:[x1,y1,x2,y2], points?:[[x,y], ...], name?}, ...]
             cfg["nest_layout"] = layout["nest_layout"]
+        if layout["source"] in ("site", "video"):
+            # Drawn for a site or a clip, which is never a bee hotel: don't let
+            # the worker fall back to the hotel nest model (memory/52).
+            cfg["nest_fallback"] = False
     return cfg
 
 

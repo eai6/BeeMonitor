@@ -305,7 +305,8 @@ def roi_references(roi_output):
     for n, tube in enumerate(roi_output.get("nest_layout") or [], start=1):
         if isinstance(tube, dict):
             ref_id, label = _numbered(tube.get("id"), n)
-            _add(ref_id, label, tube.get("box"), tube.get("points"))
+            # A name given in the editor ("Flag C", "Hole 3") is what results show.
+            _add(ref_id, tube.get("name") or label, tube.get("box"), tube.get("points"))
         else:
             _add(*_numbered(None, n), tube)
 
