@@ -23,6 +23,7 @@ from django.views.decorators.http import require_POST
 
 from apps.accounts import quota
 from apps.videos.models import Video
+from apps.videos.timecode import fmt_clock, parse_clock
 
 from . import engine, executors
 from .graph import build_initial_steps, graph_to_steps
@@ -243,6 +244,23 @@ def run_pipeline(request, pk):
     return redirect("pipelines:run_detail", pk=pk, run_id=run.pk)
 
 
+PART_LENGTHS = {"1": 60, "5": 300, "10": 600, "15": 900, "end": None}
+
+
+def part_of_clip(data):
+    """The run panel's "How much of each clip": None for the whole clip, else
+    (start_seconds, length_seconds or None for "to the end")."""
+    if data.get("part") != "part":
+        return None
+    length = data.get("part_minutes", "5")
+    if length not in PART_LENGTHS:
+        raise ValueError("Choose how long to analyse.")
+    start = parse_clock(data.get("part_from") or "0")
+    if start == 0 and PART_LENGTHS[length] is None:
+        return None  # from the start to the end: the whole clip
+    return (start, PART_LENGTHS[length])
+
+
 @login_required
 @require_POST
 def run_on_videos(request):
@@ -310,20 +328,32 @@ def run_on_videos(request):
     # Groups this launch for aggregate results (combined CSVs, cross-video trips).
     # fresh: the cache is keyed on clip + config, not on the build, so running
     # the same pipeline again after a fix would hand back the old result.
+    # Part of each clip (memory/53): "from m:ss for N minutes" (or to the end).
+    try:
+        window = part_of_clip(request.POST)
+    except ValueError as e:
+        return _fail(str(e))
+    too_short = 0
+    if window:
+        kept = [v for v in videos if engine.clip_window(v, window) is not None]
+        too_short = len(videos) - len(kept)
+        videos = kept
+        if not videos:
+            return _fail("Every selected clip ends before that start time.")
     # "Run the ones that fit": after a refusal, the hub resends with fit_only
     # and the batch is cut to the clips the credits cover, in list order.
     if request.POST.get("fit_only") == "1":
         videos = videos[:quota.how_many_fit(
-            request.user, [quota.pipeline_work(pipeline.steps, [v]) for v in videos])]
+            request.user, [quota.pipeline_work(pipeline.steps, [v], window) for v in videos])]
         if not videos:
             return _fail("None of these clips fit your credits.", status=402)
     try:
         batch_id, launched, invalid = engine.launch_batch(
-            pipeline, videos, request.user, fresh=request.POST.get("fresh") == "1")
+            pipeline, videos, request.user, fresh=request.POST.get("fresh") == "1", window=window)
     except quota.QuotaExceeded as e:
         if is_ajax:
             fits = quota.how_many_fit(
-                request.user, [quota.pipeline_work(pipeline.steps, [v]) for v in videos])
+                request.user, [quota.pipeline_work(pipeline.steps, [v], window) for v in videos])
             return JsonResponse({"error": e.message, "fits": fits, "total": len(videos)}, status=402)
         return _fail(e.message, status=402)
 
@@ -347,6 +377,12 @@ def run_on_videos(request):
         msg += f" Skipped {invalid}."
     if gone:
         msg += f" Left out {gone} whose raw footage was deleted."
+    if window:
+        start, length = window
+        msg += (f" Analysing {fmt_clock(start)}–{fmt_clock(start + length) if length else 'the end'}"
+                " of each clip.")
+    if too_short:
+        msg += f" Left out {too_short} that end before {fmt_clock(window[0])}."
     if over_cap:
         msg += f" ({over_cap} more matched but this run is capped at {MAX_BATCH} — narrow the filter and run again for the rest.)"
     if is_ajax:
@@ -685,7 +721,19 @@ def run_detail(request, pk, run_id):
         # only the owner may spend anything on this run's behalf.
         "can_reanalyze": run.user_id == request.user.id and run.status == "completed",
         "photo_view": photo_view(run),
+        "part": _run_part_label(run),
     })
+
+
+def _run_part_label(run):
+    """'Analysed 0:00–5:00 of 34:32' when the run covered part of its clip."""
+    from apps.videos.timecode import part_label
+
+    cfg = next(((s.get("config") or {}) for s in run.steps or []
+                if s.get("block_type") == "input.video"), {})
+    if not cfg.get("video_id"):
+        return ""
+    return part_label(cfg, Video.everything.filter(pk=cfg["video_id"]).only("duration_seconds").first())
 
 
 def photo_view(run, floor=None):

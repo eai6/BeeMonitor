@@ -187,15 +187,28 @@ def clip_seconds(video) -> float:
     return float(getattr(video, "duration_seconds", 0) or 0) or DEFAULT_CLIP_SECONDS
 
 
-def video_work(video, detector_kind: str = "yolo", task: str = "", frames: int = 0) -> Work:
+def window_seconds(video, start=None, end=None) -> float:
+    """Seconds of footage in ``start``..``end`` of a clip (memory/53); the
+    whole clip when neither is set."""
+    full = clip_seconds(video)
+    if start in (None, "") and end in (None, ""):
+        return full
+    start = float(start or 0)
+    end = min(float(end), full) if end not in (None, "") else full
+    return max(end - start, 0.0)
+
+
+def video_work(video, detector_kind: str = "yolo", task: str = "", frames: int = 0,
+               seconds: float | None = None) -> Work:
     """One analysis job on one clip (or photo). ``task`` is the Job's config task:
-    a photo is one unit, sampled detection (pre_annotate) is its frames."""
+    a photo is one unit, sampled detection (pre_annotate) is its frames.
+    ``seconds`` is the footage analysed, when it is only part of the clip."""
     instance = SAM3_INSTANCE if detector_kind == "sam3" else VIDEO_INSTANCE
     if task == "detect_photo" or getattr(video, "kind", "") == "photo":
         return Work("photo", VIDEO_INSTANCE, 1)
     if task == "pre_annotate":
         return Work("auto_label", instance, frames or 20)
-    return Work("analysis", instance, clip_seconds(video))
+    return Work("analysis", instance, clip_seconds(video) if seconds is None else seconds)
 
 
 def auto_label_work(labeler: str, frames: int) -> Work:
@@ -210,7 +223,7 @@ def training_work(images: int, epochs: int, instance: str = SAM3_INSTANCE) -> Wo
     return Work("training", instance, max(images, 1) * max(epochs, 1))
 
 
-def pipeline_work(pipeline_steps, videos) -> list:
+def pipeline_work(pipeline_steps, videos, window=None) -> list:
     """What launching a pipeline over ``videos`` queues: one analysis job per clip
     per detector the pipeline uses (Detect nodes on the same detector ride one
     job — executors.build_detect_and_track_config). Clips whose GPU result is
@@ -223,7 +236,18 @@ def pipeline_work(pipeline_steps, videos) -> list:
             cfg = step.get("config") or {}
             family = str(cfg.get("model_family") or cfg.get("detector") or "").lower()
             kinds.add("sam3" if family == "sam3" else "yolo")
-    return [video_work(v, k) for v in videos for k in sorted(kinds)]
+    # Part of each clip: a launch ``window`` of (start, length or None), or the
+    # start/end already bound to the steps' Video Input.
+    bound = next(((s.get("config") or {}) for s in pipeline_steps or []
+                  if s.get("block_type") == "input.video"), {})
+
+    def seconds(v):
+        if window:
+            start, length = window
+            return window_seconds(v, start, None if length is None else start + length)
+        return window_seconds(v, bound.get("start_seconds"), bound.get("end_seconds"))
+
+    return [video_work(v, k, seconds=seconds(v)) for v in videos for k in sorted(kinds)]
 
 
 def pending(user) -> Decimal:
@@ -242,7 +266,9 @@ def pending(user) -> Decimal:
     for job in active_jobs:
         cfg = job.config or {}
         items.append(video_work(job.video, cfg.get("detector_kind", "yolo"), cfg.get("task", ""),
-                                int(cfg.get("max_frames") or 0)))
+                                int(cfg.get("max_frames") or 0),
+                                seconds=window_seconds(job.video, cfg.get("start_seconds"),
+                                                       cfg.get("end_seconds"))))
     for labeler, params in PreAnnotationTask.objects.filter(
             user=user, status__in=[PreAnnotationTask.Status.QUEUED, PreAnnotationTask.Status.PROCESSING],
     ).values_list("labeler", "params"):

@@ -210,14 +210,27 @@ class PipelineRunView(APIView):
         from apps.accounts import quota
 
         videos = list(Video.manageable(request.user).filter(pk__in=video_ids))
+        # Part of each clip (memory/53): start_seconds and/or end_seconds.
+        try:
+            start = float(request.data.get("start_seconds") or 0)
+            end = request.data.get("end_seconds")
+            end = float(end) if end not in (None, "") else None
+        except (TypeError, ValueError):
+            return Response({"detail": "start_seconds and end_seconds must be numbers."}, status=400)
+        if start < 0 or (end is not None and end <= start):
+            return Response({"detail": "end_seconds must be after start_seconds."}, status=400)
+        window = (start, None if end is None else end - start) if (start or end is not None) else None
+        if window:
+            videos = [v for v in videos if engine.clip_window(v, window) is not None]
         # The whole request at once, before any run exists.
         try:
-            quota.check(request.user, quota.pipeline_work(pipeline.steps, videos))
+            quota.check(request.user, quota.pipeline_work(pipeline.steps, videos, window))
         except quota.QuotaExceeded as e:
             return Response({"detail": e.message}, status=402)
         launched, skipped = [], 0
         for video in videos:
-            steps = engine.steps_with_video(pipeline, video.pk)
+            part = engine.clip_window(video, window) if window else None
+            steps = engine.steps_with_video(pipeline, video.pk, part if part != (0, None) else None)
             if validate_steps(steps):
                 skipped += 1
                 continue

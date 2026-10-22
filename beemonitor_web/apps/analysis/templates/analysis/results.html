@@ -5,7 +5,7 @@
 {% block content %}
 
 <h1 class="text-2xl font-bold text-gray-900 mb-2">Results for Job #{{ job.pk }}</h1>
-<p class="text-sm text-gray-500 mb-6">{% if photo_view %}Photo{% else %}Video{% endif %}: {{ job.video.title|sanitize_name }}</p>
+<p class="text-sm text-gray-500 mb-6">{% if photo_view %}Photo{% else %}Video{% endif %}: {{ job.video.title|sanitize_name }}{% if part %} · <span class="font-semibold text-blue-900">{{ part }}</span>. Times are positions in the whole clip; run the whole clip from Processing to see the rest.{% endif %}</p>
 
 {% if photo_view %}
 {% include "pipelines/_photo_view.html" %}

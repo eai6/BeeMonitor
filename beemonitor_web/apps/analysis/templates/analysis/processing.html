@@ -72,6 +72,25 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
           {% for p in pipeline_templates %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}>{{ p.title }}</option>{% endfor %}
         </optgroup>{% endif %}
       </select>
+      {% if kind != "photo" %}
+      <!-- Part of each clip (memory/53) -->
+      <fieldset class="space-y-1.5" x-data="{ part: 'whole' }">
+        <legend class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">How much of each clip</legend>
+        <label class="flex items-center gap-2 text-[13px] text-gray-700"><input type="radio" name="part" value="whole" form="run-form" x-model="part"> The whole clip</label>
+        <label class="flex items-center gap-2 text-[13px] text-gray-700"><input type="radio" name="part" value="part" form="run-form" x-model="part"> Part of it</label>
+        <div class="flex gap-2 pl-6" x-show="part === 'part'" x-cloak>
+          <label class="flex-1 flex flex-col gap-0.5 text-[12px] font-medium text-gray-600">From
+            <input type="text" name="part_from" value="0:00" form="run-form" inputmode="numeric" placeholder="m:ss"
+                   class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px] font-normal"></label>
+          <label class="flex-1 flex flex-col gap-0.5 text-[12px] font-medium text-gray-600">For
+            <select name="part_minutes" form="run-form" class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px] font-normal">
+              <option value="1">1 minute</option><option value="5" selected>5 minutes</option>
+              <option value="10">10 minutes</option><option value="15">15 minutes</option>
+              <option value="end">to the end</option>
+            </select></label>
+        </div>
+      </fieldset>
+      {% endif %}
       {% comment %}
       No cost estimate before a run. What a clip costs is only knowable after it
       has run, and a projection presented up front reads as a promise — the

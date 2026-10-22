@@ -315,6 +315,10 @@ def _spawn_gpu_job(job_pk: int) -> None:
         # Recording start metadata → event timestamps; no filename convention needed.
         if video.recorded_at:
             payload["recorded_at"] = video.recorded_at.isoformat()
+        # Part of the clip (memory/53): turned into frames by _launch_gpu.
+        for key in ("start_seconds", "end_seconds"):
+            if job.config.get(key) not in (None, ""):
+                payload[key] = job.config[key]
 
         modal_call_id, extra_cfg = _launch_gpu(payload, video, job.modal_job_id)
         if extra_cfg:
@@ -494,13 +498,27 @@ def _invoke_endpoint_async(job_id: str, input_uri: str, endpoint: str = "") -> t
 _CHUNK_LIMIT_SECONDS = {"yolo": 1200.0, "sam3": 60.0}
 
 
-def _chunk_ranges(video, detector_kind):
+def _window_frames(config, video):
+    """The part of the clip to analyse, as (start_frame, end_frame or None),
+    from a job config's ``start_seconds`` / ``end_seconds`` (memory/53). None
+    for the whole clip."""
+    from apps.pipelines import ops
+
+    start, end = config.get("start_seconds"), config.get("end_seconds")
+    if start in (None, "") and end in (None, ""):
+        return None
+    fps = ops.fps_of(video=video)
+    return (int(float(start or 0) * fps), int(float(end) * fps) if end not in (None, "") else None)
+
+
+def _chunk_ranges(video, detector_kind, window=None):
     """[(start_frame, end_frame_or_None), ...] for a long video, else None.
 
     Built from duration/fps metadata. Boundaries are shared (chunk i's end ==
     chunk i+1's start) so coverage has no gap or overlap even if the fps
     estimate is off, and the LAST chunk runs to EOF so an imprecise duration
-    can never truncate the tail."""
+    can never truncate the tail. With a ``window`` (part of the clip), the
+    chunks cover just that part, and the last one stops at its end."""
     import math
 
     from apps.pipelines import ops
@@ -508,14 +526,17 @@ def _chunk_ranges(video, detector_kind):
     if os.environ.get("BEEMONITOR_CHUNK_TRACKING") != "1":
         return None
     limit = _CHUNK_LIMIT_SECONDS["sam3" if detector_kind == "sam3" else "yolo"]
+    fps = ops.fps_of(video=video)
     dur = float(getattr(video, "duration_seconds", 0) or 0)
+    first, last = (window or (0, None))
+    if window:
+        dur = ((last / fps) if last is not None else dur) - first / fps
     if dur <= limit:
         return None  # fits one invocation (also: unknown duration -> unchunked)
-    fps = ops.fps_of(video=video)
     total_frames = int(dur * fps)
     n = math.ceil(dur / limit)
     per = math.ceil(total_frames / n)
-    return [(i * per, (i + 1) * per if i < n - 1 else None) for i in range(n)]
+    return [(first + i * per, first + (i + 1) * per if i < n - 1 else last) for i in range(n)]
 
 
 def _launch_gpu(payload, video, mid):
@@ -526,9 +547,16 @@ def _launch_gpu(payload, video, mid):
     drives to completion."""
     detector_kind = payload.get("detector_kind", "yolo")
     endpoint = _tracking_endpoint(detector_kind)  # SAM 3 tracking → g5, YOLO → g4dn
+    window = _window_frames(payload, video)
     # A photo task is one image: never chunked.
-    ranges = None if payload.get("task") == "detect_photo" else _chunk_ranges(video, detector_kind)
+    ranges = None if payload.get("task") == "detect_photo" else _chunk_ranges(video, detector_kind, window)
     if not ranges:
+        if window:
+            # Part of the clip in one invocation: the worker reads only these
+            # frames and reports times in the whole clip.
+            payload = {**payload, "start_frame": window[0]}
+            if window[1] is not None:
+                payload["end_frame"] = window[1]
         input_uri = _put_inference_payload(mid, payload)
         output_uri, failure_uri = _invoke_endpoint_async(mid, input_uri, endpoint)
         return output_uri, ({"failure_location": failure_uri} if failure_uri else {})
@@ -1683,6 +1711,8 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
             Job.objects.for_viewer(self.request.user), pk=self.kwargs["pk"],
             video__in=Video.accessible(self.request.user, photos=True))
         ctx["job"] = job
+        from apps.videos.timecode import part_label
+        ctx["part"] = part_label(job.config, job.video)
 
         try:
             result = job.result

@@ -67,26 +67,48 @@ def _persist_step_result(user, cache_key, block_type, output):
     )
 
 
-def steps_with_video_steps(steps, video_id):
+def steps_with_video_steps(steps, video_id, window=None):
     """A copy of ``steps`` with every ``input.video`` (or ``input.photo``) step
-    bound to a clip (or photo) — both are rows of the videos table."""
+    bound to a clip (or photo) — both are rows of the videos table — and, with
+    a ``window`` of (start_seconds, end_seconds or None), to part of the clip."""
     out = copy.deepcopy(steps or [])
     for step in out:
         if step.get("block_type") in ("input.video", "input.photo"):
-            step.setdefault("config", {})["video_id"] = str(video_id)
+            cfg = step.setdefault("config", {})
+            cfg["video_id"] = str(video_id)
+            if window and step.get("block_type") == "input.video":
+                cfg["start_seconds"] = window[0]
+                if window[1] is not None:
+                    cfg["end_seconds"] = window[1]
     return out
 
 
-def steps_with_video(pipeline, video_id):
+def steps_with_video(pipeline, video_id, window=None):
     """A copy of a pipeline's steps with every ``input.video`` step bound to a video.
 
     Lets one pipeline run across many videos (e.g. from the Processing hub) by
     injecting each video into the input step at launch time.
     """
-    return steps_with_video_steps(pipeline.steps, video_id)
+    return steps_with_video_steps(pipeline.steps, video_id, window)
 
 
-def launch_batch(pipeline, videos, user, fresh=False):
+def clip_window(video, window):
+    """``window`` (start_seconds, length_seconds or None for "to the end") cut
+    to this clip: (start, end or None), or None when the clip ends before the
+    start. A clip with no recorded length gets the window as asked."""
+    if not window:
+        return (0, None)
+    start, length = window
+    duration = float(getattr(video, "duration_seconds", 0) or 0)
+    if duration and start >= duration:
+        return None
+    if length is None:
+        return (start, None)
+    end = start + length
+    return (start, None if duration and end >= duration else end)
+
+
+def launch_batch(pipeline, videos, user, fresh=False, window=None):
     """Start one ``PipelineRun`` per video, all sharing a fresh ``batch_id``.
 
     The single place a pipeline is launched over a set of videos — used by the
@@ -102,11 +124,12 @@ def launch_batch(pipeline, videos, user, fresh=False):
     """
     from apps.accounts import quota
 
-    quota.check(user, quota.pipeline_work(pipeline.steps, videos))
+    quota.check(user, quota.pipeline_work(pipeline.steps, videos, window))
     batch_id = uuid.uuid4()
     launched, invalid = [], 0
     for video in videos:
-        steps_for_video = steps_with_video(pipeline, video.pk)
+        part = clip_window(video, window) if window else None
+        steps_for_video = steps_with_video(pipeline, video.pk, part if part != (0, None) else None)
         if validate_steps(steps_for_video):
             invalid += 1
             continue

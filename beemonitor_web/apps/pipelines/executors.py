@@ -289,12 +289,18 @@ def _exec_input_video(step, run, context, inputs, index):
         video = Video.manageable(run.user).get(pk=video_id)
     except (Video.DoesNotExist, ValueError, TypeError):
         return {"error": f"Video {video_id} not found, or not yours to analyze."}
-    return {
+    out = {
         "artifact": "video",
         "video_id": video.pk,
         "storage_key": getattr(video, "storage_key", ""),
         "title": getattr(video, "title", "") or f"Video {video.pk}",
     }
+    # Part of the clip, chosen at launch (memory/53): GPU steps analyse only it.
+    cfg = step.get("config") or {}
+    for key in ("start_seconds", "end_seconds"):
+        if cfg.get(key) not in (None, ""):
+            out[key] = float(cfg[key])
+    return out
 
 
 def _exec_roi_nest_layout(step, run, context, inputs, index):
@@ -1654,6 +1660,11 @@ def build_detect_and_track_config(step, run, context, index):
             config["hotel_polygon"] = roi_out["hotel_polygon"]
         if roi_out.get("nest_layout"):
             config["nest_layout"] = roi_out["nest_layout"]
+    # Part of the clip: in the config, so it is also in the cache key and a
+    # 5-minute result never stands in for the whole clip's.
+    for key in ("start_seconds", "end_seconds"):
+        if video_out.get(key) is not None:
+            config[key] = video_out[key]
     return {"video_id": video_out["video_id"], "config": config}, None
 
 
