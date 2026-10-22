@@ -216,7 +216,8 @@ def _train(manifest: dict, data_yaml: Path) -> dict:
 def _epoch_metrics() -> tuple[list, "int | None"]:
     """Parse ultralytics' per-epoch results.csv into a compact series for the
     web charts. Column names vary across versions, so match by substring.
-    Returns (list of per-epoch dicts, best_epoch by mAP50)."""
+    Returns (list of per-epoch dicts, best_epoch): the epoch best.pt came
+    from, by ultralytics' fitness = 0.1 * mAP50 + 0.9 * mAP50-95."""
     csv_path = WORK / "runs" / "train" / "results.csv"
     if not csv_path.exists():
         return [], None
@@ -256,11 +257,14 @@ def _epoch_metrics() -> tuple[list, "int | None"]:
         return [], None
 
     best_epoch = None
-    best_map = -1.0
+    best_fit = -1.0
     for row in out:
-        m = row.get("mAP50")
-        if m is not None and m > best_map:
-            best_map, best_epoch = m, row["epoch"]
+        m50, m95 = row.get("mAP50"), row.get("mAP50_95")
+        if m50 is None and m95 is None:
+            continue
+        fit = 0.1 * (m50 or 0) + 0.9 * (m95 or 0)
+        if fit > best_fit:
+            best_fit, best_epoch = fit, row["epoch"]
     return out, best_epoch
 
 

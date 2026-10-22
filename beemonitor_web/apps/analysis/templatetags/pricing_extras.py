@@ -11,3 +11,13 @@ def get(mapping, key):
     if not mapping:
         return {}
     return mapping.get(str(key), {})
+
+
+@register.filter
+def gpu_hours(seconds):
+    """Seconds of GPU time as hours, the unit users see (``6712.5`` -> ``1.86``)."""
+    try:
+        hours = float(seconds) / 3600
+    except (TypeError, ValueError):
+        return "--"
+    return f"{hours:.2f}" if hours < 10 else f"{hours:.1f}"

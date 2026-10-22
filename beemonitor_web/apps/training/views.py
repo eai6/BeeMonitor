@@ -449,12 +449,33 @@ class TrainingCreateView(LoginRequiredMixin, CreateView):
 _W, _H, _PAD = 560, 180, 28  # epoch-chart SVG geometry
 
 
-def _line_series(em, keys_colors, y_max):
+def best_epoch_index(em):
+    """Index of the epoch whose weights became best.pt. Ultralytics keeps the
+    epoch with the highest fitness = 0.1 * mAP50 + 0.9 * mAP50-95, not the
+    highest mAP50. None when the series has no mAP values."""
+    best, best_fit = None, -1.0
+    for i, row in enumerate(em):
+        m50, m95 = row.get("mAP50"), row.get("mAP50_95")
+        if m50 is None and m95 is None:
+            continue
+        fit = 0.1 * (m50 or 0) + 0.9 * (m95 or 0)
+        if fit > best_fit:
+            best, best_fit = i, fit
+    return best
+
+
+def _x(i, n):
+    plot_w = _W - 2 * _PAD
+    return _PAD + (plot_w * i / (n - 1) if n > 1 else plot_w / 2)
+
+
+def _line_series(em, keys_colors, y_max, at=None):
     """Build inline-SVG polyline points for each metric series over epochs.
     keys_colors: list of (key, label, color). Returns series with a `points`
-    string sized to the (_W, _H) viewbox and the last value."""
+    string sized to the (_W, _H) viewbox and `value`: the value at epoch
+    index ``at`` (the best epoch), or the last value when ``at`` is None."""
     n = len(em)
-    plot_w, plot_h = _W - 2 * _PAD, _H - 2 * _PAD
+    plot_h = _H - 2 * _PAD
     series = []
     for key, label, color in keys_colors:
         pts = []
@@ -463,32 +484,38 @@ def _line_series(em, keys_colors, y_max):
             v = row.get(key)
             if v is None:
                 continue
-            x = _PAD + (plot_w * i / (n - 1) if n > 1 else plot_w / 2)
             y = _PAD + plot_h * (1 - (v / y_max if y_max else 0))
-            pts.append(f"{x:.1f},{y:.1f}")
+            pts.append(f"{_x(i, n):.1f},{y:.1f}")
             last = v
         if pts:
+            value = em[at].get(key) if at is not None else last
             series.append({"label": label, "color": color,
-                           "points": " ".join(pts), "last": last,
+                           "points": " ".join(pts), "value": value,
                            "single": len(pts) == 1})
     return series
 
 
 def _build_epoch_charts(em):
-    """Two charts (detection metrics 0–1, and losses) from epoch_metrics."""
+    """Two charts (detection metrics 0–1, and losses) from epoch_metrics.
+    Legend values are at the best epoch (the kept weights), so they line up
+    with the metric cards; the losses show the final epoch."""
     loss_vals = [row[k] for row in em for k in ("box_loss", "cls_loss")
                  if row.get(k) is not None]
     loss_max = max(loss_vals) * 1.1 if loss_vals else 1.0
+    best = best_epoch_index(em)
     return {
         "w": _W, "h": _H, "pad": _PAD,
         "epochs": [row["epoch"] for row in em],
+        "best_epoch": em[best]["epoch"] if best is not None else None,
+        "best_x": round(_x(best, len(em)), 1) if best is not None else None,
+        "last_epoch": em[-1]["epoch"],
         "detection": _line_series(em, [
             ("mAP50", "mAP50", "#d97706"),
-            ("mAP50_95", "mAP50-95", "#ea580c"),
+            ("mAP50_95", "mAP50-95", "#0891b2"),
             ("precision", "Precision", "#2563eb"),
             ("recall", "Recall", "#16a34a"),
             ("f1", "F1", "#9333ea"),
-        ], 1.0),
+        ], 1.0, at=best),
         "detection_ymax": 1.0,
         "loss": _line_series(em, [
             ("box_loss", "Box loss", "#dc2626"),
@@ -525,7 +552,9 @@ class TrainingDetailView(LoginRequiredMixin, DetailView):
         em = (self.object.metrics or {}).get("epoch_metrics") or []
         if em:
             ctx["epoch_charts"] = _build_epoch_charts(em)
-        ctx["best_epoch"] = (self.object.metrics or {}).get("best_epoch")
+        # The epoch best.pt came from (older jobs stored the mAP50 peak).
+        ctx["best_epoch"] = (ctx["epoch_charts"]["best_epoch"] if em
+                             else (self.object.metrics or {}).get("best_epoch"))
         return ctx
 
 

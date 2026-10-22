@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load pricing_extras %}
 {% block title %}{{ job.name }} - Training - BeeMonitor{% endblock %}
 
 {% block content %}
@@ -86,8 +87,8 @@
       {% endif %}
       {% if job.execution_seconds %}
       <div class="flex justify-between">
-        <dt class="text-sm text-gray-600">GPU Time</dt>
-        <dd class="text-sm text-gray-900">{{ job.execution_seconds|floatformat:1 }}s</dd>
+        <dt class="text-sm text-gray-600">GPU time</dt>
+        <dd class="text-sm text-gray-900">{{ job.execution_seconds|gpu_hours }} GPU-hours</dd>
       </div>
       {% endif %}
     </dl>
@@ -100,7 +101,8 @@
 <!-- Metrics -->
 {% if job.status == 'completed' and job.metrics %}
 <div class="bg-white shadow rounded-lg p-6 mb-6">
-  <h2 class="text-sm font-medium text-gray-500 uppercase mb-4">Training Metrics</h2>
+  <h2 class="text-sm font-medium text-gray-500 uppercase mb-1">Training Metrics</h2>
+  <p class="text-xs text-gray-500 mb-4">The kept model{% if best_epoch %} (epoch {{ best_epoch }}){% endif %}, tested again on the validation frames after training.</p>
   <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
     <div class="text-center p-3 bg-gray-50 rounded">
       <p class="text-2xl font-bold text-gray-900">{% if job.metrics.mAP50 %}{{ job.metrics.mAP50|floatformat:3 }}{% else %}--{% endif %}</p>
@@ -119,7 +121,7 @@
       <p class="text-xs text-gray-500 mt-1">Recall</p>
     </div>
     <div class="text-center p-3 bg-gray-50 rounded">
-      <p class="text-2xl font-bold text-gray-900">{% if job.metrics.best_epoch %}{{ job.metrics.best_epoch }}{% else %}--{% endif %}</p>
+      <p class="text-2xl font-bold text-gray-900">{% if best_epoch %}{{ best_epoch }}{% else %}--{% endif %}</p>
       <p class="text-xs text-gray-500 mt-1">Best Epoch</p>
     </div>
   </div>
@@ -134,13 +136,17 @@
     {% with c=epoch_charts %}
     <!-- Detection metrics (0–1) -->
     <div>
-      <h3 class="text-xs font-medium text-gray-600 mb-2">Detection quality (higher is better)</h3>
+      <h3 class="text-xs font-medium text-gray-600 mb-2">Detection quality (higher is better){% if c.best_epoch %} · values at epoch {{ c.best_epoch }}{% endif %}</h3>
       <div class="overflow-x-auto">
       <svg viewBox="0 0 {{ c.w }} {{ c.h }}" class="w-full" style="min-width: 360px;" role="img" aria-label="Detection metrics per epoch">
         <line x1="{{ c.pad }}" y1="{{ c.pad }}" x2="{{ c.pad }}" y2="{{ c.h|add:'-28' }}" stroke="#e5e7eb"/>
         <line x1="{{ c.pad }}" y1="{{ c.h|add:'-28' }}" x2="{{ c.w|add:'-28' }}" y2="{{ c.h|add:'-28' }}" stroke="#e5e7eb"/>
         <text x="4" y="{{ c.pad }}" font-size="9" fill="#9ca3af">1.0</text>
         <text x="4" y="{{ c.h|add:'-28' }}" font-size="9" fill="#9ca3af">0</text>
+        {% if c.best_x %}
+        <line x1="{{ c.best_x }}" y1="{{ c.pad }}" x2="{{ c.best_x }}" y2="{{ c.h|add:'-28' }}" stroke="#9ca3af" stroke-dasharray="3 3"/>
+        <text x="{{ c.best_x }}" y="{{ c.pad|add:'-6' }}" font-size="9" fill="#6b7280" text-anchor="middle">best · epoch {{ c.best_epoch }}</text>
+        {% endif %}
         {% for s in c.detection %}
           <polyline points="{{ s.points }}" fill="none" stroke="{{ s.color }}" stroke-width="1.5"
                     stroke-linejoin="round"{% if s.single %} stroke-linecap="round" stroke-width="4"{% endif %}/>
@@ -149,13 +155,13 @@
       </div>
       <div class="flex flex-wrap gap-x-3 gap-y-1 mt-2">
         {% for s in c.detection %}
-        <span class="inline-flex items-center gap-1 text-[11px] text-gray-600"><span class="inline-block w-3 h-[2px]" style="background: {{ s.color }}"></span>{{ s.label }} <span class="text-gray-400">{{ s.last|floatformat:3 }}</span></span>
+        <span class="inline-flex items-center gap-1 text-[11px] text-gray-600"><span class="inline-block w-3 h-[2px]" style="background: {{ s.color }}"></span>{{ s.label }} <span class="text-gray-500 tabular-nums">{{ s.value|floatformat:3 }}</span></span>
         {% endfor %}
       </div>
     </div>
     <!-- Losses -->
     <div>
-      <h3 class="text-xs font-medium text-gray-600 mb-2">Training loss (lower is better)</h3>
+      <h3 class="text-xs font-medium text-gray-600 mb-2">Training loss (lower is better) · values at epoch {{ c.last_epoch }}</h3>
       <div class="overflow-x-auto">
       <svg viewBox="0 0 {{ c.w }} {{ c.h }}" class="w-full" style="min-width: 360px;" role="img" aria-label="Training loss per epoch">
         <line x1="{{ c.pad }}" y1="{{ c.pad }}" x2="{{ c.pad }}" y2="{{ c.h|add:'-28' }}" stroke="#e5e7eb"/>
@@ -169,13 +175,13 @@
       </div>
       <div class="flex flex-wrap gap-x-3 gap-y-1 mt-2">
         {% for s in c.loss %}
-        <span class="inline-flex items-center gap-1 text-[11px] text-gray-600"><span class="inline-block w-3 h-[2px]" style="background: {{ s.color }}"></span>{{ s.label }} <span class="text-gray-400">{{ s.last|floatformat:3 }}</span></span>
+        <span class="inline-flex items-center gap-1 text-[11px] text-gray-600"><span class="inline-block w-3 h-[2px]" style="background: {{ s.color }}"></span>{{ s.label }} <span class="text-gray-500 tabular-nums">{{ s.value|floatformat:3 }}</span></span>
         {% endfor %}
       </div>
     </div>
     {% endwith %}
   </div>
-  <p class="text-[11px] text-gray-400 mt-3">x-axis: epoch 1 → {{ job.metrics.epoch_metrics|length }}. Best mAP50 at epoch {{ job.metrics.best_epoch }}.</p>
+  <p class="text-[11px] text-gray-400 mt-3">x-axis: epoch 1 → {{ epoch_charts.last_epoch }}. The kept model is the epoch with the best mAP50-95 (weighted 0.9, plus 0.1 mAP50), as YOLO picks it. The cards above re-test that model, so they can differ slightly from its epoch's values.</p>
 </div>
 {% endif %}
 

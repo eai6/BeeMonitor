@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load video_filters %}
+{% load video_filters pricing_extras %}
 {% block title %}Job #{{ job.pk }} - BeeMonitor{% endblock %}
 
 {% block content %}
@@ -64,10 +64,10 @@
       {% endcomment %}
       <div>
         <p class="text-gray-500">GPU time</p>
-        <p class="font-medium">{{ job.execution_seconds|floatformat:0 }}s</p>
+        <p class="font-medium">{{ job.execution_seconds|gpu_hours }} GPU-hours</p>
         <p class="text-xs text-gray-400">
           on {{ job.get_gpu_tier_display }}
-          {% if job.gpu_seconds %}&middot; {{ job.gpu_seconds|floatformat:0 }}s inference{% endif %}
+          {% if job.gpu_seconds %}&middot; {{ job.gpu_seconds|gpu_hours }} h inference{% endif %}
         </p>
       </div>
       {% endif %}
@@ -82,8 +82,7 @@
       <summary class="text-sm text-gray-500 cursor-pointer hover:text-gray-700">
         Time breakdown
         {% if job.gpu_seconds %}
-          &mdash; {{ job.gpu_seconds|floatformat:0 }}s on the GPU
-          of {{ job.execution_seconds|floatformat:0 }}s total
+          &mdash; {{ job.gpu_seconds|gpu_hours }} of {{ job.execution_seconds|gpu_hours }} GPU-hours on inference
         {% endif %}
       </summary>
       <table class="mt-2 text-sm w-full max-w-md">
