@@ -19,7 +19,7 @@
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
   <div class="lg:col-span-2 bg-white shadow rounded-lg p-5 flex flex-col gap-3">
     <h2 class="text-base font-semibold">Credits per week, by tier</h2>
-    {% include "platform_admin/_chart.html" %}
+    {% include "components/stacked_bars.html" %}
   </div>
   <div class="bg-white shadow rounded-lg p-5 flex flex-col gap-3 text-sm">
     <h2 class="text-base font-semibold">Users by tier</h2>
@@ -37,6 +37,28 @@
     </div>
     {% endif %}
   </div>
+</div>
+
+<div class="bg-white shadow rounded-lg p-5 flex flex-col gap-2 text-sm">
+  <div class="flex flex-wrap justify-between items-center gap-2">
+    <h2 class="text-base font-semibold">Raw footage due for deletion</h2>
+    <span class="rounded-full px-2.5 py-0.5 text-xs font-semibold {% if retention.mode == 'on' %}bg-orange-100 text-orange-800{% else %}bg-gray-100 text-gray-700{% endif %}">
+      {% if retention.mode == 'on' %}On: notices sent, then deleted{% elif retention.mode == 'dry_run' %}Dry run: nothing is sent or deleted{% else %}Off{% endif %}</span>
+  </div>
+  {% if retention.users %}
+  <p class="text-gray-700">{{ retention.clips }} clips, {{ retention.bytes|filesizeformat }}, from Standard accounts{% if retention.mode == 'on' %}, scheduled{% else %} within the next 30 days, if deletion were on{% endif %}.</p>
+  <div class="overflow-x-auto">
+  <table class="w-full">
+    <thead><tr class="text-left text-gray-600"><th class="py-1.5 font-medium">User</th><th class="text-right font-medium">Clips</th><th class="text-right font-medium">Size</th><th class="text-right font-medium">First deletion</th></tr></thead>
+    <tbody>
+      {% for r in retention.users %}
+      <tr class="border-t border-gray-100"><td class="py-2"><a href="{% url 'platform_admin:user' r.user.pk %}" class="text-green-700 hover:text-green-900">{{ r.user.username }}</a></td><td class="text-right">{{ r.clips }}</td><td class="text-right">{{ r.bytes|filesizeformat }}</td><td class="text-right">{{ r.first_date|date:"M j, Y" }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}<p class="text-gray-600">Nothing due in the next 30 days.</p>{% endif %}
+  <p class="text-xs text-gray-600">Set by RAW_FOOTAGE_DELETION (dry_run / on / off). Notices go out 30, 15 and 7 days ahead; nothing is deleted unless all three were sent.</p>
 </div>
 
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">

@@ -20,4 +20,14 @@ ask from this page.
 
 Requests are reviewed by the BeeMonitor team, who reply by email. Nothing is paid on the platform.
 
+## Raw footage
+
+On Standard, raw footage is kept for 3 months after upload. Before any is deleted you get three
+emails, 30, 15 and 7 days ahead, and a notice on this page with the date and how much. Everything
+derived from it stays: detections, tracks, events, crops and annotations. A clip whose raw footage
+was deleted can't be analysed again.
+
+To keep footage longer, use **Request longer storage**. Nothing is deleted while a request is
+waiting. On Pro, nothing is deleted.
+
 To change your password, sign out and use **Forgot your password?** on the sign-in page.

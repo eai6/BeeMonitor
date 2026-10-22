@@ -636,7 +636,14 @@ class ProfileView(viewsets.ViewSet):
     def list(self, request):
         from apps.accounts.models import UserProfile
 
+        from django.db.models import Sum
+        from django.utils import timezone
+
         profile, _ = UserProfile.objects.get_or_create(user=request.user)
+        unlimited = quota.is_unlimited(request.user)
+        month = request.user.usage_events.filter(
+            created_at__date__gte=timezone.localdate().replace(day=1),
+        ).aggregate(credits=Sum("credits"), seconds=Sum("gpu_seconds"))
         return Response({
             "username": request.user.username,
             "email": request.user.email,
@@ -647,6 +654,9 @@ class ProfileView(viewsets.ViewSet):
             "total_gpu_seconds": profile.total_gpu_seconds,
             # The meter that gates GPU work (apps/accounts/quota.py); the
             # *_credits fields above are the legacy GPU-second counters.
-            "gpu_credits_left": None if quota.is_unlimited(request.user)
-            else float(quota.available(request.user)),
+            "gpu_credits_left": None if unlimited else float(quota.available(request.user)),
+            "gpu_credits_unlimited": unlimited,
+            "gpu_credits_used_this_month": float(month["credits"] or 0),
+            "gpu_hours_this_month": round((month["seconds"] or 0) / 3600, 2),
+            "tier_expires_at": profile.tier_expires_at,
         })

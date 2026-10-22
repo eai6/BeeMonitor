@@ -253,16 +253,16 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
   }
 
   var form = document.getElementById('run-form');
-  if (form) form.addEventListener('submit', function (e) {
-    e.preventDefault();
-    if (!btn || btn.disabled) return;
+  function submitRun(fitOnly) {
     var token = form.querySelector('[name=csrfmiddlewaretoken]').value;
+    var body = new FormData(form);
+    if (fitOnly) body.set('fit_only', '1');
     btn.disabled = true;
     if (credLine) credLine.textContent = 'Submitting…';
     fetch(form.action, {
       method: 'POST',
       headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': token},
-      body: new FormData(form),
+      body: body,
     }).then(function (r) { return r.json().then(function (d) { return {ok: r.ok, d: d}; }); })
       .then(function (res) {
         var d = res.d || {};
@@ -275,11 +275,21 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
             active.add(String(id));
           });
           if (all) all.checked = false;
+        } else if (!fitOnly && d.fits > 0 && d.fits < d.total &&
+                   confirm(d.error + '\n\nYour credits cover ' + d.fits + ' of these ' + d.total +
+                           ' clips. Run those ' + d.fits + ' now?')) {
+          submitRun(true);
+          return;
         } else {
           toast((d && d.error) || 'Could not start analysis.', false);
         }
       }).catch(function () { toast('Could not start analysis.', false); })
       .then(function () { refresh(); });
+  }
+  if (form) form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (!btn || btn.disabled) return;
+    submitRun(false);
   });
 
   function poll() {

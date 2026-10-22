@@ -136,6 +136,13 @@ class Video(models.Model):
     # or a clip whose extraction failed — the grid falls back to a placeholder).
     thumbnail_key = models.CharField(max_length=500, blank=True)
 
+    # Raw footage retention (apps/videos/retention.py). A Standard account's
+    # raw file is deleted on ``raw_delete_on`` (set at least 30 days ahead,
+    # when the first notice goes out); ``raw_deleted_at`` says it's gone. The
+    # row, its results and its thumbnail stay.
+    raw_delete_on = models.DateField(null=True, blank=True, db_index=True)
+    raw_deleted_at = models.DateTimeField(null=True, blank=True)
+
     # A clip, or a full-resolution photo from the device's camera. A photo from
     # a motion burst belongs to the clip recorded right after it (``parent``);
     # a periodic photo stands alone. Photo details (sensor mode, lens, source,
@@ -200,8 +207,11 @@ class Video(models.Model):
         are not part of.
         """
         if user.is_superuser:
-            return (Video.everything if photos else Video.objects).all()
-        return Video.deletable(user, photos=photos)
+            qs = (Video.everything if photos else Video.objects).all()
+        else:
+            qs = Video.deletable(user, photos=photos)
+        # A clip whose raw file was deleted can't be analysed again.
+        return qs.filter(raw_deleted_at__isnull=True)
 
     @staticmethod
     def deletable(user, photos=False):

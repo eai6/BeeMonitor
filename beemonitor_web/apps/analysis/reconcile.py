@@ -162,7 +162,16 @@ def reconcile_all(limit: int = 500) -> dict:
     except Exception:
         logger.exception("heartbeat prune failed")
 
+    # Once a day (one worker claims it): raw footage retention, Pro reminders.
+    daily = {}
+    try:
+        from apps.accounts.daily import run_daily
+        daily = run_daily()
+    except Exception:
+        logger.exception("daily tasks failed")
+
     return {"jobs_checked": len(jobs), "jobs_resolved": resolved,
+            "daily": list(daily),
             "jobs_spawned": spawned,
             "run_users": len(run_user_ids), "annotate_users": len(annotate_user_ids),
             "training_completed": training.get("completed", 0),

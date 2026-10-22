@@ -35,6 +35,12 @@
   {% endif %}
 </div>
 
+{% if video.raw_deleted_at %}
+<div class="rounded-md bg-gray-100 border border-gray-300 px-4 py-3 mb-4 text-sm text-gray-800">The raw footage was deleted on {{ video.raw_deleted_at|date:"M j, Y" }} (kept 3 months on Standard). Its results below are kept; it can't be analysed again.</div>
+{% elif video.raw_delete_on %}
+<div class="rounded-md bg-orange-50 border border-orange-300 px-4 py-3 mb-4 text-sm text-orange-950">The raw footage will be deleted on {{ video.raw_delete_on|date:"M j, Y" }}. Results stay. <a href="{% url 'accounts:usage' %}" class="font-semibold underline">Request longer storage</a></div>
+{% endif %}
+
 {% if video.is_photo %}
 <!-- A full-resolution photo: Fit shows the device's 1280 px preview; 100% loads
      the original (~15 MB) only when asked, at the spot you click, and pans. -->

@@ -22,7 +22,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date
 from django.views.generic import TemplateView, View
 
-from apps.accounts import quota
+from apps.accounts import charts, quota
 from apps.accounts.forms import CouponForm, LoggedPasswordResetForm
 from apps.accounts.models import (AccountRequest, AdminAction, Coupon, CouponRedemption, LoginEvent,
                                   UsageEvent, UserProfile)
@@ -71,12 +71,16 @@ class OverviewView(PlatformPage):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["o"] = stats.overview()
-        weeks, series = stats.weekly_credits(UsageEvent.objects.all(), split="tier")
-        ctx["chart"] = _chart(weeks, [UserProfile.Tier(s).label if s in UserProfile.Tier.values else "Other"
-                                      for s in series])
+        weeks, series = charts.credits_by_period(UsageEvent.objects.all(), split="tier")
+        ctx["chart"] = charts.stacked(weeks, [UserProfile.Tier(s).label if s in UserProfile.Tier.values
+                                              else "Other" for s in series], "Week starting")
         top = (stats.users_with_totals().filter(month_credits__gt=0).order_by("-month_credits")[:8])
         ctx["top"] = [{"user": u, "tier": stats.tier_label(u)} for u in top]
         ctx["recent"] = _recent_activity(12)
+        from apps.videos import retention
+        due = retention.preview()
+        ctx["retention"] = {"mode": retention.mode(), "users": due[:8], "clips": sum(r["clips"] for r in due),
+                            "bytes": sum(r["bytes"] for r in due)}
         return ctx
 
 
@@ -155,7 +159,7 @@ class UserDetailView(PlatformPage):
         profile, _ = UserProfile.objects.get_or_create(user=u)
         quota.expire_tier(profile)
         events = UsageEvent.objects.filter(user=u)
-        weeks, series = stats.weekly_credits(events, split="kind")
+        weeks, series = charts.credits_by_period(events, split="kind")
         life = events.aggregate(cost=Sum("cost_usd"), cr=Sum("credits"))
         ctx.update(
             u=u, profile=profile, tier=stats.tier_label(u), status=stats.status(u),
@@ -163,8 +167,8 @@ class UserDetailView(PlatformPage):
             left=quota.available(u), pending=quota.pending(u),
             requests=AccountRequest.objects.filter(user=u)[:10],
             life_cost=life["cost"] or 0, life_credits=life["cr"] or 0, life_hours=u.life_seconds / 3600,
-            chart=_chart(weeks, [UsageEvent.Kind(s).label if s in UsageEvent.Kind.values else s
-                                 for s in series]),
+            chart=charts.stacked(weeks, [UsageEvent.Kind(s).label if s in UsageEvent.Kind.values else s
+                                         for s in series], "Week starting"),
             usage=[{"e": e, "gpu": GPU_NAMES.get(e.instance_type, e.instance_type),
                     "hours": e.gpu_seconds / 3600} for e in events.order_by("-created_at")[:25]],
             units=Device.objects.filter(owner=u).order_by("-last_seen_at"),
@@ -411,43 +415,6 @@ def _end_sessions(user):
     for s in Session.objects.filter(expire_date__gte=timezone.now()).iterator():
         if str(s.get_decoded().get("_auth_user_id")) == str(user.pk):
             s.delete()
-
-
-# Series colours: distinct in lightness as well as hue.
-CHART_COLORS = ["#1d4ed8", "#fb923c", "#93c5fd", "#7c2d12", "#9ca3af", "#0f766e"]
-
-
-def _nice_max(peak):
-    """The top of the y-axis: the peak rounded up to 1, 2, 2.5 or 5 × 10^n."""
-    import math
-
-    if peak <= 0:
-        return 1
-    base = 10 ** math.floor(math.log10(peak))
-    for step in (1, 2, 2.5, 5, 10):
-        if peak <= step * base:
-            return step * base
-    return 10 * base
-
-
-def _chart(weeks, labels, height=160):
-    """Stacked bars as pixel heights, so the template draws them with no JS,
-    with a y-axis (credits, in fifths of a round top) and week labels on the
-    x-axis."""
-    peak = max([w["total"] for w in weeks] + [0])
-    top = _nice_max(peak)
-    colors = [CHART_COLORS[i % len(CHART_COLORS)] for i in range(len(labels))]
-    return {
-        "series": [{"label": label, "color": c} for label, c in zip(labels, colors)],
-        "peak": peak,
-        # Top to bottom, as the axis is drawn; ``y`` is the pixel offset from the top.
-        "ticks": [{"v": f"{top * f:g}", "y": round(height * (1 - f))} for f in (1, 0.8, 0.6, 0.4, 0.2, 0)],
-        "weeks": [{"week": w["week"], "total": w["total"],
-                   "bars": [{"h": round(v / top * height), "color": colors[i], "label": labels[i], "v": v}
-                            for i, v in enumerate(w["values"]) if v]}
-                  for w in weeks],
-        "height": height,
-    }
 
 
 def _recent_activity(n):

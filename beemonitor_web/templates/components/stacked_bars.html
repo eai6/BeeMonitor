@@ -1,4 +1,4 @@
-{# Stacked weekly bars with labelled axes. Needs `chart` from views._chart. #}
+{# Credits as stacked bars with labelled axes. Needs `chart` from apps/accounts/charts.stacked. #}
 <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-700">
   {% for s in chart.series %}<span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm" style="background: {{ s.color }}"></span>{{ s.label }}</span>{% empty %}<span class="text-gray-600">No GPU work in these weeks.</span>{% endfor %}
 </div>
@@ -11,20 +11,20 @@
   <!-- plot: gridlines behind the bars -->
   <div class="relative flex-1" style="height: {{ chart.height }}px">
     {% for t in chart.ticks %}<div class="absolute inset-x-0 border-t {% if forloop.last %}border-gray-400{% else %}border-gray-100{% endif %}" style="top: {{ t.y }}px"></div>{% endfor %}
-    <div class="absolute inset-0 flex items-end gap-1.5 sm:gap-2.5" role="img" aria-label="Credits per week">
-      {% for w in chart.weeks %}
-      <div class="flex-1 flex flex-col-reverse gap-px" title="Week of {{ w.week|date:'M j' }}: {{ w.total|floatformat:1 }} credits">
-        {% for b in w.bars %}<div style="height: {{ b.h }}px; background: {{ b.color }}" class="{% if forloop.last %}rounded-t-sm{% endif %}"></div>{% endfor %}
+    <div class="absolute inset-0 flex items-end gap-1.5 sm:gap-2.5" role="img" aria-label="Credits per {{ chart.x_title|lower }}">
+      {% for b in chart.bars %}
+      <div class="flex-1 flex flex-col-reverse gap-px" title="{{ chart.x_title }} {{ b.start|date:'M j' }}: {{ b.total|floatformat:1 }} credits">
+        {% for p in b.parts %}<div style="height: {{ p.h }}px; background: {{ p.color }}" class="{% if forloop.last %}rounded-t-sm{% endif %}"></div>{% endfor %}
       </div>
       {% endfor %}
     </div>
   </div>
 </div>
-<!-- x-axis: a date under every other week, then the title -->
+<!-- x-axis: a date under every few bars, then the title -->
 <div class="flex gap-2">
   <div class="w-4 shrink-0"></div><div class="w-8 shrink-0"></div>
   <div class="flex-1 flex gap-1.5 sm:gap-2.5 text-xs text-gray-600">
-    {% for w in chart.weeks %}<span class="flex-1 text-center whitespace-nowrap">{% if forloop.counter0|divisibleby:2 %}{{ w.week|date:"M j" }}{% endif %}</span>{% endfor %}
+    {% for b in chart.bars %}<span class="flex-1 text-center whitespace-nowrap">{% if b.label %}{{ b.start|date:"M j" }}{% endif %}</span>{% endfor %}
   </div>
 </div>
-<p class="text-center text-xs font-medium text-gray-600">Week starting</p>
+<p class="text-center text-xs font-medium text-gray-600">{{ chart.x_title }}</p>

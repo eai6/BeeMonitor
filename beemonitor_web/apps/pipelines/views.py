@@ -288,7 +288,7 @@ def run_on_videos(request):
     # disable the cap entirely.
     from django.conf import settings
     MAX_BATCH = getattr(settings, "PIPELINE_MAX_BATCH", 50000)
-    over_cap = 0
+    over_cap = gone = 0
     if request.POST.get("all_filtered"):
         from apps.analysis.views import apply_video_filters
         vqs = apply_video_filters(_source(), request.POST)
@@ -302,16 +302,29 @@ def run_on_videos(request):
             return _fail("No videos selected.")
         vqs = _source().filter(pk__in=video_ids)
         videos = list(vqs[:MAX_BATCH] if MAX_BATCH else vqs)
+        # Selected clips whose raw footage was deleted (manageable leaves them out).
+        gone = Video.everything.filter(pk__in=video_ids, raw_deleted_at__isnull=False).count()
     if not videos:
-        return _fail("No videos match the current filter.")
+        return _fail("The raw footage of these clips was deleted, so they can't be analysed again."
+                     if gone else "No videos match the current filter.")
     # Groups this launch for aggregate results (combined CSVs, cross-video trips).
     # fresh: the cache is keyed on clip + config, not on the build, so running
     # the same pipeline again after a fix would hand back the old result.
-    from apps.accounts.quota import QuotaExceeded
+    # "Run the ones that fit": after a refusal, the hub resends with fit_only
+    # and the batch is cut to the clips the credits cover, in list order.
+    if request.POST.get("fit_only") == "1":
+        videos = videos[:quota.how_many_fit(
+            request.user, [quota.pipeline_work(pipeline.steps, [v]) for v in videos])]
+        if not videos:
+            return _fail("None of these clips fit your credits.", status=402)
     try:
         batch_id, launched, invalid = engine.launch_batch(
             pipeline, videos, request.user, fresh=request.POST.get("fresh") == "1")
-    except QuotaExceeded as e:
+    except quota.QuotaExceeded as e:
+        if is_ajax:
+            fits = quota.how_many_fit(
+                request.user, [quota.pipeline_work(pipeline.steps, [v]) for v in videos])
+            return JsonResponse({"error": e.message, "fits": fits, "total": len(videos)}, status=402)
         return _fail(e.message, status=402)
 
     # The GPU steps were created QUEUED. Kick the queue once for the whole batch:
@@ -332,6 +345,8 @@ def run_on_videos(request):
     msg = f"Started “{pipeline.title}” on {len(launched)} video(s)."
     if invalid:
         msg += f" Skipped {invalid}."
+    if gone:
+        msg += f" Left out {gone} whose raw footage was deleted."
     if over_cap:
         msg += f" ({over_cap} more matched but this run is capped at {MAX_BATCH} — narrow the filter and run again for the rest.)"
     if is_ajax:

@@ -136,6 +136,23 @@ class EntryPointTests(CreditsTestCase):
         self.assertFalse(PipelineRun.objects.exists())
         self.assertFalse(Job.objects.exists())
 
+    def test_a_refused_batch_offers_the_clips_that_fit(self):
+        from apps.pipelines.models import Pipeline, PipelineRun
+        pipeline = Pipeline.objects.create(user=self.user, title="p", steps=[
+            {"id": "v", "block_type": "input.video", "config": {}},
+            {"id": "d", "block_type": "detect.bee", "config": {}, "inputs": {"video": "v"}},
+        ])
+        small = self.clip(seconds=600, n=1)
+        data = {"pipeline": pipeline.pk, "video_ids": [self.big.pk, small.pk]}
+        r = self.client.post(reverse("pipelines:run_on_videos"), data, HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertEqual(r.status_code, 402)
+        self.assertEqual((r.json()["fits"], r.json()["total"]), (1, 2))
+        with mock.patch("apps.analysis.views._drain_queue"):
+            r = self.client.post(reverse("pipelines:run_on_videos"), {**data, "fit_only": "1"},
+                                 HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(PipelineRun.objects.count(), 1)
+
     def test_a_clip_that_fits_still_runs(self):
         small = self.clip(seconds=600, n=1)
         with mock.patch("apps.analysis.views._spawn_gpu_batch"):
@@ -173,7 +190,9 @@ class UsagePageTests(CreditsTestCase):
         quota.charge(self.user, "analysis", 7200, T4, "job", 2)
         self.client.force_login(self.user)
         r = self.client.get(reverse("accounts:usage"))
-        self.assertIn('"credits": 2.0', r.context["monthly_credits_json"])
+        self.assertEqual(r.context["chart"]["bars"][-1]["total"], 2.0)   # today, in credits
+        self.assertEqual(r.context["chart"]["series"][0]["label"], "Video analysis")
+        self.assertEqual([p["label"] for p in r.context["plans"]], ["Standard", "Pro"])
         self.assertNotContains(r, "Cost ($)")
         self.assertNotContains(r, "Concurrent")
         self.assertNotContains(r, "Enterprise")

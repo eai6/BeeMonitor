@@ -11,7 +11,7 @@ from decimal import Decimal
 from django.contrib.auth import get_user_model
 from django.db.models import (Count, DecimalField, F, FloatField, IntegerField, OuterRef, Q,
                               Subquery, Sum, Value)
-from django.db.models.functions import Coalesce, TruncWeek
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from apps.accounts import quota
@@ -118,23 +118,3 @@ def overview():
         "failed_logins_7d": LoginEvent.objects.filter(success=False, created_at__gte=week_ago).count(),
         "month_start": since,
     }
-
-
-def weekly_credits(events, weeks=12, split="kind"):
-    """Credits per week for the last ``weeks`` weeks, split by ``kind`` or by
-    the user's tier. Returns (rows, series) ready for a stacked bar chart."""
-    start = (timezone.now() - timedelta(weeks=weeks - 1)).date()
-    start -= timedelta(days=start.weekday())
-    key = "kind" if split == "kind" else "user__profile__tier"
-    rows = (events.filter(created_at__date__gte=start).annotate(week=TruncWeek("created_at"))
-            .values("week", key).annotate(cr=Sum("credits")).order_by("week"))
-    series = sorted({r[key] or "" for r in rows})
-    by_week = {}
-    for r in rows:
-        by_week.setdefault(r["week"].date(), {})[r[key] or ""] = float(r["cr"] or 0)
-    out = []
-    for i in range(weeks):
-        wk = start + timedelta(weeks=i)
-        vals = by_week.get(wk, {})
-        out.append({"week": wk, "values": [vals.get(s, 0.0) for s in series], "total": sum(vals.values())})
-    return out, series

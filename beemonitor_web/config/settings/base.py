@@ -35,6 +35,11 @@ SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", INSECURE_DEV_SECRET_KEY)
 # the request's Host header, which the client chooses. Empty = use the request.
 SITE_DOMAIN = os.environ.get("SITE_DOMAIN", "")
 
+# Raw footage retention (apps/videos/retention.py): "dry_run" only reports on
+# the platform dashboard; "on" sends the 30/15/7-day notices and deletes;
+# "off" does nothing. Deletion can't be undone, so it starts as a dry run.
+RAW_FOOTAGE_DELETION = os.environ.get("RAW_FOOTAGE_DELETION", "dry_run")
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",

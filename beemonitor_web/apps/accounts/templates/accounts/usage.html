@@ -59,6 +59,15 @@
   </div>
 </div>
 
+{% for d in deletions %}
+<div class="rounded-lg border border-orange-300 bg-orange-50 p-4 mb-6 flex flex-wrap items-center gap-4 text-sm text-orange-950">
+  <span class="flex-1 min-w-[16rem]"><b>The raw footage of {{ d.clips }} clip{{ d.clips|pluralize }} ({{ d.bytes|filesizeformat }}) will be deleted on {{ d.date|date:"M j, Y" }}.</b>
+    Detections, tracks, events, crops and annotations stay. Deleted clips can't be analysed again.</span>
+  {% if "storage" in open_kinds %}<span class="font-semibold">Storage request waiting: nothing is deleted until it's decided.</span>
+  {% else %}<button type="button" @click="ask = 'storage'" class="h-10 px-4 rounded-md border border-orange-600 bg-white font-semibold hover:bg-orange-100">Request longer storage</button>{% endif %}
+</div>
+{% endfor %}
+
 {% if requests %}
 <div class="bg-white shadow rounded-lg p-6 mb-6">
   <h2 class="text-lg font-medium text-gray-900 mb-3">Your requests</h2>
@@ -186,63 +195,25 @@
 </div>
 {% endif %}
 
-<!-- Credits per month -->
-<div class="bg-white shadow rounded-lg p-6 mb-6">
-  <h2 class="text-lg font-medium text-gray-900 mb-4">Credits used per month</h2>
-  <canvas id="monthlyCreditsChart" height="200"></canvas>
+<!-- Credits per day -->
+<div class="bg-white shadow rounded-lg p-6 mb-6 flex flex-col gap-3">
+  <h2 class="text-lg font-medium text-gray-900">Credits per day, last 30 days</h2>
+  {% include "components/stacked_bars.html" %}
 </div>
 
-<!-- Plans -->
+<!-- Plans (from TIER_LIMITS) -->
 <div class="bg-white shadow rounded-lg p-6">
   <h2 class="text-lg font-medium text-gray-900 mb-4">Plans</h2>
-  <table class="min-w-full text-sm">
-    <thead>
-      <tr class="border-b border-gray-200">
-        <th class="py-2 text-left text-gray-500"></th>
-        <th class="py-2 text-center text-gray-500">Standard</th>
-        <th class="py-2 text-center text-gray-500">Pro</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr class="border-b border-gray-100">
-        <td class="py-2">GPU credits</td>
-        <td class="py-2 text-center">{{ starting_credits }} to start, more on request</td>
-        <td class="py-2 text-center">Unlimited</td>
-      </tr>
-      <tr class="border-b border-gray-100">
-        <td class="py-2">Raw footage storage</td>
-        <td class="py-2 text-center">3 months, longer on request</td>
-        <td class="py-2 text-center">Kept while subscribed</td>
-      </tr>
-    </tbody>
-  </table>
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+    {% for p in plans %}
+    <div class="rounded-lg p-5 flex flex-col gap-1.5 text-sm text-gray-700 {% if p.key == profile.tier and not request.user.is_superuser %}border-2 border-green-600{% else %}border border-gray-200{% endif %}">
+      <div class="flex justify-between"><strong class="text-base text-gray-900">{{ p.label }}</strong>{% if p.key == profile.tier and not request.user.is_superuser %}<span class="text-xs font-semibold text-green-700">Your plan</span>{% endif %}</div>
+      <span class="text-gray-600">{{ p.who }}</span>
+      <span>Credits: {{ p.credits }}</span>
+      <span>Raw footage: {{ p.raw_footage }}</span>
+      <span>All features</span>
+    </div>
+    {% endfor %}
+  </div>
 </div>
-
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js" integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ" crossorigin="anonymous"></script>
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    const data = JSON.parse('{{ monthly_credits_json|escapejs }}');
-    if (data.length > 0) {
-        new Chart(document.getElementById('monthlyCreditsChart'), {
-            type: 'bar',
-            data: {
-                labels: data.map(d => d.month),
-                datasets: [{
-                    label: 'Credits',
-                    data: data.map(d => d.credits),
-                    backgroundColor: 'rgba(22, 163, 74, 0.7)',
-                    borderRadius: 4,
-                }]
-            },
-            options: {
-                responsive: true,
-                scales: {
-                    y: { beginAtZero: true, title: { display: true, text: 'Credits' } }
-                },
-                plugins: { legend: { display: false } }
-            }
-        });
-    }
-});
-</script>
 {% endblock %}

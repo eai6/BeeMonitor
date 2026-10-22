@@ -854,6 +854,10 @@ if deploy_service:
         #   pulumi config set sampling-backend sagemaker && pulumi up
         # only after the endpoint runs an image with the sample_label task.
         "SAMPLING_BACKEND": config.get("sampling-backend") or "local",
+        # Raw footage retention (apps/videos/retention.py). Starts as a dry run
+        # that only reports on /platform/; once the numbers look right:
+        #   pulumi config set raw-footage-deletion on && pulumi up
+        "RAW_FOOTAGE_DELETION": config.get("raw-footage-deletion") or "dry_run",
     })
 
     runtime_secrets = pulumi.Output.all(

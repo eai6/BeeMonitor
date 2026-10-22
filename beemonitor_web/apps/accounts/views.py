@@ -1,5 +1,3 @@
-import json
-
 from django.contrib import messages
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
@@ -163,6 +161,8 @@ class UsageDashboardView(LoginRequiredMixin, TemplateView):
         ctx["open_kinds"] = set(AccountRequest.objects.filter(
             user=user, status=AccountRequest.Status.PENDING).values_list("kind", flat=True))
         ctx["starting_credits"] = quota.STARTING_CREDITS
+        from apps.videos import retention
+        ctx["deletions"] = [] if quota.is_unlimited(user) else retention.scheduled_for(user)
         ctx["request_form"] = kwargs.get("request_form")
 
         # Job stats
@@ -173,17 +173,15 @@ class UsageDashboardView(LoginRequiredMixin, TemplateView):
         ctx["failed_jobs"] = jobs.filter(status=Job.Status.FAILED).count()
         ctx["processing_jobs"] = jobs.filter(status=Job.Status.PROCESSING).count()
 
-        # Credits per month for the chart — every kind of GPU work, from
-        # UsageEvent. Users see credits, not dollars.
-        from django.db.models.functions import TruncMonth
-        monthly_credits = (
-            user.usage_events.annotate(month=TruncMonth("created_at"))
-            .values("month").annotate(credits=Sum("credits")).order_by("month")
-        )
-        ctx["monthly_credits_json"] = json.dumps([
-            {"month": m["month"].strftime("%Y-%m"), "credits": round(float(m["credits"] or 0), 1)}
-            for m in monthly_credits
-        ])
+        # Credits per day for the last 30 days, by kind of work (UsageEvent).
+        # Users see credits, not dollars.
+        from . import charts
+        from .models import UsageEvent
+        days, series = charts.credits_by_period(user.usage_events.all(), periods=30, unit="day")
+        ctx["chart"] = charts.stacked(
+            days, [UsageEvent.Kind(k).label if k in UsageEvent.Kind.values else k for k in series],
+            "Day", label_every=5)
+        ctx["plans"] = [{"key": k, **v} for k, v in TIER_LIMITS.items()]
 
         # Coupon redemption history
         ctx["redemptions"] = CouponRedemption.objects.filter(user=user).select_related("coupon").order_by("-redeemed_at")

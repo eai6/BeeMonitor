@@ -14,12 +14,18 @@ from django.utils import timezone
 TIER_LIMITS = {
     "standard": {
         "label": "Standard",
+        "who": "Every account",
+        "credits": "25 to start, more on request",
+        "raw_footage": "Kept 3 months; longer on request",
         "unlimited_gpu": False,
         "monthly_credits": 25000,
         "max_video_hours_per_month": 500,
     },
     "pro": {
         "label": "Pro",
+        "who": "Annual, on request",
+        "credits": "Unlimited",
+        "raw_footage": "Kept while on Pro",
         "unlimited_gpu": True,
         "monthly_credits": 100000,
         "max_video_hours_per_month": 5000,
@@ -415,3 +421,45 @@ class AccountRequest(models.Model):
         if self.kind == self.Kind.STORAGE:
             return f"Keep raw footage until {self.until:%b %-d, %Y}" if self.until else "Longer storage"
         return "Pro" + (f" until {self.until:%b %-d, %Y}" if self.until else ", annual")
+
+
+class RetentionNotice(models.Model):
+    """One email telling a user their raw footage will be deleted on
+    ``delete_on``, ``days_before`` (30, 15 or 7) days ahead. Nothing is deleted
+    until all three were sent and each has had its full time
+    (apps/videos/retention.py)."""
+
+    class Status(models.TextChoices):
+        SENT = "sent", "Sent"
+        FAILED = "failed", "Failed"
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name="retention_notices")
+    delete_on = models.DateField()
+    days_before = models.PositiveSmallIntegerField()
+    status = models.CharField(max_length=10, choices=Status.choices)
+    clips = models.PositiveIntegerField(default=0)
+    bytes = models.BigIntegerField(default=0)
+    # The day of the daily pass that sent it: the waits count from here.
+    sent_on = models.DateField()
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["user", "delete_on", "days_before"])]
+
+    def __str__(self):
+        return f"{self.user_id} {self.days_before}d before {self.delete_on}: {self.status}"
+
+
+class DailyRun(models.Model):
+    """The day a once-a-day task last ran (apps/accounts/daily.py). Claimed
+    with one conditional UPDATE, so of all the workers ticking the reconcile
+    loop exactly one runs each task each day."""
+
+    name = models.CharField(max_length=40, unique=True)
+    ran_on = models.DateField(null=True, blank=True)
+    result = models.JSONField(default=dict, blank=True)
+
+    def __str__(self):
+        return f"{self.name} {self.ran_on}"

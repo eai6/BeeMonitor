@@ -296,6 +296,27 @@ def check(user, items) -> Decimal:
     return needed
 
 
+def how_many_fit(user, per_video) -> int:
+    """How many of the leading launches fit the user's credits now.
+
+    ``per_video`` is one list of ``Work`` per clip, in the order they would
+    run; a refused batch can then offer to run just the first that many."""
+    from .models import CreditHold
+
+    if is_unlimited(user):
+        return len(per_video)
+    held = (CreditHold.objects.filter(user=user, expires_at__gt=timezone.now())
+            .aggregate(s=Sum("credits"))["s"] or Decimal(0))
+    left = available(user) - pending(user) - held
+    n = 0
+    for items in per_video:
+        left -= estimate(items)
+        if left < 0:
+            break
+        n += 1
+    return n
+
+
 # ── Charging ─────────────────────────────────────────────────────────────────
 
 def charge(user, kind, gpu_seconds, instance, source_type, source_id, units=0, cost_usd=None):
