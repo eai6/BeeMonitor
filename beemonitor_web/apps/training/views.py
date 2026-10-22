@@ -224,11 +224,12 @@ def _build_training_payload(job: TrainingJob) -> tuple[list, list[dict]]:
         base_name = f"{ann.video.title}_f{ann.frame_number:06d}"
         yolo_label = _yolo_label_subset(ann, name_to_new_id) if name_to_new_id is not None else ann.to_yolo_format()
         box_count = len(ann.boxes) if ann.boxes else 0
-        video_groups[vid_pk]["frames"].append({
-            "frame_number": ann.frame_number,
-            "filename": f"{base_name}.jpg",
-            "label": yolo_label,
-        })
+        frame = {"frame_number": ann.frame_number, "filename": f"{base_name}.jpg", "label": yolo_label}
+        if ann.frame_image_path:
+            # The JPEG saved when the frame was sampled: the trainer downloads
+            # this instead of the whole video.
+            frame["image_key"] = ann.frame_image_path
+        video_groups[vid_pk]["frames"].append(frame)
         total_frames += 1
         logger.debug(
             "[train:%s] Annotation: video=%s frame=%d boxes=%d label_lines=%d",
@@ -343,6 +344,7 @@ def _spawn_training_job(job_pk: int) -> None:
             StoppingCondition={"MaxRuntimeInSeconds": _MAX_TRAIN_SECONDS},
             Environment={
                 "AWS_S3_BUCKET_RAW_VIDEOS": settings.AWS_S3_BUCKET_RAW_VIDEOS,
+                "AWS_S3_BUCKET_PROCESSED": settings.AWS_S3_BUCKET_PROCESSED,
                 "AWS_S3_BUCKET_MODELS": settings.AWS_S3_BUCKET_MODELS,
                 "SAGEMAKER_OUTPUT_BUCKET": settings.SAGEMAKER_OUTPUT_BUCKET,
                 "AWS_REGION": settings.AWS_REGION,

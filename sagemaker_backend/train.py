@@ -11,8 +11,10 @@ wrapper). SageMaker provides:
 The manifest (written by Django from the annotation project) tells us which
 frames of which videos to train on, plus the hyperparameters. We:
 
-  1. download each video from the raw-videos bucket,
-  2. extract the annotated frames + write YOLO label .txt files (80/20 split),
+  1. download each annotated frame's saved JPEG (from sampling) from the
+     processed bucket; only frames without one are cut from their video,
+     one video at a time, deleted before the next,
+  2. write YOLO label .txt files beside them (80/20 split),
   3. train `YOLO(base_model)` on the assembled dataset,
   4. upload best.pt to the models bucket at the requested key, and
   5. write a result.json (metrics + storage_key) to the output bucket for the
@@ -40,6 +42,7 @@ FAILURE_FILE = Path("/opt/ml/output/failure")
 WORK = Path("/tmp/bm_train")
 
 RAW_VIDEOS_BUCKET = os.environ.get("AWS_S3_BUCKET_RAW_VIDEOS", "")
+PROCESSED_BUCKET = os.environ.get("AWS_S3_BUCKET_PROCESSED", "")
 MODELS_BUCKET = os.environ.get("AWS_S3_BUCKET_MODELS", "")
 OUTPUT_BUCKET = os.environ.get("SAGEMAKER_OUTPUT_BUCKET", "")
 REGION = os.environ.get("AWS_REGION", "us-east-1")
@@ -52,24 +55,22 @@ def log(msg: str) -> None:
 
 
 def _build_dataset(manifest: dict, ds_dir: Path) -> tuple[Path, int, int]:
-    """Download videos, extract annotated frames + labels into a YOLO tree.
+    """Assemble the annotated frames + labels into a YOLO tree.
+
+    A frame saved when it was sampled is downloaded as it is. Only frames with
+    no saved image are cut from their video, one video at a time (downloaded,
+    read in order, deleted), so disk and memory stay at one video plus the
+    frames. Downloading every video first (683 clips, ~300 GB, for 5,296
+    frames) ran the instance out of space and memory.
 
     Returns (path to the written data.yaml, n_train, n_val).
     """
     classes = manifest["classes"]
-    samples = []  # (filename, label_text, video_local, frame_number)
-
-    vids_dir = WORK / "videos"
-    vids_dir.mkdir(parents=True, exist_ok=True)
-
+    samples = []  # (filename, label_text, video_blob, frame_number, image_key)
     for va in manifest["video_annotations"]:
-        blob = va["video_blob_path"]
-        local = vids_dir / (blob.replace("/", "_"))
-        if not local.exists():
-            log(f"downloading s3://{RAW_VIDEOS_BUCKET}/{blob}")
-            _s3.download_file(RAW_VIDEOS_BUCKET, blob, str(local))
         for fr in va["frames"]:
-            samples.append((fr["filename"], fr["label"], local, int(fr["frame_number"])))
+            samples.append((fr["filename"], fr["label"], va["video_blob_path"], int(fr["frame_number"]),
+                            fr.get("image_key") or ""))
 
     if not samples:
         raise RuntimeError("manifest has no annotated frames to train on")
@@ -88,32 +89,61 @@ def _build_dataset(manifest: dict, ds_dir: Path) -> tuple[Path, int, int]:
         (ds_dir / "images" / split).mkdir(parents=True, exist_ok=True)
         (ds_dir / "labels" / split).mkdir(parents=True, exist_ok=True)
 
-    extracted = 0
-    n_train = 0
-    n_val = 0
-    caps: dict = {}
-    for i, (filename, label, video_local, frame_number) in enumerate(samples):
-        cap = caps.get(str(video_local))
-        if cap is None:
-            cap = cv2.VideoCapture(str(video_local))
-            caps[str(video_local)] = cap
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
-        ok, frame = cap.read()
-        if not ok or frame is None:
-            log(f"  skip {filename}: could not read frame {frame_number}")
-            continue
+    counts = {"train": 0, "val": 0}
+
+    def _place(i, filename, label, write_image):
         stem = Path(filename).stem
         targets = ["train", "val"] if tiny else (["val"] if i in val_set else ["train"])
         for split in targets:
-            cv2.imwrite(str(ds_dir / "images" / split / f"{stem}.jpg"), frame)
+            write_image(ds_dir / "images" / split / f"{stem}.jpg")
             (ds_dir / "labels" / split / f"{stem}.txt").write_text(label or "")
-            if split == "train":
-                n_train += 1
+            counts[split] += 1
+
+    # The split is decided above, on the full sorted list. Frames saved when
+    # they were sampled are downloaded as they are (a few hundred KB each);
+    # only frames with no saved image are cut from their video, video by
+    # video, in order (sequential reads, no back-seeks).
+    extracted = 0
+    by_video: dict = {}
+    for i, (filename, label, blob, frame_number, image_key) in enumerate(samples):
+        if image_key and PROCESSED_BUCKET:
+            jpg = WORK / "frame.jpg"
+            try:
+                _s3.download_file(PROCESSED_BUCKET, image_key, str(jpg))
+            except Exception as e:
+                log(f"  {filename}: saved frame unreadable ({e}); cutting it from the video")
             else:
-                n_val += 1
-        extracted += 1
-    for cap in caps.values():
-        cap.release()
+                import shutil
+                _place(i, filename, label, lambda dest: shutil.copyfile(jpg, dest))
+                extracted += 1
+                continue
+        by_video.setdefault(blob, []).append((frame_number, i, filename, label))
+    log(f"{extracted} saved frames downloaded; {sum(len(f) for f in by_video.values())} "
+        f"frames to cut from {len(by_video)} videos")
+
+    vids_dir = WORK / "videos"
+    vids_dir.mkdir(parents=True, exist_ok=True)
+    for v, (blob, frames) in enumerate(by_video.items(), 1):
+        local = vids_dir / blob.replace("/", "_")
+        log(f"video {v}/{len(by_video)}: s3://{RAW_VIDEOS_BUCKET}/{blob} ({len(frames)} frames)")
+        try:
+            _s3.download_file(RAW_VIDEOS_BUCKET, blob, str(local))
+        except Exception as e:
+            log(f"  skip video: could not download ({e})")
+            continue
+        cap = cv2.VideoCapture(str(local))
+        try:
+            for frame_number, i, filename, label in sorted(frames):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    log(f"  skip {filename}: could not read frame {frame_number}")
+                    continue
+                _place(i, filename, label, lambda dest, f=frame: cv2.imwrite(str(dest), f))
+                extracted += 1
+        finally:
+            cap.release()
+            local.unlink(missing_ok=True)
 
     log(f"assembled {extracted}/{len(samples)} frames "
         f"({'tiny: train==val' if tiny else 'train/val 80/20'})")
@@ -127,7 +157,7 @@ def _build_dataset(manifest: dict, ds_dir: Path) -> tuple[Path, int, int]:
         f"nc: {len(classes)}\n"
         f"names:\n{names_block}\n"
     )
-    return data_yaml, n_train, n_val
+    return data_yaml, counts["train"], counts["val"]
 
 
 def _train(manifest: dict, data_yaml: Path) -> dict:

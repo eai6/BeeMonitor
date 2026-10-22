@@ -416,6 +416,14 @@ aws.iam.RolePolicy(
                     "Resource": [web_raw_videos_arn, f"{web_raw_videos_arn}/*"],
                 },
                 {
+                    # The annotated frames themselves (sampled JPEGs), so the
+                    # trainer needn't download whole videos to cut them out.
+                    "Sid": "ReadFrames",
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject"],
+                    "Resource": [f"{web_processed_arn}/*"],
+                },
+                {
                     "Sid": "WriteModels",
                     "Effect": "Allow",
                     "Action": ["s3:PutObject", "s3:GetObject", "s3:ListBucket"],
