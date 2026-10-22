@@ -37,7 +37,7 @@
       <option value="storage" {% if g.sort == 'storage' %}selected{% endif %}>Storage</option>
       <option value="clips" {% if g.sort == 'clips' %}selected{% endif %}>Clips</option>
       <option value="units" {% if g.sort == 'units' %}selected{% endif %}>Units</option>
-      <option value="login" {% if g.sort == 'login' %}selected{% endif %}>Last login</option>
+      <option value="login" {% if g.sort == 'login' %}selected{% endif %}>Last sign-in</option>
       <option value="joined" {% if g.sort == 'joined' %}selected{% endif %}>Newest</option>
       <option value="name" {% if g.sort == 'name' %}selected{% endif %}>Username</option>
     </select></label>
@@ -45,33 +45,37 @@
 </form>
 
 <div class="bg-white shadow rounded-lg overflow-x-auto">
-  <table class="w-full text-sm whitespace-nowrap">
+  <table class="w-full text-[13px]">
     <thead>
-      <tr class="bg-gray-50 text-left text-gray-600">
-        <th class="px-3 py-2.5 font-semibold">User</th><th class="px-2 font-semibold">Tier</th>
-        <th class="px-2 font-semibold text-right">Credits this month</th><th class="px-2 font-semibold text-right">Lifetime GPU-h</th>
-        <th class="px-2 font-semibold text-right">Storage</th><th class="px-2 font-semibold text-right">Units</th>
-        <th class="px-2 font-semibold text-right">Clips</th><th class="px-2 font-semibold">Last login</th>
-        <th class="px-2 font-semibold">Last seen</th><th class="px-3 font-semibold">Status</th>
+      <tr class="bg-gray-50 text-left text-gray-600 whitespace-nowrap">
+        <th class="pl-3 pr-2 py-2.5 font-semibold">User</th>
+        <th class="px-2 font-semibold">Tier</th>
+        <th class="px-2 font-semibold text-right" title="Credits used this month">Credits</th>
+        <th class="px-2 font-semibold text-right" title="Lifetime GPU-hours">GPU-h</th>
+        <th class="px-2 font-semibold text-right">Storage</th>
+        <th class="px-2 font-semibold text-right">Units</th>
+        <th class="px-2 font-semibold text-right">Clips</th>
+        <th class="px-2 font-semibold" title="Last sign-in or request, whichever is later">Last active</th>
+        <th class="pl-2 pr-3 font-semibold">Status</th>
       </tr>
     </thead>
     <tbody>
       {% for r in page %}{% with u=r.user %}
-      <tr class="border-t border-gray-100">
-        <td class="px-3 py-2.5"><a href="{% url 'platform_admin:user' u.pk %}" class="font-semibold text-green-700 hover:text-green-900">{{ u.username }}</a>
-          <div class="text-gray-600">{{ u.email|default:"no email" }}{% if u.profile.organization %} · {{ u.profile.organization }}{% endif %}</div></td>
-        <td class="px-2">{{ r.tier }}</td>
-        <td class="px-2 text-right">{{ u.month_credits|floatformat:1 }}</td>
-        <td class="px-2 text-right">{{ r.hours|floatformat:1 }}</td>
-        <td class="px-2 text-right">{{ u.storage_bytes|filesizeformat }}</td>
-        <td class="px-2 text-right">{{ u.units }}</td>
-        <td class="px-2 text-right">{{ u.clips }}</td>
-        <td class="px-2 text-gray-700">{{ u.last_login|date:"M j, Y"|default:"never" }}</td>
-        <td class="px-2 text-gray-700">{% if u.last_seen %}{{ u.last_seen|timesince }} ago{% else %}—{% endif %}</td>
-        <td class="px-3 font-semibold {% if r.status.1 == 'ok' %}text-green-700{% elif r.status.1 == 'warn' %}text-orange-700{% else %}text-gray-600{% endif %}">{{ r.status.0 }}</td>
+      <tr class="border-t border-gray-100 align-top">
+        <td class="pl-3 pr-2 py-2.5 max-w-[16rem]">
+          <a href="{% url 'platform_admin:user' u.pk %}" class="block truncate font-semibold text-green-700 hover:text-green-900">{{ u.username }}</a>
+          <div class="truncate text-gray-600" title="{{ u.email }}{% if u.profile.organization %} · {{ u.profile.organization }}{% endif %}">{{ u.email|default:"no email" }}{% if u.profile.organization %} · {{ u.profile.organization }}{% endif %}</div></td>
+        <td class="px-2 py-2.5">{{ r.tier }}</td>
+        <td class="px-2 py-2.5 text-right tabular-nums">{{ u.month_credits|floatformat:1 }}</td>
+        <td class="px-2 py-2.5 text-right tabular-nums">{{ r.hours|floatformat:1 }}</td>
+        <td class="px-2 py-2.5 text-right tabular-nums whitespace-nowrap">{% if u.storage_bytes %}{{ u.storage_bytes|filesizeformat }}{% else %}—{% endif %}</td>
+        <td class="px-2 py-2.5 text-right tabular-nums">{{ u.units }}</td>
+        <td class="px-2 py-2.5 text-right tabular-nums">{{ u.clips }}</td>
+        <td class="px-2 py-2.5 text-gray-700 whitespace-nowrap" title="Last sign-in {{ u.last_login|date:'M j, Y H:i'|default:'never' }} · last request {{ u.last_seen|date:'M j, Y H:i'|default:'—' }}">{{ r.active|default:"never" }}</td>
+        <td class="pl-2 pr-3 py-2.5"><span class="inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-semibold {% if r.status.1 == 'ok' %}bg-green-100 text-green-800{% elif r.status.1 == 'warn' %}bg-orange-100 text-orange-800{% else %}bg-gray-100 text-gray-700{% endif %}">{{ r.status.0 }}</span></td>
       </tr>
       {% endwith %}{% empty %}
-      <tr><td colspan="10" class="px-3 py-6 text-center text-gray-600">No users match.</td></tr>
+      <tr><td colspan="9" class="px-3 py-6 text-center text-gray-600">No users match.</td></tr>
       {% endfor %}
     </tbody>
   </table>
