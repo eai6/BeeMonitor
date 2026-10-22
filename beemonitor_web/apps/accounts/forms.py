@@ -3,7 +3,7 @@ from django.contrib.auth.forms import PasswordResetForm, UserCreationForm
 from django.contrib.auth.models import User
 from django.template import loader
 
-from .models import Coupon
+from .models import AccountRequest, Coupon
 
 
 class UserRegistrationForm(UserCreationForm):
@@ -113,4 +113,41 @@ class CouponForm(forms.ModelForm):
             data["credits_amount"] = 0
             if not data.get("upgrade_tier"):
                 self.add_error("upgrade_tier", "Choose the plan this code gives.")
+        return data
+
+
+class AccountRequestForm(forms.ModelForm):
+    """One request for credits, Pro or longer storage. One open request of each
+    kind at a time; Pro accounts don't ask for Pro."""
+
+    class Meta:
+        model = AccountRequest
+        fields = ["kind", "credits", "until", "organization", "contact_email", "note"]
+
+    def __init__(self, user, *args, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+
+    def clean(self):
+        from django.utils import timezone
+
+        data = super().clean()
+        kind = data.get("kind")
+        if kind and AccountRequest.objects.filter(user=self.user, kind=kind,
+                                                  status=AccountRequest.Status.PENDING).exists():
+            raise forms.ValidationError("You already have one of these waiting for approval.")
+        if kind == AccountRequest.Kind.CREDITS:
+            credits = data.get("credits")
+            if credits is None or credits <= 0 or credits > 100000:
+                self.add_error("credits", "Ask for between 1 and 100,000 credits.")
+            data["until"] = None
+        elif kind == AccountRequest.Kind.STORAGE:
+            until = data.get("until")
+            if until is None or until <= timezone.localdate():
+                self.add_error("until", "Choose a date in the future to keep your footage until.")
+            data["credits"] = None
+        elif kind == AccountRequest.Kind.PRO:
+            if getattr(getattr(self.user, "profile", None), "tier", "") == "pro":
+                raise forms.ValidationError("You're already on Pro.")
+            data["credits"] = data["until"] = None
         return data

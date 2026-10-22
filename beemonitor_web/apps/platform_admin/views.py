@@ -24,8 +24,8 @@ from django.views.generic import TemplateView, View
 
 from apps.accounts import quota
 from apps.accounts.forms import CouponForm, LoggedPasswordResetForm
-from apps.accounts.models import (AdminAction, Coupon, CouponRedemption, LoginEvent, UsageEvent,
-                                  UserProfile)
+from apps.accounts.models import (AccountRequest, AdminAction, Coupon, CouponRedemption, LoginEvent,
+                                  UsageEvent, UserProfile)
 from apps.devices.models import Device
 
 from . import stats
@@ -37,7 +37,7 @@ SORTS = {
     "clips": "-clips", "units": "-units", "joined": "-date_joined", "login": "-last_login",
     "name": "username",
 }
-# Tiers an admin can give. Free and Enterprise are on their way out (memory/50 §10).
+# The tiers an admin can give (memory/50 §2).
 GRANTABLE_TIERS = [UserProfile.Tier.STANDARD, UserProfile.Tier.PRO]
 PRO_DEFAULT_DAYS = 365
 GPU_NAMES = {"ml.g4dn.xlarge": "T4", "ml.g6.xlarge": "L4", "ml.g5.xlarge": "A10G",
@@ -60,6 +60,7 @@ class PlatformPage(SuperuserMixin, TemplateView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["section"] = self.section
+        ctx["pending_requests"] = AccountRequest.objects.filter(status=AccountRequest.Status.PENDING).count()
         return ctx
 
 
@@ -159,8 +160,8 @@ class UserDetailView(PlatformPage):
         ctx.update(
             u=u, profile=profile, tier=stats.tier_label(u), status=stats.status(u),
             unlimited=quota.is_unlimited(u),
-            left=quota.available(u), allowance=quota.monthly_allowance(profile),
-            pending=quota.pending(u), resets_on=quota.next_reset(),
+            left=quota.available(u), pending=quota.pending(u),
+            requests=AccountRequest.objects.filter(user=u)[:10],
             life_cost=life["cost"] or 0, life_credits=life["cr"] or 0, life_hours=u.life_seconds / 3600,
             chart=_chart(weeks, [UsageEvent.Kind(s).label if s in UsageEvent.Kind.values else s
                                  for s in series]),
@@ -202,9 +203,9 @@ class UserActionView(SuperuserMixin, View):
             granted_gpu_credits=F("granted_gpu_credits") + amount)
         verb = "Granted" if amount > 0 else "Removed"
         AdminAction.record(request.user, "grant_credits",
-                           f"{verb} {abs(amount):g} credits {'to' if amount > 0 else 'from'} {target.username}",
+                           f"{verb} {abs(amount).normalize():,f} credits {'to' if amount > 0 else 'from'} {target.username}",
                            target=target, reason=reason, credits=str(amount))
-        messages.success(request, f"{verb} {abs(amount):g} credits.")
+        messages.success(request, f"{verb} {abs(amount).normalize():,f} credits.")
 
     def do_tier(self, request, target, profile, reason):
         tier = request.POST.get("tier", "")
@@ -227,27 +228,6 @@ class UserActionView(SuperuserMixin, View):
             summary += f" until {until:%b %-d, %Y}"
         AdminAction.record(request.user, "change_tier", summary, target=target, reason=reason,
                            previous=old, tier=tier, until=until.isoformat() if until else None)
-        messages.success(request, summary + ".")
-
-    def do_limits(self, request, target, profile, reason):
-        raw = request.POST.get("monthly_credits", "").strip()
-        if raw == "":
-            value = None
-        else:
-            try:
-                value = Decimal(raw).quantize(quota.FOUR)
-            except (InvalidOperation, ValueError):
-                messages.error(request, "Monthly credits must be a number, or empty for the tier's default.")
-                return
-            if value < 0:
-                messages.error(request, "Monthly credits can't be negative.")
-                return
-        profile.monthly_gpu_credits_override = value
-        profile.save(update_fields=["monthly_gpu_credits_override"])
-        summary = (f"Set {target.username}'s free monthly credits to {value:g}" if value is not None
-                   else f"Reset {target.username}'s free monthly credits to the tier's default")
-        AdminAction.record(request.user, "set_limits", summary, target=target, reason=reason,
-                           monthly_credits=str(value) if value is not None else None)
         messages.success(request, summary + ".")
 
     def do_suspend(self, request, target, profile, reason):
@@ -281,6 +261,78 @@ class UserActionView(SuperuserMixin, View):
         AdminAction.record(request.user, "password_reset", f"Sent {target.username} a password reset link",
                            target=target, reason=reason)
         messages.success(request, f"Sent a reset link to {target.email}. Email status shows whether it went.")
+
+
+class RequestsView(PlatformPage):
+    template_name = "platform_admin/requests.html"
+    section = "requests"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        reqs = AccountRequest.objects.select_related("user", "user__profile", "decided_by")
+        ctx["pending"] = reqs.filter(status=AccountRequest.Status.PENDING).order_by("created_at")
+        ctx["decided"] = reqs.exclude(status=AccountRequest.Status.PENDING).order_by("-decided_at")[:50]
+        ctx["pro_default_until"] = (timezone.localdate() + timedelta(days=PRO_DEFAULT_DAYS)).isoformat()
+        return ctx
+
+
+class RequestDecideView(SuperuserMixin, View):
+    """Approve (applying it to the account) or decline one request, tell the
+    user by email, and write the audit log."""
+
+    def post(self, request, pk):
+        from apps.accounts.emails import send
+
+        req = get_object_or_404(AccountRequest, pk=pk, status=AccountRequest.Status.PENDING)
+        note = request.POST.get("note", "").strip()[:500]
+        if request.POST.get("decision") == "approve":
+            if not self._apply(request, req):
+                return redirect("platform_admin:requests")
+            req.status = AccountRequest.Status.APPROVED
+        else:
+            req.status = AccountRequest.Status.DECLINED
+        req.decided_by, req.decided_at, req.decision_note = request.user, timezone.now(), note
+        req.save()
+        verb = "Approved" if req.status == AccountRequest.Status.APPROVED else "Declined"
+        AdminAction.record(request.user, f"request_{req.status}", f"{verb} {req.user.username}'s request: {req.summary}",
+                           target=req.user, reason=note, request=req.pk)
+        send("account_request_decided", req.contact_email, f"Your BeeMonitor request: {verb.lower()}",
+             f"Your request ({req.summary}) was {verb.lower()}." + (f"\n\n{note}" if note else "")
+             + "\n\nSee it under Account → Usage & credits.", user=req.user)
+        messages.success(request, f"{verb}: {req.user.username}, {req.summary}.")
+        return redirect("platform_admin:requests")
+
+    @staticmethod
+    def _apply(request, req):
+        """Make the approved request true on the account. The admin may change
+        the amount or the date. False (with a message) when the input is bad."""
+        profile, _ = UserProfile.objects.get_or_create(user=req.user)
+        if req.kind == AccountRequest.Kind.CREDITS:
+            try:
+                amount = Decimal(request.POST.get("credits") or req.credits).quantize(quota.FOUR)
+            except (InvalidOperation, ValueError, TypeError):
+                amount = Decimal(0)
+            if amount <= 0:
+                messages.error(request, "Enter how many credits to grant.")
+                return False
+            UserProfile.objects.filter(pk=profile.pk).update(
+                granted_gpu_credits=F("granted_gpu_credits") + amount)
+            req.credits = amount
+            return True
+        until = parse_date(request.POST.get("until", "") or "") or req.until
+        if until is None or until <= timezone.localdate():
+            messages.error(request, "Choose an end date in the future.")
+            return False
+        req.until = until
+        if req.kind == AccountRequest.Kind.PRO:
+            profile.tier = UserProfile.Tier.PRO
+            profile.tier_expires_at = timezone.make_aware(
+                timezone.datetime.combine(until, timezone.datetime.min.time()))
+            profile.save(update_fields=["tier", "tier_expires_at"])
+        else:
+            profile.raw_retention_until = until
+            profile.save(update_fields=["raw_retention_until"])
+        return True
 
 
 class CodesView(PlatformPage):
@@ -365,15 +417,33 @@ def _end_sessions(user):
 CHART_COLORS = ["#1d4ed8", "#fb923c", "#93c5fd", "#7c2d12", "#9ca3af", "#0f766e"]
 
 
+def _nice_max(peak):
+    """The top of the y-axis: the peak rounded up to 1, 2, 2.5 or 5 × 10^n."""
+    import math
+
+    if peak <= 0:
+        return 1
+    base = 10 ** math.floor(math.log10(peak))
+    for step in (1, 2, 2.5, 5, 10):
+        if peak <= step * base:
+            return step * base
+    return 10 * base
+
+
 def _chart(weeks, labels, height=160):
-    """Stacked bars as pixel heights, so the template draws them with no JS."""
-    peak = max([w["total"] for w in weeks] + [0]) or 1
+    """Stacked bars as pixel heights, so the template draws them with no JS,
+    with a y-axis (credits, in fifths of a round top) and week labels on the
+    x-axis."""
+    peak = max([w["total"] for w in weeks] + [0])
+    top = _nice_max(peak)
     colors = [CHART_COLORS[i % len(CHART_COLORS)] for i in range(len(labels))]
     return {
         "series": [{"label": label, "color": c} for label, c in zip(labels, colors)],
         "peak": peak,
+        # Top to bottom, as the axis is drawn; ``y`` is the pixel offset from the top.
+        "ticks": [{"v": f"{top * f:g}", "y": round(height * (1 - f))} for f in (1, 0.8, 0.6, 0.4, 0.2, 0)],
         "weeks": [{"week": w["week"], "total": w["total"],
-                   "bars": [{"h": round(v / peak * height), "color": colors[i], "label": labels[i], "v": v}
+                   "bars": [{"h": round(v / top * height), "color": colors[i], "label": labels[i], "v": v}
                             for i, v in enumerate(w["values"]) if v]}
                   for w in weeks],
         "height": height,

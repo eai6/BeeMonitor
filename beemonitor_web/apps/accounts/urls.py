@@ -53,6 +53,7 @@ urlpatterns = [
     path("", views.ProfileView.as_view(), name="profile"),
     path("usage/", views.UsageDashboardView.as_view(), name="usage"),
     path("redeem-coupon/", views.RedeemCouponView.as_view(), name="redeem_coupon"),
+    path("requests/new/", views.RequestCreateView.as_view(), name="request_create"),
     path("email/", views.EmailStatusView.as_view(), name="email_status"),
     path("email/test/", views.EmailTestView.as_view(), name="email_test"),
     path("coupons/", views.CouponListView.as_view(), name="coupons"),

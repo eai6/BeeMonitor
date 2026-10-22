@@ -8,13 +8,12 @@ class HasTierPermission(BasePermission):
     Permission class that checks the user's subscription tier.
 
     Set `required_tier` on the view to specify the minimum tier required.
-    Tier hierarchy: free < standard < pro.
+    Tier hierarchy: standard < pro.
     """
 
     TIER_HIERARCHY = {
-        UserProfile.Tier.FREE: 0,
-        UserProfile.Tier.STANDARD: 1,
-        UserProfile.Tier.PRO: 2,
+        UserProfile.Tier.STANDARD: 0,
+        UserProfile.Tier.PRO: 1,
     }
 
     message = "Your subscription tier does not have access to this resource."
@@ -23,7 +22,7 @@ class HasTierPermission(BasePermission):
         if not request.user or not request.user.is_authenticated:
             return False
 
-        required_tier = getattr(view, "required_tier", UserProfile.Tier.FREE)
+        required_tier = getattr(view, "required_tier", UserProfile.Tier.STANDARD)
 
         try:
             profile = request.user.profile

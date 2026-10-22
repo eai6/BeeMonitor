@@ -1,6 +1,6 @@
 # 50 — Tiers, quotas, and the platform admin dashboard
 
-**Status:** plan v3 (2026-10-21); **steps 0, 1, 4 and 5 built** (email log + test page; credit gate at every GPU entry point, UsageEvent, monthly reset, 1 credit = 1 T4 GPU-hour; sign-in history, last seen; the `/platform/` dashboard). Steps 2, 3, 6, 7, 8 not started.
+**Status:** plan v4 (2026-10-22); **steps 0–2, 4, 5 and 6 built**, step 3 partly. Credits changed in v4: 25 once per account, no monthly renewal (§3). Steps 7 (view-as) replaced by "admins can analyse anyone's clips"; step 8 (footage deletion) not started.
 Canvas: https://claude.ai/artifact/9kjvmu9SWhZQ47CzB2eAB1
 The Documentation button on `/accounts/usage/` was removed separately; the real docs live on GitHub.
 Your v1 comments are kept word for word in the appendix.
@@ -33,14 +33,14 @@ Free and Standard are merged: Standard is what every account starts as, and "pay
 | | **Standard** | **Pro** |
 |---|---|---|
 | What it is | Every account, from sign-up | Annual subscription |
-| GPU credits | **10 free / month** (reset on the 1st) + extra credits you grant on request | **Unlimited**, but tracked |
+| GPU credits | **25 to start, once** (decided 2026-10-22; no monthly renewal) + more on request | **Unlimited**, but tracked |
 | When credits run out | New GPU work is blocked | Never |
 | Raw footage | **Deleted 3 months after upload**, unless longer storage is approved | Kept while subscribed |
 | Results (detections, tracks, events, crops, annotations) | Kept | Kept |
 | Features | **All** | **All** |
 | How they get it | Sign up | Request → you approve, with an end date (default one year) |
 
-You can override any limit for one account (credits, retention) on its dashboard page; that replaces Enterprise.
+A large customer is a Pro account. Credits for one account are granted on its dashboard page; retention by approving a storage request.
 
 **No per-user GPU limits (decided 2026-10-21).** The platform scales to the work for every user; jobs queue behind one platform-wide SageMaker cap (`SAGEMAKER_MAX_CONCURRENT`), which protects the endpoint and is never shown as a user limit. The per-user slot check and the "x/y slots" display were removed.
 
@@ -85,7 +85,7 @@ If the estimate doesn't fit in the balance, the job **doesn't start**. The messa
 
 **Failed jobs:** *proposed:* not charged if it's our fault (worker crash, timeout); charged if the clip got a result.
 
-**What this costs you:** each Standard user who uses all 10 free credits costs about **$7.40/month** in GPU time on the video machine (about the same on SAM 3, since it uses credits twice as fast). 100 active Standard users on free credits ≈ $740/month.
+**What this costs you (v4):** each new account's 25 starting credits are at most about **$18.40** of GPU time on the video machine, once. Everything after that is a request you approve.
 
 **Feedback:**
 
@@ -97,7 +97,7 @@ Nothing about money appears on the platform for now: no prices, no invoices, no 
 Users **ask**; you **approve** on the dashboard. Whatever you arrange with them happens off the platform.
 
 A user can request:
-- **More GPU credits:** an amount, plus why. Approving adds them to a balance that never expires (spent after the 10 free monthly credits).
+- **More GPU credits:** an amount, plus why. Approving adds them to the balance, which never expires.
 - **An upgrade to Pro:** approved with an end date (default one year). For a bigger customer you also raise their limits.
 - **Longer storage:** keep raw footage beyond 3 months, for all of it or for chosen units, until a date you set. It's kept in Glacier Instant Retrieval. See §6.
 
@@ -128,8 +128,7 @@ Called at **every** place that starts GPU work: analysis submit, pipeline run / 
 re-run of failed clips, training & adaptation, auto-label, sampling on SageMaker.
 A test lists every entry point and fails if one doesn't call the gate.
 
-- **Monthly reset:** the 10 free credits reset on the 1st, applied on the next check after that. No cron job.
-- **Balances:** `monthly` (resets), then `granted` (from requests and promo codes, never expires), spent in that order.
+- **One balance (v4):** `granted_gpu_credits` — 25 at sign-up, plus requests and promo codes; nothing resets.
 - **Tier expiry:** `tier_expires_at`, checked the same way.
 - **Pro / super admin:** `check` always passes, but `charge` still records everything.
 
@@ -263,6 +262,9 @@ Built so far (2026-10-21):
 - **Step 1** — `apps/accounts/quota.py`: `CREDITS_PER_GPU_HOUR` (T4 1, L4 1.5, A10G 2, L40S 2.5); estimates = median GPU-seconds per unit over the last 200 `UsageEvent`s of that kind and machine (fallbacks until 5 exist); `check` before every launch counts queued/running work; `charge` is idempotent per source. Gated: analysis one-click / new job / batch / annotated video, pipeline launches (hub + device schedules), API job create + batch submit, training, adaptation, auto-label, GPU sampling (add clips + sample). Migration 0008 backfills `UsageEvent` from completed Jobs (history only, nobody charged) and converts credit coupons from GPU-seconds to credits. Per-user concurrent-slot limits were then removed altogether (no per-user GPU limits). Until the dashboard exists, credits are granted by editing `granted_gpu_credits` in Django admin.
 
 - **Steps 4 + 5** — `/platform/` (`apps/platform_admin/`), superusers only (everyone else gets 404), "Platform" in the nav. Overview (users, active 7/30 d, credits and AWS cost this month, storage, failure rate, credits per week by tier, users by tier, top users, recent activity); Users (search, tier/active/status filters, sort, 50 per page, CSV; per-user columns are subqueries so totals never multiply); User detail (credits left/used/lifetime/storage, credits per week by kind, recent GPU work, units, sign-ins, history) with actions: grant or remove credits (with reason), plan Standard/Pro with end date (default one year), free monthly credits override (`monthly_gpu_credits_override`), suspend/reactivate (ends their sessions, blocks sign-in and API keys; device keys still upload), send password reset; Promo codes (replaces `/accounts/coupons/`, now superuser-only, codes auto-generated, note field, plan-trial codes really end via `tier_expires_at`); Activity (audit log, sign-ins, failed sign-ins 7 d, out of credits, top users). `AdminAction` is the audit log; `LoginEvent` records web/admin/API sign-ins and failures (IP and browser pruned after 90 days); `LastSeenMiddleware` writes `last_seen_at` at most every 5 minutes, API-key calls included. `quota.expire_tier` drops an ended plan to Standard on the next check. Storage per user is computed live from `Video.file_size_bytes` rather than stored. Requests (step 6) and view-as (step 7) are not in it yet.
+
+- **v4, 2026-10-22 — tiers, credits and requests (steps 2 and 6).** Tiers are `standard` and `pro` only (migration 0013: free → standard, enterprise → pro, enterprise promo codes → pro). No monthly allowance: every new account gets `quota.STARTING_CREDITS` (25) once, via the profile signal; existing Standard accounts got the same 25 on top of what they had. The monthly fields, the per-account monthly override and `reset_monthly_credits` are gone. `AccountRequest` (credits / Pro / storage): the account page has "Request more credits / Pro / longer storage" dialogs and "Your requests"; superusers are emailed; `/platform/requests/` approves (amount or date editable) or declines, applies it (credits added; Pro with `tier_expires_at`; `raw_retention_until` for storage), emails the user and writes the audit log. One open request per kind; five a day. Storage requests are for the whole account (no per-unit choice).
+- **Admins and other users' clips (replaces step 7).** Superusers see every clip and unit (`Video.accessible/manageable`, `Device.accessible`) and analyse them; their jobs are hidden from the clip owner (`Job.objects.for_viewer`, `JobResult.objects.for_viewer`). Deleting goes through `Video.deletable`, which admins aren't in; on others' units they are viewers. "Their clips" on a user's page opens Processing with `?owner=`.
 
 0. **Email that works, and that we can see working** (prerequisite for deletion notices). Found 2026-10-21: SES is still in the **sandbox** (`ProductionAccessEnabled: false`, review case 178259218200517), so SES rejects mail to anyone not verified (`MessageRejected … jqc7119@psu.edu`, 2026-10-20 19:25 and 19:32 UTC) while the reset page still says "check your email". The domain (DKIM) and the `beemonitor-ses-send` IAM policy are fine, but both were set up by hand and aren't in Pulumi. Fix: get production access; record every send (`EmailLog`: to, kind, status, SES message id, error); show failures on the dashboard; add a "send test email" button; add the SES policy to Pulumi.
 1. Quota gate at every GPU entry point + estimates + `UsageEvent` + monthly reset. *(Closes the leak on its own.)*

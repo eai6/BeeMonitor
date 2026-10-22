@@ -12,8 +12,11 @@ One gate for every place GPU work starts (memory/50 §5). The rules:
 * **Charged once, when it finishes**, from the seconds the instance was busy
   (``charge``). Each charge is a ``UsageEvent`` keyed on its source, so a job
   polled twice is charged once. Failed work is never charged.
-* **Pro, Enterprise and superusers are never blocked**, but are still charged,
-  so usage stays visible.
+* **One balance.** A new account starts with ``STARTING_CREDITS`` once; more
+  come from approved requests (``AccountRequest``) and promo codes. Nothing
+  renews.
+* **Pro and superusers are never blocked**, but are still charged, so usage
+  stays visible.
 
 Estimates come from recent real runs (``UsageEvent``) rather than constants,
 so they track the platform as it changes. The fallbacks below only apply until
@@ -25,7 +28,7 @@ from __future__ import annotations
 import logging
 import statistics
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import IntegrityError, transaction
@@ -75,6 +78,9 @@ FALLBACK_SECONDS_PER_UNIT = {
 }
 # A clip with no duration recorded is assumed to be a full 10-minute recording.
 DEFAULT_CLIP_SECONDS = 600.0
+# Credits every new account starts with, once (memory/50 §3).
+STARTING_CREDITS = Decimal(25)
+
 # How long an approved launch holds its credits while it creates its jobs.
 HOLD_SECONDS = 60
 HISTORY = 200          # recent events an estimate is the median of
@@ -86,19 +92,17 @@ FOUR = Decimal("0.0001")
 class QuotaExceeded(Exception):
     """A launch does not fit the user's remaining credits."""
 
-    def __init__(self, needed, available, resets_on):
+    def __init__(self, needed, available):
         self.needed = needed
         self.available = available
-        self.resets_on = resets_on
         super().__init__(self.message)
 
     @property
     def message(self) -> str:
         return (
             f"Not enough credits: this needs about {fmt(self.needed)} and you have "
-            f"{fmt(max(self.available, Decimal(0)))}. Nothing was started. Your free "
-            f"credits renew on {self.resets_on:%b} {self.resets_on.day}; ask for more "
-            "from Usage & Credits.")
+            f"{fmt(max(self.available, Decimal(0)))}. Nothing was started. Ask for more "
+            "from Usage & credits.")
 
 
 def fmt(credits) -> str:
@@ -115,8 +119,7 @@ def credits_for(gpu_seconds: float, instance: str) -> Decimal:
 def is_unlimited(user) -> bool:
     if user.is_superuser:
         return True
-    profile = _profile(user)
-    return profile.tier_limits.get("monthly_gpu_credits") is None
+    return bool(_profile(user).tier_limits.get("unlimited_gpu"))
 
 
 def _profile(user):
@@ -142,35 +145,9 @@ def expire_tier(profile) -> bool:
     return True
 
 
-def _month_start(today: date | None = None) -> date:
-    today = today or timezone.localdate()
-    return today.replace(day=1)
-
-
-def next_reset(today: date | None = None) -> date:
-    start = _month_start(today)
-    return start.replace(year=start.year + 1, month=1) if start.month == 12 else start.replace(month=start.month + 1)
-
-
-def _roll_period(profile) -> None:
-    """Start a new month's allowance if the 1st has passed. Saves if it changed."""
-    start = _month_start()
-    if profile.credit_period_start != start:
-        profile.credit_period_start = start
-        profile.monthly_gpu_credits_used = Decimal(0)
-        profile.save(update_fields=["credit_period_start", "monthly_gpu_credits_used"])
-
-
-def monthly_allowance(profile) -> Decimal:
-    return Decimal(profile.tier_limits.get("monthly_gpu_credits") or 0)
-
-
 def available(user) -> Decimal:
-    """Credits left: the month's allowance not yet used, plus granted credits."""
-    profile = _profile(user)
-    _roll_period(profile)
-    left = max(monthly_allowance(profile) - profile.monthly_gpu_credits_used, Decimal(0))
-    return left + profile.granted_gpu_credits
+    """Credits left."""
+    return _profile(user).granted_gpu_credits
 
 
 # ── Estimates ────────────────────────────────────────────────────────────────
@@ -313,7 +290,7 @@ def check(user, items) -> Decimal:
         held = CreditHold.objects.filter(user=user).aggregate(s=Sum("credits"))["s"] or Decimal(0)
         left = available(user) - pending(user) - held
         if needed > left:
-            raise QuotaExceeded(needed, left, next_reset())
+            raise QuotaExceeded(needed, left)
         CreditHold.objects.create(user=user, credits=needed,
                                   expires_at=now + timedelta(seconds=HOLD_SECONDS))
     return needed
@@ -347,16 +324,13 @@ def charge(user, kind, gpu_seconds, instance, source_type, source_id, units=0, c
             )
             UserProfile.objects.get_or_create(user_id=user_id)
             profile = UserProfile.objects.select_for_update().get(user_id=user_id)
-            _roll_period(profile)
-            from_month = min(max(monthly_allowance(profile) - profile.monthly_gpu_credits_used, Decimal(0)), credits)
-            profile.monthly_gpu_credits_used += from_month
-            if not (profile.user.is_superuser or profile.tier_limits.get("monthly_gpu_credits") is None):
-                profile.granted_gpu_credits -= credits - from_month
+            if not (profile.user.is_superuser or profile.tier_limits.get("unlimited_gpu")):
+                profile.granted_gpu_credits -= credits
             # Legacy lifetime counters the usage page still shows.
             profile.total_gpu_seconds += gpu_seconds
             profile.total_jobs_submitted += 1
-            profile.save(update_fields=["monthly_gpu_credits_used", "granted_gpu_credits",
-                                        "total_gpu_seconds", "total_jobs_submitted"])
+            profile.save(update_fields=["granted_gpu_credits", "total_gpu_seconds",
+                                        "total_jobs_submitted"])
     except IntegrityError:
         return UsageEvent.objects.filter(source_type=source_type, source_id=str(source_id)).first()
     return event

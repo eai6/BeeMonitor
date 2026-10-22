@@ -35,8 +35,7 @@ class UserAdmin(BaseUserAdmin):
 @admin.register(UserProfile)
 class UserProfileAdmin(admin.ModelAdmin):
     # Grant credits from /platform/ instead: it writes the audit log.
-    list_display = ("user", "organization", "tier", "monthly_gpu_credits_used",
-                    "granted_gpu_credits", "credit_period_start")
+    list_display = ("user", "organization", "tier", "granted_gpu_credits", "tier_expires_at")
     list_filter = ("tier",)
     search_fields = ("user__username", "user__email", "organization")
 

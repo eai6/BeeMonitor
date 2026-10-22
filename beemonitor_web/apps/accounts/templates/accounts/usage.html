@@ -4,41 +4,101 @@
 {% block content %}
 {% include "accounts/_account_tabs.html" with tab="usage" %}
 
-<!-- Credit Balance (apps/accounts/quota.py) -->
-<div class="bg-white shadow rounded-lg p-6 mb-6">
-  <div class="flex justify-between items-center mb-3">
-    <h2 class="text-lg font-medium text-gray-900">GPU credits</h2>
-    <span class="inline-flex px-3 py-1 text-sm font-medium rounded-full
-      {% if credits.unlimited %}bg-purple-100 text-purple-800{% else %}bg-gray-100 text-gray-800{% endif %}">
-      {% if request.user.is_superuser %}Super admin{% else %}{{ profile.get_tier_display }}{% endif %}
-    </span>
+<div x-data="{ ask: '' }" @keydown.escape.window="ask = ''">
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+  <!-- Credits (apps/accounts/quota.py) -->
+  <div class="lg:col-span-2 bg-white shadow rounded-lg p-6 flex flex-col gap-3">
+    <div class="flex flex-wrap justify-between items-center gap-2">
+      <h2 class="text-lg font-medium text-gray-900">GPU credits</h2>
+      <span class="text-sm text-gray-600">Video analysis: 1 credit per GPU-hour · SAM 3, sampling, training: 2</span>
+    </div>
+    {% if credits.unlimited %}
+      <p class="text-4xl font-bold text-gray-900">Unlimited</p>
+      <p class="text-sm text-gray-600">{{ credits.used_this_month|floatformat:1 }} credits used this month ({{ credits.hours_this_month|floatformat:1 }} GPU-hours).</p>
+    {% else %}
+      <p class="text-4xl font-bold text-gray-900">{{ credits.left|floatformat:1 }} <span class="text-base font-medium text-gray-600">credits left</span></p>
+      <p class="text-sm text-gray-600">About {{ credits.left|floatformat:0 }} hours of video analysis, or half that on SAM 3. Every account starts with {{ starting_credits }}; ask for more when you need them. Credits never expire.</p>
+      <div class="flex flex-wrap gap-x-6 text-sm text-gray-600">
+        <span>Used this month: <strong class="text-gray-900">{{ credits.used_this_month|floatformat:1 }}</strong> ({{ credits.hours_this_month|floatformat:1 }} GPU-hours)</span>
+        {% if credits.pending %}<span>Set aside for work in progress: <strong class="text-gray-900">{{ credits.pending|floatformat:1 }}</strong></span>{% endif %}
+      </div>
+    {% endif %}
+    {% if request.user.is_superuser %}
+      <p class="text-sm"><a class="text-green-700 hover:underline" href="{% url 'accounts:email_status' %}">Email status</a></p>
+    {% endif %}
   </div>
-  <p class="text-sm text-gray-600 mb-3">1 credit = 1 GPU-hour of video analysis (about an hour of footage). SAM 3, sampling and training use 2 credits per GPU-hour.</p>
 
-  {% if credits.unlimited %}
-    <p class="text-3xl font-bold text-gray-900">Unlimited</p>
-    <p class="text-sm text-gray-600">{{ credits.used_this_month|floatformat:1 }} credits used this month ({{ credits.hours_this_month|floatformat:1 }} GPU-hours).</p>
-  {% else %}
-    <p class="text-3xl font-bold text-gray-900">{{ credits.left|floatformat:1 }} <span class="text-base font-medium text-gray-600">credits left</span></p>
-    <p class="text-sm text-gray-600">About {{ credits.left|floatformat:1 }} hours of video analysis, or half that on SAM 3. Used this month: {{ credits.used_this_month|floatformat:1 }} credits ({{ credits.hours_this_month|floatformat:1 }} GPU-hours).</p>
-    <div class="mt-3 mb-2">
-      <div class="flex justify-between text-sm mb-1 text-gray-600">
-        <span>Free this month: {{ credits.monthly_used|floatformat:1 }} of {{ credits.allowance|floatformat:0 }} used</span>
-        <span>Renews {{ credits.resets_on|date:"M j" }}</span>
-      </div>
-      <div class="w-full bg-gray-200 rounded-full h-3">
-        <div class="h-3 rounded-full {% if credits.monthly_pct > 90 %}bg-red-500{% elif credits.monthly_pct > 70 %}bg-amber-500{% else %}bg-green-500{% endif %}"
-          style="width: {{ credits.monthly_pct }}%"></div>
-      </div>
+  <!-- Plan and requests (memory/50 §4) -->
+  <div class="bg-white shadow rounded-lg p-6 flex flex-col gap-3">
+    <div class="flex justify-between items-center">
+      <h2 class="text-lg font-medium text-gray-900">Your plan</h2>
+      <span class="px-3 py-1 rounded-full text-sm font-semibold {% if credits.unlimited %}bg-purple-100 text-purple-800{% else %}bg-blue-100 text-blue-800{% endif %}">
+        {% if request.user.is_superuser %}Super admin{% else %}{{ profile.get_tier_display }}{% endif %}</span>
     </div>
-    <div class="flex flex-wrap gap-x-6 text-sm text-gray-600">
-      <span>Granted: <strong class="text-gray-900">{{ credits.granted|floatformat:1 }}</strong> (never expire)</span>
-      {% if credits.pending %}<span>Set aside for work in progress: <strong class="text-gray-900">{{ credits.pending|floatformat:1 }}</strong></span>{% endif %}
+    <div class="text-sm text-gray-700 flex flex-col gap-1">
+      {% if profile.tier == "pro" %}
+        <span>Unlimited credits{% if profile.tier_expires_at %} until {{ profile.tier_expires_at|date:"M j, Y" }}{% endif %}.</span>
+        <span>Raw footage kept while on Pro.</span>
+      {% else %}
+        <span>{{ starting_credits }} credits to start, more on request.</span>
+        <span>Raw footage kept 3 months{% if profile.raw_retention_until %} — yours until {{ profile.raw_retention_until|date:"M j, Y" }}{% endif %}; longer on request.</span>
+      {% endif %}
+      <span>Every feature included.</span>
     </div>
-  {% endif %}
-  {% if request.user.is_superuser %}
-    <p class="mt-3 text-sm"><a class="text-green-700 hover:underline" href="{% url 'accounts:email_status' %}">Email status</a></p>
-  {% endif %}
+    {% if not request.user.is_superuser %}
+    <div class="mt-auto flex flex-col gap-2 pt-2">
+      {% if not credits.unlimited %}
+      <button type="button" @click="ask = 'credits'" class="h-11 rounded-md bg-green-600 text-white text-sm font-semibold hover:bg-green-700 disabled:opacity-50" {% if "credits" in open_kinds %}disabled title="Waiting for approval"{% endif %}>Request more credits</button>
+      {% endif %}
+      {% if profile.tier != "pro" %}
+      <button type="button" @click="ask = 'pro'" class="h-11 rounded-md border border-gray-300 bg-white text-sm font-semibold hover:bg-gray-50 disabled:opacity-50" {% if "pro" in open_kinds %}disabled title="Waiting for approval"{% endif %}>Request Pro</button>
+      <button type="button" @click="ask = 'storage'" class="h-11 rounded-md border border-gray-300 bg-white text-sm font-semibold hover:bg-gray-50 disabled:opacity-50" {% if "storage" in open_kinds %}disabled title="Waiting for approval"{% endif %}>Request longer storage</button>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% if requests %}
+<div class="bg-white shadow rounded-lg p-6 mb-6">
+  <h2 class="text-lg font-medium text-gray-900 mb-3">Your requests</h2>
+  {% for r in requests %}
+  <div class="flex flex-wrap justify-between gap-2 text-sm border-t border-gray-100 py-2">
+    <span>{{ r.summary }} <span class="text-gray-500">· asked {{ r.created_at|date:"M j" }}</span></span>
+    <span class="font-semibold {% if r.status == 'approved' %}text-green-700{% elif r.status == 'declined' %}text-gray-600{% else %}text-orange-700{% endif %}">
+      {{ r.get_status_display }}{% if r.decided_at %} {{ r.decided_at|date:"M j" }}{% endif %}</span>
+    {% if r.decision_note %}<p class="w-full text-gray-600">“{{ r.decision_note }}”</p>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- Request dialogs -->
+<div x-show="ask" x-cloak class="fixed inset-0 z-50 bg-gray-900/40 flex items-center justify-center p-4" @click.self="ask = ''">
+  <form method="post" action="{% url 'accounts:request_create' %}" class="w-full max-w-md bg-white rounded-lg shadow-xl p-6 flex flex-col gap-4" role="dialog" aria-modal="true">
+    {% csrf_token %}
+    <input type="hidden" name="kind" :value="ask">
+    <h2 class="text-lg font-semibold" x-text="{credits: 'Request more credits', pro: 'Request Pro', storage: 'Request longer storage'}[ask]"></h2>
+    <p x-show="ask === 'credits'" class="text-sm text-gray-700">Video analysis uses 1 credit per GPU-hour (about an hour of footage). SAM 3 auto-label, sampling and training use 2. Approved credits never expire.</p>
+    <p x-show="ask === 'pro'" class="text-sm text-gray-700 rounded-md bg-green-50 border border-green-200 p-3"><b>Pro</b> · annual. Unlimited credits, and raw footage kept while you're on Pro.</p>
+    <p x-show="ask === 'storage'" class="text-sm text-gray-700">Raw footage is deleted 3 months after upload; results always stay. Approved footage is kept in archive storage and still plays and re-runs normally.</p>
+    <label x-show="ask === 'credits'" class="flex flex-col gap-1 text-sm font-semibold text-gray-700">How many credits
+      <input type="number" name="credits" min="1" step="1" value="100" :required="ask === 'credits'" class="h-10 rounded-md border border-gray-300 px-3 text-sm font-normal"></label>
+    <label x-show="ask === 'storage'" class="flex flex-col gap-1 text-sm font-semibold text-gray-700">Keep my raw footage until
+      <input type="date" name="until" :required="ask === 'storage'" class="h-10 rounded-md border border-gray-300 px-3 text-sm font-normal"></label>
+    <label class="flex flex-col gap-1 text-sm font-semibold text-gray-700">Organization
+      <input type="text" name="organization" value="{{ profile.organization }}" maxlength="200" class="h-10 rounded-md border border-gray-300 px-3 text-sm font-normal"></label>
+    <label class="flex flex-col gap-1 text-sm font-semibold text-gray-700"><span x-text="ask === 'pro' ? 'What will you monitor?' : (ask === 'storage' ? 'Why' : 'What for')"></span>
+      <textarea name="note" rows="3" maxlength="2000" class="rounded-md border border-gray-300 px-3 py-2 text-sm font-normal"></textarea></label>
+    <label class="flex flex-col gap-1 text-sm font-semibold text-gray-700">Contact email
+      <input type="email" name="contact_email" value="{{ request.user.email }}" required class="h-10 rounded-md border border-gray-300 px-3 text-sm font-normal"></label>
+    <p class="text-sm text-gray-600">We'll reply by email. The status also shows on this page.</p>
+    <div class="flex justify-end gap-2">
+      <button type="button" @click="ask = ''" class="h-11 px-4 rounded-md border border-gray-300 bg-white text-sm">Cancel</button>
+      <button type="submit" class="h-11 px-4 rounded-md bg-green-600 text-white text-sm font-semibold hover:bg-green-700">Send request</button>
+    </div>
+  </form>
+</div>
 </div>
 
 <!-- Redeem Promo Code -->
@@ -47,7 +107,7 @@
   <form method="post" action="{% url 'accounts:redeem_coupon' %}" class="flex gap-3">
     {% csrf_token %}
     <input type="text" name="coupon_code" placeholder="Enter promo code"
-      class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-amber-500 focus:ring-amber-500 text-sm"
+      class="flex-1 h-10 rounded-md border border-gray-300 px-3 shadow-sm focus:border-amber-500 focus:ring-amber-500 text-sm"
       required>
     <button type="submit"
       class="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-md hover:bg-amber-700 transition">
@@ -146,7 +206,7 @@
     <tbody>
       <tr class="border-b border-gray-100">
         <td class="py-2">GPU credits</td>
-        <td class="py-2 text-center">10 free every month, more on request</td>
+        <td class="py-2 text-center">{{ starting_credits }} to start, more on request</td>
         <td class="py-2 text-center">Unlimited</td>
       </tr>
       <tr class="border-b border-gray-100">

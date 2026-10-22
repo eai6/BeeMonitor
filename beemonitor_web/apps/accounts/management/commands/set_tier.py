@@ -4,7 +4,7 @@ Usage:
     python manage.py set_tier <username> <tier>
 
 Example:
-    python manage.py set_tier edward enterprise
+    python manage.py set_tier edward pro
 """
 
 from django.contrib.auth.models import User
@@ -14,7 +14,7 @@ from apps.accounts.models import TIER_LIMITS, UserProfile
 
 
 class Command(BaseCommand):
-    help = "Set a user's account tier (free, standard, pro, enterprise)"
+    help = "Set a user's account tier (standard, pro)"
 
     def add_arguments(self, parser):
         parser.add_argument("username", type=str)
@@ -37,7 +37,6 @@ class Command(BaseCommand):
         profile.used_credits = 0
         profile.save(update_fields=["tier", "monthly_credits", "used_credits"])
 
-        monthly = limits.get("monthly_gpu_credits")
         self.stdout.write(self.style.SUCCESS(
             f"Updated {username}: {old_tier} -> {tier} "
-            f"(GPU credits: {'unlimited' if monthly is None else f'{monthly} free a month'})"))
+            f"(GPU credits: {'unlimited' if limits['unlimited_gpu'] else 'balance unchanged'})"))

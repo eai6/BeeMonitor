@@ -16,7 +16,7 @@ from django.views.generic import CreateView, TemplateView, View
 from apps.analysis.models import Job, GPU_TIERS
 from .forms import UserRegistrationForm
 from . import quota
-from .models import Coupon, CouponRedemption, EmailLog, UserProfile, TIER_LIMITS
+from .models import AccountRequest, Coupon, CouponRedemption, EmailLog, UserProfile, TIER_LIMITS
 
 
 class LoginView(AuthLoginView):
@@ -151,22 +151,19 @@ class UsageDashboardView(LoginRequiredMixin, TemplateView):
         ctx["profile"] = profile
         ctx["tier_limits"] = TIER_LIMITS
 
-        # GPU credits (apps/accounts/quota.py) — the meter that gates GPU work.
-        left = quota.available(user)
-        profile.refresh_from_db()
-        allowance = quota.monthly_allowance(profile)
+        # GPU credits (apps/accounts/quota.py) — the balance that gates GPU work.
         ctx["credits"] = {
             "unlimited": quota.is_unlimited(user),
-            "left": left,
-            "allowance": allowance,
-            "monthly_used": profile.monthly_gpu_credits_used,
-            "granted": profile.granted_gpu_credits,
+            "left": quota.available(user),
             "pending": quota.pending(user),
-            **_usage_totals(user, profile.credit_period_start),
-            "monthly_pct": (min(100, int(profile.monthly_gpu_credits_used / allowance * 100))
-                            if allowance else 0),
-            "resets_on": quota.next_reset(),
+            **_usage_totals(user, timezone.localdate().replace(day=1)),
         }
+        profile.refresh_from_db()
+        ctx["requests"] = AccountRequest.objects.filter(user=user)[:10]
+        ctx["open_kinds"] = set(AccountRequest.objects.filter(
+            user=user, status=AccountRequest.Status.PENDING).values_list("kind", flat=True))
+        ctx["starting_credits"] = quota.STARTING_CREDITS
+        ctx["request_form"] = kwargs.get("request_form")
 
         # Job stats
         jobs = Job.objects.filter(user=user)
@@ -192,6 +189,39 @@ class UsageDashboardView(LoginRequiredMixin, TemplateView):
         ctx["redemptions"] = CouponRedemption.objects.filter(user=user).select_related("coupon").order_by("-redeemed_at")
 
         return ctx
+
+
+class RequestCreateView(LoginRequiredMixin, View):
+    """Ask for more credits, Pro, or longer storage (memory/50 §4). Platform
+    admins are emailed and decide on /platform/requests/."""
+
+    def post(self, request):
+        from datetime import timedelta
+
+        from .emails import send
+        from .forms import AccountRequestForm
+        from .throttle import allow
+
+        form = AccountRequestForm(request.user, request.POST)
+        if not form.is_valid():
+            for errors in form.errors.values():
+                for e in errors:
+                    messages.error(request, e)
+            return redirect("accounts:usage")
+        if not allow(f"request:{request.user.pk}", 5, timedelta(days=1)):
+            messages.error(request, "That's a lot of requests for one day. Try again tomorrow.")
+            return redirect("accounts:usage")
+        req = form.save(commit=False)
+        req.user = request.user
+        req.save()
+        from django.contrib.auth import get_user_model
+        link = request.build_absolute_uri(f"/platform/requests/#request-{req.pk}")
+        for admin in get_user_model().objects.filter(is_superuser=True, is_active=True).exclude(email=""):
+            send("account_request", admin.email, f"BeeMonitor request: {req.summary} for {request.user.username}",
+                 f"{request.user.username} ({req.contact_email}) asked for: {req.summary}.\n\n"
+                 f"{req.note}\n\nReview it: {link}", user=admin)
+        messages.success(request, "Request sent. We'll reply by email, and its status shows below.")
+        return redirect("accounts:usage")
 
 
 class RedeemCouponView(LoginRequiredMixin, View):
@@ -245,7 +275,7 @@ class RedeemCouponView(LoginRequiredMixin, View):
 
             elif coupon.coupon_type == Coupon.CouponType.TIER_UPGRADE:
                 new_tier = coupon.upgrade_tier
-                limits = TIER_LIMITS.get(new_tier, TIER_LIMITS["free"])
+                limits = TIER_LIMITS.get(new_tier, TIER_LIMITS["standard"])
                 profile.tier = new_tier
                 profile.monthly_credits = limits["monthly_credits"]
                 # The trial ends: quota.expire_tier drops it back to Standard.

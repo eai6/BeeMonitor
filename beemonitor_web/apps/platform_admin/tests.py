@@ -50,7 +50,7 @@ class AccessTests(TestCase):
                                  {"credits": "500"})
             self.assertEqual(r.status_code, 404)
         target.profile.refresh_from_db()
-        self.assertEqual(target.profile.granted_gpu_credits, 0)
+        self.assertEqual(target.profile.granted_gpu_credits, 25)
 
     def test_the_nav_link_is_only_for_superusers(self):
         self.client.force_login(self.member)
@@ -67,7 +67,7 @@ class PagesTests(TestCase):
         self.bob = User.objects.create_user("bob", email="bob@lab.edu")
         usage(self.alice, "3.5", source="a1")
         usage(self.alice, "1.0", kind="sampling", source="a2")
-        usage(self.bob, "12", source="b1")  # past the 10 free credits
+        usage(self.bob, "30", source="b1")  # past the 25 starting credits
         self.client.force_login(self.admin)
 
     def test_every_page_renders(self):
@@ -80,7 +80,7 @@ class PagesTests(TestCase):
     def test_overview_totals_come_from_usage_events(self):
         o = self.client.get(reverse("platform_admin:overview")).context["o"]
         self.assertEqual(o["users"], 3)
-        self.assertEqual(o["credits_month"], Decimal("16.5"))
+        self.assertEqual(o["credits_month"], Decimal("34.5"))
 
     def test_users_table_sorts_searches_and_flags_who_is_out_of_credits(self):
         rows = self.client.get(reverse("platform_admin:users")).context["page"].object_list
@@ -127,12 +127,12 @@ class ActionTests(TestCase):
 
     def test_grant_credits_adds_to_the_balance_and_is_audited(self):
         self.act("grant", credits="50", reason="Field season")
-        self.assertEqual(quota.available(self.alice), Decimal(60))
+        self.assertEqual(quota.available(self.alice), Decimal(75))
         log = self.last_log()
         self.assertEqual((log.actor, log.target, log.action, log.reason),
                          (self.admin, self.alice, "grant_credits", "Field season"))
         self.act("grant", credits="-20")
-        self.assertEqual(quota.available(self.alice), Decimal(40))
+        self.assertEqual(quota.available(self.alice), Decimal(55))
 
     def test_pro_with_an_end_date_then_back_to_standard_when_it_ends(self):
         until = timezone.localdate() + timedelta(days=365)
@@ -146,15 +146,9 @@ class ActionTests(TestCase):
 
     def test_pro_needs_a_future_end_date(self):
         self.act("tier", tier="pro", until="")
-        self.assertEqual(UserProfile.objects.get(user=self.alice).tier, "free")
+        self.assertEqual(UserProfile.objects.get(user=self.alice).tier, "standard")
         self.act("tier", tier="enterprise", until="2030-01-01")
-        self.assertEqual(UserProfile.objects.get(user=self.alice).tier, "free")
-
-    def test_custom_monthly_credits_replace_the_tiers(self):
-        self.act("limits", monthly_credits="100")
-        self.assertEqual(quota.available(self.alice), Decimal(100))
-        self.act("limits", monthly_credits="")
-        self.assertEqual(quota.available(self.alice), Decimal(10))
+        self.assertEqual(UserProfile.objects.get(user=self.alice).tier, "standard")
 
     def test_suspend_signs_out_blocks_sign_in_and_api_keys(self):
         other = self.client_class()
@@ -318,3 +312,130 @@ class OtherUsersClipsTests(TestCase):
         self.assertEqual(self.unit.role_for(self.admin), "viewer")
         self.assertFalse(self.unit.can(self.admin, "manager"))
         self.assertIsNone(self.unit.role_for(self.bob))
+
+    def admin_job(self, status="completed"):
+        from apps.analysis.models import Job, JobResult
+        job = Job.objects.create(user=self.admin, video=self.clip, config={}, status=status,
+                                 modal_job_id="admin-job")
+        JobResult.objects.create(job=job, events_csv_path="processed/e.csv", total_events=7)
+        return job
+
+    def test_the_owner_never_sees_an_admins_job_on_their_clip(self):
+        from apps.analysis import analytics
+        job = self.admin_job()
+        self.client.force_login(self.alice)
+        hub = self.client.get(reverse("analysis:processing"))
+        self.assertEqual([v.job_status for v in hub.context["videos"]], [None])
+        self.assertEqual(list(hub.context["recent_jobs"]), [])
+        detail = self.client.get(reverse("videos:detail", args=[self.clip.pk]))
+        self.assertEqual(list(detail.context["jobs"]), [])
+        self.assertEqual(self.client.get(reverse("analysis:detail", args=[job.pk])).status_code, 404)
+        self.assertEqual(self.client.get(reverse("analysis:results", args=[job.pk])).status_code, 404)
+        from apps.analysis.models import JobResult
+        self.assertFalse(JobResult.objects.for_viewer(self.alice).exists())
+
+    def test_the_admin_still_sees_it(self):
+        job = self.admin_job()
+        self.client.force_login(self.admin)
+        hub = self.client.get(reverse("analysis:processing"), {"owner": self.alice.pk})
+        self.assertEqual([v.job_status for v in hub.context["videos"]], ["completed"])
+        self.assertEqual(self.client.get(reverse("analysis:detail", args=[job.pk])).status_code, 200)
+
+    def test_the_owners_own_jobs_are_unaffected(self):
+        from apps.analysis.models import Job
+        Job.objects.create(user=self.alice, video=self.clip, config={}, status="completed",
+                           modal_job_id="alice-job")
+        self.admin_job()
+        self.assertEqual(Job.objects.for_viewer(self.alice).count(), 1)
+        # Queueing and polling see both.
+        self.assertEqual(Job.objects.count(), 2)
+
+
+@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+class RequestTests(TestCase):
+    """Users ask for credits, Pro or longer storage; an admin approves or
+    declines on /platform/requests/ (memory/50 §4)."""
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser("boss", "boss@example.com", "pw-12345678")
+        self.alice = User.objects.create_user("alice", email="alice@lab.edu", password="pw-12345678")
+
+    def ask(self, **data):
+        self.client.force_login(self.alice)
+        return self.client.post(reverse("accounts:request_create"),
+                                {"contact_email": "alice@lab.edu", "note": "field season", **data})
+
+    def decide(self, req, decision, **data):
+        self.client.force_login(self.admin)
+        return self.client.post(reverse("platform_admin:request_decide", args=[req.pk]),
+                                {"decision": decision, **data})
+
+    def test_asking_for_credits_tells_the_admins_and_shows_on_the_account_page(self):
+        from apps.accounts.models import AccountRequest
+        self.ask(kind="credits", credits="200")
+        req = AccountRequest.objects.get()
+        self.assertEqual((req.kind, req.credits, req.status), ("credits", 200, "pending"))
+        self.assertEqual([m.to for m in mail.outbox], [["boss@example.com"]])
+        self.assertContains(self.client.get(reverse("accounts:usage")), "Waiting for approval")
+        # One open request of a kind at a time.
+        self.ask(kind="credits", credits="50")
+        self.assertEqual(AccountRequest.objects.count(), 1)
+
+    def test_approving_credits_adds_the_amount_the_admin_chose(self):
+        from apps.accounts.models import AccountRequest
+        self.ask(kind="credits", credits="200")
+        req = AccountRequest.objects.get()
+        mail.outbox.clear()
+        self.decide(req, "approve", credits="150", note="Enjoy the season")
+        self.assertEqual(quota.available(self.alice), Decimal(175))
+        req.refresh_from_db()
+        self.assertEqual((req.status, req.credits, req.decided_by), ("approved", 150, self.admin))
+        self.assertEqual(AdminAction.objects.first().action, "request_approved")
+        self.assertEqual(mail.outbox[0].to, ["alice@lab.edu"])
+        self.assertIn("Enjoy the season", mail.outbox[0].body)
+
+    def test_approving_pro_makes_the_account_pro_until_the_date(self):
+        from apps.accounts.models import AccountRequest
+        self.ask(kind="pro", organization="Pollinator Lab")
+        until = timezone.localdate() + timedelta(days=365)
+        self.decide(AccountRequest.objects.get(), "approve", until=until.isoformat())
+        profile = UserProfile.objects.get(user=self.alice)
+        self.assertEqual((profile.tier, profile.tier_expires_at.date()), ("pro", until))
+        self.assertTrue(quota.is_unlimited(self.alice))
+
+    def test_approving_storage_records_the_date(self):
+        from apps.accounts.models import AccountRequest
+        until = timezone.localdate() + timedelta(days=200)
+        self.ask(kind="storage", until=until.isoformat())
+        self.decide(AccountRequest.objects.get(), "approve")
+        self.assertEqual(UserProfile.objects.get(user=self.alice).raw_retention_until, until)
+
+    def test_declining_changes_nothing(self):
+        from apps.accounts.models import AccountRequest
+        self.ask(kind="credits", credits="200")
+        self.decide(AccountRequest.objects.get(), "decline", note="Not this time")
+        self.assertEqual(AccountRequest.objects.get().status, "declined")
+        self.assertEqual(quota.available(self.alice), Decimal(25))
+
+    def test_only_admins_decide(self):
+        from apps.accounts.models import AccountRequest
+        self.ask(kind="credits", credits="200")
+        req = AccountRequest.objects.get()
+        r = self.client.post(reverse("platform_admin:request_decide", args=[req.pk]), {"decision": "approve"})
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(quota.available(self.alice), Decimal(25))
+
+    def test_bad_requests_are_refused(self):
+        from apps.accounts.models import AccountRequest
+        self.ask(kind="storage", until="2001-01-01")
+        self.ask(kind="credits", credits="0")
+        UserProfile.objects.filter(user=self.alice).update(tier="pro")
+        self.ask(kind="pro")
+        self.assertFalse(AccountRequest.objects.exists())
+
+    def test_the_requests_page_lists_whats_waiting(self):
+        self.ask(kind="credits", credits="200")
+        self.client.force_login(self.admin)
+        r = self.client.get(reverse("platform_admin:requests"))
+        self.assertContains(r, "200 credits")
+        self.assertEqual(r.context["pending_requests"], 1)

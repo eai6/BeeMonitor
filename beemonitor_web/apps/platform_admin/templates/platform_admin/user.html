@@ -37,8 +37,8 @@
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
       <div class="bg-white shadow rounded-lg p-4"><p class="text-xs text-gray-600">Credits left</p>
         {% if unlimited %}<p class="text-xl font-bold">Unlimited</p><p class="text-xs text-gray-600">tracked, never blocked</p>
-        {% else %}<p class="text-xl font-bold">{{ left|floatformat:1 }}</p><p class="text-xs text-gray-600">{{ allowance|floatformat:0 }} free a month · {{ profile.granted_gpu_credits|floatformat:1 }} granted{% if pending %} · {{ pending|floatformat:1 }} queued{% endif %}</p>{% endif %}</div>
-      <div class="bg-white shadow rounded-lg p-4"><p class="text-xs text-gray-600">Used this month</p><p class="text-xl font-bold">{{ u.month_credits|floatformat:1 }}</p><p class="text-xs text-gray-600">${{ u.month_cost|floatformat:2 }} GPU cost · renews {{ resets_on|date:"M j" }}</p></div>
+        {% else %}<p class="text-xl font-bold">{{ left|floatformat:1 }}</p><p class="text-xs text-gray-600">{% if pending %}{{ pending|floatformat:1 }} set aside for queued work{% else %}grant more on the right{% endif %}</p>{% endif %}</div>
+      <div class="bg-white shadow rounded-lg p-4"><p class="text-xs text-gray-600">Used this month</p><p class="text-xl font-bold">{{ u.month_credits|floatformat:1 }}</p><p class="text-xs text-gray-600">${{ u.month_cost|floatformat:2 }} GPU cost</p></div>
       <div class="bg-white shadow rounded-lg p-4"><p class="text-xs text-gray-600">Lifetime</p><p class="text-xl font-bold">{{ life_credits|floatformat:1 }} cr</p><p class="text-xs text-gray-600">{{ life_hours|floatformat:1 }} GPU-hours · ${{ life_cost|floatformat:0 }}</p></div>
       <div class="bg-white shadow rounded-lg p-4"><p class="text-xs text-gray-600">Storage</p><p class="text-xl font-bold">{{ u.storage_bytes|filesizeformat }}</p><p class="text-xs text-gray-600">{{ u.clips }} clips · {{ u.units }} units</p></div>
     </div>
@@ -68,7 +68,7 @@
   <div class="flex flex-col gap-5">
     <form method="post" action="{% url 'platform_admin:user_action' u.pk 'grant' %}" class="bg-white shadow rounded-lg p-5 flex flex-col gap-3">{% csrf_token %}
       <h2 class="text-base font-semibold">Grant credits</h2>
-      <p class="text-xs text-gray-600">Granted credits never expire and are spent after the month's free ones. A negative number takes credits away.</p>
+      <p class="text-xs text-gray-600">Credits never expire. A negative number takes credits away.</p>
       <label class="flex flex-col gap-1 text-sm font-semibold text-gray-700">Credits
         <input type="number" name="credits" step="0.1" required class="h-10 rounded-md border border-gray-300 bg-white px-3 text-sm font-normal"></label>
       <label class="flex flex-col gap-1 text-sm font-semibold text-gray-700">Reason (shown in the audit log)
@@ -92,15 +92,14 @@
       <button type="submit" class="h-11 border border-gray-300 bg-white rounded-md text-sm font-semibold hover:bg-gray-50">Change plan</button>
     </form>
 
-    <form method="post" action="{% url 'platform_admin:user_action' u.pk 'limits' %}" class="bg-white shadow rounded-lg p-5 flex flex-col gap-3">{% csrf_token %}
-      <h2 class="text-base font-semibold">Limits for this account</h2>
-      <label class="flex flex-col gap-1 text-sm font-semibold text-gray-700">Free credits each month
-        <input type="number" name="monthly_credits" step="0.1" min="0" value="{% if profile.monthly_gpu_credits_override is not None %}{{ profile.monthly_gpu_credits_override|floatformat:'-1' }}{% endif %}" placeholder="Plan default" class="h-10 rounded-md border border-gray-300 bg-white px-3 text-sm font-normal"></label>
-      <p class="text-xs text-gray-600">Leave empty for the plan's default. Replaces it for this account only.</p>
-      <label class="flex flex-col gap-1 text-sm font-semibold text-gray-700">Reason
-        <input type="text" name="reason" maxlength="300" class="h-10 rounded-md border border-gray-300 bg-white px-3 text-sm font-normal"></label>
-      <button type="submit" class="h-11 border border-gray-300 bg-white rounded-md text-sm font-semibold hover:bg-gray-50">Save limits</button>
-    </form>
+    <div class="bg-white shadow rounded-lg p-5 flex flex-col gap-2 text-sm">
+      <h2 class="text-base font-semibold">Requests</h2>
+      {% for r in requests %}
+      <div class="flex justify-between gap-2 border-t border-gray-100 pt-2"><span>{{ r.summary }} <span class="text-gray-600">· {{ r.created_at|date:"M j" }}</span></span>
+        <span class="font-semibold {% if r.status == 'approved' %}text-green-700{% elif r.status == 'pending' %}text-orange-700{% else %}text-gray-600{% endif %}">{% if r.status == 'pending' %}<a href="{% url 'platform_admin:requests' %}#request-{{ r.pk }}" class="underline">Waiting</a>{% else %}{{ r.get_status_display }}{% endif %}</span></div>
+      {% empty %}<p class="text-gray-600">None.</p>{% endfor %}
+      {% if profile.raw_retention_until %}<p class="border-t border-gray-100 pt-2 text-gray-700">Raw footage kept until {{ profile.raw_retention_until|date:"M j, Y" }}.</p>{% endif %}
+    </div>
 
     <div class="bg-white shadow rounded-lg p-5 flex flex-col gap-2 text-sm">
       <h2 class="text-base font-semibold">Units</h2>

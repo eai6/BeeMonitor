@@ -10,9 +10,11 @@ User = get_user_model()
 
 @receiver(post_save, sender=User)
 def create_user_profile(sender, instance, created, **kwargs):
-    """Auto-create a UserProfile when a new User is created."""
+    """Every new account gets a profile and its one-time starting credits."""
     if created:
-        UserProfile.objects.get_or_create(user=instance)
+        from .quota import STARTING_CREDITS
+        UserProfile.objects.get_or_create(user=instance,
+                                          defaults={"granted_gpu_credits": STARTING_CREDITS})
 
 
 def client_ip(request):

@@ -1,0 +1,59 @@
+{% extends "platform_admin/_layout.html" %}
+{% block page_title %}Requests{% endblock %}
+
+{% block platform %}
+<h1 class="text-2xl font-bold text-gray-900">Requests</h1>
+
+{% for r in pending %}
+<form method="post" action="{% url 'platform_admin:request_decide' r.pk %}" id="request-{{ r.pk }}"
+      class="bg-white shadow rounded-lg p-5 flex flex-wrap gap-5 items-end">
+  {% csrf_token %}
+  <div class="flex-1 min-w-[18rem] flex flex-col gap-1 text-sm">
+    <div class="flex flex-wrap items-baseline gap-2"><strong class="text-base">{{ r.summary }}</strong><span class="text-gray-600">{{ r.created_at|date:"M j, H:i" }}</span></div>
+    <span class="text-gray-700"><a href="{% url 'platform_admin:user' r.user.pk %}" class="text-green-700 hover:text-green-900">{{ r.user.username }}</a>{% if r.organization %} · {{ r.organization }}{% endif %} · now {% if r.user.is_superuser %}Super admin{% else %}{{ r.user.profile.get_tier_display }}{% endif %}{% if r.user.profile.tier != "pro" and not r.user.is_superuser %}, {{ r.user.profile.granted_gpu_credits|floatformat:1 }} credits left{% endif %}</span>
+    <span class="text-gray-600">{{ r.contact_email }}</span>
+    {% if r.note %}<p class="text-gray-700 whitespace-pre-line">“{{ r.note }}”</p>{% endif %}
+  </div>
+  <div class="flex flex-wrap items-end gap-2 text-sm">
+    {% if r.kind == "credits" %}
+    <label class="flex flex-col gap-1 font-semibold text-gray-700">Credits
+      <input type="number" name="credits" step="1" min="1" value="{{ r.credits|floatformat:'0' }}" class="h-10 w-28 rounded-md border border-gray-300 bg-white px-3 font-normal"></label>
+    {% elif r.kind == "pro" %}
+    <label class="flex flex-col gap-1 font-semibold text-gray-700">Pro until
+      <input type="date" name="until" value="{{ pro_default_until }}" class="h-10 rounded-md border border-gray-300 bg-white px-3 font-normal"></label>
+    {% else %}
+    <label class="flex flex-col gap-1 font-semibold text-gray-700">Keep until
+      <input type="date" name="until" value="{{ r.until|date:'Y-m-d' }}" class="h-10 rounded-md border border-gray-300 bg-white px-3 font-normal"></label>
+    {% endif %}
+    <label class="flex flex-col gap-1 font-semibold text-gray-700">Note to them (optional)
+      <input type="text" name="note" maxlength="500" class="h-10 w-56 rounded-md border border-gray-300 bg-white px-3 font-normal"></label>
+    <button type="submit" name="decision" value="decline" class="h-10 px-4 rounded-md border border-gray-300 bg-white hover:bg-gray-50">Decline</button>
+    <button type="submit" name="decision" value="approve" class="h-10 px-4 rounded-md bg-green-600 text-white font-semibold hover:bg-green-700">Approve</button>
+  </div>
+</form>
+{% empty %}
+<p class="text-sm text-gray-600">No requests waiting.</p>
+{% endfor %}
+
+{% if decided %}
+<div class="bg-white shadow rounded-lg p-5 flex flex-col gap-2">
+  <h2 class="text-base font-semibold">Decided</h2>
+  <div class="overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead><tr class="text-left text-gray-600"><th class="py-1.5 pr-3 font-medium">When</th><th class="pr-3 font-medium">User</th><th class="pr-3 font-medium">Request</th><th class="pr-3 font-medium">Decision</th><th class="font-medium">Note</th></tr></thead>
+    <tbody>
+      {% for r in decided %}
+      <tr class="border-t border-gray-100 align-top">
+        <td class="py-2 pr-3 whitespace-nowrap text-gray-700">{{ r.decided_at|date:"M j, Y" }}</td>
+        <td class="pr-3"><a href="{% url 'platform_admin:user' r.user.pk %}" class="text-green-700 hover:text-green-900">{{ r.user.username }}</a></td>
+        <td class="pr-3">{{ r.summary }}</td>
+        <td class="pr-3 font-semibold {% if r.status == 'approved' %}text-green-700{% else %}text-gray-600{% endif %}">{{ r.get_status_display }}{% if r.decided_by %} <span class="font-normal text-gray-600">by {{ r.decided_by.username }}</span>{% endif %}</td>
+        <td class="text-gray-600">{{ r.decision_note }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -26,7 +26,7 @@ ACTIVE_DAYS = 30
 
 
 def month_start():
-    return quota._month_start()
+    return timezone.localdate().replace(day=1)
 
 
 def _sub(model_qs, user_field, expr, output):
@@ -62,8 +62,6 @@ def tier_label(user) -> str:
     label = profile.get_tier_display()
     if profile.tier_expires_at:
         label += f" · to {profile.tier_expires_at:%b %Y}"
-    if profile.monthly_gpu_credits_override is not None:
-        label += " · custom limits"
     return label
 
 
@@ -113,8 +111,8 @@ def overview():
         "storage_bytes": storage,
         "tiers": [{"label": UserProfile.Tier(t).label, "n": n} for t, n in sorted(tiers.items())],
         "superusers": User.objects.filter(is_superuser=True).count(),
-        "with_override": UserProfile.objects.exclude(monthly_gpu_credits_override=None).count(),
-        "with_granted": UserProfile.objects.filter(granted_gpu_credits__gt=0).count(),
+        "out_of_credits": UserProfile.objects.filter(
+            tier=UserProfile.Tier.STANDARD, granted_gpu_credits__lte=0, user__is_superuser=False).count(),
         "expiring_soon": UserProfile.objects.filter(
             tier_expires_at__gte=now, tier_expires_at__lte=now + timedelta(days=30)).count(),
         "failed_logins_7d": LoginEvent.objects.filter(success=False, created_at__gte=week_ago).count(),

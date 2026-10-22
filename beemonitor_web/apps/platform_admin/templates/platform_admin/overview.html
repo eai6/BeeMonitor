@@ -26,8 +26,8 @@
     {% for t in o.tiers %}<div class="flex justify-between"><span>{{ t.label }}</span><strong>{{ t.n }}</strong></div>{% endfor %}
     <div class="flex justify-between"><span>Super admin</span><strong>{{ o.superusers }}</strong></div>
     <div class="border-t border-gray-100 pt-3 flex flex-col gap-1.5 text-gray-700">
-      <div class="flex justify-between"><span>with granted credits</span><span>{{ o.with_granted }}</span></div>
-      <div class="flex justify-between"><span>with custom limits</span><span>{{ o.with_override }}</span></div>
+      <div class="flex justify-between"><span>Standard, out of credits</span><span>{{ o.out_of_credits }}</span></div>
+      <div class="flex justify-between"><a href="{% url 'platform_admin:requests' %}" class="text-green-700 hover:text-green-900">open requests</a><span>{{ pending_requests }}</span></div>
       <div class="flex justify-between"><span>plans ending in 30 days</span><span>{{ o.expiring_soon }}</span></div>
     </div>
     {% if o.by_kind %}

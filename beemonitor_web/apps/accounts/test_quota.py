@@ -4,7 +4,6 @@ memory/50 §3 and §5. The property that matters most: a launch that doesn't fit
 is refused before anything is created, so no batch is ever half-started.
 """
 
-from datetime import date
 from decimal import Decimal
 from unittest import mock
 
@@ -42,20 +41,11 @@ class ArithmeticTests(CreditsTestCase):
         self.assertEqual(quota.credits_for(3600, A10G), Decimal("2"))
         self.assertEqual(quota.credits_for(1800, "ml.unknown"), Decimal("0.5"))  # priced as the video machine
 
-    def test_a_new_account_has_ten_free_credits(self):
-        self.assertEqual(quota.available(self.user), Decimal("10"))
-
-    def test_granted_credits_add_to_the_free_ones(self):
-        self.grant(5)
-        self.assertEqual(quota.available(self.user), Decimal("15"))
-
-    def test_a_new_month_renews_the_free_credits_but_keeps_granted(self):
-        UserProfile.objects.filter(user=self.user).update(
-            credit_period_start=date(2020, 1, 1), monthly_gpu_credits_used=10,
-            granted_gpu_credits=3)
-        self.assertEqual(quota.available(self.user), Decimal("13"))
-        self.profile.refresh_from_db()
-        self.assertEqual(self.profile.credit_period_start, timezone.localdate().replace(day=1))
+    def test_a_new_account_starts_with_25_credits_once(self):
+        self.assertEqual(quota.available(self.user), Decimal("25"))
+        # Nothing renews: the balance is the balance.
+        self.grant(3)
+        self.assertEqual(quota.available(self.user), Decimal("3"))
 
     def test_estimates_use_recent_runs_once_there_are_enough(self):
         self.assertEqual(quota.seconds_per_unit("analysis", T4), 1.07)  # fallback, no history
@@ -67,23 +57,19 @@ class ArithmeticTests(CreditsTestCase):
 
 
 class ChargeTests(CreditsTestCase):
-    def test_free_credits_are_spent_before_granted_ones(self):
-        self.grant(5)
+    def test_finished_work_comes_off_the_balance(self):
         quota.charge(self.user, "analysis", 12 * 3600, T4, "job", 1)   # 12 credits
-        self.profile.refresh_from_db()
-        self.assertEqual(self.profile.monthly_gpu_credits_used, Decimal("10"))
-        self.assertEqual(self.profile.granted_gpu_credits, Decimal("3"))
-        self.assertEqual(quota.available(self.user), Decimal("3"))
+        self.assertEqual(quota.available(self.user), Decimal("13"))
 
     def test_an_overrun_can_go_negative(self):
-        quota.charge(self.user, "analysis", 11 * 3600, T4, "job", 1)
+        quota.charge(self.user, "analysis", 26 * 3600, T4, "job", 1)
         self.assertEqual(quota.available(self.user), Decimal("-1"))
 
     def test_the_same_work_is_charged_once(self):
         quota.charge(self.user, "analysis", 3600, T4, "job", 7)
         quota.charge(self.user, "analysis", 3600, T4, "job", 7)
         self.assertEqual(UsageEvent.objects.filter(source_id="7").count(), 1)
-        self.assertEqual(quota.available(self.user), Decimal("9"))
+        self.assertEqual(quota.available(self.user), Decimal("24"))
 
     def test_nothing_ran_nothing_charged(self):
         self.assertIsNone(quota.charge(self.user, "analysis", 0, T4, "job", 8))
@@ -94,7 +80,7 @@ class ChargeTests(CreditsTestCase):
         self.user.save()
         quota.charge(self.user, "analysis", 50 * 3600, T4, "job", 9)
         self.profile.refresh_from_db()
-        self.assertEqual(self.profile.granted_gpu_credits, Decimal("0"))
+        self.assertEqual(self.profile.granted_gpu_credits, Decimal("25"))
         self.assertEqual(UsageEvent.objects.get().credits, Decimal("50"))
         quota.check(self.user, Decimal("1000"))   # never raises
 
@@ -102,13 +88,13 @@ class ChargeTests(CreditsTestCase):
 class CheckTests(CreditsTestCase):
     def test_refuses_what_does_not_fit(self):
         with self.assertRaises(quota.QuotaExceeded) as cm:
-            quota.check(self.user, [quota.Work("analysis", T4, 11 * 3600 / 1.07)])
+            quota.check(self.user, [quota.Work("analysis", T4, 26 * 3600 / 1.07)])
         self.assertIn("Nothing was started", cm.exception.message)
 
     def test_work_already_queued_is_set_aside(self):
-        Job.objects.create(user=self.user, video=self.clip(9 * 3600 / 1.07),
+        Job.objects.create(user=self.user, video=self.clip(24 * 3600 / 1.07),
                            status=Job.Status.QUEUED, modal_job_id="q1")
-        self.assertAlmostEqual(float(quota.pending(self.user)), 9.0, places=2)
+        self.assertAlmostEqual(float(quota.pending(self.user)), 24.0, places=2)
         with self.assertRaises(quota.QuotaExceeded):
             quota.check(self.user, [quota.Work("analysis", T4, 2 * 3600 / 1.07)])
 
@@ -127,7 +113,7 @@ class EntryPointTests(CreditsTestCase):
     def setUp(self):
         super().setUp()
         self.client.force_login(self.user)
-        # 100 hours of footage: ~107 credits, far over 10.
+        # 100 hours of footage: ~107 credits, far over the 25 a new account has.
         self.big = self.clip(seconds=100 * 3600)
 
     def test_batch_analysis_refuses_with_402(self):
@@ -168,11 +154,11 @@ class EntryPointTests(CreditsTestCase):
 
 
 class CouponTests(CreditsTestCase):
-    def test_a_credit_coupon_grants_credits_that_survive_the_month(self):
+    def test_a_credit_coupon_adds_to_the_balance(self):
         Coupon.objects.create(code="FIELD", coupon_type="credits", credits_amount=20)
         self.client.force_login(self.user)
         self.client.post(reverse("accounts:redeem_coupon"), {"coupon_code": "field"})
-        self.assertEqual(quota.available(self.user), Decimal("30"))
+        self.assertEqual(quota.available(self.user), Decimal("45"))
 
 
 class UsagePageTests(CreditsTestCase):

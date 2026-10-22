@@ -83,7 +83,7 @@ class CouponLimitTests(TestCase):
             self.client.post(reverse("accounts:redeem_coupon"), {"coupon_code": f"GUESS{i}"})
         Coupon.objects.create(code="REAL", coupon_type="credits", credits_amount=20)
         self.client.post(reverse("accounts:redeem_coupon"), {"coupon_code": "REAL"})
-        self.assertEqual(user.profile.__class__.objects.get(user=user).granted_gpu_credits, 0)
+        self.assertEqual(user.profile.__class__.objects.get(user=user).granted_gpu_credits, 25)
 
 
 class LogoutTests(TestCase):
@@ -99,9 +99,9 @@ class LogoutTests(TestCase):
 class CreditHoldTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user("bee")
-        # Four 2-hour clips: ~2.1 credits each, 8.6 together, 10 available.
+        # Four 5-hour clips: ~5.35 credits each, 21.4 together, 25 available.
         self.clips = [Video.objects.create(user=self.user, title=f"c{i}", storage_key=f"k/{i}",
-                                           file_size_bytes=1, duration_seconds=7200) for i in range(4)]
+                                           file_size_bytes=1, duration_seconds=18000) for i in range(4)]
 
     def test_a_launch_holds_what_it_was_approved_for(self):
         quota.check(self.user, [quota.video_work(v) for v in self.clips])

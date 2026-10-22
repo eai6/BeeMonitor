@@ -6,45 +6,31 @@ from django.db import models
 from django.utils import timezone
 
 
-# Tier limits
-# ``monthly_credits`` / ``max_video_hours_per_month`` are the legacy GPU-second
-# meter. The meter that gates GPU work is ``monthly_gpu_credits``: credits in the
-# unit of apps/accounts/quota.py (1 credit = 1 GPU-hour on the video machine),
-# None = unlimited. See memory/50_tiers_quotas_and_platform_admin.md.
+# Two tiers (memory/50 §2). Standard is every account: it starts with
+# quota.STARTING_CREDITS once and asks for more (AccountRequest). Pro is
+# unlimited for as long as it was granted. ``monthly_credits`` /
+# ``max_video_hours_per_month`` are the legacy GPU-second meter, kept for the
+# old API fields only.
 TIER_LIMITS = {
-    "free": {
-        "label": "Free",
-        "monthly_gpu_credits": 10,
-        "monthly_credits": 3000,
-        "max_video_hours_per_month": 50,
-    },
     "standard": {
         "label": "Standard",
-        "monthly_gpu_credits": 10,
+        "unlimited_gpu": False,
         "monthly_credits": 25000,
         "max_video_hours_per_month": 500,
     },
     "pro": {
         "label": "Pro",
-        "monthly_gpu_credits": None,
+        "unlimited_gpu": True,
         "monthly_credits": 100000,
         "max_video_hours_per_month": 5000,
-    },
-    "enterprise": {
-        "label": "Enterprise",
-        "monthly_gpu_credits": None,
-        "monthly_credits": 0,  # Unlimited
-        "max_video_hours_per_month": 0,  # Unlimited
     },
 }
 
 
 class UserProfile(models.Model):
     class Tier(models.TextChoices):
-        FREE = "free", "Free"
         STANDARD = "standard", "Standard"
         PRO = "pro", "Pro"
-        ENTERPRISE = "enterprise", "Enterprise"
 
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
@@ -55,7 +41,7 @@ class UserProfile(models.Model):
     tier = models.CharField(
         max_length=20,
         choices=Tier.choices,
-        default=Tier.FREE,
+        default=Tier.STANDARD,
     )
 
     # Credits (abstract units, ~1 credit ≈ 1 second GPU time)
@@ -79,25 +65,20 @@ class UserProfile(models.Model):
         help_text="Allow read-only cross-tenant access (analytics, debugging). Writes still owner-scoped.",
     )
 
-    # GPU credits (apps/accounts/quota.py). The month's free allowance comes
-    # from the tier; ``monthly_gpu_credits_used`` counts what was taken from it
-    # since ``credit_period_start``. ``granted_gpu_credits`` is what was granted
-    # on top (requests, promo codes) and never resets; it is spent after the
-    # month's allowance and may go slightly negative when a run overruns.
-    credit_period_start = models.DateField(null=True, blank=True)
-    monthly_gpu_credits_used = models.DecimalField(max_digits=12, decimal_places=4, default=0)
+    # GPU credits (apps/accounts/quota.py): the balance. New accounts start
+    # with quota.STARTING_CREDITS; approved requests and promo codes add to it;
+    # finished work takes from it. May go slightly negative when a run overruns.
     granted_gpu_credits = models.DecimalField(max_digits=12, decimal_places=4, default=0)
-    # Set on the platform dashboard for one account: replaces the tier's free
-    # monthly credits (None = the tier's). A big customer is a Pro or Standard
-    # account with its own numbers, not a tier of its own.
-    monthly_gpu_credits_override = models.DecimalField(max_digits=12, decimal_places=4,
-                                                       null=True, blank=True)
     # When a granted tier (Pro, a promo-code trial) ends; the account drops to
     # Standard on the next credit check after it (quota._expire_tier).
     tier_expires_at = models.DateTimeField(null=True, blank=True)
     # Last web request or API call, written at most every 5 minutes
     # (accounts.middleware.LastSeenMiddleware).
     last_seen_at = models.DateTimeField(null=True, blank=True)
+    # Raw footage kept until this date instead of 3 months after upload: an
+    # approved storage request (AccountRequest). The deletion job (memory/50
+    # step 8) reads it.
+    raw_retention_until = models.DateField(null=True, blank=True)
 
     # Legacy
     monthly_job_count = models.IntegerField(default=0)
@@ -116,20 +97,9 @@ class UserProfile(models.Model):
             return 0
         return min(100, int(self.used_credits / self.monthly_credits * 100))
 
-    def reset_monthly_credits(self):
-        """Reset monthly usage."""
-        limits = TIER_LIMITS.get(self.tier, TIER_LIMITS["free"])
-        self.monthly_credits = limits["monthly_credits"]
-        self.used_credits = 0
-        self.credit_reset_date = timezone.now().date() + timezone.timedelta(days=30)
-        self.save(update_fields=["monthly_credits", "used_credits", "credit_reset_date"])
-
     @property
     def tier_limits(self) -> dict:
-        limits = TIER_LIMITS.get(self.tier, TIER_LIMITS["free"])
-        if self.monthly_gpu_credits_override is not None:
-            limits = {**limits, "monthly_gpu_credits": self.monthly_gpu_credits_override}
-        return limits
+        return TIER_LIMITS.get(self.tier, TIER_LIMITS["standard"])
 
 
 class Coupon(models.Model):
@@ -395,3 +365,53 @@ class AdminAction(models.Model):
         return cls.objects.create(actor=actor if getattr(actor, "pk", None) else None,
                                   target=target, action=action, summary=summary,
                                   reason=reason, detail=detail)
+
+
+class AccountRequest(models.Model):
+    """A user asking for more: credits, Pro, or keeping raw footage longer.
+
+    Nothing about money happens on the platform (memory/50 §4): the user asks,
+    a platform admin approves (possibly changing the amount or date) or
+    declines, and whatever is arranged happens off the platform. Approving
+    applies it to the account and is written to the audit log."""
+
+    class Kind(models.TextChoices):
+        CREDITS = "credits", "More credits"
+        PRO = "pro", "Pro"
+        STORAGE = "storage", "Longer storage"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Waiting for approval"
+        APPROVED = "approved", "Approved"
+        DECLINED = "declined", "Declined"
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name="account_requests")
+    kind = models.CharField(max_length=10, choices=Kind.choices)
+    # What was asked for: credits for CREDITS, a date for STORAGE (Pro asks for
+    # a year; the admin picks the end date when approving).
+    credits = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    until = models.DateField(null=True, blank=True)
+    organization = models.CharField(max_length=200, blank=True, default="")
+    contact_email = models.EmailField()
+    note = models.TextField(max_length=2000, blank=True, default="")
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+    decided_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
+                                   on_delete=models.SET_NULL, related_name="+")
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.CharField(max_length=500, blank=True, default="")
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.user} · {self.summary} · {self.get_status_display()}"
+
+    @property
+    def summary(self) -> str:
+        if self.kind == self.Kind.CREDITS:
+            return f"{self.credits.normalize():,f} credits"
+        if self.kind == self.Kind.STORAGE:
+            return f"Keep raw footage until {self.until:%b %-d, %Y}" if self.until else "Longer storage"
+        return "Pro" + (f" until {self.until:%b %-d, %Y}" if self.until else ", annual")

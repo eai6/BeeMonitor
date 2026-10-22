@@ -6,13 +6,11 @@ class TierBasedThrottle(SimpleRateThrottle):
     Throttle requests based on the user's subscription tier.
 
     Rates:
-        - free:     10 requests per minute
         - standard: 60 requests per minute
         - pro:      300 requests per minute
     """
 
     TIER_RATES = {
-        "free": "10/min",
         "standard": "60/min",
         "pro": "300/min",
     }
@@ -35,11 +33,11 @@ class TierBasedThrottle(SimpleRateThrottle):
             tier = getattr(
                 getattr(request.user, "profile", None),
                 "tier",
-                "free",
+                "standard",
             )
-            self.rate = self.TIER_RATES.get(tier, self.TIER_RATES["free"])
+            self.rate = self.TIER_RATES.get(tier, self.TIER_RATES["standard"])
         else:
-            self.rate = self.TIER_RATES["free"]
+            self.rate = self.TIER_RATES["standard"]
 
         self.num_requests, self.duration = self.parse_rate(self.rate)
         return super().allow_request(request, view)
