@@ -10,26 +10,26 @@
   {% if form.errors %}<div class="rounded-md bg-red-50 text-red-800 p-3 text-sm">{% for field, errs in form.errors.items %}{% for e in errs %}<div>{% if field != '__all__' %}{{ field }}: {% endif %}{{ e }}</div>{% endfor %}{% endfor %}</div>{% endif %}
   <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
     <label class="flex flex-col gap-1 font-semibold text-gray-700">Code
-      <input type="text" name="code" value="{{ form.code.value|default:'' }}" required maxlength="50" class="h-10 rounded-md border-gray-300 font-mono font-normal"></label>
+      <input type="text" name="code" value="{{ form.code.value|default:'' }}" required maxlength="50" class="h-10 rounded-md border border-gray-300 bg-white px-3 font-mono font-normal"></label>
     <label class="flex flex-col gap-1 font-semibold text-gray-700">Gives
-      <select name="coupon_type" x-model="kind" class="h-10 rounded-md border-gray-300 font-normal">
+      <select name="coupon_type" x-model="kind" class="h-10 rounded-md border border-gray-300 bg-white px-3 font-normal">
         <option value="credits">+ credits</option>
         <option value="tier_upgrade">Plan trial</option>
       </select></label>
     <label class="flex flex-col gap-1 font-semibold text-gray-700" x-show="kind === 'credits'">Credits
-      <input type="number" name="credits_amount" value="{{ form.credits_amount.value|default:'20' }}" min="0" class="h-10 rounded-md border-gray-300 font-normal"></label>
+      <input type="number" name="credits_amount" value="{{ form.credits_amount.value|default:'20' }}" min="0" class="h-10 rounded-md border border-gray-300 bg-white px-3 font-normal"></label>
     <label class="flex flex-col gap-1 font-semibold text-gray-700" x-show="kind === 'tier_upgrade'" x-cloak>Plan
-      <select name="upgrade_tier" class="h-10 rounded-md border-gray-300 font-normal">
+      <select name="upgrade_tier" class="h-10 rounded-md border border-gray-300 bg-white px-3 font-normal">
         {% for v, l in upgrade_tiers %}<option value="{{ v }}">{{ l }}</option>{% endfor %}
       </select></label>
     <label class="flex flex-col gap-1 font-semibold text-gray-700" x-show="kind === 'tier_upgrade'" x-cloak>For how many days
-      <input type="number" name="upgrade_duration_days" value="{{ form.upgrade_duration_days.value|default:'30' }}" min="1" class="h-10 rounded-md border-gray-300 font-normal"></label>
+      <input type="number" name="upgrade_duration_days" value="{{ form.upgrade_duration_days.value|default:'30' }}" min="1" class="h-10 rounded-md border border-gray-300 bg-white px-3 font-normal"></label>
     <label class="flex flex-col gap-1 font-semibold text-gray-700">Max uses (0 = no limit)
-      <input type="number" name="max_redemptions" value="{{ form.max_redemptions.value|default:'50' }}" min="0" class="h-10 rounded-md border-gray-300 font-normal"></label>
+      <input type="number" name="max_redemptions" value="{{ form.max_redemptions.value|default:'50' }}" min="0" class="h-10 rounded-md border border-gray-300 bg-white px-3 font-normal"></label>
     <label class="flex flex-col gap-1 font-semibold text-gray-700">Code expires
-      <input type="datetime-local" name="expires_at" class="h-10 rounded-md border-gray-300 font-normal"></label>
+      <input type="datetime-local" name="expires_at" class="h-10 rounded-md border border-gray-300 bg-white px-3 font-normal"></label>
     <label class="flex flex-col gap-1 font-semibold text-gray-700 sm:col-span-2">Note (only admins see it)
-      <input type="text" name="note" value="{{ form.note.value|default:'' }}" maxlength="200" class="h-10 rounded-md border-gray-300 font-normal"></label>
+      <input type="text" name="note" value="{{ form.note.value|default:'' }}" maxlength="200" class="h-10 rounded-md border border-gray-300 bg-white px-3 font-normal"></label>
   </div>
   <input type="hidden" name="is_active" value="on">
   <div class="flex justify-end"><button type="submit" class="h-11 px-5 bg-green-600 text-white rounded-md text-sm font-semibold hover:bg-green-700">Create code</button></div>

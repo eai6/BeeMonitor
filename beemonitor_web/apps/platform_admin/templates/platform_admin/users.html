@@ -9,21 +9,21 @@
 
 <form method="get" class="flex flex-wrap gap-2 items-end text-sm">
   <label class="flex-1 min-w-[14rem]"><span class="sr-only">Search users</span>
-    <input type="search" name="q" value="{{ g.q }}" placeholder="Search name, email, organization" class="w-full h-10 rounded-md border-gray-300 shadow-sm text-sm"></label>
+    <input type="search" name="q" value="{{ g.q }}" placeholder="Search name, email, organization" class="w-full h-10 rounded-md border border-gray-300 bg-white px-3 shadow-sm text-sm"></label>
   <label class="flex flex-col gap-1"><span class="text-xs text-gray-600">Tier</span>
-    <select name="tier" class="h-10 rounded-md border-gray-300 text-sm">
+    <select name="tier" class="h-10 rounded-md border border-gray-300 bg-white px-3 text-sm">
       <option value="">All</option>
       {% for v, l in tiers %}<option value="{{ v }}" {% if g.tier == v %}selected{% endif %}>{{ l }}</option>{% endfor %}
       <option value="superuser" {% if g.tier == 'superuser' %}selected{% endif %}>Super admin</option>
     </select></label>
   <label class="flex flex-col gap-1"><span class="text-xs text-gray-600">Active</span>
-    <select name="active" class="h-10 rounded-md border-gray-300 text-sm">
+    <select name="active" class="h-10 rounded-md border border-gray-300 bg-white px-3 text-sm">
       <option value="">Any time</option>
       <option value="7" {% if g.active == '7' %}selected{% endif %}>Last 7 days</option>
       <option value="30" {% if g.active == '30' %}selected{% endif %}>Last 30 days</option>
     </select></label>
   <label class="flex flex-col gap-1"><span class="text-xs text-gray-600">Status</span>
-    <select name="status" class="h-10 rounded-md border-gray-300 text-sm">
+    <select name="status" class="h-10 rounded-md border border-gray-300 bg-white px-3 text-sm">
       <option value="">All</option>
       <option value="active" {% if g.status == 'active' %}selected{% endif %}>Active</option>
       <option value="out_of_credits" {% if g.status == 'out_of_credits' %}selected{% endif %}>Out of credits</option>
@@ -31,7 +31,7 @@
       <option value="suspended" {% if g.status == 'suspended' %}selected{% endif %}>Suspended</option>
     </select></label>
   <label class="flex flex-col gap-1"><span class="text-xs text-gray-600">Sort by</span>
-    <select name="sort" class="h-10 rounded-md border-gray-300 text-sm">
+    <select name="sort" class="h-10 rounded-md border border-gray-300 bg-white px-3 text-sm">
       <option value="credits" {% if g.sort == 'credits' or not g.sort %}selected{% endif %}>Credits this month</option>
       <option value="lifetime" {% if g.sort == 'lifetime' %}selected{% endif %}>Lifetime GPU-hours</option>
       <option value="storage" {% if g.sort == 'storage' %}selected{% endif %}>Storage</option>
