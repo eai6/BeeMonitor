@@ -1,74 +1,35 @@
 from django import forms
 
-from .models import DataSource
 
 
 class SourceCreateForm(forms.Form):
-    name = forms.CharField(max_length=200)
-    source_type = forms.ChoiceField(choices=DataSource.SourceType.choices)
+    """Connect an S3 bucket (memory/54: S3 only for now). The secret is never
+    written back into the page."""
 
-    # AWS S3
-    s3_bucket = forms.CharField(max_length=200, required=False, label="S3 Bucket Name")
-    s3_prefix = forms.CharField(max_length=500, required=False, label="Key Prefix (optional)",
-                                help_text="e.g. videos/field-site-1/")
-    s3_access_key_id = forms.CharField(max_length=200, required=False, label="Access Key ID")
-    s3_secret_access_key = forms.CharField(max_length=200, required=False, label="Secret Access Key",
-                                           widget=forms.PasswordInput(render_value=True))
+    name = forms.CharField(max_length=200)
+    s3_bucket = forms.CharField(max_length=200, label="Bucket")
+    s3_prefix = forms.CharField(max_length=500, required=False, label="Folder (optional)",
+                                help_text="Only this folder is visible, e.g. videos/field-site-1/")
+    s3_access_key_id = forms.CharField(max_length=200, label="Access key ID")
+    s3_secret_access_key = forms.CharField(max_length=200, label="Secret access key",
+                                           widget=forms.PasswordInput(render_value=False))
     s3_region = forms.CharField(max_length=50, required=False, label="Region", initial="us-east-1")
 
-    # GCS
-    gcs_bucket = forms.CharField(max_length=200, required=False, label="GCS Bucket Name")
-    gcs_service_account_json = forms.CharField(required=False, label="Service Account JSON",
-                                               widget=forms.Textarea(attrs={"rows": 4}),
-                                               help_text="Paste the full JSON key file content")
+    def clean_s3_bucket(self):
+        bucket = self.cleaned_data["s3_bucket"].strip().removeprefix("s3://").strip("/")
+        if not bucket or "/" in bucket:
+            raise forms.ValidationError("Just the bucket name, e.g. pollinator-lab-footage. Put a folder below.")
+        return bucket
 
-    # Google Drive
-    gdrive_folder_id = forms.CharField(max_length=200, required=False, label="Folder ID",
-                                       help_text="The ID from the Google Drive folder URL")
-    gdrive_oauth_token = forms.CharField(max_length=2000, required=False, label="OAuth Token",
-                                         widget=forms.Textarea(attrs={"rows": 2}))
-
-    def clean(self):
-        cleaned = super().clean()
-        st = cleaned.get("source_type")
-
-        if st == "aws_s3":
-            if not cleaned.get("s3_bucket"):
-                self.add_error("s3_bucket", "Bucket name is required for S3.")
-            if not cleaned.get("s3_access_key_id"):
-                self.add_error("s3_access_key_id", "Access Key ID is required.")
-            if not cleaned.get("s3_secret_access_key"):
-                self.add_error("s3_secret_access_key", "Secret Access Key is required.")
-        elif st == "gcs":
-            if not cleaned.get("gcs_bucket"):
-                self.add_error("gcs_bucket", "Bucket name is required.")
-        elif st == "google_drive":
-            if not cleaned.get("gdrive_folder_id"):
-                self.add_error("gdrive_folder_id", "Folder ID is required.")
-            if not cleaned.get("gdrive_oauth_token"):
-                self.add_error("gdrive_oauth_token", "OAuth token is required.")
-
-        return cleaned
+    def clean_s3_prefix(self):
+        prefix = self.cleaned_data.get("s3_prefix", "").strip().lstrip("/")
+        return prefix + "/" if prefix and not prefix.endswith("/") else prefix
 
     def get_credentials(self) -> dict:
-        """Return a dict of credentials for the selected source type."""
-        st = self.cleaned_data["source_type"]
-        if st == "aws_s3":
-            return {
-                "bucket": self.cleaned_data["s3_bucket"],
-                "prefix": self.cleaned_data.get("s3_prefix", ""),
-                "access_key_id": self.cleaned_data["s3_access_key_id"],
-                "secret_access_key": self.cleaned_data["s3_secret_access_key"],
-                "region": self.cleaned_data.get("s3_region", "us-east-1"),
-            }
-        elif st == "gcs":
-            return {
-                "bucket": self.cleaned_data["gcs_bucket"],
-                "service_account_json": self.cleaned_data.get("gcs_service_account_json", ""),
-            }
-        elif st == "google_drive":
-            return {
-                "folder_id": self.cleaned_data["gdrive_folder_id"],
-                "oauth_token": self.cleaned_data["gdrive_oauth_token"],
-            }
-        return {}
+        return {
+            "bucket": self.cleaned_data["s3_bucket"],
+            "prefix": self.cleaned_data.get("s3_prefix", ""),
+            "access_key_id": self.cleaned_data["s3_access_key_id"].strip(),
+            "secret_access_key": self.cleaned_data["s3_secret_access_key"].strip(),
+            "region": (self.cleaned_data.get("s3_region") or "us-east-1").strip(),
+        }

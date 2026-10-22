@@ -207,7 +207,13 @@ def _delete(user, delete_on, limit):
         except Exception:
             logger.exception("could not delete raw footage %s", video.storage_key)
             continue
-        Video.everything.filter(pk=video.pk).update(raw_deleted_at=timezone.now())
+        back = _back_to_their_bucket(video)
+        if back:
+            # Imported from the user's own bucket and still there: the clip
+            # goes back to playing from it, so nothing is lost (memory/54).
+            Video.everything.filter(pk=video.pk).update(storage_key=back, raw_delete_on=None)
+        else:
+            Video.everything.filter(pk=video.pk).update(raw_deleted_at=timezone.now())
         n += 1
         b += video.file_size_bytes or 0
     if n:
@@ -215,6 +221,16 @@ def _delete(user, delete_on, limit):
                            f"Deleted the raw footage of {n} clips ({b / 1e9:.1f} GB) for {user.username}",
                            target=user, delete_on=delete_on.isoformat(), clips=n, bytes=b)
     return n, b
+
+
+def _back_to_their_bucket(video):
+    """``s3://bucket/key`` when this clip was copied in from a connected
+    bucket (its source still exists), else None."""
+    meta = video.metadata or {}
+    if video.source_id and meta.get("remote_bucket") and meta.get("remote_key"):
+        from apps.sources.s3 import remote_uri
+        return remote_uri(meta["remote_bucket"], meta["remote_key"])
+    return None
 
 
 def _subject(delete_on, clips):
@@ -230,7 +246,8 @@ def _body(user, delete_on, clips, size, units):
         f"({size / 1e9:.1f} GB) will be deleted on {delete_on:%B} {delete_on.day}, {delete_on.year}. "
         "On the Standard plan raw footage is kept for 3 months after upload.\n\n"
         "Everything derived from it stays: detections, tracks, events, crops and annotations. "
-        "Deleted clips can't be analysed again.\n\n"
+        "Deleted clips can't be analysed again, except clips you imported from your own cloud "
+        "storage: those go back to being read from your bucket.\n\n"
         f"To keep it longer, request longer storage: https://{domain}/accounts/usage/\n"
         "Nothing is deleted while a request is waiting.\n"
     )

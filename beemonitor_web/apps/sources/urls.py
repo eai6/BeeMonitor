@@ -10,4 +10,6 @@ urlpatterns = [
     path("<int:pk>/browse/", views.SourceBrowseView.as_view(), name="browse"),
     path("<int:pk>/sync/", views.SourceSyncView.as_view(), name="sync"),
     path("<int:pk>/delete/", views.SourceDeleteView.as_view(), name="delete"),
+    path("<int:pk>/test/", views.SourceTestView.as_view(), name="test"),
+    path("clips/<int:video_pk>/copy/", views.CopyIntoBeeMonitorView.as_view(), name="copy_clip"),
 ]

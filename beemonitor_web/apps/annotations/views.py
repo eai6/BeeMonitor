@@ -1169,25 +1169,15 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
             except Annotation.DoesNotExist:
                 boxes = []
 
-        # Auto-ingest external-S3 video into our raw-videos bucket if needed
+        # A clip kept in the user's own bucket: annotating needs frames from
+        # our storage, so it's copied in (queued once; the page shows a
+        # spinner and reloads). memory/54.
         ctx["transferring"] = False
-        if video and video.storage_key.startswith("s3://"):
-            try:
-                import threading
-                from apps.analysis.views import _ingest_external_s3_to_storage
-
-                # Check if already transferring (avoid duplicate)
-                if not getattr(video, '_transfer_started', False):
-                    ctx["transferring"] = True
-                    # Transfer in background — page will show spinner and auto-reload
-                    thread = threading.Thread(
-                        target=self._do_transfer,
-                        args=(video.pk,),
-                        daemon=True,
-                    )
-                    thread.start()
-            except Exception as e:
-                logger.error("Auto-transfer failed for video %s: %s", video.pk, e)
+        if video and video.storage_key.startswith("s3://") and video.source_id:
+            from apps.sources import copying
+            from apps.sources.models import SourceCopy
+            copying.queue(video, SourceCopy.Purpose.KEEP)
+            ctx["transferring"] = True
 
         ctx["project"] = project
         ctx["video"] = video
@@ -1230,23 +1220,6 @@ class AnnotationEditorView(LoginRequiredMixin, TemplateView):
 
         return ctx
 
-    @staticmethod
-    def _do_transfer(video_pk):
-        """Background thread: ingest external-S3 video into our raw-videos bucket."""
-        import django
-        django.setup()
-        from django.db import connection
-        try:
-            from apps.videos.models import Video
-            from apps.analysis.views import _ingest_external_s3_to_storage
-            video = Video.objects.select_related("source").get(pk=video_pk)
-            _ingest_external_s3_to_storage(video)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error("Background transfer failed for %s: %s", video_pk, e)
-        finally:
-            connection.close()
-
 
 class TransferVideoView(LoginRequiredMixin, View):
     """Ingest an external-S3 video into our raw-videos bucket so frames are available."""
@@ -1271,13 +1244,14 @@ class TransferVideoView(LoginRequiredMixin, View):
             messages.info(request, "Video is already in storage.")
             return redirect(f"/annotations/{pk}/edit/?video={video_id}&frame={frame}")
 
-        try:
-            from apps.analysis.views import _ingest_external_s3_to_storage
-            _ingest_external_s3_to_storage(video)
-            messages.success(request, "Video transferred. Frames now available.")
-        except Exception as e:
-            logger.error("Transfer failed for video %s: %s", video_id, e)
-            messages.error(request, f"Transfer failed: {e}")
+        if not video.source_id:
+            messages.error(request, "The storage this clip came from was removed.")
+        else:
+            # In the background (memory/54): a large clip can take minutes.
+            from apps.sources import copying
+            from apps.sources.models import SourceCopy
+            copying.queue(video, SourceCopy.Purpose.KEEP)
+            messages.info(request, "Copying the clip into your BeeMonitor storage. Frames appear when it's done.")
 
         return redirect(f"/annotations/{pk}/edit/?video={video_id}&frame={frame}")
 
@@ -1388,7 +1362,7 @@ def _spawn_preannotation(task_pk: int) -> None:
         blob_path = video.storage_key
         if blob_path.startswith("s3://"):
             from apps.analysis.views import _ingest_external_s3_to_storage
-            blob_path = _ingest_external_s3_to_storage(video)
+            blob_path = _ingest_external_s3_to_storage(video, f"pa{task.pk}")
 
         labeler = task.labeler
         if labeler == "sam3":

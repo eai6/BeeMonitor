@@ -1,50 +1,52 @@
 {% extends "base.html" %}
-{% block title %}Data Sources - BeeMonitor{% endblock %}
+{% block title %}Cloud storage - BeeMonitor{% endblock %}
 
 {% block content %}
-<div class="flex justify-between items-center mb-6">
-  <h1 class="text-2xl font-bold text-gray-900">Data Sources</h1>
-  <a href="{% url 'sources:add' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Add Source</a>
-</div>
-
-{% if sources %}
-<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-  {% for source in sources %}
-  <div class="bg-white shadow rounded-lg p-6">
-    <div class="flex justify-between items-start">
-      <h3 class="font-medium text-gray-900">{{ source.name }}</h3>
-      <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full {% if source.is_connected %}bg-green-100 text-green-800{% else %}bg-gray-100 text-gray-500{% endif %}">
-        {% if source.is_connected %}Connected{% else %}Disconnected{% endif %}
-      </span>
+<div class="max-w-5xl mx-auto flex flex-col gap-5">
+  <div class="flex flex-wrap justify-between items-start gap-3">
+    <div>
+      <h1 class="text-2xl font-bold text-gray-900">Cloud storage</h1>
+      <p class="text-sm text-gray-600">Connect an Amazon S3 bucket where your videos already are, then import clips: keep them in
+        your bucket (read only while they're analysed) or copy them into your BeeMonitor storage.</p>
     </div>
-    <p class="text-sm text-gray-500 mt-1">{{ source.get_source_type_display }}</p>
-    <p class="text-xs text-gray-400 mt-2">Added {{ source.created_at|timesince }} ago</p>
-    {% if source.last_synced_at %}
-    <p class="text-xs text-gray-400">Last synced {{ source.last_synced_at|timesince }} ago</p>
-    {% endif %}
+    <a href="{% url 'sources:add' %}" class="h-10 px-4 inline-flex items-center rounded-md bg-amber-600 hover:bg-amber-700 text-white text-sm font-semibold">Connect a bucket</a>
+  </div>
 
-    <div class="flex gap-2 mt-4">
-      {% if source.is_connected %}
-      <a href="{% url 'sources:browse' source.pk %}"
-         class="flex-1 text-center px-3 py-1.5 bg-amber-50 border border-amber-200 rounded text-sm text-amber-700 hover:bg-amber-100">
-        Browse Files
-      </a>
-      {% endif %}
-      <form method="post" action="{% url 'sources:delete' source.pk %}"
-            onsubmit="return confirm('Delete source \'{{ source.name|escapejs }}\'? This will remove stored credentials. This cannot be undone.')">
-        {% csrf_token %}
-        <button type="submit" class="px-3 py-1.5 bg-red-50 border border-red-200 rounded text-sm text-red-700 hover:bg-red-100">
-          Delete
-        </button>
-      </form>
+  {% for source in sources %}
+  <div class="bg-white shadow rounded-lg p-5 flex flex-wrap items-center gap-4">
+    <div class="flex-1 min-w-[16rem]">
+      <div class="flex items-center gap-2">
+        <h2 class="font-semibold text-gray-900">{{ source.name }}</h2>
+        <span class="px-2 py-0.5 rounded-full text-xs font-semibold {% if source.is_connected %}bg-green-100 text-green-800{% else %}bg-orange-100 text-orange-800{% endif %}">{% if source.is_connected %}Connected{% else %}Can't connect{% endif %}</span>
+      </div>
+      <p class="text-sm text-gray-600">Amazon S3 · {{ source.clips }} clip{{ source.clips|pluralize }} imported{% if source.copying %} · copying {{ source.copying }}{% endif %}{% if source.last_synced_at %} · last import {{ source.last_synced_at|timesince }} ago{% endif %}</p>
+    </div>
+    <div class="flex flex-wrap gap-2 text-sm">
+      <a href="{% url 'sources:browse' source.pk %}" class="h-9 px-3 inline-flex items-center rounded-md bg-amber-600 hover:bg-amber-700 text-white font-semibold">Browse &amp; import</a>
+      <form method="post" action="{% url 'sources:test' source.pk %}">{% csrf_token %}<button class="h-9 px-3 rounded-md border border-gray-300 bg-white hover:bg-gray-50">Test again</button></form>
+      <form method="post" action="{% url 'sources:delete' source.pk %}" onsubmit="return confirm('Remove {{ source.name|escapejs }}? Its key is deleted. Clips copied into BeeMonitor stay; clips kept in the bucket can no longer be analysed.')">{% csrf_token %}<button class="h-9 px-3 rounded-md border border-red-200 bg-white text-red-700 hover:bg-red-50">Remove</button></form>
     </div>
   </div>
+  {% empty %}
+  <div class="bg-white shadow rounded-lg p-10 text-center text-sm text-gray-600">
+    No buckets connected. <a href="{% url 'sources:add' %}" class="font-semibold text-amber-700 hover:underline">Connect one</a> to import videos you already store in Amazon S3.
+  </div>
   {% endfor %}
+
+  {% if recent_copies %}
+  <div class="bg-white shadow rounded-lg p-5 flex flex-col gap-2 text-sm">
+    <h2 class="text-base font-semibold">Copies into BeeMonitor</h2>
+    {% for c in recent_copies %}
+    <div class="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 pt-2">
+      <a href="{% url 'videos:detail' c.video.pk %}" class="text-amber-700 hover:underline">{{ c.video.title }}</a>
+      {% if c.status == "running" %}
+        <span class="flex items-center gap-2"><span class="w-24 h-1.5 rounded bg-gray-200"><span class="block h-1.5 rounded bg-green-600" style="width: {{ c.percent }}%"></span></span>Copying {{ c.bytes_done|filesizeformat }} of {{ c.bytes_total|filesizeformat }}</span>
+      {% elif c.status == "queued" %}<span class="text-gray-600">Waiting</span>
+      {% elif c.status == "done" %}<span class="font-semibold text-green-700">Copied</span>
+      {% else %}<span class="font-semibold text-orange-700">Failed: {{ c.error }}</span>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
 </div>
-{% else %}
-<div class="bg-white shadow rounded-lg p-12 text-center">
-  <p class="text-gray-500 mb-4">No data sources connected.</p>
-  <a href="{% url 'sources:add' %}" class="text-amber-600 hover:underline font-medium">Add your first source</a>
-</div>
-{% endif %}
 {% endblock %}

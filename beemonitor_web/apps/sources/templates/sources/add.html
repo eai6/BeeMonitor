@@ -1,178 +1,29 @@
 {% extends "base.html" %}
-{% block title %}Add Data Source - BeeMonitor{% endblock %}
+{% block title %}Connect a bucket - BeeMonitor{% endblock %}
 
 {% block content %}
-<div class="max-w-2xl mx-auto" x-data="{ sourceType: '{{ form.source_type.value|default:''|escapejs }}' }">
-  <h1 class="text-2xl font-bold text-gray-900 mb-6">Add Data Source</h1>
-  <div class="bg-white shadow rounded-lg p-6">
-    <form method="post" autocomplete="off">
-      {% csrf_token %}
-      {% if form.errors %}
-      <div class="bg-red-50 text-red-700 rounded p-3 mb-4 text-sm">
-        <ul class="list-disc list-inside">
-          {% for field in form %}
-            {% for error in field.errors %}
-            <li>{{ field.label }}: {{ error }}</li>
-            {% endfor %}
-          {% endfor %}
-          {% for error in form.non_field_errors %}
-          <li>{{ error }}</li>
-          {% endfor %}
-        </ul>
-      </div>
-      {% endif %}
-
-      <!-- Name -->
-      <div class="mb-4">
-        <label for="id_name" class="block text-sm font-medium text-gray-700 mb-1">Name</label>
-        <input type="text" name="name" id="id_name" value="{{ form.name.value|default:'' }}" required
-               placeholder="e.g. Penn State Field Data"
-               class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
-      </div>
-
-      <!-- Source Type -->
-      <div class="mb-6">
-        <label for="id_source_type" class="block text-sm font-medium text-gray-700 mb-1">Source Type</label>
-        <select name="source_type" id="id_source_type" required x-model="sourceType"
-                class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
-          <option value="">Select type...</option>
-          <option value="aws_s3">AWS S3</option>
-          <option value="gcs">Google Cloud Storage</option>
-          <option value="google_drive">Google Drive</option>
-        </select>
-      </div>
-
-      <!-- AWS S3 Fields -->
-      <div x-show="sourceType === 'aws_s3'" x-cloak x-data="{ showPolicy: false, bucket: '' }" class="space-y-4 mb-6 p-4 bg-orange-50 rounded-lg border border-orange-200">
-        <h3 class="font-medium text-gray-800">AWS S3 Configuration</h3>
-
-        <!-- Security Warning -->
-        <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm">
-          <p class="font-medium text-red-800 mb-1">Security: Use least-privilege access</p>
-          <p class="text-red-700">Do NOT use <code class="bg-red-100 px-1 rounded">AmazonS3FullAccess</code>. Create a dedicated IAM user with read-only access to your specific bucket.</p>
-          <button type="button" @click="showPolicy = !showPolicy" class="mt-2 text-red-600 underline text-xs">
-            <span x-show="!showPolicy">Show recommended IAM policy</span>
-            <span x-show="showPolicy">Hide policy</span>
-          </button>
-        </div>
-
-        <!-- IAM Policy Generator -->
-        <div x-show="showPolicy" x-cloak class="bg-white border border-gray-200 rounded-lg p-4">
-          <p class="text-sm font-medium text-gray-700 mb-2">Recommended IAM Policy for BeeMonitor</p>
-          <p class="text-xs text-gray-500 mb-3">Create an IAM user in AWS Console, attach this custom policy, then use its Access Keys below.</p>
-          <p class="text-xs text-gray-500 mb-2">Enter your bucket name to generate the policy:</p>
-          <input type="text" x-model="bucket" placeholder="my-bee-videos" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm mb-3 font-mono">
-          <pre class="bg-gray-900 text-green-400 rounded p-3 text-xs overflow-x-auto" x-show="bucket">
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "BeeMonitorListBucket",
-      "Effect": "Allow",
-      "Action": ["s3:ListBucket"],
-      "Resource": "arn:aws:s3:::<span x-text="bucket"></span>"
-    },
-    {
-      "Sid": "BeeMonitorReadObjects",
-      "Effect": "Allow",
-      "Action": ["s3:GetObject"],
-      "Resource": "arn:aws:s3:::<span x-text="bucket"></span>/*"
-    }
-  ]
-}
-</pre>
-          <div class="mt-2 text-xs text-gray-500">
-            <p class="font-medium">Setup steps:</p>
-            <ol class="list-decimal list-inside space-y-1 mt-1">
-              <li>Go to <a href="https://console.aws.amazon.com/iam/" target="_blank" class="text-orange-600 underline">AWS IAM Console</a></li>
-              <li>Create a new IAM user (e.g., <code class="bg-gray-100 px-1 rounded">beemonitor-reader</code>)</li>
-              <li>Attach the policy above (Policies → Create Policy → JSON tab)</li>
-              <li>Create Access Keys for the user (Security Credentials → Create Access Key)</li>
-              <li>Paste the Access Key ID and Secret below</li>
-            </ol>
-          </div>
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Bucket Name *</label>
-          <input type="text" name="s3_bucket" value="{{ form.s3_bucket.value|default:'' }}" placeholder="my-bee-videos"
-                 x-model="bucket" class="w-full border border-gray-300 rounded px-3 py-2 text-sm">
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Key Prefix (optional)</label>
-          <input type="text" name="s3_prefix" value="{{ form.s3_prefix.value|default:'' }}" placeholder="videos/field-site-1/"
-                 class="w-full border border-gray-300 rounded px-3 py-2 text-sm">
-          <p class="text-xs text-gray-500 mt-1">Only list/read files under this prefix</p>
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Access Key ID *</label>
-          <input type="text" name="s3_access_key_id" value="{{ form.s3_access_key_id.value|default:'' }}" placeholder="AKIA..."
-                 autocomplete="off" data-1p-ignore data-lpignore="true"
-                 class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">
-          <p class="text-xs text-gray-500 mt-1">From the IAM user's Security Credentials</p>
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Secret Access Key *</label>
-          <input type="password" name="s3_secret_access_key" value="{{ form.s3_secret_access_key.value|default:'' }}"
-                 autocomplete="new-password" data-1p-ignore data-lpignore="true"
-                 class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Region</label>
-          <input type="text" name="s3_region" value="{{ form.s3_region.value|default:'us-east-1' }}"
-                 class="w-full border border-gray-300 rounded px-3 py-2 text-sm">
-        </div>
-
-        <!-- Security checklist -->
-        <div class="bg-green-50 border border-green-200 rounded p-3 text-xs text-green-800">
-          <p class="font-medium mb-1">Security checklist:</p>
-          <ul class="space-y-0.5">
-            <li>[ ] Dedicated IAM user (not your root account)</li>
-            <li>[ ] Read-only policy scoped to one bucket</li>
-            <li>[ ] Access keys rotated every 90 days</li>
-            <li>[ ] MFA enabled on your AWS account</li>
-          </ul>
-        </div>
-      </div>
-
-      <!-- GCS Fields -->
-      <div x-show="sourceType === 'gcs'" x-cloak class="space-y-4 mb-6 p-4 bg-green-50 rounded-lg border border-green-200">
-        <h3 class="font-medium text-gray-800">Google Cloud Storage Configuration</h3>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Bucket Name *</label>
-          <input type="text" name="gcs_bucket" value="{{ form.gcs_bucket.value|default:'' }}"
-                 class="w-full border border-gray-300 rounded px-3 py-2 text-sm">
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Service Account JSON (optional)</label>
-          <textarea name="gcs_service_account_json" rows="4"
-                    class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">{{ form.gcs_service_account_json.value|default:'' }}</textarea>
-          <p class="text-xs text-gray-500 mt-1">Paste the full JSON key file. Leave blank to use default credentials.</p>
-        </div>
-      </div>
-
-      <!-- Google Drive Fields -->
-      <div x-show="sourceType === 'google_drive'" x-cloak class="space-y-4 mb-6 p-4 bg-purple-50 rounded-lg border border-purple-200">
-        <h3 class="font-medium text-gray-800">Google Drive Configuration</h3>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Folder ID *</label>
-          <input type="text" name="gdrive_folder_id" value="{{ form.gdrive_folder_id.value|default:'' }}"
-                 placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
-                 class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">
-          <p class="text-xs text-gray-500 mt-1">From the folder URL: drive.google.com/drive/folders/<strong>THIS_PART</strong></p>
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">OAuth Token *</label>
-          <textarea name="gdrive_oauth_token" rows="2"
-                    class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">{{ form.gdrive_oauth_token.value|default:'' }}</textarea>
-        </div>
-      </div>
-
-      <div class="flex space-x-3">
-        <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Add & Test Connection</button>
-        <a href="{% url 'sources:list' %}" class="px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Cancel</a>
-      </div>
-    </form>
+<div class="max-w-2xl mx-auto flex flex-col gap-5">
+  <div>
+    <a href="{% url 'sources:list' %}" class="text-sm text-amber-700 hover:underline">&larr; Cloud storage</a>
+    <h1 class="text-2xl font-bold text-gray-900">Connect an Amazon S3 bucket</h1>
+    <p class="text-sm text-gray-600">Use an access key that can only <strong>read</strong> this bucket: it needs
+      <code>s3:ListBucket</code> and <code>s3:GetObject</code>, nothing else. BeeMonitor never writes to your bucket.
+      The key is stored encrypted and is never shown again.</p>
   </div>
+  <form method="post" class="bg-white shadow rounded-lg p-6 flex flex-col gap-4 text-sm">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="rounded-md bg-red-50 text-red-800 px-3 py-2">{{ form.non_field_errors|join:" " }}</div>{% endif %}
+    {% for field in form %}
+    <label class="flex flex-col gap-1 font-semibold text-gray-700">{{ field.label }}
+      <input type="{% if field.name == 's3_secret_access_key' %}password{% else %}text{% endif %}" name="{{ field.html_name }}"
+             {% if field.name != 's3_secret_access_key' %}value="{{ field.value|default:'' }}"{% endif %}
+             {% if field.field.required %}required{% endif %} autocomplete="off"
+             class="h-10 rounded-md border border-gray-300 px-3 font-normal">
+      {% if field.help_text %}<span class="text-xs font-normal text-gray-500">{{ field.help_text }}</span>{% endif %}
+      {% for e in field.errors %}<span class="text-xs font-normal text-red-700">{{ e }}</span>{% endfor %}
+    </label>
+    {% endfor %}
+    <button type="submit" class="h-11 rounded-md bg-amber-600 hover:bg-amber-700 text-white font-semibold">Test and connect</button>
+  </form>
 </div>
 {% endblock %}

@@ -30,35 +30,20 @@ class BaseConnector:
 
 
 class S3Connector(BaseConnector):
-    """AWS S3 connector."""
+    """AWS S3 connector, on the user's own keys only (apps/sources/s3.py)."""
 
     def test_connection(self) -> tuple[bool, str]:
+        from . import s3
         try:
-            import boto3
-
-            client = boto3.client(
-                "s3",
-                aws_access_key_id=self.config.get("access_key_id"),
-                aws_secret_access_key=self.config.get("secret_access_key"),
-                region_name=self.config.get("region", "us-east-1"),
-            )
-            client.list_buckets()
-            return True, "Connected to AWS S3."
-        except Exception as exc:
+            return True, s3.test(self.config)
+        except s3.SourceError as exc:
             return False, str(exc)
 
     def download(self, remote_path: str) -> str:
-        import boto3
+        from . import s3
 
-        client = boto3.client(
-            "s3",
-            aws_access_key_id=self.config.get("access_key_id"),
-            aws_secret_access_key=self.config.get("secret_access_key"),
-            region_name=self.config.get("region", "us-east-1"),
-        )
-        bucket = self.config["bucket"]
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        client.download_file(bucket, remote_path, tmp.name)
+        s3.client(self.config).download_file(self.config["bucket"], remote_path, tmp.name)
         return tmp.name
 
 

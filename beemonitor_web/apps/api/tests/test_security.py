@@ -142,7 +142,8 @@ class SourceCredentialTests(Base):
     def test_api_created_credentials_are_encrypted(self):
         from apps.sources import crypto
         r = self.api.post("/api/v1/sources/", {"name": "lab", "source_type": "aws_s3",
-                                                "credentials": {"secret_access_key": "TOPSECRET"}},
+                                                "credentials": {"bucket": "b", "access_key_id": "AKIA",
+                                                                "secret_access_key": "TOPSECRET"}},
                           format="json")
         self.assertIn(r.status_code, (200, 201), r.content)
         src = DataSource.objects.get(name="lab")

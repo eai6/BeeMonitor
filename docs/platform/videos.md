@@ -32,6 +32,29 @@ files again and they pick up where they stopped.
   <figcaption>Upload videos and photos. The legend under the drop zone shows where each file's time came from.</figcaption>
 </figure>
 
+### From your own cloud storage (Amazon S3)
+
+**Videos → Cloud storage → Connect a bucket.** Give the bucket name, an optional folder, a region and an
+access key that can only **read** the bucket (`s3:ListBucket` and `s3:GetObject`). The connection is
+tested before it's saved; the key is stored encrypted and never shown again. BeeMonitor never writes to
+your bucket.
+
+**Browse & import** shows the bucket folder by folder. Tick clips (or a whole folder), optionally pick a
+site so its ROI and reference objects apply, and choose where the footage lives:
+
+| | Keep in my bucket | Copy into BeeMonitor |
+|---|---|---|
+| Where it's stored | Your bucket only | Your BeeMonitor storage too |
+| When it's analysed | Copied for the run, removed a day later | Read from BeeMonitor |
+| Plays, previews, frames | From your bucket (needs the connection) | Without your bucket |
+| BeeMonitor storage used | None | The clip's size |
+
+Copying runs in the background and uses no credits; progress shows on the Cloud storage page and the
+clip's page. A clip kept in your bucket can be copied in later from its page (**Copy into BeeMonitor**).
+On the Standard plan, copied footage follows the same [3-month rule](account.md#raw-footage) as uploads;
+when our copy is removed, the clip goes back to being read from your bucket, so nothing is lost while
+the bucket stays connected.
+
 ### From code
 
 The [API](api.md) uploads clips and runs pipelines from a script or a notebook.

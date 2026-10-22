@@ -125,6 +125,14 @@ def reconcile_all(limit: int = 500) -> dict:
     except Exception:
         logger.exception("frame sampling poll failed")
 
+    # Clips from users' own buckets: copies into ours, and measuring (memory/54).
+    try:
+        from apps.sources import copying
+
+        copying.tick()
+    except Exception:
+        logger.exception("source copy tick failed")
+
     # Uploaded AVIs → MP4 on the GPU endpoint (memory/44).
     try:
         from apps.videos import transcode

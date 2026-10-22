@@ -44,6 +44,19 @@
 </div>
 {% endif %}
 
+{% if in_their_bucket %}
+<div class="bg-white shadow rounded-lg px-4 py-3 mb-4 flex flex-wrap items-center justify-between gap-3 text-sm">
+  <span><span class="font-semibold text-gray-900">Stored in your bucket</span>
+    ({{ video.source.name|default:"a removed source" }}). Read from there when it's analysed.</span>
+  {% if copy and copy.status == "running" %}<span class="text-gray-700">Copying into BeeMonitor: {{ copy.percent }}%</span>
+  {% elif copy and copy.status == "queued" %}<span class="text-gray-700">Waiting to copy into BeeMonitor</span>
+  {% elif video.source and video.user_id == request.user.id %}
+  <form method="post" action="{% url 'sources:copy_clip' video.pk %}">{% csrf_token %}
+    <button class="px-3 py-1.5 rounded border border-gray-300 bg-white font-semibold hover:bg-gray-50"{% if copy and copy.status == "failed" %} title="Last try: {{ copy.error }}"{% endif %}>{% if copy and copy.status == "failed" %}Copy failed — try again{% else %}Copy into BeeMonitor{% endif %}</button></form>
+  {% endif %}
+</div>
+{% endif %}
+
 {% if video.raw_deleted_at %}
 <div class="rounded-md bg-gray-100 border border-gray-300 px-4 py-3 mb-4 text-sm text-gray-800">The raw footage was deleted on {{ video.raw_deleted_at|date:"M j, Y" }} (kept 3 months on Standard). Its results below are kept; it can't be analysed again.</div>
 {% elif video.raw_delete_on %}
@@ -151,7 +164,7 @@
 </div>
 {% elif video.storage_key and "s3://" in video.storage_key %}
 <div class="bg-gray-50 rounded-lg p-8 text-center mb-6">
-  <p class="text-gray-500">Video is in an external S3 source. It will be copied into our storage when analysis is submitted.</p>
+  <p class="text-gray-500">This clip is in your own bucket and can't be reached right now. Check the connection under Videos → Cloud storage.</p>
 </div>
 {% endif %}
 

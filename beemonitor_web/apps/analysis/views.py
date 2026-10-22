@@ -57,60 +57,15 @@ def _generate_presigned_url(blob_path: str, container: str = "processed") -> str
         return ""
 
 
-def _ingest_external_s3_to_storage(video) -> str:
-    """Copy a video from an external S3 source into our raw-videos bucket.
+def _ingest_external_s3_to_storage(video, tag="") -> str:
+    """A key in our raw-videos bucket for this clip, for the GPU to read.
 
-    Returns the new ``storage_key`` (the key in our bucket). If the video is
-    already in our storage (``storage_key`` doesn't start with ``s3://``),
-    this is a no-op and returns the existing key.
+    A clip kept in the user's own bucket (memory/54) gets a temporary copy for
+    this run, streamed and removed a day later; the clip stays in their bucket.
     """
-    storage_key = video.storage_key
-    if not storage_key.startswith("s3://"):
-        return storage_key  # already in our bucket
+    from apps.sources.copying import ensure_readable
 
-    import boto3
-    import tempfile
-    from pathlib import Path
-
-    meta = video.metadata or {}
-    remote_key = meta.get("remote_key", storage_key.replace("s3://", ""))
-    bucket = meta.get("remote_bucket", "")
-    if not bucket:
-        raise ValueError("No S3 bucket in video metadata")
-    if not video.source:
-        raise ValueError("Video has no linked data source for S3 credentials")
-
-    from apps.sources.views import _decrypt_credentials
-    creds = _decrypt_credentials(video.source)
-
-    external_s3 = boto3.client(
-        "s3",
-        aws_access_key_id=creds["access_key_id"],
-        aws_secret_access_key=creds["secret_access_key"],
-        region_name=creds.get("region", "us-east-1"),
-    )
-
-    filename = remote_key.split("/")[-1]
-    new_key = f"{video.user_id}/{video.pk}/{filename}"
-
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=True) as tmp:
-        logger.info(
-            "Ingesting external s3://%s/%s -> raw-videos/%s",
-            bucket, remote_key, new_key,
-        )
-        external_s3.download_file(bucket, remote_key, tmp.name)
-        file_size = Path(tmp.name).stat().st_size
-        get_s3_client().upload_file(
-            "raw-videos", new_key, tmp.name, content_type="video/mp4",
-        )
-
-    video.storage_key = new_key
-    video.file_size_bytes = file_size
-    video.save(update_fields=["storage_key", "file_size_bytes"])
-    creds.clear()
-
-    logger.info("Ingest complete: %s (%d MB)", new_key, file_size // (1024 * 1024))
-    return new_key
+    return ensure_readable(video, tag or uuid.uuid4().hex[:10])
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +201,7 @@ def _spawn_gpu_job(job_pk: int) -> None:
 
     try:
         if blob_path.startswith("s3://"):
-            blob_path = _ingest_external_s3_to_storage(video)
+            blob_path = _ingest_external_s3_to_storage(video, job.modal_job_id)
 
         payload = {
             "job_id": job.modal_job_id,
@@ -353,26 +308,28 @@ def _spawn_gpu_batch(jobs_data: list, detection_mode: str, confidence: float,
     from django.db import connection
 
     try:
-        # Ingest any external-S3 videos first so SM only sees our buckets.
+        # Clips kept in a user's bucket get a temporary copy, so the GPU only
+        # reads our buckets (memory/54).
+        blob_for = {}
         for jd in jobs_data:
             video = jd["video"]
-            if video.storage_key.startswith("s3://"):
-                try:
-                    _ingest_external_s3_to_storage(video)
-                except Exception as e:
-                    Job.objects.filter(pk=jd["job_pk"]).update(
-                        status="failed", error_message=f"Ingest failed: {e}",
-                    )
+            try:
+                blob_for[jd["job_pk"]] = _ingest_external_s3_to_storage(video, jd["job_id"])
+            except Exception as e:
+                from apps.sources.s3 import friendly
+                Job.objects.filter(pk=jd["job_pk"]).update(
+                    status="failed", error_message=f"Couldn't read the clip from your storage: {friendly(e)}",
+                )
 
         for jd in jobs_data:
             video = jd["video"]
-            if video.storage_key.startswith("s3://"):
-                continue  # ingest failed; already marked failed above
+            if jd["job_pk"] not in blob_for:
+                continue  # its copy failed; already marked failed above
             try:
                 payload = {
                     "job_id": jd["job_id"],
                     "user_id": jd["user_id"],
-                    "video_blob_path": video.storage_key,
+                    "video_blob_path": blob_for[jd["job_pk"]],
                     "detection_mode": detection_mode,
                     "confidence_threshold": confidence,
                     "visualize": bool((jd.get("config") or {}).get("visualize", False)),

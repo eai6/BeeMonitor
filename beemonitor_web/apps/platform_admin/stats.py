@@ -46,7 +46,9 @@ def users_with_totals():
         month_cost=_sub(UsageEvent.objects.filter(created_at__date__gte=since), "user",
                         Sum("cost_usd"), dec),
         life_seconds=_sub(UsageEvent.objects.all(), "user", Sum("gpu_seconds"), FloatField()),
-        storage_bytes=_sub(Video.everything.all(), "user", Sum("file_size_bytes"), IntegerField()),
+        # Bytes in our buckets; clips kept in a user's own bucket don't count.
+        storage_bytes=_sub(Video.everything.exclude(storage_key__startswith="s3://"), "user",
+                           Sum("file_size_bytes"), IntegerField()),
         clips=_sub(Video.objects.all(), "user", Count("id"), IntegerField()),
         units=_sub(Device.objects.all(), "owner", Count("id"), IntegerField()),
         last_seen=F("profile__last_seen_at"),
@@ -96,7 +98,8 @@ def overview():
     failed = jobs.filter(status=Job.Status.FAILED).count()
     tiers = dict(UserProfile.objects.filter(user__is_superuser=False)
                  .values_list("tier").annotate(n=Count("id")))
-    storage = Video.everything.aggregate(b=Sum("file_size_bytes"))["b"] or 0
+    storage = (Video.everything.exclude(storage_key__startswith="s3://")
+               .aggregate(b=Sum("file_size_bytes"))["b"] or 0)
     return {
         "users": User.objects.count(),
         "new_this_week": User.objects.filter(date_joined__gte=week_ago).count(),

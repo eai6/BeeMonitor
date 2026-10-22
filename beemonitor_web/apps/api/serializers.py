@@ -314,8 +314,17 @@ class DataSourceSerializer(serializers.ModelSerializer):
 
 class DataSourceCreateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=200)
-    source_type = serializers.ChoiceField(choices=DataSource.SourceType.choices)
-    credentials = serializers.DictField(child=serializers.CharField(), write_only=True)
+    # S3 only for now (memory/54): the Google connectors don't work.
+    source_type = serializers.ChoiceField(choices=[DataSource.SourceType.AWS_S3])
+    credentials = serializers.DictField(child=serializers.CharField(allow_blank=True), write_only=True)
+
+    def validate_credentials(self, value):
+        # Without its own keys a connector would run on BeeMonitor's AWS role.
+        missing = [k for k in ("bucket", "access_key_id", "secret_access_key") if not value.get(k)]
+        if missing:
+            raise serializers.ValidationError(f"Required: {', '.join(missing)}.")
+        allowed = {"bucket", "prefix", "access_key_id", "secret_access_key", "region"}
+        return {k: str(v).strip() for k, v in value.items() if k in allowed}
 
     def create(self, validated_data):
         from apps.sources.crypto import encrypt

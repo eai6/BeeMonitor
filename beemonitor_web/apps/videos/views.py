@@ -255,7 +255,14 @@ class VideoStreamView(LoginRequiredMixin, View):
 def stream_redirect(video, expiry_hours=None):
     """A redirect to the raw clip, presigned (a share link passes a short expiry)."""
     blob_path = video.storage_key or ""
-    if not blob_path or blob_path.startswith("s3://"):
+    if blob_path.startswith("s3://"):
+        # Kept in the user's own bucket (memory/54): play it from there.
+        from .frames import readable_url
+        url = readable_url(video)
+        if not url:
+            raise Http404("This clip's storage isn't reachable.")
+        return HttpResponseRedirect(url)
+    if not blob_path:
         raise Http404("This clip has no stored file yet.")
     from config.storage import get_s3_client
     extra = (expiry_hours,) if expiry_hours else ()  # else the client's default
@@ -293,8 +300,15 @@ class VideoDetailView(LoginRequiredMixin, DetailView):
                                       or Video.deletable(self.request.user).filter(pk=video.pk).exists())
         blob_path = video.storage_key
 
-        # Presigned URL for playback (external-S3-ingested videos have no URL
-        # until they're copied into our raw-videos bucket).
+        # A clip kept in the user's own bucket plays from there (memory/54).
+        if blob_path and blob_path.startswith("s3://"):
+            from .frames import readable_url
+            ctx["video_url"] = readable_url(video) or ""
+            ctx["in_their_bucket"] = True
+            from apps.sources.models import SourceCopy
+            ctx["copy"] = SourceCopy.objects.filter(
+                video=video, purpose=SourceCopy.Purpose.KEEP).order_by("-created_at").first()
+        # Presigned URL for playback.
         if blob_path and not blob_path.startswith("s3://"):
             try:
                 from config.storage import get_s3_client

@@ -1,102 +1,81 @@
 {% extends "base.html" %}
-{% block title %}Browse {{ source.name }} - BeeMonitor{% endblock %}
+{% block title %}{{ source.name }} - Cloud storage - BeeMonitor{% endblock %}
 
 {% block content %}
-
-<div class="flex justify-between items-center mb-6">
-  <div>
-    <h1 class="text-2xl font-bold text-gray-900">{{ source.name }}</h1>
-    <p class="text-sm text-gray-500">{{ source.get_source_type_display }} — {{ total_files }} video file(s) found</p>
+<div class="flex flex-col gap-4">
+  <a href="{% url 'sources:list' %}" class="text-sm text-amber-700 hover:underline">&larr; Cloud storage</a>
+  <div class="flex flex-wrap justify-between items-baseline gap-2">
+    <h1 class="text-2xl font-bold text-gray-900">{{ source.name }}
+      <span class="text-sm font-medium text-gray-600">· S3 · s3://{{ bucket }}/{{ prefix }}{{ path }}</span></h1>
   </div>
-  <!-- Import All button -->
-  <form method="post" action="{% url 'sources:sync' source.pk %}"
-        onsubmit="return confirm('Import all {{ total_files }} video files into BeeMonitor?')">
+
+  {% if error %}
+  <div class="rounded-md bg-orange-50 border border-orange-200 text-orange-900 px-4 py-3 text-sm">{{ error }}
+    <a href="{% url 'sources:list' %}" class="font-semibold underline">Test again or reconnect</a></div>
+  {% else %}
+  <form method="post" action="{% url 'sources:sync' source.pk %}" class="flex flex-col lg:flex-row gap-5 items-start" x-data="{ n: 0, all: false }">
     {% csrf_token %}
-    <input type="hidden" name="import_all" value="true">
-    <input type="hidden" name="prefix" value="{{ prefix }}">
-    <button type="submit" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded text-sm font-medium">
-      Import All {{ total_files }} Videos
-    </button>
-  </form>
-</div>
+    <input type="hidden" name="path" value="{{ path }}">
+    <input type="hidden" name="import_all" :value="all ? 'true' : ''">
 
-{% if error %}
-<div class="bg-red-50 text-red-700 rounded-lg p-4 mb-6">{{ error }}</div>
-{% endif %}
-
-{% if files %}
-<form method="post" action="{% url 'sources:sync' source.pk %}">
-  {% csrf_token %}
-
-  <div class="bg-white shadow rounded-lg mb-4">
-    <div class="px-6 py-3 border-b border-gray-200 flex justify-between items-center bg-gray-50">
-      <label class="flex items-center gap-2 text-sm">
-        <input type="checkbox" id="select-all" class="rounded border-gray-300">
-        <span class="font-medium text-gray-700">Select All on Page</span>
-      </label>
-      <div class="flex gap-3 items-center">
-        <span class="text-xs text-gray-500">Page {{ page }} of {{ total_pages }}</span>
-        <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-1.5 rounded text-sm font-medium">
-          Import Selected
-        </button>
+    <div class="flex-1 min-w-0 bg-white shadow rounded-lg overflow-hidden">
+      <div class="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-100 text-sm">
+        <a href="?path=" class="text-amber-700 hover:underline">{{ bucket }}</a>
+        {% for c in crumbs %}<span class="text-gray-400">/</span>{% if forloop.last %}<b>{{ c.name }}</b>{% else %}<a href="?path={{ c.path|urlencode }}" class="text-amber-700 hover:underline">{{ c.name }}</a>{% endif %}{% endfor %}
       </div>
-    </div>
-
-    <div class="overflow-x-auto">
-      <table class="min-w-full divide-y divide-gray-200 text-sm">
-        <thead class="bg-gray-50">
-          <tr>
-            <th class="px-4 py-3 w-8"></th>
-            <th class="px-4 py-3 text-left font-medium text-gray-500 text-xs uppercase">Filename</th>
-            <th class="px-4 py-3 text-left font-medium text-gray-500 text-xs uppercase">Size</th>
-            <th class="px-4 py-3 text-left font-medium text-gray-500 text-xs uppercase">Last Modified</th>
-          </tr>
-        </thead>
-        <tbody class="bg-white divide-y divide-gray-200">
-          {% for file in files %}
-          <tr class="hover:bg-gray-50">
-            <td class="px-4 py-2">
-              <input type="checkbox" name="selected_files" value="{{ file.key }}" class="file-checkbox rounded border-gray-300">
+      <table class="w-full text-sm">
+        <thead><tr class="bg-gray-50 text-left text-gray-600">
+          <th class="px-4 py-2 w-8"><span class="sr-only">Select</span></th><th class="font-semibold">Name</th>
+          <th class="px-2 font-semibold text-right">Size</th><th class="px-2 font-semibold">Modified</th>
+          <th class="px-4 font-semibold">In BeeMonitor</th></tr></thead>
+        <tbody>
+          {% for folder in folders %}
+          <tr class="border-t border-gray-100"><td class="px-4 py-2.5"></td>
+            <td colspan="4"><a href="?path={{ folder|urlencode }}" class="font-semibold text-amber-700 hover:underline">{{ folder|cut:path }}</a></td></tr>
+          {% endfor %}
+          {% for f in files %}
+          <tr class="border-t border-gray-100">
+            <td class="px-4 py-2.5">{% if not f.video %}<input type="checkbox" name="selected_files" value="{{ f.key }}" aria-label="Select {{ f.name }}" @change="n += $event.target.checked ? 1 : -1">{% endif %}</td>
+            <td class="break-all">{{ f.name }}</td>
+            <td class="px-2 text-right whitespace-nowrap tabular-nums">{{ f.size|filesizeformat }}</td>
+            <td class="px-2 whitespace-nowrap text-gray-700">{{ f.modified|date:"M j, Y" }}</td>
+            <td class="px-4 whitespace-nowrap">
+              {% if not f.video %}<span class="text-gray-400">—</span>
+              {% elif f.copied %}<a href="{% url 'videos:detail' f.video.pk %}" class="font-semibold text-green-700 hover:underline">Copied</a>
+              {% elif f.copy and f.copy.status == "running" %}<span class="flex items-center gap-2"><span class="w-20 h-1.5 rounded bg-gray-200"><span class="block h-1.5 rounded bg-green-600" style="width: {{ f.copy.percent }}%"></span></span>Copying</span>
+              {% elif f.copy and f.copy.status == "queued" %}<span class="text-gray-600">Waiting to copy</span>
+              {% elif f.copy and f.copy.status == "failed" %}<span class="font-semibold text-orange-700" title="{{ f.copy.error }}">Copy failed</span>
+              {% else %}<a href="{% url 'videos:detail' f.video.pk %}" class="font-semibold text-blue-700 hover:underline">In your bucket</a>{% endif %}
             </td>
-            <td class="px-4 py-2">
-              <span class="font-mono text-gray-700 text-xs">{{ file.name }}</span>
-            </td>
-            <td class="px-4 py-2 text-gray-500">{{ file.size_mb }} MB</td>
-            <td class="px-4 py-2 text-gray-400 text-xs">{{ file.last_modified|truncatechars:19 }}</td>
           </tr>
+          {% empty %}
+          {% if not folders %}<tr><td colspan="5" class="px-4 py-8 text-center text-gray-600">No videos in this folder.</td></tr>{% endif %}
           {% endfor %}
         </tbody>
       </table>
+      {% if next_token %}<div class="px-4 py-3 border-t border-gray-100 text-sm text-right"><a href="?path={{ path|urlencode }}&token={{ next_token|urlencode }}" class="text-amber-700 hover:underline">More ›</a></div>{% endif %}
     </div>
 
-    <!-- Pagination -->
-    <div class="px-6 py-3 border-t border-gray-200 flex justify-between items-center bg-gray-50">
-      <div class="text-sm text-gray-500">
-        Showing {{ files|length }} of {{ total_files }} files
-      </div>
-      <div class="flex gap-2">
-        {% if has_prev %}
-        <a href="?prefix={{ prefix }}&page={{ page|add:"-1" }}"
-           class="px-3 py-1 border border-gray-300 rounded text-sm hover:bg-gray-100">Previous</a>
-        {% endif %}
-        {% if has_next %}
-        <a href="?prefix={{ prefix }}&page={{ page|add:"1" }}"
-           class="px-3 py-1 border border-gray-300 rounded text-sm hover:bg-gray-100">Next</a>
-        {% endif %}
-      </div>
+    <div class="w-full lg:w-80 shrink-0 bg-white shadow rounded-lg p-5 flex flex-col gap-4 text-sm">
+      <h2 class="text-base font-semibold"><span x-show="!all">Import <span x-text="n"></span> selected</span><span x-show="all" x-cloak>Import every video in this folder</span></h2>
+      <label class="flex items-center gap-2"><input type="checkbox" x-model="all"> Every video in this folder and below</label>
+      <fieldset class="flex flex-col gap-3">
+        <legend class="font-semibold text-gray-700 mb-1">Where the footage lives</legend>
+        <label class="flex items-start gap-2"><input type="radio" name="where" value="bucket" checked class="mt-1">
+          <span><b>Keep in my bucket</b><br><span class="text-gray-600">Read from your bucket when it's analysed; we keep a copy only during the run. Uses none of your BeeMonitor storage.</span></span></label>
+        <label class="flex items-start gap-2"><input type="radio" name="where" value="copy" class="mt-1">
+          <span><b>Copy into BeeMonitor</b><br><span class="text-gray-600">A full copy in your BeeMonitor storage: plays and re-runs without your bucket. Standard keeps raw footage 3 months; after that the clip is read from your bucket again.</span></span></label>
+      </fieldset>
+      <label class="flex flex-col gap-1 font-semibold text-gray-700">Site (optional)
+        <select name="site" class="h-10 rounded-md border border-gray-300 bg-white px-3 font-normal">
+          <option value="">No site</option>
+          {% for s in sites %}<option value="{{ s.pk }}">{{ s.name }}</option>{% endfor %}
+        </select></label>
+      <p class="text-xs text-gray-500">A site's ROI and reference objects apply to its clips. <a href="{% url 'videos:sites_page' %}" class="text-amber-700 hover:underline">Sites</a></p>
+      <button type="submit" class="h-11 rounded-md bg-amber-600 hover:bg-amber-700 text-white font-semibold disabled:opacity-50" :disabled="!all && n === 0">Import</button>
+      <p class="text-xs text-gray-500">Copying runs in the background; you can leave this page. No credits are used.</p>
     </div>
-  </div>
-</form>
-
-<script>
-  document.getElementById('select-all').addEventListener('change', function() {
-    document.querySelectorAll('.file-checkbox').forEach(cb => cb.checked = this.checked);
-  });
-</script>
-
-{% else %}
-<div class="bg-white shadow rounded-lg p-12 text-center">
-  <p class="text-gray-500">No video files found in this source.</p>
+  </form>
+  {% endif %}
 </div>
-{% endif %}
 {% endblock %}

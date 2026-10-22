@@ -349,10 +349,12 @@ class DataSourceViewSet(viewsets.ModelViewSet):
     def test_connection(self, request, pk=None):
         """Ping the remote source to verify credentials."""
         source = self.get_object()
-        from apps.sources.connectors import get_connector
+        from apps.sources import crypto, s3
 
-        connector = get_connector(source)
-        ok, message = connector.test_connection()
+        try:
+            ok, message = True, s3.test(crypto.decrypt(source))
+        except s3.SourceError as e:
+            ok, message = False, str(e)
         source.is_connected = ok
         source.save(update_fields=["is_connected"])
         return Response({"ok": ok, "message": message})

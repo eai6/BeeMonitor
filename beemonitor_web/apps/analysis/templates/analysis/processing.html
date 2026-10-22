@@ -23,6 +23,7 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
         <span class="flex items-baseline gap-3">
           {% if has_filter %}<a href="{% url 'analysis:processing' %}" class="text-xs text-amber-700 hover:underline">Clear all</a>{% endif %}
           <a href="{% url 'videos:sites_page' %}" class="text-xs text-amber-700 hover:underline" title="Places recorded without a unit, and their ROI and reference objects">Sites</a>
+          <a href="{% url 'sources:list' %}" class="text-xs text-amber-700 hover:underline" title="Import videos from your Amazon S3 bucket">Cloud storage</a>
           <a href="{% url 'videos:upload' %}" class="text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded px-2.5 py-1.5">Upload videos</a>
         </span>
       </div>
