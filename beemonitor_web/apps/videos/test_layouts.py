@@ -101,14 +101,23 @@ class EditorTests(Base):
         self.save(reverse("videos:site_layout", args=[self.site.pk]))
         self.assertEqual(len(Layout.current(site=self.site).nest_layout), 2)
 
-    def test_only_the_owner_edits(self):
-        stranger = User.objects.create_user("x")
-        admin = User.objects.create_superuser("boss", "b@x.org", "pw-12345678")
-        for who in (stranger, admin):
-            self.client.force_login(who)
-            self.assertEqual(self.client.get(reverse("videos:layout", args=[self.clip.pk])).status_code, 404)
-            self.assertEqual(self.save(reverse("videos:site_layout", args=[self.site.pk])).status_code, 404)
+    def test_other_users_cannot_edit(self):
+        self.client.force_login(User.objects.create_user("x"))
+        self.assertEqual(self.client.get(reverse("videos:layout", args=[self.clip.pk])).status_code, 404)
+        self.assertEqual(self.save(reverse("videos:site_layout", args=[self.site.pk])).status_code, 404)
         self.assertFalse(Layout.objects.exists())
+
+    def test_a_platform_admin_can_draw_on_anyones_clip_and_it_is_audited(self):
+        from apps.accounts.models import AdminAction
+        admin = User.objects.create_superuser("boss", "b@x.org", "pw-12345678")
+        self.client.force_login(admin)
+        self.assertContains(self.client.get(reverse("videos:detail", args=[self.clip.pk])),
+                            reverse("videos:layout", args=[self.clip.pk]))
+        self.assertEqual(self.client.get(reverse("videos:layout", args=[self.clip.pk])).status_code, 200)
+        self.save(reverse("videos:layout", args=[self.clip.pk]), scope="clip")
+        self.assertEqual(Layout.current(video=self.clip).saved_by, admin)
+        log = AdminAction.objects.get()
+        self.assertEqual((log.actor, log.target, log.action), (admin, self.user, "edit_layout"))
 
     def test_the_unit_editor_keeps_names_too(self):
         import json
@@ -124,6 +133,33 @@ class EditorTests(Base):
         Layout.save_new(site=self.site, nests=[HOLE])
         r = self.client.get(reverse("videos:detail", args=[self.clip.pk]))
         self.assertContains(r, "from site North bank (v1)")
+
+
+class NewSiteTests(Base):
+    """A new site has no clips: pick one of yours to draw on; it joins the site."""
+
+    def test_pick_a_clip_draw_and_it_joins_the_site(self):
+        import json
+        loose = Video.objects.create(user=self.user, title="loose.mp4", storage_key="k9", file_size_bytes=1,
+                                     duration_seconds=600)
+        new = Site.objects.create(user=self.user, name="site1")
+        r = self.client.get(reverse("videos:site_layout", args=[new.pk]))
+        self.assertContains(r, "Pick a clip to draw on")
+        self.assertContains(r, "loose.mp4")
+        r = self.client.get(reverse("videos:site_layout", args=[new.pk]), {"clip": loose.pk})
+        self.assertContains(r, reverse("videos:frame", args=[loose.pk]))
+        self.client.post(reverse("videos:site_layout", args=[new.pk]),
+                         json.dumps({"nests": [HOLE], "clip": loose.pk}), content_type="application/json")
+        loose.refresh_from_db()
+        self.assertEqual(loose.site, new)
+        self.assertEqual(layout_for_video(loose)["source"], "site")
+
+    def test_another_users_clip_cannot_be_picked(self):
+        other = User.objects.create_user("x")
+        theirs = Video.objects.create(user=other, title="theirs.mp4", storage_key="k8", file_size_bytes=1)
+        new = Site.objects.create(user=self.user, name="site1")
+        r = self.client.get(reverse("videos:site_layout", args=[new.pk]), {"clip": theirs.pk})
+        self.assertNotContains(r, reverse("videos:frame", args=[theirs.pk]))
 
 
 class SitesPageTests(Base):

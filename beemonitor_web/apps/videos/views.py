@@ -289,7 +289,8 @@ class VideoDetailView(LoginRequiredMixin, DetailView):
         if not video.is_photo:
             from apps.devices.layouts import layout_for_video
             ctx["layout"] = layout_for_video(video)
-            ctx["can_edit_layout"] = Video.deletable(self.request.user).filter(pk=video.pk).exists()
+            ctx["can_edit_layout"] = (self.request.user.is_superuser
+                                      or Video.deletable(self.request.user).filter(pk=video.pk).exists())
         blob_path = video.storage_key
 
         # Presigned URL for playback (external-S3-ingested videos have no URL
@@ -646,17 +647,33 @@ class LayoutEditorView(LoginRequiredMixin, View):
 
     template_name = "videos/layout_editor.html"
 
-    def _target(self, request, video_pk=None, site_pk=None):
+    def _target(self, request, video_pk=None, site_pk=None, picked=None):
         from .models import Site
         if site_pk is not None:
-            site = get_object_or_404(Site, pk=site_pk, user=request.user)
-            clip = (Video.objects.filter(site=site, raw_deleted_at__isnull=True)
-                    .order_by("-recorded_at", "-uploaded_at").first())
+            sites = Site.objects.all() if request.user.is_superuser else Site.objects.filter(user=request.user)
+            site = get_object_or_404(sites, pk=site_pk)
+            # The frame comes from a clip the user picks (?clip=), else the
+            # site's newest. A new site has none: the page offers the owner's
+            # recent clips, and the picked one joins the site on save.
+            picked = picked or request.GET.get("clip")
+            clip = None
+            if picked and str(picked).isdigit():
+                clip = self._site_candidates(site).filter(pk=picked).first()
+            if clip is None:
+                clip = (Video.objects.filter(site=site, raw_deleted_at__isnull=True)
+                        .order_by("-recorded_at", "-uploaded_at").first())
             return site, None, clip
-        # Editing a layout changes how the owner's clips are analysed: owner or
-        # unit manager only (not a platform admin looking at someone's clip).
-        video = get_object_or_404(Video.deletable(request.user).select_related("site", "device"), pk=video_pk)
+        # Editing a layout changes how a clip is analysed: its owner, a manager
+        # of its unit, or a platform admin (who analyses anyone's clips; the
+        # change goes in the audit log).
+        clips = Video.objects.all() if request.user.is_superuser else Video.deletable(request.user)
+        video = get_object_or_404(clips.select_related("site", "device", "user"), pk=video_pk)
         return video.site, video, video
+
+    @staticmethod
+    def _site_candidates(site):
+        """Clips that can give a site its drawing frame: the site owner's."""
+        return Video.objects.filter(user=site.user, raw_deleted_at__isnull=True)
 
     def get(self, request, video_pk=None, site_pk=None):
         import json as _json
@@ -679,7 +696,12 @@ class LayoutEditorView(LoginRequiredMixin, View):
             current["source_label"] = f"site {site.name}" if latest else ""
             history = _layout_versions(Layout.objects.filter(site=site).select_related("saved_by"))
         t = request.GET.get("t") or "0"
+        recent = []
+        if video is None:
+            recent = list(self._site_candidates(site).order_by("-uploaded_at")[:12])
         return render(request, self.template_name, {
+            "recent_clips": recent,
+            "clip_at_site": bool(clip and site and clip.site_id == site.pk),
             "site": site, "video": video, "clip": clip,
             "site_name": (site.name if site else (video.site_name if video else "")),
             "site_clips": Video.objects.filter(site=site).count() if site else 0,
@@ -698,11 +720,11 @@ class LayoutEditorView(LoginRequiredMixin, View):
 
         from .models import Layout, Site
 
-        site, video, _clip = self._target(request, video_pk, site_pk)
         try:
             body = _json.loads(request.body or "{}")
         except ValueError:
             return JsonResponse({"error": "Invalid JSON."}, status=400)
+        site, video, _clip = self._target(request, video_pk, site_pk, picked=body.get("clip"))
         roi, polygon, nests = parse_layout_body(body)
         scope = body.get("scope") or ("site" if site_pk is not None else "site" if (video and (site or video.site_name)) else "clip")
         if video is not None and scope == "site" and site is None:
@@ -711,6 +733,9 @@ class LayoutEditorView(LoginRequiredMixin, View):
             # A site that was only ever a typed name becomes a real one.
             site, _ = Site.objects.get_or_create(user=video.user, name=video.site_name)
             Video.everything.filter(user=video.user, site__isnull=True, site_name=video.site_name).update(site=site)
+        if site_pk is not None and _clip is not None and _clip.site_id != site.pk and body.get("add_clip", True):
+            # The clip it was drawn on joins the site, so the drawing applies to it.
+            Video.everything.filter(pk=_clip.pk).update(site=site, site_name=site.name)
         if scope == "site":
             saved = Layout.save_new(site=site, roi=roi, polygon=polygon, nests=nests, user=request.user)
             versions = _layout_versions(Layout.objects.filter(site=site).select_related("saved_by"))
@@ -720,6 +745,13 @@ class LayoutEditorView(LoginRequiredMixin, View):
             saved = Layout.save_new(video=video, roi=roi, polygon=polygon, nests=nests, user=request.user)
             versions = _layout_versions(Layout.objects.filter(video=video).select_related("saved_by"))
             message = "Saved for this clip only."
+        owner = video.user if video is not None else site.user
+        if owner != request.user:
+            from apps.accounts.models import AdminAction
+            AdminAction.record(request.user, "edit_layout",
+                               f"Drew the ROI and references for {owner.username}'s "
+                               + (f"site {site.name}" if scope == "site" else f"clip {video.title}"),
+                               target=owner, layout=saved.pk)
         return JsonResponse({"ok": True, "roi": saved.roi_override, "roi_polygon": saved.roi_polygon,
                              "nests": saved.nest_layout, "versions": versions,
                              "message": message + " New runs use it."})
