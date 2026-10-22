@@ -24,7 +24,28 @@ def compute_config_hash(video_id: int, config: dict) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()[:32]
 
 
+class JobQuerySet(models.QuerySet):
+    def for_viewer(self, user):
+        """The jobs ``user`` should see. A platform admin may analyse anyone's
+        clips (Video.manageable); those jobs are the admin's own work and stay
+        out of the clip owner's pages, results and analytics. For display only:
+        queueing, polling and charging must keep seeing every job."""
+        if user.is_superuser:
+            return self
+        return self.exclude(user__is_superuser=True)
+
+
+class JobResultQuerySet(models.QuerySet):
+    def for_viewer(self, user):
+        """Results of the jobs ``user`` should see (JobQuerySet.for_viewer)."""
+        if user.is_superuser:
+            return self
+        return self.exclude(job__user__is_superuser=True)
+
+
 class Job(models.Model):
+    objects = JobQuerySet.as_manager()
+
     class Status(models.TextChoices):
         QUEUED = "queued", "Queued"
         INGESTING = "ingesting", "Ingesting"
@@ -102,6 +123,8 @@ class Job(models.Model):
 
 
 class JobResult(models.Model):
+    objects = JobResultQuerySet.as_manager()
+
     job = models.OneToOneField(
         Job,
         on_delete=models.CASCADE,

@@ -157,7 +157,8 @@ class VideoProxyView(LoginRequiredMixin, View):
         # Read scope follows the video's device shares (viewer/manager can
         # watch annotated renders of the owner's runs).
         from apps.videos.models import Video
-        job = get_object_or_404(Job, pk=pk, video__in=Video.accessible(request.user))
+        job = get_object_or_404(Job.objects.for_viewer(request.user), pk=pk,
+                                video__in=Video.accessible(request.user))
 
         try:
             result = job.result

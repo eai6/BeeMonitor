@@ -281,6 +281,8 @@ class VideoDetailView(LoginRequiredMixin, DetailView):
         # Owners and device-managers can act (run/delete); viewers are read-only.
         ctx["is_owner"] = video.user_id == self.request.user.id
         ctx["can_manage"] = video.managed_by(self.request.user)
+        from apps.analysis.models import Job
+        ctx["jobs"] = Job.objects.for_viewer(self.request.user).filter(video=video)
         blob_path = video.storage_key
 
         # Presigned URL for playback (external-S3-ingested videos have no URL

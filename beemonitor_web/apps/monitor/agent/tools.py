@@ -255,11 +255,12 @@ def run_tool(name: str, tool_input: dict, user) -> dict:
             ]}
 
         if name == "tracking_summary":
-            from apps.analysis.models import JobResult
+            from apps.analysis.models import Job, JobResult
             from apps.videos.models import Video
-            results = JobResult.objects.filter(
+            results = JobResult.objects.for_viewer(user).filter(
                 job__video__device=device, job__status="completed")
-            analyzed = (Video.objects.filter(device=device, jobs__status="completed")
+            analyzed = (Video.objects.filter(device=device,
+                                             jobs__in=Job.objects.for_viewer(user).filter(status="completed"))
                         .distinct().count())
             total_videos = Video.objects.filter(device=device).count()
             if analyzed == 0:

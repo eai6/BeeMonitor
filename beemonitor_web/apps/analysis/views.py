@@ -641,14 +641,14 @@ class ProcessingHubView(LoginRequiredMixin, View):
         f["device"] = selected_devices
         qs = apply_video_filters(qs, request.GET)
 
-        latest = (Job.objects.filter(video=OuterRef("pk"))
+        latest = (Job.objects.for_viewer(request.user).filter(video=OuterRef("pk"))
                   .order_by("-id").values("status")[:1])
-        latest_id = (Job.objects.filter(video=OuterRef("pk"))
+        latest_id = (Job.objects.for_viewer(request.user).filter(video=OuterRef("pk"))
                      .order_by("-id").values("id")[:1])
         videos = (qs.annotate(job_status=Subquery(latest), job_id=Subquery(latest_id))
                   .select_related("device")
                   .order_by("-recorded_at", "-uploaded_at")[:200])
-        recent_jobs = (Job.objects.filter(video__in=Video.accessible(request.user))
+        recent_jobs = (Job.objects.for_viewer(request.user).filter(video__in=Video.accessible(request.user))
                        .select_related("video").order_by("-id")[:8])
 
         devices = list(Device.accessible(request.user).order_by("name"))
@@ -678,7 +678,8 @@ class ProcessingHubView(LoginRequiredMixin, View):
         # confirmation: nothing tags a clip either way any more.
         triage = {
             "unanalyzed": qs.exclude(
-                pk__in=Job.objects.filter(status="completed").values("video_id")).count(),
+                pk__in=Job.objects.for_viewer(request.user).filter(status="completed")
+                .values("video_id")).count(),
         }
         models = CustomModel.objects.filter(user=request.user, is_active=True)
 
@@ -694,8 +695,8 @@ class ProcessingHubView(LoginRequiredMixin, View):
         from apps.accounts.models import UserProfile
         profile, _ = UserProfile.objects.get_or_create(user=request.user)
         active_jobs = list(
-            Job.objects.filter(video__in=Video.accessible(request.user),
-                               status__in=ACTIVE_JOB_STATUSES)
+            Job.objects.for_viewer(request.user).filter(video__in=Video.accessible(request.user),
+                                                        status__in=ACTIVE_JOB_STATUSES)
             .select_related("video").order_by("started_at", "id")
         )
 
@@ -775,7 +776,7 @@ class JobListView(LoginRequiredMixin, ListView):
     paginate_by = 50
 
     def get_queryset(self):
-        qs = (Job.objects.filter(video__in=Video.accessible(self.request.user))
+        qs = (Job.objects.for_viewer(self.request.user).filter(video__in=Video.accessible(self.request.user))
               .select_related("video"))
 
         # Filters
@@ -852,7 +853,8 @@ class JobDetailView(LoginRequiredMixin, DetailView):
     def get_queryset(self):
         # Read scope follows the VIDEO's device shares (viewer/manager see the
         # owner's runs on shared devices), not just who launched the job.
-        return (Job.objects.filter(video__in=Video.accessible(self.request.user, photos=True))
+        return (Job.objects.for_viewer(self.request.user)
+                .filter(video__in=Video.accessible(self.request.user, photos=True))
                 .select_related("video"))
 
 
@@ -962,8 +964,10 @@ class PollJobsView(LoginRequiredMixin, View):
         completed = _poll_sagemaker_results(processing_jobs)
         # Post-poll status per video so a page can flip rows live (Processing hub).
         pks = [j.pk for j in processing_jobs]
+        # Every in-flight job is driven above; only the viewer's are reported.
         jobs = [{"job_id": s["pk"], "video_id": s["video_id"], "status": s["status"]}
-                for s in Job.objects.filter(pk__in=pks).values("pk", "video_id", "status")]
+                for s in Job.objects.for_viewer(request.user).filter(pk__in=pks)
+                .values("pk", "video_id", "status")]
         return JsonResponse({
             "checked": len(processing_jobs),
             "completed": completed,
@@ -1676,7 +1680,7 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         ctx = super().get_context_data(**kwargs)
         # Device shares grant read access to results on the video's device.
         job = get_object_or_404(
-            Job, pk=self.kwargs["pk"],
+            Job.objects.for_viewer(self.request.user), pk=self.kwargs["pk"],
             video__in=Video.accessible(self.request.user, photos=True))
         ctx["job"] = job
 
@@ -1868,7 +1872,8 @@ class GenerateAnnotatedVideoView(LoginRequiredMixin, View):
         from django.utils import timezone
 
         # Rendering costs GPU money — owner or device MANAGER only.
-        job = get_object_or_404(Job, pk=pk, video__in=Video.manageable(request.user))
+        job = get_object_or_404(Job.objects.for_viewer(request.user), pk=pk,
+                                video__in=Video.manageable(request.user))
         try:
             result = job.result
         except JobResult.DoesNotExist:
@@ -1949,7 +1954,7 @@ class _FilteredJobsMixin:
 
         # Ecological data follows video access: results for any video the user
         # owns OR can see via a device share (mirrors Video.accessible).
-        qs = JobResult.objects.filter(
+        qs = JobResult.objects.for_viewer(request.user).filter(
             job__video__in=Video.accessible(request.user),
             job__status=Job.Status.COMPLETED,
         ).select_related("job__video")
@@ -2395,7 +2400,7 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
         ctx["current_device"] = device
 
         # Job progress metrics
-        user_jobs = Job.objects.filter(video__in=Video.accessible(user))
+        user_jobs = Job.objects.for_viewer(user).filter(video__in=Video.accessible(user))
         processing_jobs = user_jobs.filter(status=Job.Status.PROCESSING).select_related("video")
         failed_jobs = user_jobs.filter(status=Job.Status.FAILED).select_related("video").order_by("-created_at")[:5]
         completed_recent = user_jobs.filter(status=Job.Status.COMPLETED).order_by("-completed_at")[:5]
@@ -2541,7 +2546,8 @@ class TrackCropsView(LoginRequiredMixin, View):
     def get(self, request, pk, track_id):
         from apps.pipelines.ops import _read_csv
 
-        job = get_object_or_404(Job, pk=pk, video__in=Video.accessible(request.user, photos=True))
+        job = get_object_or_404(Job.objects.for_viewer(request.user), pk=pk,
+                                video__in=Video.accessible(request.user, photos=True))
         result = getattr(job, "result", None)
         df = _read_csv(getattr(result, "crops_csv_path", "") or "") if result else None
         crops = []
@@ -2568,7 +2574,8 @@ class TrackOverlayView(LoginRequiredMixin, View):
     """
 
     def get(self, request, pk):
-        job = get_object_or_404(Job, pk=pk, video__in=Video.accessible(request.user))
+        job = get_object_or_404(Job.objects.for_viewer(request.user), pk=pk,
+                                video__in=Video.accessible(request.user))
         return overlay_response(request, job)
 
 
@@ -2654,7 +2661,7 @@ class JobPrimitiveCsvView(LoginRequiredMixin, View):
 
         if kind not in ("events", "interactions", "tracks"):
             raise Http404("Unknown table.")
-        job = get_object_or_404(Job, pk=pk)
+        job = get_object_or_404(Job.objects.for_viewer(request.user), pk=pk)
         if job.user_id != request.user.id and not Video.accessible(
                 request.user, photos=True).filter(pk=job.video_id).exists():
             raise Http404("No such job.")

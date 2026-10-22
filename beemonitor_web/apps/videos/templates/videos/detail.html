@@ -261,7 +261,7 @@
   <div class="px-6 py-4 border-b border-gray-200">
     <h2 class="text-lg font-medium text-gray-900">Analysis Jobs</h2>
   </div>
-  {% if video.jobs.all %}
+  {% if jobs %}
   <table class="min-w-full divide-y divide-gray-200">
     <thead class="bg-gray-50">
       <tr>
@@ -273,7 +273,7 @@
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-200">
-      {% for job in video.jobs.all %}
+      {% for job in jobs %}
       <tr>
         <td class="px-6 py-4 text-sm"><a href="{% url 'analysis:detail' job.pk %}" class="text-amber-600 hover:underline">#{{ job.pk }}</a></td>
         <td class="px-6 py-4 text-sm">

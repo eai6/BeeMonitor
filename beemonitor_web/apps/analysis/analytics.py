@@ -40,7 +40,7 @@ def get_activity_over_time(user, site_name=None, year=None, month=None, day=None
 
     Returns a list of dicts: [{"date": "2024-06-01", "entries": 12, "exits": 8, "total": 20}, ...]
     """
-    qs = JobResult.objects.filter(
+    qs = JobResult.objects.for_viewer(user).filter(
         job__video__in=Video.accessible(user),
         job__status=Job.Status.COMPLETED,
     ).select_related("job__video")
@@ -77,7 +77,7 @@ def get_period_averages(user, site_name=None, year=None, month=None, day=None, h
     """
     Return average events per hour-of-day, per day-of-week, and per month.
     """
-    qs = JobResult.objects.filter(
+    qs = JobResult.objects.for_viewer(user).filter(
         job__video__in=Video.accessible(user),
         job__status=Job.Status.COMPLETED,
     ).select_related("job__video")
@@ -133,7 +133,7 @@ def get_nest_activity_heatmap(user, job_id=None):
 
     Returns a list of dicts: [{"nest_id": "nest_1", "entries": 5, "exits": 3, "total": 8}, ...]
     """
-    qs = JobResult.objects.filter(
+    qs = JobResult.objects.for_viewer(user).filter(
         job__video__in=Video.accessible(user),
         job__status=Job.Status.COMPLETED,
     )
@@ -199,7 +199,7 @@ def get_summary_stats(user, site_name=None, year=None, month=None, day=None, hou
         "completed_jobs": int,
     }
     """
-    qs = JobResult.objects.filter(
+    qs = JobResult.objects.for_viewer(user).filter(
         job__video__in=Video.accessible(user),
         job__status=Job.Status.COMPLETED,
     ).select_related("job__video")
@@ -280,7 +280,7 @@ def get_summary_stats(user, site_name=None, year=None, month=None, day=None, hou
 
 def get_video_breakdown(user, site_name=None, year=None, month=None, day=None, hour=None, device=None):
     """Return per-video event breakdown for the analytics table."""
-    qs = JobResult.objects.filter(
+    qs = JobResult.objects.for_viewer(user).filter(
         job__video__in=Video.accessible(user),
         job__status=Job.Status.COMPLETED,
     ).select_related("job__video")
@@ -342,7 +342,7 @@ def get_foraging_trips_over_time(user, site_name=None, year=None, month=None, da
         return sorted_data
 
     # Fallback to per-video aggregation
-    qs = JobResult.objects.filter(
+    qs = JobResult.objects.for_viewer(user).filter(
         job__video__in=Video.accessible(user),
         job__status=Job.Status.COMPLETED,
     ).select_related("job__video")
@@ -382,7 +382,7 @@ def get_trips_per_nest(user, site_name=None, year=None, month=None, day=None, ho
 
     Returns: [{"nest_id": "11", "trips": 15}, ...]
     """
-    qs = JobResult.objects.filter(
+    qs = JobResult.objects.for_viewer(user).filter(
         job__video__in=Video.accessible(user),
         job__status=Job.Status.COMPLETED,
     ).select_related("job__video")
