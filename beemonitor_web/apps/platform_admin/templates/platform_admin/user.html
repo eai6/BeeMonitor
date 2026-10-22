@@ -19,6 +19,7 @@
     </p>
   </div>
   <div class="flex flex-wrap gap-2">
+    <a href="{% url 'analysis:processing' %}?owner={{ u.pk }}" class="h-10 px-4 inline-flex items-center bg-green-600 text-white rounded-md text-sm font-semibold hover:bg-green-700">Their clips</a>
     <form method="post" action="{% url 'platform_admin:user_action' u.pk 'reset' %}">{% csrf_token %}
       <button type="submit" class="h-10 px-4 border border-gray-300 bg-white rounded-md text-sm font-semibold hover:bg-gray-50" {% if not u.email %}disabled title="No email address"{% endif %}>Send password reset</button></form>
     {% if u.is_active %}

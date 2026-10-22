@@ -37,7 +37,7 @@ def _unsanitize_site(value: str) -> str:
 # ProcessingHubView — so apply_video_filters ignores it.
 VIDEO_FILTER_KEYS = ("device", "site", "year", "month", "day", "hour",
                      "hfrom", "hto", "from", "to", "q", "analysis", "kind",
-                     "batch", "origin", "time")
+                     "batch", "origin", "time", "owner")
 
 
 def _values(params, key):
@@ -68,6 +68,11 @@ def apply_video_filters(qs, params):
     q = (params.get("q") or "").strip()
     if q:
         qs = qs.filter(title__icontains=q)
+    # One account's clips. Only narrows what the caller can already see, so it
+    # matters for platform admins, who see every clip (Video.accessible).
+    owner = str(params.get("owner") or "")
+    if owner.isdigit():
+        qs = qs.filter(user_id=int(owner))
     devices = _values(params, "device")
     if devices:
         # Several hotels at once: clips interleave by time so the same hour can

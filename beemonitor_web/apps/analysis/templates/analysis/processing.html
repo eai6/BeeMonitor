@@ -42,6 +42,13 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
 
     <div class="flex-1 overflow-y-auto">
     <form method="get" id="filter-form" class="px-4 py-4 space-y-5">
+      {% if owner_user %}
+      <input type="hidden" name="owner" value="{{ owner_user.pk }}">
+      <div class="flex items-center justify-between gap-2 rounded-md bg-blue-50 px-3 py-2 text-[13px] text-blue-900">
+        <span>{{ owner_user.username }}'s clips</span>
+        <a href="{% url 'analysis:processing' %}" class="font-semibold text-blue-800 hover:text-blue-950">Show all</a>
+      </div>
+      {% endif %}
       {% include "videos/_review_filters.html" %}
     </form>
 

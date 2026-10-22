@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from django.conf import settings
 from django.contrib import messages
+from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
@@ -710,6 +711,9 @@ class ProcessingHubView(LoginRequiredMixin, View):
             "roi_devices": roi_devices,
             "f": f, "opts": opts, "download_qs": download_qs,
             "has_filter": any(f.values()),
+            # "Their clips" from the platform dashboard: whose clips these are.
+            "owner_user": (get_user_model().objects.filter(pk=f["owner"]).first()
+                           if request.user.is_superuser and f["owner"].isdigit() else None),
             # Pure viewers (manage no videos) see a read-only hub: no run controls.
             "can_manage_any": Video.manageable(request.user).exists(),
             "custom_nest_models": models.filter(model_type__in=["nest_detection", "custom"]),

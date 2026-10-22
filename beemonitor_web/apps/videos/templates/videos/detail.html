@@ -31,7 +31,7 @@
     </button>
   </form>
   {% else %}
-  <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">Shared · view only</span>
+  <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">{% if request.user.is_superuser and video.user_id != request.user.id %}{{ video.user.username }}'s clip · you can analyse it{% else %}Shared · view only{% endif %}</span>
   {% endif %}
 </div>
 

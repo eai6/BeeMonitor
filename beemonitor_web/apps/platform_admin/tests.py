@@ -260,3 +260,61 @@ class TrackingTests(TestCase):
         _, raw = APIKey.create_key(self.alice, "k", "live")
         self.client.get("/api/v1/jobs/", HTTP_AUTHORIZATION=f"Bearer {raw}")
         self.assertIsNotNone(UserProfile.objects.get(user=self.alice).last_seen_at)
+
+
+class OtherUsersClipsTests(TestCase):
+    """Platform admins can see and analyse any user's clips, never delete them
+    or change their units; everyone else still sees only their own."""
+
+    def setUp(self):
+        from apps.devices.models import Device
+        from apps.videos.models import Video
+
+        self.admin = User.objects.create_superuser("boss", "boss@example.com", "pw-12345678")
+        self.alice = User.objects.create_user("alice", password="pw-12345678")
+        self.bob = User.objects.create_user("bob", password="pw-12345678")
+        self.unit = Device.objects.create(owner=self.alice, name="Amber Osmia", key_hash="h", prefix="p")
+        self.clip = Video.objects.create(user=self.alice, device=self.unit, title="alice-clip.mp4",
+                                         storage_key="raw/a.mp4", file_size_bytes=10,
+                                         status=Video.Status.READY, duration_seconds=60)
+
+    def test_their_clips_lists_one_users_clips(self):
+        self.client.force_login(self.admin)
+        r = self.client.get(reverse("analysis:processing"), {"owner": self.alice.pk})
+        self.assertContains(r, "alice-clip.mp4")
+        self.assertContains(r, "alice's clips")
+        self.assertContains(self.client.get(reverse("platform_admin:user", args=[self.alice.pk])),
+                            f"?owner={self.alice.pk}")
+
+    def test_other_users_still_see_nothing_of_alices(self):
+        self.client.force_login(self.bob)
+        self.assertNotContains(self.client.get(reverse("analysis:processing"), {"owner": self.alice.pk}),
+                               "alice-clip.mp4")
+        self.assertEqual(self.client.get(reverse("videos:detail", args=[self.clip.pk])).status_code, 404)
+
+    def test_an_admin_can_analyse_it_and_the_job_is_theirs(self):
+        from unittest import mock
+        from apps.analysis.models import Job
+        self.client.force_login(self.admin)
+        with mock.patch("apps.analysis.views._spawn_gpu_batch"):
+            r = self.client.post(reverse("analysis:batch"), {"video_ids": [self.clip.pk]},
+                                 HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(Job.objects.get().user, self.admin)
+
+    def test_an_admin_cannot_delete_it_here_or_on_the_unit(self):
+        from apps.videos.models import Video
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.post(reverse("videos:delete", args=[self.clip.pk])).status_code, 404)
+        self.client.post(reverse("videos:batch_delete"), {"video_ids": [self.clip.pk]})
+        self.assertEqual(self.client.post(reverse("videos:device_delete", args=[self.clip.pk])).status_code, 404)
+        clip = Video.objects.get(pk=self.clip.pk)
+        self.assertFalse(clip.device_delete_requested)
+        r = self.client.get(reverse("videos:detail", args=[self.clip.pk]))
+        self.assertNotContains(r, "Delete Video")
+        self.assertContains(r, "alice's clip")
+
+    def test_an_admin_sees_the_unit_as_a_viewer(self):
+        self.assertEqual(self.unit.role_for(self.admin), "viewer")
+        self.assertFalse(self.unit.can(self.admin, "manager"))
+        self.assertIsNone(self.unit.role_for(self.bob))

@@ -317,6 +317,8 @@ class Device(models.Model):
     @staticmethod
     def accessible(user):
         """Devices the user owns OR has been shared (any role)."""
+        if user.is_superuser:
+            return Device.objects.all()  # admins see every unit, as viewers
         return Device.objects.filter(
             Q(owner=user) | Q(shares__user=user)
         ).distinct()
@@ -328,7 +330,11 @@ class Device(models.Model):
         if self.owner_id == user.id:
             return "owner"
         share = self.shares.filter(user=user).first()
-        return share.role if share else None
+        if share:
+            return share.role
+        # Platform admins can look at any unit (and analyse its clips through
+        # Video.manageable) but not change its settings.
+        return "viewer" if user.is_superuser else None
 
     def can(self, user, level: str) -> bool:
         """True if ``user``'s role on this device is >= ``level``."""

@@ -183,6 +183,8 @@ class Video(models.Model):
         keep filtering on ``user=request.user`` and must NOT use this.
         """
         base = Video.everything if photos else Video.objects
+        if user.is_superuser:
+            return base.all()  # platform admins see and analyse every clip
         return base.filter(
             Q(user=user) | Q(device__shares__user=user)
         ).distinct()
@@ -192,9 +194,20 @@ class Video(models.Model):
         """Videos the user may WRITE (run analysis / delete): owned, or on a
         device shared with them as **manager** (not viewer).
 
-        Use this for action paths (run, delete, device-delete). Viewers get
-        read-only access via ``accessible`` and are excluded here.
+        Use this for action paths (run analysis). Viewers get read-only access
+        via ``accessible`` and are excluded here. Platform admins may run
+        analysis on any clip; deleting goes through ``deletable``, which they
+        are not part of.
         """
+        if user.is_superuser:
+            return (Video.everything if photos else Video.objects).all()
+        return Video.deletable(user, photos=photos)
+
+    @staticmethod
+    def deletable(user, photos=False):
+        """Videos the user may delete, here or on the unit's SD card: owned, or
+        on a device shared with them as manager. Never someone else's clip just
+        because the user is a platform admin."""
         base = Video.everything if photos else Video.objects
         return base.filter(
             Q(user=user)

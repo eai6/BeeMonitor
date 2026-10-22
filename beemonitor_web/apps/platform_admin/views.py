@@ -107,7 +107,9 @@ class UserListView(PlatformPage):
             qs = qs.filter(Q(profile__last_seen_at__gte=cutoff) | Q(last_login__gte=cutoff))
         qs = qs.order_by(SORTS.get(g.get("sort", ""), SORTS["credits"]), "username")
         rows = [{"user": u, "tier": stats.tier_label(u), "status": stats.status(u),
-                 "hours": u.life_seconds / 3600} for u in qs]
+                 "hours": u.life_seconds / 3600,
+                 "active": _ago(max(filter(None, [u.last_seen, u.last_login]), default=None))}
+                for u in qs]
         status = g.get("status", "")
         if status:
             rows = [r for r in rows if r["status"][0].lower().replace(" ", "_") == status]
@@ -337,6 +339,13 @@ class ActivityView(PlatformPage):
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+def _ago(when):
+    """'4 minutes ago', '2 days ago': one unit, short enough for a table cell."""
+    from django.utils.timesince import timesince
+
+    return f"{timesince(when, depth=1)} ago" if when else ""
+
 
 def _new_code():
     alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O, 1/I

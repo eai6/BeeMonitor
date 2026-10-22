@@ -449,7 +449,7 @@ class VideoDeleteView(LoginRequiredMixin, View):
     """Delete a single video and its S3 objects."""
 
     def post(self, request, pk):
-        video = get_object_or_404(Video.manageable(request.user, photos=True), pk=pk)
+        video = get_object_or_404(Video.deletable(request.user, photos=True), pk=pk)
         title = video.title
 
         _delete_storage_objects_for_video(video)
@@ -469,7 +469,7 @@ class VideoBatchDeleteView(LoginRequiredMixin, View):
             messages.warning(request, "No videos selected.")
             return redirect("videos:list")
 
-        videos = Video.manageable(request.user).filter(pk__in=video_ids)
+        videos = Video.deletable(request.user).filter(pk__in=video_ids)
         count = videos.count()
 
         for video in videos:
@@ -490,7 +490,7 @@ class VideoDeviceDeleteView(LoginRequiredMixin, View):
     """
 
     def post(self, request, pk):
-        video = get_object_or_404(Video.manageable(request.user, photos=True), pk=pk)
+        video = get_object_or_404(Video.deletable(request.user, photos=True), pk=pk)
         if request.POST.get("cancel"):
             if video.device_deleted_at is None and video.device_delete_requested:
                 video.device_delete_requested = False
@@ -523,7 +523,7 @@ class VideoBatchDeviceDeleteView(LoginRequiredMixin, View):
             messages.warning(request, "No videos selected.")
             return redirect("videos:list")
         n = (
-            Video.manageable(request.user)
+            Video.deletable(request.user)
             .filter(pk__in=video_ids, device__isnull=False)
             .update(device_delete_requested=True)
         )
