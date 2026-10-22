@@ -151,9 +151,12 @@ class SourceSyncView(LoginRequiredMixin, View):
         source = get_object_or_404(DataSource, pk=pk, user=request.user)
         path = request.POST.get("path", "")
         keep_here = request.POST.get("where", "bucket") == "copy"
+        # "" = the site named in each filename (made if new); "none" = no site.
+        choice = request.POST.get("site", "")
         site = None
-        if request.POST.get("site"):
-            site = Site.objects.filter(user=request.user, pk=request.POST["site"]).first()
+        if choice not in ("", "none"):
+            site = Site.objects.filter(user=request.user, pk=choice).first()
+        sites_by_name = {}
         back = redirect(f"{reverse_lazy('sources:browse', args=[pk])}?path={path}")
         try:
             creds = decrypt(source)
@@ -176,14 +179,20 @@ class SourceSyncView(LoginRequiredMixin, View):
         bucket = creds["bucket"]
         done = _imported(request.user, bucket)
         imported = skipped = 0
+        new_sites = []
         for f in files:
             if f["key"] in done:
                 skipped += 1
                 continue
             site_name, recorded_at = Video.parse_timestamp_from_filename(f["name"])
+            clip_site = site
+            if clip_site is None and choice == "" and site_name:
+                clip_site, made = _site_named(request.user, site_name, sites_by_name)
+                if made:
+                    new_sites.append(clip_site.name)
             video = Video.objects.create(
-                user=request.user, source=source, site=site,
-                site_name=site.name if site else (site_name or ""),
+                user=request.user, source=source, site=clip_site,
+                site_name=clip_site.name if clip_site else (site_name or ""),
                 title=f["name"].rsplit(".", 1)[0], storage_key=s3.remote_uri(bucket, f["key"]),
                 file_size_bytes=f["size"] or 0, status=Video.Status.READY, recorded_at=recorded_at,
                 metadata={"source_id": source.pk, "source_type": source.source_type,
@@ -198,8 +207,27 @@ class SourceSyncView(LoginRequiredMixin, View):
             " — they stay in your bucket and are read from it when analysed."
         if skipped:
             msg += f" {skipped} were already imported."
+        if new_sites:
+            msg += f" New site{'s' if len(new_sites) != 1 else ''} from the filenames: {', '.join(sorted(new_sites))}."
         messages.success(request, msg)
         return back
+
+
+def _site_named(user, name, cache):
+    """The user's site called ``name`` (any capitals), made if there's none.
+    Returns ``(site, made)``; ``cache`` keeps one lookup per name per import.
+    A name that can't be a site (blank, too long) gives ``(None, False)``."""
+    name = name.strip()
+    if not name or len(name) > Site._meta.get_field("name").max_length:
+        return None, False
+    if name.lower() in cache:
+        return cache[name.lower()], False
+    site = Site.objects.filter(user=user, name__iexact=name).first()
+    made = False
+    if site is None:
+        site, made = Site.objects.get_or_create(user=user, name=name)
+    cache[name.lower()] = site
+    return site, made
 
 
 class CopyIntoBeeMonitorView(LoginRequiredMixin, View):

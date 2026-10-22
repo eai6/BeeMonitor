@@ -139,6 +139,63 @@ class CloudTests(TestCase):
                              {"path": "", "selected_files": ["2026/top.mov"], "where": "bucket"})
         self.assertEqual(Video.objects.count(), 1)
 
+    def test_the_site_comes_from_the_filename_and_is_made_if_new(self):
+        source = self.source()
+        self.s3.put_object(Bucket="their-footage", Key="2026/mendels_2024-04-16_15_21_24.mp4", Body=CLIP)
+        self.s3.put_object(Bucket="their-footage", Key="2026/Oakridge_2024-04-16_15_30_00.mp4", Body=CLIP)
+        self.s3.put_object(Bucket="their-footage", Key="2026/oakridge_2024-04-16_15_40_00.mp4", Body=CLIP)
+        oak = Site.objects.create(user=self.user, name="oakridge")
+        other = User.objects.create_user("other", password="pw-12345678")
+        Site.objects.create(user=other, name="mendels")                  # someone else's
+        r = self.client.post(reverse("sources:sync", args=[source.pk]),
+                             {"selected_files": ["2026/mendels_2024-04-16_15_21_24.mp4",
+                                                 "2026/Oakridge_2024-04-16_15_30_00.mp4",
+                                                 "2026/oakridge_2024-04-16_15_40_00.mp4"],
+                              "where": "bucket", "site": ""}, follow=True)
+        mendels = Site.objects.get(user=self.user, name="mendels")
+        by_title = {v.title: v for v in Video.objects.all()}
+        self.assertEqual(by_title["mendels_2024-04-16_15_21_24"].site, mendels)
+        self.assertEqual(by_title["Oakridge_2024-04-16_15_30_00"].site, oak)   # any capitals
+        self.assertEqual(by_title["oakridge_2024-04-16_15_40_00"].site, oak)
+        self.assertEqual(Site.objects.filter(user=self.user).count(), 2)
+        self.assertEqual(by_title["mendels_2024-04-16_15_21_24"].recorded_at.hour, 15)
+        self.assertContains(r, "New site from the filenames: mendels.")
+
+    def test_no_site_and_a_chosen_site_override_the_filename(self):
+        source = self.source()
+        self.s3.put_object(Bucket="their-footage", Key="2026/mendels_2024-04-16_15_21_24.mp4", Body=CLIP)
+        key = ["2026/mendels_2024-04-16_15_21_24.mp4"]
+        self.client.post(reverse("sources:sync", args=[source.pk]),
+                         {"selected_files": key, "where": "bucket", "site": "none"})
+        self.assertIsNone(Video.objects.get().site)
+        self.assertFalse(Site.objects.exists())
+        Video.objects.all().delete()
+        north = Site.objects.create(user=self.user, name="North bank")
+        self.client.post(reverse("sources:sync", args=[source.pk]),
+                         {"selected_files": key, "where": "bucket", "site": north.pk})
+        self.assertEqual(Video.objects.get().site, north)
+
+    def test_a_filename_without_a_site_gets_none(self):
+        source = self.source()
+        self.client.post(reverse("sources:sync", args=[source.pk]),
+                         {"selected_files": ["2026/june/nest_0412.mp4"], "where": "bucket"})
+        self.assertIsNone(Video.objects.get().site)
+        self.assertFalse(Site.objects.exists())
+
+    def test_odd_filenames_import_without_a_site(self):
+        source = self.source()
+        odd = ["2026/" + n for n in (
+            "clip.mp4", "_2024-04-16_15_21_24.mp4", "   _2024-04-16_15_21_24.mp4",
+            "x" * 250 + "_2024-04-16_15_21_24.mp4", "IMG 2024-04-16 15.21.24.mov",
+            "mendels_2024-13-45_99_99_99.mp4")]
+        for key in odd:
+            self.s3.put_object(Bucket="their-footage", Key=key, Body=CLIP)
+        r = self.client.post(reverse("sources:sync", args=[source.pk]),
+                             {"selected_files": odd, "where": "bucket"}, follow=True)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(Video.objects.count(), len(odd))
+        self.assertFalse(Site.objects.exists())       # an impossible date reads as no pattern
+
     def test_a_forged_key_outside_the_folder_is_ignored(self):
         source = self.source()
         self.client.post(reverse("sources:sync", args=[source.pk]),

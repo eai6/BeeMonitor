@@ -66,12 +66,13 @@
         <label class="flex items-start gap-2"><input type="radio" name="where" value="copy" class="mt-1">
           <span><b>Copy into BeeMonitor</b><br><span class="text-gray-600">A full copy in your BeeMonitor storage: plays and re-runs without your bucket. Standard keeps raw footage 3 months; after that the clip is read from your bucket again.</span></span></label>
       </fieldset>
-      <label class="flex flex-col gap-1 font-semibold text-gray-700">Site (optional)
+      <label class="flex flex-col gap-1 font-semibold text-gray-700">Site
         <select name="site" class="h-10 rounded-md border border-gray-300 bg-white px-3 font-normal">
-          <option value="">No site</option>
+          <option value="">From the filename</option>
+          <option value="none">No site</option>
           {% for s in sites %}<option value="{{ s.pk }}">{{ s.name }}</option>{% endfor %}
         </select></label>
-      <p class="text-xs text-gray-500">A site's ROI and reference objects apply to its clips. <a href="{% url 'videos:sites_page' %}" class="text-amber-700 hover:underline">Sites</a></p>
+      <p class="text-xs text-gray-500">From the filename: <code>mendels_2024-04-16_15_21_24.mp4</code> goes to the site "mendels", made if you don't have it yet. A site's ROI and reference objects apply to its clips. <a href="{% url 'videos:sites_page' %}" class="text-amber-700 hover:underline">Sites</a></p>
       <button type="submit" class="h-11 rounded-md bg-amber-600 hover:bg-amber-700 text-white font-semibold disabled:opacity-50" :disabled="!all && n === 0">Import</button>
       <p class="text-xs text-gray-500">Copying runs in the background; you can leave this page. No credits are used.</p>
     </div>
