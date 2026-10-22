@@ -21,6 +21,8 @@ on:
     tags: ["v*"]
   pull_request:
     branches: [main]
+  # Manual redeploy of main, for when a push doesn't trigger this workflow.
+  workflow_dispatch:
 
 # Read-only by default; jobs that need OIDC ask for id-token: write.
 permissions:
@@ -110,7 +112,7 @@ jobs:
   build-push:
     needs: [test, test-beemonitor]
     # Only build/push from main and version tags — PRs run tests only.
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:
       # `id-token: write` is required for OIDC federation to AWS.
