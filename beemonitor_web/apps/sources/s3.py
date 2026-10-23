@@ -166,6 +166,8 @@ def stream_copy(creds: dict, bucket: str, key: str, dest_key: str, progress=None
         ExtraArgs={"ContentType": content_type(key)},
         # Parts upload in this thread: the progress callback writes to the
         # database, and boto's worker threads would each open a connection.
-        Config=TransferConfig(multipart_chunksize=64 * 1024 * 1024, use_threads=False),
+        # 16 MB parts: one is held in memory per copy, and several run at once
+        # (copying.PARALLEL). S3's 10,000-part limit still allows 160 GB.
+        Config=TransferConfig(multipart_chunksize=16 * 1024 * 1024, use_threads=False),
         Callback=_cb)
     return done[0]

@@ -266,6 +266,68 @@ class CloudTests(TestCase):
         self.assertEqual(self.s3.list_objects_v2(Bucket="our-raw").get("KeyCount"), 0)
         self.assertEqual(SourceCopy.objects.get().status, "removed")
 
+    # ── The queue ──
+    def _queued(self, n):
+        source = self.source()
+        for i in range(n):
+            v = Video.objects.create(user=self.user, source=source, title=f"c{i}", file_size_bytes=1,
+                                     storage_key=f"s3://their-footage/2026/c{i}.mp4",
+                                     metadata={"remote_bucket": "their-footage", "remote_key": f"2026/c{i}.mp4"})
+            copying.queue(v, SourceCopy.Purpose.KEEP)
+
+    def test_six_copies_run_at_once(self):
+        self._queued(9)
+        with mock.patch("threading.Thread"):
+            self.assertEqual(copying.tick()["copies_started"], 6)
+            self.assertEqual(copying.tick()["copies_started"], 0)       # all slots taken
+        self.assertEqual(SourceCopy.objects.filter(status="running").count(), 6)
+
+    def test_a_finished_copy_starts_the_next_without_waiting_for_a_tick(self):
+        self._queued(8)
+        with mock.patch("threading.Thread"):
+            copying.tick()
+        first = SourceCopy.objects.filter(status="running").first()
+        SourceCopy.objects.filter(pk=first.pk).update(status="done")
+        with mock.patch("threading.Thread") as thread, mock.patch("apps.sources.copying.run"):
+            copying._run_in_thread(first.pk)
+        self.assertEqual(thread.call_count, 1)
+        self.assertEqual(SourceCopy.objects.filter(status="running").count(), 6)
+
+    def test_a_copy_gone_quiet_is_put_back_but_a_busy_one_is_not(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+        self._queued(2)
+        quiet, busy = SourceCopy.objects.all()
+        old = timezone.now() - timedelta(minutes=11)
+        SourceCopy.objects.filter(pk=quiet.pk).update(status="running", started_at=old, heartbeat_at=old)
+        SourceCopy.objects.filter(pk=busy.pk).update(status="running", started_at=old,
+                                                     heartbeat_at=timezone.now())
+        with mock.patch("apps.sources.copying._fill_slots", return_value=0):
+            copying.tick()
+        self.assertEqual(SourceCopy.objects.get(pk=quiet.pk).status, "queued")
+        self.assertEqual(SourceCopy.objects.get(pk=busy.pk).status, "running")
+
+    def test_a_copy_for_one_analysis_is_never_requeued_or_counted(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+        self._queued(1)
+        temp = SourceCopy.objects.create(video=Video.objects.first(), purpose="temp", status="running",
+                                         started_at=timezone.now() - timedelta(hours=2))
+        with mock.patch("threading.Thread"):
+            self.assertEqual(copying.tick()["copies_started"], 1)
+        self.assertEqual(SourceCopy.objects.get(pk=temp.pk).status, "running")
+
+    def test_progress_touches_the_heartbeat(self):
+        source = self.source()
+        self.client.post(reverse("sources:sync", args=[source.pk]),
+                         {"selected_files": ["2026/june/nest_0412.mp4"], "where": "copy"})
+        self.run_copies()
+        copy = SourceCopy.objects.get()
+        self.assertEqual(copy.status, "done")
+        self.assertIsNotNone(copy.heartbeat_at)
+
     # ── The 3-month rule ──
     @override_settings(RAW_FOOTAGE_DELETION="on")
     def test_a_copied_clip_goes_back_to_their_bucket_instead_of_being_lost(self):

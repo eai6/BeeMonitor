@@ -3,9 +3,10 @@
 No Celery in production, so the reconcile loop (apps/analysis/reconcile.py)
 calls ``tick`` every couple of minutes. Each tick:
 
-* puts back copies a restart interrupted (running for over an hour),
+* puts back copies a restart interrupted (no progress for ``STALE_AFTER``),
 * claims up to ``PARALLEL`` waiting copies, one conditional UPDATE each, so a
-  clip is copied once even with several workers ticking,
+  clip is copied once even with several workers ticking; a copy that finishes
+  claims the next one itself, so the queue doesn't wait for the next tick,
 * runs each in its own thread: streamed bucket to bucket, then the clip is
   measured (duration, fps, frame size) and gets a thumbnail,
 * removes copies made for a single analysis a day after they were made.
@@ -17,18 +18,24 @@ in the user's bucket: a temporary copy, recorded so the tick removes it.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from datetime import timedelta
 
 from django.db import close_old_connections
+from django.db.models import Q
 from django.utils import timezone
 
 from .models import SourceCopy
 
 logger = logging.getLogger(__name__)
 
-PARALLEL = 2
-STALE_AFTER = timedelta(hours=1)
+# Copies at once across every worker. Each holds one 16 MB part in memory
+# (s3.stream_copy), so 6 stay near 100 MB on the 2 GB web instance.
+PARALLEL = int(os.environ.get("BEEMONITOR_COPY_PARALLEL", "6"))
+# A copy touches heartbeat_at every ~2% of its bytes; a restart kills the
+# thread, and one that goes quiet this long is put back in the queue.
+STALE_AFTER = timedelta(minutes=10)
 TEMP_KEEP = timedelta(days=1)
 
 
@@ -53,24 +60,38 @@ def _dest_key(video, tag=""):
 
 def tick() -> dict:
     now = timezone.now()
-    SourceCopy.objects.filter(status=SourceCopy.Status.RUNNING,
-                              started_at__lt=now - STALE_AFTER).update(status=SourceCopy.Status.QUEUED)
+    # Single-analysis copies run inside a request (ensure_readable), not here.
+    background = SourceCopy.objects.exclude(purpose=SourceCopy.Purpose.TEMP)
+    stale = now - STALE_AFTER
+    background.filter(status=SourceCopy.Status.RUNNING).filter(
+        Q(heartbeat_at__lt=stale) | Q(heartbeat_at=None, started_at__lt=stale)
+    ).update(status=SourceCopy.Status.QUEUED)
     removed = _remove_temp_copies(now)
-    running = SourceCopy.objects.filter(status=SourceCopy.Status.RUNNING).count()
+    return {"copies_started": _fill_slots(), "temp_copies_removed": removed}
+
+
+def _fill_slots() -> int:
+    """Start waiting copies until ``PARALLEL`` are running."""
+    background = SourceCopy.objects.exclude(purpose=SourceCopy.Purpose.TEMP)
+    running = background.filter(status=SourceCopy.Status.RUNNING).count()
     started = 0
-    for pk in SourceCopy.objects.filter(status=SourceCopy.Status.QUEUED).values_list("pk", flat=True)[
+    for pk in background.filter(status=SourceCopy.Status.QUEUED).values_list("pk", flat=True)[
             :max(PARALLEL - running, 0)]:
+        now = timezone.now()
         claimed = SourceCopy.objects.filter(pk=pk, status=SourceCopy.Status.QUEUED).update(
-            status=SourceCopy.Status.RUNNING, started_at=now, bytes_done=0, error="")
+            status=SourceCopy.Status.RUNNING, started_at=now, heartbeat_at=now, bytes_done=0, error="")
         if claimed:
             threading.Thread(target=_run_in_thread, args=(pk,), daemon=True).start()
             started += 1
-    return {"copies_started": started, "temp_copies_removed": removed}
+    return started
 
 
 def _run_in_thread(pk):
     try:
         run(pk)
+        _fill_slots()
+    except Exception:
+        logger.exception("source copy %s: starting the next one failed", pk)
     finally:
         close_old_connections()
 
@@ -97,7 +118,7 @@ def run(pk) -> None:
                 if job.bytes_total and done - last[0] < job.bytes_total / 50:
                     return
                 last[0] = done
-                SourceCopy.objects.filter(pk=pk).update(bytes_done=done)
+                SourceCopy.objects.filter(pk=pk).update(bytes_done=done, heartbeat_at=timezone.now())
 
             size = s3.stream_copy(creds, bucket, key, dest, progress)
             meta = {**(video.metadata or {}), "remote_bucket": bucket, "remote_key": key,
