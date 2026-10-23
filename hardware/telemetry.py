@@ -242,6 +242,16 @@ def _uptime_seconds():
         return None
 
 
+@lru_cache(maxsize=1)
+def _board():
+    """The board doesn't change while the service runs: read it once."""
+    try:
+        import board_profile
+        return board_profile.describe()
+    except Exception:  # never let this cost a heartbeat
+        return {}
+
+
 def _cpu_temp_c():
     try:
         with open("/sys/class/thermal/thermal_zone0/temp") as fh:
@@ -864,6 +874,8 @@ def collect_metrics() -> dict:
     temp = _cpu_temp_c()
     if temp is not None:
         m["cpu_temp_c"] = temp
+    # The board, its memory and whether it runs light (memory/56).
+    m.update(_board())
 
     vs = _video_stats(ACTIVITY_PERIOD)
     m["videos_recorded"] = vs["videos_recorded"]

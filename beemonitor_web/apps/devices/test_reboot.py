@@ -37,3 +37,29 @@ class RebootTests(TestCase):
         self.assertLess(html.index("<details"), html.index("Reboot device"))
         self.assertNotIn("Cellular access", html)
         self.assertNotIn("Open for debug", html)
+
+
+class BoardTests(TestCase):
+    """What the unit says it runs on, and light mode (memory/56)."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user("bd", password="x")
+        self.device, _ = Device.create_with_key(self.owner, "Amber Osmia")
+        self.client.force_login(self.owner)
+
+    def _page(self, metrics):
+        self.device.heartbeats.create(metrics=metrics)
+        return self.client.get(reverse("devices:detail", args=[self.device.pk])).content.decode()
+
+    def test_a_light_unit_says_so(self):
+        html = self._page({"board": "Raspberry Pi Zero 2 W", "mem_mb": 416, "profile": "lite"})
+        self.assertIn("Raspberry Pi Zero 2 W", html)
+        self.assertIn("light mode", html)
+
+    def test_a_full_unit_shows_only_its_board(self):
+        html = self._page({"board": "Raspberry Pi 4 Model B", "mem_mb": 3793, "profile": "full"})
+        self.assertIn("Raspberry Pi 4 Model B", html)
+        self.assertNotIn("light mode", html)
+
+    def test_an_older_unit_that_reports_no_board_shows_nothing(self):
+        self.assertNotIn("light mode", self._page({"cpu_temp_c": 50}))

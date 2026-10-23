@@ -6,7 +6,7 @@ import argparse
 import signal
 from pathlib import Path
 
-from motion.config import YOLO_MODEL, CALIB_MAX_CLIPS
+from motion.config import YOLO_MODEL, CALIB_MAX_CLIPS, PROFILE, log
 from motion.calibrate import calibrate, _find_snippets
 from motion.recorder import record, _handle_signal
 
@@ -25,6 +25,12 @@ def main() -> int:
                         help="recalibrate even if calibration.json is recent")
     args = parser.parse_args()
 
+    if args.calibrate and not (args.calibrate_from or args.force) and PROFILE == "lite":
+        # YOLO needs more memory than a light board has (memory/56). The daily
+        # timer still fires, so every board keeps the same units; --force or
+        # --calibrate-from runs it by hand anyway.
+        log.info("calibration skipped: light profile (this board can't hold YOLO)")
+        return 0
     if args.calibrate or args.calibrate_from:
         paths = ([Path(p) for p in args.calibrate_from]
                  if args.calibrate_from else _find_snippets(CALIB_MAX_CLIPS))

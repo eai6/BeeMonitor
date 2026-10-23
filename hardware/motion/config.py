@@ -9,7 +9,15 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from pathlib import Path
+
+# Light boards (a Pi Zero 2 W) get light defaults before any knob below is
+# read; anything set in uploader.env still wins (memory/56).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import board_profile  # noqa: E402
+
+PROFILE = board_profile.apply_defaults()
 
 
 def _env_int(name: str, default: int) -> int:

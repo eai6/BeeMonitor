@@ -227,6 +227,36 @@ def _write_device_key(path, env, key):
         pass
 
 
+def _light_boot(env, run=subprocess.run):
+    """On a light board (a Pi Zero 2 W, memory/56), boot to the console: the
+    golden image is Raspberry Pi OS Desktop, and the desktop session alone
+    takes a large share of 512 MB. Done once (the default target is checked
+    first); BEEMONITOR_KEEP_DESKTOP=1 keeps it. Best-effort, like the hostname."""
+    try:
+        import board_profile
+        if board_profile.detect(env) != board_profile.LITE:
+            return False
+    except Exception as e:  # never let this stop enrollment
+        print(f"enroll: could not read the board (non-fatal): {e}", file=sys.stderr)
+        return False
+    if str(env.get("BEEMONITOR_KEEP_DESKTOP", "")).strip().lower() in {"1", "true", "yes", "on"}:
+        return False
+    try:
+        current = run(["systemctl", "get-default"], capture_output=True, text=True,
+                      timeout=15).stdout.strip()
+        if current != "graphical.target":
+            return False
+        run(["systemctl", "set-default", "multi-user.target"], capture_output=True, timeout=15, check=True)
+        # And stop it now rather than at the next boot; --no-block, since
+        # this runs while boot is still under way.
+        run(["systemctl", "stop", "--no-block", "display-manager.service"], capture_output=True, timeout=15)
+        print("enroll: light board — booting to the console from now on (no desktop)")
+        return True
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"enroll: could not turn the desktop off (non-fatal): {e}", file=sys.stderr)
+        return False
+
+
 def main():
     # Per-card provisioning lives on the FAT boot partition (written by
     # prepare-card.sh / the browser installer from any laptop) or in uploader.env;
@@ -236,6 +266,9 @@ def main():
     _configure_wifi(boot, boot_path)
 
     env = _parse_env(ENV_FILE)
+    # Every boot, enrolled or not: an already-enrolled card moved to a light
+    # board still needs its desktop off.
+    _light_boot({**env, **boot})
     if env.get("BEEMONITOR_DEVICE_KEY"):
         print("enroll: device key already present — nothing to do")
         return 0
