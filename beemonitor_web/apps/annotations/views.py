@@ -850,7 +850,7 @@ class AddVideosWorkspaceView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         from apps.devices.models import Device
         from apps.videos import workspace
-        from apps.videos.models import Video
+        from apps.videos.models import Site, Video
 
         from . import coverage as coverage_mod
 
@@ -888,6 +888,10 @@ class AddVideosWorkspaceView(LoginRequiredMixin, TemplateView):
             "f": workspace.current_filter(params),
             "opts": workspace.filter_options(accessible),
             "device_rows": rows,
+            "site_rows": workspace.site_rows(
+                Site.objects.filter(user=self.request.user).order_by("name"),
+                workspace._values(params, "site_id"),
+                dict(qs.exclude(site=None).order_by().values_list("site_id").annotate(models.Count("id")))),
             "video_days": workspace.group_by_day(videos, dots),
             "video_count": qs.count(),
             "page_size": ADD_PAGE_SIZE,

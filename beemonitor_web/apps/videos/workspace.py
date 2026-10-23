@@ -35,7 +35,7 @@ def _unsanitize_site(value: str) -> str:
 # GET/POST params the Processing-hub video filter understands.
 # ``kind`` (clips | photos) picks the queryset rather than filtering it — see
 # ProcessingHubView — so apply_video_filters ignores it.
-VIDEO_FILTER_KEYS = ("device", "site", "year", "month", "day", "hour",
+VIDEO_FILTER_KEYS = ("device", "site_id", "site", "year", "month", "day", "hour",
                      "hfrom", "hto", "from", "to", "q", "analysis", "kind",
                      "batch", "origin", "time", "owner")
 
@@ -74,10 +74,14 @@ def apply_video_filters(qs, params):
     if owner.isdigit():
         qs = qs.filter(user_id=int(owner))
     devices = _values(params, "device")
-    if devices:
+    sites = [v for v in _values(params, "site_id") if str(v).isdigit()]
+    if devices or sites:
         # Several hotels at once: clips interleave by time so the same hour can
-        # be compared across them.
-        qs = qs.filter(device_id__in=devices)
+        # be compared across them. A hotel is a field unit or a site (clips
+        # from uploads and cloud storage have a site but no unit), and ticking
+        # both shows either.
+        from django.db.models import Q
+        qs = qs.filter(Q(device_id__in=devices) | Q(site_id__in=sites))
     if params.get("site"):
         qs = qs.filter(site_name=_unsanitize_site(params.get("site")))
     for field in ("year", "month", "day", "hour"):
@@ -177,6 +181,13 @@ def device_rows(devices, selected, counts):
     } for i, d in enumerate(devices)]
 
 
+def site_rows(sites, selected, counts):
+    """Rail rows for sites, beside the units: the site, its clip count."""
+    selected = {str(s) for s in (selected or [])}
+    return [{"obj": s, "count": counts.get(s.id, 0), "selected": str(s.id) in selected}
+            for s in sites]
+
+
 def dots_by_device(rows):
     return {r["obj"].id: r["dot"] for r in rows}
 
@@ -230,6 +241,7 @@ def current_filter(params):
     """The filter as a plain dict, for re-rendering the rail's own state."""
     f = {k: (params.get(k) or "") for k in VIDEO_FILTER_KEYS}
     f["device"] = _values(params, "device")
+    f["site_id"] = _values(params, "site_id")
     return f
 
 

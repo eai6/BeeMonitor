@@ -15,7 +15,7 @@ from django.http import Http404, HttpResponse, JsonResponse
 from django.views import View
 from django.views.generic import DetailView, FormView, ListView, TemplateView
 
-from apps.videos.models import Video
+from apps.videos.models import Site, Video
 from config.storage import get_s3_client
 
 from .analytics import (
@@ -629,6 +629,7 @@ class ProcessingHubView(LoginRequiredMixin, View):
         # `device` is multi-valued now — several hotels reviewed side by side.
         selected_devices = _values(request.GET, "device")
         f["device"] = selected_devices
+        f["site_id"] = _values(request.GET, "site_id")
         qs = apply_video_filters(qs, request.GET)
 
         latest = (Job.objects.for_viewer(request.user).filter(video=OuterRef("pk"))
@@ -650,6 +651,7 @@ class ProcessingHubView(LoginRequiredMixin, View):
         # exists and widen the range.
         others = QueryDict(request.GET.urlencode(), mutable=True)
         others.setlist("device", [])
+        others.setlist("site_id", [])
         without_device = apply_video_filters(user_videos, others)
         per_device = dict(without_device.exclude(device=None)
                           # .order_by() clears Video.Meta.ordering — Django folds
@@ -662,6 +664,10 @@ class ProcessingHubView(LoginRequiredMixin, View):
                           .values_list("device_id", "n"))
         device_rows = workspace.device_rows(devices, selected_devices, per_device)
         dot_by_device = workspace.dots_by_device(device_rows)
+        site_rows = workspace.site_rows(
+            Site.objects.filter(user=request.user).order_by("name"), f["site_id"],
+            dict(without_device.exclude(site=None).order_by()
+                 .values_list("site_id").annotate(n=Count("id")).values_list("site_id", "n")))
 
         # Triage counts — "never analyzed" is what a run is usually for. The
         # confirmed/unconfirmed/untagged buckets went with on-device bee
@@ -710,6 +716,7 @@ class ProcessingHubView(LoginRequiredMixin, View):
             "custom_nest_models": models.filter(model_type__in=["nest_detection", "custom"]),
             "custom_bee_models": models.filter(model_type__in=["bee_tracking", "custom"]),
             "device_rows": device_rows,
+            "site_rows": site_rows,
             # The rail's date strip: the whole recorded span under the other filters.
             "date_overview": workspace.date_overview(
                 apply_video_filters(user_videos, workspace.without_dates(request.GET))),

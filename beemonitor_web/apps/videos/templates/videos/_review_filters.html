@@ -33,11 +33,24 @@
             <span class="flex-1 text-[13px] truncate {% if row.count %}text-gray-900{% else %}text-gray-400{% endif %}">{{ row.obj.name }}</span>
             <span class="text-[11px] {% if row.count %}text-gray-500{% else %}text-gray-400{% endif %}">{{ row.count }}</span>
           </label>
-          {% empty %}
-          <p class="text-xs text-gray-400 px-2">No bee hotels yet.</p>
           {% endfor %}
+          {% if site_rows %}
+          <div class="text-[11px] text-gray-500 px-2 pt-2">Sites</div>
+          {% for row in site_rows %}
+          <label class="flex items-center gap-2.5 px-2 py-1.5 rounded cursor-pointer {% if row.selected %}bg-amber-50{% else %}hover:bg-gray-50{% endif %}">
+            <input type="checkbox" name="site_id" value="{{ row.obj.id }}" class="dev-cb rounded border-gray-300 shrink-0"
+                   {% if row.selected %}checked{% endif %} onchange="this.form.submit()">
+            <span class="w-1.5 h-1.5 rounded-full shrink-0 {% if row.count %}bg-gray-500{% else %}bg-gray-300{% endif %}"></span>
+            <span class="flex-1 text-[13px] truncate {% if row.count %}text-gray-900{% else %}text-gray-400{% endif %}">{{ row.obj.name }}</span>
+            <span class="text-[11px] {% if row.count %}text-gray-500{% else %}text-gray-400{% endif %}">{{ row.count }}</span>
+          </label>
+          {% endfor %}
+          {% endif %}
+          {% if not device_rows and not site_rows %}
+          <p class="text-xs text-gray-400 px-2">No bee hotels yet.</p>
+          {% endif %}
         </div>
-        {% if f.device|length > 1 %}
+        {% if f.device|length > 1 or f.site_id|length > 1 or f.device and f.site_id %}
         <p class="text-[11px] text-gray-400 leading-4">Clips interleave by time; the dot on each card says which hotel it came from.</p>
         {% endif %}
       </div>

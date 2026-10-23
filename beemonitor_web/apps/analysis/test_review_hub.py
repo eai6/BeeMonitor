@@ -13,7 +13,7 @@ from django.urls import reverse
 from apps.analysis.models import Job
 from apps.analysis.views import apply_video_filters
 from apps.devices.models import Device
-from apps.videos.models import Video
+from apps.videos.models import Site, Video
 
 User = get_user_model()
 
@@ -70,6 +70,56 @@ class MultiDeviceFilterTests(ReviewHubTestCase):
         qs = apply_video_filters(Video.objects.all(), {})
 
         self.assertEqual(qs.count(), 3)
+
+
+class SiteFilterTests(ReviewHubTestCase):
+    """Clips from uploads and cloud storage have a site but no unit; the rail
+    lists sites beside the units so they can be found."""
+
+    def setUp(self):
+        super().setUp()
+        self.mendels = Site.objects.create(user=self.user, name="mendels")
+        self.empty = Site.objects.create(user=self.user, name="oakridge")
+        self.s1 = Video.objects.create(
+            user=self.user, site=self.mendels, site_name="mendels", title="mendels_1",
+            storage_key="s3://bucket/mendels_1.mp4", file_size_bytes=1,
+            status=Video.Status.READY, recorded_at=datetime(2024, 4, 16, 15, 21, tzinfo=dt_tz.utc))
+
+    def test_sites_are_listed_with_counts(self):
+        r = self.client.get(reverse("analysis:processing"))
+
+        counts = {row["obj"].name: row["count"] for row in r.context["site_rows"]}
+        self.assertEqual(counts, {"mendels": 1, "oakridge": 0})
+        self.assertContains(r, 'name="site_id"')
+
+    def test_ticking_a_site_shows_its_clips_even_if_old(self):
+        r = self.client.get(reverse("analysis:processing"), {"site_id": str(self.mendels.id)})
+
+        html = r.content.decode()
+        self.assertIn(f'data-vid="{self.s1.pk}"', html)
+        self.assertNotIn(f'data-vid="{self.a1.pk}"', html)
+        self.assertEqual(r.context["video_count"], 1)
+
+    def test_a_site_and_a_unit_together_show_both(self):
+        qs = apply_video_filters(Video.objects.all(), {"device": str(self.hotel_b.id)})
+        self.assertEqual(set(qs.values_list("pk", flat=True)), {self.b1.pk})
+        from django.http import QueryDict
+        q = QueryDict(mutable=True)
+        q.setlist("device", [str(self.hotel_b.id)])
+        q.setlist("site_id", [str(self.mendels.id)])
+        qs = apply_video_filters(Video.objects.all(), q)
+        self.assertEqual(set(qs.values_list("pk", flat=True)), {self.b1.pk, self.s1.pk})
+
+    def test_another_users_sites_are_not_listed(self):
+        other = User.objects.create_user("bob", password="x")
+        Site.objects.create(user=other, name="secret")
+        r = self.client.get(reverse("analysis:processing"))
+
+        self.assertNotIn("secret", [row["obj"].name for row in r.context["site_rows"]])
+
+    def test_a_bad_site_id_is_ignored(self):
+        qs = apply_video_filters(Video.objects.all(), {"site_id": "x;drop"})
+        self.assertEqual(qs.count(), 4)
 
 
 class HotelCountTests(ReviewHubTestCase):

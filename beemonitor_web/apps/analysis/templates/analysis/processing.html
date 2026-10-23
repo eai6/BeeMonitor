@@ -31,8 +31,8 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
         motion burst's photos are on their clip's page).{% endcomment %}
       <div class="flex border border-gray-300 rounded-md overflow-hidden text-[13px] mt-2 w-fit" role="group" aria-label="Clips or photos">
         {% with dev=f.device %}
-        <a href="?{% for d in dev %}device={{ d }}&{% endfor %}" class="px-3 py-1 {% if kind != 'photo' %}bg-amber-100 text-amber-900 font-semibold{% else %}bg-white hover:bg-gray-50{% endif %}">Clips</a>
-        <a href="?{% for d in dev %}device={{ d }}&{% endfor %}kind=photo" class="px-3 py-1 border-l border-gray-300 {% if kind == 'photo' %}bg-amber-100 text-amber-900 font-semibold{% else %}bg-white hover:bg-gray-50{% endif %}">Photos</a>
+        <a href="?{% for d in dev %}device={{ d }}&{% endfor %}{% for d in f.site_id %}site_id={{ d }}&{% endfor %}" class="px-3 py-1 {% if kind != 'photo' %}bg-amber-100 text-amber-900 font-semibold{% else %}bg-white hover:bg-gray-50{% endif %}">Clips</a>
+        <a href="?{% for d in dev %}device={{ d }}&{% endfor %}{% for d in f.site_id %}site_id={{ d }}&{% endfor %}kind=photo" class="px-3 py-1 border-l border-gray-300 {% if kind == 'photo' %}bg-amber-100 text-amber-900 font-semibold{% else %}bg-white hover:bg-gray-50{% endif %}">Photos</a>
         {% endwith %}
       </div>
       <p class="text-xs text-gray-500 mt-1">
@@ -135,7 +135,7 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
       {% csrf_token %}
       <input type="hidden" name="all_filtered" id="all-filtered-flag" value="">
       <input type="hidden" name="kind" value="{{ kind }}">
-      {% for k, v in f.items %}{% if v %}{% if k == "device" %}{% for d in v %}<input type="hidden" name="device" value="{{ d }}">{% endfor %}{% else %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endif %}{% endfor %}
+      {% for k, v in f.items %}{% if v %}{% if k == "device" or k == "site_id" %}{% for d in v %}<input type="hidden" name="{{ k }}" value="{{ d }}">{% endfor %}{% else %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endif %}{% endfor %}
 
       <!-- toolbar -->
       <div class="flex items-center justify-between gap-4 px-5 py-3 bg-white border-b border-gray-200">
