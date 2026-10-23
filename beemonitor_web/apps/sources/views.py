@@ -10,6 +10,7 @@ import logging
 
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.db import transaction
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
@@ -27,8 +28,8 @@ from .models import DataSource, SourceCopy
 
 logger = logging.getLogger(__name__)
 
-# Videos per import at most, so one click can't queue a whole archive.
-MAX_IMPORT = 2000
+# Rows per INSERT when importing; a whole folder goes in one click.
+IMPORT_BATCH = 500
 
 
 class SourceListView(LoginRequiredMixin, ListView):
@@ -161,9 +162,9 @@ class SourceSyncView(LoginRequiredMixin, View):
         try:
             creds = decrypt(source)
             if request.POST.get("import_all") == "true":
-                files = s3.list_videos(creds, path, limit=MAX_IMPORT)
+                files = s3.list_videos(creds, path)
             else:
-                keys = request.POST.getlist("selected_files")[:MAX_IMPORT]
+                keys = request.POST.getlist("selected_files")
                 base = creds.get("prefix") or ""
                 # Only keys under this source's folder: a forged key can't
                 # reach elsewhere in the bucket.
@@ -178,27 +179,33 @@ class SourceSyncView(LoginRequiredMixin, View):
 
         bucket = creds["bucket"]
         done = _imported(request.user, bucket)
-        imported = skipped = 0
         new_sites = []
-        for f in files:
-            if f["key"] in done:
-                skipped += 1
-                continue
+        fresh = [f for f in files if f["key"] not in done]
+        skipped = len(files) - len(fresh)
+        videos = []
+        for f in fresh:
             site_name, recorded_at = Video.parse_timestamp_from_filename(f["name"])
             clip_site = site
             if clip_site is None and choice == "" and site_name:
                 clip_site, made = _site_named(request.user, site_name, sites_by_name)
                 if made:
                     new_sites.append(clip_site.name)
-            video = Video.objects.create(
+            videos.append(Video(
                 user=request.user, source=source, site=clip_site,
                 site_name=clip_site.name if clip_site else (site_name or ""),
                 title=f["name"].rsplit(".", 1)[0], storage_key=s3.remote_uri(bucket, f["key"]),
                 file_size_bytes=f["size"] or 0, status=Video.Status.READY, recorded_at=recorded_at,
                 metadata={"source_id": source.pk, "source_type": source.source_type,
-                          "remote_key": f["key"], "remote_bucket": bucket})
-            copying.queue(video, SourceCopy.Purpose.KEEP if keep_here else SourceCopy.Purpose.MEASURE)
-            imported += 1
+                          "remote_key": f["key"], "remote_bucket": bucket}))
+        # In bulk: a folder of thousands has to fit in one request. Nothing
+        # hooks a Video's or SourceCopy's save, so nothing is skipped.
+        purpose = SourceCopy.Purpose.KEEP if keep_here else SourceCopy.Purpose.MEASURE
+        with transaction.atomic():
+            videos = Video.objects.bulk_create(videos, batch_size=IMPORT_BATCH)
+            SourceCopy.objects.bulk_create(
+                [SourceCopy(video=v, source=source, purpose=purpose, bytes_total=v.file_size_bytes or 0)
+                 for v in videos], batch_size=IMPORT_BATCH)
+        imported = len(videos)
         DataSource.objects.filter(pk=pk).update(last_synced_at=timezone.now())
         logger.info("AUDIT: user %s imported %d clips from source %s (%s)", request.user.pk, imported, pk,
                     "copy" if keep_here else "keep in bucket")

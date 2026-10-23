@@ -196,6 +196,24 @@ class CloudTests(TestCase):
         self.assertEqual(Video.objects.count(), len(odd))
         self.assertFalse(Site.objects.exists())       # an impossible date reads as no pattern
 
+    def test_one_click_imports_everything_not_yet_imported(self):
+        source = self.source()
+        keys = [f"2026/bulk/mendels_2024-04-16_15_{m:02d}_00.mp4" for m in range(25)]
+        for key in keys:
+            self.s3.put_object(Bucket="their-footage", Key=key, Body=CLIP)
+        url = reverse("sources:sync", args=[source.pk])
+        self.client.post(url, {"path": "bulk/", "selected_files": keys[:10], "where": "bucket"})
+        with mock.patch("apps.sources.views.IMPORT_BATCH", 4):       # several INSERT batches
+            r = self.client.post(url, {"path": "bulk/", "import_all": "true", "where": "copy"}, follow=True)
+        self.assertContains(r, "Imported 15 clips")
+        self.assertContains(r, "10 were already imported.")
+        self.assertEqual(Video.objects.count(), 25)
+        self.assertEqual(Video.objects.filter(site__name="mendels").count(), 25)
+        copies = SourceCopy.objects.filter(purpose="keep")
+        self.assertEqual(copies.count(), 15)
+        self.assertEqual(set(copies.values_list("bytes_total", flat=True)), {len(CLIP)})
+        self.assertFalse(Video.objects.filter(source_copies__isnull=True).exists())
+
     def test_a_forged_key_outside_the_folder_is_ignored(self):
         source = self.source()
         self.client.post(reverse("sources:sync", args=[source.pk]),

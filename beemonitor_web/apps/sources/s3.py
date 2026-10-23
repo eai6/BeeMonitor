@@ -106,8 +106,8 @@ def browse(creds: dict, path: str = "", token: str = "") -> dict:
             "next_token": page.get("NextContinuationToken") or ""}
 
 
-def list_videos(creds: dict, path: str = "", limit: int = 2000) -> list[dict]:
-    """Every video under a folder (recursively), up to ``limit``."""
+def list_videos(creds: dict, path: str = "", limit: int | None = None) -> list[dict]:
+    """Every video under a folder (recursively), or the first ``limit``."""
     base = creds.get("prefix") or ""
     out = []
     try:
@@ -117,7 +117,7 @@ def list_videos(creds: dict, path: str = "", limit: int = 2000) -> list[dict]:
             for o in page.get("Contents") or []:
                 if o["Key"].lower().endswith(VIDEO_EXTENSIONS):
                     out.append({"key": o["Key"], "name": o["Key"].rsplit("/", 1)[-1], "size": o.get("Size", 0)})
-                    if len(out) >= limit:
+                    if limit and len(out) >= limit:
                         return out
     except Exception as exc:
         raise SourceError(friendly(exc)) from None
