@@ -282,6 +282,9 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
             from . import labelers
             ctx["labeler_choices"] = labelers.with_rows(user, project)
         ctx["sampling_status"] = sampling_remote.project_status(project)
+        if ctx["can_assign"]:
+            from apps.accounts import quota
+            ctx["gpu_used"] = quota.project_usage(project)
 
         # Everyone on the project who may review: the assign dialog's list
         # and the "who" filter.
@@ -1389,6 +1392,8 @@ def _spawn_preannotation(task_pk: int) -> None:
     from django.db import connection
     from django.utils import timezone
 
+    from apps.accounts import quota
+
     from .models import PreAnnotationTask
 
     try:
@@ -1489,6 +1494,9 @@ def _spawn_preannotation(task_pk: int) -> None:
             status=PreAnnotationTask.Status.PROCESSING,
             output_uri=resp["OutputLocation"], failure_uri=fail_loc,
             started_at=timezone.now(),
+            # The machine it runs on is what it is charged at (memory/58).
+            instance_type=(quota.SAM3_INSTANCE if endpoint == settings.SAGEMAKER_SAM3_ENDPOINT_NAME
+                           else quota.VIDEO_INSTANCE),
         )
         logger.info("pre-annotate task %s invoked -> %s", task_pk, resp["OutputLocation"])
     except Exception as e:
@@ -1567,9 +1575,7 @@ def finalize_preannotation_task(task, s3) -> bool:
     # Suggest-only (editor per-frame pre-annotate): don't touch the DB — the boxes
     # are read straight from this S3 output and shown for the human to Save.
     if (task.params or {}).get("suggest_only"):
-        PreAnnotationTask.objects.filter(pk=task.pk).update(
-            status=PreAnnotationTask.Status.COMPLETED,
-            frames_written=len(frames), completed_at=timezone.now())
+        _complete_preannotation(task, result, len(frames))
         return True
 
     proj_classes = task.project.classes or []
@@ -1648,20 +1654,32 @@ def finalize_preannotation_task(task, s3) -> bool:
             )
             created += 1
 
-    PreAnnotationTask.objects.filter(pk=task.pk).update(
-        status=PreAnnotationTask.Status.COMPLETED,
-        frames_written=created, completed_at=timezone.now())
-
-    exec_secs = result.get("execution_seconds", 0) or 0
-    try:
-        from apps.accounts import quota
-        quota.charge(task.user_id, "auto_label", exec_secs or 30,
-                     quota.auto_label_work(task.labeler, 0).instance, "preannotation_task", task.pk,
-                     units=int((task.params or {}).get("max_frames") or 0))
-    except Exception as e:
-        logger.error("pre-annotate credit charge failed task %s: %s", task.pk, e)
+    _complete_preannotation(task, result, created)
     logger.info("pre-annotate task %s complete: %d frames written", task.pk, created)
     return True
+
+
+def _complete_preannotation(task, result, frames_written) -> None:
+    """Mark a pre-label run done and charge it at the machine it ran on, per
+    frame checked (memory/58)."""
+    from django.utils import timezone
+
+    from apps.accounts import quota
+
+    from .models import PreAnnotationTask
+
+    exec_secs = float(result.get("execution_seconds", 0) or 0) or 30
+    instance = task.instance_type or quota.prelabel_instance(task.labeler)
+    PreAnnotationTask.objects.filter(pk=task.pk).update(
+        status=PreAnnotationTask.Status.COMPLETED,
+        frames_written=frames_written, completed_at=timezone.now(),
+        gpu_seconds=exec_secs, instance_type=instance)
+    try:
+        quota.charge(task.user_id, "auto_label", exec_secs, instance, "preannotation_task", task.pk,
+                     units=int(result.get("total_frames_checked") or len(result.get("frames") or [])),
+                     project=task.project_id)
+    except Exception as e:
+        logger.error("pre-annotate credit charge failed task %s: %s", task.pk, e)
 
 
 def poll_preannotation_tasks(user=None) -> int:

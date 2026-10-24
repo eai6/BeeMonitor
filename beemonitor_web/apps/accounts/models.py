@@ -226,7 +226,7 @@ class UsageEvent(models.Model):
         ANALYSIS = "analysis", "Video analysis"
         PHOTO = "photo", "Photo detection"
         ANNOTATED_VIDEO = "annotated_video", "Annotated video"
-        AUTO_LABEL = "auto_label", "Auto-label"
+        AUTO_LABEL = "auto_label", "Pre-labeling"
         SAMPLING = "sampling", "Sampling"
         TRAINING = "training", "Training"
 
@@ -242,6 +242,10 @@ class UsageEvent(models.Model):
     units = models.FloatField(default=0)
     source_type = models.CharField(max_length=40)
     source_id = models.CharField(max_length=80)
+    # The annotation project the work was for (sampling, pre-labeling,
+    # training), so a project can show what it has used. Older events have none.
+    project = models.ForeignKey("annotations.AnnotationProject", null=True, blank=True,
+                                on_delete=models.SET_NULL, related_name="usage_events")
     created_at = models.DateTimeField(default=timezone.now, db_index=True)
 
     class Meta:

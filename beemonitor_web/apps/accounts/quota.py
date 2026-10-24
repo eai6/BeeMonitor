@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Sum
 from django.utils import timezone
@@ -211,8 +212,17 @@ def video_work(video, detector_kind: str = "yolo", task: str = "", frames: int =
     return Work("analysis", instance, clip_seconds(video) if seconds is None else seconds)
 
 
+def prelabel_instance(labeler: str) -> str:
+    """The machine a pre-label run lands on: the SAM 3 endpoint (g5), which
+    runs YOLO pre-labeling too since memory/57; the tracking endpoint (g4dn)
+    only when no SAM 3 endpoint is set (annotations.views._spawn_preannotation)."""
+    if labeler == "sam3" or getattr(settings, "SAGEMAKER_SAM3_ENDPOINT_NAME", ""):
+        return SAM3_INSTANCE
+    return VIDEO_INSTANCE
+
+
 def auto_label_work(labeler: str, frames: int) -> Work:
-    return Work("auto_label", SAM3_INSTANCE if labeler == "sam3" else VIDEO_INSTANCE, frames)
+    return Work("auto_label", prelabel_instance(labeler), frames)
 
 
 def sampling_work(clips: int) -> Work:
@@ -345,11 +355,13 @@ def how_many_fit(user, per_video) -> int:
 
 # ── Charging ─────────────────────────────────────────────────────────────────
 
-def charge(user, kind, gpu_seconds, instance, source_type, source_id, units=0, cost_usd=None):
+def charge(user, kind, gpu_seconds, instance, source_type, source_id, units=0, cost_usd=None,
+           project=None):
     """Record finished GPU work and take it off the user's credits. Idempotent.
 
     Returns the ``UsageEvent``, or None when nothing ran (0 seconds). A second
-    call for the same (source_type, source_id) changes nothing.
+    call for the same (source_type, source_id) changes nothing. ``project`` is
+    the annotation project (or its pk) the work was for, if any.
     """
     from apps.analysis.pricing import rate_per_second
 
@@ -368,6 +380,7 @@ def charge(user, kind, gpu_seconds, instance, source_type, source_id, units=0, c
                 user_id=user_id, kind=kind, gpu_seconds=gpu_seconds, instance_type=instance,
                 credits=credits, cost_usd=Decimal(str(round(cost_usd, 4))), units=units or 0,
                 source_type=source_type, source_id=str(source_id),
+                project_id=getattr(project, "pk", project),
             )
             UserProfile.objects.get_or_create(user_id=user_id)
             profile = UserProfile.objects.select_for_update().get(user_id=user_id)
@@ -381,3 +394,26 @@ def charge(user, kind, gpu_seconds, instance, source_type, source_id, units=0, c
     except IntegrityError:
         return UsageEvent.objects.filter(source_type=source_type, source_id=str(source_id)).first()
     return event
+
+
+# ── Reporting ────────────────────────────────────────────────────────────────
+
+def by_kind(events) -> list:
+    """``[{kind, label, hours, credits}]`` for a set of UsageEvents, biggest
+    first. Hours, never seconds (users see GPU-hours)."""
+    from .models import UsageEvent
+
+    rows = (events.values("kind").annotate(secs=Sum("gpu_seconds"), cr=Sum("credits"))
+            .order_by("-cr"))
+    labels = dict(UsageEvent.Kind.choices)
+    return [{"kind": r["kind"], "label": labels.get(r["kind"], r["kind"]),
+             "hours": (r["secs"] or 0) / 3600, "credits": r["cr"] or Decimal(0)}
+            for r in rows if r["secs"]]
+
+
+def project_usage(project) -> dict:
+    """GPU-hours and credits charged for one annotation project, everyone's
+    work on it together, split by kind (sampling, pre-labeling, training)."""
+    kinds = by_kind(project.usage_events.all())
+    return {"hours": sum(k["hours"] for k in kinds),
+            "credits": sum((k["credits"] for k in kinds), Decimal(0)), "kinds": kinds}

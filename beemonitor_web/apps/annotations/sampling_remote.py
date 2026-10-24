@@ -307,9 +307,9 @@ def _write_frames(task, clip) -> int:
     return written
 
 
-def _apply(batch, clip) -> float:
+def _apply(batch, clip) -> bool:
     """Apply one clip's result if its task still belongs to this batch.
-    Returns GPU-ish seconds to charge (0 if skipped)."""
+    Returns True when the clip completed (only those are charged)."""
     task_id = clip.get("task_id")
     with transaction.atomic():
         task = (FrameSamplingTask.objects.select_for_update()
@@ -317,27 +317,64 @@ def _apply(batch, clip) -> float:
                 .filter(pk=task_id, batch=batch, status=FrameSamplingTask.Status.PROCESSING)
                 .first())
         if task is None:
-            return 0.0            # cancelled, superseded, or already collected
+            return False          # cancelled, superseded, or already collected
         if clip.get("error"):
             FrameSamplingTask.objects.filter(pk=task.pk).update(
                 status=FrameSamplingTask.Status.FAILED, completed_at=timezone.now(),
                 error_message=_friendly(clip["error"])[:500])
-            return 0.0
+            return False
         written = _write_frames(task, clip)
         FrameSamplingTask.objects.filter(pk=task.pk).update(
             status=FrameSamplingTask.Status.COMPLETED, completed_at=timezone.now(),
-            frames_written=written, motion=clip.get("motion"))
-    return float((clip.get("seconds") or {}).get("scan_and_detect") or 0.0)
+            frames_written=written, motion=clip.get("motion"), timing=_timing(clip))
+    return True
 
 
-def _charge(batch, seconds_by_user, clips_by_user=None) -> None:
+def _timing(clip) -> dict:
+    t = {k: v for k, v in (clip.get("seconds") or {}).items() if isinstance(v, (int, float))}
+    if clip.get("total_frames") is not None:
+        t["frames_decoded"] = clip["total_frames"]
+    if clip.get("candidates") is not None:
+        t["candidates"] = clip["candidates"]
+    return t
+
+
+def _clip_seconds(clip) -> float:
+    """A clip's own wall time on the GPU: download, scan and detect, upload."""
+    return float(sum(v for v in (clip.get("seconds") or {}).values() if isinstance(v, (int, float))))
+
+
+def shares(result) -> tuple:
+    """``(batch_seconds, {task_id: seconds})``: the batch's handler time
+    (memory/58), split across its clips by their own wall time. Clips run
+    three at a time on one GPU, so their wall times overlap and add up to more
+    than the batch; the handler's ``execution_seconds`` is what the instance
+    was held for. A result without it (older images) bills the clips' summed
+    scan time, as before."""
+    clips = result.get("clips") or []
+    weights = {c.get("task_id"): _clip_seconds(c) for c in clips}
+    total = result.get("execution_seconds")
+    if not total:
+        total = sum(float((c.get("seconds") or {}).get("scan_and_detect") or 0) for c in clips)
+    total = float(total or 0)
+    weight_sum = sum(weights.values())
+    if weight_sum <= 0:
+        even = total / len(clips) if clips else 0.0
+        return total, {tid: even for tid in weights}
+    return total, {tid: total * w / weight_sum for tid, w in weights.items()}
+
+
+def _charge(batch, seconds_by_owner, clips_by_owner=None) -> None:
+    """One charge per (user, project) in the batch."""
     from apps.accounts import quota
-    for user_id, secs in seconds_by_user.items():
+    for (user_id, project_id), secs in seconds_by_owner.items():
         if secs <= 0:
             continue
         try:
             quota.charge(user_id, "sampling", secs, quota.SAM3_INSTANCE, "sampling_batch",
-                         f"{batch.batch_id}:{user_id}", units=(clips_by_user or {}).get(user_id, 0))
+                         f"{batch.batch_id}:{user_id}:{project_id}",
+                         units=(clips_by_owner or {}).get((user_id, project_id), 0),
+                         project=project_id)
         except Exception:
             logger.exception("sampling batch %s credit charge failed", batch.batch_id)
 
@@ -389,19 +426,25 @@ def collect(limit: int = 20) -> int:
                 done += 1
                 continue
             result = json.loads(body)
-            seconds_by_user, clips_by_user = {}, {}
-            owners = dict(FrameSamplingTask.objects.filter(batch=batch).values_list("pk", "user_id"))
+            batch_secs, share = shares(result)
+            seconds_by_owner, clips_by_owner = {}, {}
+            owners = {pk: (uid, proj) for pk, uid, proj in FrameSamplingTask.objects.filter(
+                batch=batch).values_list("pk", "user_id", "project_id")}
             for clip in result.get("clips") or []:
-                secs = _apply(batch, clip)
-                uid = owners.get(clip.get("task_id"))
-                if uid:
-                    seconds_by_user[uid] = seconds_by_user.get(uid, 0.0) + secs
-                    clips_by_user[uid] = clips_by_user.get(uid, 0) + 1
+                tid = clip.get("task_id")
+                if not _apply(batch, clip) or tid not in owners:
+                    continue      # failed or skipped clips: their share isn't billed
+                secs = share.get(tid, 0.0)
+                FrameSamplingTask.objects.filter(pk=tid).update(gpu_seconds=secs)
+                owner = owners[tid]
+                seconds_by_owner[owner] = seconds_by_owner.get(owner, 0.0) + secs
+                clips_by_owner[owner] = clips_by_owner.get(owner, 0) + 1
             # Clips the GPU never mentioned (shouldn't happen): back in the queue.
             _retry_or_fail_leftovers(batch)
             SamplingBatch.objects.filter(pk=batch.pk).update(
-                status=SamplingBatch.Status.COLLECTED, finished_at=timezone.now())
-            _charge(batch, seconds_by_user, clips_by_user)
+                status=SamplingBatch.Status.COLLECTED, finished_at=timezone.now(),
+                gpu_seconds=batch_secs, clips_completed=sum(clips_by_owner.values()))
+            _charge(batch, seconds_by_owner, clips_by_owner)
             done += 1
         except Exception:
             logger.exception("collecting sampling batch %s failed", batch.batch_id)

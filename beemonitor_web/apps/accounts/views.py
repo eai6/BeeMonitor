@@ -51,9 +51,11 @@ def _usage_totals(user, month_start):
         agg = qs.aggregate(cr=Sum("credits"), secs=Sum("gpu_seconds"))
         return agg["cr"] or 0, (agg["secs"] or 0) / 3600
 
-    month_cr, month_h = totals(user.usage_events.filter(created_at__date__gte=month_start))
+    month = user.usage_events.filter(created_at__date__gte=month_start)
+    month_cr, month_h = totals(month)
     life_cr, life_h = totals(user.usage_events.all())
     return {"used_this_month": month_cr, "hours_this_month": month_h,
+            "month_by_kind": quota.by_kind(month),
             "lifetime_credits": life_cr, "lifetime_hours": life_h}
 
 

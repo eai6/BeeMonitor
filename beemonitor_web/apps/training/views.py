@@ -704,7 +704,8 @@ def poll_training_jobs(user=None) -> dict:
             quota.charge(job.user, "training", exec_secs,
                          _INSTANCE_BY_TIER.get(job.gpu_tier, _DEFAULT_INSTANCE),
                          "training_job", job.pk,
-                         units=quota.training_work(quota._project_images(job.project), job.epochs).units)
+                         units=quota.training_work(quota._project_images(job.project), job.epochs).units,
+                         project=job.project_id)
         except Exception as e:
             logger.error("[poll] job=%s credit charge failed: %s", job.pk, e)
 

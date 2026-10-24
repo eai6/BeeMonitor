@@ -10,7 +10,7 @@
   <div class="lg:col-span-2 bg-white shadow rounded-lg p-6 flex flex-col gap-3">
     <div class="flex flex-wrap justify-between items-center gap-2">
       <h2 class="text-lg font-medium text-gray-900">GPU credits</h2>
-      <span class="text-sm text-gray-600">Video analysis: 1 credit per GPU-hour · SAM 3, sampling, training: 2</span>
+      <span class="text-sm text-gray-600">Video analysis: 1 credit per GPU-hour · SAM 3, pre-labeling, sampling, training: 2</span>
     </div>
     {% if credits.unlimited %}
       <p class="text-4xl font-bold text-gray-900">Unlimited</p>
@@ -22,6 +22,11 @@
         <span>Used this month: <strong class="text-gray-900">{{ credits.used_this_month|floatformat:1 }}</strong> ({{ credits.hours_this_month|floatformat:1 }} GPU-hours)</span>
         {% if credits.pending %}<span>Set aside for work in progress: <strong class="text-gray-900">{{ credits.pending|floatformat:1 }}</strong></span>{% endif %}
       </div>
+    {% endif %}
+    {% if credits.month_by_kind %}
+      <p class="text-sm text-gray-600">This month by kind:
+        {% for k in credits.month_by_kind %}<span class="whitespace-nowrap">{{ k.label }} <strong class="text-gray-900">{{ k.hours|floatformat:1 }} GPU-h</strong> · {{ k.credits|floatformat:1 }} credits</span>{% if not forloop.last %}; {% endif %}{% endfor %}
+      </p>
     {% endif %}
     {% if request.user.is_superuser %}
       <p class="text-sm"><a class="text-green-700 hover:underline" href="{% url 'accounts:email_status' %}">Email status</a></p>

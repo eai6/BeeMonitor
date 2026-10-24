@@ -362,6 +362,10 @@ class PreAnnotationTask(models.Model):
     output_uri = models.CharField(max_length=700, blank=True, default="")
     failure_uri = models.CharField(max_length=700, blank=True, default="")
     frames_written = models.IntegerField(default=0)
+    # What it cost (memory/58): the handler's seconds and the machine it ran
+    # on, set when the result is recorded; the instance is set when it is sent.
+    gpu_seconds = models.FloatField(default=0)
+    instance_type = models.CharField(max_length=40, blank=True, default="")
     error_message = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)
@@ -413,6 +417,10 @@ class FrameSamplingTask(models.Model):
     batch = models.ForeignKey("SamplingBatch", null=True, blank=True,
                               on_delete=models.SET_NULL, related_name="tasks")
     attempts = models.PositiveSmallIntegerField(default=0)
+    # Its share of the batch's GPU time (memory/58), and the GPU's own split:
+    # {"download", "scan_and_detect", "upload", "frames_decoded", "candidates"}.
+    gpu_seconds = models.FloatField(default=0)
+    timing = models.JSONField(null=True, blank=True)
     error_message = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)
@@ -451,6 +459,10 @@ class SamplingBatch(models.Model):
     output_uri = models.CharField(max_length=700, blank=True, default="")
     failure_uri = models.CharField(max_length=700, blank=True, default="")
     error = models.TextField(blank=True, default="")
+    # The handler's time for the whole batch, and how many clips it finished
+    # (memory/58). Only finished clips are charged.
+    gpu_seconds = models.FloatField(default=0)
+    clips_completed = models.PositiveIntegerField(default=0)
     claimed_at = models.DateTimeField(auto_now_add=True)
     invoked_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
