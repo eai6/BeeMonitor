@@ -720,10 +720,13 @@ def _sample_label_run(payload, pipeline, detect_fn, candidates, min_gap_s, start
             with tempfile.NamedTemporaryFile(suffix=".mp4", delete=True) as tmp:
                 storage.download_file("raw-videos", blob, tmp.name)
                 t_dl = time.time()
+                # scan_seconds: motion is scored on one stretch of that
+                # length, the same stretch for the same clip every time.
                 out = sl.sample_label_clip(
                     tmp.name, detect_fn, max_frames=int(clip.get("max_frames", 20)),
                     candidates=candidates, min_gap_s=min_gap_s,
-                    roi=clip.get("roi"), polygon=clip.get("polygon"))
+                    roi=clip.get("roi"), polygon=clip.get("polygon"),
+                    window_s=payload.get("scan_seconds"), seed=blob)
             t_scan = time.time()
             prefix = f"frames/{blob.replace('/', '_')}"
             for pick in out["picks"]:

@@ -22,6 +22,7 @@ and a ``detect_fn`` (see ``sagemaker_backend/inference.py``).
 
 from __future__ import annotations
 
+import hashlib
 import heapq
 import logging
 from dataclasses import dataclass, field
@@ -63,6 +64,7 @@ class ClipScan:
     frames: int
     scores: List[int]               # per frame
     candidates: List[Candidate]
+    start: int = 0                  # first frame scanned (a window's start)
 
 
 def _roi_px(roi, w, h):
@@ -89,9 +91,25 @@ def _open(path):
     return cap
 
 
+def scan_window(total_frames: int, fps: float, window_s: Optional[float], seed: str = "") -> tuple:
+    """``(start, length)`` in frames: one ``window_s`` stretch of the clip,
+    placed by ``seed`` (the same clip always gets the same stretch, different
+    clips land at different times). No window, or a clip shorter than it: the
+    whole clip, ``(0, None)``."""
+    if not window_s or window_s <= 0 or total_frames <= 0:
+        return 0, None
+    length = int(round(window_s * (fps or 25.0)))
+    if length >= total_frames:
+        return 0, None
+    digest = hashlib.sha256((seed or "").encode("utf-8")).digest()
+    fraction = int.from_bytes(digest[:8], "big") / float(1 << 64)
+    return int(fraction * (total_frames - length)), length
+
+
 def scan_clip(path: str, *, candidates: int = 30, spread: Optional[int] = None,
               min_gap_s: float = 0.5, roi=None, polygon=None,
-              cfg: MotionConfig = MotionConfig()) -> ClipScan:
+              cfg: MotionConfig = MotionConfig(), window_s: Optional[float] = None,
+              seed: str = "") -> ClipScan:
     """Decode once; score motion per frame; keep candidate frames in memory.
 
     The clip is cut into ``min_gap_s`` windows and each window offers its
@@ -101,17 +119,32 @@ def scan_clip(path: str, *, candidates: int = 30, spread: Optional[int] = None,
     them after (the first live version) kept one burst: a 2-minute clip moving
     in 2,268 frames gave 8 candidates.
     Memory is bounded: at most ``2 * candidates + spread + 1`` frames are held.
+
+    ``window_s`` scans only that long a stretch (see ``scan_window``): decoding
+    is the whole cost, so a 1-minute window costs a tenth of a 10-minute clip.
+    Frame numbers stay the clip's own; ``scores`` cover the window.
     """
     import cv2
 
     cap = _open(path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     total_hint = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    warmup = int(round(fps * cfg.warmup_s))
+    start, length = scan_window(total_hint, fps, window_s, seed)
+    if start:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start)
+        if int(cap.get(cv2.CAP_PROP_POS_FRAMES) or 0) != start:
+            # The seek missed: step there instead, so frame numbers stay exact.
+            cap.release()
+            cap = _open(path)
+            for _ in range(start):
+                if not cap.grab():
+                    break
+    span = length if length is not None else max(0, total_hint - start)
+    warmup = start + int(round(fps * cfg.warmup_s))
     spread = (candidates + 3) // 4 if spread is None else spread
     spread_at = set()
-    if spread and total_hint > warmup:
-        usable = total_hint - warmup
+    if spread and start + span > warmup:
+        usable = start + span - warmup
         spread_at = {warmup + int((j + 0.5) * usable / spread) for j in range(spread)}
 
     mog = cv2.createBackgroundSubtractorMOG2(cfg.history, cfg.var_threshold, False)
@@ -138,9 +171,9 @@ def scan_clip(path: str, *, candidates: int = 30, spread: Optional[int] = None,
     width = height = 0
     geom = None
 
-    n = 0
+    n = start
     try:
-        while True:
+        while length is None or n < start + length:
             ok, frame = cap.read()
             if not ok:
                 break
@@ -213,10 +246,10 @@ def scan_clip(path: str, *, candidates: int = 30, spread: Optional[int] = None,
     near = max(0, int(round(cfg.near_s * fps)))
     picked = [held[i] for i in sorted(chosen) if i in held]
     for c in picked:
-        c.near = [b for m in range(max(0, c.n - near), min(n, c.n + near + 1))
-                  for b in blob_log[m]]
-    return ClipScan(fps=fps, width=width, height=height, frames=n, scores=scores,
-                    candidates=picked)
+        c.near = [b for m in range(max(start, c.n - near), min(n, c.n + near + 1))
+                  for b in blob_log[m - start]]
+    return ClipScan(fps=fps, width=width, height=height, frames=n - start, scores=scores,
+                    candidates=picked, start=start)
 
 
 def _overlaps(box, blobs, pad: float) -> bool:
@@ -287,7 +320,8 @@ def motion_profile(scores: Sequence[int], picks: Sequence[int], buckets: int = 6
 
 def sample_label_clip(path: str, detect_fn: Callable[[List[np.ndarray]], List[List[dict]]], *,
                       max_frames: int = 20, candidates: int = 30, min_gap_s: float = 0.5,
-                      roi=None, polygon=None, cfg: MotionConfig = MotionConfig()) -> dict:
+                      roi=None, polygon=None, cfg: MotionConfig = MotionConfig(),
+                      window_s: Optional[float] = None, seed: str = "") -> dict:
     """Scan, detect on candidates, keep the top ``max_frames`` with moving detections.
 
     Returns ``{fps, width, height, frames, candidates, picks: [{n, frame, boxes}],
@@ -295,7 +329,7 @@ def sample_label_clip(path: str, detect_fn: Callable[[List[np.ndarray]], List[Li
     A clip where nothing detected moves returns no picks (an empty trigger).
     """
     scan = scan_clip(path, candidates=candidates, min_gap_s=min_gap_s, roi=roi,
-                     polygon=polygon, cfg=cfg)
+                     polygon=polygon, cfg=cfg, window_s=window_s, seed=seed)
     frames = [c.frame for c in scan.candidates]
     detections = detect_fn(frames) if frames else []
     kept, ranked = {}, []
@@ -310,5 +344,6 @@ def sample_label_clip(path: str, detect_fn: Callable[[List[np.ndarray]], List[Li
         "fps": scan.fps, "width": scan.width, "height": scan.height,
         "frames": scan.frames, "candidates": len(scan.candidates),
         "picks": [{"n": n, "frame": kept[n][0].frame, "boxes": kept[n][1]} for n in picked],
-        "motion": motion_profile(scan.scores, picked),
+        "motion": {**motion_profile(scan.scores, [n - scan.start for n in picked]),
+                   "start": scan.start},
     }

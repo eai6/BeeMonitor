@@ -172,3 +172,29 @@ def test_a_box_counts_if_motion_touched_it_nearby(clip_dir):
     for c in scan.candidates:
         assert set(c.blobs) <= set(c.near)
         assert len(c.near) > len(c.blobs)
+
+
+def test_scan_window_is_stable_per_clip_and_inside_it():
+    a = sl.scan_window(15000, 25, 60, "mendels_2024-05-08_10_00_00.mp4")
+    assert a == sl.scan_window(15000, 25, 60, "mendels_2024-05-08_10_00_00.mp4")
+    assert a[1] == 1500 and 0 <= a[0] <= 15000 - 1500
+    assert sl.scan_window(15000, 25, 60, "other.mp4") != a
+    assert sl.scan_window(1000, 25, 60, "x") == (0, None)        # shorter than the window
+    assert sl.scan_window(15000, 25, 0, "x") == (0, None)        # 0 = whole clip
+
+
+def test_a_window_scans_only_its_stretch_and_keeps_clip_frame_numbers(clip_dir):
+    """memory/57: a 1-minute window decodes a tenth of a 10-minute clip; picked
+    frames keep the clip's own numbers. Seeded so the window covers the bee."""
+    p = os.path.join(clip_dir, "bee.avi")
+    _write(p, n=250)
+    seed = next(s for s in (f"s{i}" for i in range(500))
+                if 20 <= sl.scan_window(250, FPS, 4, s)[0] <= 45)
+    start, length = sl.scan_window(250, FPS, 4, seed)
+    res = sl.sample_label_clip(p, detect_dark, max_frames=4, candidates=8, min_gap_s=0.2,
+                               window_s=4, seed=seed)
+    assert res["frames"] == length == 100
+    assert res["motion"]["start"] == start
+    assert res["picks"] and all(start <= pk["n"] < start + length for pk in res["picks"])
+    for pk in res["picks"]:
+        assert abs(int(pk["frame"][H - 14, W - 14].mean()) - pk["n"] % 250) <= 6

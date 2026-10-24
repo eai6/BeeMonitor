@@ -212,6 +212,9 @@ SAMPLING_BACKEND = os.environ.get("SAMPLING_BACKEND", "local").strip().lower()
 SAMPLING_MAX_BATCHES_IN_FLIGHT = int(os.environ.get("SAMPLING_MAX_BATCHES_IN_FLIGHT", "20"))
 SAMPLING_BATCH_CLIPS = int(os.environ.get("SAMPLING_BATCH_CLIPS", "10"))
 SAMPLING_CANDIDATES = int(os.environ.get("SAMPLING_CANDIDATES", "30"))
+# Motion is scored on one stretch this long per clip (seconds; 0 = the whole
+# clip). Decoding is the whole cost: a minute of a 10-minute clip is a tenth.
+SAMPLING_SCAN_SECONDS = int(os.environ.get("SAMPLING_SCAN_SECONDS", "60"))
 # Fine-tuning (SageMaker training jobs) — role SageMaker assumes for the job and
 # the training image. Set by the aws-sagemaker stack via App Runner env.
 SAGEMAKER_TRAINING_ROLE_ARN = os.environ.get("SAGEMAKER_TRAINING_ROLE_ARN", "")

@@ -272,3 +272,39 @@ class ExportReviewedTests(TestCase):
         names = zipfile.ZipFile(io.BytesIO(resp.content)).namelist()
         self.assertEqual(sorted(n for n in names if n.startswith("labels/")),
                          ["labels/val/t_f000001.txt"])
+
+
+@override_settings(**GPU, SAMPLING_SCAN_SECONDS=60)
+class ScanWindowAndRoiTests(TestCase):
+    """Motion is scored on one minute per clip, inside the clip's ROI; a site
+    with no ROI is named so it can be drawn."""
+
+    def setUp(self):
+        from apps.videos.models import Layout
+        self.user = User.objects.create_user("w", password="x")
+        self.project = AnnotationProject.objects.create(user=self.user, name="P", classes=["bee"])
+        self.drawn = Site.objects.create(user=self.user, name="mendels")
+        self.bare = Site.objects.create(user=self.user, name="natalies")
+        Layout.objects.create(site=self.drawn, number=1, roi_override=[0.2, 0.1, 0.8, 0.9])
+        self.videos = [Video.objects.create(user=self.user, title=f"c{i}", storage_key=f"u/c{i}.mp4",
+                                            file_size_bytes=BIG, status=Video.Status.READY, site=s)
+                       for i, s in enumerate((self.drawn, self.bare, self.bare))]
+        self.project.videos.add(*self.videos)
+        self.aws = FakeAWS()
+        patch = mock.patch("boto3.client", side_effect=self.aws.client)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_the_gpu_scans_a_minute_and_sites_without_roi_are_named(self):
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse("annotations:sample_frames", args=[self.project.pk]), {
+            "s_method": "sample_label", "s_classes": ["bee"], "s_roi": "device"}, follow=True)
+        text = " ".join(str(m) for m in resp.context["messages"])
+        self.assertIn("No ROI drawn for natalies:", text)
+        self.assertNotIn("mendels", text.split("No ROI drawn for")[1].split(":")[0])
+        sr.dispatch()
+        payloads = [self.aws.payload(b) for b in SamplingBatch.objects.all()]
+        self.assertEqual({p["scan_seconds"] for p in payloads}, {60})
+        rois = {c["task_id"]: c["roi"] for p in payloads for c in p["clips"]}
+        drawn_task = FrameSamplingTask.objects.get(video=self.videos[0])
+        self.assertEqual(rois[drawn_task.pk], [0.2, 0.1, 0.8, 0.9])

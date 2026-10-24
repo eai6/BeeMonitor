@@ -1067,6 +1067,8 @@ class AddVideosView(LoginRequiredMixin, View):
         tasks = FrameSamplingTask.objects.bulk_create([
             FrameSamplingTask(user=request.user, project=project, video=v, params=params)
             for v in keep], batch_size=1000)
+        if params.get("roi") == "device":
+            _warn_no_roi(request, sampling_remote.without_roi(keep))
         sampling_remote.start(tasks)
 
         if params["method"] == sampling_remote.METHOD:
@@ -1084,6 +1086,18 @@ class AddVideosView(LoginRequiredMixin, View):
             + (f" ({skipped} already in the project, skipped)" if skipped else "")
             + how + leftout.skipped_note(left_out, empty))
         return redirect("annotations:detail", pk=project.pk)
+
+
+def _warn_no_roi(request, missing):
+    """Sampling scores motion inside the clip's ROI; without one it is the
+    whole frame, where leaves and shadows move too."""
+    from django.contrib import messages
+    if missing:
+        messages.warning(
+            request, f"No ROI drawn for {', '.join(missing[:5])}"
+            + (f" and {len(missing) - 5} more" if len(missing) > 5 else "")
+            + ": motion there is scored on the whole frame, so moving leaves can pick frames. "
+            "Draw one from the Sites link on the Clips page to look only at the hotel.")
 
 
 def _editor_queue(project, user, params):
@@ -2108,6 +2122,8 @@ class SampleFramesView(LoginRequiredMixin, View):
             })
         videos, left_out, empty = leftout.split_for_sampling(project, videos)
         skipped = leftout.skipped_note(left_out, empty)
+        if params.get("roi") == "device":
+            _warn_no_roi(request, sampling_remote.without_roi(videos))
         if not videos:
             messages.warning(request, "Nothing to sample." + skipped)
             return redirect("annotations:detail", pk=pk)

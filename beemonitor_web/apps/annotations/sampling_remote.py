@@ -59,13 +59,38 @@ def params_for(classes, max_frames=20, min_gap_s=0.5, roi="device", replace=True
     params = {"method": METHOD, "classes": [c for c in (classes or []) if c],
               "max_frames": max(1, min(int(max_frames), 200)),
               "min_gap_s": float(min_gap_s), "roi": "frame" if roi == "frame" else "device",
-              "replace": bool(replace)}
+              "replace": bool(replace),
+              "scan_seconds": max(0, int(getattr(settings, "SAMPLING_SCAN_SECONDS", 60)))}
     if labeler and labeler.get("labeler") == "yolo":
         class_map = labeler["class_map"]
         params.update(detector="yolo", model_key=labeler.get("model_key") or "",
                       model_name=labeler.get("model_name") or "", class_map=class_map,
                       classes=sorted(set(class_map.values())))
     return params
+
+
+def without_roi(videos) -> list:
+    """Names of the sites (or units, or clips) among ``videos`` with no ROI
+    drawn: their motion is scored on the whole frame, where leaves and
+    shadows move too."""
+    from apps.devices.layouts import layout_for_video
+    from apps.videos.models import Layout
+
+    videos = list(videos)
+    own = set(Layout.objects.filter(video__in=[v.pk for v in videos])
+              .values_list("video_id", flat=True))
+    seen, missing = {}, []
+    for v in videos:
+        key = ("clip", v.pk) if v.pk in own else ("site", v.site_id, v.device_id)
+        if key not in seen:
+            layout = layout_for_video(v)
+            seen[key] = bool(layout.get("roi_override") or layout.get("roi_polygon"))
+            if not seen[key]:
+                name = (v.site.name if v.site_id else
+                        (v.device.name if v.device_id else v.title))
+                if name not in missing:
+                    missing.append(name)
+    return missing
 
 
 def labeler_note(params) -> str:
@@ -164,6 +189,7 @@ def _invoke(batch, clips) -> None:
         "classes": params.get("classes") or ["bee"],
         "confidence": labelers.SAM3_CONFIDENCE, "candidates": settings.SAMPLING_CANDIDATES,
         "min_gap_s": params.get("min_gap_s", 0.5), "clips": clips,
+        "scan_seconds": params.get("scan_seconds", 0),
     }
     if params.get("detector") == "yolo":
         # YOLO keeps boxes of the model's own classes; _write_frames renames
