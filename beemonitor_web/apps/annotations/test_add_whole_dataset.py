@@ -31,7 +31,7 @@ class WholeDatasetTestCase(TestCase):
         self.n += 1
         return Video.objects.create(
             user=self.user, device=device or self.dev, title=f"c{self.n}",
-            storage_key=f"w/{self.n}.mp4", file_size_bytes=1,
+            storage_key=f"w/{self.n}.mp4", file_size_bytes=10_000_000,
             status=Video.Status.READY, recorded_at=when)
 
     def day(self, m, d, h=12):

@@ -49,12 +49,32 @@ def enabled() -> bool:
     return getattr(settings, "SAMPLING_BACKEND", "local") == "sagemaker"
 
 
-def params_for(classes, max_frames=20, min_gap_s=0.5, roi="device", replace=True) -> dict:
-    """Task params for GPU sample-and-pre-label (method ``sample_label``)."""
-    return {"method": METHOD, "classes": [c for c in (classes or []) if c],
-            "max_frames": max(1, min(int(max_frames), 200)),
-            "min_gap_s": float(min_gap_s), "roi": "frame" if roi == "frame" else "device",
-            "replace": bool(replace)}
+def params_for(classes, max_frames=20, min_gap_s=0.5, roi="device", replace=True,
+               labeler=None) -> dict:
+    """Task params for GPU sample-and-pre-label (method ``sample_label``).
+
+    ``labeler`` is ``labelers.from_post``'s result. A YOLO labeler replaces
+    ``classes`` with the project classes its map lands on, and carries the
+    model and the map (memory/57)."""
+    params = {"method": METHOD, "classes": [c for c in (classes or []) if c],
+              "max_frames": max(1, min(int(max_frames), 200)),
+              "min_gap_s": float(min_gap_s), "roi": "frame" if roi == "frame" else "device",
+              "replace": bool(replace)}
+    if labeler and labeler.get("labeler") == "yolo":
+        class_map = labeler["class_map"]
+        params.update(detector="yolo", model_key=labeler.get("model_key") or "",
+                      model_name=labeler.get("model_name") or "", class_map=class_map,
+                      classes=sorted(set(class_map.values())))
+    return params
+
+
+def labeler_note(params) -> str:
+    """"bee, wasp" for SAM 3; "Model X (bee → insect)" for a YOLO model."""
+    if (params or {}).get("detector") == "yolo":
+        from . import labelers
+        return labelers.describe({"labeler": "yolo", "model_name": params.get("model_name"),
+                                  "class_map": params.get("class_map") or {}})
+    return ", ".join((params or {}).get("classes") or [])
 
 
 def start(tasks) -> None:
@@ -135,14 +155,23 @@ def _invoke(batch, clips) -> None:
     import boto3
     from botocore.config import Config
 
+    from . import labelers
+
     params = batch.params or {}
     payload = {
         "task": METHOD, "batch_id": batch.batch_id, "job_id": batch.batch_id,
         "result_bucket": settings.SAGEMAKER_OUTPUT_BUCKET, "result_key": batch.result_key,
         "classes": params.get("classes") or ["bee"],
-        "confidence": 0.3, "candidates": settings.SAMPLING_CANDIDATES,
+        "confidence": labelers.SAM3_CONFIDENCE, "candidates": settings.SAMPLING_CANDIDATES,
         "min_gap_s": params.get("min_gap_s", 0.5), "clips": clips,
     }
+    if params.get("detector") == "yolo":
+        # YOLO keeps boxes of the model's own classes; _write_frames renames
+        # them onto the project's through the map.
+        payload.update(detector_kind="yolo", classes=list(params.get("class_map") or {}),
+                       confidence=labelers.YOLO_CONFIDENCE)
+        if params.get("model_key"):
+            payload["custom_bee_model_path"] = params["model_key"]
     region = getattr(settings, "AWS_REGION", "us-east-1")
     cfg = Config(connect_timeout=10, read_timeout=30, retries={"max_attempts": 2})
     key = f"sampling/{batch.batch_id}.json"
@@ -224,9 +253,13 @@ def _write_frames(task, clip) -> int:
         (Annotation.objects.filter(project=task.project, video=task.video, sampled_only=True,
                                    reviewed=False, boxes=[])
          .exclude(frame_number__in=picked).delete())
+    from . import labelers
+
+    class_map = (task.params or {}).get("class_map") or {}
     written = 0
     for f in clip.get("frames", []):
-        boxes = [{**b, "class_id": class_id[b["class"]]} for b in f.get("boxes", [])
+        boxes = [{**b, "class_id": class_id[b["class"]]}
+                 for b in labelers.map_boxes(f.get("boxes", []), class_map)
                  if b.get("class") in class_id]
         existing = Annotation.objects.filter(project=task.project, video=task.video,
                                              frame_number=f["n"]).first()

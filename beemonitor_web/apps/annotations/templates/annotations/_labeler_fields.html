@@ -1,0 +1,45 @@
+{% comment %}
+  Who draws the pre-label boxes (memory/57): SAM 3, prompted with the ticked
+  classes, or a YOLO model, whose own classes are mapped onto the project's
+  ("bee" → "insect") or skipped. Lives inside a sampling form; fields carry the
+  s_ prefix. Elements marked .s-sam3-only hide while a YOLO model is picked.
+{% endcomment %}
+<div class="s-labeler space-y-1.5">
+  <label class="block text-[10.5px] font-semibold text-gray-500 uppercase tracking-wide">Draw boxes with
+    <select name="s_labeler" class="s-labeler-pick mt-1 w-full border border-gray-300 rounded px-1.5 py-1 text-xs normal-case font-normal text-gray-800">
+      {% for c in labeler_choices %}<option value="{{ c.value }}">{{ c.name }}</option>{% endfor %}
+    </select>
+  </label>
+  {% for c in labeler_choices %}{% if c.rows %}
+  <div class="s-map hidden space-y-1" data-for="{{ c.value }}">
+    <div class="text-xs text-gray-500">Its classes become:</div>
+    {% for r in c.rows %}
+    <label class="flex items-center gap-2 text-[13px] text-gray-700">
+      <span class="w-24 truncate" title="{{ r.model }}">{{ r.model }}</span> &rarr;
+      <select name="{{ r.field }}" class="flex-1 border border-gray-300 rounded px-1.5 py-1 text-xs">
+        <option value="" {% if not r.picked %}selected{% endif %}>skip</option>
+        {% for pc in project.classes %}<option value="{{ pc }}" {% if pc == r.picked %}selected{% endif %}>{{ pc }}</option>{% endfor %}
+      </select>
+    </label>
+    {% endfor %}
+  </div>
+  {% endif %}{% endfor %}
+</div>
+<script>
+(function () {
+  var box = document.currentScript.previousElementSibling;
+  var form = box.closest('form') || document;
+  var pick = box.querySelector('.s-labeler-pick');
+  function show() {
+    var v = pick.value, yolo = v !== 'sam3';
+    box.querySelectorAll('.s-map').forEach(function (m) {
+      var on = m.getAttribute('data-for') === v;
+      m.classList.toggle('hidden', !on);
+      m.querySelectorAll('select').forEach(function (s) { s.disabled = !on; });
+    });
+    form.querySelectorAll('.s-sam3-only').forEach(function (el) { el.classList.toggle('hidden', yolo); });
+  }
+  pick.addEventListener('change', show);
+  show();
+})();
+</script>

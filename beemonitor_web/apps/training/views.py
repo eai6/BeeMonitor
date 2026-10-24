@@ -163,6 +163,18 @@ def _build_training_payload(job: TrainingJob) -> tuple[list, list[dict]]:
     elif job.frame_filter == TrainingJob.FrameFilter.HUMAN:
         annotations = annotations.filter(review_source=Annotation.ReviewSource.HUMAN)
 
+    # The project's left-out days are a test set: none of their frames is
+    # ever trained on, even ones someone annotated (memory/57).
+    from apps.annotations import leftout
+    left_out_rules = leftout.project_rules(project)
+    left_out_ids = leftout.left_out_ids(project)
+    left_out_frames = 0
+    if left_out_ids:
+        left_out_frames = annotations.filter(video_id__in=left_out_ids).count()
+        annotations = annotations.exclude(video_id__in=left_out_ids)
+        logger.info("[train:%s] Left out %d frame(s) from %d clip(s) on left-out days",
+                    job.pk, left_out_frames, len(left_out_ids))
+
     ann_count = annotations.count()
     logger.info("[train:%s] Found %d annotations in project '%s' (filter=%s)",
                 job.pk, ann_count, project.name, job.frame_filter)
@@ -203,6 +215,7 @@ def _build_training_payload(job: TrainingJob) -> tuple[list, list[dict]]:
 
     # Group annotations by video
     video_groups: dict[int, dict] = {}
+    training_clips: list[str] = []
     total_frames = 0
     for ann in annotations:
         if job.frames_with_class:
@@ -217,6 +230,7 @@ def _build_training_payload(job: TrainingJob) -> tuple[list, list[dict]]:
                 "video_blob_path": ann.video.storage_key,
                 "frames": [],
             }
+            training_clips.append(ann.video.title)
             logger.info(
                 "[train:%s] Video pk=%s title='%s' blob_path='%s'",
                 job.pk, vid_pk, ann.video.title, ann.video.storage_key,
@@ -263,6 +277,12 @@ def _build_training_payload(job: TrainingJob) -> tuple[list, list[dict]]:
             "frame_filter": job.get_frame_filter_display(),
             "frames_with_class": bool(job.frames_with_class),
             "skipped_no_class": skipped_frames if job.frames_with_class else 0,
+            # For a methods section: the held-out days, and every clip that
+            # gave training frames, so the two can be shown to be disjoint.
+            "left_out_days": leftout.describe(left_out_rules),
+            "left_out_clips": len(left_out_ids),
+            "left_out_frames": left_out_frames,
+            "training_clips": training_clips,
         },
     }
     job.save(update_fields=["metrics"])

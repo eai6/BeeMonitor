@@ -60,7 +60,7 @@ class GpuSamplingTests(TestCase):
         self.videos = []
         for i in range(3):
             v = Video.objects.create(user=self.user, title=f"c{i}", storage_key=f"u/c{i}.mp4",
-                                     file_size_bytes=1, status=Video.Status.READY)
+                                     file_size_bytes=10_000_000, status=Video.Status.READY)
             self.project.videos.add(v)
             self.videos.append(v)
         self.aws = FakeAWS()
@@ -198,7 +198,7 @@ class GpuSamplingTests(TestCase):
 
     def test_adding_clips_queues_gpu_tasks_for_the_picked_classes(self):
         v = Video.objects.create(user=self.user, title="new", storage_key="u/new.mp4",
-                                 file_size_bytes=1, status=Video.Status.READY)
+                                 file_size_bytes=10_000_000, status=Video.Status.READY)
         self.client.force_login(self.user)
         with mock.patch.object(sampling, "spawn_sampling_async") as spawn:
             self.client.post(reverse("annotations:add_videos", args=[self.project.pk]),
@@ -240,7 +240,7 @@ class NoActivityStageTests(TestCase):
         vids = []
         for i in range(3):
             v = Video.objects.create(user=user, title=f"c{i}", storage_key=f"u/{i}.mp4",
-                                     file_size_bytes=1, status=Video.Status.READY)
+                                     file_size_bytes=10_000_000, status=Video.Status.READY)
             project.videos.add(v)
             vids.append(v)
         Annotation.objects.create(project=project, video=vids[0], frame_number=1, boxes=[])

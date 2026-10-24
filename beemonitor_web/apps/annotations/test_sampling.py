@@ -53,7 +53,7 @@ class SamplingTestCase(TestCase):
         )
         self.video = Video.objects.create(
             user=self.user, title="clip", storage_key="alice/clip.mp4",
-            file_size_bytes=1, status=Video.Status.READY,
+            file_size_bytes=10_000_000, status=Video.Status.READY,
         )
         self.project.videos.add(self.video)
 

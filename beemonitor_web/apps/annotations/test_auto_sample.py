@@ -25,7 +25,7 @@ class AutoSampleTests(TestCase):
         self.project = AnnotationProject.objects.create(user=self.user, name="P")
         self.videos = [
             Video.objects.create(user=self.user, title=f"c{i}",
-                                 storage_key=f"as/{i}.mp4", file_size_bytes=1,
+                                 storage_key=f"as/{i}.mp4", file_size_bytes=10_000_000,
                                  status=Video.Status.READY)
             for i in range(3)
         ]
@@ -75,7 +75,7 @@ class AutoSampleTests(TestCase):
         other = User.objects.create_user("owner2", password="x")
         theirs = Video.objects.create(user=other, title="shared",
                                       storage_key="as/shared.mp4",
-                                      file_size_bytes=1, status=Video.Status.READY)
+                                      file_size_bytes=10_000_000, status=Video.Status.READY)
 
         self._add([theirs])
 

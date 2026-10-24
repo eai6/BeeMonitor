@@ -101,7 +101,8 @@
         <div id="sel-mix" class="flex items-center gap-2 text-[11px] text-gray-500"></div>
         {% if gpu_sampling %}
         {# GPU: added clips are sampled and pre-labelled for these classes. #}
-        <div class="flex items-center gap-2 text-[11px] text-gray-600" title="Classes the GPU looks for and pre-labels. Each class adds GPU time.">
+        <div class="w-56 text-[11px] text-gray-600">{% include "annotations/_labeler_fields.html" %}</div>
+        <div class="s-sam3-only flex items-center gap-2 text-[11px] text-gray-600" title="Classes the GPU looks for and pre-labels. Each class adds GPU time.">
           <span class="font-semibold">Pre-label:</span>
           {% for c in project.classes %}
           <label class="inline-flex items-center gap-1"><input type="checkbox" name="s_classes" value="{{ c }}" checked> {{ c }}</label>

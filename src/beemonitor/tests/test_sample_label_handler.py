@@ -7,6 +7,7 @@ import os
 import shutil
 import sys
 import tempfile
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -102,3 +103,47 @@ def test_detect_many_falls_back_to_single_frames():
     out = det.detect_many(frames, batch_size=8)
     assert [len(d) for d in out] == [1, 1, 1]
     assert det._segment.call_count == 3 and det._segment_batch.call_count == 1
+
+
+class _Vec(list):
+    def tolist(self):
+        return list(self)
+
+
+class FakeYolo:
+    """A YOLO model knowing "bee" and "nest": every dark object is a bee."""
+    loaded = []
+
+    def __init__(self, path):
+        FakeYolo.loaded.append(path)
+
+    def __call__(self, frames, conf=0.25, verbose=False):
+        out = []
+        for boxes in detect_dark(frames):
+            r = mock.Mock(names={0: "bee", 1: "nest"})
+            r.boxes = [SimpleNamespace(cls=[0], conf=[b["confidence"]],
+                                       xyxy=[_Vec([b["x"], b["y"], b["x"] + b["w"], b["y"] + b["h"]])])
+                       for b in boxes]
+            out.append(r)
+        return out
+
+
+def test_a_yolo_model_labels_with_its_own_classes(clips):
+    """memory/57: ``detector_kind: yolo`` runs the named custom model and keeps
+    boxes under the model's class names; SAM 3 is never loaded."""
+    storage = FakeStorage(clips)
+    pipeline = mock.Mock(_storage=storage)
+    pipeline._models.ensure_custom_model.return_value = "/models/best.pt"
+    payload = {"task": "sample_label", "batch_id": "b2", "classes": ["bee"], "candidates": 10,
+               "min_gap_s": 0.2, "detector_kind": "yolo", "confidence": 0.25,
+               "custom_bee_model_path": "custom/1/4/best.pt",
+               "clips": [{"task_id": 9, "video_blob_path": "users/1/devices/2/2026/07/a.mp4", "max_frames": 3}]}
+    fake_ul = mock.Mock(YOLO=FakeYolo)
+    with mock.patch.dict(sys.modules, {"ultralytics": fake_ul}), \
+         mock.patch("beemonitor.detection.sam3_detector.Sam3Detector", side_effect=AssertionError("no SAM 3")):
+        out = inference._sample_label_batch(payload, pipeline)
+    pipeline._models.ensure_custom_model.assert_called_once_with("custom/1/4/best.pt")
+    assert FakeYolo.loaded[-1] == "/models/best.pt"
+    (clip,) = out["clips"]
+    assert "error" not in clip and clip["frames"]
+    assert all(b["class"] == "bee" for f in clip["frames"] for b in f["boxes"])

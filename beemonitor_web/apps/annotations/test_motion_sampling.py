@@ -92,7 +92,7 @@ class TaskTests(TestCase):
         self.dev = Device.objects.create(owner=self.user, name="Jill", key_hash="h", prefix="p")
         self.project = AnnotationProject.objects.create(user=self.user, name="P", classes=["bee"])
         self.video = Video.objects.create(user=self.user, device=self.dev, title="c",
-                                          storage_key="u/c.mp4", file_size_bytes=1,
+                                          storage_key="u/c.mp4", file_size_bytes=10_000_000,
                                           status=Video.Status.READY)
         self.project.videos.add(self.video)
 
@@ -131,7 +131,7 @@ class TaskTests(TestCase):
     def test_added_clips_default_to_motion(self):
         with mock.patch("apps.annotations.sampling.spawn_sampling_async"):
             other = Video.objects.create(user=self.user, device=self.dev, title="d",
-                                         storage_key="u/d.mp4", file_size_bytes=1,
+                                         storage_key="u/d.mp4", file_size_bytes=10_000_000,
                                          status=Video.Status.READY)
             self.client.force_login(self.user)
             self.client.post(reverse("annotations:add_videos", args=[self.project.pk]),

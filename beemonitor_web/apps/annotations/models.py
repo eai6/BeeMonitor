@@ -42,6 +42,9 @@ class AnnotationProject(models.Model):
         related_name="copies",
     )
     copied_from_name = models.CharField(max_length=200, blank=True)
+    # Days held out of sampling, pre-labeling and training: a test set
+    # (memory/57). Text, one line per site; parsed by leftout.parse.
+    left_out_days = models.TextField(blank=True, default="")
 
     class Meta:
         ordering = ["-created_at"]

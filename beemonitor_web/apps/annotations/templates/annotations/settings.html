@@ -40,6 +40,12 @@
         </div>
         <button type="button" id="btn-add-class" class="mt-2 text-sm text-amber-600 hover:underline">+ Add class</button>
       </div>
+      <div class="mb-6">
+        <label for="id_left_out_days" class="block text-sm font-medium text-gray-700 mb-1">Leave out these days</label>
+        <p class="text-xs text-gray-500 mb-2">Clips recorded on these days are never sampled, pre-labeled or used to train a model from this project, so they can be a test set. One line per site, dates as YYYY-MM-DD; a line without a site applies to every site.{% if left_out_count %} <strong>{{ left_out_count }} clip{{ left_out_count|pluralize }}</strong> in this project {{ left_out_count|pluralize:"is,are" }} on left-out days.{% endif %}</p>
+        <textarea name="left_out_days" id="id_left_out_days" rows="4" placeholder="mendels: 2024-04-21, 2024-04-30&#10;natalies: 2024-05-04"
+                  class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-amber-500">{{ object.left_out_days }}</textarea>
+      </div>
       <div class="flex space-x-3">
         <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">Save</button>
         <a href="{% url 'annotations:detail' object.pk %}" class="px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50">Cancel</a>

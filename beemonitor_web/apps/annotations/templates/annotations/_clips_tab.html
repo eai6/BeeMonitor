@@ -114,7 +114,8 @@
             {% if gpu_sampling %}
             {# GPU: one pass finds the frames with these classes and pre-labels them. #}
             <input type="hidden" name="s_method" value="sample_label">
-            <fieldset class="space-y-1">
+            {% include "annotations/_labeler_fields.html" %}
+            <fieldset class="s-sam3-only space-y-1">
               <legend class="text-[10.5px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Find and pre-label</legend>
               {% for c in project.classes %}
               <label class="flex items-center gap-2 text-[13px] text-gray-700">

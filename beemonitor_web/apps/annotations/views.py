@@ -38,12 +38,12 @@ def _preannotate_opts(request):
     )
 
 
-def _labeler_opts(request):
-    """(labeler, custom_model_key). Pre-annotation is SAM 3 only — text-prompt
-    labeling of each class is what seeds new domains, and it's the single GPU
-    path we keep for the annotation editor. (YOLO / custom-model pre-annotation
-    was removed to avoid a second endpoint's GPU time.)"""
-    return "sam3", ""
+def _labeler_opts(request, project):
+    """``labelers.from_post`` for an unprefixed form (``labeler``, ``map:…``):
+    SAM 3 unless a YOLO model is picked. Both run on the SAM 3 endpoint, so a
+    YOLO pick costs no second endpoint (memory/57). Raises LabelerError."""
+    from . import labelers
+    return labelers.from_post(request.POST, request.user, project, prefix="")
 
 
 def _sam3_opts(request):
@@ -130,6 +130,8 @@ class ProjectUpdateView(LoginRequiredMixin, UpdateView):
             {"index": i, "name": c, "count": counts.get(c, 0)}
             for i, c in enumerate(self.object.classes or [])
         ]
+        from . import leftout
+        ctx["left_out_count"] = len(leftout.left_out_ids(self.object))
         return ctx
 
     def post(self, request, *args, **kwargs):
@@ -196,12 +198,23 @@ class ProjectUpdateView(LoginRequiredMixin, UpdateView):
                 ann.save(update_fields=["boxes"])
                 migrated_frames += 1
 
+        from . import leftout
+        left_out_days = (request.POST.get("left_out_days") or "").strip()
+        rules, problems = leftout.parse(left_out_days)
+
         project.name = name
         project.description = description
         project.classes = new_classes
-        project.save(update_fields=["name", "description", "classes"])
+        project.left_out_days = left_out_days
+        project.save(update_fields=["name", "description", "classes", "left_out_days"])
 
+        problems += [f"no clip in this project is from site '{s}'"
+                     for s in leftout.unknown_sites(project, rules)]
+        if problems:
+            messages.warning(request, "Left-out days: " + "; ".join(problems) + ".")
         msg = "Project settings saved."
+        if rules:
+            msg += f" {len(leftout.left_out_ids(project))} clip(s) are on left-out days."
         if migrated_frames:
             msg += f" Relabeled boxes on {migrated_frames} frame(s)."
         if dropped_boxes:
@@ -265,6 +278,9 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         # share the footage (people.html).
         ctx["show_source"] = ctx["can_assign"]
         ctx["gpu_sampling"] = sampling_remote.enabled()
+        if ctx["gpu_sampling"]:
+            from . import labelers
+            ctx["labeler_choices"] = labelers.with_rows(user, project)
         ctx["sampling_status"] = sampling_remote.project_status(project)
 
         # Everyone on the project who may review: the assign dialog's list
@@ -852,6 +868,8 @@ class AddVideosWorkspaceView(LoginRequiredMixin, TemplateView):
         from apps.videos import workspace
         from apps.videos.models import Site, Video
 
+        from . import labelers
+
         from . import coverage as coverage_mod
 
         ctx = super().get_context_data(**kwargs)
@@ -899,6 +917,8 @@ class AddVideosWorkspaceView(LoginRequiredMixin, TemplateView):
             "frames_per_clip": _frames_per_clip(),
             "clips_per_hour": _clips_per_hour(),
             "gpu_sampling": sampling_remote_enabled(),
+            "labeler_choices": (labelers.with_rows(self.request.user, project)
+                                if sampling_remote_enabled() else []),
             "date_overview": workspace.date_overview(
                 workspace.apply_video_filters(accessible, workspace.without_dates(params))),
             "grid_page_url": reverse("annotations:add_videos_grid", args=[project.pk]),
@@ -998,12 +1018,17 @@ class AddVideosView(LoginRequiredMixin, View):
         # GPU sampling is checked against credits before anything is added, so
         # a refused add leaves the project as it was. Web-process sampling is free.
         from apps.accounts import quota
-        from . import sampling_remote
+        from . import labelers, sampling_remote
+        spec = {"labeler": labelers.SAM3}
         if sampling_remote.enabled():
             try:
                 quota.check(request.user, [quota.sampling_work(len(video_ids))])
+                spec = labelers.from_post(request.POST, request.user, project)
             except quota.QuotaExceeded as e:
                 messages.error(request, e.message)
+                return redirect("annotations:add_videos_page", pk=project.pk)
+            except labelers.LabelerError as e:
+                messages.error(request, f"{e} Nothing was added.")
                 return redirect("annotations:add_videos_page", pk=project.pk)
         # Accessible, not owned: the picker lists clips from shared devices, so
         # restricting the add to owned ones silently drops half a selection.
@@ -1026,23 +1051,28 @@ class AddVideosView(LoginRequiredMixin, View):
         # at a time (and the reconciler re-feeds any a deploy interrupts).
         # New clips are sampled by motion: their most active frames, not every
         # Nth one, so a labeller isn't handed a stack of empty frames.
-        from . import sampling_remote
+        from . import leftout
         if sampling_remote.enabled():
             # GPU: sample and pre-label in one pass, for the classes picked on
-            # the add page (all of the project's by default).
+            # the add page (all of the project's by default), by SAM 3 or the
+            # YOLO model picked there.
             picked = [c for c in request.POST.getlist("s_classes") if c in (project.classes or [])]
-            params = sampling_remote.params_for(picked or project.classes)
+            params = sampling_remote.params_for(picked or project.classes, labeler=spec)
         else:
             params = sampling.motion_params()
+        # Added, but not sampled: clips on the project's left-out days and
+        # files with no video in them.
+        keep, left_out, empty = leftout.split_for_sampling(
+            project, Video.objects.filter(pk__in=added_ids).select_related("site", "device"))
         tasks = FrameSamplingTask.objects.bulk_create([
-            FrameSamplingTask(user=request.user, project=project, video_id=v, params=params)
-            for v in added_ids], batch_size=1000)
+            FrameSamplingTask(user=request.user, project=project, video=v, params=params)
+            for v in keep], batch_size=1000)
         sampling_remote.start(tasks)
 
         if params["method"] == sampling_remote.METHOD:
             how = (f" and queued them on the GPU to find and pre-label up to "
                    f"{params['max_frames']} frames each with "
-                   f"{', '.join(params['classes'])}. The first batch may wait several "
+                   f"{sampling_remote.labeler_note(params)}. The first batch may wait several "
                    "minutes for the GPU to start. Frames appear as batches finish.")
         else:
             how = (" and started sampling their most active frames — up to "
@@ -1052,7 +1082,7 @@ class AddVideosView(LoginRequiredMixin, View):
             request,
             f"Added {added} clip(s)"
             + (f" ({skipped} already in the project, skipped)" if skipped else "")
-            + how)
+            + how + leftout.skipped_note(left_out, empty))
         return redirect("annotations:detail", pk=project.pk)
 
 
@@ -1369,9 +1399,10 @@ def _spawn_preannotation(task_pk: int) -> None:
             blob_path = _ingest_external_s3_to_storage(video, f"pa{task.pk}")
 
         labeler = task.labeler
-        if labeler == "sam3":
-            endpoint = settings.SAGEMAKER_SAM3_ENDPOINT_NAME
-        else:
+        # YOLO runs on the SAM 3 endpoint too (same image): one GPU endpoint
+        # for pre-labeling. The tracking endpoint is the fallback.
+        endpoint = settings.SAGEMAKER_SAM3_ENDPOINT_NAME
+        if labeler != "sam3" and not endpoint:
             endpoint = settings.SAGEMAKER_ENDPOINT_NAME
         if not endpoint:
             raise RuntimeError(f"{'SAM3' if labeler=='sam3' else 'YOLO'} endpoint not configured")
@@ -1389,7 +1420,10 @@ def _spawn_preannotation(task_pk: int) -> None:
             "detector_kind": "sam3" if labeler == "sam3" else "yolo",
             # Detect only the requested labels (SAM 3 prompts / YOLO filter);
             # finalize re-maps class ids by name against the project's classes.
-            "classes": p.get("target_labels") or task.project.classes,
+            # A YOLO model with a class map keeps its own classes; finalize
+            # renames them onto the project's.
+            "classes": list(p["class_map"]) if p.get("class_map")
+            else (p.get("target_labels") or task.project.classes),
             "sample_interval": p.get("sample_interval", 10),
             "max_frames": p.get("max_frames", 300),
             "confidence_threshold": p.get("confidence", 0.15),
@@ -1556,9 +1590,12 @@ def finalize_preannotation_task(task, s3) -> bool:
         )
 
     created = 0
+    from . import labelers
+    class_map = (task.params or {}).get("class_map") or {}
     for fd in frames:
         fn = fd["frame_number"]
-        detected = [b for b in (_remap(b) for b in fd.get("boxes", [])) if b]
+        detected = [b for b in (_remap(b) for b in labelers.map_boxes(fd.get("boxes", []), class_map))
+                    if b]
 
         if merge_mode:
             existing = existing_by_frame.get(fn)
@@ -1705,13 +1742,18 @@ class PreAnnotateView(LoginRequiredMixin, View):
                                   pk=request.POST.get("video_id"))
 
         from apps.accounts import quota
+        from . import labelers
         try:
+            spec = _labeler_opts(request, project)
             quota.check(request.user, [quota.auto_label_work(
-                _labeler_opts(request)[0], _preannotate_opts(request)[1])])
+                spec["labeler"], _preannotate_opts(request)[1])])
+        except labelers.LabelerError as e:
+            messages.error(request, str(e))
+            return redirect("annotations:detail", pk=pk)
         except quota.QuotaExceeded as e:
             messages.error(request, e.message)
             return redirect("annotations:detail", pk=pk)
-        task = _create_preannotation_task(request, project, video)
+        task = _create_preannotation_task(request, project, video, spec=spec)
         spawn_preannotation_async(task.pk)
         engine = "SAM 3" if task.labeler == "sam3" else "AI"
         messages.info(request, f"Pre-annotating '{video.title}' with {engine}. "
@@ -1719,12 +1761,14 @@ class PreAnnotateView(LoginRequiredMixin, View):
         return redirect("annotations:detail", pk=pk)
 
 
-def _create_preannotation_task(request, project, video, frame_numbers=None):
+def _create_preannotation_task(request, project, video, frame_numbers=None, spec=None):
     """Build a PreAnnotationTask row from the request's pre-annotate options."""
     from .models import PreAnnotationTask
 
     sample_interval, max_frames, confidence = _preannotate_opts(request)
-    labeler, custom_model_key = _labeler_opts(request)
+    spec = spec or _labeler_opts(request, project)
+    labeler, custom_model_key = spec["labeler"], spec.get("model_key", "")
+    class_map = spec.get("class_map") or {}
     # Frame selection is always "every Nth" (uniform). The DINOv2 "diverse"
     # selection was removed — it added embedding GPU work we don't need.
     selection = "uniform"
@@ -1735,6 +1779,8 @@ def _create_preannotation_task(request, project, video, frame_numbers=None):
     proj_classes = project.classes or []
     posted = set(request.POST.getlist("target_labels"))
     target_labels = [c for c in proj_classes if c in posted] if posted else list(proj_classes)
+    if class_map:  # a YOLO model labels the classes its map lands on
+        target_labels = [c for c in proj_classes if c in set(class_map.values())]
     return PreAnnotationTask.objects.create(
         user=request.user, project=project, video=video,
         labeler=labeler, custom_model_key=custom_model_key,
@@ -1743,6 +1789,7 @@ def _create_preannotation_task(request, project, video, frame_numbers=None):
             "confidence": confidence, "selection": selection,
             "nms_iou": nms_iou, "max_detections": max_detections,
             "target_labels": target_labels,
+            **({"class_map": class_map} if class_map else {}),
             # Exact sampled frames to label (batch "N of M"); the GPU then
             # labels those frames rather than re-sampling every Nth itself.
             **({"frame_numbers": frame_numbers, "max_frames": len(frame_numbers)}
@@ -1898,6 +1945,10 @@ class ExportProjectView(LoginRequiredMixin, View):
         # navigation placeholders, not labelled data.
         annotations = (project.annotations.exclude(sampled_only=True)
                        .select_related("video").order_by("video", "frame_number"))
+        # ?reviewed=1: only frames a person checked, for scoring a detector
+        # on a test project (scripts/score_detector.py, memory/57).
+        if request.GET.get("reviewed") == "1":
+            annotations = annotations.filter(reviewed=True)
 
         if not annotations.exists():
             from django.contrib import messages
@@ -2020,7 +2071,7 @@ class SampleFramesView(LoginRequiredMixin, View):
         )
         if video_ids:
             videos = videos.filter(pk__in=video_ids)
-        videos = list(videos)
+        videos = list(videos.select_related("site", "device"))
         if not videos:
             messages.warning(request, "No videos selected to sample.")
             return redirect("annotations:detail", pk=pk)
@@ -2031,23 +2082,35 @@ class SampleFramesView(LoginRequiredMixin, View):
         def _field(key):
             v = request.POST.get("s_" + key)
             return v if v is not None else request.POST.get(key)
-        from . import sampling_remote
+        from . import labelers, leftout, sampling_remote
         if sampling_remote.enabled():
-            # GPU: sample and pre-label in one pass for the ticked classes.
+            # GPU: sample and pre-label in one pass, by SAM 3 for the ticked
+            # classes or by the picked YOLO model through its class map.
+            try:
+                spec = labelers.from_post(request.POST, request.user, project)
+            except labelers.LabelerError as e:
+                messages.warning(request, str(e))
+                return redirect("annotations:detail", pk=pk)
             picked = [c for c in request.POST.getlist("s_classes") if c in (project.classes or [])]
-            if not picked:
+            if not picked and spec["labeler"] == labelers.SAM3:
                 messages.warning(request, "Pick at least one class to find and pre-label.")
                 return redirect("annotations:detail", pk=pk)
             params = sampling_remote.params_for(
                 picked, max_frames=_field("max_frames") or 20,
                 min_gap_s=_field("min_gap_s") or 0.5, roi=_field("roi") or "device",
-                replace=str(_field("replace") or "1").lower() not in ("0", "false", "off"))
+                replace=str(_field("replace") or "1").lower() not in ("0", "false", "off"),
+                labeler=spec)
         else:
             params = sampling.clamp_params({
                 key: _field(key)
                 for key in ("method", "sample_interval", "max_frames", "min_gap_s", "roi", "replace")
                 if _field(key) is not None
             })
+        videos, left_out, empty = leftout.split_for_sampling(project, videos)
+        skipped = leftout.skipped_note(left_out, empty)
+        if not videos:
+            messages.warning(request, "Nothing to sample." + skipped)
+            return redirect("annotations:detail", pk=pk)
         if params["method"] == sampling_remote.METHOD:
             from apps.accounts import quota
             try:
@@ -2066,8 +2129,8 @@ class SampleFramesView(LoginRequiredMixin, View):
             messages.info(
                 request,
                 f"Queued {len(videos)} clip(s) on the GPU to find and pre-label up to "
-                f"{params['max_frames']} frames each with {', '.join(params['classes'])}. "
-                "The first batch may wait several minutes for the GPU to start.")
+                f"{params['max_frames']} frames each with {sampling_remote.labeler_note(params)}. "
+                "The first batch may wait several minutes for the GPU to start." + skipped)
         else:
             how = (f"the {params['max_frames']} most active frame(s), at least "
                    f"{params['min_gap_s']:g}s apart,"
@@ -2076,7 +2139,7 @@ class SampleFramesView(LoginRequiredMixin, View):
             messages.info(
                 request,
                 f"Sampling {how} from {len(videos)} video(s) on the server. "
-                "Refresh to see them appear.",
+                "Refresh to see them appear." + skipped,
             )
         return redirect("annotations:detail", pk=pk)
 

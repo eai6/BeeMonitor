@@ -620,27 +620,30 @@ def _sample_label_batch(payload, pipeline) -> dict:
     One clip failing never fails the batch: it comes back with ``error``. The
     whole result is also written to ``result_bucket/result_key`` so the web app
     can find it even if it lost the async output location.
+
+    ``detector_kind: "yolo"`` (plus ``custom_bee_model_path``) labels with a
+    YOLO model instead of SAM 3; ``classes`` are then the model's own names.
     """
-    import io
-    import tempfile
     import threading
-    from concurrent.futures import ThreadPoolExecutor
-
-    import cv2
-
-    from beemonitor.detection.sam3_detector import Sam3Detector
-    from beemonitor.processing import sample_label as sl
 
     started = time.time()
-    storage = pipeline._storage
     classes = [c for c in (payload.get("classes") or ["bee"]) if c]
     candidates = int(payload.get("candidates", 15))
     min_gap_s = float(payload.get("min_gap_s", 0.5))
-    detector = Sam3Detector(prompt=",".join(classes),
-                            conf_threshold=float(payload.get("confidence", 0.3)),
-                            iou_threshold=0.5, max_detections=50)
+    conf = float(payload.get("confidence", 0.3))
     wanted = {c.lower(): c for c in classes}
     gpu_lock = threading.Lock()
+
+    if (payload.get("detector_kind") or "sam3").strip().lower() == "yolo":
+        # A YOLO model (memory/57): ``classes`` are the model's own names; the
+        # web app maps them onto the project's when it writes the frames.
+        return _sample_label_run(payload, pipeline, _yolo_detect_many(payload, pipeline, wanted, conf, gpu_lock),
+                                 candidates, min_gap_s, started)
+
+    from beemonitor.detection.sam3_detector import Sam3Detector
+
+    detector = Sam3Detector(prompt=",".join(classes), conf_threshold=conf,
+                            iou_threshold=0.5, max_detections=50)
 
     def detect_fn(frames):
         with gpu_lock:                       # one model on one GPU
@@ -659,6 +662,55 @@ def _sample_label_batch(payload, pipeline) -> dict:
                               if d.confidence is not None else None})
             out.append(boxes)
         return out
+
+    return _sample_label_run(payload, pipeline, detect_fn, candidates, min_gap_s, started)
+
+
+def _yolo_detect_many(payload, pipeline, wanted, conf, gpu_lock):
+    """``detect_fn(frames) -> [[box, …], …]`` from a YOLO model: the custom
+    model the payload names, else the built-in bee model. Keeps boxes whose
+    model class is in ``wanted`` (lower-cased name -> name)."""
+    from ultralytics import YOLO
+
+    key = payload.get("custom_bee_model_path") or ""
+    model_path = (pipeline._models.ensure_custom_model(key) if key
+                  else pipeline._models.ensure_models().bee_tracking)
+    yolo = YOLO(model_path)
+
+    def detect_fn(frames):
+        if not frames:
+            return []
+        with gpu_lock:
+            results = yolo(list(frames), conf=conf, verbose=False)
+        out = []
+        for r in results:
+            boxes = []
+            for box in r.boxes:
+                cls_id = int(box.cls[0])
+                name = wanted.get((r.names.get(cls_id, "") or "").lower())
+                if not name:
+                    continue
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                boxes.append({"x": round(x1), "y": round(y1), "w": round(x2 - x1),
+                              "h": round(y2 - y1), "class": name,
+                              "confidence": round(float(box.conf[0]), 3)})
+            out.append(boxes)
+        return out
+
+    return detect_fn
+
+
+def _sample_label_run(payload, pipeline, detect_fn, candidates, min_gap_s, started):
+    """The per-clip loop of ``_sample_label_batch``, for any detector."""
+    import io
+    import tempfile
+    from concurrent.futures import ThreadPoolExecutor
+
+    import cv2
+
+    from beemonitor.processing import sample_label as sl
+
+    storage = pipeline._storage
 
     def one_clip(clip):
         t0 = time.time()
