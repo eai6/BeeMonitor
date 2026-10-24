@@ -64,13 +64,26 @@
             <input type="checkbox" id="select-all" class="rounded border-gray-300"> Select all shown
           </label>
           <span class="text-xs text-gray-500">Showing <span id="shown-n">{% if video_count > page_size %}{{ page_size }}{% else %}{{ video_count }}{% endif %}</span> of {{ video_count }} clip{{ video_count|pluralize }} matching the filter &middot; newest first</span>
-          <span class="text-xs text-gray-500 ml-auto hidden sm:inline">Hover to preview &middot; click to open</span>
+          {% if video_count %}
+          <!-- An even N across everything the filter matches: in proportion to
+               the footage per hotel, spaced through its days and hours; skips
+               left-out days, empty files and clips already added. -->
+          <span class="ml-auto flex items-center gap-1.5 text-xs text-gray-600"
+                title="Picks in proportion to the clips per hotel, spaced evenly through their days and hours. Skips the project's left-out days, empty files and clips already added.">
+            Pick an even
+            <input id="even-n" type="number" min="1" max="{{ add_cap }}" step="1"
+                   value="{% if video_count < add_cap %}{{ video_count }}{% else %}{{ add_cap }}{% endif %}"
+                   class="w-16 border border-gray-300 rounded px-1.5 py-1 text-xs">
+            of these
+            <button type="button" id="even-btn" class="px-2.5 py-1 rounded border border-indigo-300 bg-white text-indigo-800 font-medium hover:bg-indigo-50">Pick</button>
+          </span>
+          {% endif %}
+          <span class="text-xs text-gray-500 {% if not video_count %}ml-auto {% endif %}hidden xl:inline">Hover to preview &middot; click to open</span>
         </div>
         <!-- Past the cards on screen: everything the filter matches. -->
         <div id="all-banner" class="hidden flex items-center gap-3 px-3 py-2 rounded border border-indigo-200 bg-indigo-50 text-xs text-indigo-900">
           <span id="all-banner-text"></span>
           <button type="button" id="all-banner-btn" class="ml-auto px-2.5 py-1 rounded border border-indigo-300 bg-white font-medium hover:bg-indigo-50"></button>
-          <button type="button" id="even-banner-btn" class="hidden px-2.5 py-1 rounded text-indigo-800 hover:underline"></button>
           <button type="button" id="clear-sel" class="px-2 py-1 text-indigo-700 hover:underline">Clear selection</button>
         </div>
       </div>
@@ -230,7 +243,6 @@
     banner.classList.remove('hidden');
     document.getElementById('all-banner-text').innerHTML = 'All <b>' + MATCHING.toLocaleString() + '</b> clips matching this filter are selected.';
     document.getElementById('all-banner-btn').classList.add('hidden');
-    document.getElementById('even-banner-btn').classList.add('hidden');
   }
 
   function refresh() {
@@ -293,20 +305,18 @@
   }
 
   // "Select all shown" -> offer everything the filter matches: all of it (added
-  // by filter on the server), or an even 1,000 spread across it.
+  // by filter on the server). An even N is the "Pick an even" control.
   var banner = document.getElementById('all-banner');
   function updateBanner(pickedOnScreen) {
     var shown = boxes().length;
     var show = (selectAllShown || (shown && pickedOnScreen === shown)) && MATCHING > shown;
     banner.classList.toggle('hidden', !show);
     if (!show) return;
-    var btn = document.getElementById('all-banner-btn'), even = document.getElementById('even-banner-btn');
+    var btn = document.getElementById('all-banner-btn');
     btn.classList.remove('hidden');
     document.getElementById('all-banner-text').innerHTML = 'All ' + pickedOnScreen + ' shown are selected. <b>'
       + MATCHING.toLocaleString() + '</b> clips match this filter.';
     btn.textContent = 'Select all ' + MATCHING.toLocaleString() + ' matching this filter';
-    even.classList.toggle('hidden', MATCHING <= CAP);
-    even.textContent = 'or an even ' + CAP.toLocaleString() + ' across them';
   }
 
   // Apply server picks: tick the ones on screen, keep the rest as extras.
@@ -339,16 +349,28 @@
     Array.prototype.forEach.call(boxes(), function (b) { b.checked = true; });
     refresh();
   });
-  document.getElementById('even-banner-btn').addEventListener('click', function () {
-    var btn = this, was = btn.textContent;
-    btn.disabled = true; btn.textContent = 'Selecting…';
+  var evenBtn = document.getElementById('even-btn');
+  if (evenBtn) evenBtn.addEventListener('click', function () {
+    var btn = this, was = btn.textContent, input = document.getElementById('even-n');
+    var n = Math.max(1, Math.min(CAP, parseInt(input.value, 10) || CAP));
+    input.value = n;
+    btn.disabled = true; btn.textContent = 'Picking…';
     allMatching = false; selectAllShown = false;
     var all = document.getElementById('select-all'); if (all) all.checked = false;
-    fetch(draftUrl('&even=1'), {headers: {'X-Requested-With': 'XMLHttpRequest'}})
+    fetch(draftUrl('&even=1&n=' + n), {headers: {'X-Requested-With': 'XMLHttpRequest'}})
       .then(function (r) { return r.json(); })
-      .then(function (j) { applyPicks(j.picks || [], true); })
-      .catch(function () { alert('Could not select those clips.'); })
-      .then(function () { btn.disabled = false; btn.textContent = was; });
+      .then(function (j) {
+        applyPicks(j.picks || [], true);
+        btn.textContent = j.count < n ? 'Picked ' + j.count + ' (all that can be)' : 'Picked ' + j.count;
+        setTimeout(function () { btn.textContent = was; }, 2600);
+      })
+      .catch(function () { alert('Could not select those clips.'); btn.textContent = was; })
+      .then(function () { btn.disabled = false; });
+  });
+  // Enter in the number picks; it must not submit the add form.
+  var evenN = document.getElementById('even-n');
+  if (evenN) evenN.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); evenBtn.click(); }
   });
   document.getElementById('clear-sel').addEventListener('click', function () {
     Array.prototype.forEach.call(boxes(), function (b) { b.checked = false; });

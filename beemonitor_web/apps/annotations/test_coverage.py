@@ -35,7 +35,7 @@ class CoverageTestCase(TestCase):
         when = timezone.now().replace(hour=hour, minute=0) - timedelta(days=self.n % 3)
         v = Video.objects.create(
             user=self.user, device=device, title=f"c{self.n}",
-            storage_key=f"cov/{self.n}.mp4", file_size_bytes=1,
+            storage_key=f"cov/{self.n}.mp4", file_size_bytes=10_000_000,
             status=Video.Status.READY, recorded_at=when)
         v.hour = hour
         v.save(update_fields=["hour"])

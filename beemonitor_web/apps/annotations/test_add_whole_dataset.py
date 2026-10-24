@@ -148,3 +148,74 @@ class AddAllMatchingTests(WholeDatasetTestCase):
         self.clip(self.day(7, 2, 9))                   # outside the daily window
         self.post(mode="filter", device=[self.dev.pk], hfrom="12", hto="16")
         self.assertEqual(list(self.project.videos.values_list("pk", flat=True)), [keep.pk])
+
+
+class EvenNTests(WholeDatasetTestCase):
+    """Pick an even N (memory/57): sites count as hotels, picks follow the
+    footage, and left-out days, empty files and added clips are skipped."""
+
+    def site_clip(self, site, when, size=10_000_000):
+        self.n += 1
+        return Video.objects.create(
+            user=self.user, site=site, title=f"s{self.n}", storage_key=f"s/{self.n}.mp4",
+            file_size_bytes=size, status=Video.Status.READY, recorded_at=when)
+
+    def setUp(self):
+        super().setUp()
+        from apps.videos.models import Site
+        self.mendels = Site.objects.create(user=self.user, name="mendels")
+        self.natalies = Site.objects.create(user=self.user, name="natalies")
+
+    def test_imported_site_clips_are_picked_in_proportion(self):
+        for i in range(60):
+            self.site_clip(self.mendels, self.day(5, 1, 9) + timedelta(hours=i))
+        for i in range(40):
+            self.site_clip(self.natalies, self.day(5, 1, 9) + timedelta(hours=i))
+        picks = coverage.even_spread(Video.accessible(self.user), self.project.videos.all(), 10)
+        by_site = {}
+        for p in picks:
+            by_site[p["site"]] = by_site.get(p["site"], 0) + 1
+        self.assertEqual(by_site, {self.mendels.pk: 6, self.natalies.pk: 4})
+
+    def test_picks_are_spread_through_the_period(self):
+        for d in range(30):
+            self.site_clip(self.mendels, self.day(5, 1, 10) + timedelta(days=d))
+        picks = coverage.even_spread(Video.accessible(self.user), self.project.videos.all(), 3)
+        self.assertEqual(sorted(p["date"] for p in picks), ["2026-05-06", "2026-05-16", "2026-05-26"])
+
+    def test_left_out_days_empty_files_and_added_clips_are_skipped(self):
+        self.project.left_out_days = "mendels: 2026-05-02"
+        self.project.save()
+        keep = self.site_clip(self.mendels, self.day(5, 1))
+        self.site_clip(self.mendels, self.day(5, 2))                 # left out
+        self.site_clip(self.mendels, self.day(5, 3), size=1000)      # empty file
+        added = self.site_clip(self.mendels, self.day(5, 4))
+        self.project.videos.add(added)
+        picks = coverage.even_spread(Video.accessible(self.user), self.project.videos.all(), 10,
+                                     project=self.project)
+        self.assertEqual([p["id"] for p in picks], [keep.pk])
+
+    def test_the_endpoint_takes_n_and_keeps_to_the_filter(self):
+        for d in range(20):
+            self.site_clip(self.mendels, self.day(5, 1, 10) + timedelta(days=d))
+            self.site_clip(self.natalies, self.day(5, 1, 10) + timedelta(days=d))
+        url = reverse("annotations:add_videos_draft", args=[self.project.pk])
+        j = self.client.get(url, {"even": 1, "n": 5, "site_id": self.natalies.pk,
+                                  "from": "2026-05-05", "to": "2026-05-14"}).json()
+        self.assertEqual(j["count"], 5)
+        picked = Video.objects.filter(pk__in=j["video_ids"])
+        self.assertEqual({v.site_id for v in picked}, {self.natalies.pk})
+        self.assertTrue(all("2026-05-05" <= v.recorded_at.date().isoformat() <= "2026-05-14"
+                            for v in picked))
+        self.assertEqual(self.client.get(url, {"even": 1, "n": 99999}).json()["count"], 40)
+
+    def test_draft_counts_sites_as_hotels(self):
+        self.site_clip(self.mendels, self.day(5, 1, 9))
+        self.site_clip(self.natalies, self.day(5, 1, 9))
+        picks = coverage.draft(Video.accessible(self.user), self.project.videos.all())
+        self.assertEqual(len(picks), 2)
+
+    def test_the_page_offers_an_even_n(self):
+        self.site_clip(self.mendels, self.day(5, 1))
+        html = self.client.get(reverse("annotations:add_videos_page", args=[self.project.pk])).content.decode()
+        self.assertIn('id="even-n"', html)

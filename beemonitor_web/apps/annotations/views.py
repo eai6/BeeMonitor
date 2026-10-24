@@ -953,14 +953,18 @@ class AddVideosDraftView(LoginRequiredMixin, View):
             AnnotationProject.manageable(request.user), pk=pk)
         qs = workspace.apply_video_filters(Video.accessible(request.user), request.GET)
         if request.GET.get("even"):
-            # "Select an even N across everything matching the filter".
-            picks = coverage_mod.even_spread(qs, project.videos.all(), ADD_CAP)
+            # "Pick an even N across everything matching the filter".
+            try:
+                n = max(1, min(int(request.GET.get("n") or ADD_CAP), ADD_CAP))
+            except (TypeError, ValueError):
+                n = ADD_CAP
+            picks = coverage_mod.even_spread(qs, project.videos.all(), n, project=project)
         else:
             try:
                 per_cell = max(1, min(int(request.GET.get("per_cell") or 2), 10))
             except (TypeError, ValueError):
                 per_cell = 2
-            picks = coverage_mod.draft(qs, project.videos.all(), per_cell=per_cell)
+            picks = coverage_mod.draft(qs, project.videos.all(), per_cell=per_cell, project=project)
         return JsonResponse({"picks": picks,
                              "video_ids": [p["id"] for p in picks],
                              "count": len(picks)})

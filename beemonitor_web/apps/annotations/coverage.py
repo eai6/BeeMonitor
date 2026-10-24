@@ -105,15 +105,33 @@ def _findings(rows, hours):
     return out[:6]
 
 
-def _cells(available_qs, exclude_ids):
-    """Candidate clips grouped by (device, hour), each cell oldest-first."""
-    rows = (available_qs.exclude(hour=None).exclude(device=None).exclude(pk__in=exclude_ids)
-            .order_by("recorded_at", "id")
-            .values_list("id", "device_id", "hour", "recorded_at"))
-    cells = {}
-    for vid, dev, hour, rec in rows:
-        cells.setdefault((dev, hour), []).append((vid, dev, hour, rec))
-    return cells
+def _hotel(device_id, site_id, site_name):
+    """A clip's hotel: its field unit, else its site. Clips imported from
+    uploads or cloud storage have a site and no unit."""
+    if device_id:
+        return ("unit", device_id)
+    if site_id:
+        return ("site", site_id)
+    return ("name", (site_name or "").lower())
+
+
+def _candidates(available_qs, exclude_ids, project=None):
+    """``[(id, device, site, hotel, hour, recorded_at)]`` that may be picked,
+    oldest first: not already in the project, not an empty file, not on the
+    project's left-out days (memory/57)."""
+    from . import leftout
+
+    rules = leftout.project_rules(project) if project is not None else {}
+    qs = (available_qs.exclude(pk__in=exclude_ids)
+          .exclude(file_size_bytes__lt=leftout.TOO_SMALL_BYTES)
+          .select_related("site", "device").order_by("recorded_at", "id"))
+    out = []
+    for v in qs:
+        if rules and leftout.is_left_out(v, rules):
+            continue
+        out.append((v.pk, v.device_id, v.site_id, _hotel(v.device_id, v.site_id, v.site_name),
+                    v.hour, v.recorded_at))
+    return out
 
 
 def _spaced(items, k):
@@ -125,55 +143,57 @@ def _spaced(items, k):
     return [items[int((j + 0.5) * n / k)] for j in range(k)]
 
 
-def _pick(vid, dev, hour, rec):
-    return {"id": vid, "device": dev, "hour": hour,
+def _pick(vid, dev, site, hotel, hour, rec):
+    return {"id": vid, "device": dev, "site": site, "hour": hour,
             "date": rec.date().isoformat() if rec else ""}
 
 
-def draft(available_qs, project_videos, per_cell=2):
+def draft(available_qs, project_videos, per_cell=2, project=None):
     """A balanced starting selection: up to ``per_cell`` clips per empty cell.
 
     Deliberately a draft. It picks clips the project is missing across hotels
     and hours — spread across the recorded dates, not the newest — and the user
     still looks at each one before adding it, because "spread evenly" and
     "worth annotating" are different questions and only the second one needs
-    eyes. Returns ``[{id, device, hour, date}]``.
+    eyes. Returns ``[{id, device, site, hour, date}]``.
     """
-    have = _counts(project_videos)
+    have = {(_hotel(d, s, n), h) for d, s, n, h in project_videos.exclude(hour=None).order_by()
+            .values_list("device_id", "site_id", "site_name", "hour")}
     in_project = list(project_videos.values_list("pk", flat=True))
+    cells = {}
+    for c in _candidates(available_qs.exclude(hour=None), in_project, project):
+        cells.setdefault((c[3], c[4]), []).append(c)
     picks = []
-    for cell, items in sorted(_cells(available_qs, in_project).items()):
-        if have.get(cell):
+    for cell in sorted(cells, key=str):
+        if cell in have:
             continue                       # already represented
-        picks += [_pick(*it) for it in _spaced(items, per_cell)]
+        picks += [_pick(*it) for it in _spaced(cells[cell], per_cell)]
     return picks
 
 
-def even_spread(available_qs, project_videos, target):
-    """Up to ``target`` clips spread as evenly as possible over every
-    (device, hour) cell, and within each cell over the recorded dates.
-
-    For "select an even N across everything matching the filter": a cell with
-    fewer clips than its share gives the rest to the others.
+def even_spread(available_qs, project_videos, target, project=None):
+    """Up to ``target`` clips from everything the filter matches, in
+    proportion to the footage: a hotel with 60% of the clips gets 60% of the
+    picks, and within a hotel the picks are spaced evenly through time, so
+    every day and hour is sampled as much as it was recorded. The sample then
+    looks like the footage that will be analysed.
     """
     in_project = list(project_videos.values_list("pk", flat=True))
-    cells = _cells(available_qs, in_project)
-    alloc = {c: 0 for c in cells}
-    left = target
-    open_cells = [c for c in cells if cells[c]]
-    while left > 0 and open_cells:
-        share = max(1, left // len(open_cells))
-        still_open = []
-        for c in open_cells:
-            if left <= 0:
-                break
-            give = min(share, len(cells[c]) - alloc[c], left)
-            alloc[c] += give
-            left -= give
-            if alloc[c] < len(cells[c]):
-                still_open.append(c)
-        open_cells = still_open
+    by_hotel = {}
+    for c in _candidates(available_qs, in_project, project):
+        by_hotel.setdefault(c[3], []).append(c)
+    total = sum(len(v) for v in by_hotel.values())
+    if not total or target <= 0:
+        return []
+    if target >= total:
+        alloc = {h: len(v) for h, v in by_hotel.items()}
+    else:
+        # Largest remainder: shares add up to exactly ``target``.
+        exact = {h: len(v) * target / total for h, v in by_hotel.items()}
+        alloc = {h: int(x) for h, x in exact.items()}
+        for h in sorted(exact, key=lambda h: exact[h] - alloc[h], reverse=True)[:target - sum(alloc.values())]:
+            alloc[h] += 1
     picks = []
-    for c in sorted(cells):
-        picks += [_pick(*it) for it in _spaced(cells[c], alloc[c])]
+    for h in sorted(by_hotel, key=str):
+        picks += [_pick(*it) for it in _spaced(by_hotel[h], alloc[h])]
     return picks
