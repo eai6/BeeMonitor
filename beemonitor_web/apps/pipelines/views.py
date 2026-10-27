@@ -46,6 +46,11 @@ def _own_pipeline(request, pk):
     return get_object_or_404(Pipeline, pk=pk, user=request.user)
 
 
+def _usable_pipeline(request, pk):
+    """Own, template or published: viewable, runnable and copyable."""
+    return get_object_or_404(Pipeline.usable(request.user), pk=pk)
+
+
 def _user_videos(request):
     return Video.objects.filter(user=request.user).order_by("-id")[:200]
 
@@ -55,11 +60,7 @@ def _user_videos(request):
 @login_required
 def pipeline_list(request):
     pipelines = Pipeline.objects.filter(user=request.user, is_template=False)
-    templates = Pipeline.objects.filter(is_template=True)
-    return render(request, "pipelines/list.html", {
-        "pipelines": pipelines,
-        "templates": templates,
-    })
+    return render(request, "pipelines/list.html", {"pipelines": pipelines})
 
 
 @login_required
@@ -110,7 +111,12 @@ def _reid(steps):
 
 @login_required
 def pipeline_editor(request, pk):
-    pipeline = _own_pipeline(request, pk)
+    # Someone else's published pipeline opens read-only: the canvas is locked
+    # and there is no save; copying it is how to change it.
+    pipeline = get_object_or_404(
+        Pipeline.objects.filter(Q(user=request.user) | Q(visibility=Pipeline.Visibility.PUBLIC)),
+        pk=pk)
+    readonly = pipeline.user_id != request.user.id
     videos = [
         {"id": str(v.pk), "title": (getattr(v, "title", "") or f"Video {v.pk}")}
         for v in _user_videos(request)
@@ -138,9 +144,34 @@ def pipeline_editor(request, pk):
         "bee_models_json": json.dumps(bee_models),
         "nest_models_json": json.dumps(nest_models),
         "errors_json": json.dumps(validate_steps(pipeline.steps or [])),
-        "recent_runs": pipeline.runs.all()[:5],
+        "recent_runs": [] if readonly else pipeline.runs.all()[:5],
+        "readonly": readonly,
     }
+    if readonly:
+        from . import publishing
+        ctx["summary"] = publishing.summary(pipeline)
+    elif request.GET.get("publish") == "blocked":
+        from . import publishing
+        ctx["publish_blockers"] = publishing.blockers(pipeline)
     return render(request, "pipelines/editor.html", ctx)
+
+
+@login_required
+@require_POST
+def pipeline_publish(request, pk):
+    """Publish or unpublish. Owner only."""
+    from . import publishing
+
+    pipeline = _own_pipeline(request, pk)
+    if request.POST.get("visibility") == "public":
+        if publishing.publish(pipeline):
+            return redirect(reverse("pipelines:editor", args=[pk]) + "?publish=blocked")
+        messages.success(request, "Published. Anyone signed in can now view, run and copy "
+                                  "this pipeline from Browse; only you can change it.")
+    else:
+        publishing.unpublish(pipeline)
+        messages.info(request, "No longer published. Copies people took and their runs are kept.")
+    return redirect("pipelines:editor", pk=pk)
 
 
 @login_required
@@ -195,6 +226,12 @@ def save_graph(request, pk):
 @require_POST
 def pipeline_delete(request, pk):
     pipeline = _own_pipeline(request, pk)
+    # Runs belong to their pipeline (CASCADE): deleting a published pipeline
+    # would take other people's runs with it.
+    if pipeline.runs.exclude(user=request.user).exists():
+        messages.error(request, "Other people have runs on this pipeline, and deleting it would "
+                                "delete them too. Unpublish it instead.")
+        return redirect("pipelines:list")
     pipeline.delete()
     return redirect("pipelines:list")
 
@@ -281,7 +318,7 @@ def run_on_videos(request):
         return redirect("analysis:processing")
 
     pipeline = Pipeline.objects.filter(pk=request.POST.get("pipeline")).first()
-    if not pipeline or not (pipeline.is_template or pipeline.user_id == request.user.id):
+    if not pipeline or not pipeline.usable_by(request.user):
         return _fail("Choose a pipeline to run.")
     from .registry import pipeline_input_kind
     photos = request.POST.get("kind") == "photo"
@@ -479,6 +516,9 @@ def rerun(request, pk, run_id):
     """
     old = get_object_or_404(PipelineRun, pk=run_id, user=request.user)
     pipeline = old.pipeline
+    if not pipeline.usable_by(request.user):
+        messages.error(request, "That pipeline is no longer published; copy it to run it again.")
+        return redirect("pipelines:run_detail", pk=pipeline.pk, run_id=old.pk)
     video_id = next(((s.get("config") or {}).get("video_id")
                      for s in (old.steps or [])
                      if s.get("block_type") in ("input.video", "input.photo")), None)
@@ -961,9 +1001,7 @@ def _poll_run_jobs(run):
 @login_required
 @require_POST
 def clone_pipeline(request, pk):
-    source = get_object_or_404(Pipeline, pk=pk)
-    if not (source.is_template or source.user_id == request.user.id):
-        return HttpResponse(status=403)
+    source = _usable_pipeline(request, pk)
     new = Pipeline.objects.create(
         user=request.user,
         title=f"{source.title} (copy)",
@@ -1098,7 +1136,7 @@ def batch_detail(request, batch_id):
                                    .exclude(pk=runs[0].pipeline_id if runs else None)
                                    .order_by("-is_template", "title"))
                        if pipeline_input_kind(p.steps) == kind]
-    if runs and (runs[0].pipeline.user_id == request.user.id or runs[0].pipeline.is_template):
+    if runs and runs[0].pipeline.usable_by(request.user):
         rerun_pipelines.insert(0, runs[0].pipeline)
 
     # No cross-video aggregation here any more. The page used to pair trips and

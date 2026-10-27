@@ -41,6 +41,17 @@ class Pipeline(models.Model):
                   "`steps` on save; empty for pipelines built before the canvas.",
     )
     is_template = models.BooleanField(default=False)
+
+    class Visibility(models.TextChoices):
+        PRIVATE = "private", "Private"
+        PUBLIC = "public", "Public — anyone can view, run and copy it"
+
+    # Published like a model or a dataset (memory/59): readable, runnable and
+    # copyable by anyone signed in, never editable by them.
+    visibility = models.CharField(
+        max_length=10, choices=Visibility.choices, default=Visibility.PRIVATE,
+    )
+    published_at = models.DateTimeField(null=True, blank=True)
     cloned_from = models.ForeignKey(
         "self",
         on_delete=models.SET_NULL,
@@ -56,6 +67,25 @@ class Pipeline(models.Model):
 
     def __str__(self):
         return self.title
+
+    @property
+    def is_public(self):
+        return self.visibility == self.Visibility.PUBLIC
+
+    @classmethod
+    def public(cls):
+        return cls.objects.filter(visibility=cls.Visibility.PUBLIC).order_by("-published_at")
+
+    @classmethod
+    def usable(cls, user):
+        """Pipelines this user may view, run and copy: their own, the
+        templates, and anyone's published ones."""
+        return cls.objects.filter(
+            models.Q(user=user) | models.Q(is_template=True)
+            | models.Q(visibility=cls.Visibility.PUBLIC))
+
+    def usable_by(self, user):
+        return self.user_id == user.id or self.is_template or self.is_public
 
 
 class PipelineRun(models.Model):

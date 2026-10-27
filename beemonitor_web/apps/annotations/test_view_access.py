@@ -347,6 +347,18 @@ class ReviewPageTests(ViewAccessTestCase):
         cards = self.client.get(url, {"who": "none"}).context["frame_cards"]
         self.assertEqual([c["video_pk"] for c in cards], [self.video.pk])
 
+    def test_the_grid_filters_to_one_site(self):
+        other = Video.objects.create(user=self.owner, title="o", storage_key="va/o.mp4",
+                                     file_size_bytes=1, status=Video.Status.READY,
+                                     site_name="Ithaca")
+        self.project.videos.add(other)
+        Annotation.objects.create(project=self.project, video=other, frame_number=5, boxes=[])
+        self.as_("owner")
+        r = self.client.get(reverse("annotations:detail", args=[self.project.pk]),
+                            {"site": "Ithaca"})
+        self.assertEqual([c["video_pk"] for c in r.context["frame_cards"]], [other.pk])
+        self.assertIn('<option value="Ithaca" selected>', r.content.decode())
+
     def test_only_managers_see_where_and_when(self):
         """Sharing a project does not share the footage (people.html)."""
         from datetime import datetime, timezone as dt_tz

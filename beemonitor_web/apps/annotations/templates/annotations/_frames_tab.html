@@ -55,12 +55,22 @@
     {% endfor %}
   </select>
   {% if show_source %}
+  {% if device_opts %}
   <select name="device" aria-label="Device" class="border border-gray-300 rounded-md px-2 py-1.5 text-[13px]">
     <option value="">All devices</option>
     {% for pk, name in device_opts %}
     <option value="{{ pk }}" {% if frame_filter.device == pk|stringformat:"s" %}selected{% endif %}>{{ name }}</option>
     {% endfor %}
   </select>
+  {% endif %}
+  {% if site_opts %}
+  <select name="site" aria-label="Site" class="border border-gray-300 rounded-md px-2 py-1.5 text-[13px]">
+    <option value="">All sites</option>
+    {% for name in site_opts %}
+    <option value="{{ name }}" {% if frame_filter.site == name %}selected{% endif %}>{{ name }}</option>
+    {% endfor %}
+  </select>
+  {% endif %}
   <label class="text-[12px] text-gray-500 flex items-center gap-1">From
     <input type="date" name="from" value="{{ frame_filter.from }}" class="border border-gray-300 rounded-md px-1.5 py-1 text-[13px]"></label>
   <label class="text-[12px] text-gray-500 flex items-center gap-1">to
@@ -95,7 +105,7 @@
     </div>
     <div class="px-2 py-1.5">
       <p class="text-[11.5px] text-gray-700 truncate">
-        {% if show_source %}{{ card.device|default:"—" }}{% if card.recorded_at %} &middot; {{ card.recorded_at|date:"j M, H:i" }}{% endif %}{% else %}{{ card.video_title }}{% endif %}
+        {% if show_source %}{{ card.device|default:card.site|default:"—" }}{% if card.recorded_at %} &middot; {{ card.recorded_at|date:"j M, H:i" }}{% endif %}{% else %}{{ card.video_title }}{% endif %}
       </p>
       <div class="flex items-center gap-1 mt-0.5">
         <span class="text-[10.5px] font-mono text-gray-400">f{{ card.frame_number }}</span>

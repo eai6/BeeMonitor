@@ -3,7 +3,8 @@
 
 {% comment %}
   Datasets are copied, models are used — a dataset you build on has to be yours
-  to change, a model is an artefact you point a pipeline at.
+  to change, a model is an artefact you point a pipeline at. Pipelines are both:
+  run one as it is, or copy it to change it (memory/59).
 
   Every card says what the thing COVERS, not just how big it is. 1,800 frames
   from two hotels before lunch and 1,800 spread over four hotels and a full day
@@ -13,17 +14,52 @@
 {% block content %}
 <h1 class="text-2xl font-bold text-gray-900">Shared publicly</h1>
 <p class="text-sm text-gray-500 mt-1 mb-5 max-w-3xl leading-6">
-  Datasets and models other people have published. Take a copy of a dataset to build
-  on it, or select a model in your own pipeline — nothing you do here changes the
-  original.
+  Datasets, models and pipelines other people have published. Take a copy of a dataset
+  to build on it, select a model in your own pipeline, or run or copy a pipeline —
+  nothing you do here changes the original.
 </p>
 
 <div class="flex gap-1.5 mb-4">
-  <a href="?tab=datasets" class="text-[12.5px] px-3.5 py-1.5 rounded-full border {% if tab != 'models' %}bg-amber-600 border-amber-600 text-white font-semibold{% else %}border-gray-300 text-gray-700 hover:bg-gray-50{% endif %}">Datasets {{ dataset_count }}</a>
+  <a href="?tab=datasets" class="text-[12.5px] px-3.5 py-1.5 rounded-full border {% if tab != 'models' and tab != 'pipelines' %}bg-amber-600 border-amber-600 text-white font-semibold{% else %}border-gray-300 text-gray-700 hover:bg-gray-50{% endif %}">Datasets {{ dataset_count }}</a>
   <a href="?tab=models" class="text-[12.5px] px-3.5 py-1.5 rounded-full border {% if tab == 'models' %}bg-amber-600 border-amber-600 text-white font-semibold{% else %}border-gray-300 text-gray-700 hover:bg-gray-50{% endif %}">Models {{ model_count }}</a>
+  <a href="?tab=pipelines" class="text-[12.5px] px-3.5 py-1.5 rounded-full border {% if tab == 'pipelines' %}bg-amber-600 border-amber-600 text-white font-semibold{% else %}border-gray-300 text-gray-700 hover:bg-gray-50{% endif %}">Pipelines {{ pipeline_count }}</a>
 </div>
 
-{% if tab != "models" %}
+{% if tab == "pipelines" %}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+  {% for item in pipelines %}{% with p=item.pipeline sm=item.summary %}
+  <div class="bg-white shadow rounded-lg overflow-hidden flex flex-col">
+    <div class="p-4 flex-1">
+      <div class="flex items-start justify-between gap-3">
+        <h3 class="text-[15px] font-bold text-gray-900">{{ p.title }}</h3>
+        <span class="text-[11px] text-gray-500 whitespace-nowrap">{% if sm.copies %}copied {{ sm.copies }}&times;{% else %}not copied yet{% endif %}</span>
+      </div>
+      <p class="text-[11.5px] text-gray-500 mt-0.5">
+        {{ p.user.username }}{% if p.published_at %} &middot; published {{ p.published_at|date:"j M Y" }}{% endif %} &middot; updated {{ p.updated_at|date:"j M Y" }}
+      </p>
+      {% if p.description %}<p class="text-[13px] text-gray-700 mt-2 leading-5">{{ p.description }}</p>{% endif %}
+      <div class="flex flex-wrap items-center gap-1 mt-2.5" aria-label="Steps in order">
+        {% for st in sm.steps %}
+        <span class="text-[11px] bg-gray-100 border border-gray-200 text-gray-800 px-2 py-0.5 rounded">{{ st.icon }} {{ st.name }}</span>{% if not forloop.last %}<span class="text-gray-300 text-[11px]" aria-hidden="true">&rarr;</span>{% endif %}
+        {% endfor %}
+      </div>
+      {% if sm.models %}<p class="text-[11.5px] text-gray-500 mt-2.5">Models: <span class="text-gray-700">{{ sm.models|join:", " }}</span></p>{% endif %}
+    </div>
+    <div class="flex items-center gap-2 px-4 py-2.5 border-t border-gray-200">
+      <a href="{% url 'pipelines:editor' p.pk %}" class="text-[12px] px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-50">{% if item.mine %}Open{% else %}View{% endif %}</a>
+      <form method="post" action="{% url 'pipelines:clone' p.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-3.5 py-1.5 rounded text-[12.5px] font-semibold">Copy to my pipelines</button>
+      </form>
+      <a href="{% url 'analysis:processing' %}?pipeline={{ p.pk }}" class="ml-auto text-[12px] text-amber-700 hover:underline">Run on my clips</a>
+    </div>
+  </div>
+  {% endwith %}{% empty %}
+  <p class="text-sm text-gray-400">No pipelines published yet. Open one of yours and press Publish.</p>
+  {% endfor %}
+</div>
+
+{% elif tab != "models" %}
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
   {% for d in datasets %}
   <div class="bg-white shadow rounded-lg overflow-hidden">

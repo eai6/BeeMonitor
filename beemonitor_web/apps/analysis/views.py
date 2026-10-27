@@ -730,6 +730,9 @@ class ProcessingHubView(LoginRequiredMixin, View):
             # Only pipelines that start from the matching input (memory/45).
             "pipelines": _pipelines_for(kind, Pipeline.objects.filter(user=request.user, is_template=False).order_by("title")),
             "pipeline_templates": _pipelines_for(kind, Pipeline.objects.filter(is_template=True).order_by("title")),
+            # Others' published pipelines run as they are (memory/59).
+            "pipeline_published": _pipelines_for(kind, Pipeline.public().select_related("user").exclude(user=request.user)
+                                                 .filter(is_template=False).order_by("title")),
         })
 
     def post(self, request):

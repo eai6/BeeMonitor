@@ -73,6 +73,9 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
         {% if pipeline_templates %}<optgroup label="Templates">
           {% for p in pipeline_templates %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}>{{ p.title }}</option>{% endfor %}
         </optgroup>{% endif %}
+        {% if pipeline_published %}<optgroup label="Published by others">
+          {% for p in pipeline_published %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}>{{ p.title }} — {{ p.user.username }}</option>{% endfor %}
+        </optgroup>{% endif %}
       </select>
       {% if kind != "photo" %}
       <!-- Part of each clip (memory/53) -->

@@ -335,6 +335,8 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
                 {(v.device_id, v.device.name)
                  for v in project.videos.select_related("device") if v.device_id},
                 key=lambda d: d[1]),
+            "site_opts": sorted(set(project.videos.exclude(site_name="")
+                                    .values_list("site_name", flat=True)), key=str.lower),
         })
 
     def _clips_context(self, ctx):
@@ -521,10 +523,19 @@ class PublicBrowseView(LoginRequiredMixin, TemplateView):
                   .filter(visibility=CustomModel.Visibility.PUBLIC)
                   .select_related("user").order_by("-published_at", "-id")[:60])
 
+        from apps.pipelines import publishing as pipeline_publishing
+        from apps.pipelines.models import Pipeline
+
+        pipelines = [{"pipeline": p, "summary": pipeline_publishing.summary(p),
+                      "mine": p.user_id == self.request.user.id}
+                     for p in Pipeline.public().select_related("user")[:60]]
+
         ctx.update({
             "tab": tab,
             "datasets": datasets,
             "models": models,
+            "pipelines": pipelines,
+            "pipeline_count": Pipeline.public().count(),
             "dataset_count": AnnotationProject.public().count(),
             "model_count": CustomModel.objects.filter(
                 visibility=CustomModel.Visibility.PUBLIC).count(),

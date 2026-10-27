@@ -101,9 +101,9 @@ def _owned(request, pk):
     return get_object_or_404(Pipeline, pk=pk, user=request.user)
 
 
-def _owned_or_template(request, pk):
+def _usable(request, pk):
     p = get_object_or_404(Pipeline, pk=pk)
-    if p.user_id != request.user.id and not p.is_template:
+    if not p.usable_by(request.user):
         return None
     return p
 
@@ -143,7 +143,7 @@ class PipelineListCreateView(APIView):
 
 class PipelineDetailView(APIView):
     def get(self, request, pk):
-        p = _owned_or_template(request, pk)
+        p = _usable(request, pk)
         if p is None:
             return Response({"detail": "Not found."}, status=404)
         return Response(_pipeline_json(p))
@@ -179,7 +179,7 @@ class PipelineValidateView(APIView):
 class PipelineCloneView(APIView):
     def post(self, request, pk):
         src = get_object_or_404(Pipeline, pk=pk)
-        if not (src.is_template or src.user_id == request.user.id):
+        if not src.usable_by(request.user):
             return Response({"detail": "Not allowed."}, status=403)
         new = Pipeline.objects.create(
             user=request.user,
@@ -198,7 +198,7 @@ class PipelineRunView(APIView):
         from apps.videos.models import Video
 
         pipeline = get_object_or_404(Pipeline, pk=pk)
-        if not (pipeline.is_template or pipeline.user_id == request.user.id):
+        if not pipeline.usable_by(request.user):
             return Response({"detail": "Not allowed."}, status=403)
         if not any(s.get("block_type") == "input.video" for s in (pipeline.steps or [])):
             return Response({"detail": "Pipeline has no video input to run on."}, status=400)

@@ -329,6 +329,7 @@ def _spawn_training_job(job_pk: int) -> None:
             "imgsz": job.image_size,
             "batch_size": job.batch_size,
             "val_percent": job.val_percent,
+            "hyperparams": job.hyperparams or {},
             "classes": classes,
             "video_annotations": video_annotations,
             "model_key": model_key,
@@ -841,6 +842,10 @@ def _training_snapshot(job):
         "devices": videos.exclude(device=None).values("device_id").distinct().count(),
         "hours": hours,
         "classes": list(job.class_subset or project.classes or []),
+        # How it was trained, so a shared model can be reproduced.
+        "settings": {"base_model": job.base_model, "epochs": job.epochs,
+                     "image_size": job.image_size, "batch_size": job.batch_size,
+                     "val_percent": job.val_percent, **(job.hyperparams or {})},
     }
 
 

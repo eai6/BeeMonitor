@@ -60,6 +60,31 @@
   .tray-block { cursor: grab; }
 </style>
 
+{% if readonly %}
+<div class="flex items-start justify-between gap-3 mb-3 flex-wrap">
+  <div>
+    <a href="{% url 'annotations:browse' %}?tab=pipelines" class="text-xs text-gray-400 hover:text-gray-600">← Browse pipelines</a>
+    <h1 class="text-xl font-bold text-gray-900">{{ pipeline.title }}</h1>
+    <p class="text-sm text-gray-500">
+      Published by {{ pipeline.user.username }}
+      &middot; updated {{ pipeline.updated_at|date:"j M Y" }}{% if summary.copies %} &middot; copied {{ summary.copies }}&times;{% endif %}
+    </p>
+    {% if pipeline.description %}<p class="text-sm text-gray-700 mt-1 max-w-2xl">{{ pipeline.description }}</p>{% endif %}
+  </div>
+  <div class="flex items-center gap-2">
+    <a href="{% url 'analysis:processing' %}?pipeline={{ pipeline.pk }}"
+       class="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-md text-sm font-medium">Run on my clips</a>
+    <form method="post" action="{% url 'pipelines:clone' pk=pipeline.pk %}">
+      {% csrf_token %}
+      <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-md text-sm font-semibold">Copy to my pipelines</button>
+    </form>
+  </div>
+</div>
+<div class="bg-blue-50 border border-blue-200 text-blue-900 rounded-md px-3 py-2 mb-3 text-sm">
+  View only. The settings on each step are shown as they are; copy the pipeline to change anything.
+  {% if summary.models %}<span class="block text-[13px] text-blue-800 mt-0.5">Models: {{ summary.models|join:", " }}</span>{% endif %}
+</div>
+{% else %}
 <div class="flex items-center justify-between mb-3">
   <div>
     <form hx-post="{% url 'pipelines:rename' pk=pipeline.pk %}" hx-target="#save-indicator" hx-swap="innerHTML" class="flex items-center gap-2">
@@ -78,14 +103,34 @@
       launched from here has no video selected, so it could only ever fail or
       silently pick one for you. The editor's job is the graph.
     {% endcomment %}
+    {% if pipeline.is_public %}<span class="text-[12px] font-semibold text-green-800 bg-green-100 rounded-full px-2.5 py-1" title="Listed on Browse: anyone signed in can view, run and copy it">Published</span>{% endif %}
+    {% if not pipeline.is_template %}
+    <form method="post" action="{% url 'pipelines:publish' pk=pipeline.pk %}"
+          {% if pipeline.is_public %}onsubmit="return confirm('Unpublish? It leaves Browse and others can no longer run it. Copies they took are kept.')"{% endif %}>
+      {% csrf_token %}
+      <input type="hidden" name="visibility" value="{% if pipeline.is_public %}private{% else %}public{% endif %}">
+      <button type="submit" class="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-md text-sm font-medium"
+              {% if not pipeline.is_public %}title="List it on Browse so others can view, run and copy it. Save your changes first."{% endif %}>
+        {% if pipeline.is_public %}Unpublish{% else %}Publish{% endif %}</button>
+    </form>
+    {% endif %}
     <button type="button" onclick="plSave()" class="bg-amber-600 hover:bg-amber-700 text-white px-5 py-2 rounded-md text-sm font-semibold">💾 Save</button>
   </div>
 </div>
+{% if publish_blockers %}
+<div role="alert" class="bg-amber-50 border border-amber-300 text-amber-900 rounded-md p-3 mb-3 text-sm">
+  <strong>Not published.</strong> These steps use model{{ publish_blockers|length|pluralize }} only you can use, so the pipeline would fail for anyone else:
+  {% for m in publish_blockers %}<a href="{% url 'training:model_detail' m.pk %}" class="font-semibold underline">{{ m.name }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}.
+  Publish {{ publish_blockers|length|pluralize:"it,them" }} from the model page, then publish this pipeline.
+</div>
+{% endif %}
+{% endif %}
 
 <div id="pl-errors" class="hidden bg-red-50 border border-red-200 text-red-800 rounded-md p-3 mb-3 text-sm"></div>
 <p id="pl-toast" class="hidden text-sm text-green-700 mb-2"></p>
 
 <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+  {% if not readonly %}
   <!-- Palette -->
   <div class="md:col-span-1">
     <div class="bg-white rounded-lg border border-gray-200 shadow-sm p-3" x-data="{ open: '{{ categories.0.slug }}' }">
@@ -115,10 +160,11 @@
     </div>
   </div>
 
+  {% endif %}
   <!-- Canvas -->
-  <div class="md:col-span-3">
-    <div id="drawflow" ondrop="plDrop(event)" ondragover="event.preventDefault()"></div>
-    <p class="text-xs text-gray-400 mt-1">Drag a block in, connect output → input, edit fields on the node. Select a node and press <kbd>Delete</kbd> to remove it. Save persists the graph.</p>
+  <div class="{% if readonly %}md:col-span-4{% else %}md:col-span-3{% endif %}">
+    <div id="drawflow" {% if not readonly %}ondrop="plDrop(event)" ondragover="event.preventDefault()"{% endif %}></div>
+    <p class="text-xs text-gray-400 mt-1">{% if readonly %}Drag the background to move around; scroll to zoom.{% else %}Drag a block in, connect output → input, edit fields on the node. Select a node and press <kbd>Delete</kbd> to remove it. Save persists the graph.{% endif %}</p>
   </div>
 </div>
 
@@ -131,6 +177,7 @@ const BEE_MODELS = JSON.parse("{{ bee_models_json|escapejs }}");
 const NEST_MODELS = JSON.parse("{{ nest_models_json|escapejs }}");
 const SAVE_URL = "{% url 'pipelines:save_graph' pk=pipeline.pk %}";
 const CSRF = "{{ csrf_token }}";
+const READONLY = {{ readonly|yesno:"true,false" }};
 
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function genId(){ return Math.random().toString(16).slice(2,10); }
@@ -316,6 +363,14 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   }));
 
+  if(READONLY){
+    // Locked: pan and zoom only, every field shown but not editable.
+    editor.editor_mode = 'view';
+    document.querySelectorAll('#drawflow .pl-inp').forEach(el => { el.disabled = true; });
+    plApplyShowIf(document);
+    plLabelPorts();
+    return;
+  }
   plShowErrors(JSON.parse("{{ errors_json|escapejs }}") || []);
   plApplyShowIf(document);  // initial visibility from saved config
   plLabelPorts();           // label input dots from the block's ports

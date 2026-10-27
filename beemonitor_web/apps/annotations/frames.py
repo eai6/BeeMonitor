@@ -19,7 +19,7 @@ from .models import Annotation
 
 PAGE_SIZE = 60
 
-FILTER_KEYS = ("status", "who", "device", "cls", "from", "to")
+FILTER_KEYS = ("status", "who", "device", "site", "cls", "from", "to")
 STATUSES = ("review", "reviewed", "all")
 ORDER = ("video_id", "frame_number")
 
@@ -62,6 +62,8 @@ def base(project, f, user):
         qs = qs.filter(assigned_to_id=int(who))
     if f.get("device"):
         qs = qs.filter(video__device_id=int(f["device"]))
+    if f.get("site"):
+        qs = qs.filter(video__site_name=f["site"])
     if f.get("from"):
         qs = qs.filter(video__recorded_at__date__gte=f["from"])
     if f.get("to"):
@@ -157,6 +159,7 @@ def page(qs, number, size=PAGE_SIZE):
             "video_pk": ann.video_id,
             "video_title": ann.video.title,
             "device": ann.video.device.name if ann.video.device_id else "",
+            "site": ann.video.site_name,
             "recorded_at": ann.video.recorded_at,
             "frame_number": ann.frame_number,
             "box_count": len(boxes),

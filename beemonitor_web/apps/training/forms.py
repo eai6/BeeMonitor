@@ -3,6 +3,7 @@ from django.conf import settings
 
 from apps.annotations.models import AnnotationProject
 
+from . import hyperparams as hp
 from .models import CustomModel, TrainingJob
 
 _SELECT_CSS = "w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
@@ -97,6 +98,50 @@ class TrainingCreateForm(forms.ModelForm):
         if not self.initial.get("base_model"):
             self.initial["base_model"] = "default"
 
+        # Advanced settings, all optional: blank means Ultralytics' default.
+        small = _SELECT_CSS.replace("px-3 py-2", "px-2 py-1.5")
+        for name, label, kind, lo, hi, default, help_text in hp.FIELDS.values():
+            if kind == "choice":
+                field = forms.ChoiceField(choices=[(c, c) for c in lo], initial=default,
+                                          widget=forms.Select(attrs={"class": small}))
+            elif kind == "bool":
+                field = forms.BooleanField(widget=forms.CheckboxInput(attrs={
+                    "class": "rounded border-gray-300 text-amber-600 focus:ring-amber-500"}))
+            else:
+                cls = forms.IntegerField if kind == "int" else forms.FloatField
+                field = cls(min_value=lo, max_value=hi, widget=forms.NumberInput(attrs={
+                    "class": small, "placeholder": default,
+                    "step": "1" if kind == "int" else "any"}))
+            field.required = False
+            field.label = label
+            field.help_text = help_text
+            self.fields["hp_" + name] = field
+
+    def advanced_fields(self):
+        """The advanced settings as ``[(group title, [bound fields])]``."""
+        return [(title, [self["hp_" + f[0]] for f in group]) for title, group in hp.SPEC]
+
+    def _clean_hyperparams(self, cleaned):
+        """Keep only what was set. A number typed equal to its default is
+        still kept, so the job records what the user asked for."""
+        values = {}
+        for name, _label, kind, _lo, _hi, default, _help in hp.FIELDS.values():
+            v = cleaned.get("hp_" + name)
+            if kind == "choice":
+                if v and v != default:
+                    values[name] = v
+            elif kind == "bool":
+                if v:
+                    values[name] = True
+            elif v is not None:
+                values[name] = v
+        if values.get("optimizer", "auto") == "auto":
+            for name in hp.NEEDS_OPTIMIZER:
+                if name in values:
+                    self.add_error("hp_" + name, "Auto chooses its own — pick an optimizer "
+                                                 "to set this.")
+        self.instance.hyperparams = values
+
     def clean_val_percent(self):
         v = self.cleaned_data.get("val_percent")
         if v is None:
@@ -107,6 +152,7 @@ class TrainingCreateForm(forms.ModelForm):
 
     def clean(self):
         cleaned = super().clean()
+        self._clean_hyperparams(cleaned)
 
         # Class subset — checkboxes named "class_subset" (dynamic per project,
         # so validated here rather than as a ChoiceField). Empty stored subset

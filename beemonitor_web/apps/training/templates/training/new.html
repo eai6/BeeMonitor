@@ -72,9 +72,32 @@
       </div>
       <p class="-mt-2 mb-4 text-xs text-gray-500">Val Split: percent of frames held out for evaluation (metrics + validation predictions); the rest train the model.</p>
 
+      <details class="mb-4 border border-gray-200 rounded" {% if form.instance.hyperparams or form.errors %}open{% endif %}>
+        <summary class="cursor-pointer select-none px-3 py-2 text-sm font-medium text-gray-700">Advanced settings
+          <span class="font-normal text-gray-500">— optional; blank uses the default</span></summary>
+        <div class="px-3 pb-3">
+          {% for title, fields in form.advanced_fields %}
+          <p class="mt-3 mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">{{ title }}</p>
+          <div class="grid grid-cols-2 gap-3">
+            {% for f in fields %}
+            <div>
+              {% if f.widget_type == "checkbox" %}
+              <label class="flex items-center gap-2 text-sm text-gray-700 mt-5">{{ f }} {{ f.label }}</label>
+              {% else %}
+              <label for="{{ f.id_for_label }}" class="block text-xs font-medium text-gray-700 mb-1">{{ f.label }}</label>
+              {{ f }}
+              {% endif %}
+              {% if f.help_text %}<p class="mt-0.5 text-[11px] leading-snug text-gray-500">{{ f.help_text }}</p>{% endif %}
+            </div>
+            {% endfor %}
+          </div>
+          {% endfor %}
+        </div>
+      </details>
+
       <!-- Estimated cost hint -->
       <div class="bg-amber-50 border border-amber-200 rounded p-3 mb-6 text-sm text-amber-800">
-        Training time depends on the number of frames and epochs. Typical training runs use 500-5000 GPU seconds.
+        Training time depends on the number of frames and epochs. Typical training runs use about 0.1–1.5 GPU-hours.
       </div>
 
       <div class="flex space-x-3">

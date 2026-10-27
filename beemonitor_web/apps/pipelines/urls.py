@@ -21,6 +21,7 @@ urlpatterns = [
     path("<uuid:pk>/rename/", views.pipeline_rename, name="rename"),
     path("<uuid:pk>/delete/", views.pipeline_delete, name="delete"),
     path("<uuid:pk>/clone/", views.clone_pipeline, name="clone"),
+    path("<uuid:pk>/publish/", views.pipeline_publish, name="publish"),
     path("<uuid:pk>/run/", views.run_pipeline, name="run"),
     path("<uuid:pk>/run/<uuid:run_id>/", views.run_detail, name="run_detail"),
     path("<uuid:pk>/run/<uuid:run_id>/photo/", views.run_photo, name="run_photo"),

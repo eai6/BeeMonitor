@@ -69,3 +69,12 @@ def test_saved_frames_are_used_and_only_the_rest_are_cut_from_video(train):
     assert images == ["a_f000001.jpg", "b_f000003.jpg", "b_f000007.jpg"]
     assert not list((tmp / "work" / "videos").iterdir())        # the video was deleted
     assert data_yaml.exists()
+
+
+def test_only_known_hyperparameters_reach_yolo(train):
+    mod, _, _ = train
+    got = mod._hyperparams({"hyperparams": {
+        "lr0": "0.002", "optimizer": "AdamW", "cos_lr": True, "patience": 20.0,
+        "freeze": 0, "seed": None, "data": "/etc/passwd", "lrf": "bad"}})
+    assert got == {"lr0": 0.002, "optimizer": "AdamW", "cos_lr": True, "patience": 20}
+    assert mod._hyperparams({}) == {}

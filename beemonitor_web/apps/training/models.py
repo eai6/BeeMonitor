@@ -68,6 +68,11 @@ class TrainingJob(models.Model):
         default=20,
         help_text="Percent of frames held out for validation (the metrics set).",
     )
+    hyperparams = models.JSONField(
+        default=dict, blank=True,
+        help_text="Advanced Ultralytics settings that were set (hyperparams.py); "
+                  "anything absent is Ultralytics' default.",
+    )
     gpu_tier = models.CharField(
         max_length=10,
         choices=Job.GpuTier.choices,
@@ -95,6 +100,11 @@ class TrainingJob(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.status})"
+
+    def advanced_settings(self):
+        """The advanced settings this job set, as ``[(label, value)]``."""
+        from .hyperparams import labelled
+        return labelled(self.hyperparams)
 
 
 class CustomModel(models.Model):

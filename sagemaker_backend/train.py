@@ -160,6 +160,34 @@ def _build_dataset(manifest: dict, ds_dir: Path) -> tuple[Path, int, int]:
     return data_yaml, counts["train"], counts["val"]
 
 
+# Advanced settings the web app may send (beemonitor_web/apps/training/
+# hyperparams.py), with their types. Anything else in the manifest is ignored,
+# so a bad key can never reach YOLO.train.
+HYPERPARAMS = {
+    "optimizer": str, "lr0": float, "lrf": float, "momentum": float,
+    "weight_decay": float, "warmup_epochs": float, "cos_lr": bool,
+    "patience": int, "freeze": int, "seed": int,
+    "mosaic": float, "fliplr": float, "flipud": float, "degrees": float,
+    "scale": float, "translate": float, "hsv_v": float,
+}
+
+
+def _hyperparams(manifest: dict) -> dict:
+    out = {}
+    for name, value in (manifest.get("hyperparams") or {}).items():
+        cast = HYPERPARAMS.get(name)
+        if cast is None or value is None:
+            continue
+        try:
+            out[name] = cast(value)
+        except (TypeError, ValueError):
+            log(f"ignoring hyperparameter {name}={value!r}")
+    # freeze=0 means "freeze nothing"; Ultralytics wants None for that.
+    if out.get("freeze") == 0:
+        out.pop("freeze")
+    return out
+
+
 def _train(manifest: dict, data_yaml: Path) -> dict:
     from ultralytics import YOLO
 
@@ -179,11 +207,14 @@ def _train(manifest: dict, data_yaml: Path) -> dict:
     imgsz = int(manifest.get("imgsz", 640))
     batch = int(manifest.get("batch_size", 16))
 
-    log(f"training {base} epochs={epochs} imgsz={imgsz} batch={batch}")
+    extra = _hyperparams(manifest)
+
+    log(f"training {base} epochs={epochs} imgsz={imgsz} batch={batch} {extra}")
     model = YOLO(base)
     results = model.train(
         data=str(data_yaml), epochs=epochs, imgsz=imgsz, batch=batch,
         project=str(WORK / "runs"), name="train", exist_ok=True, verbose=True,
+        **extra,
     )
 
     # Locate best.pt.
