@@ -39,6 +39,7 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
         {{ video_count }} {% if kind == "photo" %}photo{% else %}clip{% endif %}{{ video_count|pluralize }}
         {% if f.device %}&middot; {{ f.device|length }} hotel{{ f.device|pluralize }}{% endif %}
         &middot; <span id="rail-selected">0</span> selected
+        <span id="rail-elsewhere" class="hidden">(<span id="rail-elsewhere-n">0</span> from other filters)</span>
       </p>
     </div>
 
@@ -192,6 +193,28 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
 
   function boxes() { return Array.prototype.slice.call(document.querySelectorAll('.vid-cb')); }
 
+  // Picks survive filter changes: every filter is a page load, so the ticked
+  // clips are kept for this tab and re-ticked wherever they show up again.
+  // A run sends every pick, shown under this filter or not.
+  var PICKS_KEY = 'bm-hub-picks-{{ kind|default:"video" }}';
+  var picked = (function () {
+    try { return new Set(JSON.parse(sessionStorage.getItem(PICKS_KEY) || '[]')); }
+    catch (e) { return new Set(); }
+  })();
+  function savePicks() {
+    try { sessionStorage.setItem(PICKS_KEY, JSON.stringify(Array.from(picked))); } catch (e) {}
+  }
+  function visibleIds() {
+    var ids = new Set();
+    boxes().forEach(function (b) { ids.add(b.value); });
+    return ids;
+  }
+  function elsewhere() {
+    var shown = visibleIds();
+    return Array.from(picked).filter(function (id) { return !shown.has(id); });
+  }
+  boxes().forEach(function (b) { if (picked.has(b.value) && !b.disabled) b.checked = true; });
+
   function paintCard(cb) {
     var card = cb.closest('.vid-card');
     if (!card) return;
@@ -203,7 +226,13 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
     var checked = boxes().filter(function (b) { return b.checked; }).length;
     var useAll = all && all.checked && TOTAL > boxes().length;
     if (flag) flag.value = useAll ? '1' : '';
-    var n = useAll ? Math.min(TOTAL, CAP) : checked;
+    var other = elsewhere().length;
+    var n = (useAll ? Math.min(TOTAL, CAP) : checked) + other;
+    var otherEl = document.getElementById('rail-elsewhere');
+    if (otherEl) {
+      otherEl.classList.toggle('hidden', !other);
+      document.getElementById('rail-elsewhere-n').textContent = other.toLocaleString();
+    }
     if (cnt) cnt.textContent = n.toLocaleString();
     if (railSel) railSel.textContent = n.toLocaleString();
     if (btn) btn.disabled = n === 0;
@@ -213,6 +242,7 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
       else {
         credLine.innerHTML = '<span class="text-gray-900 font-medium">' + n.toLocaleString() +
           ' clip' + (n === 1 ? '' : 's') + ' selected</span>' +
+          (other ? ' (' + other.toLocaleString() + ' from other filters)' : '') +
           (useAll && TOTAL > CAP ? ' — capped at ' + CAP.toLocaleString() : '');
       }
     }
@@ -220,17 +250,23 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
     boxes().forEach(paintCard);
   }
 
+  function remember(b) {
+    if (b.checked) picked.add(b.value); else picked.delete(b.value);
+  }
   if (all) all.addEventListener('change', function () {
-    boxes().forEach(function (b) { if (!b.disabled) b.checked = all.checked; });
+    boxes().forEach(function (b) { if (!b.disabled) { b.checked = all.checked; remember(b); } });
+    savePicks();
     refresh();
   });
   if (clearSel) clearSel.addEventListener('click', function () {
     if (all) all.checked = false;
     boxes().forEach(function (b) { b.checked = false; });
+    picked.clear();
+    savePicks();
     refresh();
   });
   boxes().forEach(function (b) {
-    b.addEventListener('change', refresh);
+    b.addEventListener('change', function () { remember(b); savePicks(); refresh(); });
     b.addEventListener('click', function (e) { e.stopPropagation(); });
   });
 
@@ -280,6 +316,8 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
   function submitRun(fitOnly) {
     var token = form.querySelector('[name=csrfmiddlewaretoken]').value;
     var body = new FormData(form);
+    // Picks made under other filters ride along with the ones shown here.
+    elsewhere().forEach(function (id) { body.append('video_ids', id); });
     if (fitOnly) body.set('fit_only', '1');
     btn.disabled = true;
     if (credLine) credLine.textContent = 'Submitting…';
@@ -292,6 +330,8 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
         var d = res.d || {};
         if (res.ok && d.ok) {
           toast(d.message || 'Submitted.', true);
+          (d.video_ids || []).forEach(function (id) { picked.delete(String(id)); });
+          savePicks();
           (d.video_ids || []).forEach(function (id) {
             var cb = document.getElementById('cb-' + id);
             if (cb) { cb.checked = false; cb.disabled = true; }

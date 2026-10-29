@@ -345,8 +345,15 @@ def run_on_videos(request):
     MAX_BATCH = getattr(settings, "PIPELINE_MAX_BATCH", 50000)
     over_cap = gone = 0
     if request.POST.get("all_filtered"):
+        from django.db.models import Q
+
         from apps.analysis.views import apply_video_filters
         vqs = apply_video_filters(_source(), request.POST)
+        # Clips picked under other filters (the page keeps picks across
+        # filter changes) run too.
+        picked = [v for v in request.POST.getlist("video_ids") if str(v).isdigit()]
+        if picked:
+            vqs = _source().filter(Q(pk__in=vqs.values("pk")) | Q(pk__in=picked))
         total = vqs.count()
         vqs = vqs.order_by("-recorded_at", "-uploaded_at")
         videos = list(vqs[:MAX_BATCH] if MAX_BATCH else vqs)

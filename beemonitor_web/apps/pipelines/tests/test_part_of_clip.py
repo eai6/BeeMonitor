@@ -150,3 +150,32 @@ class WorkerPayloadTests(TestCase):
     def test_the_label(self):
         self.assertEqual(part_label({"start_seconds": 0, "end_seconds": 300}, self.clip), "Analysed 0:00–5:00 of 34:00")
         self.assertEqual(part_label({}, self.clip), "")
+
+
+class PicksAcrossFiltersTests(LaunchTests):
+    """The Videos page keeps picks across filter changes and sends them with a
+    run; "Select all" under a filter runs that filter's clips and the picks."""
+
+    def test_select_all_runs_the_filter_and_picks_from_other_filters(self):
+        mendel = [self.video(60, n) for n in (1, 2)]
+        for v in mendel:
+            v.title = f"mendels {v.pk}"
+            v.save()
+        other = self.video(60, 9)   # picked earlier, under another filter
+        with mock.patch("apps.analysis.views._drain_queue"):
+            r = self.client.post(reverse("pipelines:run_on_videos"),
+                                 {"pipeline": self.pipeline.pk, "all_filtered": "1",
+                                  "q": "mendels", "video_ids": [other.pk]},
+                                 HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(sorted(r.json()["video_ids"]), sorted([v.pk for v in mendel] + [other.pk]))
+
+    def test_picks_alone_run_just_those(self):
+        a, b = self.video(60, 3), self.video(60, 4)
+        r = self.launch([a.pk, b.pk], part="whole")
+        self.assertEqual(sorted(r.json()["video_ids"]), sorted([a.pk, b.pk]))
+
+    def test_the_page_keeps_picks_for_the_tab(self):
+        page = self.client.get(reverse("analysis:processing")).content.decode()
+        self.assertIn("bm-hub-picks-", page)
+        self.assertIn("rail-elsewhere", page)
