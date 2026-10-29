@@ -21,6 +21,11 @@ _ID_COLS = ["track_id", "track", "tid", "id", "object_id", "particle"]
 _FRAME_COLS = ["frame", "frame_num", "frame_number", "frame_idx", "frame_id", "t"]
 _CX_COLS = ["cx", "centroid_x", "x_center", "xc", "x", "cent_x"]
 _CY_COLS = ["cy", "centroid_y", "y_center", "yc", "y", "cent_y"]
+# The detector's class for a row. ``class`` first: the tracking table's
+# ``taxon`` becomes the voted species once Identify species has run, so it is
+# the detector's class only in tables written before the worker kept ``class``
+# apart (memory/60).
+_CLASS_COLS = ["class", "label", "class_name", "taxon"]
 _BBOX = {
     "x1": ["x1", "xmin", "bbox_x1", "left"],
     "y1": ["y1", "ymin", "bbox_y1", "top"],
@@ -824,7 +829,7 @@ def resolve_taxa(df, wanted, exclude=()):
     """
     if df is None or len(df) == 0:
         return None, "exact"
-    col = _pick(df, ["taxon", "label", "class", "class_name"])
+    col = _pick(df, _CLASS_COLS)
     if col is None:
         # Older results predate the column. Returning nothing would read as
         # "no detections" instead of "can't tell".
@@ -868,7 +873,7 @@ def filter_by_label(df, label, exclude=()):
     taxa, _how = resolve_taxa(df, label, exclude)
     if taxa is None:
         return df
-    col = _pick(df, ["taxon", "label", "class", "class_name"])
+    col = _pick(df, _CLASS_COLS)
     return df if col is None else df[
         df[col].astype(str).str.strip().str.lower().isin(taxa)]
 

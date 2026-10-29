@@ -381,6 +381,21 @@ def _upstream_label(inputs):
     return ""
 
 
+def _tracks_label(run, inputs):
+    """The class to take out of the shared tracking table, or "" for all of it.
+
+    One GPU pass serves every Detect node, so a table can hold several classes
+    and each analyzer takes its own. With ONE Detect class in the pipeline
+    every track is the subject and nothing is filtered: the table's taxon
+    column carries the voted SPECIES once Identify species has run, and
+    matching the Detect class ("bee") against species names emptied every
+    analyzer (memory/60).
+    """
+    if len(_all_detector_labels(run.steps)) <= 1:
+        return ""
+    return _upstream_label(inputs)
+
+
 def _first_upstream_result(inputs):
     """Return the (single) upstream output dict for a linear step."""
     if not inputs:
@@ -479,9 +494,9 @@ def _analysis_inputs(step, run, context, inputs, index):
     # is what makes the pipeline taxon-agnostic: renaming a class moves rows
     # between branches by role, it does not empty one.
     raw = ops.load_tracking_df(result)
-    taxa, taxa_how = ops.resolve_taxa(raw, _upstream_label(inputs),
+    taxa, taxa_how = ops.resolve_taxa(raw, _tracks_label(run, inputs),
                                       exclude=[(roi or {}).get("label")])
-    df = ops.filter_by_label(raw, _upstream_label(inputs),
+    df = ops.filter_by_label(raw, _tracks_label(run, inputs),
                              exclude=[(roi or {}).get("label")])
     tidy = ops.normalized_tracks(df, scale) if df is not None else None
     fps, fps_source = ops.fps_with_source(result, video)
@@ -701,9 +716,12 @@ def analysis_notes_for_job(job):
     for kind, out in analyzer_outputs(run):
         if kind not in ("events", "interactions"):
             continue
-        if (out.get("counting_rules") or 0) < _COUNTING_RULES and out.get("rows") is not None:
-            note = ("Counted under the rules before 29 Oct 2026. Re-run tracking to "
-                    "count it with the current ones.")
+        rules = out.get("counting_rules") or 0
+        if rules < _COUNTING_RULES and out.get("rows") is not None:
+            # The reconcile sweep recounts every run below the current rules
+            # from its saved tracks (recount.py).
+            note = ("Waiting to be recounted with the current rules from this run's "
+                    "saved tracks; this happens automatically.")
             if note not in notes:
                 notes.append(note)
         if out.get("note") and out["note"] not in notes:
@@ -790,7 +808,7 @@ def _exec_analyze_events(step, run, context, inputs, index):
 
 # Which event/interaction rules a saved output was counted under (memory/60).
 # recount.CURRENT_RULES follows this.
-_COUNTING_RULES = 3
+_COUNTING_RULES = 4
 
 
 def _measurement_notes(tidy, refs, extra, need_refs=True):
@@ -807,7 +825,7 @@ def _measurement_notes(tidy, refs, extra, need_refs=True):
                      "or a Detect node for the reference class wired into the analyzer.")
     if not ops.has_detected(tidy):
         notes.append("This clip was tracked before the tracker recorded which rows "
-                     "were detections, so track starts and ends include predicted "
+                     "were detections, so track starts and ends may include predicted "
                      "positions. Re-run tracking to measure from detections only.")
     pairs = ops.overlapping_references(refs)
     if pairs:
@@ -970,7 +988,7 @@ def _exec_analyze_detection_count(step, run, context, inputs, index):
             df = df.copy()
             df["track_id"] = range(len(df))
     else:
-        df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
+        df = ops.filter_by_label(ops.load_tracking_df(result), _tracks_label(run, inputs))
         note = ("Counted from the tracked-detection table — this job predates "
                 "raw-detection export, so detections the tracker discarded are "
                 "not included. Re-run it to count raw detections.")
@@ -1014,7 +1032,7 @@ def _exec_analyze_colony_activity(step, run, context, inputs, index):
     roi = find_reference(run.steps, index, context, run)
     boxes = ops.roi_shapes(roi)
 
-    df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
+    df = ops.filter_by_label(ops.load_tracking_df(result), _tracks_label(run, inputs))
     tidy = (ops.normalized_tracks(df, _frame_scale(run, result))
             if df is not None else None)
     if tidy is not None:
@@ -1047,7 +1065,7 @@ def _exec_identify_species(step, run, context, inputs, index):
     photo = (result.get("summary_stats") or {}).get("photo")
     if photo is not None:
         return {"artifact": "table", "table_kind": "species", **photo_species(photo)}
-    df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
+    df = ops.filter_by_label(ops.load_tracking_df(result), _tracks_label(run, inputs))
     summary = ops.species_identities(df) if df is not None else None
     if summary is not None and summary.get("rows"):
         return {"artifact": "table", "table_kind": "species", **summary}
@@ -1157,7 +1175,7 @@ def _exec_identify_marker(step, run, context, inputs, index):
     result = (up or {}).get("result", {})
     marker_type = (step.get("config") or {}).get("marker_type", "auto")
 
-    df = ops.filter_by_label(ops.load_tracking_df(result), _upstream_label(inputs))
+    df = ops.filter_by_label(ops.load_tracking_df(result), _tracks_label(run, inputs))
     ident = ops.marker_identities(df) if df is not None else None
     if ident is not None:
         return {"artifact": "table", "table_kind": "marker_id",

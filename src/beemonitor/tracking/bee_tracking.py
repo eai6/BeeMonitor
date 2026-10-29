@@ -1028,7 +1028,7 @@ class BeeTracking:
 
         # Define clean column list
         columns = ['frame', 'track_id', 'x1', 'y1', 'x2', 'y2', 'cx', 'cy',
-                   'detected', 'confidence', 'source', 'taxon', 'taxon_confidence', 'taxon_votes',
+                   'detected', 'confidence', 'source', 'class', 'taxon', 'taxon_confidence', 'taxon_votes',
                    'bee_id', 'bee_id_method', 'bee_id_confidence', 'mode']
         
         if not results:
@@ -1071,6 +1071,10 @@ class BeeTracking:
                     # YOLO says "bee", BeeMachine says which bee. Falls back to
                     # the detector label when no classifier ran or nothing was
                     # legible, so this column is never empty.
+                    # The detector's class, never replaced by the species
+                    # vote: the web takes each Detect node's rows by it
+                    # when one pass serves several classes (memory/60).
+                    'class': track.get('taxon', 'bee'),
                     'taxon': (species[0] if species else track.get('taxon', 'bee')),
                     'taxon_confidence': (species[1] if species else None),
                     'taxon_votes': (species[2] if species else 0),

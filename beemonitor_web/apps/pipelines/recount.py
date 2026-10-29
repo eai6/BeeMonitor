@@ -5,10 +5,13 @@ pure function of it and the reference geometry. Used when the rules change
 (memory/60: exit / enter / stay from detected rows) or a clip's layout was
 drawn after it was analysed.
 
-Only clips whose tracking table says which rows were detections are recounted.
-Older clips are left as they are (memory/60): recounting them would measure
-from the tracker's predicted positions, so their old rows stay, labelled. The reference steps are resolved again, so the current
-layout is the one counted against.
+Every finished run is recounted, backfilling the current rules from the
+tracks it already saved (the user's call, 2026-10-29). A clip tracked before
+the worker wrote the ``detected`` column can't say which rows were detections,
+so its rows are all used and its outputs carry a note saying track starts and
+ends may include the tracker's predicted positions — nothing is guessed to
+fill the gap. The reference steps are resolved again, so the current layout
+is the one counted against.
 
 The new outputs replace the old ones in ``run.context``, which is what the batch
 table, the CSV downloads, studies and the results page all read, so they all
@@ -31,8 +34,7 @@ _REFERENCES = ("reference.", "roi.")
 
 def recount_run(run) -> dict:
     """Recount one run in place. Returns ``{kind: count}`` for what was
-    recounted; an analyzer that errors keeps its old output, and so does one
-    whose tracking table predates the ``detected`` column."""
+    recounted; an analyzer that errors keeps its old output."""
     from . import executors
 
     steps = run.steps or []
@@ -53,8 +55,6 @@ def recount_run(run) -> dict:
                 logger.warning("recount: run %s step %s failed: %s", run.pk, sid,
                                (out or {}).get("error"))
                 continue
-            if out.get("tracking_has_detected") is False:
-                continue          # tracked before the detected column: left as it is
             out["counted_at"] = timezone.now().isoformat()
             context[sid] = out
             kind = out.get("table_kind")
@@ -97,9 +97,11 @@ def sync_job_counts(run):
 
 
 # Bumped whenever the counting rules change; runs below it are recounted.
-CURRENT_RULES = 3
-SWEEP_BATCH = 20
-SWEEP_SECONDS = 60
+CURRENT_RULES = 4
+# Sized to work through a backlog of every finished run after a rules change
+# within the reconciler's 120 s interval.
+SWEEP_BATCH = 60
+SWEEP_SECONDS = 90
 
 
 def sweep(batch=SWEEP_BATCH, budget=SWEEP_SECONDS) -> int:

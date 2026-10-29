@@ -1,8 +1,8 @@
 """Recount every finished run's events and interactions now (memory/60).
 
-The reconcile loop does the same, 20 runs per pass; this does them all at once.
-No GPU. Runs whose tracking table predates the ``detected`` column are left as
-they are.
+The reconcile loop does the same, 60 runs per pass; this does them all at once.
+No GPU. Runs whose tracking table predates the ``detected`` column are recounted
+from every row, and say so.
 
     python manage.py recount_runs            # runs below the current rules
     python manage.py recount_runs --all      # every finished run
@@ -38,6 +38,5 @@ class Command(BaseCommand):
                 recounted += 1
             else:
                 left += 1
-        self.stdout.write(f"Recounted {recounted} run(s); left {left} as they were "
-                          f"(no events/interactions step, or tracked before the detected "
-                          f"column); {failed} failed.")
+        self.stdout.write(f"Recounted {recounted} run(s); {left} had no events or "
+                          f"interactions step; {failed} failed.")

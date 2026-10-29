@@ -93,8 +93,8 @@ def interactions_from_proximity(episodes, fps):
 
 # ── Rows saved before memory/60 ──────────────────────────────────────────────
 #
-# Runs counted under the old rules keep their saved rows (they are left as they
-# are, labelled). Their keys are mapped onto the current ones so every page and
+# Runs not yet recounted keep their old saved rows until the sweep reaches them
+# (recount.py). Their keys are mapped onto the current ones so every page and
 # download reads one shape. Nothing is converted that can't be: an old
 # ``min_distance`` was a fraction of frame width, not body lengths, so it is
 # dropped rather than relabelled.

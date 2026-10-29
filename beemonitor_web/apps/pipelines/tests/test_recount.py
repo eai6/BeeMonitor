@@ -1,9 +1,9 @@
 """Old runs are recounted from their saved tracks, with no GPU (memory/55, 60).
 
 The batch table, its CSVs and the clip's results page all read the rows the
-run saved, so recounting a run moves them all together. Only clips whose
-tracking table says which rows were detections are recounted; older ones are
-left as they are (memory/60).
+run saved, so recounting a run moves them all together. Every run is
+recounted; one tracked before the ``detected`` column uses all its rows and
+says so (memory/60).
 """
 
 from django.utils import timezone
@@ -64,18 +64,22 @@ class RecountTests(PrimitiveBlockTestCase):
         self.assertEqual(len(old.context["a"]["rows"]), 2)
         self.assertEqual(running.counting_rules, 1)
 
-    def test_a_clip_tracked_before_the_detected_column_is_left_as_it_is(self):
+    def test_a_clip_tracked_before_the_detected_column_is_backfilled_and_says_so(self):
         run = self._old_run()
         run.context["m"]["result"]["tracking_csv_path"] = self.old_tracking_csv
         run.save()
 
-        self.assertEqual(recount.recount_run(run), {})
+        counts = recount.recount_run(run)
+
         run.refresh_from_db()
-        self.assertEqual(aggregate.primitive_counts(run)["events"], 40)
-        self.assertNotIn("counted_at", run.context["a"])
+        self.assertIn("events", counts)
+        self.assertIn("counted_at", run.context["a"])
+        self.assertIs(run.context["a"]["tracking_has_detected"], False)
+        self.assertIn("predicted positions", run.context["a"]["note"])
 
     def test_the_rules_are_the_memory_60_ones(self):
-        self.assertEqual(recount.CURRENT_RULES, 3)
+        # 4: the species vote no longer empties single-Detect pipelines.
+        self.assertEqual(recount.CURRENT_RULES, 4)
 
     def test_a_recount_copies_the_counts_to_the_job(self):
         run = self._old_run()
