@@ -96,9 +96,11 @@ class RunTests(TestCase):
         regions = [((0.0, 0.0, 0.5, 0.5), None)]
         self.assertEqual(executors.photo_detection_count(PHOTO, regions)["regions"],
                          [{"region": 1, "count": 1}])
-        sp = executors.photo_species(PHOTO, 0.25)
-        self.assertEqual([r["taxon"] for r in sp["rows"]], ["Bombus impatiens", "unidentified"])
-        self.assertEqual(sp["rows"][1]["best_guess"], "Syrphidae")
+        # No floor (memory/60): every call is reported with its confidence.
+        sp = executors.photo_species(PHOTO)
+        self.assertEqual([r["taxon"] for r in sp["rows"]], ["Bombus impatiens", "Syrphidae"])
+        self.assertNotIn("best_guess", sp["rows"][1])
+        self.assertEqual(sp["unique_taxa"], 2)
 
     def test_a_detect_node_is_the_reference_on_a_photo(self):
         flowers = {"width": 4000, "height": 3000, "detections": [
@@ -123,8 +125,8 @@ class RunTests(TestCase):
         run.save()
         rows = aggregate.photo_rows([run])
         self.assertEqual(len(rows), 2)
-        # Syrphidae is below the 0.25 floor, so one of the two is named.
-        self.assertEqual(aggregate.photo_counts(run, 0.25), {"insects": 2, "named": 1})
+        # No floor: both species are named.
+        self.assertEqual(aggregate.photo_counts(run), {"insects": 2, "named": 2})
 
 
 class PhotoTabRunTests(TestCase):
@@ -225,7 +227,8 @@ class PhotoBatchPageTests(TestCase):
         resp = self.client.get(reverse("pipelines:batch_detail", kwargs={"batch_id": self.batch_id}))
 
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.context["rows"][0]["photo"], {"insects": 2, "named": 1})
+        # A saved min_mean_confidence is ignored now (memory/60).
+        self.assertEqual(resp.context["rows"][0]["photo"], {"insects": 2, "named": 2})
         self.assertContains(resp, "data-photo=")
         self.assertNotContains(resp, "Interactions</div>")
         self.assertNotContains(resp, "Insects per photo")

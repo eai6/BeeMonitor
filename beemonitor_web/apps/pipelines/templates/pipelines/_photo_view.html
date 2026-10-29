@@ -25,8 +25,8 @@
     <div class="grid grid-cols-[56px_minmax(0,1fr)_56px] gap-3 items-center">
       {% if i.crop_url %}<a href="{{ i.crop_url }}" data-crop data-label="Insect {{ i.id }} · {{ i.species|default:i.class }}{% if i.species_confidence is not None %} · {{ i.species_confidence|floatformat:2 }}{% endif %}"><img src="{{ i.crop_url }}" alt="insect {{ i.id }}" class="w-14 h-14 object-contain bg-gray-50 rounded border border-gray-200"></a>{% else %}<span></span>{% endif %}
       <div class="min-w-0">
-        <div class="text-sm font-semibold {% if i.species and i.species != 'unidentified' %}italic{% endif %}">{{ i.species|default:i.class }}</div>
-        <div class="text-xs text-gray-600">insect {{ i.id }} · {{ i.class }}{% if i.best_guess %} · best guess {{ i.best_guess }}{% endif %}</div>
+        <div class="text-sm font-semibold {% if i.species %}italic{% endif %}">{{ i.species|default:i.class }}</div>
+        <div class="text-xs text-gray-600">insect {{ i.id }} · {{ i.class }}</div>
       </div>
       <span class="text-sm tabular-nums text-right">{% if i.species_confidence is not None %}{{ i.species_confidence|floatformat:2 }}{% endif %}</span>
     </div>

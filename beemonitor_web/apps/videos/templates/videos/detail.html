@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load tz %}
 {% load video_filters %}
 {% block title %}{{ video.title|sanitize_name }} - BeeMonitor{% endblock %}
 
@@ -188,7 +189,7 @@
     </div>
     <div>
       <p class="text-gray-500">Recorded</p>
-      <p class="font-medium">{% if video.recorded_at %}{{ video.recorded_at|date:"Y-m-d H:i" }}{% else %}--{% endif %}</p>
+      <p class="font-medium">{% localtime off %}{% if clip_start %}{{ clip_start|date:"Y-m-d H:i:s" }} <span class="text-xs text-gray-500">{% if clip_start.tzinfo %}{{ clip_start|date:"T" }}{% else %}site time, no time zone{% endif %}</span>{% else %}Unknown{% endif %}{% endlocaltime %}</p>
     </div>
     <div>
       <p class="text-gray-500">File Size</p>
@@ -222,6 +223,7 @@
     <div>
       <p class="text-gray-500">FPS</p>
       <p class="font-medium">{{ video.fps|floatformat:1 }}</p>
+      {% if video.metadata.variable_frame_rate %}<p class="text-xs text-orange-700">Variable frame rate: times in the CSVs assume a constant rate.</p>{% endif %}
     </div>
     {% endif %}
     {% if video.is_photo %}

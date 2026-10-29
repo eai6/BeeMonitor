@@ -12,12 +12,10 @@ Regression guard for the bug where shared users saw an empty Processing page.
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.test import RequestFactory, TestCase
+from django.test import TestCase
 from django.urls import reverse
 
 from apps.devices.models import Device, DeviceShare
-from apps.analysis.models import Job, JobResult
-from apps.analysis.views import DownloadEventsCSVView
 from .models import Video
 
 User = get_user_model()
@@ -128,23 +126,3 @@ class DeviceShareVideoAccessTests(TestCase):
         self.assertEqual(resp.status_code, 302)
         self.assertFalse(Video.objects.filter(pk=self.shared_video.pk).exists())
         mock_s3.return_value.delete_blob.assert_called()  # storage cleanup attempted, mocked
-
-    # ---- ecological data scoping (no S3: test the filter directly) ------
-    def test_ecological_results_follow_video_access(self):
-        job = Job.objects.create(
-            user=self.owner, video=self.shared_video,
-            status=Job.Status.COMPLETED, modal_job_id="mid-1",
-        )
-        result = JobResult.objects.create(job=job, total_events=5)
-
-        view = DownloadEventsCSVView()
-        for u in (self.owner, self.manager, self.viewer):
-            req = RequestFactory().get("/analytics/download-events/")
-            req.user = u
-            qs, _ = view._get_filtered_results(req)
-            self.assertIn(result, qs, f"{u} should get the shared-device result")
-
-        req = RequestFactory().get("/analytics/download-events/")
-        req.user = self.stranger
-        qs, _ = view._get_filtered_results(req)
-        self.assertNotIn(result, qs)

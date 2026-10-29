@@ -1,7 +1,9 @@
-"""Old runs are recounted from their saved tracks, with no GPU (memory/55).
+"""Old runs are recounted from their saved tracks, with no GPU (memory/55, 60).
 
 The batch table, its CSVs and the clip's results page all read the rows the
-run saved, so recounting a run moves them all together.
+run saved, so recounting a run moves them all together. Only clips whose
+tracking table says which rows were detections are recounted; older ones are
+left as they are (memory/60).
 """
 
 from django.urls import reverse
@@ -11,13 +13,19 @@ from apps.analysis.models import Job, JobResult
 from apps.pipelines import aggregate, executors, recount
 from apps.pipelines.models import PipelineRun
 
-from .test_primitive_blocks import PrimitiveBlockTestCase
+from .test_primitive_blocks import TRACKING_ROWS, PrimitiveBlockTestCase, _write_csv
 
 OLD_ROWS = [{"frame": f, "action": a, "subject": 1, "target": "reference_1"}
             for f in range(0, 40, 2) for a in ("enter", "exit")]
 
 
 class RecountTests(PrimitiveBlockTestCase):
+    def setUp(self):
+        super().setUp()
+        self.old_tracking_csv = self.tracking_csv          # no `detected` column
+        self.tracking_csv = _write_csv([{**r, "detected": 1} for r in TRACKING_ROWS],
+                                       "tracking_detected.csv")
+
     def _old_run(self, status=PipelineRun.Status.COMPLETED):
         steps = self._steps("analyze.events")
         run = PipelineRun.objects.create(pipeline=self.pipeline, user=self.user, status=status,
@@ -56,6 +64,32 @@ class RecountTests(PrimitiveBlockTestCase):
         self.assertEqual(old.counting_rules, recount.CURRENT_RULES)
         self.assertEqual(len(old.context["a"]["rows"]), 2)
         self.assertEqual(running.counting_rules, 1)
+
+    def test_a_clip_tracked_before_the_detected_column_is_left_as_it_is(self):
+        run = self._old_run()
+        run.context["m"]["result"]["tracking_csv_path"] = self.old_tracking_csv
+        run.save()
+
+        self.assertEqual(recount.recount_run(run), {})
+        run.refresh_from_db()
+        self.assertEqual(aggregate.primitive_counts(run)["events"], 40)
+        self.assertNotIn("counted_at", run.context["a"])
+
+    def test_the_rules_are_the_memory_60_ones(self):
+        self.assertEqual(recount.CURRENT_RULES, 3)
+
+    def test_a_recount_copies_the_counts_to_the_job(self):
+        run = self._old_run()
+        job = Job.objects.create(user=self.user, video=self.video, status=Job.Status.COMPLETED)
+        JobResult.objects.create(job=job, tracking_csv_path=self.tracking_csv,
+                                 total_events=40, entry_count=20, exit_count=20)
+        run.context["m"]["job_id"] = job.pk
+        run.save()
+
+        recount.recount_run(run)
+
+        result = JobResult.objects.get(job=job)
+        self.assertEqual((result.total_events, result.entry_count, result.exit_count), (2, 1, 1))
 
     def test_new_runs_are_already_on_the_current_rules(self):
         run = PipelineRun.objects.create(pipeline=self.pipeline, user=self.user)

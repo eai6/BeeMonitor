@@ -1,16 +1,15 @@
 """Analyzers report per reference, not just "something".
 
-compute_visitation used to ask in_any_box(x, y, boxes) — one boolean for every
-reference at once — so it could say a track visited SOMETHING and never WHICH.
-For four flower treatments that is the whole question: they are only interesting
-compared against each other.
+For four flower treatments that is the whole question: they are only
+interesting compared against each other. Time in each reference is the
+interactions table's ``in_reference`` rows (memory/60), grouped by reference.
 """
 
 import unittest
 
 import pandas as pd
 
-from apps.pipelines import ops
+from apps.pipelines import ops, primitives
 
 
 def tracks(*rows):
@@ -42,10 +41,11 @@ class ReferenceIdentityTests(unittest.TestCase):
 
         self.assertEqual([r["label"] for r in refs], ["Reference 1", "Reference 2"])
 
-    def test_the_hotel_is_its_own_reference(self):
+    def test_the_hotel_roi_is_not_a_reference(self):
+        """It is the area tracking runs over (memory/60)."""
         refs = ops.roi_references({"hotel_roi": [0, 0, 1, 1], "nest_layout": [NEST_3]})
 
-        self.assertEqual([r["id"] for r in refs], ["hotel", "reference_3"])
+        self.assertEqual([r["id"] for r in refs], ["reference_3"])
 
     def test_which_reference_names_the_one_containing_a_point(self):
         refs = ops.roi_references(ROI)
@@ -65,162 +65,77 @@ class ReferenceIdentityTests(unittest.TestCase):
         self.assertIsNone(ops.which_reference(0.02, 0.02, refs))    # corner
 
 
-class PerReferenceVisitationTests(unittest.TestCase):
+class PerReferenceInteractionTests(unittest.TestCase):
+    """Time in each reference, from the one episode pass."""
+
     def setUp(self):
         self.refs = ops.roi_references(ROI)
 
+    def summary(self, df, **kw):
+        return primitives.summarize_interactions(primitives.interactions_from_episodes(
+            ops.compute_episodes(df, self.refs, **kw), fps=10))
+
     def test_visits_are_attributed_to_the_reference_they_happened_in(self):
-        df = tracks(
-            *[(1, f, 0.1, 0.1) for f in range(10)],      # track 1 in nest 3
-            *[(2, f, 0.9, 0.9) for f in range(10)],      # track 2 in nest 7
-        )
+        df = tracks(*[(1, f, 0.1, 0.1) for f in range(10)],
+                    *[(2, f, 0.9, 0.9) for f in range(10)])
 
-        out = ops.compute_visitation(df, self.refs, fps=10)
+        by_id = {r["id"]: r for r in self.summary(df)["per_reference"]}
 
-        by_id = {r["id"]: r for r in out["per_reference"]}
-        self.assertEqual(by_id["reference_3"]["visits"], 1)
-        self.assertEqual(by_id["reference_7"]["visits"], 1)
-        self.assertEqual(by_id["reference_3"]["visitors"], 1)
+        self.assertEqual(by_id["reference_3"]["interactions"], 1)
+        self.assertEqual(by_id["reference_7"]["interactions"], 1)
+        self.assertEqual(by_id["reference_3"]["partners"], 1)
 
     def test_moving_between_references_is_two_visits_not_one(self):
-        """Otherwise a bee crossing from tube 3 to tube 7 reads as one long stay
-        in neither."""
         df = tracks(*[(1, f, 0.1, 0.1) for f in range(5)],
                     *[(1, f, 0.9, 0.9) for f in range(5, 10)])
 
-        out = ops.compute_visitation(df, self.refs, fps=10)
-
-        self.assertEqual(out["total_visits"], 2)
-        by_id = {r["id"]: r for r in out["per_reference"]}
-        self.assertEqual(by_id["reference_3"]["visits"], 1)
-        self.assertEqual(by_id["reference_7"]["visits"], 1)
+        self.assertEqual(self.summary(df)["organism_reference"], 2)
 
     def test_a_long_gap_in_the_same_reference_is_a_second_visit(self):
         df = tracks(*[(1, f, 0.1, 0.1) for f in range(5)],
                     *[(1, f, 0.1, 0.1) for f in range(100, 105)])
 
-        out = ops.compute_visitation(df, self.refs, fps=10, gap_frames=15)
-
-        self.assertEqual(out["total_visits"], 2)
-
-    def test_a_reference_nothing_visited_is_still_listed(self):
-        """"Nothing visited the control" is a result; dropping the row leaves
-        the reader to notice an absence."""
-        df = tracks(*[(1, f, 0.1, 0.1) for f in range(10)])
-
-        out = ops.compute_visitation(df, self.refs, fps=10)
-
-        by_id = {r["id"]: r for r in out["per_reference"]}
-        self.assertIn("reference_7", by_id)
-        self.assertEqual(by_id["reference_7"]["visits"], 0)
-        self.assertEqual(by_id["reference_7"]["visitors"], 0)
+        self.assertEqual(self.summary(df, gap_frames=15)["organism_reference"], 2)
 
     def test_the_busiest_reference_comes_first(self):
         df = tracks(*[(1, f, 0.9, 0.9) for f in range(10)],
-                    *[(2, f, 0.9, 0.9) for f in range(20, 30)])
+                    *[(2, f, 0.9, 0.9) for f in range(20, 30)],
+                    *[(3, f, 0.1, 0.1) for f in range(10)])
 
-        out = ops.compute_visitation(df, self.refs, fps=10)
+        self.assertEqual(self.summary(df)["per_reference"][0]["id"], "reference_7")
 
-        self.assertEqual(out["per_reference"][0]["id"], "reference_7")
-
-    def test_dwell_is_split_between_references(self):
+    def test_time_is_split_between_references(self):
         df = tracks(*[(1, f, 0.1, 0.1) for f in range(10)],
                     *[(1, f, 0.9, 0.9) for f in range(10, 40)])
 
-        out = ops.compute_visitation(df, self.refs, fps=10)
+        by_id = {r["id"]: r for r in self.summary(df)["per_reference"]}
 
-        by_id = {r["id"]: r for r in out["per_reference"]}
-        self.assertAlmostEqual(by_id["reference_3"]["dwell_sec"], 1.0, places=2)
-        self.assertAlmostEqual(by_id["reference_7"]["dwell_sec"], 3.0, places=2)
-
-    def test_the_totals_still_agree_with_the_breakdown(self):
-        df = tracks(*[(1, f, 0.1, 0.1) for f in range(10)],
-                    *[(2, f, 0.9, 0.9) for f in range(10)])
-
-        out = ops.compute_visitation(df, self.refs, fps=10)
-
-        self.assertEqual(out["total_visits"],
-                         sum(r["visits"] for r in out["per_reference"]))
-        self.assertEqual(out["unique_visitors"], 2)
+        self.assertAlmostEqual(by_id["reference_3"]["duration_sec"], 1.0, places=2)
+        self.assertAlmostEqual(by_id["reference_7"]["duration_sec"], 3.0, places=2)
 
     def test_points_outside_every_reference_count_for_nothing(self):
         df = tracks(*[(1, f, 0.5, 0.5) for f in range(20)])
 
-        out = ops.compute_visitation(df, self.refs, fps=10)
-
-        self.assertEqual(out["total_visits"], 0)
-        self.assertEqual(out["unique_visitors"], 0)
+        self.assertEqual(self.summary(df)["organism_reference"], 0)
 
     def test_bare_boxes_from_an_older_pipeline_still_work(self):
         """They just get numbers for names rather than refusing to compute."""
         df = tracks(*[(1, f, 0.1, 0.1) for f in range(10)])
 
-        out = ops.compute_visitation(df, ops.roi_shapes(ROI), fps=10)
+        episodes = ops.compute_episodes(df, ops.roi_shapes(ROI))
 
-        self.assertEqual(out["total_visits"], 1)
-        self.assertEqual(out["per_reference"][0]["id"], "reference_1")
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
-class PerReferenceInteractionTests(unittest.TestCase):
-    """Interactions already carried a reference_id — nothing grouped by it."""
-
-    def _df(self, *rows):
-        return pd.DataFrame(rows, columns=[
-            "interaction_type", "organism_track_id", "partner_track_id",
-            "reference_id", "duration_seconds", "start_frame"])
-
-    def test_interactions_are_grouped_by_reference(self):
-        df = self._df(
-            ("organism-to-reference", 1, "", "nest_3", 4.0, 10),
-            ("organism-to-reference", 2, "", "nest_3", 2.0, 40),
-            ("organism-to-reference", 3, "", "nest_7", 1.5, 60),
-        )
-
-        out = ops.summarize_interactions(df)
-
-        by_id = {r["id"]: r for r in out["per_reference"]}
-        self.assertEqual(by_id["reference_3"]["interactions"], 2)
-        self.assertEqual(by_id["reference_3"]["partners"], 2)
-        self.assertEqual(by_id["reference_7"]["interactions"], 1)
-
-    def test_worker_ids_get_the_same_labels_as_the_layout(self):
-        df = self._df(("organism-to-reference", 1, "", "nest_3", 1.0, 1))
-
-        out = ops.summarize_interactions(df)
-
-        self.assertEqual(out["per_reference"][0]["label"], "Reference 3")
+        self.assertEqual([e["reference"] for e in episodes], ["reference_1"])
 
     def test_insect_to_insect_has_no_reference_and_is_not_counted_in_one(self):
-        df = self._df(
-            ("organism-to-organism", 1, 2, "", 3.0, 10),
-            ("organism-to-reference", 1, "", "nest_3", 1.0, 20),
-        )
+        rows = [{"track_id": 1, "with": 2, "relation": "near", "duration_sec": 3.0,
+                 "start_frame": 10},
+                {"track_id": 1, "with": "reference_3", "relation": "in_reference",
+                 "duration_sec": 1.0, "start_frame": 20}]
 
-        out = ops.summarize_interactions(df)
+        out = primitives.summarize_interactions(rows)
 
-        self.assertEqual(len(out["per_reference"]), 1)
-        self.assertEqual(out["per_reference"][0]["id"], "reference_3")
+        self.assertEqual([r["id"] for r in out["per_reference"]], ["reference_3"])
         self.assertEqual(out["organism_organism"], 1)
-
-    def test_durations_add_up_per_reference(self):
-        df = self._df(
-            ("organism-to-reference", 1, "", "nest_3", 4.25, 10),
-            ("organism-to-reference", 2, "", "nest_3", 1.75, 40),
-        )
-
-        out = ops.summarize_interactions(df)
-
-        self.assertEqual(out["per_reference"][0]["duration_sec"], 6.0)
-
-    def test_an_empty_frame_yields_an_empty_breakdown(self):
-        out = ops.summarize_interactions(None)
-
-        self.assertEqual(out["interaction_count"], 0)
-        self.assertEqual(out.get("per_reference", []), [])
 
 
 class AnalyzerResultsTests(unittest.TestCase):
@@ -241,14 +156,14 @@ class AnalyzerResultsTests(unittest.TestCase):
 
         self.assertEqual(aggregate.analyzer_outputs(run)[0][0], "visitation")
 
-    def test_foraging_trips_is_found_though_it_has_no_table_kind(self):
-        """It predates the table analyzers and returns artifact: events —
-        undetected, a trips pipeline would look like it ran no analyzer."""
+    def test_an_old_foraging_trips_output_is_not_an_analyzer_any_more(self):
+        """Trips are left to the reader (memory/60); an old run's trips output
+        has no table_kind and no panel."""
         from apps.pipelines import aggregate
 
         run = self._Run({"a": {"artifact": "events", "trips": []}})
 
-        self.assertEqual(aggregate.analyzer_outputs(run)[0][0], "foraging_trips")
+        self.assertEqual(aggregate.analyzer_outputs(run), [])
 
     def test_non_dict_context_entries_are_ignored(self):
         from apps.pipelines import aggregate

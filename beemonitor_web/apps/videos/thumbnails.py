@@ -150,6 +150,7 @@ def extract_thumbnail(video, *, force: bool = False) -> str:
         # even when no frame renders, since durations depend on it and the
         # still does not.
         _store_props(video, props)
+        _store_frame_rate_kind(video, tmp.name)
         if frame is None:
             logger.info("thumbnail: no decodable frame in video %s", video.pk)
             return ""
@@ -247,6 +248,57 @@ def _store_props(video, props: dict) -> None:
     video.save(update_fields=fields)
     logger.info("probe: video %s recorded %s", video.pk,
                 ", ".join(f"{f}={props[f]}" for f in fields))
+
+
+# Nominal and average rates further apart than this mean frames are not evenly
+# spaced. Constant-rate files often differ by rounding (30 vs 29.97): 1% is
+# well past that.
+VFR_TOLERANCE = 0.01
+
+
+def _rate(text):
+    """An ffprobe rate like "30000/1001" as a float, or None."""
+    try:
+        num, _, den = str(text or "").partition("/")
+        value = float(num) / float(den or 1)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    return value if value > 0 else None
+
+
+def frame_rate_is_variable(path):
+    """True/False from the container's nominal vs average frame rate, or None
+    when ffprobe can't say (not installed, unreadable, rates not reported)."""
+    import json
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=r_frame_rate,avg_frame_rate", "-of", "json", path],
+            capture_output=True, text=True, timeout=30, check=True).stdout
+        stream = (json.loads(out).get("streams") or [{}])[0]
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        return None
+    nominal, average = _rate(stream.get("r_frame_rate")), _rate(stream.get("avg_frame_rate"))
+    if nominal is None or average is None:
+        return None
+    return abs(nominal - average) / nominal > VFR_TOLERANCE
+
+
+def _store_frame_rate_kind(video, path) -> None:
+    """Record whether the clip's frames are evenly spaced (memory/60).
+
+    Every time in the CSVs is frame ÷ fps, which assumes they are. Nothing is
+    corrected; the clip page says so. Unknown stays unrecorded."""
+    meta = video.metadata or {}
+    if "variable_frame_rate" in meta:
+        return
+    variable = frame_rate_is_variable(path)
+    if variable is None:
+        return
+    video.metadata = {**meta, "variable_frame_rate": variable}
+    video.save(update_fields=["metadata"])
 
 
 def _downscale(cv2, frame):

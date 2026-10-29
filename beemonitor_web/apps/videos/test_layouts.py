@@ -188,18 +188,19 @@ class FrameTests(Base):
 
 
 class AnalysisTests(Base):
-    def test_a_site_layout_reaches_the_job_and_turns_off_the_hotel_model(self):
+    def test_a_site_layout_reaches_the_job_and_no_nest_model_is_asked_for(self):
         from apps.analysis.views import _video_job_config
         Layout.save_new(site=self.site, nests=[HOLE], roi=[0, 0, 0.8, 1])
         cfg = _video_job_config({}, self.clip, use_device_roi=True)
-        self.assertEqual((cfg["nest_layout"], cfg["hotel_roi"], cfg["nest_fallback"]), ([HOLE], [0, 0, 0.8, 1], False))
+        self.assertEqual((cfg["nest_layout"], cfg["hotel_roi"]), ([HOLE], [0, 0, 0.8, 1]))
+        self.assertNotIn("detect_nests", cfg)   # memory/60: never run unasked
 
-    def test_a_unit_layout_keeps_the_hotel_model(self):
+    def test_a_unit_layout_does_not_ask_for_the_hotel_model_either(self):
         from apps.analysis.views import _video_job_config
         unit = Device.objects.create(owner=self.user, name="Amber", key_hash="h3", prefix="p",
                                      roi_override=[0, 0, 1, 1])
         clip = Video.objects.create(user=self.user, device=unit, title="u", storage_key="k5", file_size_bytes=1)
-        self.assertNotIn("nest_fallback", _video_job_config({}, clip, use_device_roi=True))
+        self.assertNotIn("detect_nests", _video_job_config({}, clip, use_device_roi=True))
 
     def test_pipeline_gpu_config_uses_the_site_layout(self):
         from apps.pipelines.executors import build_detect_and_track_config
@@ -212,7 +213,8 @@ class AnalysisTests(Base):
         context = {"v": {"artifact": "video", "video_id": self.clip.pk}}
         built, err = build_detect_and_track_config(steps[1], run, context, 1)
         self.assertIsNone(err)
-        self.assertEqual((built["config"]["nest_layout"], built["config"]["nest_fallback"]), ([HOLE], False))
+        self.assertEqual(built["config"]["nest_layout"], [HOLE])
+        self.assertNotIn("detect_nests", built["config"])
 
     def test_sampled_detections_become_references_with_stable_ids(self):
         from apps.pipelines.executors import detected_reference

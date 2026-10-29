@@ -687,7 +687,11 @@ class BeeTracker:
                     'y2': y2,
                     'cx': float(cx),
                     'cy': float(cy),
-                    'confidence': track.last_confidence,
+                    # Predicted rows (the track coasting while lost) say so,
+                    # and carry no confidence: no detection was made.
+                    'detected': int(track.time_since_update == 0),
+                    'confidence': (track.last_confidence
+                                   if track.time_since_update == 0 else None),
                     'source': track.last_source,
                     'taxon': track.taxon,
                     'bee_id': track.bee_id,
@@ -708,7 +712,7 @@ class BeeTracker:
                 continue          # this frame is reported as usual
             rows.append((frame, {
                 'track_id': track.id, 'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
-                'cx': (x1 + x2) / 2, 'cy': (y1 + y2) / 2,
+                'cx': (x1 + x2) / 2, 'cy': (y1 + y2) / 2, 'detected': 1,
                 'confidence': conf, 'source': source, 'taxon': taxon,
                 'bee_id': None, 'bee_id_method': None, 'bee_id_confidence': 0.0,
                 'history': [],
@@ -730,7 +734,11 @@ class BeeTracker:
                     'y2': y2,
                     'cx': float(cx),
                     'cy': float(cy),
-                    'confidence': track.last_confidence,
+                    # Predicted rows (the track coasting while lost) say so,
+                    # and carry no confidence: no detection was made.
+                    'detected': int(track.time_since_update == 0),
+                    'confidence': (track.last_confidence
+                                   if track.time_since_update == 0 else None),
                     'source': track.last_source,
                     'taxon': track.taxon,
                     'bee_id': track.bee_id,

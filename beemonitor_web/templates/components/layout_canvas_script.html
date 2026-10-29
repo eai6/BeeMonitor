@@ -66,11 +66,48 @@
   // ── Drawing ────────────────────────────────────────────────────────────────
   var poly = null;   // in-progress polygon: {kind:'roi'|'nest', pts:[[px,py],...], cursor}
 
+  // Reference objects shouldn't overlap (memory/60): a point in two would have
+  // to be given to one of them. Overlapping ones are drawn amber and named.
+  var OVERLAP_COLOR = '#d97706';
+  function segmentsCross(a, b, c, d) {
+    function o(p, q, r) { return (q[0]-p[0])*(r[1]-p[1]) - (q[1]-p[1])*(r[0]-p[0]); }
+    return (o(c,d,a) > 0) !== (o(c,d,b) > 0) && (o(a,b,c) > 0) !== (o(a,b,d) > 0);
+  }
+  function overlaps(a, b) {
+    var p = a.box, q = b.box;
+    if (p[2] <= q[0] || q[2] <= p[0] || p[3] <= q[1] || q[3] <= p[1]) return false;  // apart, or only touching
+    if (!a.points && !b.points) return true;                                       // two boxes sharing area
+    var A = outline(a).map(toP), B = outline(b).map(toP), i, j;
+    for (i = 0; i < A.length; i++) if (inShape(A[i], b)) return true;
+    for (j = 0; j < B.length; j++) if (inShape(B[j], a)) return true;
+    for (i = 0; i < A.length; i++) for (j = 0; j < B.length; j++)
+      if (segmentsCross(A[i], A[(i+1) % A.length], B[j], B[(j+1) % B.length])) return true;
+    return false;
+  }
+  function overlapping() {
+    var hit = {}, pairs = [];
+    for (var i = 0; i < nests.length; i++) for (var j = i + 1; j < nests.length; j++) {
+      if (overlaps(nests[i], nests[j])) {
+        hit[i] = hit[j] = true;
+        pairs.push((nests[i].name || nests[i].id) + ' and ' + (nests[j].name || nests[j].id));
+      }
+    }
+    var el = document.getElementById('overlap-warning');
+    if (el) {
+      el.hidden = !pairs.length;
+      el.textContent = pairs.length ? 'These reference objects overlap: ' + pairs.join('; ') +
+        '. Redraw them so they don\'t — where they overlap, a point counts for the one whose centre is nearest.' : '';
+    }
+    return hit;
+  }
+
   function draw(temp) {
     ctx.clearRect(0, 0, cv.width, cv.height);
     if (roi) drawShape(roi, ROI_COLOR, selected && selected.type === 'roi', '');
+    var clash = overlapping();
     nests.forEach(function (n, i) {
-      drawShape(n, NEST_COLOR, selected && selected.type === 'nest' && selected.i === i, n.name || String(n.id));
+      drawShape(n, clash[i] ? OVERLAP_COLOR : NEST_COLOR,
+                selected && selected.type === 'nest' && selected.i === i, n.name || String(n.id));
     });
     if (temp) {                                   // rubber-band rectangle
       ctx.lineWidth = 2; ctx.setLineDash([5,4]);

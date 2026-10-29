@@ -321,7 +321,6 @@ class OtherUsersClipsTests(TestCase):
         return job
 
     def test_the_owner_never_sees_an_admins_job_on_their_clip(self):
-        from apps.analysis import analytics
         job = self.admin_job()
         self.client.force_login(self.alice)
         hub = self.client.get(reverse("analysis:processing"))

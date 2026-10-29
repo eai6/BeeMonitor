@@ -18,16 +18,6 @@ from django.views.generic import DetailView, FormView, ListView, TemplateView
 from apps.videos.models import Site, Video
 from config.storage import get_s3_client
 
-from .analytics import (
-    get_activity_over_time,
-    get_cumulative_activity,
-    get_foraging_trips_over_time,
-    get_nest_activity_heatmap,
-    get_period_averages,
-    get_summary_stats,
-    get_trips_per_nest,
-    get_video_breakdown,
-)
 from .forms import JobCreateForm
 from .models import Job, JobResult, GPU_TIERS
 from .pricing import price_run
@@ -227,8 +217,6 @@ def _spawn_gpu_job(job_pk: int) -> None:
         if job.config.get("nest_layout"):
             payload["nest_layout"] = job.config["nest_layout"]
         payload["run_tracking"] = bool(job.config.get("run_tracking", True))
-        if job.config.get("ml_threshold") is not None:
-            payload["ml_threshold"] = float(job.config["ml_threshold"])
         # Detector: SAM 3 text-prompt tracking, else YOLO.
         # Sampled detection (static objects: nest tubes, flowers) runs the
         # worker's pre_annotate task over a handful of frames instead of the
@@ -270,9 +258,9 @@ def _spawn_gpu_job(job_pk: int) -> None:
         # Recording start metadata → event timestamps; no filename convention needed.
         if video.recorded_at:
             payload["recorded_at"] = video.recorded_at.isoformat()
-        # A layout drawn for a site or a clip: no bee-hotel nest model (memory/52).
-        if job.config.get("nest_fallback") is False:
-            payload["nest_fallback"] = False
+        # The worker runs the bee-hotel nest model only when asked (memory/60).
+        if job.config.get("detect_nests"):
+            payload["detect_nests"] = True
         # Part of the clip (memory/53): turned into frames by _launch_gpu.
         for key in ("start_seconds", "end_seconds"):
             if job.config.get(key) not in (None, ""):
@@ -346,11 +334,9 @@ def _spawn_gpu_batch(jobs_data: list, detection_mode: str, confidence: float,
                     payload["hotel_polygon"] = vcfg["hotel_polygon"]
                 if vcfg.get("nest_layout"):
                     payload["nest_layout"] = vcfg["nest_layout"]
-                if vcfg.get("nest_fallback") is False:
-                    payload["nest_fallback"] = False
+                if vcfg.get("detect_nests"):
+                    payload["detect_nests"] = True
                 payload["run_tracking"] = bool(vcfg.get("run_tracking", True))
-                if vcfg.get("ml_threshold") is not None:
-                    payload["ml_threshold"] = float(vcfg["ml_threshold"])
                 if vcfg.get("detector_kind") == "sam3":
                     payload["detector_kind"] = "sam3"
                     payload["text_prompt"] = vcfg.get("text_prompt", "") or "bee"
@@ -1433,11 +1419,6 @@ def _apply_result_to_job(job, result: dict) -> None:
     logger.info("Poll: Job %s completed — %s events, %.1fs, $%.4f",
                 job.pk, result.get("total_events", 0), exec_secs, cost_usd)
 
-    # Flag the day's foraging summary as stale (cheap upsert — the background
-    # sweep does the actual recompute). Never raises.
-    from apps.analysis import foraging
-    foraging.mark_stale_for_job(job)
-
     _notify_pipeline(job.pk)
 
 
@@ -1475,10 +1456,6 @@ def _video_job_config(base: dict, video, use_device_roi: bool) -> dict:
         if layout["nest_layout"]:
             # [{id, box:[x1,y1,x2,y2], points?:[[x,y], ...], name?}, ...]
             cfg["nest_layout"] = layout["nest_layout"]
-        if layout["source"] in ("site", "video"):
-            # Drawn for a site or a clip, which is never a bee hotel: don't let
-            # the worker fall back to the hotel nest model (memory/52).
-            cfg["nest_fallback"] = False
     return cfg
 
 
@@ -1690,12 +1667,15 @@ class JobRecountView(LoginRequiredMixin, View):
         if run is None:
             messages.info(request, "This clip's events are counted each time its page opens.")
         else:
-            counts = recount_run(run, min_seconds=pipeline_executors.DEFAULT_MIN_SECONDS)
+            counts = recount_run(run)
             if counts:
                 messages.success(request, "Recounted with the current layout: " + ", ".join(
                     f"{n} {kind}" for kind, n in sorted(counts.items())) + ".")
             else:
-                messages.warning(request, "Nothing to recount: this run has no events or interactions step.")
+                messages.warning(request, "Nothing recounted. Either this run has no events "
+                                          "or interactions step, or the clip was tracked before "
+                                          "the tracker recorded which rows were detections — "
+                                          "re-run tracking to count it with the current rules.")
         return redirect("analysis:results", pk=pk)
 
 
@@ -1722,15 +1702,11 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         # A photo job (memory/45) has no clip, tracks or tables: it is the
         # photo, its boxes and each insect's species, as on its run page.
         if job.video.kind == Video.Kind.PHOTO:
-            from apps.pipelines import executors as pipeline_executors
-            from apps.pipelines import tracks as track_tables
             from apps.pipelines.views import photo_view_of
 
             photo = (result.summary_stats or {}).get("photo")
             if photo:
-                run = pipeline_executors._run_for_job(job)
-                ctx["photo_view"] = photo_view_of(
-                    photo, track_tables.species_floor(run.steps if run else None))
+                ctx["photo_view"] = photo_view_of(photo)
             return ctx
 
         # Build paths — use DB values or construct from modal_job_id as fallback
@@ -1738,20 +1714,15 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         modal_id = job.modal_job_id or ""
         prefix = f"{user_id}/{modal_id}"
 
-        events_path = result.events_csv_path or (f"{prefix}/events.csv" if modal_id else "")
         tracking_path = result.tracking_csv_path or (f"{prefix}/tracking_results.csv" if modal_id else "")
-        interactions_path = result.interactions_csv_path or (f"{prefix}/interactions.csv" if modal_id else "")
         annotated_path = result.annotated_video_path or (f"{prefix}/annotated_video.mp4" if modal_id else "")
 
-        # Generate SAS URLs for viewing/downloading
-        if events_path:
-            ctx["events_csv_url"] = _generate_presigned_url(events_path)
+        # Downloads go through JobPrimitiveCsvView (memory/60): the same
+        # exporters as the tables on this page, never the worker's raw file.
         if tracking_path:
             ctx["tracking_csv_url"] = _generate_presigned_url(tracking_path)
         ctx["overlay_url"] = (reverse("analysis:track_overlay", args=[job.pk])
                               if tracking_path else "")
-        if interactions_path:
-            ctx["interactions_csv_url"] = _generate_presigned_url(interactions_path)
         if annotated_path:
             ctx["annotated_video_url"] = _generate_presigned_url(annotated_path)
 
@@ -1760,10 +1731,6 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
             ctx["original_video_url"] = _generate_presigned_url(
                 job.video.storage_key, container="raw-videos"
             )
-
-        foraging_path = result.foraging_trips_csv_path or ""
-        if foraging_path:
-            ctx["foraging_csv_url"] = _generate_presigned_url(foraging_path)
 
         # Raw detector output, before the tracker associated boxes into tracks.
         # Offered only when the result recorded a path: unlike tracking, a run
@@ -1788,29 +1755,28 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         from apps.pipelines import primitives
         from apps.pipelines import tracks as track_tables
 
-        # One row per track with its species and marker, the pipeline's floor
-        # applied; the same identity rides on the events and interactions rows.
-        tracks_rows, by_track, floor = job_tracks(job, ctx["tracking_data"])
+        # One row per track with its species and marker; the same identity
+        # rides on the events and interactions rows. Every table here is built
+        # by the same exporters as its CSV (memory/60), so the page and the
+        # download can't disagree.
+        tracks_rows, by_track, fps, start = job_tracks(job, ctx["tracking_data"])
         ctx["tracks_data"] = _rows_as_table(tracks_rows, track_tables.TRACK_FIELDS)
+        ctx["tracking_data"] = _rows_as_table(
+            track_tables.tracking_export(_table_dicts(ctx["tracking_data"]), by_track, fps, start),
+            track_tables.TRACKING_FIELDS)
 
-        interaction_rows = track_tables.primitive_with_identity(
-            "interactions", pipeline_executors.primitives_for_job(job, "interactions"),
-            by_track, floor)
         ctx["interactions_data"] = _rows_as_table(
-            interaction_rows, primitives.INTERACTION_FIELDS)
-        # Events are computed unconditionally, the same as interactions. They
-        # used to fall back to the worker's events CSV whenever the analyzers
-        # produced nothing, while the Events CSV button beside the table stayed
-        # computed — so in exactly that case the table showed rows the download
-        # did not contain. The fallback was not even adding anything: the
-        # analyzer already folds the worker's own nest events into its output
-        # (events_from_gpu), so an empty computed table means there was nothing
-        # to show.
+            track_tables.primitive_with_identity(
+                "interactions", pipeline_executors.primitives_for_job(job, "interactions"),
+                by_track, fps, start),
+            list(primitives.INTERACTION_FIELDS) + track_tables.IDENTITY_FIELDS
+            + ["with_species", "with_marker_id"])
         ctx["events_data"] = _rows_as_table(
             track_tables.primitive_with_identity(
                 "events", pipeline_executors.primitives_for_job(job, "events"),
-                by_track, floor),
-            primitives.EVENT_FIELDS)
+                by_track, fps, start),
+            list(primitives.EVENT_FIELDS) + track_tables.IDENTITY_FIELDS)
+        ctx["analysis_notes"] = pipeline_executors.analysis_notes_for_job(job)
 
         # The page shows the head of each long table; the CSV beside it has
         # every row. A 10-minute clip's tracking table is ~100k rows x 17
@@ -1891,14 +1857,25 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         ann = (job.config or {}).get("annotate") or {}
         ctx["annotate_status"] = ann.get("status", "")
         ctx["can_annotate"] = bool(tracking_path) and ann.get("status") != "processing"
+        if ctx["can_annotate"]:
+            from apps.accounts import quota
+            # Shown in GPU-hours, never seconds (the template converts).
+            ctx["render_gpu_seconds"] = (quota.seconds_per_unit("annotated_video", quota.VIDEO_INSTANCE)
+                                         * quota.clip_seconds(job.video))
+            ctx["render_layers"] = [
+                ("boxes", "Boxes and ids"), ("species", "Species on the label"),
+                ("trails", "Trails (last 2 s)"), ("lost", "Lost tracks (dashed)"),
+                ("regions", "ROI and reference objects"), ("events", "Events"),
+                ("interactions", "Interactions"), ("clock", "Clock (clip time and timestamp)"),
+            ]
 
         return ctx
 
 
 class GenerateAnnotatedVideoView(LoginRequiredMixin, View):
-    """Render the annotated overlay video for a finished job — a separate
-    endpoint invocation streaming from the tracking CSV, so it can't OOM or
-    stall the analysis itself (see inference._annotate_video)."""
+    """Render the overlay into an MP4 for a finished job — the player's picture,
+    drawn by the GPU from a render spec (memory/61), as its own invocation so
+    it can't stall the analysis."""
 
     def post(self, request, pk):
         from django.shortcuts import redirect
@@ -1924,16 +1901,31 @@ class GenerateAnnotatedVideoView(LoginRequiredMixin, View):
             messages.error(request, e.message)
             return redirect("analysis:results", pk=pk)
 
-        stats = (getattr(result, "summary_stats", {}) or {})
+        import io as _io
+
+        from . import overlay
+        from .overlay_spec import layers_from
+
+        # The renderer draws from the player's own picture (memory/61): the
+        # stored boxes, the run's saved events and interactions, the pipeline's
+        # ROI and references, the style, and the layers that were on.
         annotate_job_id = f"annot_{uuid.uuid4().hex[:12]}"
+        spec_key = f"{job.user_id}/{annotate_job_id}/render_spec.json.gz"
+        try:
+            spec = render_spec(job, layers_from(request.POST))
+            get_s3_client().upload_stream(
+                "processed", spec_key, _io.BytesIO(overlay.encode(spec)),
+                content_type="application/json")
+        except Exception as e:  # noqa: BLE001
+            logger.exception("render spec failed for job %s", pk)
+            messages.error(request, f"Could not prepare the render: {e}")
+            return redirect("analysis:results", pk=pk)
         payload = {
             "task": "annotate_video",
             "job_id": annotate_job_id,
             "user_id": str(job.user_id),
             "video_blob_path": job.video.storage_key,
-            "tracking_csv_path": tracking_path,
-            "nest_bboxes": stats.get("nest_bboxes") or {},
-            "hotel_bbox": stats.get("hotel_bbox"),
+            "render_spec_path": spec_key,
         }
         try:
             input_uri = _put_inference_payload(annotate_job_id, payload)
@@ -1950,573 +1942,6 @@ class GenerateAnnotatedVideoView(LoginRequiredMixin, View):
         messages.info(request, "Rendering the annotated video — this runs in the "
                                "background; refresh in a couple of minutes.")
         return redirect("analysis:results", pk=pk)
-
-
-def _download_range_bounds(dfrom, dto, zone):
-    """Parse 'YYYY-MM-DD' from/to (interpreted in `zone`) into inclusive
-    day-boundary datetimes — start at 00:00, end at 23:59:59.999999 so the whole
-    end day is included (matching the device activity chart's _parse_custom_range).
-    Either bound is None if its input is absent or unparseable."""
-    from datetime import datetime as _dt, time as _time
-    start = end = None
-    if dfrom:
-        try:
-            start = _dt.combine(_dt.strptime(dfrom, "%Y-%m-%d").date(), _time.min, tzinfo=zone)
-        except (ValueError, TypeError):
-            pass
-    if dto:
-        try:
-            end = _dt.combine(_dt.strptime(dto, "%Y-%m-%d").date(), _time.max, tzinfo=zone)
-        except (ValueError, TypeError):
-            pass
-    return start, end
-
-
-class _FilteredJobsMixin:
-    """Shared logic for filtering completed jobs by site/year/month/day/hour."""
-
-    def _get_filtered_results(self, request):
-        site = request.GET.get("site", "")
-        year = request.GET.get("year", "")
-        month = request.GET.get("month", "")
-        day = request.GET.get("day", "")
-        hour = request.GET.get("hour", "")
-        device = request.GET.get("device", "")
-        dfrom = request.GET.get("from", "")
-        dto = request.GET.get("to", "")
-
-        # Ecological data follows video access: results for any video the user
-        # owns OR can see via a device share (mirrors Video.accessible).
-        qs = JobResult.objects.for_viewer(request.user).filter(
-            job__video__in=Video.accessible(request.user),
-            job__status=Job.Status.COMPLETED,
-        ).select_related("job__video")
-
-        if device:
-            qs = qs.filter(job__video__device_id=device)
-        if site:
-            qs = qs.filter(job__video__site_name=_unsanitize_site(site))
-        if year:
-            try:
-                qs = qs.filter(job__video__year=int(year))
-            except (ValueError, TypeError):
-                pass
-        if month:
-            try:
-                qs = qs.filter(job__video__month=int(month))
-            except (ValueError, TypeError):
-                pass
-        if day:
-            try:
-                qs = qs.filter(job__video__day=int(day))
-            except (ValueError, TypeError):
-                pass
-        if hour:
-            try:
-                qs = qs.filter(job__video__hour=int(hour))
-            except (ValueError, TypeError):
-                pass
-        # Daily time-of-day window (same semantics as apply_video_filters).
-        try:
-            hfrom = int(request.GET["hfrom"]) if request.GET.get("hfrom") else None
-            hto = int(request.GET["hto"]) if request.GET.get("hto") else None
-        except (ValueError, TypeError):
-            hfrom = hto = None
-        if hfrom is not None or hto is not None:
-            lo = hfrom if hfrom is not None else 0
-            hi = hto if hto is not None else 24
-            if lo < hi:
-                qs = qs.filter(job__video__hour__gte=lo, job__video__hour__lt=hi)
-            elif lo > hi:  # wraps past midnight
-                from django.db.models import Q as _Q
-                qs = qs.filter(_Q(job__video__hour__gte=lo) | _Q(job__video__hour__lt=hi))
-
-        # Arbitrary date range (from/to, YYYY-MM-DD) on the clip's recorded time.
-        # Interpreted in the device's display tz — matching the on-page activity
-        # chart — when a device is given, else the server tz; end day inclusive.
-        if dfrom or dto:
-            from django.utils import timezone as _tz
-            zone = _tz.get_current_timezone()
-            if device:
-                try:
-                    from apps.devices.models import Device
-                    from apps.devices.views import _display_zone
-                    dev = Device.objects.filter(pk=device).first()
-                    if dev:
-                        zone = _display_zone(dev)[0]
-                except Exception:  # never let tz resolution break a download
-                    pass
-            start, end = _download_range_bounds(dfrom, dto, zone)
-            if start:
-                qs = qs.filter(job__video__recorded_at__gte=start)
-            if end:
-                qs = qs.filter(job__video__recorded_at__lte=end)
-
-        label_parts = []
-        if device:
-            label_parts.append(f"device{device}")
-        if site:
-            label_parts.append(site)
-        if year:
-            label_parts.append(str(year))
-        if month:
-            label_parts.append(f"month{month}")
-        if day:
-            label_parts.append(f"day{day}")
-        if hour:
-            label_parts.append(f"hour{hour}")
-        if dfrom and dto:
-            label_parts.append(f"{dfrom}_to_{dto}")
-        elif dfrom:
-            label_parts.append(f"from{dfrom}")
-        elif dto:
-            label_parts.append(f"to{dto}")
-        label = "_".join(label_parts) if label_parts else "all"
-
-        return qs, label
-
-
-def _stream_combined_csv(results, path_attr, fallback_basename, filename, noun):
-    """Stream a combined CSV (header + per-row video prefix) across many
-    JobResults, one per-job CSV pulled from S3.
-
-    The per-job S3 objects are fetched by a bounded thread pool and rows are
-    yielded as they arrive via StreamingHttpResponse — so a large device / date
-    range export starts sending immediately, uses little memory, and doesn't blow
-    the request timeout by doing hundreds of *sequential* S3 GETs before the first
-    byte (the reason a busy device's date-range download was timing out).
-
-    `_fetch` touches only S3 (job + video are already select_related, so no
-    cross-thread DB access); the boto3 client is thread-safe.
-    """
-    import csv
-    import io
-    import itertools
-    from collections import deque
-    from django.http import StreamingHttpResponse
-
-    s3 = get_s3_client()
-
-    def _fetch(result):
-        path = getattr(result, path_attr) or ""
-        if not path:
-            mid = result.job.modal_job_id
-            if not mid:
-                return None
-            path = f"{result.job.user_id}/{mid}/{fallback_basename}"
-        try:
-            buf = io.BytesIO()
-            s3.download_to_stream("processed", path, buf)
-            return result, buf.getvalue().decode("utf-8")
-        except Exception as e:
-            logger.error("Failed to read %s CSV %s: %s", noun, path, e)
-            return None
-
-    class _Echo:
-        def write(self, value):
-            return value
-    writer = csv.writer(_Echo())
-
-    def _prefetched(pool, items, window):
-        """Yield _fetch results in input order with at most `window` in flight."""
-        sentinel = object()
-        it = iter(items)
-        pending = deque(pool.submit(_fetch, x) for x in itertools.islice(it, window))
-        while pending:
-            yield pending.popleft().result()
-            nxt = next(it, sentinel)
-            if nxt is not sentinel:
-                pending.append(pool.submit(_fetch, nxt))
-
-    def _rows():
-        header_written = False
-        with ThreadPoolExecutor(max_workers=12, thread_name_prefix="csv-dl") as pool:
-            for fetched in _prefetched(pool, results.iterator(), 24):
-                if not fetched:
-                    continue
-                result, content = fetched
-                reader = csv.reader(io.StringIO(content))
-                headers = next(reader, [])
-                if not header_written:
-                    yield writer.writerow(["video_title", "site_name", "recorded_at"] + headers)
-                    header_written = True
-                video = result.job.video
-                prefix = [video.title, video.site_name,
-                          video.recorded_at.isoformat() if video.recorded_at else ""]
-                for row in reader:
-                    yield writer.writerow(prefix + row)
-        if not header_written:
-            yield writer.writerow([f"No {noun} data found for this filter"])
-
-    resp = StreamingHttpResponse(_rows(), content_type="text/csv")
-    resp["Content-Disposition"] = f'attachment; filename="{filename}"'
-    return resp
-
-
-class DownloadEventsCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
-    """Download combined events CSV for all filtered completed jobs."""
-
-    def get(self, request):
-        results, label = self._get_filtered_results(request)
-        if not results.exists():
-            from django.contrib import messages as msg
-            msg.warning(request, "No completed jobs matching this filter.")
-            return redirect("analysis:processing")
-        return _stream_combined_csv(results, "events_csv_path", "events.csv",
-                                    f"beemonitor_events_{label}.csv", "event")
-
-
-class DownloadTrackingCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
-    """Download combined tracking CSV for all filtered completed jobs."""
-
-    def get(self, request):
-        results, label = self._get_filtered_results(request)
-        if not results.exists():
-            from django.contrib import messages as msg
-            msg.warning(request, "No completed jobs matching this filter.")
-            return redirect("analysis:processing")
-        return _stream_combined_csv(results, "tracking_csv_path", "tracking_results.csv",
-                                    f"beemonitor_tracking_{label}.csv", "tracking")
-
-
-class DownloadTripsCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
-    """Download combined foraging trips CSV for all filtered completed jobs.
-
-    NOTE: this is the PER-VIDEO computation — a bee exiting and re-entering within
-    the SAME clip (duration = frame/fps delta, seconds). For the cross-video trips
-    shown on the batch page + activity chart (a bee returning in a LATER clip),
-    use DownloadDeviceTripsCSVView (download_device_trips)."""
-
-    def get(self, request):
-        results, label = self._get_filtered_results(request)
-        if not results.exists():
-            from django.contrib import messages as msg
-            msg.warning(request, "No completed jobs matching this filter.")
-            return redirect("analysis:processing")
-        return _stream_combined_csv(results, "foraging_trips_csv_path", "foraging_trips.csv",
-                                    f"beemonitor_foraging_trips_{label}.csv", "foraging trip")
-
-
-def _stream_concat_csv(objects, path_attr, filename, noun):
-    """Stream several already-formed CSVs (identical columns) as one file: the
-    header from the first, subsequent headers dropped. Objects are fetched from
-    the 'processed' bucket with a small bounded thread pool. Used for the
-    pre-computed per-day trips CSVs (no per-row prefix — each row is complete)."""
-    import io
-    import itertools
-    from collections import deque
-    from django.http import StreamingHttpResponse
-
-    s3 = get_s3_client()
-
-    def _fetch(obj):
-        path = getattr(obj, path_attr) or ""
-        if not path:
-            return None
-        try:
-            buf = io.BytesIO()
-            s3.download_to_stream("processed", path, buf)
-            return buf.getvalue().decode("utf-8")
-        except Exception as e:
-            logger.error("Failed to read %s CSV %s: %s", noun, path, e)
-            return None
-
-    def _prefetched(pool, items, window):
-        sentinel = object()
-        it = iter(items)
-        pending = deque(pool.submit(_fetch, x) for x in itertools.islice(it, window))
-        while pending:
-            yield pending.popleft().result()
-            nxt = next(it, sentinel)
-            if nxt is not sentinel:
-                pending.append(pool.submit(_fetch, nxt))
-
-    def _rows():
-        header = None
-        with ThreadPoolExecutor(max_workers=8, thread_name_prefix="csv-cat") as pool:
-            for content in _prefetched(pool, objects.iterator(), 16):
-                if not content:
-                    continue
-                lines = content.splitlines()
-                if not lines:
-                    continue
-                if header is None:
-                    header = lines[0]
-                    yield header + "\n"
-                for ln in lines[1:]:
-                    yield ln + "\n"
-        if header is None:
-            yield f"No {noun} data found for this filter\n"
-
-    resp = StreamingHttpResponse(_rows(), content_type="text/csv")
-    resp["Content-Disposition"] = f'attachment; filename="{filename}"'
-    return resp
-
-
-class DownloadDeviceTripsCSVView(LoginRequiredMixin, View):
-    """Cross-video foraging trips for a device — the SAME computation as the batch
-    page's trips table and the device activity chart: a bee exiting in one clip and
-    returning in a later one, duration = return_time - exit_time. Streams the
-    pre-computed per-day DailyForagingSummary.trips_csv_path objects (≈1 per day)."""
-
-    def get(self, request):
-        from datetime import datetime as _dt
-        from apps.analysis.models import DailyForagingSummary
-        from apps.devices.models import Device
-
-        device = get_object_or_404(Device.accessible(request.user),
-                                   pk=request.GET.get("device"))
-        qs = DailyForagingSummary.objects.filter(device=device).exclude(trips_csv_path="")
-
-        dfrom = request.GET.get("from", "")
-        dto = request.GET.get("to", "")
-        for val, lookup in ((dfrom, "date__gte"), (dto, "date__lte")):
-            if val:
-                try:
-                    qs = qs.filter(**{lookup: _dt.strptime(val, "%Y-%m-%d").date()})
-                except (ValueError, TypeError):
-                    pass
-        qs = qs.order_by("date")
-
-        if not qs.exists():
-            from django.contrib import messages as msg
-            msg.warning(request, "No cross-video foraging trips computed for this "
-                                 "device / range yet.")
-            return redirect("devices:detail", pk=device.pk)
-
-        parts = [f"device{device.pk}"]
-        if dfrom and dto:
-            parts.append(f"{dfrom}_to_{dto}")
-        elif dfrom:
-            parts.append(f"from{dfrom}")
-        elif dto:
-            parts.append(f"to{dto}")
-        filename = f"beemonitor_foraging_trips_{'_'.join(parts)}.csv"
-        return _stream_concat_csv(qs, "trips_csv_path", filename, "cross-video trip")
-
-
-class DownloadInteractionsCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
-    """Download combined interactions CSV for all filtered completed jobs."""
-
-    def get(self, request):
-        results, label = self._get_filtered_results(request)
-        if not results.exists():
-            from django.contrib import messages as msg
-            msg.warning(request, "No completed jobs matching this filter.")
-            return redirect("analysis:processing")
-        return _stream_combined_csv(results, "interactions_csv_path", "interactions.csv",
-                                    f"beemonitor_interactions_{label}.csv", "interaction")
-
-
-class DownloadNestDataCSVView(_FilteredJobsMixin, LoginRequiredMixin, View):
-    """Download per-video nest bounding-box coordinates CSV for all filtered completed jobs."""
-
-    def get(self, request):
-        import csv
-
-        from django.http import HttpResponse
-
-        results, label = self._get_filtered_results(request)
-
-        if not results.exists():
-            from django.contrib import messages as msg
-
-            msg.warning(request, "No completed jobs matching this filter.")
-            return redirect("analysis:processing")
-
-        response = HttpResponse(content_type="text/csv")
-        response["Content-Disposition"] = (
-            f'attachment; filename="beemonitor_nest_bboxes_{label}.csv"'
-        )
-
-        writer = csv.writer(response)
-        writer.writerow([
-            "video_title", "site_name", "recorded_at",
-            "nest_id", "x1", "y1", "x2", "y2",
-        ])
-
-        for result in results:
-            video = result.job.video
-            prefix = [
-                video.title,
-                video.site_name,
-                video.recorded_at.isoformat() if video.recorded_at else "",
-            ]
-            stats = result.summary_stats or {}
-            bboxes = stats.get("nest_bboxes", {})
-
-            if isinstance(bboxes, dict) and bboxes:
-                for nest_id in sorted(bboxes.keys(), key=lambda k: int(k) if k.isdigit() else k):
-                    coords = bboxes[nest_id]
-                    if isinstance(coords, (list, tuple)) and len(coords) == 4:
-                        writer.writerow(prefix + [nest_id] + [c for c in coords])
-                    else:
-                        writer.writerow(prefix + [nest_id, "", "", "", ""])
-
-        return response
-
-
-class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
-    template_name = "analysis/analytics.html"
-
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        user = self.request.user
-
-        # Get filter params
-        site = self.request.GET.get("site", "")
-        db_site = _unsanitize_site(site)  # reverse-map display name for DB queries
-        year = self.request.GET.get("year", "")
-        month = self.request.GET.get("month", "")
-        day = self.request.GET.get("day", "")
-        hour = self.request.GET.get("hour", "")
-        device = self.request.GET.get("device", "")
-
-        year_int = None
-        month_int = None
-        day_int = None
-        hour_int = None
-        device_int = None
-        if year:
-            try:
-                year_int = int(year)
-            except (ValueError, TypeError):
-                pass
-        if month:
-            try:
-                month_int = int(month)
-            except (ValueError, TypeError):
-                pass
-        if day:
-            try:
-                day_int = int(day)
-            except (ValueError, TypeError):
-                pass
-        if hour:
-            try:
-                hour_int = int(hour)
-            except (ValueError, TypeError):
-                pass
-        if device:
-            try:
-                device_int = int(device)
-            except (ValueError, TypeError):
-                pass
-
-        # Filter options (use set() to guarantee uniqueness)
-        user_videos = Video.accessible(user)
-        ctx["devices"] = [
-            {"id": r["device_id"], "name": r["device__name"]}
-            for r in user_videos.exclude(device=None)
-            .values("device_id", "device__name").distinct().order_by("device__name")
-        ]
-        ctx["site_names"] = sorted(set(
-            _sanitize_site(s) for s in
-            user_videos.exclude(site_name="")
-            .values_list("site_name", flat=True)
-        ))
-        ctx["years"] = sorted(set(
-            user_videos.exclude(year=None)
-            .values_list("year", flat=True)
-        ))
-        ctx["months_list"] = list(range(1, 13))
-        ctx["days_list"] = sorted(set(
-            user_videos.exclude(day=None).values_list("day", flat=True)
-        ))
-        ctx["hours_list"] = list(range(24))
-
-        ctx["current_site"] = site
-        ctx["current_year"] = year
-        ctx["current_month"] = month
-        ctx["current_day"] = day
-        ctx["current_hour"] = hour
-        ctx["current_device"] = device
-
-        # Job progress metrics
-        user_jobs = Job.objects.for_viewer(user).filter(video__in=Video.accessible(user))
-        processing_jobs = user_jobs.filter(status=Job.Status.PROCESSING).select_related("video")
-        failed_jobs = user_jobs.filter(status=Job.Status.FAILED).select_related("video").order_by("-created_at")[:5]
-        completed_recent = user_jobs.filter(status=Job.Status.COMPLETED).order_by("-completed_at")[:5]
-
-        ctx["job_stats"] = {
-            "total": user_jobs.count(),
-            "completed": user_jobs.filter(status=Job.Status.COMPLETED).count(),
-            "processing": processing_jobs.count(),
-            "failed": user_jobs.filter(status=Job.Status.FAILED).count(),
-            "queued": user_jobs.filter(status=Job.Status.QUEUED).count(),
-        }
-        ctx["processing_jobs"] = processing_jobs[:20]
-        ctx["failed_jobs"] = failed_jobs
-        ctx["completed_recent"] = completed_recent
-
-        # Analytics data — wrap in try/except so page never crashes
-        try:
-            ctx["summary"] = get_summary_stats(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int, device=device_int)
-        except Exception as e:
-            logger.error("Analytics summary failed: %s", e, exc_info=True)
-            ctx["summary"] = {"total_videos": 0, "total_events": 0, "total_entries": 0,
-                              "total_exits": 0, "avg_events_per_video": 0, "total_unique_tracks": 0, "completed_jobs": 0}
-
-        try:
-            activity = get_activity_over_time(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int, device=device_int)
-            ctx["activity_json"] = json.dumps(activity, default=str)
-        except Exception:
-            ctx["activity_json"] = "[]"
-
-        try:
-            cumulative = get_cumulative_activity(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int, device=device_int)
-            ctx["cumulative_json"] = json.dumps(cumulative, default=str)
-        except Exception:
-            ctx["cumulative_json"] = "[]"
-
-        try:
-            averages = get_period_averages(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int, device=device_int)
-            # Convert int keys to string keys for JSON
-            ctx["hourly_avg_json"] = json.dumps({str(k): v for k, v in averages["hourly"].items()})
-            ctx["daily_avg_json"] = json.dumps({str(k): v for k, v in averages["daily"].items()})
-            ctx["monthly_avg_json"] = json.dumps({str(k): v for k, v in averages["monthly"].items()})
-        except Exception:
-            ctx["hourly_avg_json"] = "{}"
-            ctx["daily_avg_json"] = "{}"
-            ctx["monthly_avg_json"] = "{}"
-
-        try:
-            vb = get_video_breakdown(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int, device=device_int)
-            for row in vb:
-                row["title"] = _sanitize_site(row["title"])
-                row["site"] = _sanitize_site(row["site"])
-            ctx["video_breakdown"] = vb
-        except Exception:
-            ctx["video_breakdown"] = []
-
-        try:
-            foraging_over_time = get_foraging_trips_over_time(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int, device=device_int)
-            ctx["foraging_trips_json"] = json.dumps(foraging_over_time, default=str)
-        except Exception:
-            ctx["foraging_trips_json"] = "[]"
-
-        try:
-            trips_per_nest = get_trips_per_nest(user, site_name=db_site or None, year=year_int, month=month_int, day=day_int, hour=hour_int, device=device_int)
-            ctx["trips_per_nest_json"] = json.dumps(trips_per_nest, default=str)
-        except Exception:
-            ctx["trips_per_nest_json"] = "[]"
-
-        # Fetch weather data for the date range of foraging trips
-        try:
-            foraging_over_time = json.loads(ctx.get("foraging_trips_json", "[]"))
-            if foraging_over_time:
-                dates = [d["date"] for d in foraging_over_time]
-                weather = _fetch_weather_data(dates[0], dates[-1])
-                ctx["weather_hourly_json"] = json.dumps(weather.get("hourly", []), default=str)
-                ctx["weather_daily_json"] = json.dumps(weather.get("daily", []), default=str)
-            else:
-                ctx["weather_hourly_json"] = "[]"
-                ctx["weather_daily_json"] = "[]"
-        except Exception:
-            ctx["weather_hourly_json"] = "[]"
-            ctx["weather_daily_json"] = "[]"
-
-        return ctx
 
 
 def _fetch_weather_data(start_date: str, end_date: str, lat: float = 40.79, lon: float = -77.86) -> dict:
@@ -2613,60 +2038,28 @@ class TrackOverlayView(LoginRequiredMixin, View):
 
 
 def overlay_response(request, job, cache_control="private, max-age=3600"):
-    """One job's overlay payload, built and stored on first use (memory/46).
+    """One job's overlay payload (memory/46). Shared by the signed-in clip pages
+    and a public batch share link.
 
-    Shared by the signed-in clip pages and a public batch share link.
+    The boxes are built once and stored beside the tracking CSV. The events,
+    interactions, ROI and references (``?part=events``) are NOT stored: they
+    are read from the run's saved rows on every request, so a recount or a
+    rule change shows at once (memory/60, memory/61).
     """
     import gzip as _gzip
-    import io as _io
-
-    from apps.pipelines import executors as pipeline_executors
-    from apps.pipelines import tracks as track_tables
-    from apps.pipelines.ops import fps_with_source
-
-    from . import overlay
+    import json as _json
 
     result = getattr(job, "result", None)
-    tracking_path = getattr(result, "tracking_csv_path", "") if result else ""
-    if not tracking_path:
+    if not (getattr(result, "tracking_csv_path", "") if result else ""):
         raise Http404("This clip has no tracks.")
 
-    s3 = get_s3_client()
-    key = overlay.stored_path(tracking_path)
-    body = None
-    try:
-        buf = _io.BytesIO()
-        s3.download_to_stream("processed", key, buf)
-        body = buf.getvalue()
-    except Exception:  # noqa: BLE001 - not built yet
-        body = None
+    if request.GET.get("part") == "events":
+        response = HttpResponse(_json.dumps(overlay_live(job), separators=(",", ":")),
+                                content_type="application/json")
+        response["Cache-Control"] = "private, no-store"
+        return response
 
-    if not body:
-        buf = _io.BytesIO()
-        try:
-            s3.download_to_stream("processed", tracking_path, buf)
-        except Exception as e:  # noqa: BLE001
-            logger.error("overlay: tracking CSV unreadable (%s): %s", tracking_path, e)
-            raise Http404("This clip's tracks could not be read.")
-        text = buf.getvalue().decode("utf-8", "replace")
-        tracking = _load_csv_from_text(text)
-        tracks_rows, by_track, floor = job_tracks(job, tracking)
-        try:
-            events = track_tables.primitive_with_identity(
-                "events", pipeline_executors.primitives_for_job(job, "events"),
-                by_track, floor)
-        except Exception as e:  # noqa: BLE001 - boxes without events still help
-            logger.warning("overlay: events unavailable for job %s: %s", job.pk, e)
-            events = []
-        fps = fps_with_source(result.summary_stats or {}, job.video)[0]
-        body = overlay.encode(overlay.build(
-            text, tracks_rows, events, fps, job.config or {}))
-        try:
-            s3.upload_stream("processed", key, _io.BytesIO(body),
-                             content_type="application/json")
-        except Exception as e:  # noqa: BLE001 - serve it anyway
-            logger.warning("overlay: could not store %s: %s", key, e)
-
+    body = stored_overlay(job)
     if "gzip" in request.META.get("HTTP_ACCEPT_ENCODING", ""):
         response = HttpResponse(body, content_type="application/json")
         response["Content-Encoding"] = "gzip"
@@ -2674,6 +2067,119 @@ def overlay_response(request, job, cache_control="private, max-age=3600"):
         response = HttpResponse(_gzip.decompress(body), content_type="application/json")
     response["Cache-Control"] = cache_control
     return response
+
+
+def stored_overlay(job):
+    """The stored boxes payload (gzip'd JSON), built and stored on first use."""
+    import io as _io
+
+    from . import overlay
+
+    tracking_path = job.result.tracking_csv_path
+    s3 = get_s3_client()
+    key = overlay.stored_path(tracking_path)
+    try:
+        buf = _io.BytesIO()
+        s3.download_to_stream("processed", key, buf)
+        if buf.getvalue():
+            return buf.getvalue()
+    except Exception:  # noqa: BLE001 - not built yet
+        pass
+
+    buf = _io.BytesIO()
+    try:
+        s3.download_to_stream("processed", tracking_path, buf)
+    except Exception as e:  # noqa: BLE001
+        logger.error("overlay: tracking CSV unreadable (%s): %s", tracking_path, e)
+        raise Http404("This clip's tracks could not be read.")
+    text = buf.getvalue().decode("utf-8", "replace")
+    tracks_rows, _by_track, fps, _start = job_tracks(job, _load_csv_from_text(text))
+    body = overlay.encode(overlay.build(text, tracks_rows, fps))
+    try:
+        s3.upload_stream("processed", key, _io.BytesIO(body), content_type="application/json")
+    except Exception as e:  # noqa: BLE001 - serve it anyway
+        logger.warning("overlay: could not store %s: %s", key, e)
+    return body
+
+
+def overlay_live(job):
+    """What the overlay draws on top of the boxes, read live from the run:
+
+    - ``events``: ``[frame, track_id, action, reference, end_frame, at_edge]``
+    - ``interactions``: ``[start_frame, end_frame, track_id, with, relation,
+      min_distance_bl]``
+    - ``regions``: the pipeline's ROI and reference objects (0..1 outlines)
+    - ``style``: how everything is drawn (``overlay_spec.STYLE``), so the
+      player and the rendered video read one spec.
+    """
+    from apps.pipelines import executors as pipeline_executors
+    from apps.pipelines import ops, primitives
+
+    from .overlay_spec import STYLE
+
+    def _int(v):
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return None
+
+    events, interactions = [], []
+    try:
+        for e in primitives.normalized(
+                "events", pipeline_executors.primitives_for_job(job, "events")):
+            frame, tid = _int(e.get("frame")), _int(e.get("track_id"))
+            if frame is None or tid is None:
+                continue
+            events.append([frame, tid, e.get("action") or "", str(e.get("reference") or ""),
+                           _int(e.get("end_frame")), e.get("at_edge")])
+        for r in primitives.normalized(
+                "interactions", pipeline_executors.primitives_for_job(job, "interactions")):
+            start, end, tid = _int(r.get("start_frame")), _int(r.get("end_frame")), _int(r.get("track_id"))
+            if None in (start, end, tid):
+                continue
+            other = r.get("with")
+            if r.get("relation") == primitives.NEAR:
+                other = _int(other)
+            interactions.append([start, end, tid, other, r.get("relation") or "",
+                                 r.get("min_distance_bl")])
+    except Exception as exc:  # noqa: BLE001 - boxes without events still help
+        logger.warning("overlay: events unavailable for job %s: %s", job.pk, exc)
+
+    def _outline(box, points):
+        return [list(p) for p in (points or [(box[0], box[1]), (box[2], box[1]),
+                                             (box[2], box[3]), (box[0], box[3])])]
+
+    geometry = pipeline_executors.geometry_for_job(job)
+    regions = []
+    roi = geometry.get("hotel_roi")
+    if roi and len(roi) == 4:
+        # The tracking area: drawn, never counted against (memory/60).
+        regions.append({"label": "ROI", "kind": "roi",
+                        "points": _outline(roi, geometry.get("hotel_polygon"))})
+    regions += [{"label": r["id"], "kind": "reference", "points": _outline(r["box"], r["points"])}
+                for r in ops.roi_references(geometry)]
+    return {"events": events, "interactions": interactions, "regions": regions, "style": STYLE}
+
+
+def render_spec(job, layers):
+    """Everything the GPU renderer draws (memory/61): the stored boxes, the live
+    events/interactions/references, the style, the layers asked for, the
+    clip's start and its mount — so the rendered video is the player's picture."""
+    import gzip as _gzip
+    import json as _json
+
+    from apps.videos import timing
+
+    spec = _json.loads(_gzip.decompress(stored_overlay(job)))
+    spec.update(overlay_live(job))
+    device = getattr(job.video, "device", None)
+    spec.update({
+        "v": 1,
+        "layers": layers,
+        "rotate_180": bool(getattr(device, "rotate_180", False)),
+        "clip_start": timing.iso(timing.clip_start(job.video)),
+    })
+    return spec
 
 
 class JobPrimitiveCsvView(LoginRequiredMixin, View):
@@ -2692,7 +2198,7 @@ class JobPrimitiveCsvView(LoginRequiredMixin, View):
 
         from apps.pipelines import tracks as track_tables
 
-        if kind not in ("events", "interactions", "tracks"):
+        if kind not in ("events", "interactions", "tracks", "tracking", "detections"):
             raise Http404("Unknown table.")
         job = get_object_or_404(Job.objects.for_viewer(request.user), pk=pk)
         if job.user_id != request.user.id and not Video.accessible(
@@ -2701,15 +2207,24 @@ class JobPrimitiveCsvView(LoginRequiredMixin, View):
 
         result = getattr(job, "result", None)
         tracking = (_load_csv_from_storage(getattr(result, "tracking_csv_path", "") or "")
-                    if kind == "tracks" else {})
-        tracks_rows, by_track, floor = job_tracks(job, tracking)
+                    if kind in ("tracks", "tracking") else {})
+        tracks_rows, by_track, fps, start = job_tracks(job, tracking)
         if kind == "tracks":
             rows, fields = tracks_rows, track_tables.TRACK_FIELDS
+        elif kind == "tracking":
+            rows = track_tables.tracking_export(_table_dicts(tracking), by_track, fps, start)
+            fields = track_tables.TRACKING_FIELDS
+        elif kind == "detections":
+            detections = _load_csv_from_storage(getattr(result, "detections_csv_path", "") or "")
+            rows = track_tables.detections_export(_table_dicts(detections), fps, start)
+            fields = track_tables.DETECTION_FIELDS
         else:
             rows = track_tables.primitive_with_identity(
-                kind, pipeline_executors.primitives_for_job(job, kind), by_track, floor)
-            fields = (primitives.EVENT_FIELDS if kind == "events"
-                      else primitives.INTERACTION_FIELDS)
+                kind, pipeline_executors.primitives_for_job(job, kind), by_track, fps, start)
+            fields = (list(primitives.EVENT_FIELDS) + track_tables.IDENTITY_FIELDS
+                      if kind == "events" else
+                      list(primitives.INTERACTION_FIELDS) + track_tables.IDENTITY_FIELDS
+                      + ["with_species", "with_marker_id"])
         table = _rows_as_table(rows, fields)
 
         response = HttpResponse(content_type="text/csv")
@@ -2722,22 +2237,26 @@ class JobPrimitiveCsvView(LoginRequiredMixin, View):
 
 
 def job_tracks(job, tracking):
-    """``(track rows, by_track, species floor)`` for one job. ``tracking`` is the
-    ``_load_csv_from_storage`` table of its tracking CSV."""
-    from apps.pipelines import executors as pipeline_executors
+    """``(track rows, by_track, fps, clip start)`` for one job. ``tracking`` is
+    the ``_load_csv_from_storage`` table of its tracking CSV."""
     from apps.pipelines import tracks as track_tables
     from apps.pipelines.ops import fps_with_source
+    from apps.videos import timing
 
     result = getattr(job, "result", None)
     if result is None:
-        return [], {}, 0.0
+        return [], {}, None, None
     by_track = track_tables.by_track_of(result)
-    run = pipeline_executors._run_for_job(job)
-    floor = track_tables.species_floor(run.steps if run else None)
-    headers = tracking.get("headers") or []
-    frames = [dict(zip(headers, r)) for r in tracking.get("rows") or []]
     fps = fps_with_source(result.summary_stats or {}, job.video)[0]
-    return track_tables.track_rows(frames, by_track, floor, fps), by_track, floor
+    start = timing.clip_start(job.video)
+    return (track_tables.track_rows(_table_dicts(tracking), by_track, fps, start),
+            by_track, fps, start)
+
+
+def _table_dicts(table):
+    """A ``_load_csv_from_storage`` table as row dicts."""
+    headers = (table or {}).get("headers") or []
+    return [dict(zip(headers, r)) for r in (table or {}).get("rows") or []]
 
 
 # Rows rendered per table on a results page; downloads carry all of them.

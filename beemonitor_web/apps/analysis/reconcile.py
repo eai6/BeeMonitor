@@ -151,16 +151,6 @@ def reconcile_all(limit: int = 500) -> dict:
     except Exception:
         logger.exception("device pipeline schedules failed")
 
-    # Foraging summaries flagged stale by job completions (or never computed):
-    # recompute a bounded batch per tick, newest day first, so device charts
-    # converge without any S3 work in request paths.
-    trips_recomputed = 0
-    try:
-        from apps.analysis import foraging
-        trips_recomputed = foraging.sweep_stale()
-    except Exception:
-        logger.exception("foraging summary sweep failed")
-
     # Runs counted with older event rules, recounted from their saved
     # tracks (memory/55): bounded batch per tick, no GPU.
     recounted = 0
@@ -195,7 +185,6 @@ def reconcile_all(limit: int = 500) -> dict:
             "preannot_finalized": preannot_done,
             "schedules_due": sched.get("due", 0),
             "scheduled_runs": sched.get("launched_runs", 0),
-            "trips_recomputed": trips_recomputed,
             "runs_recounted": recounted,
             "beats_pruned": beats_pruned}
 

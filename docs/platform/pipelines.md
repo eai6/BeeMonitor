@@ -49,10 +49,10 @@ Every run and batch is listed under [Runs](runs.md), with its tables and CSV dow
 | **Detect** | Finds one class in each frame with YOLO (fast) or SAM 3 (text prompt, slower). Can analyse every frame (needed for tracking) or a sample of frames (for objects that don't move). |
 | **MOT: Track objects** | Links detections into tracks. Choose the algorithm — BeeTrack (default), ByteTrack, BoT-SORT, OC-SORT or SFSORT — and tune its settings on the node. Runs inside the same GPU pass as Detect, on whatever Detect found. |
 | **Reference: Saved layout** | Each clip's saved ROI and reference objects (nest holes, flags, tubes, flowers): the clip's own if it has one, otherwise its site's, otherwise its unit's. Draw them from the clip page (**ROI & reference objects**), from **Videos → Sites**, or on the unit page. No GPU needed. For objects that move, wire a Detect node to the analyzer's reference input instead. |
-| **Events** | One row per enter or exit of a reference. |
-| **Interactions** | One row per episode of contact: insect with reference (a visit), insect with insect, or both. |
+| **Events** | One row per exit from, enter into, or stay in a reference, judged from where each track was first and last detected ([what an event is](runs.md#what-an-event-is)). |
+| **Interactions** | One row per spell of contact: insect with reference (a visit), insect with insect, or both. |
 | **Detection count** | Distinct objects, most common count per frame, totals, per frame, or binned over time. |
-| **Identify species** | After tracking, classifies every saved crop of each track and gives the track the species with the most votes. Model: BeeMachine (354 bee taxa) or BioCLIP (limited to species recorded near the device). A minimum mean confidence (of the crops that voted for the winner) marks weaker calls unidentified. |
+| **Identify species** | After tracking, classifies every saved crop of each track and gives the track the species with the most votes. Model: BeeMachine (354 bee taxa) or BioCLIP (limited to species recorded near the device). The species and its mean confidence go in the tables; filter on the confidence yourself. |
 | **Read bee marker** | The same vote, over every crop, for each track's paint mark, to tell individuals apart. |
 
 ### Templates
@@ -72,8 +72,14 @@ or add a second Detect step for a reference that moves.
 
 ### Settings worth knowing
 
-- **Gap tolerance (frames)**: how long a track can disappear (occlusion, a missed detection) and still
-  count as the same episode. Default 15.
-- **Event confidence**: how sure the entry/exit classifier must be before an event counts (default 0.6).
-- **Insect ↔ insect radius**: how close two insects must be, as a percentage of the frame width, to count
-  as interacting.
+- **Detect confidence**: the only confidence setting. Detections below it never reach tracking, so weak boxes
+  can't break a track. Everywhere else the confidence is a column in the tables and you filter on it.
+- **Rejoin if back within (seconds)** (Interactions): how long an insect can leave a reference, or another
+  insect, and still be the same interaction. Default 0.6 s.
+- **Minimum interaction length** (Interactions): default 0, so every pass over a reference is kept, with its
+  duration.
+- **Padding** (Events, Interactions): grows every reference by this many body lengths. Default 0.
+- **Insect ↔ insect radius** (Interactions): how close two insects must be, in body lengths, to count as near
+  each other. Default 2.
+- **Score events with the ML classifier** (Events): off by default. On, every exit and enter gets an
+  `ml_confidence` column; nothing is removed.

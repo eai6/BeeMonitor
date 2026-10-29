@@ -43,16 +43,6 @@ DETECTION_ROWS = [
     {"frame": 2, "cx": 0.2, "cy": 0.2, "confidence": 0.5, "taxon": "bee"},
 ]
 
-INTERACTION_ROWS = [
-    {"interaction_type": "organism-to-organism", "organism_track_id": 1,
-     "partner_track_id": 2, "reference_id": "", "start_frame": 0,
-     "duration_seconds": 1.5},
-    {"interaction_type": "organism-to-reference", "organism_track_id": 1,
-     "partner_track_id": "", "reference_id": "nest_3", "start_frame": 10,
-     "duration_seconds": 4.0},
-]
-
-
 def _write_csv(rows, name):
     path = Path(tempfile.mkdtemp()) / name
     with path.open("w", newline="") as fh:
@@ -191,13 +181,12 @@ class DownstreamWalkTests(ExecutorTestCase):
             {"id": "d1", "block_type": "detect.objects", "config": {}, "inputs": {"video": "v"}},
             {"id": "d2", "block_type": "detect.objects", "config": {}, "inputs": {"video": "v"}},
             {"id": "m1", "block_type": "track.mot", "config": {}, "inputs": {"detections": "d1"}},
-            {"id": "f", "block_type": "analyze.foraging_trips",
-             "config": {"event_confidence": 0.25}, "inputs": {"tracks": "m1"}},
+            {"id": "f", "block_type": "analyze.events",
+             "config": {}, "inputs": {"tracks": "m1"}},
         ]
-        d1, d2 = steps[1], steps[2]
 
-        self.assertEqual(executors._pipeline_event_confidence(d1, steps), 0.25)
-        self.assertEqual(executors._pipeline_event_confidence(d2, steps), 0.6)
+        self.assertIn("f", [s["id"] for s in executors.downstream_ids("d1", steps)])
+        self.assertNotIn("f", [s["id"] for s in executors.downstream_ids("d2", steps)])
 
     def test_tracker_comes_from_the_downstream_mot_node(self):
         steps = self._module_steps()
@@ -267,11 +256,19 @@ class BuildJobConfigTests(ExecutorTestCase):
         built, _ = self._build(steps)
         self.assertEqual(built["config"]["detector_kind"], "sam3")
 
-    def test_event_confidence_comes_from_the_downstream_foraging_node(self):
+    def test_the_job_carries_no_event_classifier_or_nest_fallback(self):
+        """Events are computed on the web (memory/60); a saved event_confidence
+        is ignored, and the worker never runs the nest model unasked."""
         analyzer = {"id": "f", "block_type": "analyze.foraging_trips",
                     "config": {"event_confidence": 0.3}, "inputs": {"tracks": "m"}}
         built, _ = self._build(self._module_steps(analyzer=analyzer))
-        self.assertEqual(built["config"]["ml_threshold"], 0.3)
+        for key in ("ml_threshold", "nest_fallback", "detect_nests"):
+            self.assertNotIn(key, built["config"])
+
+    def test_a_legacy_detect_reference_asks_the_worker_for_nests(self):
+        steps = self._module_steps({"label": "bee", "reference_source": "detect"})
+        built, _ = self._build(steps)
+        self.assertIs(built["config"]["detect_nests"], True)
 
     def test_species_node_turns_classification_on_in_the_job(self):
         """The whole chain hangs off this flag: _spawn_gpu_job forwards it, the
@@ -457,46 +454,10 @@ class AnalyzerTests(ExecutorTestCase):
         self.assertEqual(out["rows"], [])
         self.assertIn("not available", out["note"])
 
-    def test_interaction_summarises_both_kinds(self):
-        path = _write_csv(INTERACTION_ROWS, "interactions.csv")
-        step = {"id": "x", "block_type": "analyze.interaction",
-                "config": {"interaction_type": "all"}}
-        run = self._run(self._module_steps(), self._video_context())
-
-        out = executors._exec_analyze_interaction(
-            step, run, run.context,
-            self._analyzer_inputs("interactions_csv_path", path), 3,
-        )
-
-        self.assertEqual(out["interaction_count"], 2)
-        self.assertEqual(out["organism_organism"], 1)
-        self.assertEqual(out["organism_reference"], 1)
-        self.assertEqual(out["total_duration_sec"], 5.5)
-
-    def test_interaction_filters_by_type(self):
-        path = _write_csv(INTERACTION_ROWS, "interactions.csv")
-        step = {"id": "x", "block_type": "analyze.interaction",
-                "config": {"interaction_type": "organism_reference"}}
-        run = self._run(self._module_steps(), self._video_context())
-
-        out = executors._exec_analyze_interaction(
-            step, run, run.context,
-            self._analyzer_inputs("interactions_csv_path", path), 3,
-        )
-
-        self.assertEqual(out["interaction_count"], 1)
-        self.assertEqual(out["organism_organism"], 0)
-
-    def test_interaction_falls_back_to_the_job_count(self):
-        step = {"id": "x", "block_type": "analyze.interaction", "config": {}}
-        run = self._run(self._module_steps(), self._video_context())
-
-        out = executors._exec_analyze_interaction(
-            step, run, run.context, {"tracks": {"result": {"interaction_count": 9}}}, 3,
-        )
-
-        self.assertEqual(out["interaction_count"], 9)
-        self.assertIn("not available", out["note"])
+    def test_the_retired_interaction_block_runs_as_interactions(self):
+        """It read the worker's interactions file; it now runs the primitive."""
+        self.assertIs(executors.LOCAL_EXECUTORS["analyze.interaction"],
+                      executors._exec_analyze_interactions)
 
     def test_marker_step_decodes_from_crops(self):
         """No bee_id columns in the tracking CSV, so it falls through to the
@@ -668,25 +629,14 @@ class TrackerSettingsTests(ExecutorTestCase):
 
 
 class SpeciesFloorTests(ExecutorTestCase):
-    """Identify species: a minimum mean confidence for the winning species."""
+    """No species floor (memory/60): the model's call and its confidence go in
+    the CSV, and the reader filters on the confidence."""
 
-    summary = {"identified_tracks": 3, "unique_taxa": 2, "rows": [
-        {"track": 1, "taxon": "Bombus_impatiens", "confidence": 0.41, "votes": 66},
-        {"track": 2, "taxon": "Syrphidae", "confidence": 0.18, "votes": 45},
-        {"track": 3, "taxon": "Bombus_impatiens", "confidence": 0.25, "votes": 8}]}
+    def test_the_identify_node_has_no_confidence_setting(self):
+        from apps.pipelines.registry import get_block
 
-    def test_below_the_floor_is_unidentified_with_its_guess_kept(self):
-        from apps.pipelines.executors import apply_species_floor
-        out = apply_species_floor(self.summary, 0.25)
-        self.assertEqual([r["taxon"] for r in out["rows"]],
-                         ["Bombus_impatiens", "unidentified", "Bombus_impatiens"])
-        self.assertEqual(out["rows"][1]["best_guess"], "Syrphidae")
-        self.assertEqual((out["identified_tracks"], out["unique_taxa"], out["below_threshold"]),
-                         (2, 1, 1))
-
-    def test_no_floor_changes_nothing(self):
-        from apps.pipelines.executors import apply_species_floor
-        self.assertIs(apply_species_floor(self.summary, 0), self.summary)
+        names = [f["name"] for f in get_block("identify.species")["config_fields"]]
+        self.assertNotIn("min_mean_confidence", names)
 
     def test_floor_is_not_part_of_the_gpu_job(self):
         """Changing it must re-read, never re-run the GPU."""

@@ -86,15 +86,20 @@ class AnalysisResults:
         base_filename = Path(base_filename).name
         
         # === SAVE EVENTS ===
-        events_filename = str(Path(output_folder) / f"{base_filename}_events.csv")
-        
-        if columns is None:
-            self.events.to_csv(events_filename, index=False)
-        else:
-            available_cols = [col for col in columns if col in self.events.columns]
-            self.events[available_cols].to_csv(events_filename, index=False)
-        
-        logger.info(f"Saved {len(self.events)} events to {events_filename}")
+        # None when the caller did not compute events (the cloud worker: events
+        # are derived on the platform from the tracking CSV, memory/60). No file
+        # is written then, so nothing downstream can mistake an empty one for
+        # "no events happened".
+        if self.events is not None:
+            events_filename = str(Path(output_folder) / f"{base_filename}_events.csv")
+
+            if columns is None:
+                self.events.to_csv(events_filename, index=False)
+            else:
+                available_cols = [col for col in columns if col in self.events.columns]
+                self.events[available_cols].to_csv(events_filename, index=False)
+
+            logger.info(f"Saved {len(self.events)} events to {events_filename}")
         
         # === SAVE RAW DETECTIONS ===
         # Pre-association detector output: one row per detection per frame,
@@ -181,7 +186,7 @@ class AnalysisResults:
         
         output_path = synthesizer.synthesize(
             self.video_path,
-            self.events,
+            self.events if self.events is not None else pd.DataFrame(),
             self.motion_data,
             self.nests,
             output_folder
@@ -226,7 +231,7 @@ class AnalysisResults:
             n_tracks = int(tracks["track_id"].nunique())
         else:
             n_tracks = 0
-        if self.events.empty:
+        if self.events is None or self.events.empty:
             return {
                 "total_events": 0,
                 "total_entries": 0,

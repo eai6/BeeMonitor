@@ -22,11 +22,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONPATH=/opt/program \
     PATH=/opt/program:$PATH
 
-# System Python 3.10, the libs OpenCV / ffmpeg need at runtime.
+# System Python 3.10, the libs OpenCV / ffmpeg need at runtime; DejaVu Sans Mono
+# for the rendered video's labels (render_overlay.py, memory/61).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-pip python3-dev \
         libgl1 libglib2.0-0 \
         ffmpeg \
+        fonts-dejavu-core \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3 /usr/local/bin/python
@@ -54,6 +56,7 @@ COPY cloud/ /opt/program/cloud/
 # Serving code itself.
 COPY sagemaker_backend/serve.py \
      sagemaker_backend/inference.py \
+     sagemaker_backend/render_overlay.py \
      sagemaker_backend/serve \
      /opt/program/
 RUN chmod +x /opt/program/serve

@@ -85,7 +85,7 @@ class _Boxes:
 class TrackView:
     """One external track, shaped like ``mot.bee_tracker.Track``."""
 
-    def __init__(self, track_id, bbox, confidence, source, taxon, frame_num):
+    def __init__(self, track_id, bbox, confidence, source, taxon, frame_num, detected=True):
         self.id = int(track_id)
         self.history = deque(maxlen=30)
         self.time_since_update = 0
@@ -94,9 +94,12 @@ class TrackView:
         self.bee_id_method = None
         self.bee_id_confidence = 0.0
         self.hits = 0
-        self.observe(bbox, confidence, source, taxon, frame_num)
+        self.observe(bbox, confidence, source, taxon, frame_num, detected)
 
-    def observe(self, bbox, confidence, source, taxon, frame_num):
+    def observe(self, bbox, confidence, source, taxon, frame_num, detected=True):
+        # False when the tracker reported the track this frame but no detection
+        # overlaps its box: the box is the tracker's own prediction.
+        self.detected = bool(detected)
         self.last_bbox = tuple(float(v) for v in bbox)
         self.last_confidence = float(confidence)
         self.last_source = source
@@ -125,7 +128,8 @@ class TrackView:
         x1, y1, x2, y2 = self.last_bbox
         cx, cy = self.centroid
         return {"track_id": self.id, "x1": x1, "y1": y1, "x2": x2, "y2": y2,
-                "cx": float(cx), "cy": float(cy), "confidence": self.last_confidence,
+                "cx": float(cx), "cy": float(cy), "detected": int(self.detected),
+                "confidence": self.last_confidence if self.detected else None,
                 "source": self.last_source, "taxon": self.taxon, "bee_id": self.bee_id,
                 "bee_id_method": self.bee_id_method,
                 "bee_id_confidence": self.bee_id_confidence, "history": list(self.history)}
@@ -258,15 +262,18 @@ class ExternalTracker:
         for track_id, bbox, idx in self._associate(boxes, conf, taxa):
             if idx is None:   # tracker gave no index: the detection it overlaps most
                 idx = max(range(len(rows)), key=lambda i: _iou(bbox, boxes[i]), default=None)
+                if idx is not None and _iou(bbox, boxes[idx]) <= 0:
+                    idx = None    # overlaps none: a predicted box, not a detection
             src = sources[idx] if idx is not None else "yolo"
             taxon = taxa[idx] if idx is not None else None
             score = float(conf[idx]) if idx is not None else 0.0
             box = boxes[idx] if idx is not None else bbox
             view = self._views.get(track_id)
             if view is None:
-                self._views[track_id] = TrackView(track_id, box, score, src, taxon, frame_num)
+                self._views[track_id] = TrackView(track_id, box, score, src, taxon, frame_num,
+                                                  detected=idx is not None)
             else:
-                view.observe(box, score, src, taxon, frame_num)
+                view.observe(box, score, src, taxon, frame_num, detected=idx is not None)
 
         for tid in [t for t, v in self._views.items() if v.time_since_update > _VIEW_TTL]:
             del self._views[tid]

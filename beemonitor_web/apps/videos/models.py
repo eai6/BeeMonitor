@@ -35,6 +35,11 @@ class Site(models.Model):
     lat = models.FloatField(null=True, blank=True)
     lon = models.FloatField(null=True, blank=True)
     notes = models.CharField(max_length=500, blank=True)
+    # The site's IANA time zone (memory/60). A clip named ``site_timestamp``
+    # carries the site's local wall-clock time; this is what turns it into a
+    # real instant. Blank = not asked yet: the wall-clock is kept as it was read
+    # and its timestamps carry no offset.
+    tz_name = models.CharField(max_length=64, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -47,6 +52,32 @@ class Site(models.Model):
     @property
     def has_location(self) -> bool:
         return self.lat is not None and self.lon is not None
+
+    def set_time_zone(self, tz_name: str) -> int:
+        """Set the site's zone and re-base its clips' file-name times on it.
+        Returns how many clips moved. Raises ValueError for an unknown zone."""
+        from .timing import valid_tz
+
+        tz_name = (tz_name or "").strip()
+        if tz_name and not valid_tz(tz_name):
+            raise ValueError(f"Unknown time zone: {tz_name}")
+        if tz_name != self.tz_name:
+            self.tz_name = tz_name
+            self.save(update_fields=["tz_name"])
+        return rebase_site_clips(self)
+
+
+def rebase_site_clips(site) -> int:
+    """Re-place every clip of ``site`` whose time came from its file name on
+    the site's current zone. Idempotent: each clip is computed from the
+    wall-clock it was named with, never from its previous instant."""
+    moved = 0
+    for video in Video.everything.filter(site=site, metadata__recorded_at_source="filename"):
+        before = video.recorded_at
+        if video.localise_recorded_at() or video.recorded_at != before:
+            video.save()
+            moved += 1
+    return moved
 
 
 # A date-time anywhere in a file name, in the shapes cameras and people use:
@@ -368,13 +399,66 @@ class Video(models.Model):
         """False when the timestamp is really the upload time (see above)."""
         return (self.metadata or {}).get("recorded_at_source") != "upload_time"
 
+    def recorded_wall(self):
+        """The wall-clock time a file-name-timed clip was named with (naive),
+        or None for any other source."""
+        meta = self.metadata or {}
+        if meta.get("recorded_at_source") != "filename":
+            return None
+        if meta.get("recorded_wall"):
+            try:
+                return datetime.fromisoformat(meta["recorded_wall"]).replace(tzinfo=None)
+            except ValueError:
+                return None
+        if self.recorded_at is None:
+            return None
+        # Not localised yet: the name's wall-clock was stored labelled UTC.
+        return self.recorded_at.astimezone(dt_timezone.utc).replace(tzinfo=None)
+
+    def localise_recorded_at(self) -> bool:
+        """Place a file-name time on its site's zone (memory/60).
+
+        The name holds the site's local wall-clock, which used to be stored as
+        if it were UTC. With a site zone, ``recorded_at`` becomes the true
+        instant; without one it stays the wall-clock labelled UTC. The
+        wall-clock is kept in ``metadata["recorded_wall"]`` so a later zone
+        change re-bases from it and never shifts twice. Returns True if the
+        row changed (not saved)."""
+        from zoneinfo import ZoneInfo
+
+        from .timing import valid_tz
+
+        wall = self.recorded_wall()
+        if wall is None:
+            return False
+        meta = dict(self.metadata or {})
+        tz = (self.site.tz_name if self.site_id and self.site else "") or ""
+        tz = tz if valid_tz(tz) else ""
+        instant = wall.replace(tzinfo=ZoneInfo(tz) if tz else dt_timezone.utc).astimezone(dt_timezone.utc)
+        new_meta = {**meta, "recorded_wall": wall.isoformat()}
+        if tz:
+            new_meta["recorded_at_tz"] = tz
+        else:
+            new_meta.pop("recorded_at_tz", None)
+        changed = new_meta != meta or self.recorded_at != instant
+        self.metadata, self.recorded_at = new_meta, instant
+        return changed
+
     def save(self, *args, **kwargs):
-        """Auto-fill year/month/day/hour from recorded_at if available."""
+        """Auto-fill year/month/day/hour from recorded_at if available.
+
+        A file-name time is first placed on its site's zone, and the fields are
+        filled from the local wall-clock it was named with, as before."""
+        self.localise_recorded_at()
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and "recorded_at" in update_fields:
+            kwargs["update_fields"] = list(set(update_fields) | {"metadata", "year", "month", "day", "hour"})
         if self.recorded_at:
-            self.year = self.recorded_at.year
-            self.month = self.recorded_at.month
-            self.day = self.recorded_at.day
-            self.hour = self.recorded_at.hour
+            local = self.recorded_wall() or self.recorded_at
+            self.year = local.year
+            self.month = local.month
+            self.day = local.day
+            self.hour = local.hour
         super().save(*args, **kwargs)
 
 

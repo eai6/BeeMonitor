@@ -2,8 +2,12 @@
 
 No GPU: the tracking table is already saved, and events and interactions are a
 pure function of it and the reference geometry. Used when the rules change
-(memory/55: events became entries and emergences) or a clip's layout was drawn
-after it was analysed. The reference steps are resolved again, so the current
+(memory/60: exit / enter / stay from detected rows) or a clip's layout was
+drawn after it was analysed.
+
+Only clips whose tracking table says which rows were detections are recounted.
+Older clips are left as they are (memory/60): recounting them would measure
+from the tracker's predicted positions, so their old rows stay, labelled. The reference steps are resolved again, so the current
 layout is the one counted against.
 
 The new outputs replace the old ones in ``run.context``, which is what the batch
@@ -19,14 +23,16 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
-RECOUNTED = ("analyze.events", "analyze.interactions")
+RECOUNTED = ("analyze.events", "analyze.interactions",
+             # Retired blocks run as the primitives now (memory/60).
+             "analyze.foraging_trips", "analyze.visitation", "analyze.interaction")
 _REFERENCES = ("reference.", "roi.")
 
 
-def recount_run(run, min_seconds=None) -> dict:
-    """Recount one run in place. ``min_seconds`` overrides the interactions
-    minimum where the node saved none or 0. Returns ``{kind: count}`` for
-    what was recounted; an analyzer that errors keeps its old output."""
+def recount_run(run) -> dict:
+    """Recount one run in place. Returns ``{kind: count}`` for what was
+    recounted; an analyzer that errors keeps its old output, and so does one
+    whose tracking table predates the ``detected`` column."""
     from . import executors
 
     steps = run.steps or []
@@ -42,16 +48,13 @@ def recount_run(run, min_seconds=None) -> dict:
             if out and not out.get("error"):
                 context[sid] = out
         elif bt in RECOUNTED:
-            if bt == "analyze.interactions" and min_seconds is not None:
-                cfg = dict(step.get("config") or {})
-                if not float(cfg.get("min_seconds") or 0):
-                    cfg["min_seconds"] = min_seconds
-                step = {**step, "config": cfg}
             out = executors.run_local_step(step, run, context, i)
             if not out or out.get("error"):
                 logger.warning("recount: run %s step %s failed: %s", run.pk, sid,
                                (out or {}).get("error"))
                 continue
+            if out.get("tracking_has_detected") is False:
+                continue          # tracked before the detected column: left as it is
             out["counted_at"] = timezone.now().isoformat()
             context[sid] = out
             kind = out.get("table_kind")
@@ -59,11 +62,42 @@ def recount_run(run, min_seconds=None) -> dict:
     if counts:
         run.context = context
         type(run).objects.filter(pk=run.pk).update(context=context)
+        sync_job_counts(run)
     return counts
 
 
+def sync_job_counts(run):
+    """Copy what the run's analyzers counted onto its JobResult, so the jobs
+    list, clip page, dashboard and analytics read the pipeline's numbers and
+    never the worker's (memory/60)."""
+    from apps.analysis.models import JobResult
+
+    from . import aggregate
+
+    job_id = aggregate.run_job_id(run)
+    if not job_id:
+        return
+    events = interactions = None
+    for kind, out in aggregate.analyzer_outputs(run):
+        if kind == "events":
+            events = (events or {"total": 0, "enter": 0, "exit": 0})
+            events["total"] += out.get("event_count") or 0
+            events["enter"] += out.get("enter_count") or 0
+            events["exit"] += out.get("exit_count") or 0
+        elif kind == "interactions":
+            interactions = (interactions or 0) + (out.get("interaction_count") or 0)
+    fields = {}
+    if events is not None:
+        fields.update(total_events=events["total"], entry_count=events["enter"],
+                      exit_count=events["exit"])
+    if interactions is not None:
+        fields["interaction_count"] = interactions
+    if fields:
+        JobResult.objects.filter(job_id=job_id).update(**fields)
+
+
 # Bumped whenever the counting rules change; runs below it are recounted.
-CURRENT_RULES = 2
+CURRENT_RULES = 3
 SWEEP_BATCH = 20
 SWEEP_SECONDS = 60
 
@@ -90,13 +124,8 @@ def sweep(batch=SWEEP_BATCH, budget=SWEEP_SECONDS) -> int:
             continue
         run = PipelineRun.objects.get(pk=pk)
         try:
-            recount_run(run, min_seconds=_default_min_seconds())
+            recount_run(run)
         except Exception:
             logger.exception("recount of run %s failed", pk)
         done += 1
     return done
-
-
-def _default_min_seconds():
-    from .executors import DEFAULT_MIN_SECONDS
-    return DEFAULT_MIN_SECONDS

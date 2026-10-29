@@ -44,7 +44,11 @@ class DetectionsDownloadTests(TestCase):
         html = self._page()
 
         self.assertIn("Detections CSV", html)
-        self.assertIn("https://signed.test/dl/dl-1/detections.csv", html)
+        # The translated CSV (times, the columns people download — memory/60),
+        # not the worker's raw file.
+        self.assertIn(reverse("analysis:results_csv",
+                              kwargs={"pk": self.job.pk, "kind": "detections"}), html)
+        self.assertNotIn("https://signed.test/dl/dl-1/detections.csv", html)
 
     def test_a_result_without_detections_offers_no_button(self):
         """A button that 404s reads as a broken download, not a skipped step.

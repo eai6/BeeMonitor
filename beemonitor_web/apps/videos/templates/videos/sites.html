@@ -16,13 +16,19 @@
     <label class="flex-1 min-w-[14rem] flex flex-col gap-1 text-sm font-semibold text-gray-700">New site
       <input type="text" name="name" maxlength="200" required placeholder="e.g. North bank"
              class="h-10 rounded-md border border-gray-300 px-3 text-sm font-normal"></label>
+    <label class="min-w-[14rem] flex flex-col gap-1 text-sm font-semibold text-gray-700">Time zone
+      <input type="text" name="tz_name" list="tz-list" data-tz-default placeholder="e.g. America/New_York"
+             class="h-10 rounded-md border border-gray-300 px-3 text-sm font-normal"></label>
     <button type="submit" class="h-10 px-4 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-sm font-semibold">Add site</button>
+    <p class="w-full text-xs text-gray-600">Clips named <code>site_timestamp</code> carry the site's local time. The time zone turns it into a real date and time.</p>
   </form>
+  <datalist id="tz-list">{% for tz in time_zones %}<option value="{{ tz }}">{% endfor %}</datalist>
 
   <div class="bg-white shadow rounded-lg overflow-x-auto">
     <table class="w-full text-sm">
       <thead><tr class="bg-gray-50 text-left text-gray-600">
         <th class="px-4 py-2.5 font-semibold">Site</th><th class="px-2 font-semibold text-right">Clips</th>
+        <th class="px-4 font-semibold">Time zone</th>
         <th class="px-4 font-semibold">ROI &amp; references</th><th class="px-4"></th></tr></thead>
       <tbody>
         {% for r in rows %}
@@ -30,14 +36,33 @@
           <td class="px-4 py-3"><span class="font-semibold">{{ r.site.name }}</span>
             <div class="text-gray-600">{% if r.site.has_location %}{{ r.site.lat|floatformat:2 }}, {{ r.site.lon|floatformat:2 }}{% else %}no location{% endif %}</div></td>
           <td class="px-2 text-right tabular-nums">{{ r.site.clips }}</td>
+          <td class="px-4 py-3">
+            <form method="post" action="{% url 'videos:site_timezone' r.site.pk %}" class="flex items-center gap-2">
+              {% csrf_token %}
+              <input type="text" name="tz_name" list="tz-list" value="{{ r.site.tz_name }}" aria-label="Time zone for {{ r.site.name }}"
+                     {% if not r.site.tz_name %}data-tz-default{% endif %}
+                     class="h-9 w-48 rounded-md border {% if r.site.tz_name %}border-gray-300{% else %}border-orange-400{% endif %} px-2 text-sm">
+              <button type="submit" class="h-9 px-3 rounded-md border border-gray-300 text-sm hover:bg-gray-50">Save</button>
+            </form>
+            {% if not r.site.tz_name %}<p class="mt-1 text-xs font-semibold text-orange-700">No time zone yet: times from file names have no offset.</p>{% endif %}
+          </td>
           <td class="px-4">{% if r.layout and not r.layout.is_empty %}{{ r.layout.summary }} · v{{ r.layout.number }}{% else %}<span class="font-semibold text-orange-700">None yet</span>{% endif %}</td>
           <td class="px-4 text-right"><a href="{% url 'videos:site_layout' r.site.pk %}" class="font-semibold text-amber-700 hover:underline">{% if r.layout %}Edit{% else %}Draw{% endif %}</a></td>
         </tr>
         {% empty %}
-        <tr><td colspan="4" class="px-4 py-6 text-center text-gray-600">No sites yet. Add one above, or pick or type a site when you upload clips.</td></tr>
+        <tr><td colspan="5" class="px-4 py-6 text-center text-gray-600">No sites yet. Add one above, or pick or type a site when you upload clips.</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </div>
+<script>
+  // Offer the browser's own zone where none is set yet; the user still saves it.
+  (function () {
+    let tz = '';
+    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) {}
+    if (!tz) return;
+    document.querySelectorAll('input[data-tz-default]').forEach((el) => { if (!el.value) el.value = tz; });
+  })();
+</script>
 {% endblock %}

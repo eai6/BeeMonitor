@@ -776,7 +776,7 @@ def _run_part_label(run):
     return part_label(cfg, Video.everything.filter(pk=cfg["video_id"]).only("duration_seconds").first())
 
 
-def photo_view(run, floor=None):
+def photo_view(run):
     """What the run page shows for a photo run (memory/45): the preview with a
     box per insect (as % of the photo, so they scale with the image), and each
     insect's crop, class and species. None for clip runs."""
@@ -785,15 +785,7 @@ def photo_view(run, floor=None):
     photo = aggregate.run_photo(run)
     if not photo:
         return None
-    return photo_view_of(photo, _species_floor(run.steps) if floor is None else floor)
-
-
-def _species_floor(steps):
-    """The Identify Species node's minimum mean confidence, 0 without one."""
-    from .executors import _number
-
-    species_step = next((s for s in steps or [] if s.get("block_type") == "identify.species"), None)
-    return _number(((species_step or {}).get("config") or {}).get("min_mean_confidence"), 0.0)
+    return photo_view_of(photo)
 
 
 @login_required
@@ -807,22 +799,18 @@ def run_photo(request, pk, run_id):
     return render(request, "pipelines/_photo_view.html", {"photo_view": view})
 
 
-def photo_view_of(photo, floor=0.0):
-    """photo_view for one photo result (a job's summary_stats["photo"])."""
+def photo_view_of(photo):
+    """photo_view for one photo result (a job's summary_stats["photo"]). Each
+    insect's species as the model called it, with its confidence (memory/60)."""
     from config.storage import presigned_get
-
-    from .executors import UNIDENTIFIED
 
     w, h = float(photo.get("width") or 1), float(photo.get("height") or 1)
     insects = []
     for d in photo.get("detections") or []:
-        conf = d.get("species_confidence")
-        named = d.get("species") and conf is not None and not (floor and conf < floor)
         insects.append({
             "id": d.get("id"), "class": d.get("class"), "confidence": d.get("confidence"),
-            "species": d.get("species") if named else (UNIDENTIFIED if d.get("species") else ""),
-            "best_guess": d.get("species") if (d.get("species") and not named) else "",
-            "species_confidence": conf,
+            "species": d.get("species") or "",
+            "species_confidence": d.get("species_confidence"),
             "left": round(100 * d["x"] / w, 2), "top": round(100 * d["y"] / h, 2),
             "width": round(100 * d["w"] / w, 2), "height": round(100 * d["h"] / h, 2),
             "crop_url": presigned_get(d["crop_key"], container="processed") if d.get("crop_key") else None,
@@ -830,7 +818,7 @@ def photo_view_of(photo, floor=0.0):
     return {"preview_url": presigned_get(photo.get("preview_key"), container="processed")
             if photo.get("preview_key") else None,
             "width": int(w), "height": int(h), "tiles": photo.get("tiles"), "insects": insects,
-            "named": len({i["species"] for i in insects if i["species"] and i["species"] != UNIDENTIFIED})}
+            "named": len({i["species"] for i in insects if i["species"]})}
 
 
 @login_required
@@ -1036,23 +1024,14 @@ def _batch_runs(request, batch_id):
     return runs
 
 
-def _trip_bounds(request):
-    """min/max trip duration (seconds) from query params, defaulted + clamped.
-    Shares the clamp with the device chart so both pages agree exactly."""
-    from . import aggregate
-
-    return aggregate.clamp_trip_bounds(
-        request.GET.get("min_sec"), request.GET.get("max_sec"))
-
-
 # How many clips may be probed for their measured properties per page render.
 PROBES_PER_RENDER = 8
 
 
 @login_required
 def batch_detail(request, batch_id):
-    """Aggregate results for runs launched together: per-run status, combined
-    CSV downloads, and cross-video foraging trips on the absolute timeline."""
+    """Aggregate results for runs launched together: per-run status and
+    combined CSV downloads."""
     from . import aggregate
 
     runs = _batch_runs(request, batch_id)
@@ -1121,9 +1100,8 @@ def batch_detail(request, batch_id):
     from .registry import pipeline_input_kind
     kind = pipeline_input_kind(runs[0].steps) if runs else "video"
     if kind == "photo":
-        floor = _species_floor(runs[0].steps)
         for row in rows:
-            row["photo"] = aggregate.photo_counts(row["run"], floor)
+            row["photo"] = aggregate.photo_counts(row["run"])
         skipped_sources = []
         downloads = [{"kind": "photos", "label": "Photos", "analyzed": False,
                       "hint": "One row per insect: photo, time taken, box, class, "
@@ -1238,18 +1216,6 @@ def _csv_response(filename, fieldnames, rows):
     writer.writeheader()
     writer.writerows(rows)
     return response
-
-
-@login_required
-def batch_trips_csv(request, batch_id):
-    from . import aggregate
-
-    runs = _batch_runs(request, batch_id)
-    sources, _ = aggregate.collect_sources(runs)
-    min_sec, max_sec = _trip_bounds(request)
-    trips, _ = aggregate.aggregate_trips(sources, min_sec, max_sec)
-    fieldnames, rows = aggregate.trips_csv_rows(trips)
-    return _csv_response(f"foraging_trips_batch_{str(batch_id)[:8]}.csv", fieldnames, rows)
 
 
 def _backfill_interactions_paths(sources):

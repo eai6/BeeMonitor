@@ -143,8 +143,25 @@ def normalized_tracks(df, summary=None):
         out["_frame"] = range(len(out))
         frame_col = "_frame"
 
-    tidy = out[[id_col, frame_col, cx_col, cy_col]].copy()
-    tidy.columns = ["tid", "frame", "x", "y"]
+    # Whether the tracker matched a detection on this row (1) or only predicted
+    # where a lost insect might be (0) — memory/60. Tracking CSVs written before
+    # the worker recorded it have no such column, and it is NOT guessed: those
+    # rows all count, and ``has_detected`` lets callers say so.
+    det_col = _pick(df, ["detected"])
+    out["_detected"] = (out[det_col].fillna(0).astype(int) if det_col is not None else 1)
+
+    # Body length in pixels: the long side of the box. Distances, proximity and
+    # padding are all expressed in body lengths, so a threshold means the same
+    # thing for a bumblebee close to the lens and a sweat bee far from it.
+    bx1, by1 = _pick(df, _BBOX["x1"]), _pick(df, _BBOX["y1"])
+    bx2, by2 = _pick(df, _BBOX["x2"]), _pick(df, _BBOX["y2"])
+    if None not in (bx1, by1, bx2, by2):
+        out["_bl"] = ((out[bx2] - out[bx1]).abs().combine((out[by2] - out[by1]).abs(), max))
+    else:
+        out["_bl"] = float("nan")
+
+    tidy = out[[id_col, frame_col, cx_col, cy_col, "_detected", "_bl"]].copy()
+    tidy.columns = ["tid", "frame", "x", "y", "detected", "bl"]
     tidy = tidy.dropna(subset=["tid", "x", "y"])
 
     # Normalise pixel coordinates against the FRAME, never against the tracks.
@@ -183,6 +200,9 @@ def normalized_tracks(df, summary=None):
                 "extent")
             return None
         tidy[axis] = tidy[axis] / dim
+        if axis == "x":
+            # Body length in units of frame WIDTH, the unit every distance is in.
+            tidy["bl"] = tidy["bl"] / dim
 
     # One position per track per frame — which is what "tidy" claims and what
     # every consumer assumes. The worker's tracking CSV can carry more than one
@@ -193,6 +213,7 @@ def normalized_tracks(df, summary=None):
     # counts frames, so a duplicated frame counts twice and the episode reads
     # twice as long as it was.
     tidy = tidy.drop_duplicates(subset=["frame", "tid"], keep="first")
+    tidy.attrs["has_detected"] = det_col is not None
     return tidy
 
 
@@ -261,8 +282,10 @@ def roi_references(roi_output):
     * a nest tube keeps the ``id`` from the device layout ("nest 3");
     * a drawn region keeps its own ``id``/``name`` when the editor stored one,
       otherwise its 1-based index ("region 2");
-    * the hotel ROI is its own reference, since a pipeline may count visits to
-      the hotel as a whole.
+
+    The hotel ROI is NOT a reference (memory/60): it is the area tracking runs
+    over. Counting it as one turned "no tubes drawn" into "every insect visited
+    the hotel"; a pipeline with no references now has no references.
 
     Ids are stable within one layout, which is what makes them comparable across
     clips in a batch. They are not names — nothing in the editor lets a user call
@@ -285,10 +308,6 @@ def roi_references(roi_output):
         if shape:
             refs.append({"id": str(ref_id), "label": label,
                          "box": shape[0], "points": shape[1]})
-
-    hotel = roi_output.get("hotel_roi")
-    if hotel:
-        _add("hotel", "Hotel", hotel, roi_output.get("hotel_polygon"))
 
     # Tubes and drawn regions are all references: one numbering, reference_<n>.
     # A tube keeps its layout id (stable across the batch's clips); a region
@@ -321,91 +340,102 @@ def roi_references(roi_output):
     return refs
 
 
-def detected_references(job_result, video=None):
-    """References the DETECTOR found, when the graph defines none.
+def _shape_points(ref):
+    """A reference's outline as points: its polygon, or its box's corners."""
+    if ref.get("points"):
+        return ref["points"]
+    x1, y1, x2, y2 = ref["box"]
+    return [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
 
-    The worker writes the nest/reference boxes it detected into
-    ``summary_stats["nest_bboxes"]``, and until now nothing local ever read
-    them. A pipeline whose reference class is *detected* rather than drawn —
-    flowers on a board, say — therefore ran its analyzers against an empty
-    reference list and reported "0 references, 0 visits" while the job page
-    cheerfully said it had found four nests. The geometry was there; nobody
-    handed it over.
 
-    These are PIXEL coordinates (the annotator draws them straight onto the
-    frame), whereas references must be normalised 0..1 to match the tracks. The
-    frame size comes from the video row — measured at ingest — falling back to
-    the summary, and when neither knows we return nothing rather than emit
-    references at the wrong scale.
+def _inside(x, y, ref):
+    x1, y1, x2, y2 = ref["box"]
+    if not (x1 <= x <= x2 and y1 <= y <= y2):
+        return False
+    return ref.get("points") is None or _in_polygon(x, y, ref["points"])
+
+
+def _distance_outside(x, y, ref, aspect):
+    """How far (x, y) is outside the reference's outline, in frame WIDTHS; 0
+    inside. y is divided by the aspect ratio so the distance is a true one."""
+    if _inside(x, y, ref):
+        return 0.0
+    pts = [(px, py / aspect) for px, py in _shape_points(ref)]
+    qx, qy = x, y / aspect
+    best = float("inf")
+    for i in range(len(pts)):
+        (ax, ay), (bx, by) = pts[i - 1], pts[i]
+        dx, dy = bx - ax, by - ay
+        seg = dx * dx + dy * dy
+        t = 0.0 if seg == 0 else max(0.0, min(1.0, ((qx - ax) * dx + (qy - ay) * dy) / seg))
+        cx, cy = ax + t * dx, ay + t * dy
+        best = min(best, ((qx - cx) ** 2 + (qy - cy) ** 2) ** 0.5)
+    return best
+
+
+def _centre(ref):
+    x1, y1, x2, y2 = ref["box"]
+    return (x1 + x2) / 2, (y1 + y2) / 2
+
+
+def reference_at(x, y, refs, pad=0.0, aspect=16 / 9):
+    """The reference (x, y) is in, or None.
+
+    ``pad`` grows every reference by that distance, in frame widths (the
+    Events/Interactions node sets it in body lengths). References should not
+    overlap; when a point is in more than one anyway, it belongs to the one
+    whose centre is nearest — the single rule ``overlapping_references`` warns
+    about, so nothing is counted twice and nothing is decided silently.
     """
-    stats = (job_result or {}).get("summary_stats") or {}
-    boxes = stats.get("nest_bboxes") or {}
-    hotel = stats.get("hotel_bbox")
-    if not boxes and not hotel:
-        return []
+    if pad and pad > 0:
+        hits = [r for r in refs if _distance_outside(x, y, r, aspect) <= pad]
+    else:
+        hits = [r for r in refs if _inside(x, y, r)]
+    if len(hits) <= 1:
+        return hits[0] if hits else None
 
-    width = height = None
-    for source, w_key, h_key in ((video, "width", "height"),
-                                 (stats, "frame_width", "frame_height"),
-                                 (stats, "width", "height")):
-        w = getattr(source, w_key, None) if video is source else (source or {}).get(w_key)
-        h = getattr(source, h_key, None) if video is source else (source or {}).get(h_key)
-        try:
-            if w and h and float(w) > 0 and float(h) > 0:
-                width, height = float(w), float(h)
-                break
-        except (TypeError, ValueError):
-            continue
-
-    def _norm(box):
-        try:
-            x1, y1, x2, y2 = [float(v) for v in box]
-        except (TypeError, ValueError):
-            return None
-        if max(abs(x1), abs(y1), abs(x2), abs(y2)) > 1.5:
-            if not width:
-                return None              # pixels with no frame size: refuse to guess
-            x1, y1, x2, y2 = x1 / width, y1 / height, x2 / width, y2 / height
-        # Ordered like roi_references does: containment tests read x1 <= x <= x2,
-        # so a box given corner-reversed would match nothing at all.
-        return (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
-
-    refs = []
-    for box_id, box in boxes.items():
-        shape = _norm(box)
-        if shape:
-            from .primitives import reference_id
-
-            ref_id = reference_id(box_id)
-            if not str(ref_id).startswith("reference_"):
-                ref_id = f"reference_{box_id}"
-            refs.append({"id": ref_id, "label": _reference_label(ref_id),
-                         "box": shape, "points": None})
-    if hotel and not refs:
-        # Only when nothing finer was found — the hotel contains every tube, so
-        # counting both would double every episode.
-        shape = _norm(hotel)
-        if shape:
-            refs.append({"id": "hotel", "label": "Hotel", "box": shape, "points": None})
-    return refs
+    def _dist(r):
+        cx, cy = _centre(r)
+        return ((x - cx) ** 2 + ((y - cy) / aspect) ** 2) ** 0.5
+    return min(hits, key=_dist)
 
 
 def which_reference(x, y, refs):
-    """The FIRST reference containing (x, y), or None.
+    """The reference containing (x, y), no padding, or None."""
+    return reference_at(x, y, refs)
 
-    The counterpart to ``in_any_box``, which answers only yes/no. First-match
-    rather than all-matches because references can nest — a tube sits inside the
-    hotel ROI — and the tube is the more specific, more useful answer. Ordering
-    from ``roi_references`` puts the hotel first, so callers that want tube-level
-    detail should exclude it rather than rely on order.
+
+def _segments_cross(p1, p2, p3, p4):
+    def orient(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    d1, d2 = orient(p3, p4, p1), orient(p3, p4, p2)
+    d3, d4 = orient(p1, p2, p3), orient(p1, p2, p4)
+    return (d1 > 0) != (d2 > 0) and (d3 > 0) != (d4 > 0)
+
+
+def overlapping_references(refs):
+    """Pairs of references whose shapes overlap, as ``[(id_a, id_b), ...]``.
+
+    References are meant not to overlap (memory/60); a layout where they do
+    still runs, and this is what its warning names.
     """
-    for ref in refs:
-        x1, y1, x2, y2 = ref["box"]
-        if not (x1 <= x <= x2 and y1 <= y <= y2):
-            continue
-        if ref["points"] is None or _in_polygon(x, y, ref["points"]):
-            return ref
-    return None
+    refs = list(refs or [])
+    pairs = []
+    for i, a in enumerate(refs):
+        for b in refs[i + 1:]:
+            ax1, ay1, ax2, ay2 = a["box"]
+            bx1, by1, bx2, by2 = b["box"]
+            if ax2 <= bx1 or bx2 <= ax1 or ay2 <= by1 or by2 <= ay1:
+                continue                      # boxes apart (touching is not overlap)
+            if not a.get("points") and not b.get("points"):
+                pairs.append((a["id"], b["id"]))   # two boxes sharing some area
+                continue
+            pa, pb = _shape_points(a), _shape_points(b)
+            if (any(_inside(x, y, b) for x, y in pa) or any(_inside(x, y, a) for x, y in pb)
+                    or any(_segments_cross(pa[i - 1], pa[i], pb[j - 1], pb[j])
+                           for i in range(len(pa)) for j in range(len(pb)))):
+                pairs.append((a["id"], b["id"]))
+    return pairs
 
 
 def roi_boxes(roi_output):
@@ -493,36 +523,57 @@ def fps_of(summary=None, video=None, default=DEFAULT_FPS):
     return fps_with_source(summary, video, default)[0]
 
 
-def compute_episodes(tidy, refs, gap_frames=15):
-    """Contiguous spells each track spends inside each reference.
+def has_detected(tidy):
+    """Whether the tracking table said which rows were detections (memory/60).
 
-    An *episode* is a run of frames one track stays inside one reference; a gap
-    of more than ``gap_frames`` starts a new one. Moving from one reference to
-    another also ends the current episode — otherwise a bee crossing from tube 3
-    to tube 7 would read as a single long stay in neither.
+    Older tracking CSVs did not. Their rows are used as they are — predicted
+    positions included — and every output built from them says so.
+    """
+    return bool(getattr(tidy, "attrs", {}).get("has_detected", False))
 
-    This is the single geometric pass the whole analyze layer stands on. A visit
-    is an episode; an interaction with a reference is an episode; the enter and
-    exit events are an episode's two ends. Computing it once is what lets those
-    three stop being three code paths that can disagree about the same clip.
 
-    Episodes are returned in frame order and carry frames, not seconds: the
-    frame rate is applied by the projections, so there is exactly one place a
-    rate can be wrong (see ``fps_with_source``).
+def _detected_rows(tidy):
+    """Rows where the tracker matched a detection. A lost insect's predicted
+    positions decide nothing: not where a track starts or ends, not how long
+    it was somewhere. A table with no body length (no boxes) gets NaN, which
+    means no padding and no proximity — never a made-up size."""
+    if "bl" not in tidy.columns:
+        tidy = tidy.assign(bl=float("nan"))
+    if "detected" not in tidy.columns:
+        return tidy
+    return tidy[tidy["detected"] == 1]
 
-    ``refs`` comes from ``roi_references``. Bare shapes from ``roi_shapes`` are
-    still accepted, and then references are identified by index — old pipelines
-    keep working, they just get numbers for names.
+
+def _pad(bl, padding_bl):
+    """Padding in frame widths for one row: body lengths x that row's body
+    length. No box, no body length, no padding."""
+    try:
+        value = float(bl) * float(padding_bl or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return value if value == value and value > 0 else 0.0     # NaN -> 0
+
+
+def compute_episodes(tidy, refs, gap_frames=15, padding_bl=0.0, aspect=16 / 9):
+    """Contiguous spells each track spends in each reference.
+
+    An episode is a run of DETECTED frames one track spends in one reference
+    (grown by ``padding_bl`` body lengths). A gap of more than ``gap_frames``,
+    or moving to another reference, starts a new one. ``frames`` counts the
+    detected frames held, which is what a duration is made of.
     """
     refs = _as_references(refs)
     labels = {r["id"]: r["label"] for r in refs}
     episodes = []
+    if tidy is None or len(tidy) == 0 or not refs:
+        return episodes
 
-    for tid, grp in tidy.sort_values("frame").groupby("tid"):
+    rows = _detected_rows(tidy).sort_values("frame")
+    for tid, grp in rows.groupby("tid"):
         open_ep = None
-        for frame, x, y in zip(grp["frame"], grp["x"], grp["y"]):
+        for frame, x, y, bl in zip(grp["frame"], grp["x"], grp["y"], grp["bl"]):
             frame = int(frame)
-            ref = which_reference(x, y, refs)
+            ref = reference_at(x, y, refs, _pad(bl, padding_bl), aspect)
             if ref is None:
                 continue
             broke = (
@@ -547,100 +598,81 @@ def compute_episodes(tidy, refs, gap_frames=15):
     return episodes
 
 
-# What makes an episode an entry or an emergence (memory/55).
-#
-# Seen from the front, a bee crossing a hotel passes over a dozen tube boxes on
-# the way; counting every box it touched as "enter + exit" turned one bee going
-# into one tube into twelve events. A bee that goes in DISAPPEARS: its track
-# ends on the tube. One that comes out APPEARS there. Those are the events;
-# passing over a tube is an interaction (with its duration), not an event.
-ENTRY_MIN_SECONDS = 0.2     # on the tube at least this long before vanishing
-HANDOFF_SECONDS = 1.0       # a new track this soon, this close = tracker lost it
-HANDOFF_DISTANCE = 0.05     # of frame width/height
-EDGE_SECONDS = 0.5          # tracks cut by a chosen window's start or end
+# The event rule (memory/60). An insect that comes out of a reference is first
+# seen there; one that goes in is last seen there. How long it was there does
+# not matter — exits are often a fraction of a second.
+EXIT, ENTER, STAY = "exit", "enter", "stay"
 
 
-def compute_nest_events(tidy, refs, fps, gap_frames=15, start_frame=None, end_frame=None):
-    """Entries (a track that ends on a reference) and emergences (one that
-    starts on one), as ``[{track, reference, reference_label, frame, action}]``.
+def compute_events(tidy, refs, fps, padding_bl=0.0, aspect=16 / 9,
+                   first_frame=0, last_frame=None):
+    """Exits, entries and stays, one pass over each track's detected rows.
 
-    Not an entry: one that spent under ``ENTRY_MIN_SECONDS`` on the
-    reference, one followed within ``HANDOFF_SECONDS`` by a new track starting
-    close by (the tracker losing the insect and picking it up again), or —
-    when part of a clip was analysed — a track cut off by that window's end.
-    The same rules, mirrored, for emergences.
+    For each track, its start (first detected row) and end (last detected row):
 
-    ``start_frame`` / ``end_frame`` are only the edges of a CHOSEN window. A
-    whole clip's own ends are real: a motion-triggered clip starts because a
-    bee came out and stops because one went in.
+    * starts in R and is somewhere else afterwards  -> **exit** R at the start
+    * ends in R and was somewhere else before       -> **enter** R at the end
+    * starts and ends in R and never left it        -> **stay** R, start to end
+    * neither end in a reference                    -> nothing (passing over a
+      reference is an interaction)
+
+    "Somewhere else" is any detected row not in R: another reference or none.
+    ``first_frame`` / ``last_frame`` are the first and last frame analysed (the
+    clip's, or a chosen window's). An exit on the first, or an entry on the
+    last, is ``at_edge`` — counted, and flagged so it can be filtered out.
+    ``last_frame`` None = the clip's length is unknown, and then an entry's
+    flag is None, not a guess.
+
+    Returns ``[{track, action, reference, frame, end_frame, at_edge}]`` (end_frame
+    on stays) in frame order.
     """
+    refs = _as_references(refs)
     if tidy is None or len(tidy) == 0 or not refs:
         return []
-    fps = float(fps or 25)
-    min_frames = max(int(round(ENTRY_MIN_SECONDS * fps)), 1)
-    handoff = int(round(HANDOFF_SECONDS * fps))
-    edge = int(round(EDGE_SECONDS * fps))
-    # min/max with the tracks' own extent, so frames counted from the window's
-    # start rather than the clip's can't put every track "at the edge".
-    cut_start = None if start_frame is None else min(int(start_frame), int(tidy["frame"].min()))
-    cut_end = None if end_frame is None else max(int(end_frame), int(tidy["frame"].max()))
 
-    ends, starts = {}, {}   # tid -> (frame, x, y)
-    for tid, grp in tidy.sort_values("frame").groupby("tid"):
-        tid = _as_native(tid)
-        starts[tid] = (int(grp["frame"].iloc[0]), float(grp["x"].iloc[0]), float(grp["y"].iloc[0]))
-        ends[tid] = (int(grp["frame"].iloc[-1]), float(grp["x"].iloc[-1]), float(grp["y"].iloc[-1]))
+    # An exit can only be cut by the start of what was analysed, an entry only
+    # by its end — so an exit's flag is always known, an entry's only when the
+    # clip's length is.
+    def _at_start(frame):
+        return frame <= first_frame
 
-    def _near(a, b):
-        return abs(a[1] - b[1]) <= HANDOFF_DISTANCE and abs(a[2] - b[2]) <= HANDOFF_DISTANCE
-
-    def _picked_up_again(tid):
-        end = ends[tid]
-        return any(o != tid and 0 <= st[0] - end[0] <= handoff and _near(end, st)
-                   for o, st in starts.items())
-
-    def _dropped_just_before(tid):
-        start = starts[tid]
-        return any(o != tid and 0 <= start[0] - en[0] <= handoff and _near(en, start)
-                   for o, en in ends.items())
+    def _at_end(frame):
+        return None if last_frame is None else frame >= last_frame
 
     events = []
-    for ep in compute_episodes(tidy, refs, gap_frames=gap_frames):
-        tid = ep["track"]
-        long_enough = ep["end_frame"] - ep["start_frame"] + 1 >= min_frames
-        base = {"track": tid, "reference": ep["reference"],
-                "reference_label": ep["reference_label"]}
-        # Within the gap tolerance of the track's own ends: a detector that
-        # missed the last frame or two still ends the track on the tube.
-        if (ep["end_frame"] >= ends[tid][0] - gap_frames and long_enough
-                and (cut_end is None or ends[tid][0] < cut_end - edge)
-                and not _picked_up_again(tid)):
-            events.append({**base, "frame": ends[tid][0], "action": "enter"})
-        if (ep["start_frame"] <= starts[tid][0] + gap_frames and long_enough
-                and (cut_start is None or starts[tid][0] > cut_start + edge)
-                and not _dropped_just_before(tid)):
-            events.append({**base, "frame": starts[tid][0], "action": "exit"})
-    events.sort(key=lambda e: (e["frame"], e["action"], str(e["reference"])))
+    rows = _detected_rows(tidy).sort_values("frame")
+    for tid, grp in rows.groupby("tid"):
+        tid = _as_native(tid)
+        where = [
+            (ref["id"] if ref else None)
+            for ref in (reference_at(x, y, refs, _pad(bl, padding_bl), aspect)
+                        for x, y, bl in zip(grp["x"], grp["y"], grp["bl"]))
+        ]
+        frames = [int(f) for f in grp["frame"]]
+        start_ref, end_ref = where[0], where[-1]
+        if start_ref is not None and all(w == start_ref for w in where):
+            end_edge = _at_end(frames[-1])
+            events.append({"track": tid, "action": STAY, "reference": start_ref,
+                           "frame": frames[0], "end_frame": frames[-1],
+                           "at_edge": True if _at_start(frames[0]) or end_edge else end_edge})
+            continue
+        if start_ref is not None:
+            events.append({"track": tid, "action": EXIT, "reference": start_ref,
+                           "frame": frames[0], "at_edge": _at_start(frames[0])})
+        if end_ref is not None:
+            events.append({"track": tid, "action": ENTER, "reference": end_ref,
+                           "frame": frames[-1], "at_edge": _at_end(frames[-1])})
+
+    order = {EXIT: 0, STAY: 1, ENTER: 2}
+    events.sort(key=lambda e: (e["frame"], order[e["action"]], str(e["track"])))
     return events
 
 
-# Proximity radius as a fraction of FRAME WIDTH, not pixels.
-#
-# The worker's InteractionAnalyzer uses a flat 50 px, which means the same
-# setting describes a different real distance at every resolution — and after
-# the tracks are normalised to 0..1 there are no pixels left to compare against
-# anyway. A fraction of the frame is the only threshold that means the same
-# thing on a 1080p clip and a 4K one.
-#
-# 5% of frame width is roughly two body lengths for a bee filling ~2% of the
-# frame: close enough to be an encounter, not so close that only overlapping
-# boxes qualify.
-DEFAULT_PROXIMITY = 0.05
-
-# Frames with more tracks than this are skipped for pairwise proximity: the
-# work is quadratic, and a frame with hundreds of detections is a detector
-# failure rather than a swarm worth measuring.
-_MAX_PAIRWISE_TRACKS = 200
+# Insect-to-insect radius, in BODY LENGTHS (memory/60): the long side of the
+# insects' own boxes, averaged over the pair so A-B reads the same as B-A. A
+# fraction of the frame meant a different real distance for an insect near the
+# lens and one far from it.
+DEFAULT_PROXIMITY_BL = 2.0
 
 
 def frame_aspect(summary=None, default=16 / 9):
@@ -663,48 +695,43 @@ def frame_aspect(summary=None, default=16 / 9):
     return default
 
 
-def compute_proximity_episodes(tidy, radius=DEFAULT_PROXIMITY, gap_frames=15,
+def compute_proximity_episodes(tidy, radius_bl=DEFAULT_PROXIMITY_BL, gap_frames=15,
                                aspect=16 / 9):
-    """Contiguous spells two tracks spend within ``radius`` of each other.
+    """Contiguous spells two tracks spend within ``radius_bl`` body lengths.
 
-    The organism-to-organism half of the interaction table. Unlike containment
-    in a reference, a distance threshold genuinely is the right model here —
-    two bees have no boundary to be inside of — but the threshold has to be
-    resolution-independent to mean anything, hence a fraction of frame width
-    rather than a pixel count.
-
-    Returns episodes shaped like ``compute_episodes``' output, so both halves of
-    the table are built the same way and honour the same gap tolerance.
+    Detected rows only, every frame (no cap on how many insects a frame holds).
+    Pairs where either insect has no box have no body length and are not
+    measured. ``min_distance_bl`` is the closest the pair came, in body lengths.
     """
     import numpy as np
 
-    if tidy is None or len(tidy) == 0 or radius <= 0:
+    if tidy is None or len(tidy) == 0 or not radius_bl or radius_bl <= 0:
         return []
 
+    rows = _detected_rows(tidy).dropna(subset=["bl"])
     open_eps = {}
     episodes = []
-    for frame, grp in tidy.sort_values("frame").groupby("frame"):
+    for frame, grp in rows.sort_values("frame").groupby("frame"):
         frame = int(frame)
-        if len(grp) < 2 or len(grp) > _MAX_PAIRWISE_TRACKS:
+        if len(grp) < 2:
             continue
         ids = list(grp["tid"])
-        # y is scaled back up by the aspect ratio so both axes are in units of
-        # frame width and the distance below is a real circle.
         pts = np.column_stack([
             np.asarray(grp["x"], dtype=float),
             np.asarray(grp["y"], dtype=float) / float(aspect or 1.0),
         ])
+        bl = np.asarray(grp["bl"], dtype=float)
         deltas = pts[:, None, :] - pts[None, :, :]
         dists = np.sqrt((deltas ** 2).sum(axis=-1))
+        pair_bl = (bl[:, None] + bl[None, :]) / 2.0
+        with np.errstate(divide="ignore", invalid="ignore"):
+            in_bl = np.where(pair_bl > 0, dists / pair_bl, np.inf)
 
-        close_i, close_j = np.where(dists <= radius)
+        close_i, close_j = np.where(in_bl <= radius_bl)
         for i, j in zip(close_i, close_j):
             if i >= j:
                 continue  # each unordered pair once
             a, b = _as_native(ids[i]), _as_native(ids[j])
-            # i != j only means "different rows". A track is not in proximity to
-            # itself, whatever the table says, so this holds even if a malformed
-            # tracking CSV gets past the dedupe upstream.
             if str(a) == str(b):
                 continue
             key = (str(a), str(b)) if str(a) <= str(b) else (str(b), str(a))
@@ -716,70 +743,16 @@ def compute_proximity_episodes(tidy, radius=DEFAULT_PROXIMITY, gap_frames=15,
                     "start_frame": frame,
                     "end_frame": frame,
                     "frames": 0,
-                    "min_distance": float(dists[i, j]),
+                    "min_distance_bl": float(in_bl[i, j]),
                 }
                 open_eps[key] = open_ep
                 episodes.append(open_ep)
             open_ep["end_frame"] = frame
             open_ep["frames"] += 1
-            open_ep["min_distance"] = min(open_ep["min_distance"], float(dists[i, j]))
+            open_ep["min_distance_bl"] = min(open_ep["min_distance_bl"], float(in_bl[i, j]))
 
     episodes.sort(key=lambda e: (e["start_frame"], str(e["track"]), str(e["partner"])))
     return episodes
-
-
-def compute_visitation(tidy, refs, fps, gap_frames=15):
-    """Visit counts per track and per reference, rolled up from the episodes.
-
-    Kept as-is in shape so pipelines and batch pages built on it keep rendering
-    identically; the counting now happens over ``compute_episodes`` rather than
-    in a second traversal of its own.
-
-    A reference with no visits stays in the breakdown — "nothing visited the
-    control" is a result, and dropping the row would leave the reader to notice
-    an absence.
-    """
-    refs = _as_references(refs)
-    episodes = compute_episodes(tidy, refs, gap_frames=gap_frames)
-
-    per_ref = {r["id"]: {"id": r["id"], "label": r["label"], "visits": 0,
-                         "visitors": set(), "dwell_frames": 0} for r in refs}
-    per_track = {}
-    for ep in episodes:
-        bucket = per_ref.setdefault(ep["reference"], {
-            "id": ep["reference"], "label": ep["reference_label"],
-            "visits": 0, "visitors": set(), "dwell_frames": 0})
-        bucket["visits"] += 1
-        bucket["visitors"].add(ep["track"])
-        bucket["dwell_frames"] += ep["frames"]
-
-        track = per_track.setdefault(ep["track"], {"visits": 0, "dwell_frames": 0})
-        track["visits"] += 1
-        track["dwell_frames"] += ep["frames"]
-
-    rows = sorted(
-        ({"track": tid, "visits": t["visits"],
-          "dwell_sec": round(t["dwell_frames"] / fps, 2) if fps else None}
-         for tid, t in per_track.items()),
-        key=lambda r: str(r["track"]),
-    )
-
-    per_reference = sorted(
-        ({"id": b["id"], "label": b["label"], "visits": b["visits"],
-          "visitors": len(b["visitors"]),
-          "dwell_sec": round(b["dwell_frames"] / fps, 2) if fps else None}
-         for b in per_ref.values()),
-        key=lambda r: (-r["visits"], str(r["id"])),
-    )
-    dwell_frames_total = sum(ep["frames"] for ep in episodes)
-
-    return {
-        "unique_visitors": len(rows),
-        "total_visits": len(episodes),
-        "total_dwell_sec": round(dwell_frames_total / fps, 2) if fps else None,
-        "rows": rows,
-        "per_reference": per_reference,
-    }
 
 
 def _as_references(refs):
@@ -969,88 +942,6 @@ def compute_detection_counts(tidy, boxes, fps, per_frame=False, count_tracks=Tru
             for f, n in counts.items()
         ]
     return summary
-
-
-def summarize_interactions(df, kind=None):
-    """Aggregate the interactions CSV into a summary + per-interaction rows.
-
-    ``kind`` filters on the worker's ``interaction_type`` literals
-    (``organism-to-organism`` / ``organism-to-reference``); None keeps both.
-    Schema-tolerant like the tracking reader — column names have drifted.
-    """
-    if df is None or len(df) == 0:
-        return {"interaction_count": 0, "organism_organism": 0,
-                "organism_reference": 0, "rows": []}
-
-    type_col = _pick(df, ["interaction_type", "type", "kind"])
-    if type_col is not None and kind:
-        df = df[df[type_col].astype(str) == kind]
-    if len(df) == 0:
-        return {"interaction_count": 0, "organism_organism": 0,
-                "organism_reference": 0, "rows": []}
-
-    def _count(literal):
-        if type_col is None:
-            return 0
-        return int((df[type_col].astype(str) == literal).sum())
-
-    cols = {
-        "type": type_col,
-        "a": _pick(df, ["organism_track_id", "entity1_id", "track_id"]),
-        "b": _pick(df, ["partner_track_id", "entity2_id"]),
-        "reference": _pick(df, ["reference_id", "nest", "nest_id"]),
-        "duration": _pick(df, ["duration_seconds", "duration_sec", "duration"]),
-        "start": _pick(df, ["start_frame", "frame_start", "frame"]),
-    }
-    rows = []
-    for _, r in df.iterrows():
-        row = {}
-        for key, col in cols.items():
-            if col is not None:
-                row[key] = _as_native(r[col])
-        rows.append(row)
-    durations = (
-        [float(r["duration"]) for r in rows if r.get("duration") is not None]
-        if cols["duration"] else []
-    )
-    # Per reference. Interactions already carry a reference_id, so unlike
-    # visitation this needed exposing rather than computing — the breakdown was
-    # sitting in the rows and no caller ever grouped it.
-    per_ref = {}
-    for row in rows:
-        ref_id = row.get("reference")
-        if ref_id in (None, ""):
-            continue          # an insect-to-insect interaction has no reference
-        from .primitives import reference_id
-
-        ref_id = reference_id(ref_id)
-        bucket = per_ref.setdefault(str(ref_id), {
-            "id": str(ref_id), "label": _reference_label(ref_id),
-            "interactions": 0, "partners": set(), "duration_sec": 0.0,
-        })
-        bucket["interactions"] += 1
-        if row.get("a") is not None:
-            bucket["partners"].add(row["a"])
-        try:
-            bucket["duration_sec"] += float(row.get("duration") or 0)
-        except (TypeError, ValueError):
-            pass
-
-    per_reference = sorted(
-        ({"id": b["id"], "label": b["label"], "interactions": b["interactions"],
-          "partners": len(b["partners"]), "duration_sec": round(b["duration_sec"], 2)}
-         for b in per_ref.values()),
-        key=lambda r: (-r["interactions"], r["id"]),
-    )
-
-    return {
-        "interaction_count": int(len(df)),
-        "organism_organism": _count("organism-to-organism"),
-        "organism_reference": _count("organism-to-reference"),
-        "total_duration_sec": round(sum(durations), 2) if durations else None,
-        "rows": rows,
-        "per_reference": per_reference,
-    }
 
 
 def _reference_label(ref_id):

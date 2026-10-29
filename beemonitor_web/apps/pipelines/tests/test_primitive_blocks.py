@@ -1,10 +1,7 @@
 """The Events and Interactions blocks, end to end through the executor.
 
-The claim these tests defend is the one the whole collapse rests on: run the
-two primitives over the same clip and they describe the same episodes, and the
-retired Visitation block — which now rolls up from the same pass — agrees with
-both. Before, those were three traversals that had no way to be held to each
-other.
+Both are computed from the tracking table against the references the PIPELINE
+defines (memory/60) — never the worker's own nests or events.
 """
 
 import csv
@@ -97,40 +94,40 @@ class PrimitiveBlockTestCase(TestCase):
 
 class EventsBlockTests(PrimitiveBlockTestCase):
     def test_coming_out_and_going_back_in_are_the_events(self):
-        # Track 1 is on the tube when the clip starts (it came out), leaves,
-        # and vanishes on it at frame 69 (it went in). Its stay in between is
-        # an interaction, not an event (memory/55).
+        # Track 1 starts on the tube (came out), leaves, and is last seen on it
+        # at frame 69 (went in). Track 2 never touches it.
         out = self._execute("analyze.events")
 
         self.assertEqual(out["table_kind"], "events")
-        self.assertEqual([(r["action"], r["frame"]) for r in out["rows"]],
-                         [("exit", 0), ("enter", 69)])
+        self.assertEqual([(r["action"], r["frame"], r["track_id"]) for r in out["rows"]],
+                         [("exit", 0, 1), ("enter", 69, 1)])
         self.assertEqual(out["subjects"], 1)
+        self.assertEqual(out["reference_source"], "layout")
 
     def test_seconds_use_the_clips_real_frame_rate(self):
         out = self._execute("analyze.events")
 
-        first = min(out["rows"], key=lambda r: r["frame"])
-        self.assertEqual(first["frame"], 0)
         self.assertEqual(out["fps"], 25.0)
         self.assertEqual(out["fps_source"], "analysis")
 
-    def test_gap_tolerance_merges_a_dropped_frame_rather_than_doubling(self):
-        wide = self._execute("analyze.events", {"gap_frames": 100})
+    def test_the_hotel_roi_is_not_a_reference(self):
+        # The device's ROI (0-0.6) contains every point track 1 visits; only
+        # the tube is a reference, so only the tube has events.
+        out = self._execute("analyze.events")
 
-        # With 100 frames of slack the two stays are one: a single enter/exit.
-        self.assertEqual(wide["enter_count"], 1)
+        self.assertEqual({r["reference"] for r in out["rows"]}, {"reference_1"})
 
-    def test_worker_nest_events_join_the_same_table_but_stay_labelled(self):
+    def test_the_workers_own_events_file_is_ignored(self):
         out = self._execute("analyze.events", with_worker_events=True)
 
-        # Every target is a reference; the source column says whose it was.
-        kinds = {r["target_kind"] for r in out["rows"]}
-        self.assertEqual(kinds, {"reference"})
-        self.assertEqual({r["source"] for r in out["rows"]}, {"derived", "gpu"})
-        worker = {r["target"] for r in out["rows"] if r["source"] == "gpu"}
-        self.assertEqual(worker, {"reference_9"})
-        self.assertFalse(any("target_label" in r for r in out["rows"]))
+        self.assertEqual({r["reference"] for r in out["rows"]}, {"reference_1"})
+        self.assertFalse(any("source" in r for r in out["rows"]))
+
+    def test_a_tracking_table_without_detected_rows_says_so(self):
+        out = self._execute("analyze.events")
+
+        self.assertIs(out["tracking_has_detected"], False)
+        self.assertIn("predicted positions", out["note"])
 
     def test_no_reference_says_so_instead_of_reporting_zero(self):
         steps = self._steps("analyze.events")
@@ -144,32 +141,28 @@ class EventsBlockTests(PrimitiveBlockTestCase):
         out = executors.LOCAL_EXECUTORS["analyze.events"](
             steps[3], run, run.context, {"tracks": run.context["m"]}, 3)
 
-        self.assertIn("note", out)
+        self.assertEqual(out["rows"], [])
+        self.assertEqual(out["reference_source"], "none")
+        self.assertIn("No reference in this pipeline", out["note"])
 
 
 class InteractionsBlockTests(PrimitiveBlockTestCase):
     def test_each_stay_is_one_interaction_with_the_reference(self):
-        out = self._execute("analyze.interactions", {"min_seconds": 0})
+        out = self._execute("analyze.interactions")
 
         self.assertEqual(out["table_kind"], "interactions")
         self.assertEqual(out["organism_reference"], 2)
         self.assertEqual(out["organism_organism"], 0)
 
-    def test_duration_is_measured_at_the_clips_real_rate(self):
-        out = self._execute("analyze.interactions", {"min_seconds": 0})
-
-        # 20 frames then 10 frames, at 25 fps.
-        self.assertEqual(sorted(r["duration_sec"] for r in out["rows"]), [0.4, 0.8])
-
-    def test_by_default_contacts_under_half_a_second_are_dropped(self):
-        # A passing insect, not a visit.
+    def test_by_default_every_contact_is_kept_with_its_duration(self):
+        # 20 frames then 10 frames, at 25 fps; no minimum unless the node sets one.
         out = self._execute("analyze.interactions")
-        self.assertEqual([r["duration_sec"] for r in out["rows"]], [0.8])
+
+        self.assertEqual(sorted(r["duration_sec"] for r in out["rows"]), [0.4, 0.8])
 
     def test_a_minimum_length_drops_the_shorter_contacts(self):
         out = self._execute("analyze.interactions", {"min_seconds": 0.5})
 
-        # The 0.4 s stay is under the minimum; the 0.8 s one counts.
         self.assertEqual([r["duration_sec"] for r in out["rows"]], [0.8])
         self.assertEqual(out["organism_reference"], 1)
 
@@ -177,7 +170,8 @@ class InteractionsBlockTests(PrimitiveBlockTestCase):
         out = self._execute("analyze.interactions",
                             {"interaction_type": "organism_reference"})
 
-        self.assertTrue(all(r["b_kind"] == "reference" for r in out["rows"]))
+        self.assertTrue(out["rows"])
+        self.assertTrue(all(r["relation"] == "in_reference" for r in out["rows"]))
 
     def test_the_insect_to_insect_filter_empties_a_reference_only_clip(self):
         out = self._execute("analyze.interactions",
@@ -188,33 +182,41 @@ class InteractionsBlockTests(PrimitiveBlockTestCase):
 
 
 class PrimitivesAgreeTests(PrimitiveBlockTestCase):
-    """The point of the collapse: the tables cannot disagree about a clip."""
+    """The tables cannot disagree about a clip."""
 
-    def test_every_event_is_an_end_of_an_interaction(self):
-        # Coming out is where a stay starts; going in is where one ends.
+    def test_an_exit_starts_a_stay_and_an_entry_ends_one(self):
         events = self._execute("analyze.events")
-        interactions = self._execute("analyze.interactions", {"min_seconds": 0})
+        interactions = self._execute("analyze.interactions")
 
         starts = {r["start_frame"] for r in interactions["rows"]}
         ends = {r["end_frame"] for r in interactions["rows"]}
         for r in events["rows"]:
             self.assertIn(r["frame"], starts if r["action"] == "exit" else ends)
 
-    def test_the_retired_visitation_block_agrees_with_the_primitives(self):
+    def test_the_retired_visitation_block_runs_as_interactions(self):
         visitation = self._execute("analyze.visitation")
-        interactions = self._execute("analyze.interactions", {"min_seconds": 0})
+        interactions = self._execute("analyze.interactions")
 
-        self.assertEqual(visitation["total_visits"], interactions["organism_reference"])
-        self.assertEqual(visitation["total_dwell_sec"],
-                         round(sum(r["duration_sec"] for r in interactions["rows"]), 2))
+        self.assertEqual(visitation["table_kind"], "interactions")
+        self.assertEqual(visitation["rows"], interactions["rows"])
+
+    def test_the_retired_foraging_trips_block_runs_as_events(self):
+        trips = self._execute("analyze.foraging_trips")
+        events = self._execute("analyze.events")
+
+        self.assertEqual(trips["table_kind"], "events")
+        self.assertEqual(trips["rows"], events["rows"])
 
 
-# Two bees flying together well away from any reference, plus the big-flower
-# case the worker's centroid rule could never see.
-PAIR_ROWS = (
-    [{"frame": f, "track_id": 5, "cx": 0.70, "cy": 0.50} for f in range(0, 30)]
-    + [{"frame": f, "track_id": 6, "cx": 0.72, "cy": 0.50} for f in range(0, 30)]
-)
+# Two bees flying together well away from any reference, in pixels on a
+# 1920x1080 frame: 38.4 px apart, each box 30 px — 1.28 body lengths apart.
+def _pair_row(frame, tid, cx):
+    return {"frame": frame, "track_id": tid, "cx": cx, "cy": 540.0,
+            "x1": cx - 15, "y1": 525.0, "x2": cx + 15, "y2": 555.0, "detected": 1}
+
+
+PAIR_ROWS = ([_pair_row(f, 5, 1344.0) for f in range(0, 30)]
+             + [_pair_row(f, 6, 1382.4) for f in range(0, 30)])
 
 
 class ProximityBlockTests(PrimitiveBlockTestCase):
@@ -238,25 +240,37 @@ class ProximityBlockTests(PrimitiveBlockTestCase):
             steps[4], run, run.context, {"tracks": run.context["m"]}, 4)
 
     def test_two_bees_flying_together_are_recorded(self):
-        out = self._execute_with(self.pair_csv)
+        out = self._execute_with(self.pair_csv)      # default radius: 2 body lengths
 
         self.assertEqual(out["organism_organism"], 1)
-        self.assertEqual(out["rows"][0]["relation"], "proximity")
+        row = out["rows"][0]
+        self.assertEqual((row["relation"], row["track_id"], row["with"]), ("near", 5, 6))
+        self.assertAlmostEqual(row["min_distance_bl"], 1.28, places=2)
 
     def test_a_tighter_radius_stops_seeing_them(self):
-        # They are 0.02 of frame width apart.
-        out = self._execute_with(self.pair_csv, {"proximity_percent": 1})
+        out = self._execute_with(self.pair_csv, {"proximity_bl": 1})
 
         self.assertEqual(out["organism_organism"], 0)
 
-    def test_the_radius_is_read_as_a_percent_not_a_fraction(self):
-        wide = self._execute_with(self.pair_csv, {"proximity_percent": 5})
-        self.assertEqual(wide["organism_organism"], 1)
-
     def test_junk_in_the_radius_field_falls_back_to_the_default(self):
-        out = self._execute_with(self.pair_csv, {"proximity_percent": "wide"})
+        out = self._execute_with(self.pair_csv, {"proximity_bl": "wide"})
 
         self.assertEqual(out["organism_organism"], 1)
+
+    def test_no_reference_still_measures_insect_to_insect(self):
+        steps = self._steps("analyze.interactions")
+        del steps[3]
+        run = PipelineRun.objects.create(pipeline=self.pipeline, user=self.user)
+        run.steps = steps
+        run.context = {"v": {"artifact": "video", "video_id": self.video.pk},
+                       "m": {"artifact": "tracks", "result": {
+                           "tracking_csv_path": self.pair_csv,
+                           "summary_stats": {"video_fps": 25.0, "frame_width": 1920,
+                                             "frame_height": 1080}}}}
+        out = executors.LOCAL_EXECUTORS["analyze.interactions"](
+            steps[3], run, run.context, {"tracks": run.context["m"]}, 3)
+
+        self.assertEqual((out["organism_organism"], out["organism_reference"]), (1, 0))
 
 
 class ContainmentBeatsCentroidDistanceTests(PrimitiveBlockTestCase):
@@ -292,25 +306,23 @@ class ContainmentBeatsCentroidDistanceTests(PrimitiveBlockTestCase):
             steps[4], run, run.context, {"tracks": run.context["m"]}, 4)
 
         self.assertEqual(out["organism_reference"], 1)
-        self.assertEqual(out["rows"][0]["relation"], "inside")
+        self.assertEqual(out["rows"][0]["relation"], "in_reference")
         self.assertEqual(out["rows"][0]["duration_sec"], 0.8)
 
 
-class DetectedReferenceFallbackTests(PrimitiveBlockTestCase):
-    """The Biodiversity Count case: flowers were detected, never handed over.
+class NoWorkerFallbackTests(PrimitiveBlockTestCase):
+    """References come only from the pipeline (memory/60). The worker's own
+    nest boxes (``summary_stats["nest_bboxes"]``) and events file are never a
+    stand-in for a reference the pipeline didn't define."""
 
-    That batch's job page said "Nests 4" and its batch page said "0 REFERENCES
-    — no references were defined". The pipeline has no reference node because
-    its references are *detected*, not drawn; the worker wrote them to
-    summary_stats["nest_bboxes"] and no local analyzer read that key.
-    """
-
-    def _execute_without_reference_node(self, block_type, result_extra, config=None):
-        steps = self._steps(block_type, config)
+    def _execute_without_reference_node(self, block_type):
+        steps = self._steps(block_type)
         del steps[3]                      # no reference.layout node at all
         result = {
             "tracking_csv_path": self.tracking_csv,
-            "summary_stats": {"video_fps": 25.0, **result_extra},
+            "events_csv_path": self.events_csv,
+            "summary_stats": {"video_fps": 25.0,
+                              "nest_bboxes": {"1": [192, 108, 576, 324]}},
         }
         run = PipelineRun.objects.create(pipeline=self.pipeline, user=self.user)
         run.steps = steps
@@ -321,40 +333,23 @@ class DetectedReferenceFallbackTests(PrimitiveBlockTestCase):
 
     def setUp(self):
         super().setUp()
-        # Frame size measured at ingest — what normalises the worker's pixels.
         self.video.width, self.video.height = 1920, 1080
         self.video.save(update_fields=["width", "height"])
-        # The worker's detected flower, in pixels, covering the tracks at ~0.2.
-        self.detected = {"nest_bboxes": {"1": [192, 108, 576, 324]}}
 
-    def test_interactions_now_find_the_detected_flowers(self):
-        out = self._execute_without_reference_node("analyze.interactions", self.detected,
-                                                   config={"min_seconds": 0})
-
-        self.assertEqual(out["reference_source"], "detected")
-        self.assertEqual(out["reference_count"], 1)
-        self.assertEqual(out["organism_reference"], 2)
-
-    def test_events_now_record_crossings_of_them(self):
-        out = self._execute_without_reference_node("analyze.events", self.detected)
-
-        self.assertEqual(out["reference_source"], "detected")
-        self.assertEqual((out["exit_count"], out["enter_count"]), (1, 1))
-
-    def test_the_retired_visitation_block_benefits_without_rewiring(self):
-        out = self._execute_without_reference_node("analyze.visitation", self.detected)
-
-        self.assertEqual(out["reference_source"], "detected")
-        self.assertEqual(out["total_visits"], 2)
-
-    def test_a_graph_reference_still_wins_over_a_detected_one(self):
-        # The user's own geometry is intent; a detection is a guess.
-        out = self._execute("analyze.interactions")
-
-        self.assertEqual(out["reference_source"], "graph")
-
-    def test_when_nothing_is_defined_or_detected_it_says_so(self):
-        out = self._execute_without_reference_node("analyze.visitation", {})
+    def test_no_events_from_the_workers_nests_or_events_file(self):
+        out = self._execute_without_reference_node("analyze.events")
 
         self.assertEqual(out["reference_source"], "none")
-        self.assertIn("note", out)
+        self.assertEqual(out["reference_count"], 0)
+        self.assertEqual(out["rows"], [])
+
+    def test_no_reference_interactions_from_the_workers_nests(self):
+        out = self._execute_without_reference_node("analyze.interactions")
+
+        self.assertEqual(out["organism_reference"], 0)
+        self.assertIn("No reference in this pipeline", out["note"])
+
+    def test_a_graph_reference_is_reported_as_the_layout(self):
+        out = self._execute("analyze.interactions")
+
+        self.assertEqual(out["reference_source"], "layout")

@@ -1028,7 +1028,7 @@ class BeeTracking:
 
         # Define clean column list
         columns = ['frame', 'track_id', 'x1', 'y1', 'x2', 'y2', 'cx', 'cy',
-                   'confidence', 'source', 'taxon', 'taxon_confidence', 'taxon_votes',
+                   'detected', 'confidence', 'source', 'taxon', 'taxon_confidence', 'taxon_votes',
                    'bee_id', 'bee_id_method', 'bee_id_confidence', 'mode']
         
         if not results:
@@ -1061,6 +1061,10 @@ class BeeTracking:
                     'y2': track['y2'],
                     'cx': track['cx'],
                     'cy': track['cy'],
+                    # 1 = matched a detection this frame; 0 = the tracker's
+                    # prediction while the insect was lost (memory/60). A
+                    # tracker that doesn't say is taken as detected.
+                    'detected': int(track.get('detected', 1)),
                     'confidence': track.get('confidence', 0.0),
                     'source': track.get('source', 'unknown'),
                     # The voted species wins over the detector's class label:

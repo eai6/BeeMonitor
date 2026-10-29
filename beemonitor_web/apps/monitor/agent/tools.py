@@ -5,7 +5,7 @@ Every tool is read-only and scoped to devices the requesting user can access
 telemetry/GPS, it never changes state. Mirrors ``apps/setup/assistant/tools.py``.
 """
 
-from django.db.models import Avg, Count, Max, Sum
+from django.db.models import Count, Max, Sum
 from django.utils import timezone
 
 from apps.devices.models import Device
@@ -107,8 +107,8 @@ TOOL_DEFS = [
     },
     {
         "name": "tracking_summary",
-        "description": "Processed TRACKING results for a device — foraging trips, "
-                       "interactions, unique tracks, entries/exits — aggregated "
+        "description": "Processed TRACKING results for a device — events "
+                       "(exits, entries), interactions and unique tracks — aggregated "
                        "across its analyzed videos. NOTE: this data only exists "
                        "after analysis is run on the videos (the Processing page); "
                        "the tool says so if nothing has been analyzed yet.",
@@ -267,16 +267,16 @@ def run_tool(name: str, tool_input: dict, user) -> dict:
                 return {"device_id": device.pk, "analyzed_videos": 0,
                         "total_videos": total_videos,
                         "note": "No processed tracking data yet for this device. "
-                                "Tracking, foraging trips and interactions are "
+                                "Tracking, events and interactions are "
                                 "produced by running analysis on the device's "
                                 "videos (the Processing page) — not from the device "
                                 f"itself. {total_videos} video(s) uploaded, 0 analyzed."}
+            # The pipeline's own counts, copied onto each JobResult when its run
+            # finishes (memory/60) — never the worker's.
             agg = results.aggregate(
-                foraging_trips=Sum("foraging_trip_count"),
                 interactions=Sum("interaction_count"),
                 events=Sum("total_events"), entries=Sum("entry_count"),
-                exits=Sum("exit_count"), unique_tracks=Sum("unique_tracks"),
-                nests=Sum("nest_count"), avg_trip_duration_sec=Avg("avg_trip_duration_sec"))
+                exits=Sum("exit_count"), unique_tracks=Sum("unique_tracks"))
             totals = {k: (round(v, 1) if isinstance(v, float) else v)
                       for k, v in agg.items()}
             return {"device_id": device.pk, "analyzed_videos": analyzed,

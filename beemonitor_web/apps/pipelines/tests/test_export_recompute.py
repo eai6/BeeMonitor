@@ -90,8 +90,7 @@ class ExportRecomputeTests(TestCase):
         body = self._download("interactions")
 
         self.assertIn("reference_1", body)
-        self.assertIn("reference", body)
-        self.assertIn("inside", body)
+        self.assertIn("in_reference", body)
 
     def test_the_export_is_not_the_workers_centroid_distance_file(self):
         """Its columns are the giveaway: min_distance_px / avg_distance_px."""
@@ -101,16 +100,18 @@ class ExportRecomputeTests(TestCase):
         self.assertIn("duration_sec", body)
 
     def test_events_are_recomputed_the_same_way(self):
-        body = self._download("events")
+        # The insect is in the tube from its first detection to its last and
+        # never leaves: a stay (memory/60), not an exit and an entry.
+        lines = self._download("events").splitlines()
+        row = dict(zip(lines[0].split(","), lines[1].split(",")))
 
-        self.assertIn("enter", body)
-        self.assertIn("exit", body)
-        self.assertIn("reference_1", body)
+        self.assertEqual(len(lines), 2)
+        self.assertEqual((row["action"], row["reference"]), ("stay", "reference_1"))
 
     def test_recomputed_rows_still_carry_provenance(self):
         header, first = self._download("interactions").splitlines()[:2]
 
-        self.assertTrue(header.startswith("video_title,video_recorded_at,absolute_time"))
+        self.assertTrue(header.startswith("video_title,clip_start,device_id"))
         self.assertIn("beemonitor3", first)
         self.assertIn("Meadow A", first)
 

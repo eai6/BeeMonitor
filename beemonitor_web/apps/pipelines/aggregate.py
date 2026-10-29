@@ -1,48 +1,20 @@
-"""Cross-video aggregation for a batch of pipeline runs.
+"""Aggregation for a batch of pipeline runs: the per-run table, the analyzers'
+rollups, and the combined CSVs (tracking, detections, tracks, events,
+interactions) with provenance columns first.
 
-Videos record windows of activity: a bee can exit its nest in one clip and
-return in a later one, so per-video trip pairing misses (or truncates) those
-trips. This module places every Exit/Entry event from a batch's videos on an
-absolute timeline (video.recorded_at + frame/fps) and pairs Exit→Entry per
-nest across the whole batch — a stdlib port of
-``cloud/wrapper/foraging.compute_daily_foraging_trips`` (the web image has no
-pandas). It also builds combined events/tracking CSVs with video + absolute
-time columns prepended.
+Trips, visit rates and other higher-level analyses are not computed here
+(memory/60): they are reads over the events and interactions tables, left to
+the user.
 """
 
 import csv
 import io
 import logging
-from datetime import datetime, timedelta, timezone as dt_timezone
+from datetime import datetime, timezone as dt_timezone
 
 from apps.pipelines.ops import DEFAULT_FPS, fps_with_source  # noqa: F401  (re-exported)
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_MIN_SEC = 10.0
-DEFAULT_MAX_SEC = 7200.0
-
-# Widest pairing bounds. Summaries store trips paired at these so any narrower
-# user bounds are a pure read-time filter on duration (pairing consumes the
-# Exit on every Entry regardless of bounds, so results are identical).
-FULL_MIN_SEC = 0.0
-FULL_MAX_SEC = 86400.0
-
-
-def clamp_trip_bounds(min_raw, max_raw):
-    """(min_sec, max_sec) from raw query values, defaulted + clamped to
-    [0, 86400] with max >= min. Shared by the batch page and the device chart
-    so both interpret bounds identically."""
-    def _num(raw, default):
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            return default
-
-    min_sec = max(0.0, min(86400.0, _num(min_raw, DEFAULT_MIN_SEC)))
-    max_sec = max(min_sec, min(86400.0, _num(max_raw, DEFAULT_MAX_SEC)))
-    return min_sec, max_sec
-
 
 # ── Batch sources ─────────────────────────────────────────────────────────────
 
@@ -248,18 +220,21 @@ def available_downloads(sources, runs=()):
 # cannot compare a treatment against a control if the two are indistinguishable
 # once concatenated. Written ahead of the source columns so they are the first
 # thing a spreadsheet or an R session sees.
-PROVENANCE_FIELDS = ["video_title", "video_recorded_at", "absolute_time",
-                     "device_id", "device_name", "site_name", "location"]
+PROVENANCE_FIELDS = ["video_title", "clip_start", "device_id", "device_name",
+                     "site_name", "location"]
 
 
 def _provenance(src):
     """Where one clip's rows came from: which clip, which device, which site."""
     video = src.get("video")
     device = getattr(video, "device", None)
+    from apps.videos import timing
+
     return {
         "video_title": src["title"],
-        "video_recorded_at": (src["recorded_at"].isoformat()
-                              if src["recorded_at"] else ""),
+        # The clip's recorded start; blank when it is unknown (memory/60), so
+        # the reader can fill it in and add clip_sec themselves.
+        "clip_start": timing.iso(timing.clip_start(video)) if video else "",
         "device_id": getattr(device, "id", "") or "",
         "device_name": getattr(device, "name", "") or "",
         # The clip's own site wins: a device can be moved between sites, and the
@@ -275,18 +250,12 @@ PRIMITIVE_KINDS = {"events": "events", "interactions": "interactions"}
 
 
 def _primitive_fieldnames(kind, rows):
-    from . import primitives
+    from . import primitives, tracks
 
-    base = (primitives.EVENT_FIELDS if kind == "events"
-            else primitives.INTERACTION_FIELDS)
-    # Analyzers add columns the schema does not fix (b_label, min_distance);
-    # keep them, in first-seen order, rather than dropping data on export.
-    extra = []
-    for row in rows:
-        for key in row:
-            if key not in base and key not in extra and key not in PROVENANCE_FIELDS:
-                extra.append(key)
-    return PROVENANCE_FIELDS + list(base) + extra
+    if kind == "events":
+        return PROVENANCE_FIELDS + list(primitives.EVENT_FIELDS) + tracks.IDENTITY_FIELDS
+    return (PROVENANCE_FIELDS + list(primitives.INTERACTION_FIELDS) + tracks.IDENTITY_FIELDS
+            + ["with_species", "with_marker_id"])
 
 
 def primitive_csv(runs, kind):
@@ -327,24 +296,15 @@ def primitive_csv(runs, kind):
             outputs = [{"rows": rows}]
         result = run_gpu_result(run)
         fps = max(fps_with_source(result, video)[0], 1.0)
-        from . import tracks
-        by_track, floor = tracks.by_track_of(result), tracks.species_floor(run.steps)
-        outputs = [{**o, "rows": tracks.primitive_with_identity(kind, o.get("rows") or [],
-                                                                 by_track, floor)}
-                   for o in outputs]
-        src = {"video": video, "title": video.title or f"Video {video.pk}",
-               "recorded_at": video.recorded_at}
-        provenance = _provenance(src)
+        from apps.videos import timing
 
+        from . import tracks
+        start = timing.clip_start(video)
+        provenance = _provenance({"video": video, "title": video.title or f"Video {video.pk}"})
         for out in outputs:
-            for row in out.get("rows") or []:
-                frame = row.get("frame", row.get("start_frame"))
-                merged = dict(provenance)
-                merged["absolute_time"] = (
-                    (video.recorded_at + timedelta(seconds=float(frame) / fps)).isoformat()
-                    if video.recorded_at and isinstance(frame, (int, float)) else "")
-                merged.update(row)
-                all_rows.append(merged)
+            for row in tracks.primitive_with_identity(
+                    kind, out.get("rows") or [], tracks.by_track_of(result), fps, start):
+                all_rows.append({**provenance, **row})
 
     if not all_rows:
         return None, []
@@ -352,14 +312,19 @@ def primitive_csv(runs, kind):
 
 
 def combined_csv(sources, path_key):
-    """Concatenate each source's CSV, prepending provenance + absolute time.
+    """Every clip's tracking or detections rows, as the columns people download
+    (memory/60): times instead of bare frames, the worker's internal columns
+    translated, provenance first.
 
     Returns (fieldnames, rows); fieldnames is None when nothing was readable.
     """
+    from apps.videos import timing
+
     from . import tracks
 
-    fieldnames = None
-    all_rows = []
+    tracking = path_key == "tracking_csv_path"
+    fields = tracks.TRACKING_FIELDS if tracking else tracks.DETECTION_FIELDS
+    all_rows, read_any = [], False
     for src in sources:
         blob = src["result"].get(path_key)
         if not blob:
@@ -367,227 +332,18 @@ def combined_csv(sources, path_key):
         rows = read_processed_csv(blob)
         if not rows:
             continue
-        if path_key == "tracking_csv_path":
-            # Each track's species and marker, with the pipeline's floor applied.
-            rows = tracks.with_identity(rows, tracks.by_track_of(src["result"]),
-                                        tracks.species_floor(src["run"].steps))
-        if fieldnames is None:
-            fieldnames = PROVENANCE_FIELDS[:]
-        fieldnames += [c for c in rows[0].keys() if c not in fieldnames]
+        read_any = True
+        start = timing.clip_start(src["video"]) if src.get("video") else None
+        if tracking:
+            rows = tracks.tracking_export(rows, tracks.by_track_of(src["result"]),
+                                          src["fps"], start)
+        else:
+            rows = tracks.detections_export(rows, src["fps"], start)
         provenance = _provenance(src)
-        for row in rows:
-            frame = _frame_number(row)
-            abs_time = (
-                src["recorded_at"] + timedelta(seconds=frame / src["fps"])
-                if frame is not None and src["recorded_at"] else None
-            )
-            out = dict(provenance)
-            out["absolute_time"] = abs_time.isoformat() if abs_time else ""
-            out.update(row)
-            all_rows.append(out)
-    return fieldnames, all_rows
-
-
-# ── Cross-video foraging trips ────────────────────────────────────────────────
-
-
-def collect_events(sources):
-    """Flatten all sources' Exit/Entry events onto the absolute timeline.
-
-    Each event: {action, nest, time (datetime), video, track_id}. Shared by
-    trip pairing and the activity charts.
-    """
-    events = []
-    for src in sources:
-        for row in read_processed_csv(src["result"].get("events_csv_path") or "",
-                                      use_cache=True):
-            action = (row.get("action") or "").strip()
-            nest = row.get("nest", "")
-            frame = _frame_number(row)
-            if action not in ("Exit", "Entry") or nest in ("", None) or frame is None:
-                continue
-            events.append({
-                "action": action,
-                "nest": str(nest),
-                "time": src["recorded_at"] + timedelta(seconds=frame / src["fps"]),
-                "video": src["title"],
-                "video_pk": getattr(src.get("video"), "pk", None),
-                "track_id": row.get("track_id", ""),
-            })
-    return events
-
-
-def activity_charts(events, trips=None):
-    """Server-computed charts for the batch page (CSP-safe, no JS charting):
-
-    - hour_of_day: 24 buckets, exit vs entry split — the daily rhythm.
-    - ts: an hourly (or daily for long spans) time series with pre-computed SVG
-      polyline points for exit / entry / all-events / trips line plots.
-    Returns {} when there are no timestamped events.
-    """
-    if not events:
-        return {}
-    trips = trips or []
-    exit_events = sum(1 for e in events if e["action"] == "Exit")
-    entry_events = len(events) - exit_events
-
-    # Hour-of-day, exit vs entry (stacked bars in the template).
-    hod_exit, hod_entry = [0] * 24, [0] * 24
-    for e in events:
-        (hod_exit if e["action"] == "Exit" else hod_entry)[e["time"].hour] += 1
-    hod_max = max((hod_exit[h] + hod_entry[h]) for h in range(24)) or 1
-    hour_of_day = [{
-        "label": f"{h:02d}", "exit": hod_exit[h], "entry": hod_entry[h],
-        "total": hod_exit[h] + hod_entry[h],
-        "pct_exit": round(100 * hod_exit[h] / hod_max, 1),
-        "pct_entry": round(100 * hod_entry[h] / hod_max, 1),
-    } for h in range(24)]
-    hod_peak = max(range(24), key=lambda h: hod_exit[h] + hod_entry[h])
-
-    # Time series: hourly buckets across the span (daily if the span is huge).
-    def _hkey(t):
-        return t.replace(minute=0, second=0, microsecond=0)
-    tmin, tmax = _hkey(min(e["time"] for e in events)), _hkey(max(e["time"] for e in events))
-    step, fmt = timedelta(hours=1), "%m-%d %H:%M"
-    if (tmax - tmin) > timedelta(days=10):
-        def _hkey(t):
-            return t.replace(hour=0, minute=0, second=0, microsecond=0)
-        tmin, tmax = _hkey(tmin), _hkey(tmax)
-        step, fmt = timedelta(days=1), "%m-%d"
-
-    buckets = []
-    cur = tmin
-    while cur <= tmax:
-        buckets.append(cur)
-        cur += step
-    idx = {b: i for i, b in enumerate(buckets)}
-    n = len(buckets)
-    ex, en, tr = [0] * n, [0] * n, [0] * n
-    for e in events:
-        i = idx.get(_hkey(e["time"]))
-        if i is not None:
-            (ex if e["action"] == "Exit" else en)[i] += 1
-    for t in trips:
-        i = idx.get(_hkey(t["exit_time"]))
-        if i is not None:
-            tr[i] += 1
-    evt = [ex[i] + en[i] for i in range(n)]
-
-    W, H, PAD = 560, 170, 30
-
-    def _pts(vals, ymax):
-        if not vals or ymax <= 0:
-            return ""
-        pw, ph = W - 2 * PAD, H - 2 * PAD
-        out = []
-        for i, v in enumerate(vals):
-            x = PAD + (pw * i / (n - 1) if n > 1 else pw / 2)
-            y = PAD + ph * (1 - v / ymax)
-            out.append(f"{x:.1f},{y:.1f}")
-        return " ".join(out)
-
-    ev_ymax = max(max(ex, default=0), max(en, default=0), 1)
-    trip_ymax = max(max(tr, default=0), 1)
-    labels = [b.strftime(fmt) for b in buckets]
-    xticks = []
-    if n:
-        for i in dict.fromkeys((0, n // 2, n - 1)):
-            x = PAD + (W - 2 * PAD) * i / (n - 1) if n > 1 else W / 2
-            xticks.append({"label": labels[i], "x": round(x, 1)})
-
-    return {
-        "total_events": len(events),
-        "exit_events": exit_events, "entry_events": entry_events,
-        "hour_of_day": hour_of_day, "hod_peak": hod_peak,
-        "ts": {
-            "w": W, "h": H, "pad": PAD, "n": n,
-            "exit_pts": _pts(ex, ev_ymax), "entry_pts": _pts(en, ev_ymax),
-            "events_pts": _pts(evt, ev_ymax), "trips_pts": _pts(tr, trip_ymax),
-            "ev_ymax": ev_ymax, "trip_ymax": trip_ymax,
-            "xticks": xticks, "total_trips": len(trips),
-        },
-    }
-
-
-def aggregate_trips(sources, min_sec=DEFAULT_MIN_SEC, max_sec=DEFAULT_MAX_SEC, events=None):
-    """Pair Exit→Entry per nest across all sources on the absolute timeline.
-
-    Returns (trips, summary). Trip dicts carry nest, exit/entry absolute times,
-    duration, source video titles and track ids, and is_cross_video. Pass
-    ``events`` (from collect_events) to reuse them and avoid a second S3 read.
-    """
-    if events is None:
-        events = collect_events(sources)
-
-    trips = []
-    by_nest = {}
-    for ev in events:
-        by_nest.setdefault(ev["nest"], []).append(ev)
-    for nest, nest_events in sorted(by_nest.items()):
-        nest_events.sort(key=lambda e: e["time"])
-        last_exit = None
-        for ev in nest_events:
-            if ev["action"] == "Exit":
-                last_exit = ev
-            elif ev["action"] == "Entry" and last_exit is not None:
-                duration = (ev["time"] - last_exit["time"]).total_seconds()
-                if min_sec <= duration <= max_sec:
-                    trips.append({
-                        "nest": nest,
-                        "exit_time": last_exit["time"],
-                        "entry_time": ev["time"],
-                        "duration_sec": round(duration, 2),
-                        "exit_video": last_exit["video"],
-                        "entry_video": ev["video"],
-                        "exit_video_pk": last_exit.get("video_pk"),
-                        "entry_video_pk": ev.get("video_pk"),
-                        "exit_track_id": last_exit["track_id"],
-                        "entry_track_id": ev["track_id"],
-                        "is_cross_video": last_exit["video"] != ev["video"],
-                        # Whether the bee that came back is demonstrably the one
-                        # that left. Track ids are unique only within one clip,
-                        # so this can only ever be true within a clip; a
-                        # cross-video pairing is an inference from timing and
-                        # nest alone. Both kinds are still reported — the point
-                        # is that the page can tell them apart instead of
-                        # presenting the assumption as an observation.
-                        "same_track": (last_exit["video"] == ev["video"]
-                                       and str(last_exit["track_id"]) != ""
-                                       and str(last_exit["track_id"]) == str(ev["track_id"])),
-                    })
-                last_exit = None
-
-    trips.sort(key=lambda t: t["exit_time"])
-    durations = [t["duration_sec"] for t in trips]
-    per_nest = {}
-    for t in trips:
-        per_nest[t["nest"]] = per_nest.get(t["nest"], 0) + 1
-    confirmed_trips = sum(1 for t in trips if t["same_track"])
-    summary = {
-        "total_trips": len(trips),
-        "cross_video_trips": sum(1 for t in trips if t["is_cross_video"]),
-        # Split so a hotel with several active tubes cannot quietly report
-        # manufactured trips as observed ones.
-        "confirmed_trips": confirmed_trips,
-        "inferred_trips": len(trips) - confirmed_trips,
-        "total_events": len(events),
-        "avg_duration_sec": round(sum(durations) / len(durations), 1) if durations else 0,
-        "min_duration_sec": min(durations) if durations else 0,
-        "max_duration_sec": max(durations) if durations else 0,
-        "trips_per_nest": dict(sorted(per_nest.items())),
-    }
-    return trips, summary
-
-
-def trips_csv_rows(trips):
-    """(fieldnames, rows) for downloading the aggregated trips as CSV."""
-    fieldnames = ["nest", "exit_time", "entry_time", "duration_sec",
-                  "exit_video", "entry_video", "exit_track_id", "entry_track_id",
-                  "is_cross_video", "same_track"]
-    rows = [{**t,
-             "exit_time": t["exit_time"].isoformat(),
-             "entry_time": t["entry_time"].isoformat()} for t in trips]
-    return fieldnames, rows
+        all_rows.extend({**provenance, **row} for row in rows)
+    if not read_any:
+        return None, []
+    return PROVENANCE_FIELDS + list(fields), all_rows
 
 
 def run_job_id(run):
@@ -737,8 +493,6 @@ def analyzer_outputs(run):
         if not isinstance(value, dict):
             continue
         kind = value.get("table_kind")
-        if not kind and value.get("artifact") == "events":
-            kind = "foraging_trips"
         if kind:
             out.append((kind, value))
     return out
@@ -872,9 +626,9 @@ def aggregate_events(outputs):
     from .primitives import reference_id
 
     per_ref, totals = {}, {"event_count": 0, "enter_count": 0,
-                           "exit_count": 0, "subjects": 0}
+                           "exit_count": 0, "stay_count": 0, "subjects": 0}
     for out in outputs:
-        for key in ("event_count", "enter_count", "exit_count", "subjects"):
+        for key in ("event_count", "enter_count", "exit_count", "stay_count", "subjects"):
             totals[key] += out.get(key, 0) or 0
         for row in out.get("per_reference") or []:
             ref_id = str(reference_id(row.get("id", "")) or "")
@@ -883,9 +637,9 @@ def aggregate_events(outputs):
             entry = per_ref.setdefault(ref_id, {
                 "id": ref_id, "label": _reference_label(ref_id),
                 "kind": "reference" if row.get("kind") in (None, "nest") else row["kind"],
-                "events": 0, "enter": 0, "exit": 0, "subjects": 0, "clips": 0,
+                "events": 0, "enter": 0, "exit": 0, "stay": 0, "subjects": 0, "clips": 0,
             })
-            for key in ("events", "enter", "exit", "subjects"):
+            for key in ("events", "enter", "exit", "stay", "subjects"):
                 entry[key] += row.get(key, 0) or 0
             if row.get("events"):
                 entry["clips"] += 1
@@ -937,7 +691,6 @@ AGGREGATORS = {
 KIND_LABELS = {
     "events": "Events",
     "interactions": "Interactions",
-    "foraging_trips": "Foraging trips",
     "visitation": "Visitation",
     "interaction": "Interactions",
     "detection_count": "Detection count",
@@ -972,23 +725,14 @@ def reference_summary(runs, rows):
     except Exception:                      # a half-built graph must not 500 the page
         logger.exception("reference summary: could not resolve the graph reference")
         roi = {}
-    refs = [r for r in ops.roi_references(roi) if r["id"] != "hotel"] \
-        or ops.roi_references(roi)
+    refs = ops.roi_references(roi)
     if refs:
         # Where the layout came from: this clip, its site or its unit (memory/52).
         return {"count": len(refs), "source": "graph", "unplaceable": 0,
-                "label": (roi or {}).get("source_label", "")}
-
-    # Nothing in the graph: what did the detector find?
-    video = next((row["video"] for row in rows
-                  if row["run"].pk == run.pk and row["video"]), None)
-    result = run_gpu_result(run)
-    detected = ops.detected_references(result, video)
-    if detected:
-        return {"count": len(detected), "source": "detected", "unplaceable": 0}
-
-    boxes = (result.get("summary_stats") or {}).get("nest_bboxes") or {}
-    return {"count": 0, "source": "none", "unplaceable": len(boxes)}
+                "label": (roi or {}).get("source_label", ""),
+                "overlaps": ops.overlapping_references(refs)}
+    # References come only from the pipeline (memory/60): none is none.
+    return {"count": 0, "source": "none", "unplaceable": 0}
 
 
 def coverage_of(outputs, attempted):
@@ -1089,16 +833,14 @@ def photo_rows(runs):
     return out
 
 
-def photo_counts(run, floor=0.0):
+def photo_counts(run):
     """Insects detected and species named in one photo run, or None for a clip
-    run — the photo batch's row numbers. Below ``floor`` a species is not named,
-    as on the run page."""
+    run — the photo batch's row numbers."""
     photo = run_photo(run)
     if photo is None:
         return None
     named = set()
     for d in photo.get("detections") or []:
-        conf = d.get("species_confidence")
-        if d.get("species") and conf is not None and not (floor and conf < floor):
+        if d.get("species"):
             named.add(d["species"])
     return {"insects": len(photo.get("detections") or []), "named": len(named)}

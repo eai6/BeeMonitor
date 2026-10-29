@@ -320,6 +320,14 @@ def _finalize_if_terminal(run, steps, status):
         run.execution_time_ms = int(
             (run.completed_at - run.started_at).total_seconds() * 1000
         )
+    if run.status == PipelineRun.Status.COMPLETED:
+        # Job counts are the pipeline's, never the worker's (memory/60).
+        try:
+            from .recount import sync_job_counts
+
+            sync_job_counts(run)
+        except Exception:  # noqa: BLE001 - a count must never fail a run
+            logger.exception("could not copy run %s counts to its job", run.pk)
 
 
 def reconcile_user_runs(user, limit=50):

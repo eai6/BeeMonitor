@@ -41,7 +41,7 @@ class EngineTestCase(TestCase):
             {"id": "m", "block_type": "track.mot", "config": {"tracker": "beetrack"},
              "inputs": {"detections": "d"}},
             {"id": "f", "block_type": "analyze.foraging_trips",
-             "config": {"event_confidence": 0.6}, "inputs": {"tracks": "m"}},
+             "config": {}, "inputs": {"tracks": "m"}},
         ]
         return steps + (extra or [])
 
@@ -85,10 +85,22 @@ class RunAdvancementTests(EngineTestCase):
         run.refresh_from_db()
         self.assertEqual(run.status, PipelineRun.Status.COMPLETED)
         self.assertEqual(run.step_state("m"), PipelineRun.STEP_DONE)
-        # MOT relabelled the fused result; the analyzer read the trips off it.
+        # MOT relabelled the fused result; the retired trips block ran as
+        # Events (memory/60).
         self.assertEqual(run.context["m"]["artifact"], "tracks")
         self.assertEqual(run.context["m"]["unique_tracks"], 5)
-        self.assertEqual(run.context["f"]["foraging_trip_count"], 3)
+        self.assertEqual(run.context["f"]["table_kind"], "events")
+
+    def test_completion_copies_the_runs_counts_over_the_workers(self):
+        run = self._start(self._steps())
+        job = Job.objects.get()
+        self._finish_job(job, total_events=7, entry_count=4, exit_count=3)
+
+        run.refresh_from_db()
+        result = JobResult.objects.get(job=job)
+        # No readable tracking here, so the pipeline counted nothing — and the
+        # job says so rather than keeping the worker's 7.
+        self.assertEqual((result.total_events, result.entry_count, result.exit_count), (0, 0, 0))
 
     def test_failed_job_cascades_to_downstream_steps(self):
         run = self._start(self._steps())

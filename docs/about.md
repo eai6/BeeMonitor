@@ -126,7 +126,7 @@ chosen when uploading. Optional.
 recording inside the ROI.
 
 **Reference / reference object**: what behaviour is measured against, such as a nest tube, a flower or a
-pollen tube. It comes from the device's saved layout, or from a detector that finds it in the video.
+pollen tube. It comes from the pipeline: the saved layout, or a Detect step that finds it in the video.
 
 **Layout**: a device's ROI plus its reference objects. Every change is kept as a new version, so older clips
 are analysed with the layout they were recorded with.
@@ -135,7 +135,8 @@ are analysed with the layout they were recorded with.
 
 **Track**: the detections of one animal linked across frames, with an id that is valid within its clip.
 
-**Event**: a track entering or exiting a reference at a moment.
+**Event**: an insect coming out of a reference (exit), going into one (enter), or starting and ending in one
+without leaving it (stay). Judged from where its track was first and last detected.
 
 **Interaction / episode**: two things (two tracks, or a track and a reference) together for a span of time.
 

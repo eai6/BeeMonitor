@@ -196,7 +196,7 @@ class ExportedRowsCarryTheirDeviceTests(TestCase):
         fields, rows = aggregate.primitive_csv(runs, "interactions")
 
         self.assertIn("device_name", fields)
-        by_track = {r["a"]: r for r in rows}
+        by_track = {r["track_id"]: r for r in rows}
         self.assertEqual(by_track["track-a"]["device_name"], "BeeMonitor4")
         self.assertEqual(by_track["track-b"]["device_name"], "BeeMonitor7")
         self.assertEqual(by_track["track-a"]["video_title"], "from-a")
@@ -207,4 +207,4 @@ class ExportedRowsCarryTheirDeviceTests(TestCase):
 
         fields, _rows = aggregate.primitive_csv(runs, "interactions")
 
-        self.assertLess(fields.index("device_name"), fields.index("a"))
+        self.assertLess(fields.index("device_name"), fields.index("track_id"))

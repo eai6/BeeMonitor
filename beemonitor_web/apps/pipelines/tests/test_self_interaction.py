@@ -5,6 +5,8 @@ An exported interactions table carried rows like
     start_frame  a  a_kind    b  b_kind    relation   min_distance
     64           1  organism  1  organism  proximity  0.0002
 
+(columns as they were then; memory/60 renamed them).
+
 which is not an interaction at all. The proximity pass skips i >= j so a row
 cannot pair with itself, but that only means "different ROWS": the worker's
 tracking CSV can carry two rows for the same (frame, track) — two overlapping
@@ -68,8 +70,11 @@ class ProximitySelfPairTests(SimpleTestCase):
             self.skipTest("pandas not installed")
 
     def _episodes(self, rows):
-        tidy = ops.normalized_tracks(_df(rows), SUMMARY)
-        return ops.compute_proximity_episodes(tidy, radius=0.05, gap_frames=15,
+        # A 0.02-wide box around each centre: body length 0.02 frame widths.
+        boxed = [{**r, "x1": r["cx"] - 0.01, "y1": r["cy"] - 0.01,
+                  "x2": r["cx"] + 0.01, "y2": r["cy"] + 0.01} for r in rows]
+        tidy = ops.normalized_tracks(_df(boxed), SUMMARY)
+        return ops.compute_proximity_episodes(tidy, radius_bl=2, gap_frames=15,
                                               aspect=16 / 9)
 
     def test_a_duplicated_track_produces_no_episode(self):
@@ -105,22 +110,22 @@ class ProximitySelfPairTests(SimpleTestCase):
     def test_equal_ids_are_refused_even_if_the_dedupe_is_bypassed(self):
         """Belt and braces: the pairing must not rely on tidy being clean."""
         tidy = pd.DataFrame([
-            {"tid": 1, "frame": 64, "x": 0.5, "y": 0.5},
-            {"tid": 1, "frame": 64, "x": 0.5002, "y": 0.5001},
+            {"tid": 1, "frame": 64, "x": 0.5, "y": 0.5, "bl": 0.02},
+            {"tid": 1, "frame": 64, "x": 0.5002, "y": 0.5001, "bl": 0.02},
         ])
 
         self.assertEqual(
-            ops.compute_proximity_episodes(tidy, radius=0.05, gap_frames=15), [])
+            ops.compute_proximity_episodes(tidy, radius_bl=2, gap_frames=15), [])
 
     def test_ids_that_differ_only_by_type_are_still_the_same_track(self):
         """1 and "1" are one track; comparing natives would let them pair."""
         tidy = pd.DataFrame([
-            {"tid": 1, "frame": 64, "x": 0.5, "y": 0.5},
-            {"tid": "1", "frame": 64, "x": 0.5002, "y": 0.5001},
+            {"tid": 1, "frame": 64, "x": 0.5, "y": 0.5, "bl": 0.02},
+            {"tid": "1", "frame": 64, "x": 0.5002, "y": 0.5001, "bl": 0.02},
         ])
 
         self.assertEqual(
-            ops.compute_proximity_episodes(tidy, radius=0.05, gap_frames=15), [])
+            ops.compute_proximity_episodes(tidy, radius_bl=2, gap_frames=15), [])
 
 
 class ContainmentDoubleCountTests(SimpleTestCase):

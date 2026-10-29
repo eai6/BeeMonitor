@@ -246,8 +246,7 @@ class CombinedCsvProvenanceTests(TestCase):
     def test_provenance_leads_the_column_order(self):
         from apps.pipelines import aggregate
 
-        self.assertEqual(aggregate.PROVENANCE_FIELDS[:3],
-                         ["video_title", "video_recorded_at", "absolute_time"])
+        self.assertEqual(aggregate.PROVENANCE_FIELDS[:2], ["video_title", "clip_start"])
         for field in ("device_id", "device_name", "site_name", "location"):
             self.assertIn(field, aggregate.PROVENANCE_FIELDS)
 
@@ -318,45 +317,62 @@ class PrimitiveExportTests(TestCase):
             "pipelines:batch_combined_csv",
             kwargs={"batch_id": self.batch_id, "kind": kind})).content.decode()
 
-    def test_the_analyzers_reference_interactions_reach_the_export(self):
+    def test_rows_saved_under_the_old_rules_export_in_the_new_columns(self):
         self._run_with(self.INTERACTION)
 
-        body = self._download("interactions")
+        lines = self._download("interactions").splitlines()
+        row = dict(zip(lines[0].split(","), lines[1].split(",")))
 
-        self.assertIn("organism", body)
-        self.assertIn("reference_1", body)
-        self.assertIn("inside", body)
+        self.assertEqual((row["track_id"], row["with"], row["relation"]),
+                         ("4", "reference_1", "in_reference"))
+        for gone in ("a_kind", "b_kind", "source", "start_frame"):
+            self.assertNotIn(gone, lines[0].split(","))
 
-    def test_exported_rows_carry_provenance_and_absolute_time(self):
+    def test_exported_rows_carry_provenance_first(self):
         self._run_with(self.INTERACTION)
 
         header, first = self._download("interactions").splitlines()[:2]
 
-        self.assertTrue(header.startswith("video_title,video_recorded_at,absolute_time"))
+        self.assertTrue(header.startswith("video_title,clip_start,device_id"))
         self.assertIn("beemonitor3", first)
         self.assertIn("Meadow A", first)
 
-    def test_absolute_time_uses_the_clips_real_frame_rate(self):
+    def test_timestamps_use_the_clips_real_frame_rate(self):
+        from apps.videos import timing
+
         self._run_with(self.INTERACTION)
 
-        row = self._download("interactions").splitlines()[1]
+        lines = self._download("interactions").splitlines()
+        row = dict(zip(lines[0].split(","), lines[1].split(",")))
 
-        # frame 100 at 25 fps = 4s after the recording started.
-        expected = (self.video.recorded_at
-                    + __import__("datetime").timedelta(seconds=4.0)).isoformat()
-        self.assertIn(expected, row)
+        # frame 100 at 25 fps = 4 s after the recording started.
+        self.assertEqual(row["start_clip_sec"], "4.0")
+        self.assertEqual(row["start_time"],
+                         timing.timestamp_at(timing.clip_start(self.video), 4.0))
 
-    def test_columns_the_schema_does_not_fix_are_kept_not_dropped(self):
+    def test_an_unknown_start_leaves_timestamps_blank_but_keeps_clip_seconds(self):
+        self.video.metadata = {"recorded_at_source": "upload_time"}
+        self.video.save()
+        self._run_with(self.INTERACTION)
+
+        lines = self._download("interactions").splitlines()
+        row = dict(zip(lines[0].split(","), lines[1].split(",")))
+
+        self.assertEqual((row["clip_start"], row["start_time"]), ("", ""))
+        self.assertEqual(row["start_clip_sec"], "4.0")
+
+    def test_the_columns_are_the_fixed_contract(self):
         out = dict(self.INTERACTION)
         out["rows"] = [{**self.INTERACTION["rows"][0], "b_label": "Tube 1",
                         "min_distance": 0.02}]
         self._run_with(out)
 
-        header = self._download("interactions").splitlines()[0]
+        header = self._download("interactions").splitlines()[0].split(",")
 
-        self.assertIn("min_distance", header)
-        # b_label only repeated b in words; one name per reference.
+        # A fraction-of-frame distance is not a body length: not relabelled.
+        self.assertNotIn("min_distance", header)
         self.assertNotIn("b_label", header)
+        self.assertIn("min_distance_bl", header)
 
     def test_references_export_under_one_name(self):
         """A stored run's ``nest_1`` exports as ``reference_1``: not every
@@ -506,27 +522,23 @@ class ReferenceSummaryTests(TestCase):
         self.assertEqual(refs["source"], "graph")
         self.assertEqual(refs["count"], 2)
 
-    def test_detected_boxes_are_reported_when_nothing_is_defined(self):
+    def test_the_workers_own_boxes_are_not_a_reference(self):
+        """References come only from the pipeline (memory/60): boxes the worker
+        found on its own are neither counted nor offered as a fallback."""
         self._run(with_layout=False, width=1920,
                   stats={"nest_bboxes": {"1": [192, 108, 576, 324]}})
 
         refs = self._refs()
 
-        self.assertEqual(refs["source"], "detected")
-        self.assertEqual(refs["count"], 1)
+        self.assertEqual((refs["source"], refs["count"], refs["unplaceable"]), ("none", 0, 0))
 
-    def test_boxes_we_cannot_place_are_called_out_not_counted(self):
-        """The exact case that made the Interactions export fall back: the
-        detector found them, but with no frame size they cannot be placed."""
-        self._run(with_layout=False, width=None,
-                  stats={"nest_bboxes": {"1": [192, 108, 576, 324],
-                                         "2": [960, 540, 1152, 648]}})
+    def test_overlapping_references_are_named_in_the_summary(self):
+        self.device.nest_layout = [{"id": 1, "box": [0.1, 0.1, 0.3, 0.3]},
+                                   {"id": 2, "box": [0.2, 0.2, 0.5, 0.5]}]
+        self.device.save()
+        self._run(with_layout=True)
 
-        refs = self._refs()
-
-        self.assertEqual(refs["source"], "none")
-        self.assertEqual(refs["count"], 0)
-        self.assertEqual(refs["unplaceable"], 2)
+        self.assertEqual(self._refs()["overlaps"], [("reference_1", "reference_2")])
 
     def test_nothing_anywhere_reads_as_none(self):
         self._run(with_layout=False)

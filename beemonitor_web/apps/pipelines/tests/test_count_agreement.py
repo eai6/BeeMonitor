@@ -204,7 +204,7 @@ class DownloadCompletenessTests(TestCase):
 
         prov = aggregate._provenance(sources[0])
 
-        self.assertEqual(prov["video_recorded_at"], "")
+        self.assertEqual(prov["clip_start"], "")
 
     def test_undated_clips_sort_last_without_comparing_to_none(self):
         dated = self._clip(tracking_csv_path="t.csv")

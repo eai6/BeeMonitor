@@ -18,7 +18,7 @@ The batch page combines its clips:
   are reused where the new pipeline asks for the same thing, so a pipeline that differs only downstream
   costs no GPU time.
 - **Download batch data:** one CSV per table for every clip in the batch, each row labelled with its clip,
-  device, site and absolute time: **Detections**, **Tracking**, **Tracks**, **Events** and
+  device, site and the clip's recorded start: **Detections**, **Tracking**, **Tracks**, **Events** and
   **Interactions**, plus **Photos** for a photo batch. Only tables the batch produced are offered.
 - **Per clip:** each clip's outcome, tracks, events, interactions, length and GPU time.
 
@@ -43,13 +43,38 @@ Click a clip to play its annotated video in place, with each track's box and ID 
 **Full results** (or **crops & CSVs →** on a clip's row) opens the clip's results page:
 
 - counts of tracks, events and interactions, its length and GPU time;
-- the original video beside an annotated copy;
-- downloads of every table, the crop index and the annotated video;
+- the clip with its tracks drawn over it as it plays (below);
+- downloads of every table, the crop index and the rendered video;
 - the **Tracks**, **Tracking**, **Events** and **Interactions** tables, each with its own CSV download.
+
+### The player
+
+The clip plays with its tracks drawn over it. Under **Show** you choose what's drawn:
+
+- **Boxes and ids**, **Species on the label**, **Trails (last 2 s)**, and **Lost tracks** (dashed: the tracker
+  had lost the insect and was guessing where it was).
+- **ROI and reference objects**: the pipeline's ROI in green, each reference object in white with its number.
+- **Events**: a label next to the insect: **EXIT 3** for the 1.5 s after it comes out of reference 3,
+  **ENTER 3** for the 1.5 s before it goes in, **STAY 3** for as long as it stays. The reference glows blue,
+  amber or violet while the label shows.
+- **Interactions**: while an insect is in a reference, that reference is drawn in the insect's colour and the
+  insect's label counts the seconds (`in 3 · 2.3 s`). Two insects near each other are joined by a line
+  labelled with their distance in body lengths.
+
+Under the video, the event bar marks every event in the clip (exit blue, enter amber, stay as a violet span);
+click one to jump there. **Events near now** lists the events within 5 seconds of the current frame.
+
+Click a box to follow one track. The **full window** button (top right of the video), or a double-click,
+fills the screen with the video and everything drawn on it.
+
+**Render video** makes an MP4 of the clip drawn exactly as the player draws it, with the layers you tick
+(plus an optional clock showing the clip time and timestamp). It runs on a GPU, and the dialog shows the
+cost in GPU-hours before you start. The events and interactions drawn are the run's saved rows, the same
+ones in its CSVs.
 
 <figure markdown>
   ![A results page: count tiles, original and annotated videos, downloads, and the Tracks table with species per track](../assets/platform/results-tracks.png)
-  <figcaption>A clip's results. The Tracks table names each track's species, or unidentified when the vote was too weak.</figcaption>
+  <figcaption>A clip's results. The Tracks table names each track's species and its confidence.</figcaption>
 </figure>
 
 **Track crops** shows each track's sharpest 12 crops, with its species, how many crops voted for it and
@@ -71,63 +96,110 @@ events. You derive what your study needs.
 
 | Table | One row is | Answers |
 |---|---|---|
-| **Events** | Something entered or exited something, at a moment | Arrivals, departures, foraging trips |
-| **Interactions** | Two things were together for a span of time | Visits, time on a flower or in a zone, encounters |
+| **Events** | An insect came out of a reference, went into one, or stayed in one | Arrivals, departures, foraging trips |
+| **Interactions** | An insect was in a reference, or near another insect, for a span of time | Visits, time on a flower or in a zone, encounters |
 
-Both come from one pass over the tracks, so they always agree: an interaction's start and end *are* its enter
-and exit events.
+Both are computed on the platform from the tracking table, against the **references your pipeline defines**:
+a Reference (saved layout) step, or a Detect step for the reference class wired into the analyzer. Nothing
+else is used. If the pipeline has no reference, there are no events and no insect-to-reference interactions,
+and the results page says so.
 
-Beside them, the **Tracks** table lists each animal once, with its species and marker ID.
+Beside them, the **Tracks** table lists each animal once, with its species and marker ID, and the
+**Tracking** table has every frame of every track.
+
+### What an event is
+
+An event is judged from where a track **starts** and **ends**: the first and last frames in which the insect
+was actually detected. When the tracker loses an insect it keeps guessing where it is for up to a second;
+those guessed positions never count.
+
+| The track… | Events |
+|---|---|
+| starts in a reference and is later somewhere else | **exit** from it, at the start |
+| ends in a reference and was earlier somewhere else | **enter** into it, at the end |
+| starts in tube 3, flies around, ends in tube 3 | **exit** tube 3 and **enter** tube 3 |
+| starts in tube 3, ends in tube 5 | **exit** tube 3 and **enter** tube 5 |
+| starts and ends in tube 3 and never leaves it | **stay** in tube 3, with how long it stayed (it came to the entrance and turned round, or sat there) |
+| passes over references but neither starts nor ends in one | no event. Each pass over is an interaction, with its duration |
+
+How long the insect spent in the reference doesn't matter: exits are often a fraction of a second.
+
+"In a reference" means the centre of the insect's box is inside the reference's outline. The Events step's
+**Padding** grows every reference by that many body lengths (the long side of the insect's own box).
+
+References shouldn't overlap. If two do, the results warn you and name them, and a point in both counts
+once, for the reference whose centre is nearest.
+
+### Times
+
+Every table gives times, not frame numbers:
+
+- `timestamp` (or `start_time` / `end_time`) is the clip's recorded start plus the seconds into the clip, in
+  local time with its offset, to the millisecond. It's blank when the clip's start time isn't known.
+- `clip_sec` (or `start_clip_sec` / `end_clip_sec`) is the seconds into the clip, always filled. It's what the
+  video player seeks to.
+- `clip_start` (batch downloads) is the clip's recorded start, so you can fill in a start time yourself and add
+  `clip_sec` to it.
+
+An uploaded clip's time comes from its name (`site_YYYYMMDD_HHMMSS`), read as the site's local time. Set each
+site's time zone on **Videos → Sites**; until you do, times from that site have no offset.
 
 ### Events
 
 | Column | Meaning |
 |---|---|
-| `frame` | Frame number of the crossing |
-| `time_sec` | Seconds from the start of the clip |
-| `subject` | The track id of what crossed (for example a bee) |
-| `subject_kind` | `organism` |
-| `action` | `enter` or `exit` |
-| `target` | What it crossed into or out of (a nest tube, a flower, a zone) |
-| `target_kind` | `reference` |
-| `source` | `gpu` (the entry/exit classifier) or `derived` (computed from the tracks and the reference) |
+| `timestamp`, `clip_sec` | When: the start for an exit or a stay, the end for an enter |
+| `track_id` | The insect |
+| `action` | `exit`, `enter` or `stay` |
+| `reference` | The reference, for example `reference_3` (the id from your layout, the same across a site's clips) |
+| `duration_sec` | For a stay: how long it stayed |
+| `at_edge` | `true` for an exit on the first frame analysed or an enter on the last (the insect may have been there before recording started, or still there after it stopped). Blank for an enter or a stay when the clip's length is unknown |
+| `ml_confidence` | 0–1, the event classifier's score, when **Score events with the ML classifier** is on in the Events step. Nothing is removed; filter on it yourself |
 
 ### Interactions
 
+One row per unbroken spell. A gap longer than the step's **Rejoin if back within** setting, or a move to
+another reference, ends it.
+
 | Column | Meaning |
 |---|---|
-| `start_frame`, `end_frame` | First and last frame of the episode |
-| `start_sec`, `end_sec` | The same in seconds |
-| `duration_sec` | How long it lasted |
-| `a`, `a_kind` | The first party: a track id, `organism` |
-| `b`, `b_kind` | The second party: another track (`organism`) or a reference (`reference`) |
-| `relation` | `inside` (a's centre was within b's shape) or `proximity` (within the distance threshold) |
-| `min_distance` | Closest approach, for proximity episodes |
-| `source` | `gpu` or `derived` |
-
-The columns are a fixed contract. New columns may be added at the end, but existing ones are never renamed or
-reordered, so your scripts keep working.
+| `start_time`, `end_time`, `start_clip_sec`, `end_clip_sec` | When it started and ended |
+| `duration_sec` | The time the insect was detected there |
+| `track_id` | The insect |
+| `with` | A reference (`reference_3`) or another insect's track id |
+| `relation` | `in_reference`, or `near` (two insects within the step's radius, in body lengths) |
+| `min_distance_bl` | For `near`: the closest they came, in body lengths |
 
 ### Tracks
 
-One row per track: when it was seen and what it was. Species and marker IDs come from a vote over every
+One row per track: when it was detected and what it was. Species and marker IDs come from a vote over every
 crop of the track (the **Identify species** and **Read bee marker** steps). They're blank when the pipeline
 has neither step.
 
 | Column | Meaning |
 |---|---|
 | `track_id` | The track, as in the other tables |
-| `class` | What the detector called it |
-| `first_frame`, `last_frame`, `start_sec`, `end_sec`, `duration_sec` | When it was in view |
-| `frames_seen` | Frames it was detected in |
-| `species`, `species_confidence` | The winning species and its mean confidence. `unidentified` when that is below the pipeline's minimum |
-| `species_best_guess` | The model's call for an `unidentified` track |
+| `start_time`, `end_time`, `start_clip_sec`, `end_clip_sec`, `duration_sec` | First and last detection |
+| `species`, `species_confidence` | The winning species and its mean confidence. Filter on the confidence yourself |
 | `species_votes`, `species_vote_share` | Crops that voted for it, and their share of all crops |
 | `marker_id`, `marker_votes`, `marker_vote_share` | The marker read on the most crops |
 
-The same `species` and `marker_id` columns are added to the events, interactions and tracking downloads,
-for the track each row is about. On an interaction between two insects, the second one's are `b_species`
-and `b_marker_id`.
+The same species and marker columns are added to the events, interactions and tracking downloads for the
+track each row is about. On an interaction between two insects, the other one's are `with_species` and
+`with_marker_id`.
+
+### Tracking
+
+One row per track per frame.
+
+| Column | Meaning |
+|---|---|
+| `frame`, `timestamp`, `clip_sec` | The frame and its time |
+| `track_id` | The track |
+| `detected` | `1` when the detector found the insect in this frame, `0` when the tracker only guessed where it was |
+| `x1`, `y1`, `x2`, `y2`, `cx`, `cy` | Its box and centre, in pixels |
+| `confidence` | The detection's confidence (blank on guessed frames) |
+| species and marker columns | As in Tracks, plus `marker_method` and `marker_confidence` |
 
 ## From the tables to your question
 
@@ -137,31 +209,32 @@ always the same read.
 | Question | Read |
 |---|---|
 | Foraging trips at a nest | Events: each `exit` from a tube paired with the next `enter` into it; trip length = the time between them |
-| Visits to a flower | Interactions with `b_kind = reference`, counted per `b` |
-| Time on a flower (dwell) | The same rows, summing `duration_sec` per `b` |
-| Pollen assay: which tube bees prefer | Interactions per pollen tube (`b`): count the rows for the number of interactions, sum `duration_sec` for the total time |
-| Insect-to-insect encounters | Interactions with `b_kind = organism` |
-| Activity through the day | Bin events or interactions by time, or use **Detection count** |
-| Per individual or per species | Join the marker or species label to `subject` / `a` |
+| Visits to a flower | Interactions with `relation = in_reference`, counted per `with` |
+| Time on a flower (dwell) | The same rows, summing `duration_sec` per `with` |
+| Pollen assay: which tube bees prefer | Interactions per pollen tube (`with`): count the rows, sum `duration_sec` |
+| Insect-to-insect encounters | Interactions with `relation = near` |
+| Turning round at the entrance | Events with `action = stay` |
+| Activity through the day | Bin events or interactions by `timestamp`, or use **Detection count** |
+| Per individual or per species | Use the `marker_id` or `species` columns |
 
 ```python
 import pandas as pd
 
-ev = pd.read_csv("events.csv")
+ev = pd.read_csv("events.csv", parse_dates=["timestamp"])
 ia = pd.read_csv("interactions.csv")
 
-# Time on each flower (or zone): interactions with a reference
-on_ref = ia[ia.b_kind == "reference"]
-dwell = on_ref.groupby("b").agg(visits=("a", "size"),
-                                 total_sec=("duration_sec", "sum"),
-                                 mean_sec=("duration_sec", "mean"))
+# Time on each flower (or zone)
+on_ref = ia[ia.relation == "in_reference"]
+dwell = on_ref.groupby("with").agg(visits=("track_id", "size"),
+                                   total_sec=("duration_sec", "sum"),
+                                   mean_sec=("duration_sec", "mean"))
 
 # Foraging trips: exit from a tube, then the next entry into the same tube
-ev = ev.sort_values("time_sec")
-ev["next_action"] = ev.groupby("target").action.shift(-1)
-ev["next_time"] = ev.groupby("target").time_sec.shift(-1)
+ev = ev[ev.action != "stay"].sort_values("timestamp")
+ev["next_action"] = ev.groupby("reference").action.shift(-1)
+ev["next_time"] = ev.groupby("reference").timestamp.shift(-1)
 trips = ev[(ev.action == "exit") & (ev.next_action == "enter")].assign(
-    trip_sec=lambda d: d.next_time - d.time_sec)[["target", "time_sec", "trip_sec"]]
+    trip_sec=lambda d: (d.next_time - d.timestamp).dt.total_seconds())
 ```
 
 The run and batch pages show these tables, and you can always download them as CSV to derive your own
@@ -169,8 +242,11 @@ measures.
 
 ## Provenance and limits
 
-- `source` tells you how a row was produced. A `derived` row depends on the reference you supplied and the
-  gap tolerance, so if you change either, rerun the pipeline.
-- Time columns are empty when a clip's frame rate is unknown. Frame numbers are still exact.
+- Events and interactions depend on the references and the step settings. If you change either, use
+  **Recount with the current layout** on the clip's results page, or rerun the pipeline.
+- Clips tracked before 29 October 2026 don't record which frames were detections. Their events were counted
+  under the earlier rules and are labelled so; rerun tracking to count them with these rules.
+- Times assume a constant frame rate. A clip recorded at a variable frame rate (some phones) is marked on its
+  page.
 - Track ids identify an animal *within one clip*. To follow an individual across clips, mark the bees and add
   the **Read bee marker** step.

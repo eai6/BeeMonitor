@@ -10,7 +10,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views import View
 from django.views.generic import DetailView, ListView, TemplateView
-from .models import Video
+from .models import Video, rebase_site_clips
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +174,8 @@ class VideoUploadView(LoginRequiredMixin, TemplateView):
         user = self.request.user
         ctx["devices"] = _user_devices(user)
         ctx["sites_json"] = _json.dumps([_site_json(s) for s in Site.objects.filter(user=user)])
+        from .timing import time_zones
+        ctx["time_zones_json"] = _json.dumps(time_zones())
         from apps.pipelines.registry import pipeline_input_kind
         for key, qs in (("pipelines", Pipeline.objects.filter(user=user, is_template=False)),
                         ("templates", Pipeline.objects.filter(is_template=True))):
@@ -290,6 +292,10 @@ class VideoDetailView(LoginRequiredMixin, DetailView):
         # Owners and device-managers can act (run/delete); viewers are read-only.
         ctx["is_owner"] = video.user_id == self.request.user.id
         ctx["can_manage"] = video.managed_by(self.request.user)
+        # The clip's start in its own local time (memory/60); None when the only
+        # time we have is the upload time.
+        from .timing import clip_start
+        ctx["clip_start"] = clip_start(video)
         from apps.analysis.models import Job
         ctx["jobs"] = Job.objects.for_viewer(self.request.user).filter(video=video)
         # Its ROI and reference objects, and where they come from (memory/52).
@@ -588,17 +594,59 @@ class SiteListCreateView(LoginRequiredMixin, View):
             lat, lon = _coord("lat", -90, 90), _coord("lon", -180, 180)
         except (TypeError, ValueError):
             return JsonResponse({"error": "Latitude is -90 to 90 and longitude -180 to 180."}, status=400)
+        from .timing import valid_tz
+        tz_name = str(data.get("tz_name") or "").strip()
+        if tz_name and not valid_tz(tz_name):
+            return JsonResponse({"error": f"Unknown time zone: {tz_name}"}, status=400)
         site, created = Site.objects.get_or_create(
             user=request.user, name=name,
-            defaults={"lat": lat, "lon": lon, "notes": str(data.get("notes") or "")[:500]})
+            defaults={"lat": lat, "lon": lon, "notes": str(data.get("notes") or "")[:500],
+                      "tz_name": tz_name})
         if not created and (lat is not None and lon is not None):
             site.lat, site.lon = lat, lon
             site.save(update_fields=["lat", "lon"])
+        if not created and tz_name and tz_name != site.tz_name:
+            site.set_time_zone(tz_name)
         return JsonResponse({"site": _site_json(site)}, status=201 if created else 200)
 
 
+class SiteTimeZoneView(LoginRequiredMixin, View):
+    """Set a site's time zone (memory/60): JSON from the upload page, a form
+    post from the Sites page. Re-bases the site's file-name-timed clips."""
+
+    def post(self, request, site_pk):
+        import json as _json
+        from .models import Site
+
+        site = get_object_or_404(Site, pk=site_pk, user=request.user)
+        is_json = (request.content_type or "").startswith("application/json")
+        if is_json:
+            try:
+                tz_name = str((_json.loads(request.body or b"{}") or {}).get("tz_name") or "")
+            except ValueError:
+                return JsonResponse({"error": "Invalid JSON."}, status=400)
+        else:
+            tz_name = request.POST.get("tz_name") or ""
+        try:
+            moved = site.set_time_zone(tz_name)
+        except ValueError as e:
+            if is_json:
+                return JsonResponse({"error": str(e)}, status=400)
+            messages.error(request, str(e))
+            return redirect("videos:sites_page")
+        if is_json:
+            return JsonResponse({"site": _site_json(site), "clips_moved": moved})
+        if site.tz_name:
+            messages.success(request, f"{site.name} is in {site.tz_name}. "
+                             f"{moved} clip time{'s' if moved != 1 else ''} from file names re-placed.")
+        else:
+            messages.info(request, f"{site.name} has no time zone.")
+        return redirect("videos:sites_page")
+
+
 def _site_json(site):
-    return {"id": site.id, "name": site.name, "lat": site.lat, "lon": site.lon, "notes": site.notes}
+    return {"id": site.id, "name": site.name, "lat": site.lat, "lon": site.lon, "notes": site.notes,
+            "tz_name": site.tz_name}
 
 
 # ── ROI and reference objects for sites and clips (memory/52) ────────────────
@@ -747,9 +795,11 @@ class LayoutEditorView(LoginRequiredMixin, View):
             # A site that was only ever a typed name becomes a real one.
             site, _ = Site.objects.get_or_create(user=video.user, name=video.site_name)
             Video.everything.filter(user=video.user, site__isnull=True, site_name=video.site_name).update(site=site)
+            rebase_site_clips(site)
         if site_pk is not None and _clip is not None and _clip.site_id != site.pk and body.get("add_clip", True):
             # The clip it was drawn on joins the site, so the drawing applies to it.
             Video.everything.filter(pk=_clip.pk).update(site=site, site_name=site.name)
+            rebase_site_clips(site)
         if scope == "site":
             saved = Layout.save_new(site=site, roi=roi, polygon=polygon, nests=nests, user=request.user)
             versions = _layout_versions(Layout.objects.filter(site=site).select_related("saved_by"))
@@ -781,17 +831,26 @@ class SitesPageView(LoginRequiredMixin, View):
 
         sites = Site.objects.filter(user=request.user).annotate(
             clips=Count("videos", filter=models.Q(videos__kind=Video.Kind.VIDEO)))
+        from .timing import time_zones
+
         rows = [{"site": s, "layout": Layout.current(site=s)} for s in sites]
-        return render(request, "videos/sites.html", {"rows": rows})
+        return render(request, "videos/sites.html", {"rows": rows, "time_zones": time_zones()})
 
     def post(self, request):
         from .models import Site
+
+        from .timing import valid_tz
 
         name = (request.POST.get("name") or "").strip()[:200]
         if not name:
             messages.error(request, "A site needs a name.")
             return redirect("videos:sites_page")
-        site, created = Site.objects.get_or_create(user=request.user, name=name)
+        tz_name = (request.POST.get("tz_name") or "").strip()
+        if tz_name and not valid_tz(tz_name):
+            messages.error(request, f"Unknown time zone: {tz_name}")
+            return redirect("videos:sites_page")
+        site, created = Site.objects.get_or_create(user=request.user, name=name,
+                                                   defaults={"tz_name": tz_name})
         if created:
             messages.success(request, f"Added {name}. Draw its ROI and reference objects next.")
             return redirect("videos:site_layout", site_pk=site.pk)

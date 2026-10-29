@@ -45,6 +45,15 @@
         <label class="block text-sm font-medium">Site
           <select id="site" class="mt-1 w-full border border-gray-300 rounded px-3 py-2 text-sm bg-white"></select>
         </label>
+        <div id="site-tz-ask" class="hidden rounded-md border border-orange-300 bg-orange-50 p-3 space-y-2">
+          <p class="text-sm text-orange-900"><strong>This site has no time zone.</strong> Clips named <code>site_timestamp</code> carry the site's local time; the zone turns it into a real date and time.</p>
+          <div class="flex gap-2">
+            <input type="text" id="site-tz-value" list="tz-list" aria-label="Site time zone"
+                   class="flex-1 border border-gray-300 rounded px-3 py-2 text-sm bg-white">
+            <button type="button" id="site-tz-save" class="px-3 rounded border border-gray-300 bg-white text-sm hover:bg-gray-50">Save</button>
+          </div>
+          <p id="site-tz-error" class="text-xs text-red-700"></p>
+        </div>
         <p class="text-xs text-gray-600">A site with a location lets BioCLIP choose among species recorded nearby. Without one, everything still works.</p>
         <label class="block text-sm font-medium">Device <span class="font-normal text-gray-500">(only if these came off a unit's card)</span>
           <select id="device" class="mt-1 w-full border border-gray-300 rounded px-3 py-2 text-sm bg-white">
@@ -127,6 +136,9 @@
           </label>
         </div>
         <button type="button" id="site-here" class="w-full h-10 rounded border border-gray-300 text-sm hover:bg-gray-50">Use my current location</button>
+        <label class="block text-sm font-medium">Time zone
+          <input type="text" id="site-tz" list="tz-list" class="mt-1 w-full border border-gray-300 rounded px-3 py-2 text-sm">
+        </label>
         <label class="block text-sm font-medium">Notes <span class="font-normal text-gray-500">(optional)</span>
           <input type="text" id="site-notes" maxlength="500" class="mt-1 w-full border border-gray-300 rounded px-3 py-2 text-sm">
         </label>
@@ -141,6 +153,7 @@
   </div>
 </div>
 
+<datalist id="tz-list"></datalist>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
@@ -152,6 +165,10 @@
   const PROCESSING_URL = "{% url 'analysis:processing' %}";
   const PARALLEL_PARTS = 4;
   let sites = {{ sites_json|js }};
+  const TIME_ZONES = {{ time_zones_json|js }};
+  const SITE_TZ_URL = (id) => "{% url 'videos:site_timezone' 0 %}".replace('/0/', `/${id}/`);
+  let browserTz = '';
+  try { browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) {}
   const files = [];                 // {file, name, size, time, source, dupe, status, done, videoId}
   let running = false;
 
@@ -339,6 +356,23 @@
     $('site').value = selected || '';
   }
   renderSites();
+  document.getElementById('tz-list').innerHTML = TIME_ZONES.map((z) => `<option value="${z}">`).join('');
+  // A chosen site without a zone: ask for it here, before its clips' times are read.
+  function askSiteTz() {
+    const site = sites.find((s) => String(s.id) === $('site').value);
+    const ask = !!site && !site.tz_name;
+    $('site-tz-ask').classList.toggle('hidden', !ask);
+    if (ask && !$('site-tz-value').value) $('site-tz-value').value = browserTz;
+    $('site-tz-error').textContent = '';
+  }
+  $('site').addEventListener('change', askSiteTz);
+  $('site-tz-save').onclick = async () => {
+    try {
+      const {site} = await post(SITE_TZ_URL($('site').value), {tz_name: $('site-tz-value').value});
+      sites = sites.map((s) => s.id === site.id ? site : s);
+      askSiteTz();
+    } catch (e) { $('site-tz-error').textContent = e.message; }
+  };
   let map = null, pin = null, lastSite = '';
   function setPin(lat, lon) {
     $('site-lat').value = lat.toFixed(5); $('site-lon').value = lon.toFixed(5);
@@ -348,6 +382,7 @@
   function openSiteDialog() {
     const d = $('site-dialog'); d.classList.remove('hidden'); d.classList.add('flex');
     $('site-error').textContent = '';
+    if (!$('site-tz').value) $('site-tz').value = browserTz;
     $('site-name').focus();
     if (!map && typeof L !== 'undefined') {
       map = L.map('site-map').setView([40.8, -77.86], 4);
@@ -371,9 +406,10 @@
   $('site-save').onclick = async () => {
     try {
       const {site} = await post(SITES_URL, {name: $('site-name').value, lat: $('site-lat').value,
-                                            lon: $('site-lon').value, notes: $('site-notes').value});
+                                            lon: $('site-lon').value, notes: $('site-notes').value,
+                                            tz_name: $('site-tz').value});
       sites = sites.filter((s) => s.id !== site.id).concat([site]).sort((a, b) => a.name.localeCompare(b.name));
-      lastSite = String(site.id); renderSites(lastSite); closeSiteDialog();
+      lastSite = String(site.id); renderSites(lastSite); closeSiteDialog(); askSiteTz();
     } catch (e) { $('site-error').textContent = e.message; }
   };
 

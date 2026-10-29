@@ -576,11 +576,13 @@ BLOCK_REGISTRY = {
     # pipeline breaks, but they are not offered for new work.
     "analyze.events": {
         "display_name": "Events",
-        "description": "When something went into a reference or came out of it — "
-                       "a bee disappearing into a nest tube, or appearing from one. "
-                       "One row per entry or exit, with the frame, the insect and "
-                       "the reference. Passing over a reference is an interaction, "
-                       "not an event.",
+        "description": "When an insect came out of a reference (exit), went into "
+                       "one (enter), or started and ended in one without leaving "
+                       "it (stay) — a bee appearing from a nest tube, disappearing "
+                       "into one, or turning round at its entrance. Judged from the "
+                       "first and last place each track was detected, against the "
+                       "references this pipeline defines. Passing over a reference "
+                       "is an interaction, not an event.",
         "category": "analyze",
         "icon": "🚪",
         "input_type": "tracks",
@@ -589,33 +591,31 @@ BLOCK_REGISTRY = {
         "backend": "local",
         "config_fields": [
             {
-                # Detectors drop frames. Without tolerance a single missed
-                # frame reads as an exit followed immediately by a re-entry,
-                # which doubles every event count.
-                # Seconds, turned into frames with each clip's own fps: the
-                # same setting then means the same time on any camera.
-                "name": "gap_seconds",
-                "label": "Rejoin if back within (seconds)",
-                "help": ("Not the tracker: this is about one bee's contact. If a bee "
-                         "steps out of a reference (or out of range of another bee) "
-                         "and comes back within this time, it stays one interaction "
-                         "instead of two. The tracker keeps the bee's id either way."),
+                # Grows every reference by this many body lengths (the long
+                # side of the insect's own box), so an insect whose centre is
+                # just outside a small tube's outline still counts as at it.
+                "name": "padding_bl",
+                "label": "Padding around each reference (body lengths)",
+                "help": ("0 = the insect's centre must be inside the reference's "
+                         "outline. 0.5 = within half a body length of it."),
                 "field_type": "number",
                 "required": False,
-                "default": 0.6,
+                "default": 0,
                 "choices": None,
             },
             {
-                # Cutoff for the worker's Entry/Exit classifier, which runs
-                # during tracking — so the Track step reads this from here.
-                # 0.6 = best F1; lower (0.3-0.4) keeps more real events at some
-                # noise cost.
-                "name": "event_confidence",
-                "label": "Event Confidence",
-                "field_type": "number",
+                # On: every exit/enter gets the trained event classifier's
+                # score in an ml_confidence column. Nothing is dropped; the
+                # reader picks their own cut-off (memory/60).
+                "name": "ml_scoring",
+                "label": "Score events with the ML classifier",
+                "field_type": "select",
                 "required": False,
-                "default": 0.6,
-                "choices": None,
+                "default": "off",
+                "choices": [
+                    {"value": "off", "label": "Off"},
+                    {"value": "on", "label": "On — adds ml_confidence to each exit / enter"},
+                ],
             },
         ],
     },
@@ -664,54 +664,46 @@ BLOCK_REGISTRY = {
                 # episode back together, so it filters contacts, not pieces.
                 "name": "min_seconds",
                 "label": "Minimum interaction length (seconds)",
-                "help": ("Contacts shorter than this are not counted — a bee walking "
-                         "across a reference, a box flickering onto a neighbour. "
-                         "0 counts everything."),
+                "help": ("0 keeps every contact, a quick pass-over included — its "
+                         "duration is in the CSV to filter on."),
                 "field_type": "number",
                 "required": False,
-                "default": 0.5,
+                "default": 0,
                 "choices": None,
             },
             {
-                # Insect-to-insect only. Insect-to-reference asks containment,
-                # which needs no radius — a bee is inside the flower or it is
-                # not. Expressed as a percent of frame width so the same
-                # setting means the same real distance at any resolution; a
-                # pixel count silently changes meaning between a 1080p clip
-                # and a 4K one.
-                "name": "proximity_percent",
-                "label": "Insect ↔ insect radius (% of frame width)",
+                # Insect-to-reference: grows each reference, as on Events.
+                "name": "padding_bl",
+                "label": "Padding around each reference (body lengths)",
                 "field_type": "number",
                 "required": False,
-                "default": 5,
+                "default": 0,
+                "choices": None,
+            },
+            {
+                # Insect-to-insect: in body lengths, the long side of the two
+                # insects' boxes averaged, so the same setting means the same
+                # closeness near the lens and far from it (memory/60).
+                "name": "proximity_bl",
+                "label": "Insect ↔ insect radius (body lengths)",
+                "field_type": "number",
+                "required": False,
+                "default": 2,
                 "choices": None,
             },
         ],
     },
     "analyze.foraging_trips": {
         "display_name": "Foraging Trips",
-        "description": "Derive foraging-trip events (Exit→Entry) from tracks + the "
-                       "nest/hotel layout. Event Confidence tunes the Entry/Exit "
-                       "classifier applied during tracking.",
+        "description": "Retired: runs as Events (memory/60). Trips are read from "
+                       "the events table by the user.",
         "category": "analyze",
         "icon": "🌻",
         "input_type": "tracks",
         "accepts": ["tracks", "detections"],
         "output_type": "events",
         "backend": "local",
-        "config_fields": [
-            {
-                # Event-classifier cutoff for Entry/Exit events. 0.6 = best F1;
-                # lower (0.3-0.4) keeps more real events at some noise cost. Read
-                # by the upstream Track step (events are computed during tracking).
-                "name": "event_confidence",
-                "label": "Event Confidence",
-                "field_type": "number",
-                "required": False,
-                "default": 0.6,
-                "choices": None,
-            },
-        ],
+        "config_fields": [],
     },
     "analyze.visitation": {
         "display_name": "Visitation Count",
@@ -856,19 +848,8 @@ BLOCK_REGISTRY = {
                     {"value": "bioclip", "label": "BioCLIP (species near the device)"},
                 ],
             },
-            {
-                # Applied when results are read, not on the GPU: every crop
-                # still votes, and the track's call — the winner's mean
-                # confidence over its votes — must reach this to be kept.
-                # Below it the track is reported unidentified, best guess
-                # kept. Changing it re-reads; it never re-runs the GPU job.
-                "name": "min_mean_confidence",
-                "label": "Minimum mean confidence of the winning species",
-                "field_type": "number",
-                "required": False,
-                "default": 0,
-                "choices": None,
-            },
+            # No confidence floor (memory/60): each track's species and its
+            # confidence go in the CSV, and the reader filters on it.
         ],
     },
     "identify.marker": {

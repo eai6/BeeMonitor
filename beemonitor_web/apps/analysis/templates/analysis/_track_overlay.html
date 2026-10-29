@@ -1,4 +1,4 @@
-{% load static %}
+{% load static pricing_extras %}
 {% comment %}
   One player: the original clip with the run's tracks drawn over it as it plays
   (memory/46). Replaces the original + annotated pair — checking tracking needs
@@ -13,16 +13,15 @@
     <div class="flex items-center gap-3 text-sm">
       {% if result.annotated_video_path %}
         <a href="{% url 'analysis:video_proxy' job.pk %}" download="job_{{ job.pk }}_annotated.mp4"
-           class="text-amber-700 hover:underline">Download annotated video</a>
-      {% elif annotate_status == 'processing' %}
-        <span class="text-gray-600">Rendering the annotated video… refresh in a few minutes.</span>
+           class="text-amber-700 hover:underline">Download rendered video</a>
+      {% endif %}
+      {% if annotate_status == 'processing' %}
+        <span class="text-gray-600">Rendering the video… refresh in a few minutes.</span>
       {% elif can_annotate %}
-        <form method="post" action="{% url 'analysis:annotate_video' job.pk %}" class="flex items-center gap-2">
-          {% csrf_token %}
-          {% if annotate_status == 'failed' %}<span class="text-red-700 text-xs">Last render failed.</span>{% endif %}
-          <button type="submit" class="text-amber-700 hover:underline"
-                  title="Renders the boxes into an MP4 on the GPU, for sharing or downloading">Render video for download</button>
-        </form>
+        {% if annotate_status == 'failed' %}<span class="text-red-700 text-xs">Last render failed.</span>{% endif %}
+        <button type="button" data-ov-render-open class="text-amber-700 hover:underline">
+          {% if result.annotated_video_path %}Render again{% else %}Render video{% endif %}
+        </button>
       {% endif %}
     </div>
   </div>
@@ -57,6 +56,14 @@
         <span data-ov-clock class="ml-auto font-mono text-xs text-gray-500"></span>
       </div>
 
+      <div data-ov-marks-wrap hidden class="flex flex-col gap-1">
+        <div class="relative h-5 rounded bg-gray-200 cursor-pointer" data-ov-marks
+             title="Events in this clip — click one to jump there"></div>
+        <p class="text-xs text-gray-600">Events in this clip: <span class="font-semibold" style="color:#0369a1">exit</span>,
+          <span class="font-semibold" style="color:#b45309">enter</span>,
+          <span class="font-semibold" style="color:#6d28d9">stay</span> (its length). Click to jump there.</p>
+      </div>
+
       <div data-ov-timeline hidden class="flex flex-col gap-1">
         <div class="relative h-3.5 rounded bg-gray-200 cursor-pointer" data-ov-spans
              title="Where this track is on screen — click to jump there"></div>
@@ -74,8 +81,14 @@
           <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-ov-opt="species" checked> Species on the label</label>
           <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-ov-opt="trails" checked> Trails (last 2 s)</label>
           <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-ov-opt="lost" checked> Lost tracks (dashed)</label>
-          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-ov-opt="regions"> Regions (hotel, nests)</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-ov-opt="regions"> ROI and reference objects</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-ov-opt="events" checked> Events (exit, enter, stay)</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-ov-opt="interactions" checked> Interactions</label>
         </fieldset>
+        <div class="flex flex-col gap-1.5">
+          <div class="text-xs font-semibold text-gray-600 uppercase tracking-wide">Events near now</div>
+          <div data-ov-near class="flex flex-col gap-1 text-sm"></div>
+        </div>
         <div class="flex flex-col gap-1.5">
           <div class="text-xs font-semibold text-gray-600 uppercase tracking-wide">On screen now · <span data-ov-count>0</span></div>
           <div data-ov-list class="flex flex-col gap-1.5 max-h-96 overflow-y-auto"></div>
@@ -112,6 +125,27 @@
       </div>
     </aside>
   </div>
+{% if can_annotate %}
+<dialog data-ov-render class="rounded-lg p-0 w-full max-w-lg backdrop:bg-gray-900/50" aria-labelledby="ov-render-title">
+  <form method="post" action="{% url 'analysis:annotate_video' job.pk %}" class="p-6 flex flex-col gap-4 text-sm">
+    {% csrf_token %}
+    <input type="hidden" name="layers" value="1">
+    <h2 id="ov-render-title" class="text-lg font-semibold text-gray-900">Render video</h2>
+    <p class="text-gray-600">Makes an MP4 of this clip drawn exactly as the player shows it, with the layers ticked here.</p>
+    <fieldset class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
+      <legend class="sr-only">Layers</legend>
+      {% for name, label in render_layers %}
+      <label class="flex items-center gap-2 min-h-[44px] sm:min-h-0"><input type="checkbox" name="{{ name }}" value="on" data-ov-render-layer="{{ name }}"> {{ label }}</label>
+      {% endfor %}
+    </fieldset>
+    <p class="bg-gray-100 rounded px-3 py-2 text-gray-700">About {{ render_gpu_seconds|gpu_hours }} GPU-hours. Plays in any browser. The events and interactions drawn are this run's saved rows, the same ones in its CSVs.</p>
+    <div class="flex justify-end gap-2">
+      <button type="button" data-ov-render-cancel class="h-11 px-4 rounded border border-gray-300 bg-white hover:bg-gray-50">Cancel</button>
+      <button type="submit" class="h-11 px-4 rounded bg-amber-700 hover:bg-amber-800 text-white font-semibold">Render</button>
+    </div>
+  </form>
+</dialog>
+{% endif %}
 </section>
 <script src="{% static 'js/track_overlay.js' %}"></script>
 <script>
@@ -136,7 +170,6 @@
   function speciesText(t) {
     if (!t) return '';
     if (t.species) return t.species + (t.species_confidence != null ? ' · ' + t.species_confidence.toFixed(2) : '');
-    if (t.species_best_guess) return 'best guess ' + t.species_best_guess;
     return '';
   }
 
@@ -165,9 +198,73 @@
     });
   }
 
+  function eventText(e) {
+    return e[2] + (e[3] ? ' ' + e[3].replace(/^reference_/, '') : '') + ' · track ' + e[1]
+      + (e[2] === 'stay' && e[4] != null ? ' · ' + ((e[4] - e[0]) / ov.fps()).toFixed(1) + ' s' : '')
+      + (e[5] ? ' · at edge' : '');
+  }
+  function seekTo(frame) { video.pause(); ov.seekFrame(frame); }
+
+  // The events within 5 s either side of now, nearest first.
+  var nearKey = '';
+  function renderNear(frame) {
+    var box = $('[data-ov-near]'), d = ov.data();
+    if (!box || !d) return;
+    var w = 5 * ov.fps();
+    var evs = (d.events || []).filter(function (e) { return Math.abs(e[0] - frame) <= w; })
+      .sort(function (a, b) { return Math.abs(a[0] - frame) - Math.abs(b[0] - frame); }).slice(0, 6);
+    var key = evs.map(function (e) { return e.join('|'); }).join(',');
+    if (key === nearKey) return;
+    nearKey = key;
+    box.innerHTML = '';
+    if (!evs.length) { box.innerHTML = '<span class="text-gray-500">None within 5 s</span>'; return; }
+    evs.sort(function (a, b) { return a[0] - b[0]; }).forEach(function (e) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'flex gap-2.5 text-left hover:underline min-h-[28px]';
+      b.innerHTML = '<span class="font-mono text-gray-600"></span><span></span>';
+      b.children[0].textContent = fmt(sec(e[0]));
+      b.children[1].textContent = eventText(e);
+      b.addEventListener('click', function () { seekTo(e[0]); });
+      box.appendChild(b);
+    });
+  }
+
+  // Every event as a mark on a clip-long bar.
+  var EVENT_COLORS = {exit: '#0369a1', enter: '#b45309', stay: '#6d28d9'};
+  function renderMarks() {
+    var bar = $('[data-ov-marks]'), d = ov.data();
+    if (!bar || !d || !(d.events || []).length || !video.duration) return;
+    var total = video.duration * ov.fps();
+    bar.innerHTML = '';
+    d.events.forEach(function (e) {
+      var m = document.createElement('button');
+      m.type = 'button';
+      m.className = 'absolute top-0.5 h-4 rounded-sm';
+      var c = EVENT_COLORS[e[2]] || '#374151';
+      m.style.left = (100 * e[0] / total) + '%';
+      if (e[2] === 'stay' && e[4] != null) {
+        m.style.width = Math.max(0.4, 100 * (e[4] - e[0]) / total) + '%';
+        m.style.background = c + '55'; m.style.borderLeft = '3px solid ' + c;
+      } else { m.style.width = '3px'; m.style.background = c; }
+      m.title = fmt(sec(e[0])) + ' ' + eventText(e);
+      m.setAttribute('aria-label', m.title);
+      m.addEventListener('click', function (ev) { ev.stopPropagation(); seekTo(e[0]); });
+      bar.appendChild(m);
+    });
+    var now = document.createElement('div');
+    now.setAttribute('data-ov-marks-now', '');
+    now.className = 'absolute -top-0.5 h-6 w-0.5 bg-gray-900 pointer-events-none';
+    bar.appendChild(now);
+    $('[data-ov-marks-wrap]').hidden = false;
+  }
+  video.addEventListener('loadedmetadata', renderMarks);
+
   ov.onFrame(function (info) {
     clock.textContent = 'frame ' + info.frame + ' · ' + fmt(sec(info.frame));
-    if (ov.focused() == null) renderList(info.visible);
+    if (ov.focused() == null) { renderList(info.visible); renderNear(info.frame); }
+    var mk = $('[data-ov-marks-now]');
+    if (mk && video.duration) mk.style.left = (100 * video.currentTime / video.duration) + '%';
     var tl = $('[data-ov-spans] [data-ov-now]');
     if (tl && video.duration) tl.style.left = (100 * video.currentTime / video.duration) + '%';
   });
@@ -221,8 +318,8 @@
       b.className = 'flex gap-2.5 text-left hover:underline';
       b.innerHTML = '<span class="font-mono text-gray-600"></span><span></span>';
       b.children[0].textContent = fmt(sec(e[0]));
-      b.children[1].textContent = e[2] + (e[3] ? ' ' + e[3] : '');
-      b.addEventListener('click', function () { video.pause(); ov.seekFrame(e[0]); });
+      b.children[1].textContent = eventText(e);
+      b.addEventListener('click', function () { seekTo(e[0]); });
       evBox.appendChild(b);
     });
 
@@ -270,6 +367,27 @@
     var id = ov.hit(x, y);
     if (id != null) { e.preventDefault(); follow(id); }
   });
+
+  $('[data-ov-marks]').addEventListener('click', function (e) {
+    if (!video.duration) return;
+    var r = e.currentTarget.getBoundingClientRect();
+    video.currentTime = video.duration * Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  });
+
+  // Render: the dialog starts with the layers the player shows now.
+  var dlg = root.querySelector('[data-ov-render]');
+  var openBtn = root.querySelector('[data-ov-render-open]');
+  if (dlg && openBtn) {
+    openBtn.addEventListener('click', function () {
+      var on = ov.options();
+      dlg.querySelectorAll('[data-ov-render-layer]').forEach(function (box) {
+        var name = box.getAttribute('data-ov-render-layer');
+        box.checked = name === 'clock' ? false : !!on[name];
+      });
+      if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', '');
+    });
+    dlg.querySelector('[data-ov-render-cancel]').addEventListener('click', function () { dlg.close(); });
+  }
 
   $('[data-ov-spans]').addEventListener('click', function (e) {
     if (!video.duration) return;
@@ -320,6 +438,7 @@
   if (!url) { status.textContent = 'This run has no tracks to draw.'; return; }
   ov.load(url)
     .then(function (d) {
+      renderMarks();
       var n = Object.keys(d.tracks || {}).length;
       status.textContent = n + ' tracks · boxes drawn from this run’s tracking table'
         + ' · dashed = the tracker had lost the insect and was predicting where it went';

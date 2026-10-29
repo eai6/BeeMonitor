@@ -127,15 +127,52 @@ class TestCloudPipeline:
         # Verify result structure
         assert isinstance(result, PipelineResult)
         assert result.job_id == "job1"
-        assert result.total_events == 3
-        assert result.entry_count == 2
-        assert result.exit_count == 1
+        assert result.unique_tracks == 2
+        # Events, interactions and trips are the platform's (memory/60): the
+        # worker reports none, whatever the library's own statistics said.
+        assert (result.total_events, result.entry_count, result.exit_count) == (0, 0, 0)
+        assert (result.events_csv_path, result.interactions_csv_path,
+                result.foraging_trips_csv_path) == ("", "", "")
+        assert result.interaction_count == result.foraging_trip_count == 0
+        for key in ("total_events", "total_entries", "total_exits", "foraging_trips",
+                    "interaction_count"):
+            assert key not in result.summary_stats
+        # The nest model is not asked for unless the job says so.
+        assert mock_run.call_args.kwargs["detect_nests"] is False
+
+    @patch("cloud.wrapper.pipeline.CloudPipeline._run_analysis")
+    def test_detect_nests_is_passed_through_only_when_asked(self, mock_run, pipeline,
+                                                            mock_storage):
+        mock_run.return_value = None
+
+        def fake_download(container, blob_path, local_path):
+            Path(local_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(local_path).write_text("fake video")
+
+        mock_storage.download_file.side_effect = fake_download
+        pipeline.process(job_id="j", user_id="u", video_blob_path="u/v.mp4",
+                         detect_nests=True)
+        assert mock_run.call_args.kwargs["detect_nests"] is True
+
+    def test_no_events_interactions_or_trips_files_are_uploaded(self, pipeline,
+                                                                 mock_storage, tmp_path):
+        # Even if something left them in the output folder.
+        out = tmp_path / "out"
+        out.mkdir()
+        for name in ("clip_events.csv", "interactions.csv", "foraging_trips.csv",
+                     "clip_tracking_results.csv"):
+            (out / name).write_text("a\n1\n")
+        paths = pipeline._upload_results("j", "u", out, str(tmp_path / "clip.mp4"))
+        keys = [c.args[1] for c in mock_storage.upload_file.call_args_list]
+        assert [k for k in keys if k.endswith(".csv")] == ["u/j/tracking_results.csv"]
+        assert set(paths) >= {"tracking_csv"}
+        assert not {"events_csv", "interactions_csv", "foraging_trips_csv"} & set(paths)
 
 
 class TestLayout:
-    """No ROI drawn → the whole frame; no tubes drawn → none (the nest model
-    may fill them). Tracking must run either way: a new hotel the model has
-    never seen used to skip the whole analysis and report an empty run."""
+    """No ROI drawn → the whole frame; no tubes drawn → none. The nest model
+    fills them only when the job asks for it (memory/60). Tracking runs either
+    way."""
 
     @pytest.fixture
     def clip(self, tmp_path):
@@ -192,11 +229,17 @@ class TestLayout:
         layout, _ = self._fill(clip, {"hotel": (10, 10, 20, 20), "nests": {"a": (1, 2, 3, 4)}})
         assert layout == {"hotel": (0, 0, 320, 240), "nests": {"a": (1, 2, 3, 4)}}
 
-    def test_a_site_or_clip_layout_never_runs_the_hotel_model(self, clip):
-        # memory/52: ground nests are not a bee hotel; the model would invent tubes.
+    def test_the_nest_model_never_runs_unasked(self, clip):
+        # memory/60: references come from the pipeline, never from the worker.
         layout, det = self._fill(clip, {"nests": {"a": (1, 2, 3, 4)}}, fallback=False)
         assert layout == {"hotel": (0, 0, 320, 240), "nests": {}}
         det.assert_not_called()
+
+    def test_the_default_is_not_to_run_the_nest_model(self):
+        import inspect
+        assert inspect.signature(CloudPipeline.process).parameters["detect_nests"].default is False
+        assert inspect.signature(CloudPipeline._run_analysis).parameters["detect_nests"].default is False
+        assert "nest_fallback" not in inspect.signature(CloudPipeline.process).parameters
 
 
 class TestBestCrops:

@@ -1,399 +1,269 @@
-"""The two things the analyze layer actually measures.
+"""The two things the analyze layer measures (memory/35, rules from memory/60).
 
-Everything an ecologist asks of this system reduces to two facts about a clip:
+**Event** — an insect came out of a reference (exit), went into one (enter), or
+started and ended in one without leaving it (stay).
+**Interaction** — an insect was in a reference, or near another insect, for a
+span of time.
 
-**Event** — something entered or exited something, at a moment.
-**Interaction** — two things were together for a span of time.
+Both are computed here, on the web, from the tracking table and the references
+the PIPELINE defines — one source of truth. The GPU worker measures (detections,
+tracks); it no longer writes events or interactions of its own.
 
-Foraging trips, visitation counts, dwell times and insect-to-insect encounters
-are all *reads* over those two tables, not separate computations. That matters
-because they used to be separate computations: one physical fact (a bee at tube
-3 from frame 400 to 700) was produced three times by three code paths —
-``ops.compute_visitation`` over the user's ROI, the GPU's
-``InteractionAnalyzer`` over detected nests, and the GPU's Entry/Exit event
-classifier — each with its own column names, and no way to hold them to
-agreeing with each other.
-
-The two primitives are one pass. An interaction's start and end *are* its enter
-and exit events, so ``ops.compute_episodes`` runs once and both tables project
-out of it. The GPU's own CSVs are normalised into the same two schemas here, so
-a downstream consumer never has to care which side of the wire a row came from
--- only what ``source`` says about it.
+Rows are SAVED in frames (``frame``, ``start_frame`` …) and exported in time
+(``timestamp``, ``clip_sec`` …) by ``export_rows``: a clip's start time can be
+corrected later (a site's time zone set), and then every download follows
+without anything being recounted.
 """
 
-import re
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
-# Canonical column order. These are the CSV headers users download and write
-# scripts against, so they are part of the contract: append, never reorder.
-EVENT_FIELDS = ("frame", "time_sec", "subject", "subject_kind",
-                "action", "target", "target_kind", "source")
+# The CSV columns people download, in order. Identity and provenance columns
+# are added around these by the exporters.
+EVENT_FIELDS = ("timestamp", "clip_sec", "track_id", "action", "reference",
+                "duration_sec", "at_edge", "ml_confidence")
 
-INTERACTION_FIELDS = ("start_frame", "end_frame", "start_sec", "end_sec",
-                      "duration_sec", "a", "a_kind", "b", "b_kind",
-                      "relation", "min_distance", "source")
+INTERACTION_FIELDS = ("start_time", "end_time", "start_clip_sec", "end_clip_sec",
+                      "duration_sec", "track_id", "with", "relation", "min_distance_bl")
 
-ENTER, EXIT = "enter", "exit"
-ORGANISM, REFERENCE = "organism", "reference"
+EXIT, ENTER, STAY = "exit", "enter", "stay"
 
-# How the two sides of an interaction were judged to be together.
-INSIDE = "inside"        # the subject's centroid was within the reference's shape
-PROXIMITY = "proximity"  # the two were within a distance threshold of each other
-
-# Where a row came from. Following the provenance rule from the consistency
-# audit: a number that rests on someone else's assumption has to say so.
-DERIVED, GPU = "derived", "gpu"
-
-# The GPU writes Entry/Exit; the primitive spells them lowercase and calls the
-# thing they happen to a target rather than a nest.
-_GPU_ACTIONS = {"entry": ENTER, "exit": EXIT}
+# How the two sides of an interaction were together.
+IN_REFERENCE = "in_reference"   # the insect's centre was in the reference (plus padding)
+NEAR = "near"                   # two insects within the radius, in body lengths
 
 
 def _sec(frame, fps):
-    """Frame number to seconds, or None when there is no usable rate."""
+    """Frame number to seconds into the clip, or None without a usable rate."""
     try:
         return round(int(frame) / float(fps), 3) if fps else None
     except (TypeError, ValueError, ZeroDivisionError):
         return None
 
 
-# ── Projections from the episode pass ────────────────────────────────────────
+# ── Saved rows, from the ops passes ──────────────────────────────────────────
 
-def events_from_episodes(episodes, fps, source=DERIVED):
-    """An episode's two ends, as enter/exit events.
-
-    A bee inside tube 3 from frame 400 to 700 entered at 400 and exited at 700.
-    Emitting both from the same record is what keeps an event table and an
-    interaction table from ever disagreeing about the same clip.
-    """
+def events_from_computed(events, fps):
+    """``ops.compute_events`` output as saved event rows."""
     rows = []
-    for ep in episodes or []:
-        for frame, action in ((ep["start_frame"], ENTER), (ep["end_frame"], EXIT)):
-            rows.append({
-                "frame": int(frame),
-                "time_sec": _sec(frame, fps),
-                "subject": ep["track"],
-                "subject_kind": ORGANISM,
-                "action": action,
-                "target": ep["reference"],
-                "target_kind": REFERENCE,
-                "source": source,
-            })
-    rows.sort(key=lambda r: (r["frame"], r["action"], str(r["subject"])))
+    for ev in events or []:
+        row = {
+            "frame": int(ev["frame"]),
+            "track_id": ev["track"],
+            "action": ev["action"],
+            "reference": ev["reference"],
+            "at_edge": ev.get("at_edge"),
+        }
+        if ev["action"] == STAY:
+            row["end_frame"] = int(ev["end_frame"])
+            row["duration_sec"] = (round((ev["end_frame"] - ev["frame"]) / float(fps), 3)
+                                   if fps else None)
+        rows.append(row)
     return rows
 
 
-def events_from_nest_events(events, fps, source=DERIVED):
-    """``ops.compute_nest_events`` rows in the Event schema: "enter" is an
-    insect going into a reference, "exit" one coming out of it."""
-    rows = [{
-        "frame": int(ev["frame"]),
-        "time_sec": _sec(ev["frame"], fps),
-        "subject": ev["track"],
-        "subject_kind": ORGANISM,
-        "action": ev["action"],
-        "target": ev["reference"],
-        "target_kind": REFERENCE,
-        "source": source,
-    } for ev in events or []]
-    rows.sort(key=lambda r: (r["frame"], r["action"], str(r["subject"])))
-    return rows
+def interactions_from_episodes(episodes, fps):
+    """Each reference episode as one ``in_reference`` interaction."""
+    return [{
+        "start_frame": int(ep["start_frame"]),
+        "end_frame": int(ep["end_frame"]),
+        # Detected frames held, not end minus start: a gap the detector missed
+        # was not time we saw the insect there.
+        "duration_sec": round(ep["frames"] / float(fps), 3) if fps else None,
+        "track_id": ep["track"],
+        "with": ep["reference"],
+        "relation": IN_REFERENCE,
+    } for ep in episodes or []]
 
 
-def interactions_from_episodes(episodes, fps, source=DERIVED):
-    """Each episode as one organism-to-reference interaction."""
-    rows = []
-    for ep in episodes or []:
-        start, end = int(ep["start_frame"]), int(ep["end_frame"])
-        rows.append({
-            "start_frame": start,
-            "end_frame": end,
-            "start_sec": _sec(start, fps),
-            "end_sec": _sec(end, fps),
-            # Frames held, not end-minus-start: a track the detector dropped
-            # mid-episode was not present for the gap, and counting the span
-            # would inflate every dwell time by exactly the frames we missed.
-            "duration_sec": round(ep["frames"] / float(fps), 3) if fps else None,
-            "a": ep["track"],
-            "a_kind": ORGANISM,
-            "b": ep["reference"],
-            "b_kind": REFERENCE,
-            "relation": INSIDE,
-            "source": source,
-        })
-    rows.sort(key=lambda r: (r["start_frame"], str(r["a"])))
-    return rows
+def interactions_from_proximity(episodes, fps):
+    """Each pairwise spell as one ``near`` interaction."""
+    return [{
+        "start_frame": int(ep["start_frame"]),
+        "end_frame": int(ep["end_frame"]),
+        "duration_sec": round(ep["frames"] / float(fps), 3) if fps else None,
+        "track_id": ep["track"],
+        "with": ep["partner"],
+        "relation": NEAR,
+        "min_distance_bl": round(ep["min_distance_bl"], 3),
+    } for ep in episodes or []]
 
 
-def interactions_from_proximity(episodes, fps, source=DERIVED):
-    """Each pairwise proximity spell as one organism-to-organism interaction.
+# ── Rows saved before memory/60 ──────────────────────────────────────────────
+#
+# Runs counted under the old rules keep their saved rows (they are left as they
+# are, labelled). Their keys are mapped onto the current ones so every page and
+# download reads one shape. Nothing is converted that can't be: an old
+# ``min_distance`` was a fraction of frame width, not body lengths, so it is
+# dropped rather than relabelled.
 
-    ``min_distance`` rides along in fractions of frame width: it is the whole
-    reason the threshold is resolution-independent, so a reader can see how
-    close the pair actually came rather than only that they passed a cutoff.
-    """
-    rows = []
-    for ep in episodes or []:
-        start, end = int(ep["start_frame"]), int(ep["end_frame"])
-        rows.append({
-            "start_frame": start,
-            "end_frame": end,
-            "start_sec": _sec(start, fps),
-            "end_sec": _sec(end, fps),
-            "duration_sec": round(ep["frames"] / float(fps), 3) if fps else None,
-            "a": ep["track"],
-            "a_kind": ORGANISM,
-            "b": ep["partner"],
-            "b_kind": ORGANISM,
-            "relation": PROXIMITY,
-            "min_distance": round(ep.get("min_distance", 0.0), 4),
-            "source": source,
-        })
-    rows.sort(key=lambda r: (r["start_frame"], str(r["a"]), str(r["b"])))
-    return rows
+_OLD_ACTIONS = {"entry": ENTER, "enter": ENTER, "exit": EXIT, "stay": STAY}
+_OLD_RELATIONS = {"inside": IN_REFERENCE, "proximity": NEAR}
 
 
-# ── Normalising what the GPU already produces ────────────────────────────────
-
-def events_from_gpu(df, fps):
-    """The worker's ``events.csv`` in the Event schema, or [].
-
-    The worker classifies Entry/Exit against the nests it detected, which is a
-    different target set from the user's drawn ROI — so these rows coexist with
-    the derived ones rather than replacing them, and ``target_kind`` says which
-    is which.
-    """
-    if df is None or len(df) == 0:
-        return []
-    from . import ops
-
-    cols = {
-        "action": ops._pick(df, ["action", "event", "event_type"]),
-        "target": ops._pick(df, ["nest", "nest_id", "reference_id", "target"]),
-        "frame": ops._pick(df, list(ops._FRAME_COLS)),
-        "subject": ops._pick(df, list(ops._ID_COLS)),
+def normalize_event(row):
+    if "track_id" in row and "reference" in row:
+        return row
+    out = {
+        "frame": row.get("frame"),
+        "track_id": row.get("subject", ""),
+        "action": _OLD_ACTIONS.get(str(row.get("action", "")).lower(), row.get("action")),
+        "reference": reference_id(row.get("target")),
+        "at_edge": None,
     }
-    if cols["action"] is None or cols["frame"] is None:
-        logger.info("events_from_gpu: CSV lacks action/frame columns — skipped")
-        return []
-
-    rows = []
-    for _, r in df.iterrows():
-        action = _GPU_ACTIONS.get(str(r[cols["action"]]).strip().lower())
-        if action is None:
-            continue
-        try:
-            frame = int(float(r[cols["frame"]]))
-        except (TypeError, ValueError):
-            continue
-        target = r[cols["target"]] if cols["target"] else ""
-        rows.append({
-            "frame": frame,
-            "time_sec": _sec(frame, fps),
-            "subject": ops._as_native(r[cols["subject"]]) if cols["subject"] else "",
-            "subject_kind": ORGANISM,
-            "action": action,
-            "target": reference_id(ops._as_native(target)),
-            # The worker's targets are references it found itself, not the
-            # user's — ``source`` (gpu vs derived) keeps the two apart, so a
-            # count of ROI visits can never silently absorb them.
-            "target_kind": REFERENCE,
-            "source": GPU,
-        })
-    rows.sort(key=lambda r: (r["frame"], r["action"], str(r["subject"])))
-    return rows
+    return out
 
 
-def interactions_from_gpu(df, fps):
-    """The worker's ``interactions.csv`` in the Interaction schema, or [].
-
-    Covers what the local episode pass cannot see: organism-to-organism
-    proximity, which needs every pair in every frame and so is computed on the
-    GPU while the tracks are already in memory.
-    """
-    if df is None or len(df) == 0:
-        return []
-    from . import ops
-
-    cols = {
-        "type": ops._pick(df, ["interaction_type", "type", "kind"]),
-        "a": ops._pick(df, ["organism_track_id", "entity1_id", "track_id"]),
-        "b": ops._pick(df, ["partner_track_id", "entity2_id"]),
-        "reference": ops._pick(df, ["reference_id", "nest", "nest_id"]),
-        "duration": ops._pick(df, ["duration_seconds", "duration_sec", "duration"]),
-        "start": ops._pick(df, ["start_frame", "frame_start", "frame"]),
-        "end": ops._pick(df, ["end_frame", "frame_end"]),
+def normalize_interaction(row):
+    if "track_id" in row and "with" in row:
+        return row
+    to_reference = row.get("b_kind") in ("reference", "nest")
+    return {
+        "start_frame": row.get("start_frame"),
+        "end_frame": row.get("end_frame"),
+        "duration_sec": row.get("duration_sec"),
+        "track_id": row.get("a", ""),
+        "with": reference_id(row.get("b")) if to_reference else row.get("b"),
+        "relation": _OLD_RELATIONS.get(row.get("relation"),
+                                       IN_REFERENCE if to_reference else NEAR),
     }
 
-    rows = []
-    for _, r in df.iterrows():
-        kind = str(r[cols["type"]]).strip().lower() if cols["type"] else ""
-        to_reference = "reference" in kind or "nest" in kind
-        partner = (r[cols["reference"]] if to_reference and cols["reference"]
-                   else (r[cols["b"]] if cols["b"] else ""))
 
-        def _num(col, cast=float):
-            if not col:
-                return None
-            try:
-                return cast(float(r[col]))
-            except (TypeError, ValueError):
-                return None
-
-        start, end = _num(cols["start"], int), _num(cols["end"], int)
-        duration = _num(cols["duration"])
-        if duration is None and None not in (start, end) and fps:
-            duration = round((end - start) / float(fps), 3)
-
-        rows.append({
-            "start_frame": start,
-            "end_frame": end,
-            "start_sec": _sec(start, fps) if start is not None else None,
-            "end_sec": _sec(end, fps) if end is not None else None,
-            "duration_sec": round(duration, 3) if duration is not None else None,
-            "a": ops._as_native(r[cols["a"]]) if cols["a"] else "",
-            "a_kind": ORGANISM,
-            "b": reference_id(ops._as_native(partner)) if to_reference else ops._as_native(partner),
-            "b_kind": REFERENCE if to_reference else ORGANISM,
-            "relation": PROXIMITY,
-            "source": GPU,
-        })
-    rows.sort(key=lambda r: (r["start_frame"] is None, r["start_frame"], str(r["a"])))
-    return rows
+def normalized(kind, rows):
+    fn = normalize_event if kind == "events" else normalize_interaction
+    return [fn(r) for r in rows or []]
 
 
-# ── Rollups: the questions people actually ask, as reads ─────────────────────
+# ── Rollups ──────────────────────────────────────────────────────────────────
 
 def summarize_events(rows):
-    """Counts an event table can answer without any further computation."""
-    enters = sum(1 for r in rows if r["action"] == ENTER)
-    per_target = {}
+    """Counts an event table answers without further computation."""
+    per_ref = {}
     for r in rows:
-        bucket = per_target.setdefault(str(r["target"]), {
-            "id": str(r["target"]), "label": str(r["target"]),
-            "kind": r["target_kind"], "enter": 0, "exit": 0, "subjects": set(),
+        bucket = per_ref.setdefault(str(r["reference"]), {
+            "id": str(r["reference"]), "label": str(r["reference"]),
+            ENTER: 0, EXIT: 0, STAY: 0, "subjects": set(),
         })
-        bucket[r["action"]] += 1
-        if r["subject"] not in ("", None):
-            bucket["subjects"].add(r["subject"])
+        if r["action"] in (ENTER, EXIT, STAY):
+            bucket[r["action"]] += 1
+        if r["track_id"] not in ("", None):
+            bucket["subjects"].add(r["track_id"])
 
     per_reference = sorted(
-        ({"id": b["id"], "label": b["label"], "kind": b["kind"],
-          "enter": b["enter"], "exit": b["exit"],
-          "events": b["enter"] + b["exit"], "subjects": len(b["subjects"])}
-         for b in per_target.values()),
+        ({"id": b["id"], "label": b["label"], "enter": b[ENTER], "exit": b[EXIT],
+          "stay": b[STAY], "events": b[ENTER] + b[EXIT] + b[STAY],
+          "subjects": len(b["subjects"])}
+         for b in per_ref.values()),
         key=lambda r: (-r["events"], r["id"]),
     )
     return {
         "event_count": len(rows),
-        "enter_count": enters,
-        "exit_count": len(rows) - enters,
-        "subjects": len({r["subject"] for r in rows if r["subject"] not in ("", None)}),
+        "enter_count": sum(1 for r in rows if r["action"] == ENTER),
+        "exit_count": sum(1 for r in rows if r["action"] == EXIT),
+        "stay_count": sum(1 for r in rows if r["action"] == STAY),
+        "subjects": len({r["track_id"] for r in rows if r["track_id"] not in ("", None)}),
         "per_reference": per_reference,
         "rows": rows,
     }
 
 
 def summarize_interactions(rows):
-    """Counts an interaction table can answer, including the visitation view.
-
-    ``organism_reference`` *is* the visitation count — a visit is an insect
-    interacting with a reference. It is reported here rather than computed by a
-    separate analyzer.
-    """
+    """Counts an interaction table answers, including time in each reference."""
     durations = [r["duration_sec"] for r in rows if r.get("duration_sec") is not None]
-    to_reference = [r for r in rows if r["b_kind"] == REFERENCE]
+    in_reference = [r for r in rows if r["relation"] == IN_REFERENCE]
 
     per_ref = {}
-    for r in to_reference:
-        bucket = per_ref.setdefault(str(r["b"]), {
-            "id": str(r["b"]), "label": str(r["b"]),
+    for r in in_reference:
+        bucket = per_ref.setdefault(str(r["with"]), {
+            "id": str(r["with"]), "label": str(r["with"]),
             "interactions": 0, "partners": set(), "duration_sec": 0.0,
         })
         bucket["interactions"] += 1
-        if r["a"] not in ("", None):
-            bucket["partners"].add(r["a"])
+        if r["track_id"] not in ("", None):
+            bucket["partners"].add(r["track_id"])
         bucket["duration_sec"] += float(r.get("duration_sec") or 0)
 
     per_reference = sorted(
         ({"id": b["id"], "label": b["label"], "interactions": b["interactions"],
-          "partners": len(b["partners"]),
-          "duration_sec": round(b["duration_sec"], 2)}
+          "partners": len(b["partners"]), "duration_sec": round(b["duration_sec"], 2)}
          for b in per_ref.values()),
         key=lambda r: (-r["interactions"], r["id"]),
     )
     return {
         "interaction_count": len(rows),
-        "organism_organism": len(rows) - len(to_reference),
-        "organism_reference": len(to_reference),
+        "organism_organism": len(rows) - len(in_reference),
+        "organism_reference": len(in_reference),
         "total_duration_sec": round(sum(durations), 2) if durations else None,
         "per_reference": per_reference,
         "rows": rows,
     }
 
 
+# ── Export: frames -> time ───────────────────────────────────────────────────
+
+def export_rows(kind, rows, fps, start=None):
+    """Saved rows as the CSV columns people download.
+
+    ``start`` is the clip's recorded start (``apps.videos.timing.clip_start``):
+    None when unknown, and then the timestamp columns are blank while the
+    seconds-into-clip columns are still filled.
+    """
+    from apps.videos import timing
+
+    def _at(frame):
+        sec = _sec(frame, fps) if frame not in (None, "") else None
+        return sec, (timing.timestamp_at(start, sec) if sec is not None and start else "")
+
+    out = []
+    for row in normalized(kind, rows):
+        if kind == "events":
+            sec, ts = _at(row.get("frame"))
+            out.append({
+                "timestamp": ts, "clip_sec": sec,
+                "track_id": row.get("track_id", ""),
+                "action": row.get("action", ""),
+                "reference": row.get("reference", ""),
+                "duration_sec": row.get("duration_sec", ""),
+                "at_edge": _flag(row.get("at_edge")),
+                "ml_confidence": row.get("ml_confidence", ""),
+            })
+        else:
+            s_sec, s_ts = _at(row.get("start_frame"))
+            e_sec, e_ts = _at(row.get("end_frame"))
+            out.append({
+                "start_time": s_ts, "end_time": e_ts,
+                "start_clip_sec": s_sec, "end_clip_sec": e_sec,
+                "duration_sec": row.get("duration_sec", ""),
+                "track_id": row.get("track_id", ""),
+                "with": row.get("with", ""),
+                "relation": row.get("relation", ""),
+                "min_distance_bl": row.get("min_distance_bl", ""),
+            })
+    return out
+
+
+def _flag(value):
+    """true / false, or blank when it could not be known."""
+    if value is None or value == "":
+        return ""
+    return "true" if value else "false"
+
+
+# ── Reference ids ────────────────────────────────────────────────────────────
+
 _REFERENCE_ID = re.compile(r"^(?:nest|region|reference|tube)[ _-]?(.+)$", re.IGNORECASE)
 
 
 def reference_id(value):
-    """Every reference's id, in one vocabulary: ``reference_<n>``.
-
-    A reference is a nest tube on a hotel, a flower, a drawn region — the
-    tables used to call each by what the first one was (``nest_5``), so a
-    flower came out as a nest. ``hotel`` stays itself: it is the whole hotel,
-    not one of the numbered references inside it.
-    """
+    """Every reference's id, in one vocabulary: ``reference_<n>``."""
     if value is None:
         return value
     text = str(value).strip()
     m = _REFERENCE_ID.match(text)
     if m:
         return f"reference_{m.group(1)}"
-    if text.isdigit():   # the worker's bare box id
+    if text.isdigit():
         return f"reference_{text}"
     return value
-
-
-# The column each table names a reference in, and its kind column.
-_REFERENCE_COLUMNS = {"events": (("target", "target_kind"),),
-                      "interactions": (("b", "b_kind"),)}
-
-
-def tidy_references(kind, rows):
-    """Rows with every reference named ``reference_<n>``, and no label column.
-
-    The ``b_label`` / ``target_label`` columns repeated the id in words
-    ("Nest 5" beside ``nest_5``); one name per reference is enough. Applied on
-    the way out too, so runs computed under the old names export the new ones.
-    """
-    cols = _REFERENCE_COLUMNS.get(kind, ())
-    out = []
-    for row in rows or []:
-        row = {k: v for k, v in row.items() if k not in ("b_label", "target_label")}
-        for col, kind_col in cols:
-            if row.get(kind_col) in ("nest", REFERENCE):
-                row[kind_col] = REFERENCE
-                row[col] = reference_id(row.get(col))
-        out.append(row)
-    return out
-
-
-def label_references(rows, refs, key="b"):
-    """Swap reference ids for their human labels, in place. Returns ``rows``.
-
-    The primitives carry ids because ids are what stay stable across clips; the
-    page wants "Tube 3". Kept as a separate step so the tables people download
-    are joinable and the tables people read are legible.
-    """
-    labels = {}
-    for ref in refs or []:
-        if isinstance(ref, dict) and ref.get("id") is not None:
-            labels[str(ref["id"])] = ref.get("label") or str(ref["id"])
-    if not labels:
-        return rows
-    for row in rows:
-        if key in row and str(row[key]) in labels:
-            row.setdefault("%s_label" % key, labels[str(row[key])])
-    return rows

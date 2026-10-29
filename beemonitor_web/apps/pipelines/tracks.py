@@ -3,31 +3,36 @@
 The tracking table is one row per track per frame, and the worker's species /
 marker vote rides in ``summary_stats.identification.by_track``. Neither is the
 table people actually analyse: "track 12 was an Osmia lignaria, marker 4, here
-from 00:12 to 00:31". This builds that, with the pipeline's own species floor
-applied, for the job page, its download and the batch download — so species
-and marker IDs are in the data without a separate per-crop votes file.
+from 00:12 to 00:31". This builds that for the job page, its download and the
+batch download — so species and marker IDs are in the data without a separate
+per-crop votes file.
 
 The same identity columns are joined onto tracking, events and interaction
-rows (``identity_for_row``), keyed by their track id.
+rows, keyed by their track id. Every CSV people download is built here or in
+``primitives.export_rows`` (memory/60): times, not frames, and the worker's
+internal column names translated.
 """
 
 from __future__ import annotations
 
-from datetime import timedelta
-
-UNIDENTIFIED = "unidentified"
-
+# The track's species and marker, as the models called them (memory/60): no
+# confidence floor, no "unidentified" — the confidence is a column, and the
+# reader filters on it.
 IDENTITY_FIELDS = ["species", "species_confidence", "species_votes",
-                   "species_vote_share", "species_best_guess",
-                   "marker_id", "marker_votes", "marker_vote_share"]
-TRACK_FIELDS = (["track_id", "class", "first_frame", "last_frame", "start_sec",
-                 "end_sec", "duration_sec", "frames_seen"] + IDENTITY_FIELDS)
+                   "species_vote_share", "marker_id", "marker_votes", "marker_vote_share"]
+TRACK_FIELDS = (["track_id", "start_time", "end_time", "start_clip_sec", "end_clip_sec",
+                 "duration_sec"] + IDENTITY_FIELDS)
+
+# The Tracking CSV people download: the worker's per-frame table with times
+# added and its internal columns translated (memory/60).
+TRACKING_FIELDS = (["frame", "timestamp", "clip_sec", "track_id", "detected",
+                    "x1", "y1", "x2", "y2", "cx", "cy", "confidence"] + IDENTITY_FIELDS
+                   + ["marker_method", "marker_confidence"])
+DETECTION_FIELDS = ["frame", "timestamp", "clip_sec", "x1", "y1", "x2", "y2",
+                    "cx", "cy", "confidence", "class"]
 
 _ID_KEYS = ("track_id", "track", "tid", "object_id")
 _FRAME_KEYS = ("frame_number", "frame", "frame_num", "frame_idx")
-_CLASS_KEYS = ("class", "class_name", "label", "taxon_class")
-# Track ids on an events / interactions row: the insect, and its partner.
-_SUBJECT_KEYS = ("track_id", "subject", "organism_track_id", "a", "entity1_id")
 
 
 def _number(value):
@@ -52,14 +57,6 @@ def _first(row, keys):
     return None
 
 
-def species_floor(steps):
-    """The Identify Species node's minimum mean confidence, 0 when none."""
-    for s in steps or []:
-        if s.get("block_type") == "identify.species":
-            return _number((s.get("config") or {}).get("min_mean_confidence")) or 0.0
-    return 0.0
-
-
 def by_track_of(result):
     """``{track_id: vote}`` from a job result (dict or JobResult)."""
     stats = (result.get("summary_stats") if isinstance(result, dict)
@@ -67,51 +64,86 @@ def by_track_of(result):
     return (stats.get("identification") or {}).get("by_track") or {}
 
 
-def identity(vote, floor=0.0):
-    """Identity columns for one track's vote. Below ``floor`` the species is
-    unidentified and the model's call is kept as the best guess."""
+def identity(vote):
+    """Identity columns for one track's vote."""
     vote = vote or {}
     out = dict.fromkeys(IDENTITY_FIELDS, "")
     taxon, conf = vote.get("taxon"), _number(vote.get("taxon_confidence"))
     if taxon:
-        out.update(species_confidence=round(conf, 4) if conf is not None else "",
+        out.update(species=taxon,
+                   species_confidence=round(conf, 4) if conf is not None else "",
                    species_votes=vote.get("taxon_votes", ""),
                    species_vote_share=vote.get("taxon_vote_share", ""))
-        if floor and (conf is None or conf < floor):
-            out.update(species=UNIDENTIFIED, species_best_guess=taxon)
-        else:
-            out["species"] = taxon
     if vote.get("marker") not in (None, ""):
         out.update(marker_id=vote["marker"], marker_votes=vote.get("marker_votes", ""),
                    marker_vote_share=vote.get("marker_vote_share", ""))
     return out
 
 
-def has_identity(by_track):
-    return any(v.get("taxon") or v.get("marker") not in (None, "")
-               for v in (by_track or {}).values())
+def _detected(row):
+    """Whether a tracking row was a detection. A CSV from before the column
+    existed says nothing, and every row counts (memory/60)."""
+    value = row.get("detected")
+    if value in (None, ""):
+        return True
+    n = _number(value)
+    return bool(n) if n is not None else True
 
 
-def with_identity(rows, by_track, floor=0.0, keys=_SUBJECT_KEYS):
-    """``rows`` with the identity columns of each row's track appended — the
-    tracking table's own species columns are replaced, so the floor applies."""
-    if not has_identity(by_track):
-        return rows
+def _sec(frame, fps):
+    return round(float(frame) / float(fps), 3) if fps and frame is not None else ""
+
+
+def tracking_export(rows, by_track, fps, start=None):
+    """The worker's tracking rows as the Tracking CSV columns."""
+    from apps.videos import timing
+
     out = []
-    for row in rows:
-        tid = _key(_first(row, keys))
-        merged = {k: v for k, v in row.items()
-                  if k not in ("taxon", "taxon_confidence", "taxon_votes",
-                               "taxon_vote_share", "taxon_crops", "bee_id",
-                               "bee_id_method", "bee_id_confidence", "bee_id_votes",
-                               "bee_id_vote_share")}
-        merged.update(identity(by_track.get(tid) if tid else None, floor))
-        out.append(merged)
+    for row in rows or []:
+        frame = _number(_first(row, _FRAME_KEYS))
+        sec = _sec(frame, fps)
+        tid = _key(_first(row, _ID_KEYS))
+        det = row.get("detected")
+        line = {
+            "frame": int(frame) if frame is not None else "",
+            "timestamp": timing.timestamp_at(start, sec) if start and sec != "" else "",
+            "clip_sec": sec,
+            "track_id": int(_number(tid)) if tid and _number(tid) is not None else tid,
+            "detected": "" if det in (None, "") else int(_number(det) or 0),
+            **{k: row.get(k, "") for k in ("x1", "y1", "x2", "y2", "cx", "cy")},
+            # A predicted row repeats its last detection's confidence in older
+            # files; it was not this frame's, so it is not reported as one.
+            "confidence": row.get("confidence", "") if _detected(row) else "",
+        }
+        line.update(identity(by_track.get(tid) if tid else None))
+        line["marker_method"] = row.get("bee_id_method", "") or ""
+        line["marker_confidence"] = row.get("bee_id_confidence", "") if line["marker_id"] != "" else ""
+        out.append(line)
     return out
 
 
-def track_rows(tracking_rows, by_track=None, floor=0.0, fps=None):
-    """One row per track from the per-frame tracking rows (dicts)."""
+def detections_export(rows, fps, start=None):
+    """The worker's raw detections as the Detections CSV columns."""
+    from apps.videos import timing
+
+    out = []
+    for row in rows or []:
+        frame = _number(_first(row, _FRAME_KEYS))
+        sec = _sec(frame, fps)
+        out.append({
+            "frame": int(frame) if frame is not None else "",
+            "timestamp": timing.timestamp_at(start, sec) if start and sec != "" else "",
+            "clip_sec": sec,
+            **{k: row.get(k, "") for k in ("x1", "y1", "x2", "y2", "cx", "cy", "confidence")},
+            "class": row.get("taxon", "") or row.get("class", ""),
+        })
+    return out
+
+
+def track_rows(tracking_rows, by_track=None, fps=None, start=None):
+    """One row per track: when it was first and last DETECTED, and what it was."""
+    from apps.videos import timing
+
     by_track = by_track or {}
     spans = {}
     for row in tracking_rows or []:
@@ -119,12 +151,12 @@ def track_rows(tracking_rows, by_track=None, floor=0.0, fps=None):
         frame = _number(_first(row, _FRAME_KEYS))
         if tid is None or frame is None:
             continue
-        s = spans.setdefault(tid, {"first": frame, "last": frame, "n": 0, "classes": {}})
+        s = spans.setdefault(tid, None)
+        if not _detected(row):
+            continue          # a lost insect's predicted position is not when it was seen
+        if s is None:
+            spans[tid] = s = {"first": frame, "last": frame}
         s["first"], s["last"] = min(s["first"], frame), max(s["last"], frame)
-        s["n"] += 1
-        cls = _first(row, _CLASS_KEYS)
-        if cls is not None:
-            s["classes"][cls] = s["classes"].get(cls, 0) + 1
     # A track that voted but left no tracking rows still belongs in the table.
     for tid in by_track:
         spans.setdefault(str(tid), None)
@@ -139,26 +171,25 @@ def track_rows(tracking_rows, by_track=None, floor=0.0, fps=None):
         row = dict.fromkeys(TRACK_FIELDS, "")
         n = _number(tid)
         row["track_id"] = int(n) if n is not None and n == int(n) else tid
-        if s:
-            row.update(first_frame=int(s["first"]), last_frame=int(s["last"]),
-                       frames_seen=s["n"])
-            if s["classes"]:
-                row["class"] = max(s["classes"], key=s["classes"].get)
-            if fps:
-                row.update(start_sec=round(s["first"] / fps, 3),
-                           end_sec=round(s["last"] / fps, 3),
-                           duration_sec=round((s["last"] - s["first"]) / fps, 3))
-        row.update(identity(by_track.get(tid), floor))
+        if s and fps:
+            first, last = _sec(s["first"], fps), _sec(s["last"], fps)
+            row.update(start_clip_sec=first, end_clip_sec=last,
+                       duration_sec=round(last - first, 3),
+                       start_time=timing.timestamp_at(start, first) if start else "",
+                       end_time=timing.timestamp_at(start, last) if start else "")
+        row.update(identity(by_track.get(tid)))
         rows.append(row)
     return rows
 
 
 def batch_track_rows(sources, read_csv, provenance):
-    """Every clip's tracks, with where they came from and when they started.
+    """Every clip's tracks, with where they came from.
 
     ``sources`` are ``aggregate.collect_sources`` dicts; ``read_csv`` reads a
     processed-bucket CSV to dict rows; ``provenance`` gives a clip's columns.
     """
+    from apps.videos import timing
+
     out = []
     for src in sources:
         result = src.get("result") or {}
@@ -166,42 +197,28 @@ def batch_track_rows(sources, read_csv, provenance):
         by_track = by_track_of(result)
         if not path and not by_track:
             continue
-        floor = species_floor(getattr(src.get("run"), "steps", None))
-        rows = track_rows(read_csv(path) if path else [], by_track, floor, src.get("fps"))
+        start = timing.clip_start(src["video"]) if src.get("video") else None
+        rows = track_rows(read_csv(path) if path else [], by_track, src.get("fps"), start)
         prov = provenance(src)
         for row in rows:
-            merged = dict(prov)
-            start = row.get("start_sec")
-            merged["absolute_time"] = (
-                (src["recorded_at"] + timedelta(seconds=start)).isoformat()
-                if src.get("recorded_at") and isinstance(start, (int, float)) else "")
-            merged.update(row)
-            out.append(merged)
+            out.append({**prov, **row})
     return out
 
 
-def primitive_with_identity(kind, rows, by_track, floor=0.0):
-    """Events / interactions rows with the insect's species and marker.
+def primitive_with_identity(kind, rows, by_track, fps=None, start=None):
+    """Saved events / interactions rows as their CSV columns, with the insect's
+    species and marker — and, when two insects met, the other one's
+    (``with_species``, ``with_marker_id``). A reference has no identity."""
+    from . import primitives
 
-    An event's subject is the insect; an interaction's ``a`` is, and so is its
-    ``b`` when two insects met — that partner's identity goes in ``b_`` columns.
-    A reference (a tube, a flower) has no identity and gets blanks.
-    """
-    from .primitives import tidy_references
-
-    rows = tidy_references(kind, rows)
-    if not has_identity(by_track):
-        return rows
-    subject = "subject" if kind == "events" else "a"
     out = []
-    for row in rows:
+    for row in primitives.export_rows(kind, rows, fps, start):
         merged = dict(row)
-        kind_key = f"{subject}_kind" if kind == "events" else "a_kind"
-        is_insect = row.get(kind_key, "organism") in ("organism", "", None)
-        tid = _key(row.get(subject)) if is_insect else None
-        merged.update(identity(by_track.get(tid) if tid else None, floor))
-        if kind == "interactions" and row.get("b_kind") == "organism":
-            other = identity(by_track.get(_key(row.get("b"))), floor)
-            merged.update(b_species=other["species"], b_marker_id=other["marker_id"])
+        merged.update(identity(by_track.get(_key(row.get("track_id")))))
+        if kind == "interactions":
+            near = row.get("relation") == primitives.NEAR
+            other = identity(by_track.get(_key(row.get("with")))) if near else {}
+            merged.update(with_species=other.get("species", ""),
+                          with_marker_id=other.get("marker_id", ""))
         out.append(merged)
     return out

@@ -133,7 +133,7 @@ class PipelineRun(models.Model):
     # Which version of the event/interaction rules this run's tables were
     # counted with. Older runs are recounted from their saved tracks by the
     # reconcile loop (apps/pipelines/recount.py), no GPU needed.
-    counting_rules = models.PositiveSmallIntegerField(default=2)
+    counting_rules = models.PositiveSmallIntegerField(default=3)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     execution_time_ms = models.IntegerField(null=True, blank=True)

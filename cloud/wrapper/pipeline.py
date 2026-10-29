@@ -239,7 +239,7 @@ class CloudPipeline:
         marker_type: str = "auto",
         tracker: str = "beetrack",
         tracker_params: "dict | None" = None,
-        nest_fallback: bool = True,
+        detect_nests: bool = False,
     ) -> PipelineResult:
         """Run the full BeeMonitor pipeline on a video stored in S3.
 
@@ -304,7 +304,7 @@ class CloudPipeline:
         if not run_tracking:
             return self._nest_only(job_id, user_id, video_local, model_paths,
                                    custom_nest_local, hotel_roi, nest_layout,
-                                   hotel_polygon, nest_fallback)
+                                   hotel_polygon)
 
         # Step 3 — Build config and run analysis
         logger.info("[%s] Running BeeMonitor analysis", job_id)
@@ -330,7 +330,7 @@ class CloudPipeline:
             tracker=tracker,
             tracker_params=tracker_params,
             identify=identify_species or identify_markers,
-            nest_fallback=nest_fallback,
+            detect_nests=detect_nests,
         )
 
         identification = None
@@ -340,86 +340,19 @@ class CloudPipeline:
                     output_dir, species=species, marker=marker,
                     species_status=species_status, marker_status=marker_status)
 
-        with _stage("postprocess"):
-            # Step 4 — Post-processing: foraging trips + interactions
-            events = result.events if result is not None else None
-            tracks = result.tracks if result is not None else None
-            nests = result.nests if result is not None else None
+        # No post-processing here. Events, interactions and anything built on
+        # them are derived on the platform from the tracking CSV and the
+        # pipeline's own references (memory/60): one source of truth, so the
+        # worker writes no events / interactions / trips files of its own.
+        tracks = result.tracks if result is not None else None
+        nests = result.nests if result is not None else None
 
-            from cloud.wrapper.foraging import compute_foraging_trips, compute_trip_summary
-
-            # Detect fps from config or default to 30
-            fps = 30.0
-            if result and hasattr(result, "config") and result.config:
-                try:
-                    fps = float(result.config.video.fps)
-                except Exception:
-                    pass
-
-            trips_df = compute_foraging_trips(events, fps=fps)
-            trip_summary = compute_trip_summary(trips_df)
-
-            # Save foraging trips CSV to output dir
-            if not trips_df.empty:
-                trips_csv_path = str(output_dir / "foraging_trips.csv")
-                trips_df.to_csv(trips_csv_path, index=False)
-                logger.info("[%s] Saved %d foraging trips", job_id, len(trips_df))
-
-            # Step 4b — Compute interactions from tracking data
-            interaction_count = 0
+        fps = 30.0
+        if result and hasattr(result, "config") and result.config:
             try:
-                if (tracks is not None and hasattr(tracks, "empty") and not tracks.empty
-                        and nests and isinstance(nests, dict) and nests.get("nests")):
-                    from beemonitor.processing.interaction_analyzer import InteractionAnalyzer, nests_to_reference_objects
-
-                    analyzer = InteractionAnalyzer(fps=fps)
-
-                    # Bee-to-bee interactions
-                    track_interactions, _ = analyzer.analyze_track_interactions(tracks)
-
-                    # Bee-to-reference (nest) interactions
-                    ref_objects = nests_to_reference_objects(
-                        [{"id": k, "bbox": v} for k, v in nests["nests"].items()]
-                    )
-                    ref_interactions, _ = analyzer.analyze_reference_interactions(tracks, ref_objects)
-
-                    all_interactions = track_interactions + ref_interactions
-                    interaction_count = len(all_interactions)
-
-                    if all_interactions:
-                        # Build track_id → taxon lookup from tracking data
-                        import pandas as pd
-                        taxon_lookup = {}
-                        if tracks is not None and "taxon" in tracks.columns and "track_id" in tracks.columns:
-                            for tid, grp in tracks.groupby("track_id"):
-                                taxon_lookup[tid] = grp["taxon"].mode().iloc[0] if len(grp) > 0 else "unknown"
-
-                        # Combined CSV — organism-to-organism and organism-to-reference
-                        # Each row is one pairwise interaction. Multi-party encounters
-                        # produce multiple rows (e.g., A near B and C = rows A-B, A-C, B-C)
-                        rows = []
-                        track_set = set(id(e) for e in track_interactions)
-                        for event in all_interactions:
-                            is_track = id(event) in track_set
-                            rows.append({
-                                "interaction_type": "organism-to-organism" if is_track else "organism-to-reference",
-                                "organism_track_id": event.entity1_id,
-                                "organism_taxon": taxon_lookup.get(event.entity1_id, "unknown"),
-                                "partner_track_id": event.entity2_id if is_track else "",
-                                "partner_taxon": taxon_lookup.get(event.entity2_id, "") if is_track else "",
-                                "reference_id": "" if is_track else event.entity2_id,
-                                "start_frame": event.start_frame,
-                                "end_frame": event.end_frame,
-                                "duration_frames": event.duration_frames,
-                                "duration_seconds": round(event.duration_frames / fps, 2),
-                                "min_distance_px": round(event.min_distance, 1),
-                                "avg_distance_px": round(event.avg_distance, 1),
-                            })
-                        pd.DataFrame(rows).to_csv(str(output_dir / "interactions.csv"), index=False)
-                        logger.info("[%s] Saved %d interactions (%d organism-to-organism, %d organism-to-reference)",
-                                    job_id, len(all_interactions), len(track_interactions), len(ref_interactions))
-            except Exception as e:
-                logger.warning("[%s] Interaction analysis failed (non-fatal): %s", job_id, e)
+                fps = float(result.config.video.fps)
+            except Exception:
+                pass
 
         # Step 5 — Upload results to S3 processed bucket (includes per-track
         # crops so a species model can run on them later).
@@ -435,22 +368,15 @@ class CloudPipeline:
         # AnalysisResults defined inside video_analyzer.py — deleted 2026-09.)
         if result and hasattr(result, "get_statistics"):
             stats = result.get_statistics()
-        elif result and events is not None and hasattr(events, "empty") and not events.empty:
-            import pandas as pd
-            stats = {
-                "total_events": len(events),
-                "total_entries": int((events["action"] == "Entry").sum()) if "action" in events.columns else 0,
-                "total_exits": int((events["action"] == "Exit").sum()) if "action" in events.columns else 0,
-                "total_tracks": int(tracks["track_id"].nunique()) if tracks is not None and "track_id" in tracks.columns else 0,
-                "total_nests": int(events["nest"].nunique()) if "nest" in events.columns else 0,
-            }
         else:
             stats = {}
+        # Tracks only: whatever event counts the library reported describe
+        # nothing this worker wrote.
+        for key in ("total_events", "total_entries", "total_exits", "active_nests",
+                    "nest_activity"):
+            stats.pop(key, None)
 
-        # Merge foraging trip + interaction summary into stats
-        stats["foraging_trips"] = trip_summary
         stats["video_fps"] = fps
-        stats["interaction_count"] = interaction_count
         # Per-track crop keys ({track_id: [crop S3 keys]}) for later species ID.
         if crops_manifest:
             stats["crops_manifest"] = crops_manifest
@@ -470,7 +396,6 @@ class CloudPipeline:
                 nest_bboxes[str(nest_id)] = [float(x) for x in bbox]
             stats["nest_bboxes"] = nest_bboxes
 
-        total_events = len(events) if events is not None and hasattr(events, "__len__") else 0
         unique_tracks = 0
         if tracks is not None and hasattr(tracks, "nunique") and "track_id" in tracks.columns:
             unique_tracks = int(tracks["track_id"].nunique())
@@ -478,26 +403,26 @@ class CloudPipeline:
         pipeline_result = PipelineResult(
             job_id=job_id,
             user_id=user_id,
-            total_events=total_events,
-            entry_count=int(stats.get("total_entries", 0)),
-            exit_count=int(stats.get("total_exits", 0)),
+            # Events, trips and interactions are the platform's to count.
+            total_events=0,
+            entry_count=0,
+            exit_count=0,
             unique_tracks=unique_tracks,
-            nest_count=int(stats.get("total_nests", 0)),
-            events_csv_path=result_paths.get("events_csv", ""),
+            nest_count=len((nests or {}).get("nests") or {}) if isinstance(nests, dict) else 0,
+            events_csv_path="",
             tracking_csv_path=result_paths.get("tracking_csv", ""),
             detections_csv_path=result_paths.get("detections_csv", ""),
-            foraging_trips_csv_path=result_paths.get("foraging_trips_csv", ""),
-            interactions_csv_path=result_paths.get("interactions_csv", ""),
+            foraging_trips_csv_path="",
+            interactions_csv_path="",
             crops_csv_path=result_paths.get("crops_csv", ""),
             annotated_video_path=result_paths.get("annotated_video", ""),
-            foraging_trip_count=trip_summary["total_trips"],
-            avg_trip_duration_sec=trip_summary["avg_duration_sec"],
-            interaction_count=interaction_count,
+            foraging_trip_count=0,
+            avg_trip_duration_sec=0.0,
+            interaction_count=0,
             summary_stats=stats,
         )
 
-        logger.info("[%s] Pipeline complete — %d events, %d foraging trips",
-                     job_id, pipeline_result.total_events, pipeline_result.foraging_trip_count)
+        logger.info("[%s] Pipeline complete — %d tracks", job_id, unique_tracks)
         return pipeline_result
 
     # ------------------------------------------------------------------
@@ -506,14 +431,16 @@ class CloudPipeline:
 
     def _nest_only(self, job_id, user_id, video_local, model_paths,
                    custom_nest_local="", hotel_roi=None, nest_layout=None,
-                   hotel_polygon=None, nest_fallback=True):
+                   hotel_polygon=None):
         """Fast path for run_tracking=False: the device layout (ROI = whole
         frame when none was drawn), nests from the model when none were drawn.
         No motion detection, tracking model, events, or post-processing."""
         nests = self._fill_nests(
             self._build_manual_nests(video_local, hotel_roi, nest_layout, hotel_polygon),
             video_local, custom_nest_local or model_paths.nest_detection, job_id,
-            fallback=nest_fallback)
+            # A nest-only job IS the request to find the nests (the legacy
+            # Detect Nest block), so the model runs when none were drawn.
+            fallback=True)
 
         nest_bboxes = {}
         for nest_id, bbox in ((nests or {}).get("nests") or {}).items():
@@ -645,7 +572,7 @@ class CloudPipeline:
         tracker: str = "beetrack",
         tracker_params: "dict | None" = None,
         identify: bool = False,
-        nest_fallback: bool = True,
+        detect_nests: bool = False,
     ):
         """Build a BeeMonitor Config, instantiate, and run."""
         from beemonitor.core.config import Config, ModelConfig
@@ -695,13 +622,13 @@ class CloudPipeline:
         config.video.end_frame = int(end_frame) if end_frame else None
 
         # Device-supplied hotel ROI + nest tubes (normalized 0..1) → pixel-space
-        # manual_nests. No ROI drawn → the whole frame; no tubes drawn → the nest
-        # model's, if it finds any. Tracking runs either way: a new hotel the
-        # model has never seen used to skip the whole analysis (0 of 35 nests
-        # found → "No nests detected") and report an empty run.
+        # manual_nests. No ROI drawn → the whole frame. The nest model runs only
+        # when the job asks for it (``detect_nests``, sent by the platform when
+        # the pipeline itself detects nests): the worker never invents
+        # references of its own (memory/60).
         manual_nests = self._fill_nests(
             self._build_manual_nests(video_local, hotel_roi, nest_layout, hotel_polygon),
-            video_local, config.models.nest_detection, "", fallback=nest_fallback)
+            video_local, config.models.nest_detection, "", fallback=detect_nests)
 
         from beemonitor import BeeMonitor
 
@@ -712,6 +639,7 @@ class CloudPipeline:
             visualize=visualize,
             detection_mode=detection_mode,
             manual_nests=manual_nests,
+            compute_events=False,
         )
         return result
 
@@ -782,13 +710,13 @@ class CloudPipeline:
     @staticmethod
     def _fill_nests(layout, video_local: str, nest_model_path: str, job_id: str = "",
                     fallback: bool = True):
-        """No tubes drawn → try the nest model (the backup). The ROI stays as
-        drawn, or the whole frame. Finding none is fine: tracking still runs
-        over the ROI and the run reports bee activity with no nest events.
+        """The layout, with the nest model's tubes added when none were drawn
+        AND ``fallback`` asks for them. The ROI stays as drawn, or the whole
+        frame. Finding none is fine: tracking still runs over the ROI.
 
-        ``fallback=False`` skips the model: the layout was drawn for a site or a
-        clip (ground nests, flowers), where the bee-hotel model would invent
-        tubes that aren't there (memory/52)."""
+        ``fallback`` is True only on an explicit request — a pipeline that
+        detects nests, or the nest-only job. The worker never runs the model on
+        its own initiative (memory/60)."""
         if layout is None:
             try:  # unreadable size: still the whole frame, by a second route
                 import cv2
@@ -834,13 +762,6 @@ class CloudPipeline:
 
         video_stem = Path(video_local).stem
 
-        # Events CSV
-        events_files = list(output_dir.glob(f"*_events.csv"))
-        if events_files:
-            blob_path = f"{prefix}/events.csv"
-            self._storage.upload_file(container, blob_path, str(events_files[0]))
-            uploaded["events_csv"] = blob_path
-
         # Raw detections CSV (pre-association detector output)
         detections_files = list(output_dir.glob("*_detections.csv"))
         if detections_files:
@@ -861,20 +782,6 @@ class CloudPipeline:
             blob_path = f"{prefix}/track_votes.csv"
             self._storage.upload_file(container, blob_path, str(votes_file))
             uploaded["track_votes_csv"] = blob_path
-
-        # Foraging trips CSV
-        trips_files = list(output_dir.glob("foraging_trips.csv"))
-        if trips_files:
-            blob_path = f"{prefix}/foraging_trips.csv"
-            self._storage.upload_file(container, blob_path, str(trips_files[0]))
-            uploaded["foraging_trips_csv"] = blob_path
-
-        # Interactions CSV
-        interactions_files = list(output_dir.glob("interactions.csv"))
-        if interactions_files:
-            blob_path = f"{prefix}/interactions.csv"
-            self._storage.upload_file(container, blob_path, str(interactions_files[0]))
-            uploaded["interactions_csv"] = blob_path
 
         # Per-track crops — each track's UPLOAD_CROPS_PER_TRACK sharpest (the
         # tracker kept only 12 when nothing identifies). Votes already ran on

@@ -54,7 +54,7 @@ class BeeMonitor:
         config = Config.from_yaml(config_path)
         return cls(config=config)
     
-    def analyze_video(self, video_path, nest_video_path=None, output_folder=None, visualize=None, detection_mode='yolo', manual_nests=None):
+    def analyze_video(self, video_path, nest_video_path=None, output_folder=None, visualize=None, detection_mode='yolo', manual_nests=None, compute_events=True):
         video_file = Path(video_path)
         if not video_file.exists():
             raise FileNotFoundError(f"Video file not found: {video_path}")
@@ -96,9 +96,16 @@ class BeeMonitor:
             logger.warning("No motion tracking data returned, skipping video analysis")
             return None
         
-        logger.info("Step 3/3: Processing tracks to identify events...")
-        events = self.process_motion_tracking(grouped_tracking_df, nests)
-        events = self.synthesize_csv(events, video_path)
+        # compute_events=False: tracks only. The cloud worker derives events
+        # on the platform from the tracking CSV and the pipeline's own
+        # references (memory/60), so it neither classifies nor writes them.
+        if compute_events:
+            logger.info("Step 3/3: Processing tracks to identify events...")
+            events = self.process_motion_tracking(grouped_tracking_df, nests)
+            events = self.synthesize_csv(events, video_path)
+        else:
+            logger.info("Step 3/3: Skipped (events are not computed here).")
+            events = None
         
         results = AnalysisResults(
             events=events, tracks=flat_tracking_df, nests=nests,
@@ -115,7 +122,8 @@ class BeeMonitor:
         if visualize:
             results.save_video(output_folder=output_folder)
             logger.info(f"✓ Saved visualization video to {output_folder}")
-        logger.info(f"Analysis complete: {len(events)} events detected")
+        logger.info("Analysis complete: %s", "%d events detected" % len(events)
+                    if events is not None else "tracks only")
         
         return results
     

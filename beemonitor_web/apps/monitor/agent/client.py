@@ -27,7 +27,7 @@ observations; devices report GPS and telemetry.
 Your data sources (read via tools):
 - Device ACTIVITY (motion events + counts) is always available — it comes straight \
 from the device.
-- TAXONOMIC IDs (BioCLIP) and TRACKING (foraging trips, interactions, tracks) come \
+- TAXONOMIC IDs (BioCLIP) and TRACKING (events, interactions, tracks) come \
 from PROCESSING the videos, so they may be absent until analysis has been run; the \
 tools tell you when there's none yet — say so plainly rather than guessing.
 - WEATHER at the device's location is available to correlate activity with conditions.

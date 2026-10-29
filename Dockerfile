@@ -40,6 +40,9 @@ COPY cloud/ /app/cloud/
 # (currently beemonitor.identification, the marker decoder run over track
 # crops). The heavy analyzer imports are lazy, so this pulls in no torch.
 COPY src/ /app/src/
+# The trained event classifier, for the Events node's optional ML scoring
+# (memory/60). The GPU worker no longer scores events; the web does, on demand.
+COPY models/event_classifier_model.pkl /app/models/event_classifier_model.pkl
 
 # collectstatic at build time so we don't pay it on every container start;
 # whitenoise serves out of STATIC_ROOT (beemonitor_web/staticfiles).
