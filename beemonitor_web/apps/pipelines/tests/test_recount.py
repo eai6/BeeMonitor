@@ -6,7 +6,6 @@ tracking table says which rows were detections are recounted; older ones are
 left as they are (memory/60).
 """
 
-from django.urls import reverse
 from django.utils import timezone
 
 from apps.analysis.models import Job, JobResult
@@ -110,24 +109,3 @@ class ResultsPageAgreesWithBatchTests(RecountTests):
         job = self._job_for(run)
 
         self.assertEqual(len(executors.primitives_for_job(job, "events")), 40)
-
-    def test_the_recount_button_updates_both(self):
-        run = self._old_run()
-        job = self._job_for(run)
-        self.client.force_login(self.user)
-
-        self.client.post(reverse("analysis:recount", args=[job.pk]))
-
-        run.refresh_from_db()
-        self.assertEqual(aggregate.primitive_counts(run)["events"], 2)
-        self.assertEqual(len(executors.primitives_for_job(job, "events")), 2)
-
-    def test_someone_elses_clip_cant_be_recounted(self):
-        from django.contrib.auth import get_user_model
-
-        run = self._old_run()
-        job = self._job_for(run)
-        other = get_user_model().objects.create_user("other", password="x")
-        self.client.force_login(other)
-
-        self.assertEqual(self.client.post(reverse("analysis:recount", args=[job.pk])).status_code, 404)

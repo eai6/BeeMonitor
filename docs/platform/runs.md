@@ -242,8 +242,8 @@ measures.
 
 ## Provenance and limits
 
-- Events and interactions depend on the references and the step settings. If you change either, use
-  **Recount with the current layout** on the clip's results page, or rerun the pipeline.
+- Events and interactions depend on the references and the step settings. If you change either, rerun the
+  pipeline.
 - Clips tracked before 29 October 2026 don't record which frames were detections. Their events were counted
   under the earlier rules and are labelled so; rerun tracking to count them with these rules.
 - Times assume a constant frame rate. A clip recorded at a variable frame rate (some phones) is marked on its
