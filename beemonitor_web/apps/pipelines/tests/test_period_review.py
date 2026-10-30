@@ -330,3 +330,35 @@ class SharedJobTests(PeriodBase):
         page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
         self.assertContains(page, reverse("analysis:results", args=[self.a["job"].pk])
                             + f"?run={self.a['run'].pk}")
+
+    def test_votes_saved_on_the_clips_newer_run_count_for_the_batch(self):
+        # Period opened from the unit (no batch): votes land on the later runs.
+        p = self.payload(self.page())
+        self.assertEqual(p["clips"][0]["run"], str(self.later_runs[0].pk))
+        self.trip, self.clips = p["trips"][0], p["clips"]
+        self.vote("accepted", exit_run=self.clips[0]["run"], entry_run=self.clips[1]["run"])
+        self.client.force_login(self.owner)
+        e = self.clips[0]["events"][0]
+        self.client.post(self.clips[0]["review_url"], json.dumps(
+            {"event_key": e["key"], "verdict": "accepted"}), content_type="application/json")
+        self.assertEqual(TripReview.objects.get().exit_run_id, self.later_runs[0].pk)
+        page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
+        summary = page.context["review_summary"]
+        self.assertEqual((summary["trips"]["reviewed"], summary["events"]["reviewed"]), (1, 1))
+        self.assertIn("trips", [d["kind"] for d in page.context["downloads"]])
+        body = self.client.get(reverse("pipelines:batch_combined_csv", kwargs={
+            "batch_id": self.batch, "kind": "trips"})).content.decode()
+        self.assertEqual(len(list(csv.DictReader(io.StringIO(body)))), 1)
+
+    def test_a_reviewers_latest_call_wins_across_runs(self):
+        self.vote("accepted", exit_run=self.clips[0]["run"])
+        self.vote("rejected", entry=False, reason="didn't come back",
+                  exit_run=str(self.later_runs[0].pk))
+        self.client.force_login(self.owner)
+        trips = self.client.get(reverse("pipelines:batch_detail", args=[self.batch])
+                                ).context["review_summary"]["trips"]
+        self.assertEqual((trips["reviewed"], trips["rejected"], trips["disputed"]), (1, 1, 0))
+
+    def test_the_period_form_keeps_the_batch(self):
+        self.assertContains(self.page(batch=str(self.batch)),
+                            f'name="batch" value="{self.batch}"')

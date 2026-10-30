@@ -210,9 +210,9 @@ def available_downloads(sources, runs=()):
                                     "and marker ID (by vote over its crops)."})
     # Trips reviewers accepted or rejected (memory/62 §4b): only once someone
     # has reviewed one, since a suggestion alone is not data.
-    from .models import TripReview
-    run_pks = [r.pk for r in runs if getattr(r, "pk", None)]
-    if run_pks and TripReview.objects.filter(exit_run_id__in=run_pks).exists():
+    from .review import trip_reviews_for
+    if any(getattr(r, "pk", None) for r in runs) and trip_reviews_for(
+            [r for r in runs if getattr(r, "pk", None)]):
         out.append({"kind": "trips", "label": "Reviewed trips", "clips": len(runs),
                     "analyzed": False,
                     "hint": "Exit → entry pairs a reviewer called: accepted, rejected or "

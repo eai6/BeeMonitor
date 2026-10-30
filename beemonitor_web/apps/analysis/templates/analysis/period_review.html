@@ -12,6 +12,8 @@ trip review walks each suggested exit → entry pair. Logic: pipelines/period.py
 <div id="period-review" class="flex flex-col gap-3">
   {% csrf_token %}
   <form method="get" class="flex flex-wrap items-end gap-3 bg-white border border-gray-200 rounded-lg px-4 py-3">
+    {# Opened from a batch: keep showing (and voting on) that batch's runs. #}
+    {% if request.GET.batch %}<input type="hidden" name="batch" value="{{ request.GET.batch }}">{% endif %}
     <div class="flex-1 min-w-[220px]">
       <h1 class="text-lg font-semibold text-gray-900">Review a period</h1>
       <p class="text-[13px] text-gray-600">{% if data.device %}{{ data.device.name }}{% else %}{{ data.site.name }}{% endif %} · every analysed clip in the range, in recording order</p>

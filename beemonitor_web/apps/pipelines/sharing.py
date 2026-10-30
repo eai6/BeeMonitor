@@ -112,7 +112,9 @@ def batch_csv(runs, batch_id, kind):
     if kind == "trips":
         from .models import TripReview
         from .period import TRIP_FIELDS, trip_rows
-        rows = trip_rows(TripReview.objects.filter(exit_run__in=list(runs)))
+        from .review import trip_reviews_for
+        rows = trip_rows(TripReview.objects.filter(
+            pk__in=[t.pk for t in trip_reviews_for(runs)]))
         if not rows:
             raise EmptyExport("No reviewed trips in this batch yet.")
         return stem, TRIP_FIELDS, rows

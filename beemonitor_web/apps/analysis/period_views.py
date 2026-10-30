@@ -87,11 +87,9 @@ def _gather(request):
 
 def _trip_votes(runs, user):
     """``{(run pk, exit key): {"mine": {...} or None, "accepted", "rejected"}}``."""
-    from apps.pipelines.models import TripReview
-
     out = {}
-    for t in TripReview.objects.filter(exit_run__in=runs).select_related("entry_run"):
-        s = out.setdefault((t.exit_run_id, t.exit_key), {"mine": None, "accepted": 0, "rejected": 0})
+    for t in event_review.trip_reviews_for(runs):
+        s = out.setdefault((t.own_run.pk, t.exit_key), {"mine": None, "accepted": 0, "rejected": 0})
         s[t.verdict] += 1
         if t.user_id == user.pk:
             s["mine"] = {"verdict": t.verdict, "entry_key": t.entry_key, "reason": t.reason}
@@ -225,5 +223,6 @@ class PeriodTripsCsvView(LoginRequiredMixin, View):
 
         data = _gather(request)
         runs = [c["run"] for c in data["clips"]]
-        return trips_csv_response(TripReview.objects.filter(exit_run__in=runs),
+        reviews = event_review.trip_reviews_for(runs)
+        return trips_csv_response(TripReview.objects.filter(pk__in=[t.pk for t in reviews]),
                                   f"trips_{data['start']:%Y%m%d_%H%M}.csv")

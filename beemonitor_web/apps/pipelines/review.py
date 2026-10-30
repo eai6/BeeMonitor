@@ -174,6 +174,57 @@ def added_for_job(job):
     return added_rows(run) if run is not None else []
 
 
+def shared_job_runs(runs, reviewed_by):
+    """``{run pk: the run of ``runs`` it counts for}``: ``runs`` themselves and
+    every other run with reviews (``reviewed_by``: "event_reviews",
+    "trip_exits" or "added_events") that shares one of their GPU jobs.
+
+    A re-run re-uses its clips' GPU jobs, and a period page opened without its
+    batch saves votes to the clip's newest run: the same tracks and the same
+    event keys, so those votes are this run's too."""
+    from .aggregate import run_job_id
+    from .models import PipelineRun
+
+    runs = list(runs)
+    out = {r.pk: r for r in runs}
+    by_job = {j: r for r in runs if (j := run_job_id(r)) is not None}
+    for other in (PipelineRun.objects.filter(**{f"{reviewed_by}__isnull": False})
+                  .exclude(pk__in=list(out)).distinct().only("pk", "context")):
+        own = by_job.get(run_job_id(other))
+        if own is not None:
+            out[other.pk] = own
+    return out
+
+
+def _event_keys(run):
+    from .aggregate import analyzer_outputs
+
+    return {event_key(r) for k, o in analyzer_outputs(run) if k == "events"
+            for r in (o.get("rows") or [])}
+
+
+def trip_reviews_for(runs):
+    """Trip calls on exits in these runs, wherever they were saved
+    (``shared_job_runs``; from another run only if this run has that exit): the
+    latest per reviewer and exit. Each carries ``own_run``, the run of ``runs`` it counts for."""
+    from .models import TripReview
+
+    owners = shared_job_runs(runs, "trip_exits")
+    keys, latest = {}, {}
+    for t in TripReview.objects.filter(exit_run_id__in=list(owners)):
+        own = owners[t.exit_run_id]
+        if t.exit_run_id != own.pk:         # saved on another run: if this one has it
+            if own.pk not in keys:
+                keys[own.pk] = _event_keys(own)
+            if t.exit_key not in keys[own.pk]:
+                continue
+        k = (own.pk, t.exit_key, t.user_id)
+        if k not in latest or t.updated_at > latest[k].updated_at:
+            t.own_run = own
+            latest[k] = t
+    return list(latest.values())
+
+
 def batch_review_counts(runs):
     """``{run pk: counts}`` (as ``event_review_counts``) for many runs in two
     queries' worth of work; None for a run with no Events step."""
@@ -185,12 +236,25 @@ def batch_review_counts(runs):
     from .models import AddedEvent
 
     runs = list(runs)
+    # Votes saved on another run of the same GPU job count too (shared_job_runs);
+    # a reviewer's latest call on an event wins.
+    owners = shared_job_runs(runs, "event_reviews")
+    latest = {}
+    for run_id, key, user_id, verdict, when in (
+            EventReview.objects.filter(run_id__in=list(owners))
+            .values_list("run_id", "event_key", "user_id", "verdict", "updated_at")):
+        k = (owners[run_id].pk, key, user_id)
+        if k not in latest or when > latest[k][1]:
+            latest[k] = (verdict, when)
     votes = {}
-    for run_id, key, verdict in (EventReview.objects.filter(run__in=runs)
-                                 .values_list("run_id", "event_key", "verdict")):
-        votes.setdefault(run_id, {}).setdefault(key, []).append(verdict)
-    added = dict(AddedEvent.objects.filter(run__in=runs).values("run_id")
-                 .annotate(n=Count("id")).values_list("run_id", "n"))
+    for (run_pk, key, _u), (verdict, _w) in latest.items():
+        votes.setdefault(run_pk, {}).setdefault(key, []).append(verdict)
+    added_owners = shared_job_runs(runs, "added_events")
+    added = {}
+    for run_id, n in (AddedEvent.objects.filter(run_id__in=list(added_owners)).values("run_id")
+                      .annotate(n=Count("id")).values_list("run_id", "n")):
+        own = added_owners[run_id].pk
+        added[own] = added.get(own, 0) + n
     out = {}
     for run in runs:
         outs = [o for k, o in analyzer_outputs(run) if k == "events"]
@@ -210,8 +274,6 @@ def batch_review_summary(runs, per_run=None):
     """The batch page's review metrics (memory/62): events (precision and
     recall from reviewers' calls and added events) and trips. None when
     nothing in the batch has been reviewed."""
-    from .models import TripReview
-
     runs = list(runs)
     per_run = per_run if per_run is not None else batch_review_counts(runs)
     ev = {"accepted": 0, "rejected": 0, "disputed": 0, "added": 0, "reviewed": 0,
@@ -227,8 +289,8 @@ def batch_review_summary(runs, per_run=None):
     ev["precision"], ev["recall"] = quality(ev["accepted"], ev["rejected"], ev["added"])
 
     by_exit = {}
-    for r in TripReview.objects.filter(exit_run__in=runs):
-        by_exit.setdefault((r.exit_run_id, r.exit_key), []).append(r)
+    for r in trip_reviews_for(runs):
+        by_exit.setdefault((r.own_run.pk, r.exit_key), []).append(r)
     trips = {"reviewed": len(by_exit), "accepted": 0, "relinked": 0, "rejected": 0,
              "didnt_come_back": 0, "cant_tell": 0, "disputed": 0}
     for calls in by_exit.values():

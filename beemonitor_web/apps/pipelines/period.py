@@ -310,7 +310,10 @@ def trip_rows(trip_reviews):
 
     groups = {}
     for r in reviews:
-        groups.setdefault((r.exit_run_id, r.exit_key, r.entry_run_id, r.entry_key), []).append(r)
+        # By GPU job, not run: calls saved on two runs of one clip are one trip.
+        groups.setdefault((run_job_id(r.exit_run), r.exit_key,
+                           run_job_id(r.entry_run) if r.entry_run else None, r.entry_key),
+                          []).append(r)
     rows = []
     for (_er, _ek, _nr, _nk), rs in groups.items():
         first = rs[0]
