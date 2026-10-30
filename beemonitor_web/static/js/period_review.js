@@ -125,7 +125,7 @@
           (acc && rej ? '#b45309' : rej ? '#b91c1c' : '#15803d');
         m.title = clock(e.clock) + ' ' + e.action + ' tube ' + tube(ref) + ' · track ' + e.track_id;
         m.setAttribute('aria-label', m.title);
-        m.addEventListener('click', function () { loadClip(x.c, e.frame, false); });
+        m.addEventListener('click', function () { goToEvent(x); });
         track.appendChild(m);
       });
       var count = document.createElement('span');
@@ -163,7 +163,7 @@
       b.innerHTML = '<span class="font-mono text-gray-600"></span> <span></span>';
       b.children[0].textContent = clock(x.e.clock).slice(11);
       b.children[1].textContent = x.e.action + ' · track ' + x.e.track_id + ' · ' + P.clips[x.c].title;
-      b.addEventListener('click', function () { loadClip(x.c, x.e.frame, false); });
+      b.addEventListener('click', function () { goToEvent(x); });
       box.appendChild(b);
     });
   }
@@ -201,7 +201,8 @@
   });
   // At the end of a clip, the next one.
   video.addEventListener('ended', function () {
-    if (rv.on || cur + 1 >= P.clips.length) return;
+    if (tp.on) { tp.k++; tpStart(); return; }
+    if (rv.on || trip.on || cur + 1 >= P.clips.length) return;
     loadClip(cur + 1, 0, true);
   });
   if (ov) ov.onFrame(function (info) {
@@ -209,11 +210,44 @@
     var now = $('[data-pr-now]');
     if (now && c) now.style.left = pct(c.offset + info.frame / c.fps) + '%';
     if (rv.on && !rv.waiting && rv.target && rv.target.c === cur && info.frame >= rv.target.e.frame) rvArrive();
+    if (trip.on) tripHead();
+    if (tp.on) {
+      var sg = tp.segs[tp.k];
+      if (sg && sg.c === cur && info.frame >= sg.to) { tp.k++; tpStart(); }
+    }
   });
 
   // ── Event review across clips ────────────────────────────────────────────
-  var rv = {on: false, list: [], i: 0, target: null, waiting: false};
+  var rv = {on: false, list: [], i: 0, target: null, waiting: false, ourSeek: false};
   var card = $('[data-pr-card]');
+  // An event was clicked (a mark, the side list). In review mode the review
+  // goes to it, card and all; otherwise it is a plain jump.
+  function goToEvent(x) {
+    if (!rv.on) { loadClip(x.c, x.e.frame, false); return; }
+    var idx = rv.list.indexOf(x);
+    if (idx < 0) { loadClip(x.c, x.e.frame, false); return; }
+    rv.i = idx; rv.target = x; rv.waiting = false; rv.ourSeek = true;
+    card.hidden = true; $('[data-pr-reasons]').hidden = true;
+    loadClip(x.c, x.e.frame, false).then(rvArrive);
+  }
+  // The viewer scrubbed the video themselves: review carries on to the next
+  // event after that point instead of showing a card for one it left.
+  video.addEventListener('seeked', function () { rv.ourSeek = false; });
+  video.addEventListener('seeking', function () {
+    if (!rv.on || rv.ourSeek) return;
+    var frame = Math.round(video.currentTime * (P.clips[cur] ? P.clips[cur].fps : 25));
+    var idx = -1;
+    for (var k = 0; k < rv.list.length; k++) {
+      var y = rv.list[k];
+      if (y.c > cur || (y.c === cur && y.e.frame >= frame)) { idx = k; break; }
+    }
+    card.hidden = true; $('[data-pr-reasons]').hidden = true;
+    rv.waiting = false;
+    if (idx < 0) { rv.target = null; status.textContent = 'No events after this point. Jump back, or Exit review.'; return; }
+    rv.i = idx; rv.target = rv.list[idx];
+    if (rv.target.c !== cur) { rvGo(idx); return; }
+    var p = video.play(); if (p && p.catch) p.catch(function () {});
+  });
   function vote(x, verdict, reason) {
     var e = x.e, clip = P.clips[x.c];
     return post(clip.review_url, {event_key: e.key, verdict: verdict, reason: reason || ''})
@@ -231,11 +265,13 @@
     rv.i = i; rv.waiting = false; rv.target = rv.list[i];
     card.hidden = true; $('[data-pr-reasons]').hidden = true;
     var x = rv.target, c = P.clips[x.c];
+    rv.ourSeek = true;
     loadClip(x.c, Math.max(0, x.e.frame - Math.round(2 * c.fps)), true);
   }
   function rvArrive() {
     rv.waiting = true;          // first: pausing redraws, which calls back here
     video.pause();
+    rv.ourSeek = true;
     ov.seekFrame(rv.target.e.frame);
     var e = rv.target.e;
     $('[data-pr-card-title]').textContent = e.action.toUpperCase() + ' tube ' + tube(e.reference) +
@@ -252,7 +288,8 @@
     rvGo(0);
   }
   function stopReview(msg) {
-    rv.on = false; rv.waiting = false; trip.on = false;
+    rv.on = false; rv.waiting = false; trip.on = false; tp.on = false;
+    if (ov) ov.focus(null);
     if (card) card.hidden = true;
     if ($('[data-pr-trip]')) $('[data-pr-trip]').hidden = true;
     video.pause();
@@ -269,20 +306,12 @@
   var sides = {};
   ['A', 'B'].forEach(function (k) {
     var box = $('[data-pr-side-' + k + ']');
-    if (!box) return;
-    var v = $('[data-pr-trip-video]', box), cv = $('[data-pr-trip-canvas]', box);
-    sides[k] = {box: box, video: v, ov: window.TrackOverlay ? TrackOverlay(v, cv) : null, clip: -1, frame: 0};
-    v.addEventListener('loadedmetadata', function () { if (sides[k].ov) sides[k].ov.seekFrame(sides[k].frame); });
+    if (box) sides[k] = {box: box};
   });
+  // Who left and who came back: the track, its species and marker, a few crops.
   function showSide(k, ref, e, chip) {
     var s = sides[k], c = P.clips[ref.clip];
     if (!s) return;
-    s.frame = e.frame;
-    if (s.clip !== ref.clip) {
-      s.clip = ref.clip;
-      s.video.src = c.stream_url;
-      if (s.ov) s.ov.load(c.overlay_url).then(function () { s.ov.seekFrame(e.frame); s.ov.focus(Number(e.track_id)); });
-    } else if (s.ov) { s.ov.seekFrame(e.frame); s.ov.focus(Number(e.track_id)); }
     var chipEl = $('[data-pr-trip-chip]', s.box);
     chipEl.textContent = chip + ' ' + tube(e.reference) + ' · ' + clock(e.clock).slice(11);
     chipEl.style.background = COLORS[e.action] || '#374151';
@@ -302,6 +331,98 @@
         });
       }).catch(function () {});
   }
+
+  // ── Trip playback (memory/62): the trip plays in the one player above —
+  // 2 s either side of the exit, then of the entry, or the whole trip between
+  // them across clips (gaps with no recording are skipped).
+  var PAD = 2;
+  var tp = {segs: [], k: 0, on: false, a: null, b: null};
+  function segsBetween(t0, t1, focus) {
+    var out = [];
+    P.clips.forEach(function (c, ci) {
+      var lo = Math.max(t0, c.offset), hi = Math.min(t1, c.offset + (c.duration || 0));
+      if (hi > lo) out.push({c: ci, from: Math.round((lo - c.offset) * c.fps),
+                             to: Math.round((hi - c.offset) * c.fps), focus: focus});
+    });
+    return out;
+  }
+  function tripPlay(mode) {
+    var a = tp.a, b = tp.b;
+    if (!a || !b) return;
+    var exitSegs = segsBetween(a.t - PAD, a.t + PAD, a.track_id);
+    var entrySegs = segsBetween(b.t - PAD, b.t + PAD, b.track_id);
+    tp.mode = mode;
+    tp.segs = mode === 'exit' ? exitSegs : mode === 'entry' ? entrySegs
+      : mode === 'whole' ? segsBetween(a.t - PAD, b.t + PAD, null) : exitSegs.concat(entrySegs);
+    tp.k = 0; tp.on = true;
+    tpStart();
+  }
+  var TP_LABEL = {exit: 'the exit', entry: 'the entry', whole: 'the whole trip', moments: 'the exit, then the entry'};
+  function tpStart() {
+    var sg = tp.segs[tp.k];
+    var now = $('[data-pr-trip-now]');
+    if (!sg) {
+      tp.on = false; video.pause();
+      if (now) now.textContent = 'Played ' + TP_LABEL[tp.mode] + '. Vote, or play it again.';
+      return;
+    }
+    if (now) now.textContent = 'Playing ' + TP_LABEL[tp.mode] + ' · clip ' + clock(P.clips[sg.c].start).slice(11, 16);
+    rv.ourSeek = true;
+    loadClip(sg.c, sg.from, true).then(function () {
+      if (ov) ov.focus(sg.focus != null && sg.focus !== '' ? Number(sg.focus) : null);
+    });
+  }
+  function renderTripBar() {
+    var bar = $('[data-pr-trip-bar]');
+    if (!bar || !tp.a || !tp.b) return;
+    var t0 = tp.a.t - PAD, t1 = tp.b.t + PAD, span = (t1 - t0) || 1;
+    var at = function (t) { return Math.max(0, Math.min(100, 100 * (t - t0) / span)) + '%'; };
+    bar.innerHTML = '';
+    bar.style.background = 'repeating-linear-gradient(135deg, #f3f4f6 0 6px, #e5e7eb 6px 8px)';
+    P.clips.forEach(function (c) {
+      var lo = Math.max(t0, c.offset), hi = Math.min(t1, c.offset + (c.duration || 0));
+      if (hi <= lo) return;
+      var r = document.createElement('div');
+      r.className = 'absolute top-0 h-full bg-gray-300 rounded-sm pointer-events-none';
+      r.style.left = at(lo); r.style.width = (100 * (hi - lo) / span) + '%';
+      bar.appendChild(r);
+    });
+    [[tp.a, 'exit'], [tp.b, 'enter']].forEach(function (p) {
+      var m = document.createElement('div');
+      m.className = 'absolute top-0 h-full w-1 rounded-sm pointer-events-none';
+      m.style.left = at(p[0].t); m.style.background = COLORS[p[1]];
+      bar.appendChild(m);
+    });
+    var head = document.createElement('div');
+    head.setAttribute('data-pr-trip-head', '');
+    head.className = 'absolute -top-0.5 -bottom-0.5 w-0.5 bg-gray-900 pointer-events-none';
+    bar.appendChild(head);
+    $('[data-pr-trip-bar-from]').textContent = clock(tp.a.clock).slice(11, 19) + ' exit';
+    $('[data-pr-trip-bar-to]').textContent = 'entry ' + clock(tp.b.clock).slice(11, 19);
+    bar.onclick = function (ev) {
+      var r = bar.getBoundingClientRect();
+      var t = t0 + span * Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+      for (var ci = 0; ci < P.clips.length; ci++) {
+        var c = P.clips[ci];
+        if (t >= c.offset && t < c.offset + (c.duration || 0)) {
+          tp.on = false;
+          rv.ourSeek = true;
+          loadClip(ci, Math.round((t - c.offset) * c.fps), false);
+          $('[data-pr-trip-now]').textContent = 'At ' + clock(c.start).slice(11, 16) + ' clip — press play to watch on.';
+          return;
+        }
+      }
+      $('[data-pr-trip-now]').textContent = 'No recording at that moment.';
+    };
+  }
+  function tripHead() {
+    var head = $('[data-pr-trip-head]');
+    if (!head || !tp.a || !tp.b || cur < 0) return;
+    var c = P.clips[cur], t0 = tp.a.t - PAD, span = (tp.b.t + PAD - t0) || 1;
+    var t = c.offset + video.currentTime;
+    head.style.left = Math.max(0, Math.min(100, 100 * (t - t0) / span)) + '%';
+  }
+
   function tripGo(i) {
     var panel = $('[data-pr-trip]');
     if (i >= trip.list.length) { stopReview('Trip review finished: every suggested trip has been shown.'); return; }
@@ -315,7 +436,9 @@
     showSide('A', t.exit, a, 'EXIT');
     showSide('B', t.entry, b, 'ENTER');
     panel.hidden = false;
-    panel.scrollIntoView({block: 'nearest'});
+    tp.a = a; tp.b = b;
+    renderTripBar();
+    tripPlay('moments');
   }
   function tripVote(t, entry, verdict, reason, relinked) {
     var exitClip = P.clips[t.exit.clip];
@@ -394,11 +517,15 @@
     });
     $('[data-pr-trip-no]').addEventListener('click', function () { relinkChooser(trip.list[trip.i]); });
     $('[data-pr-trip-skip]').addEventListener('click', function () { tripGo(trip.i + 1); });
+    $$('[data-pr-trip-play]').forEach(function (b) {
+      b.addEventListener('click', function () { tripPlay(b.getAttribute('data-pr-trip-play')); });
+    });
     document.addEventListener('keydown', function (ev) {
       if (!(rv.on || trip.on) || /^(INPUT|TEXTAREA|SELECT)$/.test((ev.target || {}).tagName || '')) return;
       var k = ev.key.toLowerCase(), hit = true;
       if (trip.on) {
-        if (k === 'y') $('[data-pr-trip-yes]').click();
+        if (k === 'p') tripPlay('moments');
+        else if (k === 'y') $('[data-pr-trip-yes]').click();
         else if (k === 'n') $('[data-pr-trip-no]').click();
         else if (ev.key === 'ArrowRight') tripGo(trip.i + 1);
         else if (ev.key === 'Escape') stopReview('');

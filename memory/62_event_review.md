@@ -88,6 +88,30 @@ The user wants to check the detected events by hand. In "Events near now", each 
 - A period gathers the right clips in order, across clips; the exit→entry band data is not in any CSV.
 - Period review saves votes onto the right runs.
 
+
+## §3b Missed events (requested 2026-10-29; design board "Add an event the system missed")
+Review so far only judges what was detected. A reviewer must also be able to say "the system missed one here" (a false negative).
+- **Adding one:** **+ Add missed event (A)** in the player header, and in review mode's card. It pauses on the current frame and opens a small card:
+  - **What:** exit, enter or stay. A stay also takes an end, set by playing on and pressing "End here".
+  - **Tube:** click a reference on the video (outlines become clickable while adding) or type its number.
+  - **Insect:** a track on screen at that moment, or "Not tracked" when the tracker never had it.
+  - **Save.**
+- **Data:** new model `AddedEvent`: `run`, `frame`, `end_frame` (stay), `action`, `reference`, `track_id` (blank = not tracked), `user`, `note` and timestamps. Its key is `added|<pk>`. The reviewer who added it, or the run's owner, can remove it. It never touches the detected rows.
+- **Shown:**
+  - on the tube lanes as a hollow dashed mark, so added events never look like detected ones;
+  - in "Events near now" as "added by you" or "added by maria";
+  - on the video as a dashed chip;
+  - the header and the Events tile show "N added".
+- **Events CSV:** an added event is a row with `review = added`, `reviewed_by` = who added it, and `review_notes` = the note. Analyses can include or leave out what people added. The detected rows are unchanged.
+- **Detection quality**, from the reviews, shown in the side panel and on the batch table:
+  - **precision** = accepted ÷ (accepted + rejected) among the checked events;
+  - **recall** = accepted ÷ (accepted + added).
+- **Period review:** the same button, saved to the clip under the playhead's run.
+- **Tests:** add, remove (by the adder or the owner only), the CSV rows, lane drawing data, the precision and recall arithmetic, and permissions (reviewers only).
+- **Questions:**
+  1. Does an added event also need a **duplicate check**, warning when a detected event of the same tube and action is within 2 s?
+  2. Should precision and recall show on the batch table, or only on the clip page?
+
 ## Build order
 1, 3 and 5 (clip review and its data) → 2 (invites) → 4 (period review) → 4b (trip review). Each is shippable on its own.
 

@@ -114,9 +114,12 @@ event in the period in time order, moving from clip to clip by itself. Click a t
 across the period.
 
 **Trips.** A faint band joins each exit to the next entry into the same tube, across clips too (the next entry
-by the same marker first, when markers were read). These are suggestions only. **Review trips** shows each
-one side by side — the bee leaving and the bee coming back, with their species, marker and crops — and asks
-whether it is the same bee:
+by the same marker first, when markers were read). These are suggestions only. **Review trips** plays each
+one in the player: 2 seconds either side of the exit, then 2 seconds either side of the entry, following the
+bee each time. **Exit ±2 s**, **Entry ±2 s** and **Whole trip** replay a part (the whole trip runs from the exit
+to the entry across clips, skipping time with no recording), and the trip bar lets you jump to any moment in
+between. Below the player are the bee that left and the bee that came back, with their species, marker and
+crops. Then it asks whether it is the same bee:
 
 - **Same bee, a trip (Y)** accepts it.
 - **Not this pair (N)** lets you link the exit to a different later entry into that tube, or mark

@@ -115,14 +115,23 @@ trip review walks each suggested exit → entry pair. Logic: pipelines/period.py
       <span data-pr-trip-where class="font-mono text-[13px] text-gray-700"></span>
     </div>
     <p class="text-[13px] text-gray-600 m-0">Is it the same bee going out and coming back?</p>
+    {% comment %}The trip plays in the player above (memory/62): 2 s either side of the
+      exit, then of the entry, or the whole trip between them, across clips.{% endcomment %}
+    <div class="flex flex-wrap gap-2 items-center">
+      <button type="button" data-pr-trip-play="moments" class="h-10 px-3.5 rounded bg-gray-900 hover:bg-gray-700 text-white font-semibold">Play exit &amp; entry (P)</button>
+      <button type="button" data-pr-trip-play="exit" class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">Exit ±2 s</button>
+      <button type="button" data-pr-trip-play="entry" class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">Entry ±2 s</button>
+      <button type="button" data-pr-trip-play="whole" class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">Whole trip</button>
+      <span data-pr-trip-now class="text-[13px] text-gray-600"></span>
+    </div>
+    <div class="flex flex-col gap-1">
+      <div data-pr-trip-bar class="relative h-6 rounded bg-gray-200 cursor-pointer" title="The trip from 2 s before the exit to 2 s after the entry — click to watch that moment"></div>
+      <div class="flex justify-between font-mono text-[11px] text-gray-600"><span data-pr-trip-bar-from></span><span data-pr-trip-bar-to></span></div>
+    </div>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
       {% for side in "AB" %}
       <div class="flex flex-col gap-1.5" data-pr-side-{{ side }}>
-        <div class="relative bg-black rounded overflow-hidden">
-          <video data-pr-trip-video playsinline preload="metadata" muted class="w-full block" style="max-height: 34vh"></video>
-          <canvas data-pr-trip-canvas class="absolute left-0 top-0 pointer-events-none"></canvas>
-          <span data-pr-trip-chip class="absolute left-2 top-2 font-mono text-xs font-bold text-white px-1.5 py-0.5 rounded"></span>
-        </div>
+        <span data-pr-trip-chip class="self-start font-mono text-xs font-bold text-white px-1.5 py-0.5 rounded"></span>
         <span data-pr-trip-who class="text-[13px] text-gray-700"></span>
         <div data-pr-trip-crops class="flex gap-1"></div>
       </div>

@@ -241,7 +241,12 @@
       + (e[2] === 'stay' && e[4] != null ? ' · ' + ((e[4] - e[0]) / ov.fps()).toFixed(1) + ' s' : '')
       + (e[5] ? ' · at edge' : '');
   }
-  function seekTo(frame) { video.pause(); ov.seekFrame(frame); }
+  // A mark or a listed event was clicked. In review mode the review goes to
+  // that event (card and all); otherwise it is a plain seek.
+  function seekTo(frame) {
+    if (rv.on) { rvJumpTo(frame); return; }
+    video.pause(); ov.seekFrame(frame);
+  }
 
   // The events within 5 s either side of now, nearest first.
   var nearKey = '';
@@ -322,7 +327,39 @@
     }).catch(function (err) { status.textContent = String(err.message || err); });
   }
 
-  var rv = {on: false, list: [], i: 0, target: null, waiting: false};
+  var rv = {on: false, list: [], i: 0, target: null, waiting: false, ourSeek: false};
+  // Seeks review makes itself, so a seek by the viewer (a lane click, the
+  // video's own scrubber) can be told apart and followed.
+  function rvSeek(frame) { rv.ourSeek = true; ov.seekFrame(frame); }
+  video.addEventListener('seeked', function () { rv.ourSeek = false; });
+  video.addEventListener('seeking', function () {
+    if (!rv.on || rv.ourSeek) return;
+    rvFollow(Math.round(video.currentTime * ov.fps()));
+  });
+  // The viewer jumped somewhere: review carries on from there, to the next
+  // event at or after that point, instead of showing a card for an event
+  // the video is no longer on.
+  function rvFollow(frame) {
+    var idx = -1;
+    for (var k = 0; k < rv.list.length; k++) { if (rv.list[k][0] >= frame) { idx = k; break; } }
+    if (card) { card.hidden = true; card.querySelector('[data-rv-reasons]').hidden = true; }
+    rv.waiting = false;
+    if (idx < 0) {
+      rv.target = null;
+      status.textContent = 'No events after this point. Jump back, or Exit review.';
+      return;
+    }
+    rv.i = idx; rv.target = rv.list[idx][0];
+    if (frame >= rv.target) { rvArrive(); return; }
+    var p = video.play(); if (p && p.catch) p.catch(function () {});
+  }
+  function rvJumpTo(frame) {
+    var idx = -1;
+    for (var k = 0; k < rv.list.length; k++) { if (rv.list[k][0] === frame) { idx = k; break; } }
+    if (idx < 0) { rvFollow(frame); return; }
+    rv.i = idx; rv.target = frame;
+    rvArrive();
+  }
   var card = root.querySelector('[data-rv-card]');
   function rvEvent() { return rv.list[rv.i]; }
   function paintCard() {
@@ -344,13 +381,13 @@
     if (card) { card.hidden = true; card.querySelector('[data-rv-reasons]').hidden = true; }
     var e = rvEvent();
     rv.target = e[0];
-    ov.seekFrame(Math.max(0, e[0] - Math.round(2 * ov.fps())));
+    rvSeek(Math.max(0, e[0] - Math.round(2 * ov.fps())));
     var p = video.play(); if (p && p.catch) p.catch(function () {});
   }
   function rvArrive() {
     rv.waiting = true;          // first: pausing redraws, which calls back here
     video.pause();
-    ov.seekFrame(rv.target);
+    rvSeek(rv.target);
     if (card) card.hidden = false;
     paintCard();
   }
