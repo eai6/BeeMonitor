@@ -7,8 +7,8 @@
 {% endcomment %}
 <section class="bg-white shadow rounded-lg mb-8" id="track-overlay"
          data-overlay="{{ overlay_url }}"
-         {% if can_review %}data-review-url="{% url 'analysis:event_review' job.pk %}"
-         data-add-url="{% url 'analysis:add_missed_event' job.pk %}"{% endif %}
+         {% if can_review %}data-review-url="{% url 'analysis:event_review' job.pk %}{{ run_q }}"
+         data-add-url="{% url 'analysis:add_missed_event' job.pk %}{{ run_q }}"{% endif %}
          data-crops-url="{% url 'analysis:track_crops' job.pk 0 %}">
   <div class="px-6 py-3 border-b border-gray-200 flex flex-wrap gap-3 justify-between items-center">
     <h2 class="text-lg font-medium text-gray-900">Video with tracks</h2>

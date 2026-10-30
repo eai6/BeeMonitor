@@ -70,7 +70,10 @@ def _place(request):
 
 def _gather(request):
     device, site, start, end = _place(request)
-    data = period.gather(request.user, device=device, site=site, start=start, end=end)
+    # Opened from a batch: its clips show (and take votes on) the batch's runs.
+    prefer = period.batch_runs(request.GET["batch"]) if request.GET.get("batch") else None
+    data = period.gather(request.user, device=device, site=site, start=start, end=end,
+                         prefer=prefer)
     if not data["clips"] and not data["skipped"]:
         # Nothing the user can see here: not a page about someone else's unit.
         from apps.devices.models import Device
@@ -107,16 +110,17 @@ class PeriodReviewView(LoginRequiredMixin, View):
         for ci, c in enumerate(data["clips"]):
             evs = period.clip_events(c, request.user)
             pairs += [(ci, e) for e in evs]
-            job = c["job"]
+            job, run_q = c["job"], f"?run={c['run'].pk}"
             clips_json.append({
-                "job": job.pk, "title": c["video"].title, "offset": c["offset"],
+                "job": job.pk, "run": str(c["run"].pk), "title": c["video"].title, "offset": c["offset"],
                 "duration": c["duration"], "fps": c["fps"],
                 "start": c["start"].isoformat(timespec="seconds"),
                 "can_review": c["can_review"],
-                "overlay_url": reverse("analysis:track_overlay", args=[job.pk]),
+                "overlay_url": reverse("analysis:track_overlay", args=[job.pk]) + run_q,
                 "stream_url": reverse("analysis:period_stream", args=[job.pk]),
-                "review_url": reverse("analysis:event_review", args=[job.pk]),
-                "add_url": reverse("analysis:add_missed_event", args=[job.pk]),
+                # The run is named so votes land on the run shown here.
+                "review_url": reverse("analysis:event_review", args=[job.pk]) + run_q,
+                "add_url": reverse("analysis:add_missed_event", args=[job.pk]) + run_q,
                 # Events reviewers added as missed (memory/62 §3b), placed on
                 # the period's axis like the detected ones.
                 "added": [{"id": a["id"], "frame": a["frame"], "end_frame": a["end_frame"],
@@ -183,13 +187,14 @@ class TripReviewView(LoginRequiredMixin, View):
             exit_job = get_object_or_404(Job, pk=int(body["exit_job"]))
         except (KeyError, ValueError, TypeError):
             return JsonResponse({"ok": False, "error": "exit_job is required"}, status=400)
-        exit_run = event_review.run_for_job(exit_job)
+        exit_run = event_review.run_for_review(exit_job, body.get("exit_run"))
         if exit_run is None or not event_review.can_review(request.user, exit_run):
             raise Http404("You can't review this clip.")
         entry_run = None
         if body.get("entry_job"):
             entry_job = Job.objects.filter(clip_access(request.user), pk=body["entry_job"]).first()
-            entry_run = event_review.run_for_job(entry_job) if entry_job else None
+            entry_run = (event_review.run_for_review(entry_job, body.get("entry_run"))
+                         if entry_job else None)
             if entry_run is None:
                 raise Http404("No such entry.")
         try:

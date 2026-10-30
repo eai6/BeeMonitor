@@ -155,6 +155,15 @@ def run_for_job(job):
     return _run_for_job(job)
 
 
+def run_for_review(job, run_pk=None):
+    """The run a vote on this job is for: ``run_pk`` when the page named the
+    run it shows (a clip's GPU job can be shared by several runs), else the
+    job's newest run."""
+    from .executors import pin_run
+
+    return pin_run(job, run_pk) or run_for_job(job)
+
+
 def summaries_for_job(job):
     run = run_for_job(job)
     return event_summaries(run) if run is not None else {}

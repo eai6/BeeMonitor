@@ -69,8 +69,8 @@ def runs_for_videos(videos):
         status=PipelineRun.Status.COMPLETED,
         user_id__in={j.user_id for j in jobs},
         started_at__gte=min(when) - timedelta(days=1),
-        started_at__lte=max(when) + timedelta(days=1))
-    by_job = {}
+        started_at__lte=max(when) + timedelta(days=1)).order_by("-started_at")
+    by_job = {}                             # a job re-used by later runs: the newest
     for run in runs:
         jid = run_job_id(run)
         if jid is not None and any(k == "events" for k, _o in analyzer_outputs(run)):
@@ -82,13 +82,35 @@ def runs_for_videos(videos):
     return out
 
 
-def gather(user, device=None, site=None, start=None, end=None):
+def batch_runs(batch_id):
+    """``{video pk: (job, run)}`` for a batch's completed runs with an Events
+    step. A clip can have several runs (a re-run re-uses its GPU job), and a
+    period opened from a batch must show, and take votes on, that batch's."""
+    from apps.analysis.models import Job
+
+    from .aggregate import analyzer_outputs, run_job_id, run_video_id
+    from .models import PipelineRun
+
+    runs = {}
+    for run in PipelineRun.objects.filter(batch_id=batch_id, status=PipelineRun.Status.COMPLETED):
+        jid = run_job_id(run)
+        if jid is not None and any(k == "events" for k, _o in analyzer_outputs(run)):
+            runs[jid] = run
+    out = {}
+    for job in Job.objects.filter(pk__in=runs, status="completed").select_related("result"):
+        if run_video_id(runs[job.pk]) == job.video_id:
+            out[job.video_id] = (job, runs[job.pk])
+    return out
+
+
+def gather(user, device=None, site=None, start=None, end=None, prefer=None):
     """Every reviewable clip of a device or site in [start, end).
 
     Returns ``{"clips": [...], "skipped": [{"title", "reason"}], "notes": [...],
     "start", "end"}``; each clip is ``{video, job, run, start (naive local),
     offset (seconds from the period start), duration, fps, can_review}`` in
-    time order."""
+    time order. ``prefer`` (``{video pk: (job, run)}``, from ``batch_runs``)
+    overrides the latest run for the clips it names."""
     from apps.videos.models import Video
 
     from .ops import fps_with_source
@@ -121,6 +143,8 @@ def gather(user, device=None, site=None, start=None, end=None):
         placed = placed[:MAX_CLIPS]
 
     runs = runs_for_videos([v for _s, v in placed])
+    shown = {v.pk for _s, v in placed}
+    runs.update({vid: jr for vid, jr in (prefer or {}).items() if vid in shown})
     clips = []
     for s, v in placed:
         if v.pk not in runs:

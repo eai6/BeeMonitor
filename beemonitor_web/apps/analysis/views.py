@@ -1663,6 +1663,11 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
             Job.objects.for_viewer(self.request.user).filter(
                 clip_access(self.request.user, photos=True)), pk=self.kwargs["pk"])
         ctx["job"] = job
+        # Opened from a batch: its run, not the clip's newest (a re-run
+        # re-uses the GPU job), for the tables, overlay, CSVs and votes.
+        from apps.pipelines.executors import pin_run
+        pinned = pin_run(job, self.request.GET.get("run"))
+        ctx["run_q"] = f"?run={pinned.pk}" if pinned else ""
         from apps.videos.timecode import part_label
         ctx["part"] = part_label(job.config, job.video)
 
@@ -1695,7 +1700,7 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         # exporters as the tables on this page, never the worker's raw file.
         if tracking_path:
             ctx["tracking_csv_url"] = _generate_presigned_url(tracking_path)
-        ctx["overlay_url"] = (reverse("analysis:track_overlay", args=[job.pk])
+        ctx["overlay_url"] = (reverse("analysis:track_overlay", args=[job.pk]) + ctx["run_q"]
                               if tracking_path else "")
         if annotated_path:
             ctx["annotated_video_url"] = _generate_presigned_url(annotated_path)
@@ -2030,6 +2035,8 @@ class TrackOverlayView(LoginRequiredMixin, View):
     def get(self, request, pk):
         job = get_object_or_404(Job.objects.for_viewer(request.user).filter(
             clip_access(request.user)), pk=pk)
+        from apps.pipelines.executors import pin_run
+        pin_run(job, request.GET.get("run"))
         return overlay_response(request, job)
 
 
@@ -2221,7 +2228,7 @@ class EventReviewView(LoginRequiredMixin, View):
         from apps.pipelines import review as event_review
 
         job = get_object_or_404(Job, pk=pk)
-        run = event_review.run_for_job(job)
+        run = event_review.run_for_review(job, request.GET.get("run"))
         if run is None or not event_review.can_review(request.user, run):
             raise Http404("You can't review this clip.")
         try:
@@ -2251,7 +2258,7 @@ class AddMissedEventView(LoginRequiredMixin, View):
         from apps.pipelines.ops import fps_with_source
 
         job = get_object_or_404(Job, pk=pk)
-        run = event_review.run_for_job(job)
+        run = event_review.run_for_review(job, request.GET.get("run"))
         if run is None or not event_review.can_review(request.user, run):
             raise Http404("You can't review this clip.")
         try:
@@ -2301,6 +2308,7 @@ class JobPrimitiveCsvView(LoginRequiredMixin, View):
             raise Http404("Unknown table.")
         job = get_object_or_404(Job.objects.for_viewer(request.user).filter(
             clip_access(request.user, photos=True)), pk=pk)
+        pipeline_executors.pin_run(job, request.GET.get("run"))
 
         result = getattr(job, "result", None)
         tracking = (_load_csv_from_storage(getattr(result, "tracking_csv_path", "") or "")

@@ -462,8 +462,9 @@
   function tripVote(t, entry, verdict, reason, relinked) {
     var exitClip = P.clips[t.exit.clip];
     return post(P.trip_url, {
-      exit_job: exitClip.job, exit_key: t.exit.key,
-      entry_job: entry ? P.clips[entry.clip].job : null, entry_key: entry ? entry.key : '',
+      exit_job: exitClip.job, exit_run: exitClip.run, exit_key: t.exit.key,
+      entry_job: entry ? P.clips[entry.clip].job : null, entry_run: entry ? P.clips[entry.clip].run : null,
+      entry_key: entry ? entry.key : '',
       verdict: verdict, reason: reason || '', relinked: !!relinked
     }).then(function (d) {
       if (t.mine) t[t.mine.verdict] = Math.max(0, (t[t.mine.verdict] || 0) - 1);

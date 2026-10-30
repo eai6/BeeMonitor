@@ -610,6 +610,9 @@ def _run_for_job(job):
     from . import aggregate
     from .models import PipelineRun
 
+    pinned = getattr(job, "_pinned_run", None)
+    if pinned is not None:
+        return pinned
     when = job.created_at
     if not when:
         return None
@@ -622,6 +625,26 @@ def _run_for_job(job):
         if aggregate.run_job_id(run) == job.pk:
             return run
     return None
+
+
+def pin_run(job, run_pk):
+    """Make ``run_pk`` the run behind this job object for everything that reads
+    it (``_run_for_job``), when it really is one of the job's runs. A re-run
+    re-uses the clip's GPU job, so a page opened from a batch names its run.
+    Returns the pinned run or None."""
+    import uuid
+
+    from . import aggregate
+    from .models import PipelineRun
+
+    try:
+        run = PipelineRun.objects.filter(pk=uuid.UUID(str(run_pk))).first() if run_pk else None
+    except ValueError:
+        run = None
+    if run is None or aggregate.run_job_id(run) != job.pk:
+        return None
+    job._pinned_run = run
+    return run
 
 
 def primitives_for_job(job, kind):

@@ -176,7 +176,8 @@ class SuggestionTests(PeriodBase):
     def test_events_from_period_review_land_on_their_own_clip(self):
         p = self.payload(self.page())
         self.assertEqual(p["clips"][1]["review_url"],
-                         reverse("analysis:event_review", args=[self.b["job"].pk]))
+                         reverse("analysis:event_review", args=[self.b["job"].pk])
+                         + f"?run={self.b['run'].pk}")
         key = p["clips"][1]["events"][0]["key"]
         self.client.post(p["clips"][1]["review_url"], json.dumps(
             {"event_key": key, "verdict": "accepted"}), content_type="application/json")
@@ -255,3 +256,77 @@ class TripVoteTests(PeriodBase):
         body = self.client.get(reverse("pipelines:batch_combined_csv",
                                        kwargs={"batch_id": self.batch, "kind": "trips"})).content.decode()
         self.assertIn("reference_1", body)
+
+
+class SharedJobTests(PeriodBase):
+    """A later batch re-uses the clips' GPU jobs, so each job has two runs. A
+    period opened from the first batch shows its runs, and votes made there
+    land on them, so the first batch's metrics count them."""
+
+    def setUp(self):
+        PeriodBase.setUp(self)
+        self.later = uuid.uuid4()
+        self.later_runs = []
+        for c in (self.a, self.b):
+            run = PipelineRun.objects.create(
+                pipeline=self.pipeline, user=self.owner, status="completed",
+                batch_id=self.later, started_at=c["run"].started_at + timedelta(minutes=5),
+                steps=c["run"].steps, context=c["run"].context)
+            recount_run(run)
+            self.later_runs.append(run)
+        BatchMember.objects.create(batch_id=self.batch, user=self.maria)
+        payload = self.payload(self.page(batch=str(self.batch)))
+        self.trip, self.clips = payload["trips"][0], payload["clips"]
+
+    vote = TripVoteTests.vote
+
+    def test_the_period_shows_the_batchs_runs_and_names_them(self):
+        self.assertEqual([c["run"] for c in self.clips], [str(self.a["run"].pk), str(self.b["run"].pk)])
+        self.assertTrue(self.clips[0]["review_url"].endswith(f"?run={self.a['run'].pk}"))
+
+    def test_a_trip_vote_lands_on_the_batch_shown_and_counts_there(self):
+        resp = self.vote("accepted", user=self.maria, exit_run=self.clips[0]["run"],
+                         entry_run=self.clips[1]["run"])
+        self.assertEqual(resp.status_code, 200)
+        t = TripReview.objects.get()
+        self.assertEqual((t.exit_run_id, t.entry_run_id), (self.a["run"].pk, self.b["run"].pk))
+        self.client.force_login(self.owner)
+        page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
+        self.assertEqual(page.context["review_summary"]["trips"]["reviewed"], 1)
+
+    def test_an_event_vote_lands_on_the_batch_shown(self):
+        self.client.force_login(self.maria)
+        e = self.clips[0]["events"][0]
+        resp = self.client.post(self.clips[0]["review_url"], json.dumps(
+            {"event_key": e["key"], "verdict": "accepted"}), content_type="application/json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(EventReview.objects.get().run_id, self.a["run"].pk)
+
+    def test_a_run_of_another_job_is_ignored(self):
+        self.vote("accepted", exit_run=str(self.b["run"].pk))
+        self.assertEqual(TripReview.objects.get().exit_run_id, self.later_runs[0].pk)
+
+    def test_the_results_page_opened_from_a_batch_votes_on_its_run(self):
+        self.client.force_login(self.owner)
+        page = self.client.get(reverse("analysis:results", args=[self.a["job"].pk]),
+                               {"run": str(self.a["run"].pk)})
+        q = f"?run={self.a['run'].pk}"
+        self.assertEqual(page.context["run_q"], q)
+        self.assertContains(page, reverse("analysis:event_review", args=[self.a["job"].pk]) + q)
+        self.client.force_login(self.maria)
+        e = self.clips[0]["events"][0]
+        resp = self.client.post(reverse("analysis:event_review", args=[self.a["job"].pk]) + q,
+                                json.dumps({"event_key": e["key"], "verdict": "accepted"}),
+                                content_type="application/json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(EventReview.objects.get().run_id, self.a["run"].pk)
+        events = self.client.get(reverse("analysis:track_overlay", args=[self.a["job"].pk])
+                                 + q + "&part=events").json()["events"]
+        mine = [x for x in events if x[6] == e["key"]][0]
+        self.assertEqual((mine[7], mine[8]), ("accepted", 1))
+
+    def test_the_batch_links_name_its_runs(self):
+        self.client.force_login(self.owner)
+        page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
+        self.assertContains(page, reverse("analysis:results", args=[self.a["job"].pk])
+                            + f"?run={self.a['run'].pk}")

@@ -42,7 +42,7 @@
         <button type="submit" class="text-xs text-amber-700 hover:underline"
                 title="Reset this step and everything downstream, then re-run (upstream results are kept)">↻ Retry this step</button>
       </form>
-      {% if step.output.job_id %}<a href="{% url 'analysis:results' step.output.job_id %}" class="text-xs text-gray-500 hover:underline">View job →</a>{% endif %}
+      {% if step.output.job_id %}<a href="{% url 'analysis:results' step.output.job_id %}?run={{ run.pk }}" class="text-xs text-gray-500 hover:underline">View job →</a>{% endif %}
     </div>
     {% endif %}
 
@@ -53,7 +53,7 @@
         <!-- Links -->
         <div class="flex flex-wrap gap-3">
           {% if step.output.rows %}<a href="{% url 'pipelines:run_output_csv' pk=run.pipeline_id run_id=run.pk step_id=step.id %}" class="text-xs text-amber-700 hover:underline">⬇ Download CSV</a>{% endif %}
-          {% if step.output.job_id %}<a href="{% url 'analysis:results' step.output.job_id %}" class="text-xs text-amber-700 hover:underline">Full job results & CSVs →</a>{% endif %}
+          {% if step.output.job_id %}<a href="{% url 'analysis:results' step.output.job_id %}?run={{ run.pk }}" class="text-xs text-amber-700 hover:underline">Full job results & CSVs →</a>{% endif %}
           {% if step.display.annotated_video %}<span class="text-xs text-gray-400">annotated video available on the job page</span>{% endif %}
         </div>
 

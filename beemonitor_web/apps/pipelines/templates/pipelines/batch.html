@@ -348,8 +348,8 @@ their reason.
        {% if r.video %}data-title="{{ r.when|date:"j M, H:i"|default:"clip" }}{% if r.video.device %} · {{ r.video.device.name }}{% endif %}"
        data-original="{% url 'videos:stream' r.video.pk %}"
        {% if photos and r.photo %}data-photo="{% url 'pipelines:run_photo' pk=pipeline.pk run_id=r.run.pk %}"{% endif %}
-       {% if r.job and r.result.tracking_csv_path %}data-overlay="{% url 'analysis:track_overlay' r.job.pk %}"{% endif %}
-       {% if r.job %}data-results="{% url 'analysis:results' r.job.pk %}"{% endif %}
+       {% if r.job and r.result.tracking_csv_path %}data-overlay="{% url 'analysis:track_overlay' r.job.pk %}?run={{ r.run.pk }}"{% endif %}
+       {% if r.job %}data-results="{% url 'analysis:results' r.job.pk %}?run={{ r.run.pk }}"{% endif %}
        data-rotate="{% if r.video.device.rotate_180 %}1{% endif %}"{% endif %}>
     {% comment %}
       Both the still and the time open this clip's own results — the videos,
@@ -390,7 +390,7 @@ their reason.
         <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 shrink-0">running</span>
       {% endif %}
       {% if r.job %}
-      <a href="{% url 'analysis:results' r.job.pk %}"
+      <a href="{% url 'analysis:results' r.job.pk %}?run={{ r.run.pk }}"
          class="text-[11px] text-amber-700 hover:underline shrink-0 ml-auto"
          title="{% if photos %}The photo, its boxes and each insect's species{% else %}Per-track crops, the raw CSVs and the full breakdown for this clip{% endif %}">{% if photos %}full results →{% else %}crops &amp; CSVs →{% endif %}</a>
       {% endif %}
