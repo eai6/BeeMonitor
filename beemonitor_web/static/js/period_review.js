@@ -20,6 +20,17 @@
   var video = $('[data-pr-video]'), canvas = $('[data-pr-canvas]');
   var status = $('[data-pr-status]');
   var ov = window.TrackOverlay ? TrackOverlay(video, canvas) : null;
+  // The ROI and tubes, so a reviewer can see which hole an event was counted
+  // against. On unless this viewer turned it off.
+  var regionsBox = $('[data-pr-regions]');
+  if (regionsBox) {
+    try { if (localStorage.getItem('pr-regions') === '0') regionsBox.checked = false; } catch (e) {}
+    if (ov) ov.set({regions: regionsBox.checked});
+    regionsBox.addEventListener('change', function () {
+      if (ov) ov.set({regions: regionsBox.checked});
+      try { localStorage.setItem('pr-regions', regionsBox.checked ? '1' : '0'); } catch (e) {}
+    });
+  }
   var cur = -1;                 // index of the loaded clip
   var pendingFrame = null;      // frame to seek to once the clip has loaded
 

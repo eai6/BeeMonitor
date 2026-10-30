@@ -103,7 +103,11 @@ trip review walks each suggested exit → entry pair. Logic: pipelines/period.py
           </div>
         </div>
       </div>
-      <p data-pr-status class="text-xs text-gray-600"></p>
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <p data-pr-status class="text-xs text-gray-600"></p>
+        {# The ROI (green) and each tube with its number, from the run's own layout: which hole an event was counted against. #}
+        <label class="flex items-center gap-1.5 text-[13px] text-gray-700 ml-auto"><input type="checkbox" data-pr-regions checked> Show ROI and tubes</label>
+      </div>
     </div>
     <aside class="flex flex-col gap-2 bg-white border border-gray-200 rounded-lg p-3 text-[13px]" style="flex: 1 1 280px; min-width: 0">
       <h2 data-pr-side-title class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Click a tube to see its events across the period</h2>
