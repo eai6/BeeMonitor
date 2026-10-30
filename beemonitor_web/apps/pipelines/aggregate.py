@@ -290,9 +290,12 @@ def primitive_csv(runs, kind):
         from . import tracks
         start = timing.clip_start(video)
         provenance = _provenance({"video": video, "title": video.title or f"Video {video.pk}"})
+        from .review import event_summaries
+        reviews = event_summaries(run) if kind == "events" else None
         for out in outputs:
             for row in tracks.primitive_with_identity(
-                    kind, out.get("rows") or [], tracks.by_track_of(result), fps, start):
+                    kind, out.get("rows") or [], tracks.by_track_of(result), fps, start,
+                    reviews=reviews):
                 all_rows.append({**provenance, **row})
 
     if not all_rows:
@@ -378,6 +381,9 @@ def batch_rows(runs):
     jobs = {j.pk: j for j in Job.objects.filter(pk__in=job_ids)}
     results = {r.job_id: r for r in JobResult.objects.filter(job_id__in=job_ids)}
 
+    from .review import batch_review_counts
+    reviews = batch_review_counts(runs)
+
     rows = []
     for run in runs:
         video = videos.get(run_video_id(run))
@@ -391,6 +397,8 @@ def batch_rows(runs):
             # What the analyzers measured, so the row agrees with the clip's own
             # page and with this batch's CSV downloads.
             "primitives": primitive_counts(run),
+            # Reviewers' calls on its events (memory/62); None = no Events step.
+            "review": reviews.get(run.pk),
             "status": run.status,
             "error": run_error(run),
             # Stopped by its owner (memory/49): shown apart from failures.

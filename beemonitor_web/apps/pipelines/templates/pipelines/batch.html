@@ -33,7 +33,8 @@ their reason.
   </div>
   <div class="flex items-start gap-2 shrink-0">
     {% if can_share and running %}{% include "pipelines/_cancel_batch.html" %}{% endif %}
-    {% if can_share %}{% include "pipelines/_share_panel.html" %}{% endif %}
+    {% if can_share %}{% include "pipelines/_people_panel.html" %}{% include "pipelines/_share_panel.html" %}{% endif %}
+    {% if my_role %}<span class="inline-flex items-center h-10 px-3 rounded-md bg-gray-100 text-sm text-gray-700">You're a {{ my_role }} on this batch</span>{% endif %}
   </div>
 </div>
 
@@ -295,16 +296,17 @@ their reason.
     <div class="text-right">GPU time</div>
   </div>
   {% else %}
-  <div class="grid grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_96px_80px_88px] gap-0 px-4 py-2 border-b border-gray-100 text-[11px] font-semibold text-gray-500">
+  <div class="grid grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_96px_112px_80px_88px] gap-0 px-4 py-2 border-b border-gray-100 text-[11px] font-semibold text-gray-500">
     <div></div><div>Clip</div><div>Outcome</div>
     <div class="text-right">Tracks</div><div class="text-right">Events</div>
     <div class="text-right">Interactions</div>
+    <div class="text-right">Reviewed</div>
     <div class="text-right">Length</div><div class="text-right">GPU time</div>
   </div>
   {% endif %}
 
   {% for r in rows %}
-  <div class="clip-row grid {% if photos %}grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_88px]{% else %}grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_96px_80px_88px]{% endif %} items-center px-4 py-2 border-b border-gray-100 hover:bg-gray-50"
+  <div class="clip-row grid {% if photos %}grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_88px]{% else %}grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_96px_112px_80px_88px]{% endif %} items-center px-4 py-2 border-b border-gray-100 hover:bg-gray-50"
        data-f-status="{% if r.status == "completed" %}completed{% elif r.cancelled %}cancelled{% elif r.status == "failed" %}failed{% else %}running{% endif %}"
        data-f-text="{{ r.video.title }} {{ r.video.device.name }} {{ r.when|date:"j M Y H:i" }} {% if r.status == "failed" %}{{ r.error|failure_title }}{% endif %}"
        {% if r.video %}data-f-video="{{ r.video.pk }}"{% endif %}
@@ -383,6 +385,8 @@ their reason.
          {% if r.primitives.events is None %}title="This pipeline ran no events analyzer"{% endif %}>{% if r.primitives.events is None %}—{% else %}{{ r.primitives.events }}{% endif %}</div>
     <div class="text-right text-[13px] {% if r.primitives.interactions is None %}text-gray-300{% else %}text-gray-900{% endif %}"
          {% if r.primitives.interactions is None %}title="This pipeline ran no interactions analyzer"{% endif %}>{% if r.primitives.interactions is None %}—{% else %}{{ r.primitives.interactions }}{% endif %}</div>
+    <div class="text-right text-[13px] {% if not r.review or not r.review.reviewed %}text-gray-400{% else %}text-gray-900{% endif %}"
+         {% if r.review %}title="{{ r.review.accepted }} accepted, {{ r.review.rejected }} rejected{% if r.review.disputed %}, {{ r.review.disputed }} disputed{% endif %} — of {{ r.review.events }} events"{% endif %}>{% if r.review is None %}—{% elif not r.review.reviewed %}not reviewed{% else %}{{ r.review.reviewed }} / {{ r.review.events }}{% if r.review.rejected %} · <span class="text-red-700">{{ r.review.rejected }} rej.</span>{% endif %}{% endif %}</div>
     <div class="text-right text-xs text-gray-500">{% if r.video.duration_seconds %}{{ r.video.duration_seconds|duration_min }}{% else %}—{% endif %}</div>
     {% endif %}
     <div class="text-right text-xs text-gray-500">{% if r.gpu_seconds %}{{ r.gpu_seconds|duration_min }}{% else %}—{% endif %}</div>

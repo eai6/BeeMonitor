@@ -23,7 +23,10 @@ logger = logging.getLogger(__name__)
 # The CSV columns people download, in order. Identity and provenance columns
 # are added around these by the exporters.
 EVENT_FIELDS = ("timestamp", "clip_sec", "track_id", "action", "reference",
-                "duration_sec", "at_edge", "ml_confidence")
+                "duration_sec", "at_edge", "ml_confidence",
+                # Reviewers' calls (memory/62): accepted / rejected / disputed,
+                # who, and the reasons given. Blank when nobody reviewed it.
+                "review", "reviewed_by", "review_notes")
 
 INTERACTION_FIELDS = ("start_time", "end_time", "start_clip_sec", "end_clip_sec",
                       "duration_sec", "track_id", "with", "relation", "min_distance_bl")
@@ -228,6 +231,8 @@ def export_rows(kind, rows, fps, start=None):
                 "duration_sec": row.get("duration_sec", ""),
                 "at_edge": _flag(row.get("at_edge")),
                 "ml_confidence": row.get("ml_confidence", ""),
+                # Filled from the reviews by tracks.primitive_with_identity.
+                "review": "", "reviewed_by": "", "review_notes": "",
             })
         else:
             s_sec, s_ts = _at(row.get("start_frame"))

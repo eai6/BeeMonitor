@@ -78,6 +78,18 @@ of pages away.
 </div>
 {% endif %}
 
+{% if shared %}
+<h2 id="shared" class="text-sm font-medium text-gray-500 uppercase mt-8 mb-2">Shared with me</h2>
+<div class="bg-white shadow rounded-lg divide-y">
+  {% for b in shared %}
+  <a href="{% url 'pipelines:batch_detail' b.batch_id %}" class="flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-gray-50">
+    <span class="text-sm text-gray-900">{{ b.pipeline.title }} <span class="text-gray-500">· {{ b.count }} clip{{ b.count|pluralize }} · from {{ b.owner.username }}</span></span>
+    <span class="text-xs text-gray-600">{{ b.role }}</span>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
 {% if solo %}
 {% comment %}
 Runs launched on their own — one-click analysis, a single-clip pipeline run.

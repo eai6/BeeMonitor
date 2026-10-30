@@ -205,15 +205,21 @@ def batch_track_rows(sources, read_csv, provenance):
     return out
 
 
-def primitive_with_identity(kind, rows, by_track, fps=None, start=None):
+def primitive_with_identity(kind, rows, by_track, fps=None, start=None, reviews=None):
     """Saved events / interactions rows as their CSV columns, with the insect's
     species and marker — and, when two insects met, the other one's
-    (``with_species``, ``with_marker_id``). A reference has no identity."""
-    from . import primitives
+    (``with_species``, ``with_marker_id``). A reference has no identity.
 
+    ``reviews`` (``review.event_summaries``) fills an event's review columns."""
+    from . import primitives
+    from .review import event_key, review_columns
+
+    saved = primitives.normalized(kind, rows)
     out = []
-    for row in primitives.export_rows(kind, rows, fps, start):
+    for raw, row in zip(saved, primitives.export_rows(kind, rows, fps, start)):
         merged = dict(row)
+        if kind == "events":
+            merged.update(review_columns(reviews or {}, event_key(raw)))
         merged.update(identity(by_track.get(_key(row.get("track_id")))))
         if kind == "interactions":
             near = row.get("relation") == primitives.NEAR

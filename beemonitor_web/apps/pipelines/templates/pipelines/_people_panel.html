@@ -1,0 +1,60 @@
+{% comment %}
+People invited to this batch (memory/62). Only the launcher sees this. A
+reviewer watches, votes on events and trips, and downloads; a viewer watches
+and downloads. Neither can re-run, cancel or share. The public link (the Share
+panel beside this) stays view-only.
+{% endcomment %}
+<div id="people" class="relative shrink-0" x-data="{ open: window.location.hash === '#people' }">
+  <button type="button" @click="open = !open" :aria-expanded="open.toString()"
+          class="inline-flex items-center gap-2 h-10 px-4 rounded-md text-sm font-semibold border border-gray-300 bg-white text-gray-800 hover:bg-gray-50">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3"></circle><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"></path><path d="M16 11h6M19 8v6"></path></svg>
+    People{% if members %} ({{ members|length }}){% endif %}
+  </button>
+
+  <div x-show="open" x-cloak @click.outside="open = false" @keydown.escape.window="open = false"
+       class="absolute right-0 mt-2 w-[min(460px,calc(100vw-2rem))] bg-white border border-gray-200 rounded-lg shadow-xl p-5 z-30 space-y-4">
+    <div class="flex items-center justify-between">
+      <h2 class="text-base font-semibold text-gray-900">People on this batch</h2>
+      <button type="button" @click="open = false" aria-label="Close" class="w-8 h-8 inline-flex items-center justify-center text-gray-500 hover:text-gray-800">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+      </button>
+    </div>
+    <p class="text-[13px] text-gray-600">Invite people with a BeeMonitor account to look at this batch or review its events and trips.</p>
+
+    <form method="post" action="{% url 'pipelines:batch_members' batch_id %}" class="flex flex-wrap items-end gap-2">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="invite">
+      <label class="flex flex-col gap-1 text-[13px] text-gray-700 flex-1 min-w-[160px]">Username or email
+        <input type="text" name="who" required autocomplete="off" class="h-10 border border-gray-300 rounded-md px-2.5 text-sm">
+      </label>
+      <label class="flex flex-col gap-1 text-[13px] text-gray-700">Role
+        <select name="role" class="h-10 border border-gray-300 rounded-md px-2 text-sm">
+          <option value="reviewer">Reviewer</option>
+          <option value="viewer">Viewer</option>
+        </select>
+      </label>
+      <button type="submit" class="h-10 px-4 rounded-md bg-amber-700 hover:bg-amber-800 text-white text-sm font-semibold">Invite</button>
+    </form>
+
+    <ul class="border border-gray-200 rounded-md divide-y divide-gray-100 text-sm">
+      <li class="flex items-center gap-2 px-3 py-2"><strong class="flex-1">{{ request.user.username }}</strong><span class="text-gray-600">Owner</span></li>
+      {% for m in members %}
+      <li class="flex items-center gap-2 px-3 py-2">
+        <span class="flex-1">{{ m.user.username }}</span>
+        <span class="text-gray-600">{{ m.role|capfirst }}</span>
+        <form method="post" action="{% url 'pipelines:batch_members' batch_id %}">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="remove">
+          <input type="hidden" name="member" value="{{ m.pk }}">
+          <button type="submit" class="h-8 px-2.5 border border-gray-300 rounded-md text-[13px] bg-white hover:bg-gray-50" aria-label="Remove {{ m.user.username }}">Remove</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    <div class="text-[13px] text-gray-700 space-y-1">
+      <p><strong>Reviewer</strong>: watch the clips, vote on events and trips, download the CSVs.</p>
+      <p><strong>Viewer</strong>: watch and download, no votes.</p>
+      <p class="text-gray-600">Neither can re-run, cancel or share the batch. They find it under Runs › Shared with me.</p>
+    </div>
+  </div>
+</div>

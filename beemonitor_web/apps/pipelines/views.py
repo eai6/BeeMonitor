@@ -500,7 +500,19 @@ def run_list(request):
                           ).get_page(request.GET.get("solo_page"))
     solo = list(solo_page.object_list)
 
+    # Batches someone invited this user to (memory/62).
+    from .models import BatchMember
+    shared = []
+    for m in (BatchMember.objects.filter(user=request.user).order_by("-created_at")[:50]):
+        first = (PipelineRun.objects.filter(batch_id=m.batch_id).select_related("pipeline", "user")
+                 .order_by("started_at").first())
+        if first is not None:
+            shared.append({"batch_id": m.batch_id, "role": m.get_role_display().split(" —")[0],
+                           "pipeline": first.pipeline, "owner": first.user,
+                           "count": PipelineRun.objects.filter(batch_id=m.batch_id).count()})
+
     return render(request, "pipelines/runs.html", {
+        "shared": shared,
         "batches": batch_rows,
         "page": page,
         "solo": solo,
@@ -1018,6 +1030,10 @@ def _batch_runs(request, batch_id):
         raise Http404("No such batch.")
     if all(r.user_id == request.user.id for r in runs):
         return runs
+    # Invited to it (memory/62): the whole batch, read-only.
+    from .models import BatchMember
+    if BatchMember.objects.filter(batch_id=batch_id, user=request.user).exists():
+        return runs
     from apps.videos.models import Video
     from . import aggregate
     accessible = set(
@@ -1131,11 +1147,17 @@ def batch_detail(request, batch_id):
 
     # The public link (memory/47): only the launcher can turn it on or off.
     from . import sharing
+    from .models import BatchMember
     can_share = sharing.owns_batch(request.user, batch_id)
     share = sharing.live_share(batch_id) if can_share else None
 
     return render(request, "pipelines/batch.html", {
         "can_share": can_share,
+        # People invited to review or view it (memory/62).
+        "members": (list(BatchMember.objects.filter(batch_id=batch_id).select_related("user"))
+                    if can_share else []),
+        "my_role": (BatchMember.objects.filter(batch_id=batch_id, user=request.user)
+                    .values_list("role", flat=True).first() if not can_share else None),
         "share": share,
         "share_url": (request.build_absolute_uri(reverse("public_batch", args=[share.token]))
                       if share else ""),
@@ -1191,6 +1213,45 @@ def batch_cancel(request, batch_id):
     else:
         messages.info(request, "Nothing to cancel — every clip in this batch has finished.")
     return redirect("pipelines:batch_detail", batch_id=batch_id)
+
+
+@login_required
+@require_POST
+def batch_members(request, batch_id):
+    """Invite someone to review or view a batch, change their role, or remove
+    them (memory/62). Only the batch's launcher."""
+    from django.contrib.auth import get_user_model
+    from django.db.models import Q
+
+    from . import sharing
+    from .models import BatchMember
+
+    if not sharing.owns_batch(request.user, batch_id):
+        raise Http404("No such batch.")
+    back = redirect(reverse("pipelines:batch_detail", args=[batch_id]) + "#people")
+    action = request.POST.get("action", "invite")
+    if action == "remove":
+        BatchMember.objects.filter(batch_id=batch_id, pk=request.POST.get("member")).delete()
+        messages.info(request, "Removed from this batch.")
+        return back
+    role = request.POST.get("role", BatchMember.Role.REVIEWER)
+    if role not in BatchMember.Role.values:
+        messages.error(request, "Unknown role.")
+        return back
+    who = (request.POST.get("who") or "").strip()
+    user = (get_user_model().objects.filter(Q(username__iexact=who) | Q(email__iexact=who))
+            .first() if who else None)
+    if user is None:
+        messages.error(request, f"No BeeMonitor account matches “{who}”. They need to sign up first.")
+        return back
+    if user.pk == request.user.pk:
+        messages.info(request, "That's you: you already own this batch.")
+        return back
+    _member, created = BatchMember.objects.update_or_create(
+        batch_id=batch_id, user=user, defaults={"role": role, "created_by": request.user})
+    messages.success(request, f"{user.username} {'can now' if created else 'now can'} "
+                              f"{'review' if role == BatchMember.Role.REVIEWER else 'view'} this batch.")
+    return back
 
 
 @login_required

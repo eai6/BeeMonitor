@@ -840,7 +840,7 @@ class JobDetailView(LoginRequiredMixin, DetailView):
         # Read scope follows the VIDEO's device shares (viewer/manager see the
         # owner's runs on shared devices), not just who launched the job.
         return (Job.objects.for_viewer(self.request.user)
-                .filter(video__in=Video.accessible(self.request.user, photos=True))
+                .filter(clip_access(self.request.user, photos=True))
                 .select_related("video"))
 
 
@@ -1660,8 +1660,8 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         ctx = super().get_context_data(**kwargs)
         # Device shares grant read access to results on the video's device.
         job = get_object_or_404(
-            Job.objects.for_viewer(self.request.user), pk=self.kwargs["pk"],
-            video__in=Video.accessible(self.request.user, photos=True))
+            Job.objects.for_viewer(self.request.user).filter(
+                clip_access(self.request.user, photos=True)), pk=self.kwargs["pk"])
         ctx["job"] = job
         from apps.videos.timecode import part_label
         ctx["part"] = part_label(job.config, job.video)
@@ -1745,16 +1745,24 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
                 by_track, fps, start),
             list(primitives.INTERACTION_FIELDS) + track_tables.IDENTITY_FIELDS
             + ["with_species", "with_marker_id"])
+        from apps.pipelines import review as event_review
         ctx["events_data"] = _rows_as_table(
             track_tables.primitive_with_identity(
                 "events", pipeline_executors.primitives_for_job(job, "events"),
-                by_track, fps, start),
+                by_track, fps, start, reviews=event_review.summaries_for_job(job)),
             list(primitives.EVENT_FIELDS) + track_tables.IDENTITY_FIELDS)
         ctx["analysis_notes"] = pipeline_executors.analysis_notes_for_job(job)
         # Which tables this clip's pipeline has steps for (memory/60): a table
         # it didn't ask for is not computed here, so this page and the batch
         # say the same thing.
         ctx["measured"] = pipeline_executors.measured_kinds(job)
+        # Event review (memory/62): who may vote here, and how far it got.
+        from apps.pipelines import review as event_review
+        review_run = event_review.run_for_job(job)
+        ctx["can_review"] = bool(review_run and "events" in ctx["measured"]
+                                 and event_review.can_review(self.request.user, review_run))
+        ctx["review_counts"] = (event_review.event_review_counts(review_run)
+                                if review_run and "events" in ctx["measured"] else None)
 
         # The page shows the head of each long table; the CSV beside it has
         # every row. A 10-minute clip's tracking table is ~100k rows x 17
@@ -1792,7 +1800,8 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
             {"label": "Tracks", "value": result.unique_tracks, "color": "text-blue-600"},
             {"label": "Events", "value": _count("events", "events_data"),
              "color": "text-gray-900",
-             "hint": "" if "events" in measured else "No Events step in this pipeline"},
+             "hint": "" if "events" in measured else "No Events step in this pipeline",
+             "review": ctx.get("review_counts")},
             {"label": "Interactions", "value": _count("interactions", "interactions_data"),
              "color": "text-purple-600",
              "hint": "" if "interactions" in measured else "No Interactions step in this pipeline"},
@@ -1990,8 +1999,8 @@ class TrackCropsView(LoginRequiredMixin, View):
     def get(self, request, pk, track_id):
         from apps.pipelines.ops import _read_csv
 
-        job = get_object_or_404(Job.objects.for_viewer(request.user), pk=pk,
-                                video__in=Video.accessible(request.user, photos=True))
+        job = get_object_or_404(Job.objects.for_viewer(request.user).filter(
+            clip_access(request.user, photos=True)), pk=pk)
         result = getattr(job, "result", None)
         df = _read_csv(getattr(result, "crops_csv_path", "") or "") if result else None
         crops = []
@@ -2018,8 +2027,8 @@ class TrackOverlayView(LoginRequiredMixin, View):
     """
 
     def get(self, request, pk):
-        job = get_object_or_404(Job.objects.for_viewer(request.user), pk=pk,
-                                video__in=Video.accessible(request.user))
+        job = get_object_or_404(Job.objects.for_viewer(request.user).filter(
+            clip_access(request.user)), pk=pk)
         return overlay_response(request, job)
 
 
@@ -2040,7 +2049,7 @@ def overlay_response(request, job, cache_control="private, max-age=3600"):
         raise Http404("This clip has no tracks.")
 
     if request.GET.get("part") == "events":
-        response = HttpResponse(_json.dumps(overlay_live(job), separators=(",", ":")),
+        response = HttpResponse(_json.dumps(overlay_live(job, request.user), separators=(",", ":")),
                                 content_type="application/json")
         response["Cache-Control"] = "private, no-store"
         return response
@@ -2088,10 +2097,11 @@ def stored_overlay(job):
     return body
 
 
-def overlay_live(job):
+def overlay_live(job, user=None):
     """What the overlay draws on top of the boxes, read live from the run:
 
-    - ``events``: ``[frame, track_id, action, reference, end_frame, at_edge]``
+    - ``events``: ``[frame, track_id, action, reference, end_frame, at_edge,
+      event_key, your_verdict, accepted, rejected]`` (memory/62)
     - ``interactions``: ``[start_frame, end_frame, track_id, with, relation,
       min_distance_bl]``
     - ``regions``: the pipeline's ROI and reference objects (0..1 outlines)
@@ -2109,6 +2119,11 @@ def overlay_live(job):
         except (TypeError, ValueError):
             return None
 
+    from apps.pipelines import review as event_review
+
+    run = pipeline_executors._run_for_job(job)
+    summaries = event_review.event_summaries(run) if run is not None else {}
+    mine = event_review.user_votes(run, user) if run is not None and user is not None else {}
     events, interactions = [], []
     try:
         for e in primitives.normalized(
@@ -2116,8 +2131,11 @@ def overlay_live(job):
             frame, tid = _int(e.get("frame")), _int(e.get("track_id"))
             if frame is None or tid is None:
                 continue
+            key = event_review.event_key(e)
+            s = summaries.get(key) or {}
             events.append([frame, tid, e.get("action") or "", str(e.get("reference") or ""),
-                           _int(e.get("end_frame")), e.get("at_edge")])
+                           _int(e.get("end_frame")), e.get("at_edge"),
+                           key, mine.get(key), s.get("accepted", 0), s.get("rejected", 0)])
         for r in primitives.normalized(
                 "interactions", pipeline_executors.primitives_for_job(job, "interactions")):
             start, end, tid = _int(r.get("start_frame")), _int(r.get("end_frame")), _int(r.get("track_id"))
@@ -2168,6 +2186,45 @@ def render_spec(job, layers):
     return spec
 
 
+def clip_access(user, photos=False):
+    """Which jobs' clip pages a user may open: clips they can see (their own,
+    shared devices), and the clips of batches they were invited to review or
+    view (memory/62)."""
+    from django.db.models import Q
+
+    from apps.pipelines.review import member_job_ids
+
+    return (Q(video__in=Video.accessible(user, photos=photos))
+            | Q(pk__in=member_job_ids(user)))
+
+
+class EventReviewView(LoginRequiredMixin, View):
+    """Record, change or take back one reviewer's call on an event (memory/62).
+
+    JSON body ``{"event_key", "verdict": "accepted"|"rejected"|null, "reason"}``.
+    Only the run's launcher and the batch's invited reviewers may vote.
+    """
+
+    def post(self, request, pk):
+        import json as _json
+
+        from apps.pipelines import review as event_review
+
+        job = get_object_or_404(Job, pk=pk)
+        run = event_review.run_for_job(job)
+        if run is None or not event_review.can_review(request.user, run):
+            raise Http404("You can't review this clip.")
+        try:
+            body = _json.loads(request.body or b"{}")
+            verdict = event_review.set_event_vote(
+                run, request.user, str(body["event_key"]), body.get("verdict"),
+                body.get("reason", ""))
+        except (KeyError, ValueError, TypeError) as e:
+            return JsonResponse({"ok": False, "error": str(e)}, status=400)
+        return JsonResponse({"ok": True, "verdict": verdict,
+                             "counts": event_review.event_review_counts(run)})
+
+
 class JobPrimitiveCsvView(LoginRequiredMixin, View):
     """The computed events/interactions for one clip, as CSV.
 
@@ -2186,10 +2243,8 @@ class JobPrimitiveCsvView(LoginRequiredMixin, View):
 
         if kind not in ("events", "interactions", "tracks", "tracking", "detections"):
             raise Http404("Unknown table.")
-        job = get_object_or_404(Job.objects.for_viewer(request.user), pk=pk)
-        if job.user_id != request.user.id and not Video.accessible(
-                request.user, photos=True).filter(pk=job.video_id).exists():
-            raise Http404("No such job.")
+        job = get_object_or_404(Job.objects.for_viewer(request.user).filter(
+            clip_access(request.user, photos=True)), pk=pk)
 
         result = getattr(job, "result", None)
         tracking = (_load_csv_from_storage(getattr(result, "tracking_csv_path", "") or "")
@@ -2207,8 +2262,10 @@ class JobPrimitiveCsvView(LoginRequiredMixin, View):
         else:
             if kind not in pipeline_executors.measured_kinds(job):
                 raise Http404(f"This clip's pipeline has no {kind} step.")
+            from apps.pipelines import review as event_review
             rows = track_tables.primitive_with_identity(
-                kind, pipeline_executors.primitives_for_job(job, kind), by_track, fps, start)
+                kind, pipeline_executors.primitives_for_job(job, kind), by_track, fps, start,
+                reviews=event_review.summaries_for_job(job) if kind == "events" else None)
             fields = (list(primitives.EVENT_FIELDS) + track_tables.IDENTITY_FIELDS
                       if kind == "events" else
                       list(primitives.INTERACTION_FIELDS) + track_tables.IDENTITY_FIELDS

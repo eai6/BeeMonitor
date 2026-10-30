@@ -110,7 +110,10 @@ class EndpointTests(TestCase):
             r = self.client.get(self.url, {"part": "events"})
         self.assertEqual(r.status_code, 200)
         self.assertEqual(json.loads(r.content)["events"],
-                         [[4, 1, "stay", "reference_3", 9, False]])
+                         # + the event's key, your vote, and the accepted /
+                         # rejected counts (memory/62).
+                         [[4, 1, "stay", "reference_3", 9, False,
+                           "stay|reference_3|1|4", None, 0, 0]])
         self.assertEqual(r["Cache-Control"], "private, no-store")
         s3.download_to_stream.assert_not_called()
         s3.upload_stream.assert_not_called()

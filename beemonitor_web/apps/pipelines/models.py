@@ -218,3 +218,103 @@ class BatchShare(models.Model):
 
     def __str__(self):
         return f"share {str(self.batch_id)[:8]} ({'off' if self.revoked_at else 'on'})"
+
+
+class BatchMember(models.Model):
+    """Someone the batch's launcher invited (memory/62), like an annotation
+    project's ``ProjectShare``. A reviewer watches, votes on events and trips,
+    and downloads; a viewer watches and downloads. Neither can re-run, cancel
+    or share the batch. The public link (``BatchShare``) stays view-only."""
+
+    class Role(models.TextChoices):
+        REVIEWER = "reviewer", "Reviewer — watch, vote on events and trips, download"
+        VIEWER = "viewer", "Viewer — watch and download"
+
+    batch_id = models.UUIDField(db_index=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name="batch_memberships")
+    role = models.CharField(max_length=16, choices=Role.choices, default=Role.REVIEWER)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                                   null=True, blank=True, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("batch_id", "user")
+        ordering = ["user__username"]
+
+    def __str__(self):
+        return f"{self.user} on {str(self.batch_id)[:8]} ({self.role})"
+
+
+class EventReview(models.Model):
+    """One reviewer's call on one detected event (memory/62).
+
+    The event is identified by itself — action, reference, track, frame — not
+    by a row number, and its fields are copied here, so a recount that removes
+    the event keeps the vote (shown as "no longer detected"). A review never
+    changes the detected events; it sits beside them.
+    """
+
+    class Verdict(models.TextChoices):
+        ACCEPTED = "accepted", "Accepted"
+        REJECTED = "rejected", "Rejected"
+
+    run = models.ForeignKey(PipelineRun, on_delete=models.CASCADE, related_name="event_reviews")
+    event_key = models.CharField(max_length=200)
+    action = models.CharField(max_length=16)
+    reference = models.CharField(max_length=100, blank=True)
+    track_id = models.CharField(max_length=32, blank=True)
+    frame = models.IntegerField(null=True, blank=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name="event_reviews")
+    verdict = models.CharField(max_length=16, choices=Verdict.choices)
+    reason = models.CharField(max_length=40, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("run", "event_key", "user")
+        indexes = [models.Index(fields=["run", "event_key"], name="evrev_run_key")]
+
+    def __str__(self):
+        return f"{self.user} {self.verdict} {self.event_key}"
+
+
+class TripReview(models.Model):
+    """One reviewer's call on a suggested trip: an exit and the entry the
+    same bee came back on (memory/62 §4b).
+
+    A trip is data only when a person says so: accepted (the suggested pair or
+    one the reviewer re-linked to), rejected, "didn't come back in this period"
+    (no entry) or "can't tell". The exit and the entry may be in different
+    clips, so each side names its own run.
+    """
+
+    class Verdict(models.TextChoices):
+        ACCEPTED = "accepted", "Same bee, a trip"
+        REJECTED = "rejected", "Not this pair"
+
+    exit_run = models.ForeignKey(PipelineRun, on_delete=models.CASCADE, related_name="trip_exits")
+    exit_key = models.CharField(max_length=200)
+    entry_run = models.ForeignKey(PipelineRun, on_delete=models.SET_NULL, null=True, blank=True,
+                                  related_name="trip_entries")
+    entry_key = models.CharField(max_length=200, blank=True)
+    reference = models.CharField(max_length=100, blank=True)
+    exit_track = models.CharField(max_length=32, blank=True)
+    exit_frame = models.IntegerField(null=True, blank=True)
+    entry_track = models.CharField(max_length=32, blank=True)
+    entry_frame = models.IntegerField(null=True, blank=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name="trip_reviews")
+    verdict = models.CharField(max_length=16, choices=Verdict.choices)
+    # "relinked", "didn't come back", "can't tell", or blank.
+    reason = models.CharField(max_length=40, blank=True)
+    relinked = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("exit_run", "exit_key", "user")
+
+    def __str__(self):
+        return f"{self.user} {self.verdict} trip from {self.exit_key}"

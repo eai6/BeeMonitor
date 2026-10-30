@@ -20,6 +20,7 @@ urlpatterns = [
     path("<int:pk>/tracks/<int:track_id>/crops.json", views.TrackCropsView.as_view(),
          name="track_crops"),
     path("<int:pk>/overlay.json", views.TrackOverlayView.as_view(), name="track_overlay"),
+    path("<int:pk>/events/review", views.EventReviewView.as_view(), name="event_review"),
     path("<int:pk>/results/<str:kind>.csv", views.JobPrimitiveCsvView.as_view(),
          name="results_csv"),
     path("<int:pk>/annotate/", views.GenerateAnnotatedVideoView.as_view(), name="annotate_video"),
