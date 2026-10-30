@@ -205,12 +205,15 @@ def batch_track_rows(sources, read_csv, provenance):
     return out
 
 
-def primitive_with_identity(kind, rows, by_track, fps=None, start=None, reviews=None):
+def primitive_with_identity(kind, rows, by_track, fps=None, start=None, reviews=None,
+                            added=None):
     """Saved events / interactions rows as their CSV columns, with the insect's
     species and marker — and, when two insects met, the other one's
     (``with_species``, ``with_marker_id``). A reference has no identity.
 
-    ``reviews`` (``review.event_summaries``) fills an event's review columns."""
+    ``reviews`` (``review.event_summaries``) fills an event's review columns;
+    ``added`` (``review.added_rows``) appends the events reviewers said the
+    system missed, as rows with review = added (memory/62 §3b)."""
     from . import primitives
     from .review import event_key, review_columns
 
@@ -227,4 +230,16 @@ def primitive_with_identity(kind, rows, by_track, fps=None, start=None, reviews=
             merged.update(with_species=other.get("species", ""),
                           with_marker_id=other.get("marker_id", ""))
         out.append(merged)
+    if kind == "events" and added:
+        for a in added:
+            row = {"frame": a["frame"], "track_id": a["track_id"], "action": a["action"],
+                   "reference": a["reference"], "at_edge": None}
+            if a["action"] == "stay" and a.get("end_frame") is not None and fps:
+                row["end_frame"] = a["end_frame"]
+                row["duration_sec"] = round((a["end_frame"] - a["frame"]) / float(fps), 3)
+            exported = dict(primitives.export_rows("events", [row], fps, start)[0])
+            exported.update(identity(by_track.get(_key(a["track_id"])) if a["track_id"] else None))
+            exported.update(review="added", reviewed_by=a["user"], review_notes=a["note"])
+            out.append(exported)
+        out.sort(key=lambda r: (r.get("clip_sec") is None, r.get("clip_sec") or 0))
     return out

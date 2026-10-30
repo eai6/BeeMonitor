@@ -7,7 +7,8 @@
 {% endcomment %}
 <section class="bg-white shadow rounded-lg mb-8" id="track-overlay"
          data-overlay="{{ overlay_url }}"
-         {% if can_review %}data-review-url="{% url 'analysis:event_review' job.pk %}"{% endif %}
+         {% if can_review %}data-review-url="{% url 'analysis:event_review' job.pk %}"
+         data-add-url="{% url 'analysis:add_missed_event' job.pk %}"{% endif %}
          data-crops-url="{% url 'analysis:track_crops' job.pk 0 %}">
   <div class="px-6 py-3 border-b border-gray-200 flex flex-wrap gap-3 justify-between items-center">
     <h2 class="text-lg font-medium text-gray-900">Video with tracks</h2>
@@ -15,6 +16,7 @@
     {% csrf_token %}
     <div class="flex flex-wrap items-center gap-3 text-sm">
       <span data-rv-progress class="text-gray-700"></span>
+      <button type="button" data-am-open class="h-10 px-3 rounded border border-amber-700 text-amber-800 hover:bg-amber-50 font-semibold" title="An insect went in or came out and the system didn't catch it">+ Add missed event (A)</button>
       <button type="button" data-rv-start class="h-10 px-3 rounded bg-amber-700 hover:bg-amber-800 text-white font-semibold">Review events</button>
       <button type="button" data-rv-exit hidden class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">Exit review</button>
     </div>
@@ -58,6 +60,7 @@
             <button type="button" data-rv-vote="accepted" class="h-11 px-5 rounded bg-green-700 hover:bg-green-800 font-bold">Yes <span class="font-normal opacity-80">(Y)</span></button>
             <button type="button" data-rv-vote="rejected" class="h-11 px-5 rounded bg-red-700 hover:bg-red-800 font-bold">No <span class="font-normal opacity-80">(N)</span></button>
             <button type="button" data-rv-replay class="h-11 px-3.5 rounded border border-gray-500 hover:bg-gray-800">Replay 2 s (R)</button>
+            <button type="button" data-rv-missed class="h-11 px-3.5 rounded border border-amber-400 text-amber-200 hover:bg-gray-800">Missed one here? (A)</button>
             <button type="button" data-rv-skip class="h-11 px-3.5 rounded border border-gray-500 hover:bg-gray-800 ml-auto">Skip (→)</button>
           </div>
           <div data-rv-reasons hidden class="flex flex-wrap gap-1.5 items-center text-[13px]">
@@ -186,6 +189,7 @@
 {% endif %}
 </section>
 <script src="{% static 'js/track_overlay.js' %}"></script>
+{% if can_review %}<script src="{% static 'js/add_missed.js' %}"></script>{% endif %}
 <script>
 (function () {
   var root = document.getElementById('track-overlay');
@@ -256,7 +260,8 @@
     var w = 5 * ov.fps();
     var evs = (d.events || []).filter(function (e) { return Math.abs(e[0] - frame) <= w; })
       .sort(function (a, b) { return Math.abs(a[0] - frame) - Math.abs(b[0] - frame); }).slice(0, 6);
-    var key = evs.map(function (e) { return e.join('|'); }).join(',');
+    var key = evs.map(function (e) { return e.join('|'); }).join(',') + '/' +
+      (d.added || []).filter(function (a) { return Math.abs(a[0] - frame) <= w; }).map(function (a) { return a[5]; }).join(',');
     if (key === nearKey) return;
     nearKey = key;
     box.innerHTML = '';
@@ -289,6 +294,30 @@
       }
       box.appendChild(row);
     });
+    (d.added || []).filter(function (a) { return Math.abs(a[0] - frame) <= w; }).forEach(function (a) {
+      var row = document.createElement('div');
+      row.className = 'flex items-center gap-2';
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'flex gap-2.5 text-left hover:underline min-h-[28px] flex-1';
+      b.innerHTML = '<span class="font-mono text-gray-600"></span><span></span>';
+      b.children[0].textContent = fmt(sec(a[0]));
+      b.children[1].textContent = a[2] + ' ' + tubeName(a[3]) + (a[1] != null ? ' · track ' + a[1] : '') +
+        ' · added by ' + (a[7] ? 'you' : a[6]);
+      b.children[1].className = 'italic text-amber-900';
+      b.addEventListener('click', function () { seekTo(a[0]); });
+      row.appendChild(b);
+      if (reviewUrl && a[7]) {
+        var rm = document.createElement('button');
+        rm.type = 'button';
+        rm.className = 'h-9 px-2 rounded text-xs border border-gray-300 bg-white hover:bg-gray-50';
+        rm.textContent = 'Remove';
+        rm.setAttribute('aria-label', 'Remove the event you added at ' + fmt(sec(a[0])));
+        rm.addEventListener('click', function () { removeAdded(a[5]); });
+        row.appendChild(rm);
+      }
+      box.appendChild(row);
+    });
   }
 
   // ── Event review (memory/62) ────────────────────────────────────────────
@@ -306,8 +335,9 @@
     var evs = d.events || [];
     var reviewed = evs.filter(function (e) { return (e[8] || 0) + (e[9] || 0) > 0; });
     var rejected = reviewed.filter(function (e) { return (e[9] || 0) > 0 && !(e[8] || 0); }).length;
+    var added = (d.added || []).length;
     el.textContent = reviewed.length + ' of ' + evs.length + ' events reviewed' +
-      (rejected ? ' · ' + rejected + ' rejected' : '');
+      (rejected ? ' · ' + rejected + ' rejected' : '') + (added ? ' · ' + added + ' added' : '');
   }
   function vote(e, verdict, reason) {
     var v = (e[7] === verdict && reason == null) ? null : verdict;
@@ -408,6 +438,40 @@
     root.querySelector('[data-rv-exit]').hidden = true;
     if (finished) status.textContent = 'Review finished: every event in this clip has been shown.';
   }
+  // Missed events (memory/62 §3b).
+  var addUrl = root.getAttribute('data-add-url');
+  function refreshLive() {
+    var url = root.getAttribute('data-overlay');
+    return fetch(url + (url.indexOf('?') < 0 ? '?' : '&') + 'part=events', {credentials: 'same-origin'})
+      .then(function (r) { return r.json(); }).then(function (live) {
+        var d = ov.data();
+        if (d) { d.added = live.added || []; }
+        nearKey = ''; renderNear(ov.frame()); renderMarks(); paintProgress();
+      }).catch(function () {});
+  }
+  function removeAdded(id) {
+    fetch(addUrl, {method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
+      body: JSON.stringify({remove: id})}).then(refreshLive);
+  }
+  var adder = (addUrl && window.AddMissed) ? AddMissed({
+    stage: stage, video: video, ov: ov, rotated: rotated,
+    context: function () { return {url: addUrl, csrf: csrfToken()}; },
+    onSaved: function () { status.textContent = 'Added. It shows dashed on the lanes and in the Events CSV as review = added.'; refreshLive(); }
+  }) : null;
+  if (adder) {
+    root.querySelector('[data-am-open]').addEventListener('click', adder.open);
+    var missedBtn = root.querySelector('[data-rv-missed]');
+    if (missedBtn) missedBtn.addEventListener('click', function () { if (card) card.hidden = true; adder.open(); });
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key.toLowerCase() !== 'a' || adder.isOpen() || ev.metaKey || ev.ctrlKey ||
+          /^(INPUT|TEXTAREA|SELECT)$/.test((ev.target || {}).tagName || '')) return;
+      ev.preventDefault();
+      if (card) card.hidden = true;
+      adder.open();
+    });
+  }
+
   if (reviewUrl && card) {
     root.querySelector('[data-rv-start]').addEventListener('click', rvStart);
     root.querySelector('[data-rv-exit]').addEventListener('click', function () { rvStop(false); });
@@ -474,6 +538,20 @@
     track.appendChild(m);
   }
 
+  // An event a reviewer added as missed: hollow and dashed (memory/62 §3b).
+  function addAddedMark(track, a, total) {
+    var m = document.createElement('button');
+    m.type = 'button';
+    m.className = 'absolute top-0.5 bottom-0.5 rounded-sm bg-white';
+    m.style.left = (100 * a[0] / total) + '%';
+    m.style.width = a[2] === 'stay' && a[4] != null ? Math.max(0.6, 100 * (a[4] - a[0]) / total) + '%' : '6px';
+    m.style.border = '2px dashed ' + (EVENT_COLORS[a[2]] || '#374151');
+    m.title = fmt(sec(a[0])) + ' ' + a[2] + ' tube ' + tubeName(a[3]) + ', added by ' + (a[7] ? 'you' : a[6]);
+    m.setAttribute('aria-label', m.title);
+    m.addEventListener('click', function (ev) { ev.stopPropagation(); video.pause(); ov.seekFrame(a[0]); });
+    track.appendChild(m);
+  }
+
   function addPlayhead(track) {
     var now = document.createElement('div');
     now.setAttribute('data-ov-marks-now', '');
@@ -493,8 +571,12 @@
       d.events.forEach(function (e) { addMark(bar, e, total); });
       addPlayhead(bar);
     } else {
-      var tubes = {};
+      var tubes = {}, addedBy = {};
       d.events.forEach(function (e) { (tubes[e[3]] = tubes[e[3]] || []).push(e); });
+      (d.added || []).forEach(function (a) {
+        tubes[a[3]] = tubes[a[3]] || [];
+        (addedBy[a[3]] = addedBy[a[3]] || []).push(a);
+      });
       var order = Object.keys(tubes).sort(function (a, b) {
         return tubes[b].length - tubes[a].length || (parseInt(tubeName(a), 10) - parseInt(tubeName(b), 10));
       });
@@ -524,6 +606,7 @@
           video.currentTime = video.duration * Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
         });
         evs.forEach(function (e) { addMark(track, e, total); });
+        (addedBy[ref] || []).forEach(function (a) { addAddedMark(track, a, total); });
         addPlayhead(track);
         var count = document.createElement('span');
         count.className = 'w-14 shrink-0 font-mono text-[11px] text-gray-600';

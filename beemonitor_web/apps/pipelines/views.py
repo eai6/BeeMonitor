@@ -1151,6 +1151,8 @@ def batch_detail(request, batch_id):
     can_share = sharing.owns_batch(request.user, batch_id)
     share = sharing.live_share(batch_id) if can_share else None
 
+    from . import review as review_mod
+    photos_kind = kind == "photo"
     return render(request, "pipelines/batch.html", {
         "can_share": can_share,
         # People invited to review or view it (memory/62).
@@ -1163,6 +1165,11 @@ def batch_detail(request, batch_id):
                       if share else ""),
         "photos": kind == "photo",
         "rows": rows,
+        # Events and trips review metrics (memory/62); None until something
+        # in the batch has been reviewed.
+        "review_summary": (review_mod.batch_review_summary(
+            [r["run"] for r in rows], {r["run"].pk: r.get("review") for r in rows})
+            if not photos_kind else None),
         "outcome": outcome,
         "failure_groups": failure_groups,
         "downloads": downloads,

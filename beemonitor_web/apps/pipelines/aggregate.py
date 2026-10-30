@@ -299,12 +299,13 @@ def primitive_csv(runs, kind):
         from . import tracks
         start = timing.clip_start(video)
         provenance = _provenance({"video": video, "title": video.title or f"Video {video.pk}"})
-        from .review import event_summaries
+        from .review import added_rows, event_summaries
         reviews = event_summaries(run) if kind == "events" else None
-        for out in outputs:
+        rows = [r for out in outputs for r in (out.get("rows") or [])]
+        for out in [{"rows": rows}]:
             for row in tracks.primitive_with_identity(
                     kind, out.get("rows") or [], tracks.by_track_of(result), fps, start,
-                    reviews=reviews):
+                    reviews=reviews, added=added_rows(run) if kind == "events" else None):
                 all_rows.append({**provenance, **row})
 
     if not all_rows:

@@ -131,9 +131,14 @@ def event_review_counts(run, rows=None):
     summaries = event_summaries(run)
     current = {k: s for k, s in summaries.items() if k in keys}
     calls = [s["review"] for s in current.values()]
+    from .models import AddedEvent
+
+    added = AddedEvent.objects.filter(run=run).count()
+    precision, recall = quality(calls.count("accepted"), calls.count("rejected"), added)
     return {"events": len(keys), "reviewed": len(current),
             "accepted": calls.count("accepted"), "rejected": calls.count("rejected"),
-            "disputed": calls.count("disputed"),
+            "disputed": calls.count("disputed"), "added": added,
+            "precision": precision, "recall": recall,
             "gone": len(summaries) - len(current)}
 
 
@@ -155,17 +160,28 @@ def summaries_for_job(job):
     return event_summaries(run) if run is not None else {}
 
 
+def added_for_job(job):
+    run = run_for_job(job)
+    return added_rows(run) if run is not None else []
+
+
 def batch_review_counts(runs):
     """``{run pk: counts}`` (as ``event_review_counts``) for many runs in two
     queries' worth of work; None for a run with no Events step."""
     from .aggregate import analyzer_outputs
     from .models import EventReview
 
+    from django.db.models import Count
+
+    from .models import AddedEvent
+
     runs = list(runs)
     votes = {}
     for run_id, key, verdict in (EventReview.objects.filter(run__in=runs)
                                  .values_list("run_id", "event_key", "verdict")):
         votes.setdefault(run_id, {}).setdefault(key, []).append(verdict)
+    added = dict(AddedEvent.objects.filter(run__in=runs).values("run_id")
+                 .annotate(n=Count("id")).values_list("run_id", "n"))
     out = {}
     for run in runs:
         outs = [o for k, o in analyzer_outputs(run) if k == "events"]
@@ -177,8 +193,57 @@ def batch_review_counts(runs):
         calls = [combined(v) for k, v in mine.items() if k in keys]
         out[run.pk] = {"events": len(keys), "reviewed": len(calls),
                        "accepted": calls.count("accepted"), "rejected": calls.count("rejected"),
-                       "disputed": calls.count("disputed")}
+                       "disputed": calls.count("disputed"), "added": added.get(run.pk, 0)}
     return out
+
+
+def batch_review_summary(runs, per_run=None):
+    """The batch page's review metrics (memory/62): events (precision and
+    recall from reviewers' calls and added events) and trips. None when
+    nothing in the batch has been reviewed."""
+    from .models import TripReview
+
+    runs = list(runs)
+    per_run = per_run if per_run is not None else batch_review_counts(runs)
+    ev = {"accepted": 0, "rejected": 0, "disputed": 0, "added": 0, "reviewed": 0,
+          "events": 0, "clips": 0}
+    for counts in per_run.values():
+        if not counts:
+            continue
+        ev["events"] += counts["events"]
+        for k in ("accepted", "rejected", "disputed", "added", "reviewed"):
+            ev[k] += counts[k]
+        if counts["reviewed"] or counts["added"]:
+            ev["clips"] += 1
+    ev["precision"], ev["recall"] = quality(ev["accepted"], ev["rejected"], ev["added"])
+
+    by_exit = {}
+    for r in TripReview.objects.filter(exit_run__in=runs):
+        by_exit.setdefault((r.exit_run_id, r.exit_key), []).append(r)
+    trips = {"reviewed": len(by_exit), "accepted": 0, "relinked": 0, "rejected": 0,
+             "didnt_come_back": 0, "cant_tell": 0, "disputed": 0}
+    for calls in by_exit.values():
+        call = combined([c.verdict for c in calls])
+        if call == "disputed":
+            trips["disputed"] += 1
+        elif call == "accepted":
+            trips["accepted"] += 1
+            if any(c.relinked for c in calls):
+                trips["relinked"] += 1
+        else:
+            trips["rejected"] += 1
+            reasons = {c.reason for c in calls}
+            if "didn't come back" in reasons:
+                trips["didnt_come_back"] += 1
+            if "can't tell" in reasons:
+                trips["cant_tell"] += 1
+    # How often the suggested pairing was right as it stood.
+    as_suggested = trips["accepted"] - trips["relinked"]
+    trips["suggestion_right"] = (round(100 * as_suggested / trips["reviewed"])
+                                 if trips["reviewed"] else None)
+    if not (ev["reviewed"] or ev["added"] or trips["reviewed"]):
+        return None
+    return {"events": ev, "trips": trips}
 
 
 def member_job_ids(user):
@@ -193,3 +258,90 @@ def member_job_ids(user):
     batches = BatchMember.objects.filter(user=user).values_list("batch_id", flat=True)
     return [j for run in PipelineRun.objects.filter(batch_id__in=batches).only("context")
             if (j := run_job_id(run)) is not None]
+
+
+# ── Missed events (memory/62 §3b) ────────────────────────────────────────────
+
+ACTIONS = ("exit", "enter", "stay")
+DUPLICATE_SECONDS = 2.0
+
+
+class Duplicate(Exception):
+    """A detected event of the same tube and action is this close: probably the
+    same event, so the reviewer is asked before adding it again."""
+
+    def __init__(self, row):
+        super().__init__("A detected event of the same tube and action is within "
+                         f"{DUPLICATE_SECONDS:g} s")
+        self.row = row
+
+
+def _detected_rows(run):
+    from .aggregate import analyzer_outputs
+
+    return [primitives.normalize_event(r) for k, out in analyzer_outputs(run) if k == "events"
+            for r in (out.get("rows") or [])]
+
+
+def add_event(run, user, *, frame, action, reference, track_id="", end_frame=None,
+              note="", fps=25.0, force=False):
+    """Record an event the system missed. Raises ValueError on a bad request
+    and Duplicate when a detected event of the same tube and action is within
+    DUPLICATE_SECONDS (unless ``force``)."""
+    from .models import AddedEvent
+
+    if action not in ACTIONS:
+        raise ValueError("action must be exit, enter or stay")
+    reference = primitives.reference_id(str(reference or "").strip())
+    if not reference:
+        raise ValueError("pick the tube (reference)")
+    try:
+        frame = int(frame)
+        end_frame = int(end_frame) if end_frame not in (None, "") else None
+    except (TypeError, ValueError):
+        raise ValueError("frame must be a number")
+    if action == "stay" and (end_frame is None or end_frame < frame):
+        raise ValueError("a stay needs an end at or after its start")
+    if action != "stay":
+        end_frame = None
+    if not force:
+        window = DUPLICATE_SECONDS * float(fps or 25)
+        for row in _detected_rows(run):
+            try:
+                near = abs(int(row.get("frame")) - frame) <= window
+            except (TypeError, ValueError):
+                continue
+            if near and row.get("action") == action and str(row.get("reference")) == reference:
+                raise Duplicate(row)
+    return AddedEvent.objects.create(
+        run=run, user=user, frame=frame, end_frame=end_frame, action=action,
+        reference=reference, track_id=str(track_id or "").strip()[:32], note=(note or "")[:200])
+
+
+def remove_added(run, user, pk):
+    """The person who added it, or the run's owner, may take it back."""
+    from .models import AddedEvent
+
+    q = AddedEvent.objects.filter(run=run, pk=pk)
+    if run.user_id != user.pk:
+        q = q.filter(user=user)
+    return q.delete()[0] > 0
+
+
+def added_rows(run):
+    """The run's added events, oldest first, as dicts the pages and CSVs read."""
+    from .models import AddedEvent
+
+    return [{"id": a.pk, "frame": a.frame, "end_frame": a.end_frame, "action": a.action,
+             "reference": a.reference, "track_id": a.track_id, "user": a.user.username,
+             "user_id": a.user_id, "note": a.note}
+            for a in AddedEvent.objects.filter(run=run).select_related("user")]
+
+
+def quality(accepted, rejected, added):
+    """Precision and recall from reviews, as percentages, or None when there is
+    nothing to divide by. Precision = right among the checked detections;
+    recall = found among the events people confirmed or added."""
+    precision = round(100 * accepted / (accepted + rejected)) if accepted + rejected else None
+    recall = round(100 * accepted / (accepted + added)) if accepted + added else None
+    return precision, recall

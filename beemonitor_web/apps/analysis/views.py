@@ -1749,7 +1749,8 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         ctx["events_data"] = _rows_as_table(
             track_tables.primitive_with_identity(
                 "events", pipeline_executors.primitives_for_job(job, "events"),
-                by_track, fps, start, reviews=event_review.summaries_for_job(job)),
+                by_track, fps, start, reviews=event_review.summaries_for_job(job),
+                added=event_review.added_for_job(job)),
             list(primitives.EVENT_FIELDS) + track_tables.IDENTITY_FIELDS)
         ctx["analysis_notes"] = pipeline_executors.analysis_notes_for_job(job)
         # Which tables this clip's pipeline has steps for (memory/60): a table
@@ -2162,7 +2163,16 @@ def overlay_live(job, user=None):
                         "points": _outline(roi, geometry.get("hotel_polygon"))})
     regions += [{"label": r["id"], "kind": "reference", "points": _outline(r["box"], r["points"])}
                 for r in ops.roi_references(geometry)]
-    return {"events": events, "interactions": interactions, "regions": regions, "style": STYLE}
+    # Events reviewers said the system missed (memory/62 §3b):
+    # [frame, track_id|null, action, reference, end_frame, id, by, yours].
+    added = []
+    if run is not None:
+        for a in event_review.added_rows(run):
+            added.append([a["frame"], _int(a["track_id"]), a["action"], a["reference"],
+                          a["end_frame"], a["id"], a["user"],
+                          bool(user is not None and getattr(user, "pk", None) == a["user_id"])])
+    return {"events": events, "interactions": interactions, "regions": regions,
+            "added": added, "style": STYLE}
 
 
 def render_spec(job, layers):
@@ -2225,6 +2235,52 @@ class EventReviewView(LoginRequiredMixin, View):
                              "counts": event_review.event_review_counts(run)})
 
 
+class AddMissedEventView(LoginRequiredMixin, View):
+    """Add an event the system missed, or take one back (memory/62 §3b).
+
+    JSON ``{"frame", "action", "reference", "track_id", "end_frame", "note",
+    "force"}`` adds; ``{"remove": id}`` removes. Adding next to a detected
+    event of the same tube and action (within 2 s) is refused with
+    ``duplicate`` until the reviewer confirms with ``force``.
+    """
+
+    def post(self, request, pk):
+        import json as _json
+
+        from apps.pipelines import review as event_review
+        from apps.pipelines.ops import fps_with_source
+
+        job = get_object_or_404(Job, pk=pk)
+        run = event_review.run_for_job(job)
+        if run is None or not event_review.can_review(request.user, run):
+            raise Http404("You can't review this clip.")
+        try:
+            body = _json.loads(request.body or b"{}")
+        except ValueError:
+            return JsonResponse({"ok": False, "error": "bad JSON"}, status=400)
+        if body.get("remove") is not None:
+            gone = event_review.remove_added(run, request.user, body["remove"])
+            return JsonResponse({"ok": gone, "removed": gone,
+                                 "counts": event_review.event_review_counts(run)},
+                                status=200 if gone else 404)
+        result = getattr(job, "result", None)
+        fps = fps_with_source((result.summary_stats if result else {}) or {}, job.video)[0]
+        try:
+            added = event_review.add_event(
+                run, request.user, frame=body.get("frame"), action=body.get("action"),
+                reference=body.get("reference"), track_id=body.get("track_id") or "",
+                end_frame=body.get("end_frame"), note=body.get("note") or "", fps=fps,
+                force=bool(body.get("force")))
+        except event_review.Duplicate as d:
+            return JsonResponse({"ok": False, "duplicate": True, "error": str(d),
+                                 "near": {"frame": d.row.get("frame"),
+                                          "track_id": d.row.get("track_id")}}, status=409)
+        except ValueError as e:
+            return JsonResponse({"ok": False, "error": str(e)}, status=400)
+        return JsonResponse({"ok": True, "id": added.pk, "reference": added.reference,
+                             "counts": event_review.event_review_counts(run)})
+
+
 class JobPrimitiveCsvView(LoginRequiredMixin, View):
     """The computed events/interactions for one clip, as CSV.
 
@@ -2265,7 +2321,8 @@ class JobPrimitiveCsvView(LoginRequiredMixin, View):
             from apps.pipelines import review as event_review
             rows = track_tables.primitive_with_identity(
                 kind, pipeline_executors.primitives_for_job(job, kind), by_track, fps, start,
-                reviews=event_review.summaries_for_job(job) if kind == "events" else None)
+                reviews=event_review.summaries_for_job(job) if kind == "events" else None,
+                added=event_review.added_for_job(job) if kind == "events" else None)
             fields = (list(primitives.EVENT_FIELDS) + track_tables.IDENTITY_FIELDS
                       if kind == "events" else
                       list(primitives.INTERACTION_FIELDS) + track_tables.IDENTITY_FIELDS

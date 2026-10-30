@@ -364,6 +364,41 @@
           rgba(STYLE.event_rgba[e[2]] || STYLE.event_rgba.exit), rgba(STYLE.chip_text_rgba)) + 2;
       });
 
+      // Events reviewers added as missed (memory/62 §3b): dashed chips, so
+      // what people added never looks like what the system found.
+      if (opts.events) {
+        var w = Math.round(STYLE.event_seconds * fps());
+        (data.added || []).forEach(function (a) {
+          var f = a[0], on = a[2] === 'exit' ? frame >= f && frame <= f + w
+            : a[2] === 'enter' ? frame >= f - w && frame <= f
+            : frame >= f && frame <= (a[4] == null ? f : a[4]);
+          if (!on || (onlyRef != null && a[3] !== onlyRef)) return;
+          var b = a[1] != null ? boxes[a[1]] : null, x, y;
+          if (b) { x = b.x; y = b.y + b.h + STYLE.label_height + 4; }
+          else {
+            var box = regionPath(a[3], L);
+            if (!box) return;
+            x = box.x0; y = box.y1 + 2;
+          }
+          var key = Math.round(x) + ':' + Math.round(y);
+          y += (stacked[key] || 0);
+          var col = rgba(STYLE.event_rgba[a[2]] || STYLE.event_rgba.exit);
+          ctx.save();
+          ctx.font = '700 ' + STYLE.chip_font_px + 'px ui-monospace, SFMono-Regular, Menlo, monospace';
+          ctx.textBaseline = 'top';
+          var text = '+ ' + a[2].toUpperCase() + ' ' + regionText(a[3]) + ' (added)';
+          var tw = ctx.measureText(text).width + 2 * STYLE.label_pad, th = STYLE.label_height + 2;
+          ctx.fillStyle = 'rgba(255,255,255,0.92)';
+          ctx.fillRect(x, y, tw, th);
+          ctx.setLineDash(STYLE.dash); ctx.lineWidth = 2; ctx.strokeStyle = col;
+          ctx.strokeRect(x, y, tw, th);
+          ctx.fillStyle = col;
+          ctx.fillText(text, x + STYLE.label_pad, y + 3);
+          ctx.restore();
+          stacked[key] = (stacked[key] || 0) + th + 2;
+        });
+      }
+
       listeners.forEach(function (fn) { fn({frame: frame, visible: visible}); });
     }
 
@@ -448,6 +483,7 @@
             payload.events = parts[1].events || [];
             payload.interactions = parts[1].interactions || [];
             payload.regions = parts[1].regions || [];
+            payload.added = parts[1].added || [];
             if (parts[1].style) STYLE = parts[1].style;
             index(payload); loop(); redraw(); return payload;
           });

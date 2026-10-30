@@ -125,13 +125,27 @@ crops. Then it asks whether it is the same bee:
 - **Not this pair (N)** lets you link the exit to a different later entry into that tube, or mark
   "didn't come back in this period" or "can't tell".
 
+**Missed events.** Review also catches what the system missed. **+ Add missed event (A)**, in the player
+header or on the review card ("Missed one here?"), pauses on the current frame and asks what happened
+(exit, enter or stay; a stay also takes its end, set by playing on and pressing **End here**), which tube (click
+it on the video or type its number) and which insect (a track on screen, or **Not tracked**). If the system
+already has the same action at that tube within 2 seconds, it asks whether this is a different event before
+adding it. Added events are drawn hollow and dashed on the lanes and the video, so they never look like
+detected ones. Whoever added one, or the batch owner, can remove it.
+
+**Detection quality.** From the reviews: **precision** is accepted ÷ (accepted + rejected), the share of
+checked events that were right; **recall** is accepted ÷ (accepted + added), the share of real events the
+system found. Once anything in a batch has been reviewed, the batch page shows an **Events review** panel
+(reviewed, accepted, rejected, disputed, added, precision, recall) and a **Trips review** panel (reviewed,
+same bee, re-linked, not a trip, and how often the suggestion was right as it stood).
+
 **What it adds to the data.**
 
 | Where | What |
 |---|---|
-| Events CSV (clip and batch) | `review` (accepted, rejected, disputed when reviewers disagree, blank if unreviewed), `reviewed_by`, `review_notes` |
+| Events CSV (clip and batch) | `review` (accepted, rejected, disputed when reviewers disagree, blank if unreviewed), `reviewed_by`, `review_notes`; an added event is its own row with `review = added`, `reviewed_by` = who added it and `review_notes` = their note |
 | Clip page | "12 reviewed · 9 accepted · 3 rejected" under Events |
-| Batch table | a **Reviewed** column |
+| Batch page | a **Reviewed** column (with "+N" added), and the Events review and Trips review panels once something is reviewed |
 | **Reviewed trips** CSV (period page and batch) | one row per pair a reviewer called: `reference, exit_time, entry_time, duration_sec, exit_clip, exit_track, entry_clip, entry_track, species, marker_id, review, reviewed_by, review_notes` |
 
 Only reviewed trips are ever exported. A suggestion nobody looked at is not a trip in your data.

@@ -46,6 +46,7 @@ trip review walks each suggested exit → entry pair. Logic: pipelines/period.py
         <label class="flex items-center gap-1.5"><input type="checkbox" data-pr-links checked> Link each exit to the next entry on the same tube</label>
         <a href="{{ csv_url }}" class="text-amber-700 hover:underline">Reviewed trips CSV</a>
         {% if any_review %}
+        <button type="button" data-am-open class="h-10 px-3 rounded border border-amber-700 text-amber-800 hover:bg-amber-50 font-semibold" title="An insect went in or came out and the system didn't catch it">+ Add missed event (A)</button>
         <button type="button" data-pr-review-events class="h-10 px-3 rounded bg-amber-700 hover:bg-amber-800 text-white font-semibold">Review events</button>
         <button type="button" data-pr-review-trips class="h-10 px-3 rounded border border-amber-700 text-amber-800 hover:bg-amber-50 font-semibold">Review trips</button>
         <button type="button" data-pr-exit hidden class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">Exit review</button>
@@ -151,5 +152,6 @@ trip review walks each suggested exit → entry pair. Logic: pipelines/period.py
 </div>
 {{ payload|json_script:"period-data" }}
 <script src="{% static 'js/track_overlay.js' %}"></script>
+<script src="{% static 'js/add_missed.js' %}"></script>
 <script src="{% static 'js/period_review.js' %}"></script>
 {% endblock %}

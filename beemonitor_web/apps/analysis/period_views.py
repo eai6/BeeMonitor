@@ -100,6 +100,8 @@ class PeriodReviewView(LoginRequiredMixin, View):
         from apps.devices.models import Device
         from apps.videos.models import Site
 
+        from apps.pipelines import review as event_review
+
         data = _gather(request)
         clips_json, pairs = [], []
         for ci, c in enumerate(data["clips"]):
@@ -114,6 +116,14 @@ class PeriodReviewView(LoginRequiredMixin, View):
                 "overlay_url": reverse("analysis:track_overlay", args=[job.pk]),
                 "stream_url": reverse("analysis:period_stream", args=[job.pk]),
                 "review_url": reverse("analysis:event_review", args=[job.pk]),
+                "add_url": reverse("analysis:add_missed_event", args=[job.pk]),
+                # Events reviewers added as missed (memory/62 §3b), placed on
+                # the period's axis like the detected ones.
+                "added": [{"id": a["id"], "frame": a["frame"], "end_frame": a["end_frame"],
+                           "action": a["action"], "reference": a["reference"],
+                           "track_id": a["track_id"], "by": a["user"],
+                           "t": round(c["offset"] + a["frame"] / float(c["fps"] or 25), 3)}
+                          for a in event_review.added_rows(c["run"])],
                 "crops_url": reverse("analysis:track_crops", args=[job.pk, 0]),
                 "results_url": reverse("analysis:results", args=[job.pk]),
                 "events": evs,

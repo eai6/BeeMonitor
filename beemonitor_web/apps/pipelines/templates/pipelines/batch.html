@@ -234,6 +234,33 @@ their reason.
 </div>
 {% endif %}
 
+{% if review_summary %}
+{% with ev=review_summary.events tr=review_summary.trips %}
+<section class="bg-white shadow rounded-lg p-4 mb-6 grid grid-cols-1 md:grid-cols-2 gap-4" aria-label="Review">
+  {% comment %}Only once someone has reviewed (memory/62): how far the review got, and how far to trust the system here.{% endcomment %}
+  <div class="flex flex-col gap-1.5">
+    <h2 class="text-sm font-semibold text-gray-900">Events review</h2>
+    <p class="text-sm text-gray-700">{{ ev.reviewed }} of {{ ev.events }} detected events reviewed, in {{ ev.clips }} clip{{ ev.clips|pluralize }}</p>
+    <p class="text-sm"><span class="text-green-700">{{ ev.accepted }} accepted</span> · <span class="text-red-700">{{ ev.rejected }} rejected</span>{% if ev.disputed %} · <span class="text-amber-800">{{ ev.disputed }} disputed</span>{% endif %} · {{ ev.added }} added as missed</p>
+    <div class="flex gap-6 mt-1">
+      <div><div class="text-xs text-gray-600">Precision</div><div class="text-xl font-bold text-gray-900">{% if ev.precision is not None %}{{ ev.precision }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">right among the events checked</div></div>
+      <div><div class="text-xs text-gray-600">Recall</div><div class="text-xl font-bold text-gray-900">{% if ev.recall is not None %}{{ ev.recall }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">found among the events confirmed or added</div></div>
+    </div>
+  </div>
+  <div class="flex flex-col gap-1.5">
+    <h2 class="text-sm font-semibold text-gray-900">Trips review</h2>
+    {% if tr.reviewed %}
+    <p class="text-sm text-gray-700">{{ tr.reviewed }} suggested trip{{ tr.reviewed|pluralize }} reviewed</p>
+    <p class="text-sm"><span class="text-green-700">{{ tr.accepted }} same bee</span>{% if tr.relinked %} ({{ tr.relinked }} re-linked){% endif %} · <span class="text-red-700">{{ tr.rejected }} not a trip</span>{% if tr.didnt_come_back %} ({{ tr.didnt_come_back }} didn't come back{% if tr.cant_tell %}, {{ tr.cant_tell }} can't tell{% endif %}){% elif tr.cant_tell %} ({{ tr.cant_tell }} can't tell){% endif %}{% if tr.disputed %} · <span class="text-amber-800">{{ tr.disputed }} disputed</span>{% endif %}</p>
+    <div class="mt-1"><div class="text-xs text-gray-600">Suggestion right as it stood</div><div class="text-xl font-bold text-gray-900">{% if tr.suggestion_right is not None %}{{ tr.suggestion_right }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">accepted without re-linking</div></div>
+    {% else %}
+    <p class="text-sm text-gray-600">No trips reviewed yet. Use Review this period › Review trips.</p>
+    {% endif %}
+  </div>
+</section>
+{% endwith %}
+{% endif %}
+
 <!-- Per-run rows: the numbers when there are any, the reason when there are not -->
 <div class="bg-white shadow rounded-lg overflow-hidden mb-6">
   <div class="flex items-center gap-3 px-4 py-2.5 border-b border-gray-200">
@@ -387,7 +414,7 @@ their reason.
     <div class="text-right text-[13px] {% if r.primitives.interactions is None %}text-gray-300{% else %}text-gray-900{% endif %}"
          {% if r.primitives.interactions is None %}title="This pipeline ran no interactions analyzer"{% endif %}>{% if r.primitives.interactions is None %}—{% else %}{{ r.primitives.interactions }}{% endif %}</div>
     <div class="text-right text-[13px] {% if not r.review or not r.review.reviewed %}text-gray-400{% else %}text-gray-900{% endif %}"
-         {% if r.review %}title="{{ r.review.accepted }} accepted, {{ r.review.rejected }} rejected{% if r.review.disputed %}, {{ r.review.disputed }} disputed{% endif %} — of {{ r.review.events }} events"{% endif %}>{% if r.review is None %}—{% elif not r.review.reviewed %}not reviewed{% else %}{{ r.review.reviewed }} / {{ r.review.events }}{% if r.review.rejected %} · <span class="text-red-700">{{ r.review.rejected }} rej.</span>{% endif %}{% endif %}</div>
+         {% if r.review %}title="{{ r.review.accepted }} accepted, {{ r.review.rejected }} rejected{% if r.review.disputed %}, {{ r.review.disputed }} disputed{% endif %}{% if r.review.added %}, {{ r.review.added }} added as missed{% endif %} — of {{ r.review.events }} events"{% endif %}>{% if r.review is None %}—{% elif not r.review.reviewed and not r.review.added %}not reviewed{% else %}{{ r.review.reviewed }} / {{ r.review.events }}{% if r.review.rejected %} · <span class="text-red-700">{{ r.review.rejected }} rej.</span>{% endif %}{% if r.review.added %} · <span class="text-amber-800">+{{ r.review.added }}</span>{% endif %}{% endif %}</div>
     <div class="text-right text-xs text-gray-500">{% if r.video.duration_seconds %}{{ r.video.duration_seconds|duration_min }}{% else %}—{% endif %}</div>
     {% endif %}
     <div class="text-right text-xs text-gray-500">{% if r.gpu_seconds %}{{ r.gpu_seconds|duration_min }}{% else %}—{% endif %}</div>

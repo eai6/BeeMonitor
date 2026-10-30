@@ -108,9 +108,8 @@ Review so far only judges what was detected. A reviewer must also be able to say
   - **recall** = accepted ÷ (accepted + added).
 - **Period review:** the same button, saved to the clip under the playhead's run.
 - **Tests:** add, remove (by the adder or the owner only), the CSV rows, lane drawing data, the precision and recall arithmetic, and permissions (reviewers only).
-- **Questions:**
-  1. Does an added event also need a **duplicate check**, warning when a detected event of the same tube and action is within 2 s?
-  2. Should precision and recall show on the batch table, or only on the clip page?
+- **Decided:** duplicate check yes (same action and tube within 2 s → "Is this a different event?" / Add anyway). Metrics on the batch page: an Events review and a Trips review panel, shown only once something in the batch is reviewed.
+- **Status:** built (2026-10-29), not committed. `AddedEvent` (migration 0016), `review.add_event/remove_added/added_rows/quality/batch_review_summary`, `analysis:add_missed_event`, `static/js/add_missed.js` (clip and period pages), CSV rows via `tracks.primitive_with_identity(added=…)`. Tests: `apps/pipelines/tests/test_missed_events.py`; jsdom drive of the add flow (tube click, track chip, duplicate, Add anyway).
 
 ## Build order
 1, 3 and 5 (clip review and its data) → 2 (invites) → 4 (period review) → 4b (trip review). Each is shippable on its own.

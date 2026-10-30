@@ -21,6 +21,7 @@ urlpatterns = [
          name="track_crops"),
     path("<int:pk>/overlay.json", views.TrackOverlayView.as_view(), name="track_overlay"),
     path("<int:pk>/events/review", views.EventReviewView.as_view(), name="event_review"),
+    path("<int:pk>/events/add", views.AddMissedEventView.as_view(), name="add_missed_event"),
     # Period review across clips, and its trips (memory/62).
     path("review/", period_views.PeriodReviewView.as_view(), name="period_review"),
     path("review/trips", period_views.TripReviewView.as_view(), name="trip_review"),

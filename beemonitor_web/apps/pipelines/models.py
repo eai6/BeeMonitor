@@ -318,3 +318,30 @@ class TripReview(models.Model):
 
     def __str__(self):
         return f"{self.user} {self.verdict} trip from {self.exit_key}"
+
+
+class AddedEvent(models.Model):
+    """An event a reviewer says the system missed (memory/62 §3b).
+
+    Never mixed into the detected rows: it is exported beside them with
+    review = added, so an analysis can include or leave out what people added,
+    and recall can be measured against it.
+    """
+
+    run = models.ForeignKey(PipelineRun, on_delete=models.CASCADE, related_name="added_events")
+    frame = models.IntegerField()
+    end_frame = models.IntegerField(null=True, blank=True)   # a stay's end
+    action = models.CharField(max_length=16)
+    reference = models.CharField(max_length=100)
+    track_id = models.CharField(max_length=32, blank=True)  # blank = not tracked
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name="added_events")
+    note = models.CharField(max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["frame", "pk"]
+        indexes = [models.Index(fields=["run", "frame"], name="addev_run_frame")]
+
+    def __str__(self):
+        return f"{self.user} added {self.action} {self.reference} @ {self.frame}"

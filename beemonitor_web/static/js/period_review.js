@@ -83,8 +83,14 @@
   function renderLanes() {
     var box = $('[data-pr-lanes]');
     box.innerHTML = '';
-    var by = {};
+    var by = {}, addedBy = {};
     all.forEach(function (x) { (by[x.e.reference] = by[x.e.reference] || []).push(x); });
+    P.clips.forEach(function (c, ci) {
+      (c.added || []).forEach(function (a) {
+        by[a.reference] = by[a.reference] || [];
+        (addedBy[a.reference] = addedBy[a.reference] || []).push({c: ci, a: a});
+      });
+    });
     var order = Object.keys(by).sort(function (a, b) { return by[b].length - by[a].length; });
     var links = $('[data-pr-links]').checked;
     (showAll ? order : order.slice(0, MAX_LANES)).forEach(function (ref) {
@@ -126,6 +132,19 @@
         m.title = clock(e.clock) + ' ' + e.action + ' tube ' + tube(ref) + ' · track ' + e.track_id;
         m.setAttribute('aria-label', m.title);
         m.addEventListener('click', function () { goToEvent(x); });
+        track.appendChild(m);
+      });
+      // Added as missed by a reviewer: hollow and dashed (memory/62 §3b).
+      (addedBy[ref] || []).forEach(function (y) {
+        var a = y.a, m = document.createElement('button');
+        m.type = 'button';
+        m.className = 'absolute top-0.5 bottom-0.5 rounded-sm bg-white';
+        m.style.left = pct(a.t) + '%';
+        m.style.width = '6px';
+        m.style.border = '2px dashed ' + (COLORS[a.action] || '#374151');
+        m.title = a.action + ' tube ' + tube(ref) + ', added by ' + a.by;
+        m.setAttribute('aria-label', m.title);
+        m.addEventListener('click', function () { loadClip(y.c, a.frame, false); });
         track.appendChild(m);
       });
       var count = document.createElement('span');
@@ -540,6 +559,36 @@
       }
       if (hit) { ev.preventDefault(); ev.stopPropagation(); }
     }, true);
+  }
+
+  // Add a missed event to the clip in the player (memory/62 §3b).
+  var adder = (window.AddMissed && ov && $('[data-am-open]')) ? AddMissed({
+    stage: $('[data-pr-stage]'), video: video, ov: ov, rotated: false,
+    context: function () { return {url: P.clips[cur].add_url, csrf: csrf()}; },
+    onSaved: function (d, saved) {
+      var c = P.clips[cur];
+      c.added = c.added || [];
+      c.added.push({id: d.id, frame: saved.frame, end_frame: saved.end_frame, action: saved.action,
+                    reference: d.reference, track_id: saved.track_id, by: 'you',
+                    t: c.offset + saved.frame / (c.fps || 25)});
+      status.textContent = 'Added to ' + c.title + '. It shows dashed on the lanes and in the Events CSV as review = added.';
+      renderLanes();
+    }
+  }) : null;
+  if (adder) {
+    var canAdd = function () { return cur >= 0 && P.clips[cur] && P.clips[cur].can_review; };
+    $('[data-am-open]').addEventListener('click', function () {
+      if (!canAdd()) { status.textContent = 'You can\'t review this clip.'; return; }
+      if (card) card.hidden = true;
+      adder.open();
+    });
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key.toLowerCase() !== 'a' || adder.isOpen() || ev.metaKey || ev.ctrlKey || !canAdd() ||
+          /^(INPUT|TEXTAREA|SELECT)$/.test((ev.target || {}).tagName || '')) return;
+      ev.preventDefault();
+      if (card) card.hidden = true;
+      adder.open();
+    });
   }
 
   renderTicks();
