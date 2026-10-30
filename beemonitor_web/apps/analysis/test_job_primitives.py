@@ -111,9 +111,13 @@ class JobPrimitiveTests(TestCase):
                    {"id": "a", "block_type": "analyze.interactions", "config": {},
                     "inputs": {"tracks": "m", "rois": "r"}}],
             context={"v": {"artifact": "video", "video_id": self.video.pk},
-                     "m": {"artifact": "tracks",
+                     "m": {"artifact": "tracks", "job_id": self.job.pk,
                            "result": {"tracking_csv_path": self.job.result.tracking_csv_path,
                                       "summary_stats": {"video_fps": 25.0}}}})
+        # The run's own Interactions step counts its rows; both pages read them.
+        from apps.pipelines.recount import recount_run
+        recount_run(run)
+        run.refresh_from_db()
 
         _fields, batch_rows = aggregate.primitive_csv([run], "interactions")
         job_rows = executors.primitives_for_job(self.job, "interactions")
@@ -264,3 +268,30 @@ class OneClipAgreesTests(TestCase):
             reverse("analysis:track_overlay", args=[self.job.pk]), {"part": "events"}).content)
 
         self.assertEqual([r["label"] for r in overlay["regions"]], ["reference_1"])
+
+
+class OnlyWhatThePipelineHasTests(OneClipAgreesTests):
+    """The batch said "—" for interactions while the clip page computed 103:
+    a pipeline with an Events step and no Interactions step has events and no
+    interactions everywhere (memory/60)."""
+
+    def test_the_clip_page_shows_no_interactions_for_a_pipeline_without_the_step(self):
+        from apps.pipelines import aggregate
+
+        page = self.client.get(reverse("analysis:results", kwargs={"pk": self.job.pk}))
+        tiles = {t["label"]: t for t in page.context["stat_tiles"]}
+        self.assertEqual(tiles["Interactions"]["value"], "—")
+        self.assertIn("No Interactions step", tiles["Interactions"]["hint"])
+        self.assertEqual(tiles["Events"]["value"], 2)
+        self.assertIsNone(aggregate.primitive_counts(self.run)["interactions"])
+
+    def test_no_interactions_csv_or_overlay_spells_either(self):
+        import json
+
+        csv_resp = self.client.get(reverse("analysis:results_csv",
+                                           kwargs={"pk": self.job.pk, "kind": "interactions"}))
+        self.assertEqual(csv_resp.status_code, 404)
+        live = json.loads(self.client.get(
+            reverse("analysis:track_overlay", args=[self.job.pk]), {"part": "events"}).content)
+        self.assertEqual(live["interactions"], [])
+        self.assertEqual(len(live["events"]), 2)

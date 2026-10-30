@@ -1,14 +1,11 @@
-"""An old batch exports the right answer without being re-run.
+"""An old batch exports the right answer without being re-run — and only the
+tables its pipeline has steps for (memory/60).
 
 A batch analysed before the primitives existed stores only its retired
-analyzer's output — `table_kind: "interaction"`, not `"interactions"` — so the
-export had nothing to read and fell back to the worker's own CSV. That is the
-file that matches an insect to a reference by centroid distance under a flat
-50 px, so a bee inside a large flower never appears in it.
-
-Nothing about the answer needs the GPU again: the tracking table and the
-reference geometry are both saved, and the primitives are a pure function of
-them. This pins that they are recomputed at export time.
+analyzer's output (`table_kind: "interaction"`). The recount sweep runs that
+step again from the saved tracks (the retired block now runs as Interactions),
+so the export reads the run's own rows. A table the pipeline has no step for
+(here, Events) is neither computed nor offered.
 """
 
 import csv
@@ -80,11 +77,17 @@ class ExportRecomputeTests(TestCase):
                      "m": {"artifact": "tracks", "result": result},
                      "a": {"artifact": "table", "table_kind": "interaction",
                            "interaction_count": 0, "rows": []}})
+        # What the reconcile sweep does to every run below the current rules.
+        from apps.pipelines.recount import recount_run
+        recount_run(PipelineRun.objects.get(batch_id=self.batch_id))
 
-    def _download(self, kind):
+    def _response(self, kind):
         return self.client.get(reverse(
             "pipelines:batch_combined_csv",
-            kwargs={"batch_id": self.batch_id, "kind": kind})).content.decode()
+            kwargs={"batch_id": self.batch_id, "kind": kind}))
+
+    def _download(self, kind):
+        return self._response(kind).content.decode()
 
     def test_the_bee_inside_the_tube_reaches_the_export(self):
         body = self._download("interactions")
@@ -99,14 +102,9 @@ class ExportRecomputeTests(TestCase):
         self.assertNotIn("avg_distance_px", body)
         self.assertIn("duration_sec", body)
 
-    def test_events_are_recomputed_the_same_way(self):
-        # The insect is in the tube from its first detection to its last and
-        # never leaves: a stay (memory/60), not an exit and an entry.
-        lines = self._download("events").splitlines()
-        row = dict(zip(lines[0].split(","), lines[1].split(",")))
-
-        self.assertEqual(len(lines), 2)
-        self.assertEqual((row["action"], row["reference"]), ("stay", "reference_1"))
+    def test_no_events_step_means_no_events_export(self):
+        # The pipeline asked for interactions only; events are not made up.
+        self.assertEqual(self._response("events").status_code, 302)
 
     def test_recomputed_rows_still_carry_provenance(self):
         header, first = self._download("interactions").splitlines()[:2]
@@ -115,13 +113,13 @@ class ExportRecomputeTests(TestCase):
         self.assertIn("beemonitor3", first)
         self.assertIn("Meadow A", first)
 
-    def test_the_batch_offers_both_primitives(self):
+    def test_the_batch_offers_only_what_its_pipeline_has(self):
         resp = self.client.get(reverse("pipelines:batch_detail",
                                        kwargs={"batch_id": self.batch_id}))
 
         kinds = {d["kind"] for d in resp.context["downloads"]}
         self.assertIn("interactions", kinds)
-        self.assertIn("events", kinds)
+        self.assertNotIn("events", kinds)
 
     def test_a_run_with_no_tracking_table_is_skipped_not_crashed(self):
         from apps.pipelines import executors

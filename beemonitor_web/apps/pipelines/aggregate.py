@@ -159,7 +159,7 @@ BASE_TABLES = (
     ("tracking", "tracking_csv_path", "Tracking",
      "One row per track per frame — the trajectories everything else is read from."),
     ("events", "events_csv_path", "Events",
-     "Entry/exit crossings, with the frame and the thing crossed into."),
+     "Exits from, entries into and stays in a reference, with their times."),
     ("interactions", "interactions_csv_path", "Interactions",
      "Episodes of two things together, with durations."),
 )
@@ -178,16 +178,12 @@ def available_downloads(sources, runs=()):
     reference by centroid distance under a flat 50 px and misses anything
     sitting inside a large one.
     """
+    # Events and interactions only where the pipeline has the step (memory/60).
     analyzed = set()
     for run in runs:
         for kind, out in analyzer_outputs(run):
-            if kind in PRIMITIVE_KINDS and (out.get("rows") or []):
+            if kind in PRIMITIVE_KINDS:
                 analyzed.add(kind)
-    # Both primitives are a pure function of the tracking table and the
-    # reference geometry, so a batch with tracking can always export them —
-    # recomputed at download time for runs that predate the analyzers.
-    if any((s.get("result") or {}).get("tracking_csv_path") for s in sources):
-        analyzed.update(PRIMITIVE_KINDS)
 
     from . import tracks
 
@@ -198,9 +194,9 @@ def available_downloads(sources, runs=()):
             out.append({"kind": kind, "label": label,
                         "clips": len(runs) or clips,
                         "analyzed": True,
-                        "hint": hint + " Computed from this batch's tracking, "
-                                       "not the worker's raw file."})
-        elif clips:
+                        "hint": hint + " From this pipeline's own step, computed "
+                                       "from the batch's tracking."})
+        elif clips and kind not in PRIMITIVE_KINDS:
             out.append({"kind": kind, "label": label, "hint": hint,
                         "clips": clips, "analyzed": False})
         if kind == "tracking":
@@ -282,18 +278,11 @@ def primitive_csv(runs, kind):
         video = videos.get(run_video_id(run))
         if video is None:
             continue
+        # Only what the run's own steps saved: a pipeline with no step for this
+        # table contributes nothing (memory/60).
         outputs = [out for k, out in analyzer_outputs(run) if k == kind]
         if not outputs:
-            # Analysed before the primitives existed. The tracking table and the
-            # reference geometry are both saved, and the primitives are a pure
-            # function of them — so recompute rather than falling back to the
-            # worker's CSV, which is the file with the centroid-distance bug.
-            from . import executors
-
-            rows = executors.recompute_primitive(run, kind)
-            if not rows:
-                continue
-            outputs = [{"rows": rows}]
+            continue
         result = run_gpu_result(run)
         fps = max(fps_with_source(result, video)[0], 1.0)
         from apps.videos import timing

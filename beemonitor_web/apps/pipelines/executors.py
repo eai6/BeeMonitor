@@ -632,9 +632,13 @@ def primitives_for_job(job, kind):
     which computes the primitives. Two tables of the same clip saying different
     things is worse than either being wrong on its own.
 
-    Prefers the real run, so a drawn ROI or a device layout is honoured. Falls
-    back to a stand-in carrying just this job's result and video, counted
-    against the clip's saved layout (``_job_run``).
+    A pipeline run's rows are what its own steps saved — the same rows the
+    batch table, its CSVs and studies read. A pipeline with no step for this
+    table has none: nothing is computed that the pipeline didn't ask for, or
+    the clip page and the batch would disagree (memory/60).
+
+    A job no pipeline launched (the old analysis form) has no steps to read,
+    so it is counted against the clip's saved layout (``_job_run``).
     """
     result = getattr(job, "result", None)
     if result is None:
@@ -642,16 +646,22 @@ def primitives_for_job(job, kind):
 
     run = _run_for_job(job)
     if run is not None:
-        # What the run itself counted — the same rows the batch table, its CSVs
-        # and studies read, so the clip's page can't say something else.
         from .aggregate import analyzer_outputs
 
-        saved = [out for k, out in analyzer_outputs(run) if k == kind]
-        if saved:
-            return [row for out in saved for row in (out.get("rows") or [])]
+        return [row for k, out in analyzer_outputs(run) if k == kind
+                for row in (out.get("rows") or [])]
+    return recompute_primitive(_job_run(job), kind)
+
+
+def measured_kinds(job):
+    """Which of events / interactions this job's pipeline has a step for.
+    A job no pipeline launched is counted for both (``primitives_for_job``)."""
+    run = _run_for_job(job)
     if run is None:
-        run = _job_run(job)
-    return recompute_primitive(run, kind)
+        return {"events", "interactions"}
+    from .aggregate import analyzer_outputs
+
+    return {k for k, _out in analyzer_outputs(run) if k in ("events", "interactions")}
 
 
 def _job_run(job):

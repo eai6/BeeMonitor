@@ -1751,6 +1751,10 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
                 by_track, fps, start),
             list(primitives.EVENT_FIELDS) + track_tables.IDENTITY_FIELDS)
         ctx["analysis_notes"] = pipeline_executors.analysis_notes_for_job(job)
+        # Which tables this clip's pipeline has steps for (memory/60): a table
+        # it didn't ask for is not computed here, so this page and the batch
+        # say the same thing.
+        ctx["measured"] = pipeline_executors.measured_kinds(job)
 
         # The page shows the head of each long table; the CSV beside it has
         # every row. A 10-minute clip's tracking table is ~100k rows x 17
@@ -1777,13 +1781,21 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         # "Events 0", and the tile disagreed with both the table under it and
         # the CSV beside it. Tracks stays the worker's figure because the
         # tracking table IS the worker's file.
+        measured = ctx.get("measured") or set()
+
+        def _count(kind, key):
+            if kind not in measured:
+                return "—"
+            return (ctx.get(key) or {}).get("total", 0)
+
         tiles = [
             {"label": "Tracks", "value": result.unique_tracks, "color": "text-blue-600"},
-            {"label": "Events", "value": (ctx.get("events_data") or {}).get("total", 0),
-             "color": "text-gray-900"},
-            {"label": "Interactions",
-             "value": (ctx.get("interactions_data") or {}).get("total", 0),
-             "color": "text-purple-600"},
+            {"label": "Events", "value": _count("events", "events_data"),
+             "color": "text-gray-900",
+             "hint": "" if "events" in measured else "No Events step in this pipeline"},
+            {"label": "Interactions", "value": _count("interactions", "interactions_data"),
+             "color": "text-purple-600",
+             "hint": "" if "interactions" in measured else "No Interactions step in this pipeline"},
         ]
         if job.video.duration_seconds:
             # Part of a clip (memory/53): the length analysed, of the whole.
@@ -2193,6 +2205,8 @@ class JobPrimitiveCsvView(LoginRequiredMixin, View):
             rows = track_tables.detections_export(_table_dicts(detections), fps, start)
             fields = track_tables.DETECTION_FIELDS
         else:
+            if kind not in pipeline_executors.measured_kinds(job):
+                raise Http404(f"This clip's pipeline has no {kind} step.")
             rows = track_tables.primitive_with_identity(
                 kind, pipeline_executors.primitives_for_job(job, kind), by_track, fps, start)
             fields = (list(primitives.EVENT_FIELDS) + track_tables.IDENTITY_FIELDS

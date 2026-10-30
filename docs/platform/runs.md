@@ -102,6 +102,11 @@ events. You derive what your study needs.
 | **Events** | An insect came out of a reference, went into one, or stayed in one | Arrivals, departures, foraging trips |
 | **Interactions** | An insect was in a reference, or near another insect, for a span of time | Visits, time on a flower or in a zone, encounters |
 
+A run has the tables its pipeline has steps for: an **Events** step makes the Events table, an
+**Interactions** step the Interactions table. A table the pipeline has no step for shows "—" everywhere
+(the batch, the clip page, the downloads) and is never computed behind your back; add the step and rerun to
+get it.
+
 Both are computed on the platform from the tracking table, against the **references your pipeline defines**:
 a Reference (saved layout) step, or a Detect step for the reference class wired into the analyzer. Nothing
 else is used. If the pipeline has no reference, there are no events and no insect-to-reference interactions,
