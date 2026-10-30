@@ -17,6 +17,9 @@
   var roi = {{ roi_json|js }} || null;        // {box, points?} | null
   var nests = {{ nests_json|js }} || [];      // [{id, box, points?, name?}]
   var ROI_COLOR = '#16a34a', NEST_COLOR = '#dc2626';
+  // The layout as loaded (or last saved), drawn faintly once it is changed,
+  // so a move shows how far it went.
+  var base = JSON.parse(JSON.stringify({roi: roi, nests: nests}));
   var GRAB = 8;                                 // px radius for vertex grabbing
 
   function size() {
@@ -101,8 +104,16 @@
     return hit;
   }
 
+  function drawBase() {
+    if (viewing || JSON.stringify({roi: roi, nests: nests}) === JSON.stringify(base)) return;
+    ctx.save(); ctx.setLineDash([4, 4]); ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+    (base.roi ? [base.roi] : []).concat(base.nests).forEach(function (s) { pathOf(outline(s)); ctx.stroke(); });
+    ctx.restore();
+  }
+
   function draw(temp) {
     ctx.clearRect(0, 0, cv.width, cv.height);
+    drawBase();
     if (roi) drawShape(roi, ROI_COLOR, selected && selected.type === 'roi', '');
     var clash = overlapping();
     nests.forEach(function (n, i) {
@@ -198,6 +209,7 @@
   function down(e) {
     if (viewing) return;
     e.preventDefault(); var p = pos(e);
+    if (mode === 'all') { drag = {all: true, last: p}; return; }
     if (mode !== 'move' && tool === 'poly') { polyClick(p); return; }
     if (mode === 'move') {
       var s = shapeOf(selected);
@@ -212,6 +224,10 @@
     if (poly) { poly.cursor = pos(e); draw(); return; }
     if (!drag) return;
     e.preventDefault(); var p = pos(e);
+    if (drag.all) {
+      moveAll((p[0]-drag.last[0])/cv.width, (p[1]-drag.last[1])/cv.height);
+      drag.last = p; return;
+    }
     if (mode === 'move' && selected) {
       var s = shapeOf(selected);
       if (!s) { drag = null; return; }
@@ -228,6 +244,7 @@
   }
   function up(e) {
     if (!drag || poly) return;
+    if (drag.all) { drag = null; return; }
     var p = pos(e);
     if (mode === 'roi') { roi = {box: rectOf(drag.start, p), points: null}; selected = {type:'roi'}; }
     else if (mode === 'nest') {
@@ -243,6 +260,14 @@
   function translate(s, dx, dy) {
     s.box = [s.box[0]+dx, s.box[1]+dy, s.box[2]+dx, s.box[3]+dy];
     if (s.points) s.points = s.points.map(function (n) { return [n[0]+dx, n[1]+dy]; });
+  }
+  // Every reference object together (and the ROI when ticked): a camera or
+  // hotel that shifted moves the whole layout, not one tube (memory/63).
+  function moveAll(dx, dy) {
+    nests.forEach(function (n) { translate(n, dx, dy); });
+    var withRoi = document.getElementById('all-roi');
+    if (roi && withRoi && withRoi.checked) translate(roi, dx, dy);
+    draw();
   }
   function hit(p) {  // topmost nest, then the ROI
     for (var i = nests.length-1; i >= 0; i--) if (inShape(p, nests[i])) return {type:'nest', i:i};
@@ -270,8 +295,10 @@
     var el = document.getElementById('hint'), txt;
     if (poly) txt = 'Click to add corners; click the first corner (or press Enter / double-click) to close. ' +
                     'Backspace undoes a corner, Esc cancels.';
-    else if (mode === 'move') txt = 'Click a shape to select; drag to move. Drag a white handle to move a polygon corner. ' +
-                                    'Delete selected removes it.';
+    else if (mode === 'move') txt = 'Click a shape to select; drag to move, or nudge it with the arrow keys (Shift: 10 px). ' +
+                                    'Drag a white handle to move a polygon corner. Delete selected removes it.';
+    else if (mode === 'all') txt = 'Drag anywhere to move every reference object together; tick "with the ROI" to move it too. ' +
+                                   'Arrow keys nudge 1 px, Shift + arrow 10 px. The dashed white outline is where they were.';
     else if (tool === 'poly') txt = mode === 'roi'
       ? 'Click around the area to trace the ROI — corners can follow its real outline (replaces the current ROI).'
       : 'Click around a reference object to trace it. Then Auto-number.';
@@ -285,7 +312,8 @@
       mode = btn.dataset.mode; selected = null;
       document.querySelectorAll('.mode-btn').forEach(function (b){ b.className = 'mode-btn px-3 py-1.5 bg-white text-gray-700'; });
       btn.className = 'mode-btn px-3 py-1.5 bg-amber-600 text-white';
-      document.getElementById('tools').style.opacity = mode === 'move' ? '0.4' : '1';
+      document.getElementById('tools').style.opacity = (mode === 'move' || mode === 'all') ? '0.4' : '1';
+      document.getElementById('all-roi-wrap').hidden = mode !== 'all';
       setHint(); draw();
     });
   });
@@ -332,12 +360,23 @@
           roi = d.roi ? {box: d.roi, points: d.roi_polygon || null} : null;
           nests = d.nests || []; selected = null; draw();
           if (d.versions) renderLayoutHistory(d.versions, null);
+          base = copy({roi: roi, nests: nests});
+          if (CFG.onSaved) CFG.onSaved(d);
           var s=document.getElementById('saved');
           if (d.message) s.textContent = d.message;
           s.classList.remove('hidden');
           setTimeout(function(){ s.classList.add('hidden'); }, 2500);
         } else { alert((d && d.error) || 'Could not save.'); }
       }).catch(function(err){ alert((err && err.message) || 'Could not save.'); });
+  });
+  // Arrow keys nudge the selection (Move / edit) or everything (Move all).
+  var ARROWS = {ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1]};
+  document.addEventListener('keydown', function (e) {
+    var d = ARROWS[e.key];
+    if (!d || poly || viewing || /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '')) return;
+    var step = e.shiftKey ? 10 : 1, dx = d[0] * step / cv.width, dy = d[1] * step / cv.height;
+    if (mode === 'all') { e.preventDefault(); moveAll(dx, dy); }
+    else if (mode === 'move' && shapeOf(selected)) { e.preventDefault(); translate(shapeOf(selected), dx, dy); draw(); }
   });
   document.addEventListener('keydown', function (e) {
     if (!poly) return;

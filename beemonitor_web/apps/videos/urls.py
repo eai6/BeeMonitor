@@ -16,6 +16,8 @@ urlpatterns = [
     path("sites/<int:site_pk>/timezone/", views.SiteTimeZoneView.as_view(), name="site_timezone"),
     path("sites/<int:site_pk>/layout/", views.LayoutEditorView.as_view(), name="site_layout"),
     path("<int:video_pk>/layout/", views.LayoutEditorView.as_view(), name="layout"),
+    path("<int:video_pk>/layout/recount/", views.LayoutRecountView.as_view(), name="layout_recount"),
+    path("sites/<int:site_pk>/layout/recount/", views.LayoutRecountView.as_view(), name="site_layout_recount"),
     path("<int:pk>/frame/", views.VideoFrameView.as_view(), name="frame"),
     path("<int:pk>/", views.VideoDetailView.as_view(), name="detail"),
     # Media for the review grid: a presign is spent per clip actually

@@ -29,10 +29,21 @@ class JobQuerySet(models.QuerySet):
         """The jobs ``user`` should see. A platform admin may analyse anyone's
         clips (Video.manageable); those jobs are the admin's own work and stay
         out of the clip owner's pages, results and analytics. For display only:
-        queueing, polling and charging must keep seeing every job."""
+        queueing, polling and charging must keep seeing every job.
+
+        Only an admin's jobs on **someone else's** clips are hidden: an admin's
+        own clips are theirs like anyone's, and a batch they invited people to
+        (BatchMember) opens for those people (memory/62)."""
         if user.is_superuser:
             return self
-        return self.exclude(user__is_superuser=True)
+        from django.db.models import F, Q
+
+        hidden = Q(user__is_superuser=True) & ~Q(video__user_id=F("user_id"))
+        if getattr(user, "is_authenticated", False):
+            from apps.pipelines.review import member_job_ids
+
+            hidden &= ~Q(pk__in=member_job_ids(user))
+        return self.exclude(hidden)
 
 
 class JobResultQuerySet(models.QuerySet):
@@ -40,7 +51,14 @@ class JobResultQuerySet(models.QuerySet):
         """Results of the jobs ``user`` should see (JobQuerySet.for_viewer)."""
         if user.is_superuser:
             return self
-        return self.exclude(job__user__is_superuser=True)
+        from django.db.models import F, Q
+
+        hidden = Q(job__user__is_superuser=True) & ~Q(job__video__user_id=F("job__user_id"))
+        if getattr(user, "is_authenticated", False):
+            from apps.pipelines.review import member_job_ids
+
+            hidden &= ~Q(job_id__in=member_job_ids(user))
+        return self.exclude(hidden)
 
 
 class Job(models.Model):

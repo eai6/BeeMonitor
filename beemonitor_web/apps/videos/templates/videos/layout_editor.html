@@ -4,7 +4,8 @@
 {% block content %}
 <div class="max-w-6xl mx-auto">
   <div class="mb-3">
-    {% if video %}<a href="{% url 'videos:detail' video.pk %}" class="text-sm text-amber-700 hover:underline">&larr; {{ video.title }}</a>
+    {% if back_url %}<a href="{{ back_url }}" class="text-sm text-amber-700 hover:underline">&larr; Back to the results</a>
+    {% elif video %}<a href="{% url 'videos:detail' video.pk %}" class="text-sm text-amber-700 hover:underline">&larr; {{ video.title }}</a>
     {% else %}<a href="{% url 'videos:sites_page' %}" class="text-sm text-amber-700 hover:underline">&larr; Sites</a>{% endif %}
     <h1 class="text-2xl font-bold text-gray-900">ROI &amp; reference objects{% if not video %} · {{ site.name }}{% endif %}</h1>
     <p class="text-sm text-gray-500">
@@ -33,6 +34,14 @@
   </div>
   {% else %}
   {% include "components/layout_toolbar.html" %}
+  <div id="recount-panel" hidden class="mb-3 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-900 flex flex-col gap-2" role="status">
+    <p id="recount-text" class="m-0"></p>
+    <p id="recount-roi" hidden class="m-0 text-amber-800">You moved the ROI. Tracking used the old ROI, so the recount counts the existing tracks against the new reference objects; bees only inside the new area were never tracked. Run the clip again to track with the new ROI.</p>
+    <div class="flex flex-wrap items-center gap-3">
+      <button type="button" id="recount-go" class="h-10 px-4 rounded-md bg-green-700 hover:bg-green-800 text-white font-semibold">Recount events</button>
+      <span id="recount-result" class="text-sm"></span>
+    </div>
+  </div>
   {% if clip.duration_seconds %}
   <div class="mt-3 flex flex-wrap items-center gap-3 text-sm text-gray-700">
     <label for="frame-t" class="font-medium">Frame</label>
@@ -64,7 +73,7 @@
         <a href="{% url 'videos:sites_page' %}" class="text-amber-700 hover:underline">Sites</a></p>
       <input type="radio" name="scope" value="clip" checked class="hidden">
       {% endif %}
-      <p class="text-xs text-gray-500">New runs use it. Clips already analysed keep their results until you run them again.</p>
+      <p class="text-xs text-gray-500">New runs use it. Clips already analysed can be recounted against it after you save, with no GPU time.</p>
     </fieldset>
     {% endif %}
     <div class="bg-white shadow rounded-lg p-4">
@@ -87,7 +96,32 @@ window.LAYOUT_CFG = {
     return {scope: picked ? picked.value : 'site', clip: {{ clip.pk|default:'null' }},
             add_clip: add ? add.checked : true};
   },
+  // After a save: offer to recount the clips already analysed (memory/63).
+  onSaved: function (d) {
+    var panel = document.getElementById('recount-panel');
+    if (!d.analysed) { panel.hidden = true; return; }
+    var scope = d.scope || 'clip';
+    document.getElementById('recount-text').textContent =
+      d.analysed + ' finished run' + (d.analysed === 1 ? ' was' : 's were') +
+      ' counted with the old layout. Recount their events and interactions against this one, from the tracks already saved.';
+    document.getElementById('recount-roi').hidden = !d.roi_changed;
+    document.getElementById('recount-result').textContent = '';
+    var go = document.getElementById('recount-go');
+    go.disabled = false; go.dataset.scope = scope;
+    panel.hidden = false;
+  },
 };
+document.getElementById('recount-go') && document.getElementById('recount-go').addEventListener('click', function () {
+  var go = this, out = document.getElementById('recount-result');
+  go.disabled = true; out.textContent = 'Recounting…';
+  fetch("{% if video %}{% url 'videos:layout_recount' video.pk %}{% else %}{% url 'videos:site_layout_recount' site.pk %}{% endif %}", {
+    method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': "{{ csrf_token }}"},
+    body: JSON.stringify({scope: go.dataset.scope})
+  }).then(function (r) { return r.json(); }).then(function (d) {
+    out.textContent = d.message || d.error || 'Could not recount.';
+    if (!d.ok) go.disabled = false;
+  }).catch(function () { out.textContent = 'Could not recount.'; go.disabled = false; });
+});
 </script>
 {% include "components/layout_canvas_script.html" %}
 {% if clip.duration_seconds %}

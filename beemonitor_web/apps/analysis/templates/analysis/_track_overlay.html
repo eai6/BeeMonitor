@@ -22,6 +22,12 @@
     </div>
     {% endif %}
     <div class="flex items-center gap-3 text-sm">
+      {% if job.video and job.video.user_id == request.user.id or job.video and request.user.is_superuser %}
+        {# Fix where the tubes sit, on this frame, then recount (memory/63). #}
+        <a href="{% url 'videos:layout' job.video.pk %}?back={{ request.path|urlencode }}"
+           onclick="var v = document.querySelector('#track-overlay video'); if (v) this.href = this.href.split('&t=')[0] + '&t=' + Math.floor(v.currentTime || 0);"
+           class="text-amber-700 hover:underline" title="Move the reference objects onto the real holes on this frame, then recount the events">Fix tube positions</a>
+      {% endif %}
       {% if result.annotated_video_path %}
         <a href="{% url 'analysis:video_proxy' job.pk %}" download="job_{{ job.pk }}_annotated.mp4"
            class="text-amber-700 hover:underline">Download rendered video</a>

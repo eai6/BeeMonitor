@@ -131,3 +131,64 @@ def sweep(batch=SWEEP_BATCH, budget=SWEEP_SECONDS) -> int:
             logger.exception("recount of run %s failed", pk)
         done += 1
     return done
+
+
+# ── After a layout fix (memory/63) ──────────────────────────────────────────
+# Moving reference objects changes nothing the GPU did: tracking only used the
+# ROI. So a clip already analysed is recounted against the new references from
+# the tracks it saved. A few runs are recounted while the editor waits; more
+# are handed to the sweep, which picks them up within one reconcile pass.
+RECOUNT_NOW = 8
+
+
+def runs_for_clips(videos):
+    """Every finished run that counted events or interactions for these
+    clips, found through their finished GPU jobs."""
+    from datetime import timedelta
+
+    from apps.analysis.models import Job
+
+    from .aggregate import run_job_id
+    from .models import PipelineRun
+
+    jobs = list(Job.objects.filter(video__in=videos, status="completed")
+                .values_list("pk", "user_id", "created_at"))
+    if not jobs:
+        return []
+    ids = {pk for pk, _u, _c in jobs}
+    when = [c for _p, _u, c in jobs if c]
+    runs = PipelineRun.objects.filter(status=PipelineRun.Status.COMPLETED,
+                                      user_id__in={u for _p, u, _c in jobs})
+    if when:
+        runs = runs.filter(started_at__gte=min(when) - timedelta(days=1),
+                           started_at__lte=max(when) + timedelta(days=1))
+    return [run for run in runs
+            if run_job_id(run) in ids
+            and any(s.get("block_type") in RECOUNTED for s in (run.steps or []))]
+
+
+def recount_clips(videos, now=RECOUNT_NOW) -> dict:
+    """Recount every analysed run of these clips against their current
+    layout. ``{runs, recounted, queued, events, votes_outdated}``:
+    ``votes_outdated`` counts review votes whose event changed (they are kept,
+    shown as no longer detected, and need a fresh look)."""
+    from . import review
+    from .models import PipelineRun
+
+    runs = runs_for_clips(videos)
+    out = {"runs": len(runs), "recounted": 0, "queued": 0, "events": 0, "votes_outdated": 0}
+    if len(runs) > now:
+        out["queued"] = PipelineRun.objects.filter(pk__in=[r.pk for r in runs]).update(counting_rules=0)
+        return out
+    for run in runs:
+        try:
+            counts = recount_run(run)
+        except Exception:
+            logger.exception("layout recount of run %s failed", run.pk)
+            continue
+        PipelineRun.objects.filter(pk=run.pk).update(counting_rules=CURRENT_RULES)
+        run.refresh_from_db()
+        out["recounted"] += 1
+        out["events"] += counts.get("events", 0)
+        out["votes_outdated"] += review.event_review_counts(run).get("gone", 0)
+    return out

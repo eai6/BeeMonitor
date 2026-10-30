@@ -5,7 +5,9 @@
       <button data-mode="roi"  class="mode-btn px-3 py-1.5 bg-amber-600 text-white">ROI</button>
       <button data-mode="nest" class="mode-btn px-3 py-1.5 bg-white text-gray-700">Add reference object</button>
       <button data-mode="move" class="mode-btn px-3 py-1.5 bg-white text-gray-700">Move / edit</button>
+      <button data-mode="all" class="mode-btn px-3 py-1.5 bg-white text-gray-700" title="Move every reference object together, for a camera or hotel that shifted">Move all</button>
     </div>
+    <label id="all-roi-wrap" hidden class="inline-flex items-center gap-1.5 text-gray-700"><input type="checkbox" id="all-roi"> with the ROI</label>
     <div class="inline-flex rounded-md overflow-hidden border border-gray-300" id="tools">
       <button data-tool="rect" class="tool-btn px-3 py-1.5 bg-gray-800 text-white">Rectangle</button>
       <button data-tool="poly" class="tool-btn px-3 py-1.5 bg-white text-gray-700">Polygon</button>

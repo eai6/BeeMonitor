@@ -761,7 +761,11 @@ class LayoutEditorView(LoginRequiredMixin, View):
         recent = []
         if video is None:
             recent = list(self._site_candidates(site).order_by("-uploaded_at")[:12])
+        back = request.GET.get("back") or ""
+        if not (back.startswith("/analysis/") and "//" not in back):
+            back = ""  # only ever back to a results page on this site
         return render(request, self.template_name, {
+            "back_url": back,
             "recent_clips": recent,
             "clip_at_site": bool(clip and site and clip.site_id == site.pk),
             "site": site, "video": video, "clip": clip,
@@ -788,6 +792,10 @@ class LayoutEditorView(LoginRequiredMixin, View):
             return JsonResponse({"error": "Invalid JSON."}, status=400)
         site, video, _clip = self._target(request, video_pk, site_pk, picked=body.get("clip"))
         roi, polygon, nests = parse_layout_body(body)
+        from apps.devices.layouts import layout_for_video
+        before = (layout_for_video(video) if video is not None else
+                  (lambda cur: {"roi_override": cur.roi_override, "roi_polygon": cur.roi_polygon}
+                   if cur else {})(Layout.current(site=site)))
         scope = body.get("scope") or ("site" if site_pk is not None else "site" if (video and (site or video.site_name)) else "clip")
         if video is not None and scope == "site" and site is None:
             if not video.site_name:
@@ -816,9 +824,51 @@ class LayoutEditorView(LoginRequiredMixin, View):
                                f"Drew the ROI and references for {owner.username}'s "
                                + (f"site {site.name}" if scope == "site" else f"clip {video.title}"),
                                target=owner, layout=saved.pk)
+        # Clips already analysed can be recounted against it from their saved
+        # tracks (memory/63); the ROI, though, was used by tracking itself.
+        from apps.pipelines import recount
+        clips = Video.objects.filter(site=site) if scope == "site" else [video]
+        analysed = len(recount.runs_for_clips(clips))
+        roi_changed = (before.get("roi_override") != saved.roi_override
+                       or before.get("roi_polygon") != saved.roi_polygon)
         return JsonResponse({"ok": True, "roi": saved.roi_override, "roi_polygon": saved.roi_polygon,
                              "nests": saved.nest_layout, "versions": versions,
+                             "scope": scope, "analysed": analysed, "roi_changed": roi_changed,
                              "message": message + " New runs use it."})
+
+
+class LayoutRecountView(LoginRequiredMixin, View):
+    """Recount events and interactions of clips already analysed, against the
+    layout they use now (memory/63). No GPU: references are only used after
+    tracking, so the saved tracks are counted again. POST ``{scope}``."""
+
+    def post(self, request, video_pk=None, site_pk=None):
+        import json as _json
+
+        from apps.pipelines import recount
+
+        try:
+            body = _json.loads(request.body or "{}")
+        except ValueError:
+            return JsonResponse({"error": "Invalid JSON."}, status=400)
+        site, video, _clip = LayoutEditorView()._target(request, video_pk, site_pk)
+        scope = "site" if (site_pk is not None or body.get("scope") == "site") else "clip"
+        if scope == "site" and site is None:
+            return JsonResponse({"error": "This clip has no site."}, status=400)
+        clips = Video.objects.filter(site=site) if scope == "site" else [video]
+        done = recount.recount_clips(clips)
+        if done["queued"]:
+            message = (f"Recounting {done['queued']} analysed runs in the background. "
+                       "Their results update within a few minutes.")
+        elif done["recounted"]:
+            message = (f"Recounted {done['recounted']} run{'s' if done['recounted'] != 1 else ''}: "
+                       f"{done['events']} event{'s' if done['events'] != 1 else ''}.")
+            if done["votes_outdated"]:
+                message += (f" {done['votes_outdated']} review vote{'s are' if done['votes_outdated'] != 1 else ' is'}"
+                            " on events that changed. They're kept but no longer count; review those events again.")
+        else:
+            message = "Nothing to recount: no finished run counted events for these clips."
+        return JsonResponse({"ok": True, "message": message, **done})
 
 
 class SitesPageView(LoginRequiredMixin, View):
