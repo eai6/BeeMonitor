@@ -13,6 +13,11 @@ every link out of here would only send them to a login page.
   <title>{% block title %}BeeMonitor{% endblock %}</title>
   <meta name="theme-color" content="#16a34a">
   <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* The hidden attribute must win. Tailwind's own rule for it is weaker
+       than any display class, so `hidden class="flex"` stayed visible. */
+    [hidden] { display: none !important; }
+  </style>
   <script>
     tailwind.config = {
       theme: {

@@ -57,11 +57,13 @@
       </div>
 
       <div data-ov-marks-wrap hidden class="flex flex-col gap-1">
+        {# One bar for the clip, or one lane per tube (the "Events by tube" toggle). #}
         <div class="relative h-5 rounded bg-gray-200 cursor-pointer" data-ov-marks
              title="Events in this clip — click one to jump there"></div>
+        <div data-ov-lanes hidden class="flex flex-col gap-0.5"></div>
         <p class="text-xs text-gray-600">Events in this clip: <span class="font-semibold" style="color:#0369a1">exit</span>,
           <span class="font-semibold" style="color:#b45309">enter</span>,
-          <span class="font-semibold" style="color:#6d28d9">stay</span> (its length). Click to jump there.</p>
+          <span class="font-semibold" style="color:#6d28d9">stay</span> (its length). Click a mark to jump there<span data-ov-lanes-hint hidden>; click a tube to show only its events on the video. The counts are exits / entries</span>.</p>
       </div>
 
       <div data-ov-timeline hidden class="flex flex-col gap-1">
@@ -84,6 +86,7 @@
           <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-ov-opt="regions"> ROI and reference objects</label>
           <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-ov-opt="events" checked> Events (exit, enter, stay)</label>
           <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-ov-opt="interactions" checked> Interactions</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-ov-bytube checked> Events by tube (one lane each)</label>
         </fieldset>
         <div class="flex flex-col gap-1.5">
           <div class="text-xs font-semibold text-gray-600 uppercase tracking-wide">Events near now</div>
@@ -230,41 +233,120 @@
     });
   }
 
-  // Every event as a mark on a clip-long bar.
+  // Every event as a mark: on one clip-long bar, or on one lane per tube
+  // ("Events by tube"), so a mark says when AND at which tube.
   var EVENT_COLORS = {exit: '#0369a1', enter: '#b45309', stay: '#6d28d9'};
-  function renderMarks() {
-    var bar = $('[data-ov-marks]'), d = ov.data();
-    if (!bar || !d || !(d.events || []).length || !video.duration) return;
-    var total = video.duration * ov.fps();
-    bar.innerHTML = '';
-    d.events.forEach(function (e) {
-      var m = document.createElement('button');
-      m.type = 'button';
-      m.className = 'absolute top-0.5 h-4 rounded-sm';
-      var c = EVENT_COLORS[e[2]] || '#374151';
-      m.style.left = (100 * e[0] / total) + '%';
-      if (e[2] === 'stay' && e[4] != null) {
-        m.style.width = Math.max(0.4, 100 * (e[4] - e[0]) / total) + '%';
-        m.style.background = c + '55'; m.style.borderLeft = '3px solid ' + c;
-      } else { m.style.width = '3px'; m.style.background = c; }
-      m.title = fmt(sec(e[0])) + ' ' + eventText(e);
-      m.setAttribute('aria-label', m.title);
-      m.addEventListener('click', function (ev) { ev.stopPropagation(); seekTo(e[0]); });
-      bar.appendChild(m);
-    });
+  var MAX_LANES = 8;
+  var byTubeBox = root.querySelector('[data-ov-bytube]');
+  var showAllLanes = false, onlyTube = null;
+  try { if (localStorage.getItem('bm-ov-bytube') === '0' && byTubeBox) byTubeBox.checked = false; } catch (e) {}
+
+  function tubeName(ref) { return String(ref || '').replace(/^reference_/, ''); }
+
+  function addMark(track, e, total) {
+    var m = document.createElement('button');
+    m.type = 'button';
+    m.className = 'absolute top-0.5 bottom-0.5 rounded-sm';
+    var c = EVENT_COLORS[e[2]] || '#374151';
+    m.style.left = (100 * e[0] / total) + '%';
+    if (e[2] === 'stay' && e[4] != null) {
+      m.style.width = Math.max(0.4, 100 * (e[4] - e[0]) / total) + '%';
+      m.style.background = c + '55'; m.style.borderLeft = '3px solid ' + c;
+    } else { m.style.width = '3px'; m.style.background = c; }
+    m.title = fmt(sec(e[0])) + ' ' + eventText(e);
+    m.setAttribute('aria-label', m.title);
+    m.addEventListener('click', function (ev) { ev.stopPropagation(); seekTo(e[0]); });
+    track.appendChild(m);
+  }
+
+  function addPlayhead(track) {
     var now = document.createElement('div');
     now.setAttribute('data-ov-marks-now', '');
-    now.className = 'absolute -top-0.5 h-6 w-0.5 bg-gray-900 pointer-events-none';
-    bar.appendChild(now);
+    now.className = 'absolute -top-0.5 -bottom-0.5 w-0.5 bg-gray-900 pointer-events-none';
+    track.appendChild(now);
+  }
+
+  function renderMarks() {
+    var bar = $('[data-ov-marks]'), lanesBox = $('[data-ov-lanes]'), d = ov.data();
+    if (!bar || !d || !(d.events || []).length || !video.duration) return;
+    var total = video.duration * ov.fps();
+    var byTube = !byTubeBox || byTubeBox.checked;
+    bar.innerHTML = ''; lanesBox.innerHTML = '';
+    bar.hidden = byTube; lanesBox.hidden = !byTube;
+    $('[data-ov-lanes-hint]').hidden = !byTube;
+    if (!byTube) {
+      d.events.forEach(function (e) { addMark(bar, e, total); });
+      addPlayhead(bar);
+    } else {
+      var tubes = {};
+      d.events.forEach(function (e) { (tubes[e[3]] = tubes[e[3]] || []).push(e); });
+      var order = Object.keys(tubes).sort(function (a, b) {
+        return tubes[b].length - tubes[a].length || (parseInt(tubeName(a), 10) - parseInt(tubeName(b), 10));
+      });
+      var shown = showAllLanes ? order : order.slice(0, MAX_LANES);
+      shown.forEach(function (ref) {
+        var evs = tubes[ref];
+        var row = document.createElement('div');
+        row.className = 'flex items-center gap-2';
+        var name = document.createElement('button');
+        name.type = 'button';
+        name.className = 'w-16 shrink-0 text-right font-mono text-xs font-semibold hover:underline ' +
+          (onlyTube === ref ? 'text-amber-800' : 'text-gray-700');
+        name.textContent = 'tube ' + tubeName(ref);
+        name.title = onlyTube === ref ? 'Show every tube\'s events on the video'
+                                      : 'Show only tube ' + tubeName(ref) + '\'s events on the video';
+        name.setAttribute('aria-pressed', onlyTube === ref ? 'true' : 'false');
+        name.addEventListener('click', function () {
+          onlyTube = onlyTube === ref ? null : ref;
+          ov.onlyReference(onlyTube);
+          renderMarks();
+        });
+        var track = document.createElement('div');
+        track.className = 'relative flex-1 h-4 rounded-sm cursor-pointer ' +
+          (onlyTube && onlyTube !== ref ? 'bg-gray-100 opacity-50' : 'bg-gray-200');
+        track.addEventListener('click', function (ev) {
+          var r = track.getBoundingClientRect();
+          video.currentTime = video.duration * Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+        });
+        evs.forEach(function (e) { addMark(track, e, total); });
+        addPlayhead(track);
+        var count = document.createElement('span');
+        count.className = 'w-14 shrink-0 font-mono text-[11px] text-gray-600';
+        count.title = 'exits / entries';
+        count.textContent = evs.filter(function (e) { return e[2] === 'exit'; }).length + ' / ' +
+          evs.filter(function (e) { return e[2] === 'enter'; }).length;
+        row.appendChild(name); row.appendChild(track); row.appendChild(count);
+        lanesBox.appendChild(row);
+      });
+      if (order.length > MAX_LANES) {
+        var more = document.createElement('button');
+        more.type = 'button';
+        more.className = 'self-start ml-[4.5rem] text-xs text-amber-700 hover:underline min-h-[28px]';
+        more.textContent = showAllLanes ? 'Show the ' + MAX_LANES + ' busiest tubes'
+                                        : '+ ' + (order.length - MAX_LANES) + ' more tube' + (order.length - MAX_LANES === 1 ? '' : 's');
+        more.addEventListener('click', function () { showAllLanes = !showAllLanes; renderMarks(); });
+        lanesBox.appendChild(more);
+      }
+    }
     $('[data-ov-marks-wrap]').hidden = false;
+    syncPlayheads();
+  }
+  if (byTubeBox) byTubeBox.addEventListener('change', function () {
+    try { localStorage.setItem('bm-ov-bytube', byTubeBox.checked ? '1' : '0'); } catch (e) {}
+    if (!byTubeBox.checked && onlyTube) { onlyTube = null; ov.onlyReference(null); }
+    renderMarks();
+  });
+  function syncPlayheads() {
+    if (!video.duration) return;
+    var left = (100 * video.currentTime / video.duration) + '%';
+    root.querySelectorAll('[data-ov-marks-now]').forEach(function (n) { n.style.left = left; });
   }
   video.addEventListener('loadedmetadata', renderMarks);
 
   ov.onFrame(function (info) {
     clock.textContent = 'frame ' + info.frame + ' · ' + fmt(sec(info.frame));
     if (ov.focused() == null) { renderList(info.visible); renderNear(info.frame); }
-    var mk = $('[data-ov-marks-now]');
-    if (mk && video.duration) mk.style.left = (100 * video.currentTime / video.duration) + '%';
+    syncPlayheads();
     var tl = $('[data-ov-spans] [data-ov-now]');
     if (tl && video.duration) tl.style.left = (100 * video.currentTime / video.duration) + '%';
   });

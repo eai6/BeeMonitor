@@ -110,6 +110,9 @@ class RenderVideoTests(TestCase):
         self.assertIn("GPU-hours", html)
         self.assertIn('data-ov-opt="events"', html)
         self.assertIn('data-ov-opt="interactions"', html)
+        # The event bar can split into one lane per tube.
+        self.assertIn("data-ov-bytube", html)
+        self.assertIn("data-ov-lanes", html)
 
 
 class SpecTests(TestCase):

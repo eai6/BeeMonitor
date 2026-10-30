@@ -70,6 +70,7 @@
     var opts = {boxes: true, species: true, trails: true, lost: true, regions: false,
                 events: true, interactions: true};
     var focused = null;
+    var onlyRef = null;       // show one reference's events and spells only
     var listeners = [];
     var lastFrame = -1;
     var vfcHandle = null, rafHandle = null;
@@ -214,6 +215,7 @@
     function activeEvents(frame) {
       var w = Math.round(STYLE.event_seconds * fps());
       return (data.events || []).filter(function (e) {
+        if (onlyRef != null && e[3] !== onlyRef) return false;
         if (e[2] === 'exit') return frame >= e[0] && frame <= e[0] + w;
         if (e[2] === 'enter') return frame >= e[0] - w && frame <= e[0];
         if (e[2] === 'stay') return frame >= e[0] && frame <= (e[4] == null ? e[0] : e[4]);
@@ -222,7 +224,10 @@
     }
 
     function activeInteractions(frame) {
-      return (data.interactions || []).filter(function (r) { return frame >= r[0] && frame <= r[1]; });
+      return (data.interactions || []).filter(function (r) {
+        if (onlyRef != null && !(r[4] === 'in_reference' && r[3] === onlyRef)) return false;
+        return frame >= r[0] && frame <= r[1];
+      });
     }
 
     // Where a track is at this frame: its last row at or before it.
@@ -456,6 +461,9 @@
       set: function (o) { Object.keys(o).forEach(function (k) { opts[k] = !!o[k]; }); redraw(); },
       options: function () { return Object.assign({}, opts); },
       focus: function (id) { focused = id == null ? null : Number(id); redraw(); },
+      // One reference only (the event lanes' tube names): its events and the
+      // spells inside it; null for all.
+      onlyReference: function (ref) { onlyRef = ref == null ? null : String(ref); redraw(); },
       focused: function () { return focused; },
       onFrame: function (fn) { listeners.push(fn); },
       data: function () { return data; },

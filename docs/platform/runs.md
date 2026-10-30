@@ -62,7 +62,10 @@ The clip plays with its tracks drawn over it. Under **Show** you choose what's d
   labelled with their distance in body lengths.
 
 Under the video, the event bar marks every event in the clip (exit blue, enter amber, stay as a violet span);
-click one to jump there. **Events near now** lists the events within 5 seconds of the current frame.
+click one to jump there. With **Events by tube** on (the default), it splits into one lane per tube, busiest
+first, so each mark says when *and* at which tube; the numbers beside a lane are its exits / entries. Click a
+tube's name to show only that tube's events on the video, and again to show them all. More than eight tubes
+fold into "+ N more tubes". **Events near now** lists the events within 5 seconds of the current frame.
 
 Click a box to follow one track. The **full window** button (top right of the video), or a double-click,
 fills the screen with the video and everything drawn on it.
