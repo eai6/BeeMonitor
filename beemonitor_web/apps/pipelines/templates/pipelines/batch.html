@@ -34,6 +34,7 @@ their reason.
   <div class="flex items-start gap-2 shrink-0">
     {% if can_share and running %}{% include "pipelines/_cancel_batch.html" %}{% endif %}
     {% if can_share %}{% include "pipelines/_people_panel.html" %}{% include "pipelines/_share_panel.html" %}{% endif %}
+    {% if period_review_url and not photos %}<a href="{{ period_review_url }}" class="inline-flex items-center h-10 px-4 rounded-md text-sm font-semibold border border-gray-300 bg-white text-gray-800 hover:bg-gray-50" title="Every analysed clip of this batch's unit or site on one time axis: review events and trips across clips">Review this period</a>{% endif %}
     {% if my_role %}<span class="inline-flex items-center h-10 px-3 rounded-md bg-gray-100 text-sm text-gray-700">You're a {{ my_role }} on this batch</span>{% endif %}
   </div>
 </div>

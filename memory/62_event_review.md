@@ -1,6 +1,6 @@
 # 62 — Event review: yes / no on each detected event
 
-**Status:** audit + plan + design (2026-10-29), awaiting review.
+**Status:** built (2026-10-29), not committed. Defaults: one device or site per period; latest completed run per clip with an Events step; suggested trips prefer the same marker.
 Canvas: https://claude.ai/artifact/H9GUb3sgYQshaifeFwPNNf
 Related: [[60_activity_extraction_audit]], [[61_events_on_the_video]], [[39_annotation_review_page]].
 
@@ -95,3 +95,10 @@ The user wants to check the detected events by hand. In "Events near now", each 
 1. Period review across **several devices at once** (one timeline each, stacked), or one device / site at a time (planned)?
 2. Which runs for a period when a clip was analysed more than once: **the latest run with an Events step** (planned), or let the user pick a pipeline?
 3. Suggested trips pair an exit with the next entry into the same tube, **any track**. When markers are read, should the suggestion prefer the next entry by **the same marker** (and fall back to any)?
+
+## Build notes (period + trips, 2026-10-29)
+- `apps/pipelines/period.py`: `gather` (clips of a device/site with a known start in [from, to), on one naive local wall-clock axis; caps 7 days / 200 clips with a note; clips without a start or without a finished Events run listed apart), `runs_for_videos` (latest completed run with an Events step, through the clips' jobs), `clip_events`, `suggest_trips` (next later entry into the same reference, same marker first, never earlier), `set_trip_vote`, `trip_rows` (reviewed pairs only; grouped by exit+entry; `review` combined per pair).
+- `apps/analysis/period_views.py`: `analysis:period_review` (`review/`, `device|site_id|batch`, `from`, `to`), `analysis:trip_review` (POST JSON), `analysis:period_trips_csv`, `analysis:period_stream` (`<job>/stream/`, admits batch members — the Videos stream link doesn't).
+- Page: `analysis/period_review.html` + `static/js/period_review.js` (reuses `TrackOverlay`; event votes POST to each clip's `analysis:event_review`).
+- Batch: "Review this period" when its clips share one device or one site; `trips` download (`sharing.batch_csv`) offered once any TripReview exists. Device page: "Review a period".
+- Tests: `apps/pipelines/tests/test_period_review.py` (18). jsdom drive of the page: lanes, side panel, event review across clips, trip review with re-link.

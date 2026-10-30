@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Review a period - BeeMonitor{% endblock %}
+
+{% block content %}
+{% comment %}
+Period review (memory/62): every analysed clip of one device or site between
+two local times on ONE time axis, so an exit in one clip and the entry in a
+later one sit on the same tube lane. Review walks every event across clips;
+trip review walks each suggested exit → entry pair. Logic: pipelines/period.py.
+{% endcomment %}
+<div id="period-review" class="flex flex-col gap-3">
+  {% csrf_token %}
+  <form method="get" class="flex flex-wrap items-end gap-3 bg-white border border-gray-200 rounded-lg px-4 py-3">
+    <div class="flex-1 min-w-[220px]">
+      <h1 class="text-lg font-semibold text-gray-900">Review a period</h1>
+      <p class="text-[13px] text-gray-600">{% if data.device %}{{ data.device.name }}{% else %}{{ data.site.name }}{% endif %} · every analysed clip in the range, in recording order</p>
+    </div>
+    <label class="flex flex-col gap-1 text-xs text-gray-700">Device
+      <select name="device" class="h-10 border border-gray-300 rounded-md px-2 text-sm">
+        <option value="">—</option>
+        {% for d in devices %}<option value="{{ d.pk }}" {% if data.device and d.pk == data.device.pk %}selected{% endif %}>{{ d.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label class="flex flex-col gap-1 text-xs text-gray-700">or site
+      <select name="site_id" class="h-10 border border-gray-300 rounded-md px-2 text-sm">
+        <option value="">—</option>
+        {% for s in sites %}<option value="{{ s.pk }}" {% if data.site and s.pk == data.site.pk %}selected{% endif %}>{{ s.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label class="flex flex-col gap-1 text-xs text-gray-700">From
+      <input type="datetime-local" name="from" value="{{ from_value }}" class="h-10 border border-gray-300 rounded-md px-2 text-sm">
+    </label>
+    <label class="flex flex-col gap-1 text-xs text-gray-700">To
+      <input type="datetime-local" name="to" value="{{ to_value }}" class="h-10 border border-gray-300 rounded-md px-2 text-sm">
+    </label>
+    <button type="submit" class="h-10 px-4 rounded-md border border-gray-300 bg-white hover:bg-gray-50 text-sm font-semibold">Show</button>
+  </form>
+
+  {% for n in data.notes %}<p class="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">{{ n }}</p>{% endfor %}
+
+  <section class="bg-white border border-gray-200 rounded-lg px-4 py-3 flex flex-col gap-2">
+    <div class="flex flex-wrap items-center justify-between gap-3 text-[13px] text-gray-700">
+      <span><strong>{{ data.clips|length }} clip{{ data.clips|length|pluralize }}</strong> · <span data-pr-progress></span></span>
+      <span class="flex flex-wrap items-center gap-3">
+        <label class="flex items-center gap-1.5"><input type="checkbox" data-pr-links checked> Link each exit to the next entry on the same tube</label>
+        <a href="{{ csv_url }}" class="text-amber-700 hover:underline">Reviewed trips CSV</a>
+        {% if any_review %}
+        <button type="button" data-pr-review-events class="h-10 px-3 rounded bg-amber-700 hover:bg-amber-800 text-white font-semibold">Review events</button>
+        <button type="button" data-pr-review-trips class="h-10 px-3 rounded border border-amber-700 text-amber-800 hover:bg-amber-50 font-semibold">Review trips</button>
+        <button type="button" data-pr-exit hidden class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">Exit review</button>
+        {% endif %}
+      </span>
+    </div>
+    <div class="relative h-[18px] ml-[76px] mr-[60px] font-mono text-[11px] text-gray-600" data-pr-ticks aria-hidden="true"></div>
+    <div class="flex items-center gap-2">
+      <span class="w-[68px] shrink-0 text-right font-mono text-xs font-semibold text-gray-700">clips</span>
+      <div class="relative flex-1 h-[22px] rounded-sm" data-pr-strip
+           style="background: repeating-linear-gradient(135deg, #f3f4f6 0 6px, #e5e7eb 6px 8px)"
+           aria-label="Clips in the period; striped = no recording"></div>
+      <span class="w-[52px] shrink-0"></span>
+    </div>
+    <div data-pr-lanes class="flex flex-col gap-0.5"></div>
+    <p class="ml-[76px] text-xs text-gray-600">One time axis for the whole period; striped = no recording. Marks: <strong style="color:#0369a1">exit</strong>, <strong style="color:#b45309">enter</strong>, <strong style="color:#6d28d9">stay</strong>; a ring = reviewed. A faint band joins each exit to the next entry on the same tube, across clips too. It is only drawn: a trip is in your data only when a reviewer accepts it.</p>
+  </section>
+
+  {% if data.skipped %}
+  <details class="bg-white border border-gray-200 rounded-lg px-4 py-2 text-sm text-gray-700">
+    <summary class="cursor-pointer">{{ data.skipped|length }} clip{{ data.skipped|length|pluralize }} not placed</summary>
+    <ul class="mt-2 space-y-1">{% for s in data.skipped %}<li>{{ s.title }} — {{ s.reason }}</li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+
+  <div class="flex flex-wrap gap-4">
+    <div class="min-w-0 flex flex-col gap-2" style="flex: 999 1 640px">
+      <div class="relative bg-black rounded overflow-hidden" data-pr-stage>
+        <video data-pr-video controls playsinline preload="metadata" class="w-full block" style="max-height: 62vh"></video>
+        <canvas data-pr-canvas class="absolute left-0 top-0 pointer-events-none"></canvas>
+        <span data-pr-clip class="absolute left-2 top-2 font-mono text-xs text-white bg-black/60 px-1.5 py-0.5 rounded"></span>
+        <div data-pr-card hidden role="dialog" aria-label="Review this event"
+             class="absolute left-1/2 bottom-12 -translate-x-1/2 w-[min(560px,92%)] rounded-lg bg-gray-900/95 text-white p-3.5 flex flex-col gap-2.5 z-10">
+          <div class="flex items-baseline justify-between gap-3">
+            <strong data-pr-card-title class="text-[15px]"></strong>
+            <span data-pr-card-where class="font-mono text-xs text-gray-300"></span>
+          </div>
+          <p class="text-[13px] text-gray-200 m-0">Paused on the event. Is this right?</p>
+          <div class="flex flex-wrap gap-2 items-center">
+            <button type="button" data-pr-vote="accepted" class="h-11 px-5 rounded bg-green-700 hover:bg-green-800 font-bold">Yes <span class="font-normal opacity-80">(Y)</span></button>
+            <button type="button" data-pr-vote="rejected" class="h-11 px-5 rounded bg-red-700 hover:bg-red-800 font-bold">No <span class="font-normal opacity-80">(N)</span></button>
+            <button type="button" data-pr-replay class="h-11 px-3.5 rounded border border-gray-500 hover:bg-gray-800">Replay 2 s (R)</button>
+            <button type="button" data-pr-skip class="h-11 px-3.5 rounded border border-gray-500 hover:bg-gray-800 ml-auto">Skip (→)</button>
+          </div>
+          <div data-pr-reasons hidden class="flex flex-wrap gap-1.5 items-center text-[13px]">
+            <span class="text-gray-300">What's wrong? (optional)</span>
+            <button type="button" data-pr-reason="not an event" class="h-8 px-2.5 rounded-full border border-gray-400 hover:bg-gray-800">Not an event</button>
+            <button type="button" data-pr-reason="wrong tube" class="h-8 px-2.5 rounded-full border border-gray-400 hover:bg-gray-800">Wrong tube</button>
+            <button type="button" data-pr-reason="wrong action" class="h-8 px-2.5 rounded-full border border-gray-400 hover:bg-gray-800">Wrong action</button>
+            <button type="button" data-pr-reason="can't tell" class="h-8 px-2.5 rounded-full border border-gray-400 hover:bg-gray-800">Can't tell</button>
+            <button type="button" data-pr-next class="h-8 px-2.5 rounded-full bg-gray-700 hover:bg-gray-600 ml-auto">Next →</button>
+          </div>
+        </div>
+      </div>
+      <p data-pr-status class="text-xs text-gray-600"></p>
+    </div>
+    <aside class="flex flex-col gap-2 bg-white border border-gray-200 rounded-lg p-3 text-[13px]" style="flex: 1 1 280px; min-width: 0">
+      <h2 data-pr-side-title class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Click a tube to see its events across the period</h2>
+      <div data-pr-side class="flex flex-col gap-1"></div>
+    </aside>
+  </div>
+
+  {% if any_review %}
+  <section data-pr-trip hidden class="bg-white border border-gray-200 rounded-lg p-4 flex flex-col gap-3" aria-label="Review this trip">
+    <div class="flex flex-wrap items-baseline justify-between gap-2">
+      <strong data-pr-trip-title class="text-base"></strong>
+      <span data-pr-trip-where class="font-mono text-[13px] text-gray-700"></span>
+    </div>
+    <p class="text-[13px] text-gray-600 m-0">Is it the same bee going out and coming back?</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {% for side in "AB" %}
+      <div class="flex flex-col gap-1.5" data-pr-side-{{ side }}>
+        <div class="relative bg-black rounded overflow-hidden">
+          <video data-pr-trip-video playsinline preload="metadata" muted class="w-full block" style="max-height: 34vh"></video>
+          <canvas data-pr-trip-canvas class="absolute left-0 top-0 pointer-events-none"></canvas>
+          <span data-pr-trip-chip class="absolute left-2 top-2 font-mono text-xs font-bold text-white px-1.5 py-0.5 rounded"></span>
+        </div>
+        <span data-pr-trip-who class="text-[13px] text-gray-700"></span>
+        <div data-pr-trip-crops class="flex gap-1"></div>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="flex flex-wrap gap-2 items-center">
+      <button type="button" data-pr-trip-yes class="h-11 px-5 rounded bg-green-700 hover:bg-green-800 text-white font-bold">Same bee, a trip (Y)</button>
+      <button type="button" data-pr-trip-no class="h-11 px-5 rounded bg-red-700 hover:bg-red-800 text-white font-bold">Not this pair (N)</button>
+      <button type="button" data-pr-trip-skip class="h-11 px-3.5 rounded border border-gray-300 bg-white hover:bg-gray-50 ml-auto">Skip (→)</button>
+    </div>
+    <div data-pr-relink hidden class="bg-gray-50 border border-gray-200 rounded-md p-3 flex flex-col gap-2 text-[13px]">
+      <span>Did this bee come back on a different entry into this tube?</span>
+      <div data-pr-relink-list class="flex flex-wrap gap-1.5"></div>
+    </div>
+  </section>
+  {% endif %}
+</div>
+{{ payload|json_script:"period-data" }}
+<script src="{% static 'js/track_overlay.js' %}"></script>
+<script src="{% static 'js/period_review.js' %}"></script>
+{% endblock %}

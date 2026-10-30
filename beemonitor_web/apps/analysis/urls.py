@@ -1,7 +1,7 @@
 from django.urls import path
 from django.views.generic import RedirectView
 
-from . import views
+from . import period_views, views
 from .video_proxy import VideoProxyView
 
 app_name = "analysis"
@@ -21,6 +21,11 @@ urlpatterns = [
          name="track_crops"),
     path("<int:pk>/overlay.json", views.TrackOverlayView.as_view(), name="track_overlay"),
     path("<int:pk>/events/review", views.EventReviewView.as_view(), name="event_review"),
+    # Period review across clips, and its trips (memory/62).
+    path("review/", period_views.PeriodReviewView.as_view(), name="period_review"),
+    path("review/trips", period_views.TripReviewView.as_view(), name="trip_review"),
+    path("review/trips.csv", period_views.PeriodTripsCsvView.as_view(), name="period_trips_csv"),
+    path("<int:pk>/stream/", period_views.PeriodStreamView.as_view(), name="period_stream"),
     path("<int:pk>/results/<str:kind>.csv", views.JobPrimitiveCsvView.as_view(),
          name="results_csv"),
     path("<int:pk>/annotate/", views.GenerateAnnotatedVideoView.as_view(), name="annotate_video"),

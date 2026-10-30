@@ -1177,8 +1177,26 @@ def batch_detail(request, batch_id):
         "skipped_sources": skipped_sources,
         "skipped_reasons": Counter(s["reason"] for s in skipped_sources).most_common(),
         "batch_devices": batch_devices,
+        # Period review (memory/62): the batch's clips on one time axis, when
+        # they are from one device or one site.
+        "period_review_url": _period_review_url(rows, batch_id),
         "batch_days": aggregate.batch_days(rows),
     })
+
+
+def _period_review_url(rows, batch_id):
+    """The period review of a batch, or "" when its clips span several devices
+    and several sites (a period is one device or one site)."""
+    videos = [r["video"] for r in rows if r.get("video")]
+    if not videos:
+        return ""
+    if len({v.device_id for v in videos}) == 1 and videos[0].device_id:
+        pass
+    elif len({v.site_id for v in videos}) == 1 and videos[0].site_id:
+        pass
+    else:
+        return ""
+    return reverse("analysis:period_review") + f"?batch={batch_id}"
 
 
 @login_required

@@ -109,6 +109,13 @@ def batch_csv(runs, batch_id, kind):
     from . import aggregate
 
     stem = f"{kind}_batch_{str(batch_id)[:8]}.csv"
+    if kind == "trips":
+        from .models import TripReview
+        from .period import TRIP_FIELDS, trip_rows
+        rows = trip_rows(TripReview.objects.filter(exit_run__in=list(runs)))
+        if not rows:
+            raise EmptyExport("No reviewed trips in this batch yet.")
+        return stem, TRIP_FIELDS, rows
     if kind == "photos":
         rows = aggregate.photo_rows(runs)
         fields = ["photo_id", "taken_at", "run_id", "insect", "class", "confidence",
