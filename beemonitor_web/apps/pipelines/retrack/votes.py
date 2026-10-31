@@ -1,4 +1,4 @@
-"""Review votes follow their events onto the new tracks (memory/69).
+"""Review votes follow their events after a recount or a re-track (memory/69).
 
 An event's key holds its track id, so after a re-track a reviewed event can
 come back under a new key. Each vote copied its event's action, reference and
@@ -28,7 +28,14 @@ def _events(run):
     return out
 
 
-def _matcher(events, fps):
+def _matcher(events, fps, same_tracks):
+    """``match(action, reference, frame, track)`` -> ``(frame, key, track)``.
+
+    When the tracks are the ones the votes were cast on (a recount, not a
+    re-track), the event of the same track, action and reference is the same
+    event even if its frame moved (e.g. counted from the whole trajectory).
+    Otherwise — or when that finds nothing — the one event of that action and
+    reference within half a second."""
     from ..primitives import normalize_event
 
     tolerance = max(1, round(float(fps or 25) * 0.5))
@@ -42,31 +49,38 @@ def _matcher(events, fps):
         index.setdefault((r.get("action"), str(r.get("reference") or "")), []).append(
             (frame, key, str(r.get("track_id") or "")))
 
-    def match(action, reference, frame):
+    def match(action, reference, frame, track=None):
+        hits = index.get((action, str(reference or "")), [])
+        if same_tracks and track not in (None, ""):
+            own = [h for h in hits if h[2] == str(track)]
+            if own:
+                return min(own, key=lambda h: abs(h[0] - (frame or 0)))
         if frame is None:
             return None
-        hits = [h for h in index.get((action, str(reference or "")), [])
-                if abs(h[0] - frame) <= tolerance]
-        return hits[0] if len(hits) == 1 else None
+        near = [h for h in hits if abs(h[0] - frame) <= tolerance]
+        return near[0] if len(near) == 1 else None
 
     return match
 
 
-def move_votes(run, fps) -> dict:
+def move_votes(run, fps, same_tracks=False) -> dict:
     """Move or copy this run's event and trip votes onto its new events.
-    ``{moved, gone}``."""
+    ``same_tracks``: the run's tracks are the ones the votes were cast on
+    (after a recount rather than a re-track). ``{moved, gone}``."""
     from ..models import EventReview, TripReview
     from ..review import shared_job_runs
 
     events = _events(run)
-    match = _matcher(events, fps)
+    if not events:
+        return {"moved": 0, "gone": 0}
+    match = _matcher(events, fps, same_tracks)
     moved = gone = 0
 
     owners = shared_job_runs([run], "event_reviews")
     for v in EventReview.objects.filter(run_id__in=list(owners)):
         if owners[v.run_id].pk != run.pk or v.event_key in events:
             continue
-        hit = match(v.action, v.reference, v.frame)
+        hit = match(v.action, v.reference, v.frame, v.track_id)
         if hit is None:
             gone += 1
             continue
@@ -86,11 +100,12 @@ def move_votes(run, fps) -> dict:
     for t in TripReview.objects.filter(exit_run_id__in=list(owners)):
         if owners[t.exit_run_id].pk != run.pk:
             continue
-        new_exit = None if t.exit_key in events else match("exit", t.reference, t.exit_frame)
+        new_exit = (None if t.exit_key in events
+                    else match("exit", t.reference, t.exit_frame, t.exit_track))
         same_job_entry = t.entry_run_id is not None and owners.get(t.entry_run_id) is run
         new_entry = None
         if same_job_entry and t.entry_key and t.entry_key not in events:
-            new_entry = match("enter", t.reference, t.entry_frame)
+            new_entry = match("enter", t.reference, t.entry_frame, t.entry_track)
         if t.exit_key not in events and new_exit is None:
             gone += 1
             continue

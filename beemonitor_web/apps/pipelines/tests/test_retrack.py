@@ -268,3 +268,28 @@ class RetrackRunTests(PrimitiveBlockTestCase):
         res = self.client.post(reverse("pipelines:batch_retrack_check", args=[batch]))
         self.assertTrue(res.json()["ok"], res.content)
         self.assertEqual(res.json()["check"]["boxes"], 100)
+
+    def test_after_a_recount_votes_follow_the_same_tracks_event_even_if_it_moved(self):
+        # "Track start and end from: whole trajectory" moved an entry 3 s later.
+        run, _job = self._run()
+        EventReview.objects.create(run=run, event_key="enter|reference_1|4|100", action="enter",
+                                   reference="reference_1", track_id="4", frame=100,
+                                   user=self.user, verdict="rejected")
+        from apps.pipelines.retrack import votes
+        run.context["a"]["rows"] = [
+            {"action": "enter", "reference": "reference_1", "track_id": 4, "frame": 190},
+            {"action": "enter", "reference": "reference_1", "track_id": 9, "frame": 101}]
+        self.assertEqual(votes.move_votes(run, FPS, same_tracks=True), {"moved": 1, "gone": 0})
+        self.assertEqual(EventReview.objects.get(run=run).event_key, "enter|reference_1|4|190")
+
+    def test_after_a_re_track_a_same_numbered_track_is_not_trusted(self):
+        run, _job = self._run()
+        EventReview.objects.create(run=run, event_key="enter|reference_1|4|100", action="enter",
+                                   reference="reference_1", track_id="4", frame=100,
+                                   user=self.user, verdict="rejected")
+        from apps.pipelines.retrack import votes
+        run.context["a"]["rows"] = [
+            {"action": "enter", "reference": "reference_1", "track_id": 4, "frame": 190},
+            {"action": "enter", "reference": "reference_1", "track_id": 9, "frame": 101}]
+        votes.move_votes(run, FPS, same_tracks=False)
+        self.assertEqual(EventReview.objects.get(run=run).event_key, "enter|reference_1|9|101")

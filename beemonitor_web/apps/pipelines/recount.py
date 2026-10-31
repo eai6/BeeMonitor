@@ -97,10 +97,19 @@ def recount_run(run) -> dict:
         run.context = context
         type(run).objects.filter(pk=run.pk).update(context=context)
         sync_job_counts(run)
-    if retracked:
+    if counts:
+        # Votes follow their events: an event's key holds its frame and track,
+        # and a recount (new Events settings, a new layout) or a re-track can
+        # move both (memory/69).
         from .retrack import votes
+        from .retrack.run import gpu_result
 
-        votes.move_votes(run, retracked.get("fps"))
+        fps = (retracked or {}).get("fps") or (
+            ((gpu_result(run) or {}).get("summary_stats") or {}).get("video_fps"))
+        try:
+            votes.move_votes(run, fps, same_tracks=not retracked)
+        except Exception:
+            logger.exception("moving review votes of run %s failed", run.pk)
     return counts
 
 
