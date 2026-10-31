@@ -121,7 +121,8 @@ def lineages(names) -> dict:
             continue
         hit = cache.get(_cache_key(name))
         if hit is not None:
-            out[name] = hit
+            # A "no match" cached before bee genera were known still says bee.
+            out[name] = hit or _known_bee(name) or {}
         else:
             todo.append(name)
     if todo:
@@ -143,24 +144,109 @@ def lineages(names) -> dict:
 
 
 def default_group(lin: dict) -> str:
-    """The group a lineage falls in before any rule: bees by family, ants by
-    Formicidae, any other Hymenopteran a wasp, then by order or class."""
-    lin = lin or {}
-    family, order = lin.get("family") or "", lin.get("order") or ""
-    if family == "Formicidae":
-        return ANTS
-    if family in BEE_FAMILIES or lin.get("bee"):
-        return BEES
-    if order == "Hymenoptera":
-        return WASPS
-    if order in ORDER_GROUPS:
-        return ORDER_GROUPS[order]
-    if (lin.get("class") or "") in CRAWLER_CLASSES:
-        return CRAWLERS
-    return UNCLEAR
+    """The group a lineage falls in under the default grouping."""
+    return name_group("", lin, _index(default_grouping()))[0]
 
 
-# ── The node's settings ─────────────────────────────────────────────────────
+# ── The grouping (memory/66) ────────────────────────────────────────────────
+# A grouping is data the user edits: each group is a list of taxa at any rank,
+# and the most specific match wins, so "Ants = family Formicidae" beats
+# "Wasps = order Hymenoptera" for an ant. Track rules (set while reviewing)
+# decide one track outright.
+
+RANKS = ("species", "genus", "family", "order", "class")   # most specific first
+GROUP_COLORS = {BEES: "#d97706", WASPS: "#dc2626", ANTS: "#2563eb", FLIES: "#0d9488",
+                BEETLES: "#65a30d", MOTHS: "#db2777", CRAWLERS: "#6b7280"}
+_PALETTE = ["#7c3aed", "#0891b2", "#ca8a04", "#be185d", "#4d7c0f", "#9333ea", "#0f766e"]
+
+
+def default_grouping() -> dict:
+    """The built-in groups, written out so they can be seen and changed."""
+    def members(rank, names):
+        return [{"rank": rank, "name": n} for n in sorted(names)]
+
+    crawler_orders = [o for o, g in ORDER_GROUPS.items() if g == CRAWLERS]
+    groups = [
+        (BEES, members("family", BEE_FAMILIES)),
+        (WASPS, members("order", ["Hymenoptera"])),
+        (ANTS, members("family", ["Formicidae"])),
+        (FLIES, members("order", ["Diptera"])),
+        (BEETLES, members("order", ["Coleoptera"])),
+        (MOTHS, members("order", ["Lepidoptera"])),
+        (CRAWLERS, members("order", crawler_orders) + members("class", CRAWLER_CLASSES)),
+    ]
+    return {"groups": [{"name": n, "color": GROUP_COLORS[n], "members": m} for n, m in groups],
+            "tracks": []}
+
+
+def _key(name) -> str:
+    return _clean(name).lower()
+
+
+def _ensure_group(grouping, name):
+    for g in grouping["groups"]:
+        if g["name"] == name:
+            return g
+    g = {"name": name, "color": _PALETTE[len(grouping["groups"]) % len(_PALETTE)], "members": []}
+    grouping["groups"].append(g)
+    return g
+
+
+def put_member(grouping, rank, name, group):
+    """Put a taxon in ``group`` (taking it out of any other); an empty group
+    just takes it out."""
+    for g in grouping["groups"]:
+        g["members"] = [m for m in g["members"]
+                        if not (m["rank"] == rank and _key(m["name"]) == _key(name))]
+    if group and group != UNCLEAR:
+        _ensure_group(grouping, group)["members"].append({"rank": rank, "name": _clean(name)})
+    return grouping
+
+
+def _valid(grouping) -> dict:
+    groups, seen = [], set()
+    for g in grouping.get("groups") or []:
+        name = " ".join(str((g or {}).get("name") or "").split())[:60]
+        if not name or name == UNCLEAR or name in seen:
+            continue
+        seen.add(name)
+        members = [{"rank": m["rank"], "name": _clean(m.get("name"))}
+                   for m in g.get("members") or []
+                   if isinstance(m, dict) and m.get("rank") in RANKS and _clean(m.get("name"))]
+        groups.append({"name": name, "color": str(g.get("color") or "#6b7280")[:9],
+                       "members": members})
+    tracks = [{"job": t.get("job"), "track": t.get("track"), "group": t.get("group")}
+              for t in grouping.get("tracks") or []
+              if isinstance(t, dict) and t.get("group") and t.get("track") is not None]
+    return {"groups": groups, "tracks": tracks}
+
+
+def grouping_of(config) -> dict:
+    """The node's grouping. A config saved before groupings were explicit is
+    converted: the defaults, plus its own groups and rules (memory/65), so it
+    counts exactly as it did."""
+    cfg = config or {}
+    explicit = _json(cfg.get("grouping"), None)
+    if isinstance(explicit, dict) and isinstance(explicit.get("groups"), list):
+        return _valid(explicit)
+    grouping = default_grouping()
+    old = _json(cfg.get("group_rules"), {})
+    if not isinstance(old, dict):
+        old = {}
+    for name in old.get("groups") or []:
+        if str(name).strip() and str(name).strip() != UNCLEAR:
+            _ensure_group(grouping, str(name).strip())
+    for r in old.get("rules") or []:
+        if not isinstance(r, dict) or not r.get("group"):
+            continue
+        if r.get("kind") == "track":
+            grouping["tracks"].append({"job": r.get("job"), "track": r.get("track"),
+                                       "group": r["group"]})
+        elif r.get("kind") in ("name", "genus", "family", "order") and r.get("value"):
+            put_member(grouping, "species" if r["kind"] == "name" else r["kind"],
+                       r["value"], r["group"])
+    return grouping
+
 
 def _json(value, default):
     if isinstance(value, (list, dict)):
@@ -173,15 +259,10 @@ def _json(value, default):
 
 def settings(config) -> dict:
     """The Identify Species node's group settings, parsed:
-    ``{on, leave_out, share, custom, rules}``. The editor stores the JSON
+    ``{on, leave_out, share, grouping, groups}``. The editor stores the JSON
     fields as strings; a config saved before groups existed gets the defaults."""
     cfg = config or {}
-    rules_cfg = _json(cfg.get("group_rules"), {})
-    if not isinstance(rules_cfg, dict):
-        rules_cfg = {}
-    custom = [str(g).strip() for g in rules_cfg.get("groups") or [] if str(g).strip()]
-    rules = [r for r in rules_cfg.get("rules") or []
-             if isinstance(r, dict) and r.get("kind") in RULE_KINDS and r.get("group")]
+    grouping = grouping_of(cfg)
     leave_out = _json(cfg.get("leave_out"), None)
     if not isinstance(leave_out, list):
         leave_out = list(DEFAULT_LEAVE_OUT)
@@ -196,35 +277,39 @@ def settings(config) -> dict:
         "on": str(cfg.get("group_filter") or "on").lower() != "off",
         "leave_out": [g for g in leave_out if g and g != UNCLEAR],
         "share": min(max(share, 0.0), 1.0),
-        "custom": custom,
-        "rules": rules,
+        "grouping": grouping,
+        "groups": [g["name"] for g in grouping["groups"]],
     }
 
 
-def all_groups(custom=()) -> list:
-    return BUILTIN + [g for g in custom if g not in BUILTIN and g != UNCLEAR]
-
-
-def _rule_index(rules):
+def _index(grouping) -> dict:
     index = {}
-    for r in rules:
-        if r["kind"] == "track":
-            key = ("track", str(r.get("job") or ""), str(r.get("track") or ""))
-        else:
-            key = (r["kind"], str(r.get("value") or "").strip().lower())
-        index[key] = r["group"]
+    for g in grouping["groups"]:
+        for m in g["members"]:
+            index[(m["rank"], _key(m["name"]))] = g["name"]
+    for t in grouping.get("tracks") or []:
+        index[("track", str(t.get("job") or ""), str(t.get("track")))] = t["group"]
+    # Where a bee genus nobody could place goes: the group holding Apidae.
+    index["__bees__"] = next((g["name"] for g in grouping["groups"]
+                              if any(m["rank"] == "family" and m["name"] == "Apidae"
+                                     for m in g["members"])), None)
     return index
 
 
 def name_group(name, lin, index) -> tuple[str, str]:
-    """``(group, why)`` for one species name: a rule on the name, its genus,
-    family or order (most specific first), else the family default."""
-    for kind, value in (("name", name), ("genus", (lin or {}).get("genus")),
-                        ("family", (lin or {}).get("family")),
-                        ("order", (lin or {}).get("order"))):
-        if value and (kind, str(value).strip().lower()) in index:
-            return index[(kind, str(value).strip().lower())], f"rule on {kind} {value}"
-    return default_group(lin), "default"
+    """``(group, why)`` for one species name: the most specific taxon of it
+    that a group holds (species, genus, family, order, class)."""
+    lin = lin or {}
+    for rank, value in (("species", name), ("genus", lin.get("genus")),
+                        ("family", lin.get("family")), ("order", lin.get("order")),
+                        ("class", lin.get("class"))):
+        if rank == "order" and lin.get("bee") and index.get("__bees__"):
+            # A bee genus GBIF couldn't place has no family: it's a bee, not
+            # whatever holds the whole of Hymenoptera.
+            return index["__bees__"], f"bee genus {lin.get('genus')}"
+        if value and (rank, _key(value)) in index:
+            return index[(rank, _key(value))], f"{rank} {_clean(value)}"
+    return UNCLEAR, "not in a group"
 
 
 # ── Tracks ──────────────────────────────────────────────────────────────────
@@ -278,7 +363,7 @@ def track_groups(readings: dict, cfg: dict, job_id=None) -> dict:
     track's group is called when at least ``share`` of its crops agree and
     ``MIN_CROPS`` were read; otherwise it is unclear. A rule on the track
     itself decides outright. ``counted`` is whether the filter keeps it."""
-    index = _rule_index(cfg["rules"])
+    index = _index(cfg["grouping"])
     names = {n for crops in readings.values() for n in crops if n}
     lin = lineages(names)
     per_name = {n: name_group(n, lin.get(n), index) for n in names}
@@ -318,6 +403,9 @@ def track_groups(readings: dict, cfg: dict, job_id=None) -> dict:
             "top": top, "family": (lin.get(top) or {}).get("family", "") if top else "",
             "why": why,
             "counted": group not in leave_out,
+            # What its crops were named, so a grouping can be tried on the
+            # batch without reading the crop files again (memory/66).
+            "names": species,
         }
     return out
 
@@ -329,28 +417,29 @@ def names_seen(readings: dict) -> list:
 # ── Changing a rule ─────────────────────────────────────────────────────────
 
 def with_rule(config: dict, rule: dict) -> dict:
-    """A copy of the node's config with ``rule`` in its rules (replacing one on
-    the same thing). An empty group removes the rule. A group not yet known is
-    added to the node's own groups."""
+    """A copy of the node's config with ``rule`` written into its grouping:
+    a track's group, or a species, genus or family put in a group (taken out
+    of any other). An empty group takes it out. A new group name is added."""
     cfg = dict(config or {})
-    rules_cfg = _json(cfg.get("group_rules"), {})
-    if not isinstance(rules_cfg, dict):
-        rules_cfg = {}
-    groups = list(rules_cfg.get("groups") or [])
-    rules = [r for r in rules_cfg.get("rules") or [] if isinstance(r, dict)]
-
-    def same(r):
-        if r.get("kind") != rule["kind"]:
-            return False
-        if rule["kind"] == "track":
-            return (str(r.get("job")), str(r.get("track"))) == (str(rule.get("job")),
-                                                                 str(rule.get("track")))
-        return str(r.get("value", "")).strip().lower() == str(rule.get("value", "")).strip().lower()
-
-    rules = [r for r in rules if not same(r)]
-    if rule.get("group"):
-        rules.append(rule)
-        if rule["group"] not in BUILTIN and rule["group"] != UNCLEAR and rule["group"] not in groups:
-            groups.append(rule["group"])
-    cfg["group_rules"] = json.dumps({"groups": groups, "rules": rules})
+    grouping = grouping_of(cfg)
+    if rule["kind"] == "track":
+        grouping["tracks"] = [t for t in grouping["tracks"]
+                              if (str(t.get("job")), str(t.get("track")))
+                              != (str(rule.get("job")), str(rule.get("track")))]
+        if rule.get("group"):
+            if rule["group"] != UNCLEAR:
+                _ensure_group(grouping, rule["group"])
+            grouping["tracks"].append({"job": rule.get("job"), "track": rule.get("track"),
+                                       "group": rule["group"]})
+    else:
+        rank = "species" if rule["kind"] == "name" else rule["kind"]
+        group = rule.get("group")
+        if not group:
+            # Undo: back where the default grouping has it, if anywhere.
+            group = next((g["name"] for g in default_grouping()["groups"]
+                          for m in g["members"]
+                          if m["rank"] == rank and _key(m["name"]) == _key(rule["value"])), "")
+        put_member(grouping, rank, rule["value"], group)
+    cfg["grouping"] = json.dumps(grouping)
+    cfg.pop("group_rules", None)
     return cfg

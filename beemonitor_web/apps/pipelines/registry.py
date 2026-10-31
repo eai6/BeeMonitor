@@ -874,6 +874,8 @@ BLOCK_REGISTRY = {
                 "field_type": "group_checklist",
                 "required": False,
                 "default": _json.dumps(_groups.DEFAULT_LEAVE_OUT),
+                # The default grouping's groups; a node's own come from its
+                # grouping field.
                 "choices": [{"value": g, "label": g} for g in _groups.BUILTIN],
                 "show_if": {"field": "group_filter", "value": "on"},
                 "help": "Tracks of a ticked group are not counted by the analyzers "
@@ -892,15 +894,16 @@ BLOCK_REGISTRY = {
                         "unclear and counted.",
             },
             {
-                "name": "group_rules",
-                "label": "Groups and rules",
-                "field_type": "group_rules",
+                # The groups and the taxa in each (memory/66), edited on the
+                # grouping page; the node shows a summary and the link.
+                "name": "grouping",
+                "label": "Grouping",
+                "field_type": "grouping",
                 "required": False,
                 "default": "",
                 "choices": None,
-                "help": "Your own groups, and rules that put a species, genus, "
-                        "family or single track in a group. You can also change a "
-                        "track's group while reviewing the clip.",
+                "help": "Which taxa make up each group. Edit it on its own page: "
+                        "add groups, move a species, genus or family between them.",
             },
         ],
     },

@@ -1174,11 +1174,12 @@ def _species_groups(step, run, result, df, rows):
     for g in groups.values():
         c = counts.setdefault(g["group"], {"group": g["group"], "tracks": 0, "counted": g["counted"]})
         c["tracks"] += 1
-    order = taxon_groups.all_groups(cfg["custom"]) + [taxon_groups.UNCLEAR]
+    order = cfg["groups"] + [taxon_groups.UNCLEAR]
     return {
         "group_filter": cfg["on"],
         "leave_out": cfg["leave_out"] if cfg["on"] else [],
-        "group_options": taxon_groups.all_groups(cfg["custom"]),
+        "group_options": cfg["groups"],
+        "group_colors": {g["name"]: g["color"] for g in cfg["grouping"]["groups"]},
         "track_groups": {str(t): g for t, g in groups.items()},
         "group_counts": sorted(counts.values(), key=lambda c: (
             order.index(c["group"]) if c["group"] in order else len(order))),

@@ -98,6 +98,11 @@ class GroupingTests(SimpleTestCase):
         g = taxon_groups.track_groups({1: ["Megachile sculpturalis"] * 4}, cfg())[1]
         self.assertEqual(g["group"], "Bees")
 
+    def test_a_cached_no_match_for_a_bee_genus_is_still_a_bee(self):
+        cache.set(taxon_groups._cache_key("Megachile sculpturalis"), {}, 60)
+        g = taxon_groups.track_groups({1: ["Megachile sculpturalis"] * 4}, cfg())[1]
+        self.assertEqual(g["group"], "Bees")
+
     def test_crops_named_outside_every_group_dont_dilute_the_vote(self):
         # Track 4 on natalies: a Megachile whose other crops were named
         # things no group covers (a bat, names GBIF doesn't know).
@@ -119,8 +124,10 @@ class GroupingTests(SimpleTestCase):
             {"kind": "name", "value": "Ectemnius continuus", "group": "Small dark bees"},
             {"kind": "track", "job": 9, "track": 2, "group": "Ants"},
         ]}
+        # A pipeline saved with the memory/65 rules is converted on read.
         groups = taxon_groups.track_groups(
-            {1: ["Ectemnius continuus"] * 4, 2: ["Bombus impatiens"] * 4},
+            {1: ["Ectemnius continuus"] * 4, 2: ["Bombus impatiens"] * 4,
+             3: ["Ectemnius lapidarius"] * 4},
             cfg(group_rules=json.dumps(rules)), job_id=9)
         self.assertEqual(groups[1]["group"], "Small dark bees")
         self.assertTrue(groups[1]["counted"])        # not in leave_out
@@ -156,14 +163,35 @@ class GroupingTests(SimpleTestCase):
         # Unclear can never be left out.
         self.assertEqual(cfg(leave_out='["Unclear", "Ants"]')["leave_out"], ["Ants"])
 
-    def test_with_rule_replaces_removes_and_adds_new_groups(self):
-        c = taxon_groups.with_rule({}, {"kind": "name", "value": "Lasius niger", "group": "Ants"})
-        c = taxon_groups.with_rule(c, {"kind": "name", "value": "lasius niger", "group": "Tiny things"})
-        r = json.loads(c["group_rules"])
-        self.assertEqual(r["rules"], [{"kind": "name", "value": "lasius niger", "group": "Tiny things"}])
-        self.assertEqual(r["groups"], ["Tiny things"])
-        c = taxon_groups.with_rule(c, {"kind": "name", "value": "Lasius niger", "group": ""})
-        self.assertEqual(json.loads(c["group_rules"])["rules"], [])
+    def test_with_rule_moves_a_taxon_and_undo_puts_it_back(self):
+        c = taxon_groups.with_rule({}, {"kind": "name", "value": "Lasius niger", "group": "Tiny things"})
+        g = taxon_groups.grouping_of(c)
+        tiny = next(x for x in g["groups"] if x["name"] == "Tiny things")
+        self.assertEqual(tiny["members"], [{"rank": "species", "name": "Lasius niger"}])
+        c = taxon_groups.with_rule(c, {"kind": "family", "value": "Formicidae", "group": "Bees"})
+        ants = next(x for x in taxon_groups.grouping_of(c)["groups"] if x["name"] == "Ants")
+        self.assertEqual(ants["members"], [])
+        c = taxon_groups.with_rule(c, {"kind": "family", "value": "Formicidae", "group": ""})
+        ants = next(x for x in taxon_groups.grouping_of(c)["groups"] if x["name"] == "Ants")
+        self.assertEqual(ants["members"], [{"rank": "family", "name": "Formicidae"}])
+
+    def test_the_most_specific_taxon_wins(self):
+        grouping = taxon_groups.default_grouping()
+        taxon_groups.put_member(grouping, "genus", "Camponotus", "Bees")
+        c = cfg(grouping=json.dumps(grouping))
+        groups = taxon_groups.track_groups(
+            {1: ["Camponotus pennsylvanicus"] * 4, 2: ["Lasius niger"] * 4,
+             3: ["Vespula maculifrons"] * 4}, c)
+        self.assertEqual(groups[1]["group"], "Bees")      # genus beats family
+        self.assertEqual(groups[2]["group"], "Ants")      # family beats order
+        self.assertEqual(groups[3]["group"], "Wasps")     # order Hymenoptera
+        self.assertEqual(groups[1]["names"], {"Camponotus pennsylvanicus": 4})
+
+    def test_the_default_grouping_is_written_out(self):
+        g = taxon_groups.default_grouping()
+        bees = next(x for x in g["groups"] if x["name"] == "Bees")
+        self.assertIn({"rank": "family", "name": "Megachilidae"}, bees["members"])
+        self.assertEqual([x["name"] for x in g["groups"]], taxon_groups.BUILTIN)
 
 
 CROPS = ([{"track_id": 1, "frame": f, "crop": f"frame_{f}.jpg", "species": "Camponotus pennsylvanicus"}
@@ -241,7 +269,7 @@ class FilterTests(FilterBase):
         self.assertEqual(len(run.context["a"]["rows"]), 2)
 
     def test_the_groups_dont_change_the_gpu_job(self):
-        steps = self._steps_with_species({"leave_out": '["Bees"]', "group_rules": '{"rules": []}'})
+        steps = self._steps_with_species({"leave_out": '["Bees"]', "grouping": '{"groups": []}'})
         self.assertEqual(executors._pipeline_species(steps[2], steps), "bioclip")
 
     def test_the_tracks_csv_has_the_group(self):
@@ -283,8 +311,8 @@ class RegroupTests(FilterBase):
         self.assertEqual(run.context["s"]["track_groups"]["1"]["why"], "set by hand")
         # Saved to the pipeline too, for the next clips.
         self.pipeline.refresh_from_db()
-        rules = json.loads(self.pipeline.steps[-1]["config"]["group_rules"])["rules"]
-        self.assertEqual(rules[0]["kind"], "track")
+        tracks = json.loads(self.pipeline.steps[-1]["config"]["grouping"])["tracks"]
+        self.assertEqual(tracks[0]["track"], 1)
 
     def test_a_species_rule_queues_the_batchs_other_clips(self):
         import uuid
@@ -301,7 +329,7 @@ class RegroupTests(FilterBase):
         self.assertEqual(res.json()["queued"], 1)
         other.refresh_from_db()
         self.assertEqual(other.counting_rules, 0)
-        self.assertIn("Camponotus pennsylvanicus", other.steps[-1]["config"]["group_rules"])
+        self.assertIn("Camponotus pennsylvanicus", other.steps[-1]["config"]["grouping"])
 
     def test_a_family_rule_and_undoing_it(self):
         run, job = self._run(self._steps_with_species())
@@ -414,3 +442,77 @@ class ApplyToBatchTests(FilterBase):
         res = self.client.get(reverse("pipelines:batch_detail", args=[batch]))
         self.assertContains(res, "Apply the pipeline's groups to this batch")
         self.assertContains(res, "leaves out ants")
+
+
+class GroupingEditorTests(FilterBase):
+    """The grouping's own page (memory/66)."""
+
+    def setUp(self):
+        super().setUp()
+        self.pipeline.steps = self._steps_with_species()
+        self.pipeline.save()
+        self.client.force_login(self.user)
+
+    def _url(self, name="pipelines:grouping"):
+        return reverse(name, args=[self.pipeline.pk, "s"])
+
+    def test_the_page_lists_the_groups_and_the_names_seen(self):
+        self._run(self._steps_with_species())
+        res = self.client.get(self._url())
+        self.assertEqual(res.status_code, 200)
+        page = json.loads(res.context["page_json"])
+        self.assertEqual([g["name"] for g in page["grouping"]["groups"]], taxon_groups.BUILTIN)
+        names = {n["name"]: n for n in page["names"]}
+        self.assertEqual(names["Camponotus pennsylvanicus"]["family"], "Formicidae")
+        self.assertEqual(names["Camponotus pennsylvanicus"]["tracks"], 1)
+
+    def test_saving_writes_the_grouping_into_the_pipeline(self):
+        grouping = taxon_groups.default_grouping()
+        grouping["groups"].append({"name": "Tiny things", "color": "#7c3aed",
+                                   "members": [{"rank": "family", "name": "Formicidae"}]})
+        res = self.client.post(self._url(), json.dumps({"grouping": grouping}),
+                               content_type="application/json")
+        self.assertEqual(res.status_code, 200, res.content)
+        self.pipeline.refresh_from_db()
+        saved = taxon_groups.grouping_of(self.pipeline.steps[-1]["config"])
+        self.assertEqual(saved["groups"][-1]["name"], "Tiny things")
+
+    def test_the_preview_counts_tracks_and_events_under_a_new_grouping(self):
+        import uuid
+        run, _job = self._run(self._steps_with_species())
+        batch = uuid.uuid4()
+        PipelineRun.objects.filter(pk=run.pk).update(batch_id=batch)
+        grouping = taxon_groups.default_grouping()
+        taxon_groups.put_member(grouping, "family", "Formicidae", "Bees")
+
+        res = self.client.post(self._url("pipelines:grouping_preview"),
+                               json.dumps({"grouping": grouping, "batch": str(batch)}),
+                               content_type="application/json")
+
+        data = res.json()
+        self.assertTrue(data["ok"], data)
+        rows = {r["group"]: r for r in data["rows"]}
+        self.assertEqual((rows["Ants"]["now"], rows["Ants"]["after"]), (1, 0))
+        self.assertEqual((rows["Bees"]["now"], rows["Bees"]["after"]), (1, 2))
+        self.assertEqual((data["events_now"], data["events_after"]), (0, 2))
+        run.refresh_from_db()
+        self.assertEqual(run.context["a"]["rows"], [])          # nothing saved
+
+    def test_only_the_owner_saves(self):
+        from django.contrib.auth.models import User
+        self.pipeline.is_published = True if hasattr(self.pipeline, "is_published") else False
+        other = User.objects.create_user("viewer", password="x")
+        self.client.force_login(other)
+        res = self.client.post(self._url(), json.dumps({"grouping": {"groups": []}}),
+                               content_type="application/json")
+        self.assertEqual(res.status_code, 404)
+
+    def test_the_canvas_gets_old_rules_written_out_as_a_grouping(self):
+        steps = self._steps_with_species({"group_rules": json.dumps(
+            {"rules": [{"kind": "name", "value": "Lasius niger", "group": "Bees"}]})})
+        self.pipeline.steps = steps
+        self.pipeline.save()
+        res = self.client.get(reverse("pipelines:editor", args=[self.pipeline.pk]))
+        nodes = json.loads(res.context["initial_steps_json"])
+        species = next(n for n in nodes if n["block_type"] == "identify.species")
+        self.assertIn("Lasius niger", species["config"]["grouping"])

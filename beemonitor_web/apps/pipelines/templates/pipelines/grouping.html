@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Insect grouping · {{ pipeline.title }} - BeeMonitor{% endblock %}
+
+{% block content %}
+{% comment %}The insect grouping editor (memory/66): which taxa make up each group of an Identify Species node.{% endcomment %}
+<div class="max-w-7xl mx-auto px-4 py-6 flex flex-col gap-4" id="grouping" data-page="{{ page_json }}">
+  {% csrf_token %}
+  <div class="flex flex-wrap items-end justify-between gap-4">
+    <div class="flex flex-col gap-1">
+      <a href="{% url 'pipelines:editor' pipeline.pk %}" class="text-sm text-amber-700 hover:underline">← {{ pipeline.title }} › Identify Species</a>
+      <h1 class="text-2xl font-semibold text-gray-900">Insect grouping</h1>
+      <p class="text-sm text-gray-600 max-w-3xl">Which taxa make up each group. A taxon can be a species, genus, family, order or class; when a name matches several, the most specific wins, so "Ants = family Formicidae" beats "Wasps = order Hymenoptera" for an ant.</p>
+    </div>
+    {% if not readonly %}
+    <div class="flex flex-wrap items-center gap-2">
+      <label class="sr-only" for="ge-copy">Copy from another pipeline</label>
+      <select id="ge-copy" class="h-11 rounded border border-gray-300 bg-white px-2 text-sm"><option value="">Copy from another pipeline…</option></select>
+      <button type="button" id="ge-reset" class="h-11 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50 text-sm">Start from the defaults</button>
+      <button type="button" id="ge-save" class="h-11 px-4 rounded bg-green-700 hover:bg-green-800 text-white font-semibold">Save</button>
+    </div>
+    {% else %}
+    <p class="text-sm text-gray-600">You can look at this grouping; only the pipeline's owner can change it.</p>
+    {% endif %}
+  </div>
+  <p id="ge-status" class="text-sm text-gray-700 min-h-[1.25rem]" aria-live="polite"></p>
+
+  <div class="flex flex-col lg:flex-row gap-5 items-start">
+    <section class="w-full lg:w-[34rem] lg:flex-none flex flex-col gap-3" aria-label="Groups">
+      <div class="flex items-center justify-between">
+        <h2 class="font-semibold text-gray-900">Groups</h2>
+        {% if not readonly %}
+        <form id="ge-new-group" class="flex gap-2">
+          <label class="sr-only" for="ge-new-name">New group name</label>
+          <input id="ge-new-name" type="text" maxlength="60" placeholder="New group, e.g. Small dark bees" class="h-10 w-56 rounded border border-gray-300 px-2 text-sm">
+          <button type="submit" class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50 text-sm">Add group</button>
+        </form>
+        {% endif %}
+      </div>
+      <div id="ge-groups" class="flex flex-col gap-3"></div>
+      <p class="text-sm text-gray-600 bg-white border border-gray-200 rounded-lg px-3 py-2"><strong>Unclear</strong> is always there and always counted: tracks whose crops don't agree, or name nothing a group holds.</p>
+    </section>
+
+    <section class="w-full min-w-0 flex-1 bg-white border border-gray-200 rounded-lg flex flex-col" aria-label="Names the model gave">
+      <div class="px-4 py-3 border-b border-gray-200 flex flex-col gap-3">
+        <div class="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 class="font-semibold text-gray-900">Names the model gave in your runs</h2>
+          <span id="ge-names-count" class="text-sm text-gray-600"></span>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <div id="ge-tabs" class="flex flex-wrap gap-2"></div>
+          <label class="ml-auto flex items-center gap-2 text-sm">Find
+            <input id="ge-find" type="search" placeholder="species, genus or family" class="h-10 w-56 rounded border border-gray-300 px-2">
+          </label>
+        </div>
+        <div id="ge-bulk" class="flex flex-col gap-2"></div>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="bg-gray-50 text-xs uppercase tracking-wide text-gray-600">
+            <tr><th class="px-4 py-2 text-left font-semibold">Name</th><th class="px-4 py-2 text-left font-semibold">Family · order</th><th class="px-4 py-2 text-left font-semibold">In group</th><th class="px-4 py-2 text-right font-semibold" title="Tracks it was the most-voted name of">Tracks</th><th class="px-4 py-2 text-left font-semibold">Because</th></tr>
+          </thead>
+          <tbody id="ge-names" class="divide-y divide-gray-100"></tbody>
+        </table>
+      </div>
+      <p id="ge-more" class="px-4 py-2 text-xs text-gray-500"></p>
+    </section>
+  </div>
+
+  {% if not readonly %}
+  <section class="bg-white border border-gray-200 rounded-lg p-4 flex flex-col gap-3" aria-labelledby="ge-try-title">
+    <div class="flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <h2 id="ge-try-title" class="font-semibold text-gray-900">Try it on a batch</h2>
+        <p class="text-sm text-gray-600">Worked out from the crops already read. Nothing changes until you apply it.</p>
+      </div>
+      <div class="flex flex-wrap items-end gap-2">
+        <label class="flex flex-col gap-1 text-sm">Batch
+          <select id="ge-batch" class="h-11 min-w-[18rem] rounded border border-gray-300 bg-white px-2"></select>
+        </label>
+        <button type="button" id="ge-try" class="h-11 px-4 rounded border border-gray-300 bg-white hover:bg-gray-50 text-sm font-semibold">Try it</button>
+      </div>
+    </div>
+    <div id="ge-preview" class="overflow-x-auto"></div>
+    <form id="ge-apply" method="post" hidden class="flex flex-wrap items-center justify-end gap-3">
+      {% csrf_token %}
+      <span id="ge-apply-note" class="text-sm text-gray-700"></span>
+      <button type="submit" class="h-11 px-4 rounded bg-green-700 hover:bg-green-800 text-white font-semibold">Save and apply to this batch</button>
+    </form>
+  </section>
+  {% endif %}
+</div>
+<script src="{% static 'js/grouping_editor.js' %}"></script>
+{% endblock %}

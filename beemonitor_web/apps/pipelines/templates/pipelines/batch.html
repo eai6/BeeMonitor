@@ -315,7 +315,7 @@ their reason.
       <span class="text-xs text-gray-600 text-right">
         {% if not pg.in_line %}The pipeline's Identify Species isn't wired into Events, so nothing is filtered.
         {% elif not pg.on %}The pipeline's filter is off: every track is counted.
-        {% else %}The pipeline leaves out {{ pg.leave_out|join:", "|lower|default:"nothing" }}{% if pg.rules %} · {{ pg.rules }} rule{{ pg.rules|pluralize }}{% endif %}.{% endif %}
+        {% else %}The pipeline leaves out {{ pg.leave_out|join:", "|lower|default:"nothing" }}.{% endif %}
         Recounts here, no GPU-hours.
       </span>
     </form>

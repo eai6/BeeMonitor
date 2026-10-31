@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views
+from . import grouping_views, views
 
 app_name = "pipelines"
 
@@ -19,6 +19,9 @@ urlpatterns = [
     path("batch/<uuid:batch_id>/combined/<str:kind>.csv", views.batch_combined_csv, name="batch_combined_csv"),
     path("<uuid:pk>/", views.pipeline_editor, name="editor"),
     path("<uuid:pk>/save-graph/", views.save_graph, name="save_graph"),
+    path("<uuid:pk>/grouping/<str:step_id>/", grouping_views.grouping_editor, name="grouping"),
+    path("<uuid:pk>/grouping/<str:step_id>/preview/", grouping_views.grouping_preview,
+         name="grouping_preview"),
     path("<uuid:pk>/colab/", views.open_in_colab, name="open_in_colab"),
     path("<uuid:pk>/rename/", views.pipeline_rename, name="rename"),
     path("<uuid:pk>/delete/", views.pipeline_delete, name="delete"),

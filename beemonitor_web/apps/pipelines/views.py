@@ -51,6 +51,21 @@ def _usable_pipeline(request, pk):
     return get_object_or_404(Pipeline.usable(request.user), pk=pk)
 
 
+def _with_groupings(nodes):
+    """Identify Species nodes carry their grouping written out (memory/66), so
+    a pipeline saved with the memory/65 rules keeps them when the canvas is
+    saved again (the canvas saves only the fields it shows)."""
+    from . import taxon_groups
+
+    for node in nodes:
+        if node.get("block_type") == "identify.species":
+            cfg = dict(node.get("config") or {})
+            if not cfg.get("grouping"):
+                cfg["grouping"] = json.dumps(taxon_groups.grouping_of(cfg))
+            node["config"] = cfg
+    return nodes
+
+
 def _user_videos(request):
     return Video.objects.filter(user=request.user).order_by("-id")[:200]
 
@@ -138,7 +153,7 @@ def pipeline_editor(request, pk):
         "pipeline": pipeline,
         "categories": get_categories(),
         "blocks_json": json.dumps(serialize_blocks()),
-        "initial_steps_json": json.dumps(build_initial_steps(pipeline)),
+        "initial_steps_json": json.dumps(_with_groupings(build_initial_steps(pipeline))),
         "saved_graph_json": json.dumps(pipeline.graph or {}),
         "videos_json": json.dumps(videos),
         "bee_models_json": json.dumps(bee_models),
@@ -1317,7 +1332,8 @@ def _pipeline_groups(pipeline):
     cfg = taxon_groups.settings(step.get("config"))
     return {"on": cfg["on"], "leave_out": cfg["leave_out"],
             "in_line": regroup._feeds_analyzers(pipeline, step.get("id")),
-            "rules": len(cfg["rules"])}
+            "groups": len(cfg["groups"]),
+            "taxa": sum(len(g["members"]) for g in cfg["grouping"]["groups"])}
 
 
 @login_required
