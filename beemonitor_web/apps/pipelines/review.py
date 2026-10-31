@@ -283,17 +283,26 @@ def batch_group_summary(runs, per_run=None):
     from .aggregate import analyzer_outputs
     from .regroup import group_step
 
-    groups, tracks, events, kept, filtered_runs = {}, 0, 0, set(), 0
+    from .recount import CURRENT_RULES
+
+    groups, tracks, events, filtered_runs = {}, 0, 0, 0
+    # Each clip's own setting: after a change, clips counted before and after
+    # it are reported apart instead of merged (memory/65).
+    settings, options, pending = {}, {}, 0
     for run in runs:
         _i, step = group_step(run)
         if step is None:
             continue
+        if run.counting_rules < CURRENT_RULES:
+            pending += 1
         out = (run.context or {}).get(step["id"]) or {}
         in_line = any((s.get("inputs") or {}).get("tracks") == step["id"] for s in run.steps or [])
         if not (out.get("group_filter") and in_line):
             continue
         filtered_runs += 1
-        kept.update(g for g in out.get("group_options") or [] if g not in (out.get("leave_out") or []))
+        setting = tuple(sorted(out.get("leave_out") or []))
+        settings[setting] = settings.get(setting, 0) + 1
+        options.setdefault(setting, out.get("group_options") or [])
         for g in out.get("group_counts") or []:
             if not g.get("counted"):
                 row = groups.setdefault(g["group"], {"group": g["group"], "tracks": 0, "events": 0})
@@ -312,7 +321,15 @@ def batch_group_summary(runs, per_run=None):
     for counts in (per_run or {}).values():
         for k in left:
             left[k] += ((counts or {}).get("left_out") or {}).get(k, 0)
-    return {"tracks": tracks, "events": events, "kept": sorted(kept),
+    main = max(settings, key=settings.get)
+    return {"tracks": tracks, "events": events,
+            "left_out": list(main),
+            "kept": [g for g in options[main] if g not in main],
+            "clips": filtered_runs,
+            # Clips counted with a different filter from most of the batch.
+            "other_clips": filtered_runs - settings[main],
+            # Clips queued for a recount after an Apply.
+            "pending": pending,
             "by_group": sorted(groups.values(), key=lambda g: -g["tracks"]),
             "reviewed": left}
 

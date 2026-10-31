@@ -1330,7 +1330,7 @@ def _pipeline_groups(pipeline):
     if step is None:
         return None
     cfg = taxon_groups.settings(step.get("config"))
-    return {"on": cfg["on"], "leave_out": cfg["leave_out"],
+    return {"on": cfg["on"], "leave_out": sorted(cfg["leave_out"]),
             "in_line": regroup._feeds_analyzers(pipeline, step.get("id")),
             "groups": len(cfg["groups"]),
             "taxa": sum(len(g["members"]) for g in cfg["grouping"]["groups"])}

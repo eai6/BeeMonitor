@@ -516,3 +516,37 @@ class GroupingEditorTests(FilterBase):
         nodes = json.loads(res.context["initial_steps_json"])
         species = next(n for n in nodes if n["block_type"] == "identify.species")
         self.assertIn("Lasius niger", species["config"]["grouping"])
+
+
+class BatchCardTests(FilterBase):
+    """The batch card says how the batch was counted, apart from what the
+    pipeline now says."""
+
+    def test_turning_the_filter_off_in_the_pipeline_says_to_apply_it(self):
+        import uuid
+        run, _job = self._run(self._steps_with_species())
+        batch = uuid.uuid4()
+        PipelineRun.objects.filter(pk=run.pk).update(batch_id=batch)
+        self.pipeline.steps = self._steps_with_species({"group_filter": "off"})
+        self.pipeline.save()
+        self.client.force_login(self.user)
+
+        res = self.client.get(reverse("pipelines:batch_detail", args=[batch]))
+
+        self.assertContains(res, "The pipeline's filter is now off, but this batch was counted with it on")
+        self.assertContains(res, "This batch was counted leaving out ants, beetles")
+
+        self.client.post(reverse("pipelines:batch_apply_groups", args=[batch]))
+        res = self.client.get(reverse("pipelines:batch_detail", args=[batch]))
+        self.assertContains(res, "This batch counts every track")
+
+    def test_clips_counted_with_different_settings_are_reported_apart(self):
+        from apps.pipelines import review
+        a, _ = self._run(self._steps_with_species())
+        b, _ = self._run(self._steps_with_species({"leave_out": '["Beetles"]'}))
+        c, _ = self._run(self._steps_with_species())
+        summary = review.batch_group_summary([a, b, c], {})
+        self.assertEqual(summary["clips"], 3)
+        self.assertEqual(summary["other_clips"], 1)
+        self.assertIn("Ants", summary["left_out"])
+        self.assertNotIn("Ants", summary["kept"])

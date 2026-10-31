@@ -324,7 +324,13 @@ their reason.
   {% if not gs %}
   <p class="text-sm text-gray-700">This batch counts every track. Edit the pipeline's Identify Species node, then apply it here to recount these clips with the filter.</p>
   {% else %}
-  <p class="text-sm text-gray-700">Counting {{ gs.kept|join:", "|lower }}, plus tracks with no clear group.</p>
+  {% if pg and not pg.on %}
+  <p class="text-sm rounded border border-yellow-300 bg-yellow-50 text-yellow-800 px-3 py-2">The pipeline's filter is now off, but this batch was counted with it on. Apply the pipeline's groups to count every track again.</p>
+  {% elif pg and pg.leave_out != gs.left_out %}
+  <p class="text-sm rounded border border-yellow-300 bg-yellow-50 text-yellow-800 px-3 py-2">The pipeline now leaves out {{ pg.leave_out|join:", "|lower|default:"nothing" }}; this batch was counted leaving out {{ gs.left_out|join:", "|lower|default:"nothing" }}. Apply the pipeline's groups to recount it.</p>
+  {% endif %}
+  {% if gs.pending %}<p class="text-sm text-blue-800">{{ gs.pending }} clip{{ gs.pending|pluralize }} still being recounted; refresh in a few minutes.</p>{% endif %}
+  <p class="text-sm text-gray-700">This batch was counted leaving out {{ gs.left_out|join:", "|lower|default:"nothing" }}{% if gs.other_clips %} ({{ gs.other_clips }} of its {{ gs.clips }} clips with a different setting){% endif %}. Tracks with no clear group are always counted.</p>
   {% if gs.tracks %}
   <p class="text-sm"><strong class="text-orange-800">{{ gs.tracks }}</strong> track{{ gs.tracks|pluralize }} not counted:
     {% for g in gs.by_group %}{{ g.tracks }} {{ g.group|lower }}{% if not forloop.last %}, {% endif %}{% endfor %}
