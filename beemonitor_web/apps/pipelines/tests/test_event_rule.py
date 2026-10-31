@@ -199,3 +199,25 @@ class HotelIsNotAReferenceTests(SimpleTestCase):
 
     def test_a_hotel_with_no_tubes_gives_no_references(self):
         self.assertEqual(ops.roi_references({"hotel_roi": [0, 0, 1, 1]}), [])
+
+
+class WholeTrajectory(SimpleTestCase):
+    """Events' "Track start and end from" setting: detections only (default),
+    or the whole trajectory with the tracker's predicted positions."""
+
+    # A bee leaves R3, the detector loses it at the mouth, and the tracker
+    # predicts it flying off.
+    LEAVING = dict(points=(AWAY, AWAY, IN_R3, IN_R3, AWAY, AWAY), detected=[1, 1, 1, 1, 0, 0])
+
+    def test_detections_only_ends_at_the_last_detection(self):
+        tidy = track(*self.LEAVING["points"], detected=self.LEAVING["detected"])
+        self.assertEqual(events(tidy), [("enter", "reference_3", 13)])
+
+    def test_the_whole_trajectory_follows_the_prediction_out(self):
+        tidy = track(*self.LEAVING["points"], detected=self.LEAVING["detected"])
+        self.assertEqual(events(tidy, detected_only=False), [])
+
+    def test_a_predicted_start_counts_with_the_whole_trajectory(self):
+        tidy = track(IN_R3, AWAY, AWAY, detected=[0, 1, 1])
+        self.assertEqual(events(tidy), [])
+        self.assertEqual(events(tidy, detected_only=False), [("exit", "reference_3", 10)])

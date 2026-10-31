@@ -109,9 +109,13 @@ def _cache_key(name) -> str:
     return "lineage:v1:" + hashlib.sha1(_clean(name).lower().encode()).hexdigest()
 
 
-def lineages(names) -> dict:
+def lineages(names, budget=None):
     """``{name: {class, order, family, genus}}`` for every name, ``{}`` for one
-    nobody could place. Cached for 90 days; misses are looked up in parallel."""
+    nobody could place. Cached for 90 days; misses are looked up in parallel.
+
+    With ``budget``, at most that many misses are looked up and the call
+    returns ``(lineages, pending)``: names left for later are absent from
+    ``lineages`` and counted in ``pending``."""
     from django.core.cache import cache
 
     out, todo = {}, []
@@ -125,6 +129,9 @@ def lineages(names) -> dict:
             out[name] = hit or _known_bee(name) or {}
         else:
             todo.append(name)
+    left = []
+    if budget is not None and len(todo) > budget:
+        todo, left = todo[:budget], todo[budget:]
     if todo:
         with ThreadPoolExecutor(max_workers=8) as pool:
             found = list(pool.map(lambda n: _gbif(_clean(n)), todo))
@@ -140,6 +147,8 @@ def lineages(names) -> dict:
                 lin["genus"] = _clean(name).split(" ")[0] if " " in _clean(name) else ""
             cache.set(_cache_key(name), lin, _CACHE_SECONDS)
             out[name] = lin
+    if budget is not None:
+        return out, len(left)
     return out
 
 

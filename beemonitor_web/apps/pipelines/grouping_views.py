@@ -34,12 +34,33 @@ def _step(pipeline, step_id):
     raise Http404("No Identify Species node with that id in this pipeline.")
 
 
-def _names_seen(user):
-    """Every name the species model gave in the user's runs, with how many
-    tracks it was the most-voted name of."""
-    from .regroup import group_step
+def _name_counts(user):
+    """``{name: tracks it was the most-voted name of}`` over the user's runs.
+
+    On Postgres only the names leave the database (a JSON path over every
+    step's output): a run's saved context also holds its event rows, and
+    loading thousands of them to read a few names took minutes."""
+    from django.db import connection
 
     counts = {}
+    if connection.vendor == "postgresql":
+        sql = (f"SELECT jsonb_path_query_array(context, '$.*.names_seen[*]'), "
+               f"jsonb_path_query_array(context, '$.*.track_groups.*.top') "
+               f"FROM {PipelineRun._meta.db_table} WHERE user_id = %s AND status = %s "
+               f"ORDER BY started_at DESC NULLS LAST LIMIT %s")
+        with connection.cursor() as cur:
+            cur.execute(sql, [user.pk, PipelineRun.Status.COMPLETED, NAMES_FROM_RUNS])
+            for seen, tops in cur.fetchall():
+                seen = json.loads(seen) if isinstance(seen, str) else (seen or [])
+                tops = json.loads(tops) if isinstance(tops, str) else (tops or [])
+                for name in seen:
+                    counts.setdefault(name, 0)
+                for name in tops:
+                    if name:
+                        counts[name] = counts.get(name, 0) + 1
+        return counts
+    from .regroup import group_step
+
     runs = (PipelineRun.objects.filter(user=user, status=PipelineRun.Status.COMPLETED)
             .order_by("-started_at").only("pk", "steps", "context")[:NAMES_FROM_RUNS])
     for run in runs:
@@ -52,14 +73,33 @@ def _names_seen(user):
         for g in (out.get("track_groups") or {}).values():
             if g.get("top"):
                 counts[g["top"]] = counts.get(g["top"], 0) + 1
-    lineages = taxon_groups.lineages(list(counts))
+    return counts
+
+
+# Names looked up in GBIF per request; the rest come on the next fetch.
+LOOKUPS_PER_REQUEST = 40
+
+
+def _names_seen(user):
+    """``(rows, pending)``: every name the species model gave in the user's
+    runs with its family and order, and how many names are still waiting for
+    a GBIF lookup. Cached names are free; at most LOOKUPS_PER_REQUEST new ones
+    are looked up each time, so the page never waits on hundreds of them."""
+    from django.core.cache import cache
+
+    key = f"grouping-names:{user.pk}"
+    counts = cache.get(key)
+    if counts is None:
+        counts = _name_counts(user)
+        cache.set(key, counts, 600)
+    lineages, pending = taxon_groups.lineages(list(counts), budget=LOOKUPS_PER_REQUEST)
     rows = []
     for name, tracks in counts.items():
-        lin = lineages.get(name) or {}
+        lin = lineages.get(name)
         rows.append({"name": name, "tracks": tracks,
-                     **{k: lin.get(k, "") for k in ("class", "order", "family", "genus")},
-                     "bee": bool(lin.get("bee"))})
-    return sorted(rows, key=lambda r: (-r["tracks"], r["name"]))
+                     **{k: (lin or {}).get(k, "") for k in ("class", "order", "family", "genus")},
+                     "bee": bool((lin or {}).get("bee")), "pending": lin is None})
+    return sorted(rows, key=lambda r: (-r["tracks"], r["name"])), pending
 
 
 def _batches(user, pipeline):
@@ -70,9 +110,13 @@ def _batches(user, pipeline):
                 .order_by("-started_at").values_list("batch_id", flat=True)):
         if bid not in ids:
             ids.append(bid)
+    ids = ids[:30]
     names = batches.names(ids)
+    from django.db.models import Count
+    clips = dict(PipelineRun.objects.filter(batch_id__in=ids).values_list("batch_id")
+                 .annotate(n=Count("pk")).values_list("batch_id", "n"))
     return [{"id": str(b), "name": names.get(b) or f"{pipeline.title} · batch {str(b)[:8]}",
-             "clips": PipelineRun.objects.filter(batch_id=b).count()} for b in ids[:30]]
+             "clips": clips.get(b, 0)} for b in ids]
 
 
 def _other_groupings(user, pipeline):
@@ -115,7 +159,9 @@ def grouping_editor(request, pk, step_id):
         "grouping": cfg["grouping"],
         "default": taxon_groups.default_grouping(),
         "leave_out": cfg["leave_out"] if cfg["on"] else [],
-        "names": _names_seen(request.user),
+        # Loaded after the page (grouping_names): it can take a few seconds.
+        "names": None,
+        "names_url": reverse("pipelines:grouping_names", args=[pipeline.pk, step_id]),
         "batches": _batches(request.user, pipeline) if mine else [],
         "others": _other_groupings(request.user, pipeline) if mine else [],
         "readonly": not mine,
@@ -128,6 +174,15 @@ def grouping_editor(request, pk, step_id):
     return render(request, "pipelines/grouping.html", {
         "pipeline": pipeline, "page_json": json.dumps(page), "readonly": not mine,
     })
+
+
+@login_required
+def grouping_names(request, pk, step_id):
+    """The names list for the grouping page, fetched after it loads."""
+    pipeline = get_object_or_404(Pipeline.usable(request.user), pk=pk)
+    _step(pipeline, step_id)
+    rows, pending = _names_seen(request.user)
+    return JsonResponse({"names": rows, "pending": pending})
 
 
 def _readings_of(out):

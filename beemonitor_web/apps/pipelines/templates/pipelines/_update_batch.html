@@ -1,0 +1,30 @@
+{% comment %}Update this batch with the pipeline as it is now (memory/68): a recount from the tracking it saved, in place, no GPU. Changes to detection or tracking can't be applied this way and are listed for a new run.{% endcomment %}
+{% if can_share and not photos %}
+<section class="flex flex-col gap-2 pb-4 mb-4 border-b border-gray-200" aria-labelledby="update-title">
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div class="flex flex-col gap-1 min-w-0">
+      <h2 id="update-title" class="text-sm font-semibold text-gray-900">Update this batch with {{ pipeline.title }} as it is now</h2>
+      {% if not changes %}
+      <p class="text-sm text-gray-600">Up to date: every clip was counted with the pipeline as it is now.</p>
+      {% else %}
+      {% if changes.web %}
+      <p class="text-sm text-gray-700">Changed since {% if changes.behind == 1 %}a clip{% else %}{{ changes.behind }} clips{% endif %} here {% if changes.behind == 1 %}was{% else %}were{% endif %} counted:</p>
+      <ul class="text-sm text-gray-700 list-disc pl-5">
+        {% for c in changes.web %}<li>{{ c.step }}{% if c.field %} · {{ c.field }}{% endif %}{% if c.before %}: {{ c.before }} → {{ c.after }}{% elif c.after %}: {{ c.after }}{% endif %}</li>{% endfor %}
+      </ul>
+      {% endif %}
+      {% if changes.gpu %}
+      <p class="text-sm text-yellow-800">Need tracking again, so not applied here (start a new batch below; anything unchanged is reused):
+        {% for c in changes.gpu %}{{ c.step }}{% if c.field %} · {{ c.field }}{% endif %}{% if c.before %} ({{ c.before }} → {{ c.after }}){% endif %}{% if not forloop.last %}; {% endif %}{% endfor %}.</p>
+      {% endif %}
+      {% endif %}
+      <p class="text-xs text-gray-500">Loads each clip's saved tracking and counts it again with the pipeline's current Events, Interactions and insect groups. Same batch, same review votes, no GPU-hours.</p>
+    </div>
+    <form method="post" action="{% url 'pipelines:batch_apply_groups' batch_id %}" class="shrink-0">
+      {% csrf_token %}
+      <button type="submit" {% if not changes.web %}disabled{% endif %}
+              class="h-10 px-4 rounded-md text-sm font-semibold bg-green-700 hover:bg-green-800 text-white disabled:bg-gray-300 disabled:text-gray-600 disabled:cursor-not-allowed">Update this batch</button>
+    </form>
+  </div>
+</section>
+{% endif %}

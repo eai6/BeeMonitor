@@ -610,8 +610,10 @@ EXIT, ENTER, STAY = "exit", "enter", "stay"
 
 
 def compute_events(tidy, refs, fps, padding_bl=0.0, aspect=16 / 9,
-                   first_frame=0, last_frame=None):
-    """Exits, entries and stays, one pass over each track's detected rows.
+                   first_frame=0, last_frame=None, detected_only=True):
+    """Exits, entries and stays, one pass over each track's detected rows
+    (or, with ``detected_only`` False, its whole trajectory: the tracker's
+    predicted positions too).
 
     For each track, its start (first detected row) and end (last detected row):
 
@@ -645,7 +647,8 @@ def compute_events(tidy, refs, fps, padding_bl=0.0, aspect=16 / 9,
         return None if last_frame is None else frame >= last_frame
 
     events = []
-    rows = _detected_rows(tidy).sort_values("frame")
+    rows = (_detected_rows(tidy) if detected_only
+            else (tidy if "bl" in tidy.columns else tidy.assign(bl=float("nan")))).sort_values("frame")
     for tid, grp in rows.groupby("tid"):
         tid = _as_native(tid)
         where = [

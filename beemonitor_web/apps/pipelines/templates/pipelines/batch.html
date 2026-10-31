@@ -178,6 +178,7 @@ their reason.
   {% endif %}
   {% if can_rerun and rerun_videos and not failure_groups %}
   <div class="bg-white shadow rounded-lg p-4">
+  {% include "pipelines/_update_batch.html" %}
   <form method="post" action="{% url 'pipelines:run_on_videos' %}" id="rerun" data-rerun-form
         class="flex items-end gap-3 flex-wrap scroll-mt-4">
     {% csrf_token %}
@@ -186,7 +187,7 @@ their reason.
     {% if photos %}<input type="hidden" name="kind" value="photo">{% endif %}
     <div class="min-w-[240px]">
       <label for="rerun-pipeline" class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
-        Run these <span data-rerun-count data-rerun-noun="{% if photos %}photo{% else %}clip{% endif %}">{{ rerun_videos|length }} {% if photos %}photo{% else %}clip{% endif %}{{ rerun_videos|length|pluralize }}</span> through a pipeline
+        Or start a new batch: run these <span data-rerun-count data-rerun-noun="{% if photos %}photo{% else %}clip{% endif %}">{{ rerun_videos|length }} {% if photos %}photo{% else %}clip{% endif %}{{ rerun_videos|length|pluralize }}</span> through a pipeline
       </label>
       <select name="pipeline" id="rerun-pipeline"
               class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
@@ -225,6 +226,7 @@ their reason.
 
 {% if can_rerun and rerun_videos and failure_groups %}
 <div class="bg-white shadow rounded-lg p-4 mb-6">
+  {% include "pipelines/_update_batch.html" %}
   <form method="post" action="{% url 'pipelines:run_on_videos' %}" id="rerun" data-rerun-form
         class="flex items-end gap-3 flex-wrap scroll-mt-4">
     {% csrf_token %}
@@ -233,7 +235,7 @@ their reason.
     {% if photos %}<input type="hidden" name="kind" value="photo">{% endif %}
     <div class="min-w-[240px]">
       <label for="rerun-pipeline" class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
-        Run these <span data-rerun-count data-rerun-noun="{% if photos %}photo{% else %}clip{% endif %}">{{ rerun_videos|length }} {% if photos %}photo{% else %}clip{% endif %}{{ rerun_videos|length|pluralize }}</span> through a pipeline
+        Or start a new batch: run these <span data-rerun-count data-rerun-noun="{% if photos %}photo{% else %}clip{% endif %}">{{ rerun_videos|length }} {% if photos %}photo{% else %}clip{% endif %}{{ rerun_videos|length|pluralize }}</span> through a pipeline
       </label>
       <select name="pipeline" id="rerun-pipeline"
               class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
@@ -308,26 +310,14 @@ their reason.
   {% comment %}What the Identify Species group filter took out of the counts (memory/65).{% endcomment %}
   <div class="flex flex-wrap items-start justify-between gap-3">
     <h2 class="text-sm font-semibold text-gray-900">Insect groups</h2>
-    {% if pg %}
-    <form method="post" action="{% url 'pipelines:batch_apply_groups' batch_id %}" class="flex flex-col items-end gap-1">
-      {% csrf_token %}
-      <button type="submit" class="h-10 px-4 rounded-md text-sm font-semibold bg-green-700 hover:bg-green-800 text-white">Apply the pipeline's groups to this batch</button>
-      <span class="text-xs text-gray-600 text-right">
-        {% if not pg.in_line %}The pipeline's Identify Species isn't wired into Events, so nothing is filtered.
-        {% elif not pg.on %}The pipeline's filter is off: every track is counted.
-        {% else %}The pipeline leaves out {{ pg.leave_out|join:", "|lower|default:"nothing" }}.{% endif %}
-        Recounts here, no GPU-hours.
-      </span>
-    </form>
-    {% endif %}
   </div>
   {% if not gs %}
-  <p class="text-sm text-gray-700">This batch counts every track. Edit the pipeline's Identify Species node, then apply it here to recount these clips with the filter.</p>
+  <p class="text-sm text-gray-700">This batch counts every track. Edit the pipeline's Identify Species node, then use Update this batch to recount these clips with the filter.</p>
   {% else %}
   {% if pg and not pg.on %}
-  <p class="text-sm rounded border border-yellow-300 bg-yellow-50 text-yellow-800 px-3 py-2">The pipeline's filter is now off, but this batch was counted with it on. Apply the pipeline's groups to count every track again.</p>
+  <p class="text-sm rounded border border-yellow-300 bg-yellow-50 text-yellow-800 px-3 py-2">The pipeline's filter is now off, but this batch was counted with it on. Use <a href="#update-title" class="underline">Update this batch</a> to count every track again.</p>
   {% elif pg and pg.leave_out != gs.left_out %}
-  <p class="text-sm rounded border border-yellow-300 bg-yellow-50 text-yellow-800 px-3 py-2">The pipeline now leaves out {{ pg.leave_out|join:", "|lower|default:"nothing" }}; this batch was counted leaving out {{ gs.left_out|join:", "|lower|default:"nothing" }}. Apply the pipeline's groups to recount it.</p>
+  <p class="text-sm rounded border border-yellow-300 bg-yellow-50 text-yellow-800 px-3 py-2">The pipeline now leaves out {{ pg.leave_out|join:", "|lower|default:"nothing" }}; this batch was counted leaving out {{ gs.left_out|join:", "|lower|default:"nothing" }}. Use <a href="#update-title" class="underline">Update this batch</a> to recount it.</p>
   {% endif %}
   {% if gs.pending %}<p class="text-sm text-blue-800">{{ gs.pending }} clip{{ gs.pending|pluralize }} still being recounted; refresh in a few minutes.</p>{% endif %}
   <p class="text-sm text-gray-700">This batch was counted leaving out {{ gs.left_out|join:", "|lower|default:"nothing" }}{% if gs.other_clips %} ({{ gs.other_clips }} of its {{ gs.clips }} clips with a different setting){% endif %}. Tracks with no clear group are always counted.</p>

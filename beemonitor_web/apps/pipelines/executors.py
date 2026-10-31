@@ -828,14 +828,17 @@ def _exec_analyze_events(step, run, context, inputs, index):
     filtered_out = None
     if tidy is not None and refs:
         first, last = _frames_analysed(run, fps, extra.get("video"))
+        detected_only = cfg.get("track_rows") != "all"
         events = ops.compute_events(
             tidy, refs, fps, padding_bl=_number(cfg.get("padding_bl"), 0.0),
-            aspect=extra["aspect"], first_frame=first, last_frame=last)
+            aspect=extra["aspect"], first_frame=first, last_frame=last,
+            detected_only=detected_only)
         rows = primitives.events_from_computed(events, fps)
         if extra["dropped"] and extra["unfiltered"] is not None:
             every = primitives.events_from_computed(ops.compute_events(
                 extra["unfiltered"], refs, fps, padding_bl=_number(cfg.get("padding_bl"), 0.0),
-                aspect=extra["aspect"], first_frame=first, last_frame=last), fps)
+                aspect=extra["aspect"], first_frame=first, last_frame=last,
+                detected_only=detected_only), fps)
             filtered_out = _filtered_out(every, extra)
         if cfg.get("ml_scoring") in (True, "true", "on", "1", 1):
             from . import ml_scoring
@@ -851,6 +854,7 @@ def _exec_analyze_events(step, run, context, inputs, index):
         "taxa": extra["taxa"], "taxa_source": extra["how"],
         "tracking_has_detected": ops.has_detected(tidy) if tidy is not None else None,
         "counting_rules": _COUNTING_RULES,
+        "track_rows": "all" if cfg.get("track_rows") == "all" else "detected",
         **primitives.summarize_events(rows),
     }
     if filtered_out:

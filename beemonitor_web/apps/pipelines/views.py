@@ -1205,6 +1205,7 @@ def batch_detail(request, batch_id):
 
     from . import review as review_mod
     photos_kind = kind == "photo"
+    from . import regroup as regroup_mod
     from . import batches
     started = [r["run"].started_at for r in rows if r["run"].started_at]
     return render(request, "pipelines/batch.html", {
@@ -1232,6 +1233,10 @@ def batch_detail(request, batch_id):
         # Apply the pipeline's insect groups here, without a re-run (memory/65).
         "pipeline_groups": (_pipeline_groups(runs[0].pipeline)
                             if can_share and runs and not photos_kind else None),
+        # What changed in the pipeline since the batch was counted, for
+        # "Update this batch" (memory/68).
+        "changes": (regroup_mod.batch_changes([r["run"] for r in rows], runs[0].pipeline)
+                    if can_share and runs and not photos_kind else None),
         # What its insect-group filters left out (memory/65).
         "group_summary": (review_mod.batch_group_summary(
             [r["run"] for r in rows], {r["run"].pk: r.get("review") for r in rows})
@@ -1339,24 +1344,24 @@ def _pipeline_groups(pipeline):
 @login_required
 @require_POST
 def batch_apply_groups(request, batch_id):
-    """Apply the pipeline's current Identify Species groups to this batch and
-    recount it in place (memory/65): no re-run, no new batch, no GPU. Only
-    the batch's launcher."""
+    """Apply the pipeline's current counting settings (Events, Interactions,
+    Identify Species groups) to this batch and recount it in place: no re-run,
+    no new batch, no GPU (memory/65). Only the batch's launcher."""
     from . import regroup, sharing
 
     if not sharing.owns_batch(request.user, batch_id):
         raise Http404("No such batch.")
     done = regroup.apply_pipeline(batch_id, request.user)
     if not done["applied"]:
-        messages.error(request, "No clip in this batch was tracked with Identify Species, so "
-                                "there are no crop readings to group. Re-run it with the node.")
+        messages.error(request, "Nothing to apply: the pipeline's steps don't match this batch's "
+                                "(a node was replaced since it ran), or no clip has finished.")
     else:
-        msg = f"Applied the pipeline's insect groups to {done['applied']} clips"
+        msg = f"Updated {done['applied']} clips with the pipeline as it is now"
         msg += (f": {done['recounted']} recounted, the other {done['queued']} in the next few "
                 f"minutes." if done["queued"] else ", and recounted them.")
         if done["skipped"]:
-            msg += (f" {done['skipped']} were tracked without Identify Species and keep "
-                    f"every track.")
+            msg += (f" {done['skipped']} were tracked without Identify Species, so their tracks "
+                    f"can't be grouped and all count.")
         messages.success(request, msg + " No GPU-hours.")
     return redirect("pipelines:batch_detail", batch_id=batch_id)
 

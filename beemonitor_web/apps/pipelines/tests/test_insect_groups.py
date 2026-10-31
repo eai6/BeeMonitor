@@ -440,8 +440,10 @@ class ApplyToBatchTests(FilterBase):
         self.pipeline.save()
         self.client.force_login(self.user)
         res = self.client.get(reverse("pipelines:batch_detail", args=[batch]))
-        self.assertContains(res, "Apply the pipeline's groups to this batch")
-        self.assertContains(res, "leaves out ants")
+        self.assertContains(res, "Update this batch")
+        # The batch ran with Identify Species off to the side; the pipeline
+        # now wires it into Events.
+        self.assertContains(res, "Events · Wiring: changed")
 
 
 class GroupingEditorTests(FilterBase):
@@ -462,9 +464,23 @@ class GroupingEditorTests(FilterBase):
         self.assertEqual(res.status_code, 200)
         page = json.loads(res.context["page_json"])
         self.assertEqual([g["name"] for g in page["grouping"]["groups"]], taxon_groups.BUILTIN)
-        names = {n["name"]: n for n in page["names"]}
+        self.assertIsNone(page["names"])          # fetched after the page
+        res = self.client.get(page["names_url"])
+        self.assertEqual(res.json()["pending"], 0)
+        names = {n["name"]: n for n in res.json()["names"]}
         self.assertEqual(names["Camponotus pennsylvanicus"]["family"], "Formicidae")
         self.assertEqual(names["Camponotus pennsylvanicus"]["tracks"], 1)
+
+    def test_names_are_looked_up_a_few_at_a_time(self):
+        from apps.pipelines import grouping_views
+        self._run(self._steps_with_species())
+        cache.clear()       # the run looked them up; start cold
+        with mock.patch.object(grouping_views, "LOOKUPS_PER_REQUEST", 1):
+            first = self.client.get(reverse("pipelines:grouping_names", args=[self.pipeline.pk, "s"])).json()
+            second = self.client.get(reverse("pipelines:grouping_names", args=[self.pipeline.pk, "s"])).json()
+        self.assertEqual(first["pending"], 1)
+        self.assertEqual(sum(1 for n in first["names"] if n["pending"]), 1)
+        self.assertEqual(second["pending"], 0)
 
     def test_saving_writes_the_grouping_into_the_pipeline(self):
         grouping = taxon_groups.default_grouping()
@@ -534,6 +550,7 @@ class BatchCardTests(FilterBase):
         res = self.client.get(reverse("pipelines:batch_detail", args=[batch]))
 
         self.assertContains(res, "The pipeline's filter is now off, but this batch was counted with it on")
+        self.assertContains(res, "Filter by insect group: On: leave out the groups ticked → Off: name groups, count every track")
         self.assertContains(res, "This batch was counted leaving out ants, beetles")
 
         self.client.post(reverse("pipelines:batch_apply_groups", args=[batch]))
@@ -550,3 +567,44 @@ class BatchCardTests(FilterBase):
         self.assertEqual(summary["other_clips"], 1)
         self.assertIn("Ants", summary["left_out"])
         self.assertNotIn("Ants", summary["kept"])
+
+
+class EventsSettingTests(FilterBase):
+    """Recounting a batch with the pipeline's Events settings, in place."""
+
+    def test_the_events_setting_is_applied_to_the_batch(self):
+        import uuid
+        run, _job = self._run(self._steps("analyze.events") + [])
+        batch = uuid.uuid4()
+        PipelineRun.objects.filter(pk=run.pk).update(batch_id=batch)
+        steps = self._steps("analyze.events", {"track_rows": "all"})
+        self.pipeline.steps = steps
+        self.pipeline.save()
+        self.client.force_login(self.user)
+
+        res = self.client.get(reverse("pipelines:batch_detail", args=[batch]))
+        self.assertContains(res, "Track start and end from: Detections only → Whole trajectory")
+        self.client.post(reverse("pipelines:batch_apply_groups", args=[batch]))
+
+        run.refresh_from_db()
+        self.assertEqual(run.steps[4]["config"]["track_rows"], "all")
+        self.assertEqual(run.context["a"]["track_rows"], "all")
+
+    def test_an_unchanged_batch_is_up_to_date_and_a_gpu_change_is_listed_apart(self):
+        import uuid
+        from apps.pipelines import regroup
+        steps = self._steps_with_species()
+        run, _job = self._run(steps)
+        batch = uuid.uuid4()
+        PipelineRun.objects.filter(pk=run.pk).update(batch_id=batch)
+        self.pipeline.steps = steps
+        self.pipeline.save()
+        run.refresh_from_db()
+        self.assertIsNone(regroup.batch_changes([run], self.pipeline))
+
+        changed = self._steps_with_species({"model": "beemachine"})
+        self.pipeline.steps = changed
+        self.pipeline.save()
+        changes = regroup.batch_changes([run], self.pipeline)
+        self.assertEqual(changes["web"], [])
+        self.assertEqual(changes["gpu"][0]["field"], "Model")

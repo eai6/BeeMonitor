@@ -22,6 +22,8 @@ urlpatterns = [
     path("<uuid:pk>/grouping/<str:step_id>/", grouping_views.grouping_editor, name="grouping"),
     path("<uuid:pk>/grouping/<str:step_id>/preview/", grouping_views.grouping_preview,
          name="grouping_preview"),
+    path("<uuid:pk>/grouping/<str:step_id>/names.json", grouping_views.grouping_names,
+         name="grouping_names"),
     path("<uuid:pk>/colab/", views.open_in_colab, name="open_in_colab"),
     path("<uuid:pk>/rename/", views.pipeline_rename, name="rename"),
     path("<uuid:pk>/delete/", views.pipeline_delete, name="delete"),

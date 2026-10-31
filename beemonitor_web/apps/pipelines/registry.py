@@ -621,6 +621,22 @@ BLOCK_REGISTRY = {
                     {"value": "on", "label": "On — adds ml_confidence to each exit / enter"},
                 ],
             },
+            {
+                # Where a track starts and ends. Detections only (memory/60)
+                # misses a bee that flew off once the detector lost it: its
+                # last detection is at the tube, so it reads as an entry.
+                "name": "track_rows",
+                "label": "Track start and end from",
+                "field_type": "select",
+                "required": False,
+                "default": "detected",
+                "choices": [
+                    {"value": "detected", "label": "Detections only"},
+                    {"value": "all", "label": "Whole trajectory (detections and predictions)"},
+                ],
+                "help": "Whole trajectory includes where the tracker predicted the insect "
+                        "went after (or before) it was detected.",
+            },
         ],
     },
     "analyze.interactions": {

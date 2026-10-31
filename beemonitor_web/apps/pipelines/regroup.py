@@ -11,6 +11,7 @@ from the crop readings already saved.
 
 from __future__ import annotations
 
+import json
 import logging
 
 logger = logging.getLogger(__name__)
@@ -132,18 +133,31 @@ def _feeds_analyzers(pipeline, sid):
 
 
 def applied_steps(run_steps, pipeline):
-    """The run's steps with the pipeline's Identify Species settings and wiring,
-    or None when the run has no Identify Species node (its tracking classified
-    no crops, so there is nothing to group without the GPU).
+    """``(steps, grouped)``: the run's steps with the pipeline's current
+    settings for the steps the web counts with — every analyzer (Events,
+    Interactions…, matched by step id) and Identify Species with its wiring.
+    ``grouped`` is False when the pipeline groups tracks but the run has no
+    Identify Species node: its tracking classified no crops, so there is
+    nothing to group without the GPU. None when nothing applies at all.
 
-    The run keeps its own model: its crops were read with it. Analyzers that
-    took the run's tracks straight from MOT take them from Identify Species
-    when the pipeline wires it in line, and from MOT again when it doesn't."""
-    src = pipeline_group_step(pipeline)
+    The run keeps its own species model: its crops were read with it.
+    Analyzers that took the run's tracks straight from MOT take them from
+    Identify Species when the pipeline wires it in line, and from MOT again
+    when it doesn't."""
     steps = [dict(s) for s in run_steps or []]
+    by_id = {s.get("id"): s for s in (pipeline.steps or []) if pipeline}
+    changed = False
+    for s in steps:
+        src_step = by_id.get(s.get("id"))
+        if (s.get("block_type") in ANALYZERS and src_step is not None
+                and src_step.get("block_type") == s.get("block_type")):
+            s["config"] = dict(src_step.get("config") or {})
+            changed = True
+
+    src = pipeline_group_step(pipeline)
     mine = next((s for s in steps if s.get("block_type") == "identify.species"), None)
     if src is None or mine is None:
-        return None
+        return (steps, src is None) if changed else None
     model = (mine.get("config") or {}).get("model")
     mine["config"] = {**(src.get("config") or {}), **({"model": model} if model else {})}
     upstream = (mine.get("inputs") or {}).get("tracks")
@@ -156,15 +170,16 @@ def applied_steps(run_steps, pipeline):
             s["inputs"] = {**s["inputs"], "tracks": mine["id"]}
         elif not in_line and tracks == mine["id"] and upstream:
             s["inputs"] = {**s["inputs"], "tracks": upstream}
-    return steps
+    return steps, True
 
 
 def apply_pipeline(batch_id, user, now=APPLY_NOW) -> dict:
-    """Give every finished run of the batch its pipeline's current Identify
-    Species settings and wiring, then recount them: the first ``now`` here, the
-    rest by the sweep within a reconcile pass. No GPU: groups come from the
-    crop readings the runs already saved. ``{applied, recounted, queued,
-    skipped}``; ``skipped`` are runs tracked without Identify Species."""
+    """Give every finished run of the batch its pipeline's current counting
+    settings (analyzers, Identify Species and its wiring), then recount them:
+    the first ``now`` here, the rest by the sweep within a reconcile pass. No
+    GPU: everything is counted from the tracks and crop readings the runs
+    already saved. ``{applied, recounted, queued, skipped}``; ``skipped`` are
+    runs whose groups couldn't be applied (tracked without Identify Species)."""
     from . import recount
     from .models import PipelineRun
 
@@ -173,10 +188,13 @@ def apply_pipeline(batch_id, user, now=APPLY_NOW) -> dict:
                 .select_related("pipeline").order_by("started_at"))
     out = {"applied": 0, "recounted": 0, "queued": 0, "skipped": 0}
     for i, run in enumerate(runs):
-        steps = applied_steps(run.steps, run.pipeline)
-        if steps is None:
+        applied = applied_steps(run.steps, run.pipeline)
+        if applied is None:
             out["skipped"] += 1
             continue
+        steps, grouped = applied
+        if not grouped:
+            out["skipped"] += 1
         PipelineRun.objects.filter(pk=run.pk).update(steps=steps)
         out["applied"] += 1
         if out["recounted"] < now:
@@ -191,3 +209,115 @@ def apply_pipeline(batch_id, user, now=APPLY_NOW) -> dict:
         PipelineRun.objects.filter(pk=run.pk).update(counting_rules=0)
         out["queued"] += 1
     return out
+
+
+# ── What changed in the pipeline since a batch was counted ─────────────────
+
+def _label(block_type, field_name, value):
+    """A setting's value as the editor shows it (a choice's label)."""
+    from .registry import get_block
+
+    for f in (get_block(block_type) or {}).get("config_fields") or []:
+        if f["name"] == field_name:
+            for c in f.get("choices") or []:
+                if str(c["value"]) == str(value):
+                    return c["label"]
+            break
+    if value in (None, ""):
+        return "default"
+    text = str(value)
+    return text if len(text) <= 40 else text[:37] + "…"
+
+
+def _field_label(block_type, field_name):
+    from .registry import get_block
+
+    for f in (get_block(block_type) or {}).get("config_fields") or []:
+        if f["name"] == field_name:
+            return f.get("label") or field_name
+    return field_name
+
+
+def _effective(block_type, config):
+    """A step's settings with the registry's defaults filled in, so a field
+    saved blank and one never saved compare equal."""
+    from .registry import get_block
+
+    out = {}
+    for f in (get_block(block_type) or {}).get("config_fields") or []:
+        v = (config or {}).get(f["name"])
+        out[f["name"]] = f.get("default") if v in (None, "") else v
+    return out
+
+
+# Settings the web counts with; everything else on a GPU step changes tracking.
+_GPU_FIELDS = {"identify.species": {"model"}}
+
+
+def pipeline_changes(run, pipeline) -> dict:
+    """``{"web": [...], "gpu": [...]}``: what differs between the steps this
+    run was counted with and the pipeline's now. ``web`` changes a recount
+    applies (no GPU); ``gpu`` ones need tracking again. Each item is
+    ``{step, field, before, after}``."""
+    from .registry import get_block
+
+    web, gpu = [], []
+    mine = {s.get("id"): s for s in run.steps or []}
+    for src in pipeline.steps or []:
+        bt = src.get("block_type", "")
+        block = get_block(bt) or {}
+        step = mine.get(src.get("id"))
+        name = block.get("display_name") or bt
+        if bt.startswith("input."):
+            continue
+        if step is None or step.get("block_type") != bt:
+            (gpu if block.get("backend") == "gpu" else web).append(
+                {"step": name, "field": "", "before": "", "after": "added"})
+            continue
+        before, after = _effective(bt, step.get("config")), _effective(bt, src.get("config"))
+        for key in after:
+            if key in ("video_id", "start_seconds", "end_seconds"):
+                continue
+            if json.dumps(before.get(key), sort_keys=True, default=str) == \
+                    json.dumps(after.get(key), sort_keys=True, default=str):
+                continue
+            if key == "leave_out":
+                from . import taxon_groups
+                b = sorted(taxon_groups.settings(step.get("config"))["leave_out"])
+                a = sorted(taxon_groups.settings(src.get("config"))["leave_out"])
+                if a == b:
+                    continue
+                web.append({"step": name, "field": _field_label(bt, key),
+                            "before": ", ".join(b) or "none", "after": ", ".join(a) or "none"})
+                continue
+            if key == "grouping":
+                from . import taxon_groups
+                if taxon_groups.grouping_of(step.get("config")) == taxon_groups.grouping_of(src.get("config")):
+                    continue
+                item = {"step": name, "field": "Grouping", "before": "", "after": "edited"}
+            else:
+                item = {"step": name, "field": _field_label(bt, key),
+                        "before": _label(bt, key, before.get(key)),
+                        "after": _label(bt, key, after.get(key))}
+            gpu_side = block.get("backend") == "gpu" or key in _GPU_FIELDS.get(bt, set())
+            (gpu if gpu_side else web).append(item)
+        if (step.get("inputs") or {}) != (src.get("inputs") or {}) and block.get("backend") != "gpu":
+            web.append({"step": name, "field": "Wiring", "before": "", "after": "changed"})
+    return {"web": web, "gpu": gpu}
+
+
+def batch_changes(runs, pipeline) -> dict | None:
+    """The batch page's "pipeline changed" card: the changes (from the first
+    clip that differs) and how many clips are behind. None when every clip
+    was counted with the pipeline as it is."""
+    first, behind = None, 0
+    for run in runs:
+        if run.status != run.Status.COMPLETED:
+            continue
+        changes = pipeline_changes(run, pipeline)
+        if changes["web"] or changes["gpu"]:
+            behind += 1
+            first = first or changes
+    if not behind:
+        return None
+    return {**first, "behind": behind}

@@ -179,7 +179,8 @@
     shown.slice(0, LIMIT).forEach(function (x) {
       var tr = el('tr');
       tr.appendChild(el('td', 'px-4 py-1.5 italic', x.r.name));
-      tr.appendChild(el('td', 'px-4 py-1.5 text-gray-600 text-xs', [x.r.family, x.r.order].filter(Boolean).join(' · ') || (x.r.bee ? 'a bee genus' : 'not found')));
+      tr.appendChild(el('td', 'px-4 py-1.5 text-gray-600 text-xs', [x.r.family, x.r.order].filter(Boolean).join(' · ')
+        || (x.r.bee ? 'a bee genus' : (x.r.pending ? 'looking up…' : 'not found'))));
       var td = el('td', 'px-4 py-1.5');
       var sel = el('select', 'h-9 w-44 rounded px-1 text-sm ' + (x.group === UNCLEAR ? 'border border-amber-500 bg-amber-50' : 'border border-gray-300 bg-white'));
       sel.disabled = RO; sel.setAttribute('aria-label', 'Group for ' + x.r.name);
@@ -205,12 +206,14 @@
       tr.appendChild(el('td', 'px-4 py-1.5 text-xs text-gray-600', x.why));
       body.appendChild(tr);
     });
-    if (!page.names.length) {
+    if (!page.names.length && !loading) {
       var empty = el('tr');
       var c = el('td', 'px-4 py-6 text-sm text-gray-600', 'No names yet: run a pipeline with Identify Species and they show here.');
       c.colSpan = 5; empty.appendChild(c); body.appendChild(empty);
     }
-    $('ge-more').textContent = shown.length > LIMIT ? 'Showing ' + LIMIT + ' of ' + shown.length + '. Use Find to narrow it.' : '';
+    $('ge-more').textContent = loading ? 'Loading the names from your runs…'
+      : (pending ? 'Looking up the family of ' + pending + ' more name' + (pending === 1 ? '' : 's') + '… ' : '')
+        + (shown.length > LIMIT ? 'Showing ' + LIMIT + ' of ' + shown.length + '. Use Find to narrow it.' : '');
 
     // Bulk: families whose names are in no group.
     var bulk = $('ge-bulk');
@@ -333,5 +336,26 @@
   $('ge-find').addEventListener('input', function (e) { find = e.target.value; render(); });
 
   state.tracks = state.tracks || [];
+
+  // The names list comes after the page (it reads all your runs). Names not
+  // yet looked up in GBIF arrive over a few more fetches.
+  var loading = true, pending = 0, tries = 0;
+  function loadNames() {
+    fetch(page.names_url, {credentials: 'same-origin'})
+      .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+      .then(function (res) {
+        page.names = res.names || [];
+        pending = res.pending || 0;
+        loading = false;
+        render();
+        if (pending && ++tries < 15) setTimeout(loadNames, 800);
+      })
+      .catch(function () {
+        loading = false;
+        $('ge-more').textContent = 'Could not load the names. Reload the page to try again.';
+      });
+  }
+  page.names = page.names || [];
   render();
+  loadNames();
 })();
