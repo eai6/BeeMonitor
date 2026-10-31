@@ -67,7 +67,22 @@ their reason.
     {% endif %}
     {% if can_share and running %}{% include "pipelines/_cancel_batch.html" %}{% endif %}
     {% if can_share %}{% include "pipelines/_people_panel.html" %}{% include "pipelines/_share_panel.html" %}{% endif %}
-    {% if period_review_url and not photos %}<a href="{{ period_review_url }}" class="inline-flex items-center h-10 px-4 rounded-md text-sm font-semibold border border-gray-300 bg-white text-gray-800 hover:bg-gray-50" title="Every analysed clip of this batch's unit or site on one time axis: review events and trips across clips">Review this period</a>{% endif %}
+    {% if period_reviews and not photos %}
+    {% if period_reviews|length == 1 %}
+    <a href="{{ period_reviews.0.url }}" class="inline-flex items-center h-10 px-4 rounded-md text-sm font-semibold border border-gray-300 bg-white text-gray-800 hover:bg-gray-50" title="Every analysed clip of this batch's unit or site on one time axis: review events and trips across clips">Review this period</a>
+    {% else %}
+    {% comment %}Clips from several units or sites: a period is one place, so one review per place.{% endcomment %}
+    <details class="relative">
+      <summary class="list-none cursor-pointer inline-flex items-center h-10 px-4 rounded-md text-sm font-semibold border border-gray-300 bg-white text-gray-800 hover:bg-gray-50">Review this period ▾</summary>
+      <div class="absolute right-0 mt-1 z-20 w-64 bg-white border border-gray-200 rounded-md shadow-lg p-1 flex flex-col">
+        <span class="px-3 py-1.5 text-xs text-gray-600">This batch's clips come from {{ period_reviews|length }} places; a period is one.</span>
+        {% for p in period_reviews %}
+        <a href="{{ p.url }}" class="px-3 py-2 rounded text-sm text-gray-800 hover:bg-gray-100">{{ p.label }} <span class="text-gray-500">· {{ p.clips }} clip{{ p.clips|pluralize }}</span></a>
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+    {% endif %}
     {% if my_role %}<span class="inline-flex items-center h-10 px-3 rounded-md bg-gray-100 text-sm text-gray-700">You're a {{ my_role }} on this batch</span>{% endif %}
   </div>
 </div>

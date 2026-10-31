@@ -130,7 +130,24 @@ class GatherTests(PeriodBase):
     def test_the_batch_and_device_pages_link_to_it(self):
         self.client.force_login(self.owner)
         batch = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
-        self.assertIn("?batch=", batch.context["period_review_url"])
+        reviews = batch.context["period_reviews"]
+        self.assertEqual(len(reviews), 1)
+        self.assertIn("?batch=", reviews[0]["url"])
+
+    def test_a_batch_from_two_places_gets_a_review_per_place(self):
+        # A clip added from a second unit: a period is one place, so the batch
+        # offers one review per place instead of none.
+        other = Device.objects.create(owner=self.owner, name="Second", key_hash="hpr2",
+                                      prefix="bmk_pr2")
+        Video.objects.filter(pk=self.b["video"].pk).update(device=other)
+        self.client.force_login(self.owner)
+        batch = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
+        reviews = batch.context["period_reviews"]
+        self.assertEqual({r["label"] for r in reviews}, {"Hotel", "Second"})
+        self.assertContains(batch, "a period is one")
+        hotel = next(r for r in reviews if r["label"] == "Hotel")
+        page = self.client.get(hotel["url"])
+        self.assertEqual([c["title"] for c in page.context["payload"]["clips"]], ["a"])
 
 
 class AccessTests(PeriodBase):

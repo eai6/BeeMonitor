@@ -1263,24 +1263,37 @@ def batch_detail(request, batch_id):
         "batch_devices": batch_devices,
         # Period review (memory/62): the batch's clips on one time axis, when
         # they are from one device or one site.
-        "period_review_url": _period_review_url(rows, batch_id),
+        "period_reviews": _period_reviews(rows, batch_id),
         "batch_days": aggregate.batch_days(rows),
     })
 
 
-def _period_review_url(rows, batch_id):
-    """The period review of a batch, or "" when its clips span several devices
-    and several sites (a period is one device or one site)."""
+def _period_reviews(rows, batch_id):
+    """``[{label, url, clips}]``: the batch's period review, one per place.
+
+    A period is one unit or one site. A batch whose clips are all from one
+    gets one link; a batch that mixes them (clips added later from another
+    place, or some tied to the unit and some only to a site) gets one per
+    place rather than none. A clip's place is its unit, else its site."""
     videos = [r["video"] for r in rows if r.get("video")]
-    if not videos:
-        return ""
-    if len({v.device_id for v in videos}) == 1 and videos[0].device_id:
-        pass
-    elif len({v.site_id for v in videos}) == 1 and videos[0].site_id:
-        pass
-    else:
-        return ""
-    return reverse("analysis:period_review") + f"?batch={batch_id}"
+    base = reverse("analysis:period_review") + f"?batch={batch_id}"
+    devices = {v.device_id for v in videos}
+    sites = {v.site_id for v in videos}
+    if videos and len(devices) == 1 and None not in devices:
+        return [{"label": videos[0].device.name, "url": base, "clips": len(videos)}]
+    if videos and len(sites) == 1 and None not in sites:
+        return [{"label": videos[0].site.name, "url": base, "clips": len(videos)}]
+    places = {}
+    for v in videos:
+        if v.device_id:
+            key, label, arg = ("d", v.device_id), v.device.name, f"&device={v.device_id}"
+        elif v.site_id:
+            key, label, arg = ("s", v.site_id), v.site.name, f"&site_id={v.site_id}"
+        else:
+            continue
+        place = places.setdefault(key, {"label": label, "url": base + arg, "clips": 0})
+        place["clips"] += 1
+    return sorted(places.values(), key=lambda p: -p["clips"])
 
 
 @login_required
