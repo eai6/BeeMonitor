@@ -17,6 +17,8 @@
         </div>
       </div>
       <div class="hidden md:flex md:items-center md:space-x-3">
+        {# Theme (memory/67): System → Light → Dark, kept in this browser. #}
+        <button type="button" data-theme-cycle class="inline-flex items-center gap-1.5 h-9 px-2 rounded text-amber-100 hover:text-white text-sm" title="Theme"><svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg> <span data-theme-label>System</span></button>
         {% if user.is_authenticated %}
         {% if user.is_superuser %}<a href="{% url 'platform_admin:overview' %}" class="bg-amber-800 hover:bg-amber-900 text-white px-3 py-1.5 rounded text-sm font-semibold">Platform</a>{% endif %}
         <a href="{% url 'developer:index' %}" class="text-amber-100 hover:text-white text-sm" title="API keys">API</a>
@@ -41,6 +43,7 @@
   <!-- Mobile menu -->
   <div x-show="open" class="md:hidden bg-amber-700">
     <div class="px-2 pt-2 pb-3 space-y-1">
+      <button type="button" data-theme-cycle class="flex items-center gap-2 w-full text-left text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium"><svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg> Theme: <span data-theme-label>System</span></button>
       <a href="{% url 'analysis:processing' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Videos</a>
       <a href="{% url 'pipelines:list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Pipelines</a>
       <a href="{% url 'pipelines:run_list' %}" class="block text-amber-100 hover:text-white px-3 py-2 rounded text-base font-medium">Runs</a>
@@ -59,3 +62,26 @@
     </div>
   </div>
 </nav>
+<script>
+  // Theme switch (memory/67): each click moves System → Light → Dark.
+  (function () {
+    var ORDER = ['system', 'light', 'dark'], NAMES = {system: 'System', light: 'Light', dark: 'Dark'};
+    function paint() {
+      if (!window.bmTheme) return;
+      var choice = window.bmTheme.get();
+      document.querySelectorAll('[data-theme-cycle]').forEach(function (b) {
+        b.querySelector('[data-theme-label]').textContent = NAMES[choice];
+        b.setAttribute('aria-label', 'Theme: ' + NAMES[choice] + '. Change theme');
+      });
+    }
+    document.querySelectorAll('[data-theme-cycle]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        if (!window.bmTheme) return;
+        var next = ORDER[(ORDER.indexOf(window.bmTheme.get()) + 1) % ORDER.length];
+        window.bmTheme.set(next);
+        paint();
+      });
+    });
+    paint();
+  })();
+</script>

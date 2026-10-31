@@ -12,6 +12,7 @@ every link out of here would only send them to a login page.
   <meta name="referrer" content="no-referrer">
   <title>{% block title %}BeeMonitor{% endblock %}</title>
   <meta name="theme-color" content="#16a34a">
+  {% include "components/theme_head.html" %}
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     /* The hidden attribute must win. Tailwind's own rule for it is weaker
@@ -20,6 +21,8 @@ every link out of here would only send them to a login page.
   </style>
   <script>
     tailwind.config = {
+      // Dark theme by class (memory/67): components/theme_head.html sets it.
+      darkMode: 'class',
       theme: {
         extend: {
           colors: {

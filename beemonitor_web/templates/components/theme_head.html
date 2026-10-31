@@ -1,0 +1,39 @@
+{% load static %}{% comment %}Dark theme (memory/67): applied before anything paints, so a dark page never flashes white. System (the default) follows the device; Light or Dark is kept in this browser.{% endcomment %}
+<script>
+  (function () {
+    var KEY = 'bm-theme', stored = null;
+    try { stored = localStorage.getItem(KEY); } catch (e) {}
+    var media = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+    function isDark() { return stored === 'dark' || (stored !== 'light' && !!(media && media.matches)); }
+    function codeTheme(dark) {
+      // highlight.js in the chats and the walkthrough has a light and a dark sheet.
+      document.querySelectorAll('link[href*="highlight.js"][href*="/styles/github"]').forEach(function (l) {
+        l.href = l.href.replace(/github(-dark)?\.min\.css$/, dark ? 'github-dark.min.css' : 'github.min.css');
+      });
+    }
+    function apply() {
+      var dark = isDark();
+      document.documentElement.classList.toggle('dark', dark);
+      var meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.content = dark ? '#14532d' : '#16a34a';
+      codeTheme(dark);
+    }
+    window.bmTheme = {
+      get: function () { return stored || 'system'; },
+      isDark: isDark,
+      set: function (value) {
+        stored = value === 'light' || value === 'dark' ? value : null;
+        try { if (stored) localStorage.setItem(KEY, stored); else localStorage.removeItem(KEY); } catch (e) {}
+        apply();
+        document.dispatchEvent(new CustomEvent('bm-theme', {detail: {dark: isDark(), choice: window.bmTheme.get()}}));
+      }
+    };
+    apply();
+    document.addEventListener('DOMContentLoaded', function () { codeTheme(isDark()); });
+    if (media) {
+      var onChange = function () { if (!stored) { apply(); document.dispatchEvent(new CustomEvent('bm-theme', {detail: {dark: isDark(), choice: 'system'}})); } };
+      if (media.addEventListener) media.addEventListener('change', onChange); else if (media.addListener) media.addListener(onChange);
+    }
+  })();
+</script>
+<link rel="stylesheet" href="{% static 'css/dark.css' %}">

@@ -1058,6 +1058,13 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js" integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ" crossorigin="anonymous"></script>
 <script>
+  // Dark theme (memory/67): axis text and grid lines readable on dark cards.
+  if (window.Chart && window.bmTheme && window.bmTheme.isDark()) {
+    Chart.defaults.color = '#b4bcc8';
+    Chart.defaults.borderColor = '#2b3546';
+  }
+</script>
+<script>
 (function () {
   // When loaded in custom mode, keep a sane preset fallback so "Clear" works.
   var RANGE = "{% if activity_custom %}7d{% else %}{{ activity_range }}{% endif %}";

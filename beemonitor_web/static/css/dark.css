@@ -1,0 +1,152 @@
+/* Dark theme (memory/67).
+ *
+ * Tailwind comes from the Play CDN and the templates hard-code light utility
+ * classes (~3,100 of them in 97 templates), so rather than adding dark:
+ * variants everywhere this layer remaps those classes when <html> has the
+ * "dark" class. Selectors start with html.dark, so they beat Tailwind's own
+ * single-class rules whatever order the two stylesheets load in.
+ *
+ * Colours: page #0b0f14, card #111827, raised #1f2937, border #2b3546.
+ * Text keeps at least 4.5:1 on the card colour. Pages that need something
+ * special can still use Tailwind dark: classes (darkMode: 'class').
+ */
+
+:root {
+  --bm-page: #f9fafb; --bm-surface: #ffffff; --bm-raised: #f3f4f6; --bm-border: #e5e7eb;
+  --bm-text: #111827; --bm-muted: #4b5563;
+  --bm-stripe-a: #f3f4f6; --bm-stripe-b: #e5e7eb;
+}
+html.dark {
+  color-scheme: dark;
+  --bm-page: #0b0f14; --bm-surface: #111827; --bm-raised: #1f2937; --bm-border: #2b3546;
+  --bm-text: #e5e7eb; --bm-muted: #9ca3af;
+  --bm-stripe-a: #1f2937; --bm-stripe-b: #2b3546;
+  background-color: #0b0f14;
+  color: #e5e7eb;
+}
+html.dark body { background-color: #0b0f14; color: #e5e7eb; }
+
+/* ── Surfaces ─────────────────────────────────────────────────────────── */
+html.dark .bg-gray-50 { background-color: #0b0f14; }
+html.dark .bg-white,
+html.dark .bg-slate-50 { background-color: #111827; }
+html.dark .bg-gray-100, html.dark .bg-slate-100 { background-color: #1f2937; }
+html.dark .bg-gray-200, html.dark .bg-slate-200 { background-color: #2b3546; }
+html.dark .bg-gray-300 { background-color: #374151; }
+html.dark .bg-white\/80, html.dark .bg-white\/90, html.dark .bg-white\/95 { background-color: rgba(17, 24, 39, 0.92); }
+html.dark .hover\:bg-gray-50:hover, html.dark .hover\:bg-gray-100:hover,
+html.dark .hover\:bg-white:hover { background-color: #1f2937; }
+html.dark .hover\:bg-gray-200:hover { background-color: #2b3546; }
+
+/* ── Text ─────────────────────────────────────────────────────────────── */
+html.dark .text-black, html.dark .text-gray-900, html.dark .text-slate-900 { color: #f3f4f6; }
+html.dark .text-gray-800, html.dark .text-slate-800 { color: #e5e7eb; }
+html.dark .text-gray-700, html.dark .text-slate-700 { color: #d1d5db; }
+html.dark .text-gray-600, html.dark .text-slate-600 { color: #b4bcc8; }
+html.dark .text-gray-500, html.dark .text-slate-500 { color: #9ca3af; }
+html.dark .text-gray-400 { color: #8b95a5; }
+html.dark .hover\:text-gray-900:hover, html.dark .hover\:text-gray-800:hover,
+html.dark .hover\:text-gray-700:hover { color: #ffffff; }
+html.dark .placeholder-gray-400::placeholder, html.dark ::placeholder { color: #6b7280; }
+
+/* ── Borders, dividers, rings ─────────────────────────────────────────── */
+html.dark .border-gray-100, html.dark .border-gray-200, html.dark .border-slate-200 { border-color: #2b3546; }
+html.dark .border-gray-300, html.dark .border-slate-300 { border-color: #3a4558; }
+html.dark .border-gray-400 { border-color: #4b5563; }
+html.dark .divide-gray-100 > :not([hidden]) ~ :not([hidden]),
+html.dark .divide-gray-200 > :not([hidden]) ~ :not([hidden]) { border-color: #2b3546; }
+html.dark .ring-gray-200, html.dark .ring-gray-300 { --tw-ring-color: #3a4558; }
+html.dark .shadow, html.dark .shadow-sm, html.dark .shadow-md, html.dark .shadow-lg {
+  --tw-shadow-color: rgba(0, 0, 0, 0.5);
+}
+
+/* ── Tinted panels and chips: dark tint, light text ───────────────────── */
+/* amber-* is the brand green (the Tailwind config remaps it). */
+html.dark .bg-green-50, html.dark .bg-amber-50, html.dark .bg-emerald-50, html.dark .bg-lime-50 { background-color: #0f2a1a; }
+html.dark .bg-green-100, html.dark .bg-amber-100, html.dark .bg-emerald-100 { background-color: #14391f; }
+html.dark .bg-red-50, html.dark .bg-rose-50 { background-color: #2c1213; }
+html.dark .bg-red-100, html.dark .bg-rose-100 { background-color: #3b1515; }
+html.dark .bg-yellow-50 { background-color: #2a230b; }
+html.dark .bg-yellow-100 { background-color: #3a300e; }
+html.dark .bg-orange-50 { background-color: #2c1a0c; }
+html.dark .bg-orange-100 { background-color: #3d230f; }
+html.dark .bg-blue-50, html.dark .bg-sky-50, html.dark .bg-indigo-50 { background-color: #0f1d33; }
+html.dark .bg-blue-100, html.dark .bg-sky-100, html.dark .bg-indigo-100 { background-color: #142744; }
+html.dark .bg-purple-50, html.dark .bg-violet-50 { background-color: #1e1533; }
+html.dark .bg-purple-100, html.dark .bg-violet-100 { background-color: #2a1d47; }
+html.dark .bg-teal-50, html.dark .bg-cyan-50 { background-color: #0b2528; }
+html.dark .bg-teal-100, html.dark .bg-cyan-100 { background-color: #0f3236; }
+html.dark .bg-pink-50 { background-color: #2c1222; }
+html.dark .hover\:bg-amber-50:hover, html.dark .hover\:bg-green-50:hover { background-color: #14391f; }
+html.dark .hover\:bg-amber-100:hover, html.dark .hover\:bg-green-100:hover { background-color: #1a4a28; }
+html.dark .hover\:bg-red-50:hover { background-color: #3b1515; }
+html.dark .hover\:bg-blue-50:hover { background-color: #142744; }
+
+/* Coloured text: the 700-900 shades are too dark on dark; use 300-400. */
+html.dark .text-green-700, html.dark .text-amber-700, html.dark .text-emerald-700,
+html.dark .text-green-800, html.dark .text-amber-800, html.dark .text-emerald-800 { color: #4ade80; }
+html.dark .text-green-900, html.dark .text-amber-900 { color: #86efac; }
+html.dark .text-amber-600, html.dark .text-green-600 { color: #4ade80; }
+html.dark .hover\:text-amber-700:hover, html.dark .hover\:text-amber-800:hover,
+html.dark .hover\:text-green-800:hover { color: #86efac; }
+html.dark .text-red-600, html.dark .text-red-700, html.dark .text-red-800, html.dark .text-rose-700 { color: #f87171; }
+html.dark .text-red-900 { color: #fca5a5; }
+html.dark .text-orange-600, html.dark .text-orange-700, html.dark .text-orange-800 { color: #fb923c; }
+html.dark .text-yellow-600, html.dark .text-yellow-700, html.dark .text-yellow-800 { color: #facc15; }
+html.dark .text-blue-600, html.dark .text-blue-700, html.dark .text-blue-800,
+html.dark .text-sky-700, html.dark .text-indigo-600, html.dark .text-indigo-700 { color: #60a5fa; }
+html.dark .text-blue-900 { color: #93c5fd; }
+html.dark .text-purple-600, html.dark .text-purple-700, html.dark .text-purple-800,
+html.dark .text-violet-700 { color: #c084fc; }
+html.dark .text-teal-600, html.dark .text-teal-700, html.dark .text-teal-800,
+html.dark .text-cyan-700 { color: #2dd4bf; }
+html.dark .text-pink-700 { color: #f472b6; }
+
+html.dark .border-green-200, html.dark .border-amber-200, html.dark .border-green-300,
+html.dark .border-amber-300, html.dark .border-emerald-200 { border-color: #166534; }
+html.dark .border-red-200, html.dark .border-red-300 { border-color: #7f1d1d; }
+html.dark .border-yellow-200, html.dark .border-yellow-300 { border-color: #713f12; }
+html.dark .border-orange-200, html.dark .border-orange-300 { border-color: #7c2d12; }
+html.dark .border-blue-200, html.dark .border-blue-300 { border-color: #1e3a8a; }
+html.dark .border-purple-200 { border-color: #581c87; }
+html.dark .border-teal-200 { border-color: #134e4a; }
+
+/* ── Forms ────────────────────────────────────────────────────────────── */
+html.dark input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=submit]):not([type=button]),
+html.dark select, html.dark textarea {
+  background-color: #0f1621;
+  color: #e5e7eb;
+  border-color: #3a4558;
+}
+html.dark input:disabled, html.dark select:disabled, html.dark textarea:disabled { background-color: #1a2230; color: #8b95a5; }
+html.dark input[type=checkbox], html.dark input[type=radio] { accent-color: #22c55e; }
+
+/* ── Tables, code, dialogs ────────────────────────────────────────────── */
+html.dark thead.bg-gray-50, html.dark tr.bg-gray-50, html.dark th.bg-gray-50 { background-color: #161e2b; }
+html.dark .hover\:bg-gray-50:hover td { background-color: transparent; }
+html.dark dialog { background-color: #111827; color: #e5e7eb; }
+html.dark kbd { background-color: #1f2937; color: #e5e7eb; }
+
+/* Markdown answers in the support chat, agent chat and walkthrough. */
+html.dark .md code { background: #1f2937; color: #e5e7eb; }
+html.dark .md pre { background: #0f1621; border-color: #2b3546; }
+html.dark .md pre code, html.dark .md pre code.hljs { color: #e5e7eb; }
+html.dark .md .copy-btn { background: #1f2937; border-color: #3a4558; color: #d1d5db; }
+html.dark .md .copy-btn:hover { background: #2b3546; }
+html.dark .md .copy-btn.copied { background: #0f2a1a; border-color: #166534; color: #4ade80; }
+html.dark .md a { color: #4ade80; }
+html.dark .md blockquote { border-left-color: #3a4558; color: #b4bcc8; }
+html.dark .md th, html.dark .md td { border-color: #3a4558; }
+
+/* ── The navbar: the brand green, a shade deeper ───────────────────────── */
+html.dark nav.bg-amber-600 { background-color: #14532d; }
+html.dark nav .bg-amber-700 { background-color: #166534; }
+html.dark nav .hover\:bg-amber-800:hover { background-color: #15803d; }
+
+/* ── Maps: tiles stay light (they read better), controls go dark ────────── */
+html.dark .leaflet-bar a, html.dark .leaflet-control-layers,
+html.dark .leaflet-popup-content-wrapper, html.dark .leaflet-popup-tip {
+  background-color: #111827; color: #e5e7eb; border-color: #3a4558;
+}
+html.dark .leaflet-control-attribution { background: rgba(17, 24, 39, 0.8) !important; color: #9ca3af; }
+html.dark .leaflet-control-attribution a { color: #4ade80; }

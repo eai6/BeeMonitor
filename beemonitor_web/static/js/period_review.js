@@ -138,7 +138,7 @@
         m.style.width = '3px';
         m.style.background = COLORS[e.action] || '#374151';
         var acc = e.accepted || 0, rej = e.rejected || 0;
-        if (acc || rej) m.style.boxShadow = '0 0 0 2px #fff, 0 0 0 4px ' +
+        if (acc || rej) m.style.boxShadow = '0 0 0 2px var(--bm-surface, #fff), 0 0 0 4px ' +
           (acc && rej ? '#b45309' : rej ? '#b91c1c' : '#15803d');
         m.title = clock(e.clock) + ' ' + e.action + ' tube ' + tube(ref) + ' · track ' + e.track_id;
         m.setAttribute('aria-label', m.title);
@@ -408,7 +408,7 @@
     var t0 = tp.a.t - PAD, t1 = tp.b.t + PAD, span = (t1 - t0) || 1;
     var at = function (t) { return Math.max(0, Math.min(100, 100 * (t - t0) / span)) + '%'; };
     bar.innerHTML = '';
-    bar.style.background = 'repeating-linear-gradient(135deg, #f3f4f6 0 6px, #e5e7eb 6px 8px)';
+    bar.style.background = 'repeating-linear-gradient(135deg, var(--bm-stripe-a, #f3f4f6) 0 6px, var(--bm-stripe-b, #e5e7eb) 6px 8px)';
     P.clips.forEach(function (c) {
       var lo = Math.max(t0, c.offset), hi = Math.min(t1, c.offset + (c.duration || 0));
       if (hi <= lo) return;
