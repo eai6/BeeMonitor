@@ -37,7 +37,8 @@ of pages away.
      class="flex items-center gap-4 px-4 py-3 hover:bg-gray-50">
     <div class="min-w-0 flex-1">
       <div class="flex items-baseline gap-2 flex-wrap">
-        <span class="text-sm font-medium text-gray-900">{{ b.pipeline.title|default:"Pipeline" }}</span>
+        <span class="text-sm font-medium text-gray-900">{{ b.name|default:b.pipeline.title|default:"Pipeline" }}</span>
+        {% if b.name %}<span class="text-xs text-gray-500">{{ b.pipeline.title }} pipeline</span>{% endif %}
         <span class="text-xs text-gray-400">{{ b.count }} clip{{ b.count|pluralize }}</span>
         <span class="text-xs text-gray-400">· {{ b.started_at|date:"j M Y, H:i" }}</span>
       </div>
@@ -83,7 +84,7 @@ of pages away.
 <div class="bg-white shadow rounded-lg divide-y">
   {% for b in shared %}
   <a href="{% url 'pipelines:batch_detail' b.batch_id %}" class="flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-gray-50">
-    <span class="text-sm text-gray-900">{{ b.pipeline.title }} <span class="text-gray-500">· {{ b.count }} clip{{ b.count|pluralize }} · from {{ b.owner.username }}</span></span>
+    <span class="text-sm text-gray-900">{{ b.name|default:b.pipeline.title }} <span class="text-gray-500">{% if b.name %}· {{ b.pipeline.title }} pipeline {% endif %}· {{ b.count }} clip{{ b.count|pluralize }} · from {{ b.owner.username }}</span></span>
     <span class="text-xs text-gray-600">{{ b.role }}</span>
   </a>
   {% endfor %}

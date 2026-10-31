@@ -1,6 +1,6 @@
 {% extends "public/base.html" %}
 {% load static batch_extras l10n %}
-{% block title %}{{ pipeline.title }} - shared results{% endblock %}
+{% block title %}{{ batch_name }} - shared results{% endblock %}
 {% comment %}
 A batch's results for anyone with its share link (memory/47). Read-only and
 self-contained: every URL on this page is under the link, so nothing here
@@ -9,7 +9,7 @@ text, and site or location unless the owner shared them.
 {% endcomment %}
 {% block content %}
 <div class="mb-5">
-  <h1 class="text-2xl font-bold text-gray-900">{{ pipeline.title }}</h1>
+  <h1 class="text-2xl font-bold text-gray-900">{{ batch_name }}</h1>
   <p class="text-sm text-gray-600 mt-1">
     {{ outcome.total }} {% if photos %}photo{% else %}clip{% endif %}{{ outcome.total|pluralize }}
     {% for d in devices %} · {{ d.name }}{% if share.show_locations and d.location %} ({{ d.location }}){% endif %}{% endfor %}

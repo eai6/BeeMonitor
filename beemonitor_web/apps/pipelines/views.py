@@ -317,14 +317,28 @@ def run_on_videos(request):
         getattr(messages, level)(request, msg)
         return redirect("analysis:processing")
 
-    pipeline = Pipeline.objects.filter(pk=request.POST.get("pipeline")).first()
-    if not pipeline or not pipeline.usable_by(request.user):
-        return _fail("Choose a pipeline to run.")
+    # Adding clips to an existing batch (memory/64): its pipeline, its own
+    # frozen steps and its part of each clip, whatever the form says.
+    add_batch, template, batch_window = None, None, None
+    if request.POST.get("add_to"):
+        from . import sharing
+        try:
+            add_batch = uuid.UUID(request.POST["add_to"])
+        except ValueError:
+            return _fail("No such batch.", status=404)
+        if not sharing.owns_batch(request.user, add_batch):
+            return _fail("Only the batch's launcher can add clips to it.", status=404)
+        pipeline, template, batch_window = engine.batch_template(add_batch)
+    else:
+        pipeline = Pipeline.objects.filter(pk=request.POST.get("pipeline")).first()
+        if not pipeline or not pipeline.usable_by(request.user):
+            return _fail("Choose a pipeline to run.")
+    work_steps = pipeline.steps if template is None else template
     from .registry import pipeline_input_kind
     photos = request.POST.get("kind") == "photo"
-    if photos and pipeline_input_kind(pipeline.steps) != "photo":
+    if photos and pipeline_input_kind(work_steps) != "photo":
         return _fail("That pipeline starts from a video; choose one that starts from a Photo Input.")
-    if not photos and not any(s.get("block_type") == "input.video" for s in (pipeline.steps or [])):
+    if not photos and not any(s.get("block_type") == "input.video" for s in (work_steps or [])):
         return _fail("That pipeline has no video input to run on.")
 
     def _source():
@@ -373,8 +387,16 @@ def run_on_videos(request):
     # fresh: the cache is keyed on clip + config, not on the build, so running
     # the same pipeline again after a fix would hand back the old result.
     # Part of each clip (memory/53): "from m:ss for N minutes" (or to the end).
+    already = 0
+    if add_batch is not None:
+        from .aggregate import run_video_id
+        inside = {run_video_id(r) for r in PipelineRun.objects.filter(batch_id=add_batch)}
+        already = sum(1 for v in videos if v.pk in inside)
+        videos = [v for v in videos if v.pk not in inside]
+        if not videos:
+            return _fail("Every one of these clips is already in this batch.")
     try:
-        window = part_of_clip(request.POST)
+        window = batch_window if add_batch is not None else part_of_clip(request.POST)
     except ValueError as e:
         return _fail(str(e))
     too_short = 0
@@ -388,16 +410,17 @@ def run_on_videos(request):
     # and the batch is cut to the clips the credits cover, in list order.
     if request.POST.get("fit_only") == "1":
         videos = videos[:quota.how_many_fit(
-            request.user, [quota.pipeline_work(pipeline.steps, [v], window) for v in videos])]
+            request.user, [quota.pipeline_work(work_steps, [v], window) for v in videos])]
         if not videos:
             return _fail("None of these clips fit your credits.", status=402)
     try:
         batch_id, launched, invalid = engine.launch_batch(
-            pipeline, videos, request.user, fresh=request.POST.get("fresh") == "1", window=window)
+            pipeline, videos, request.user, fresh=request.POST.get("fresh") == "1", window=window,
+            batch_id=add_batch, steps=template)
     except quota.QuotaExceeded as e:
         if is_ajax:
             fits = quota.how_many_fit(
-                request.user, [quota.pipeline_work(pipeline.steps, [v], window) for v in videos])
+                request.user, [quota.pipeline_work(work_steps, [v], window) for v in videos])
             return JsonResponse({"error": e.message, "fits": fits, "total": len(videos)}, status=402)
         return _fail(e.message, status=402)
 
@@ -415,8 +438,18 @@ def run_on_videos(request):
         return _fail("Could not start — the pipeline isn't valid for the selected videos.")
 
     from django.urls import reverse
+
+    from . import batches
     batch_url = reverse("pipelines:batch_detail", kwargs={"batch_id": batch_id})
-    msg = f"Started “{pipeline.title}” on {len(launched)} video(s)."
+    if add_batch is not None:
+        msg = (f"Adding {len(launched)} clip{'s' if len(launched) != 1 else ''} to "
+               f"“{batches.title(batch_id, pipeline)}”. They show as running below.")
+        if already:
+            msg += f" {already} were already in it."
+    else:
+        if (request.POST.get("batch_name") or "").strip():
+            batches.rename(batch_id, request.user, request.POST["batch_name"])
+        msg = f"Started “{batches.title(batch_id, pipeline)}” on {len(launched)} video(s)."
     if invalid:
         msg += f" Skipped {invalid}."
     if gone:
@@ -487,8 +520,11 @@ def run_list(request):
               .values("batch_id", "pipeline_id").distinct()):
         pipe_by_batch.setdefault(r["batch_id"], r["pipeline_id"])
     pipes = {p.pk: p for p in Pipeline.objects.filter(pk__in=set(pipe_by_batch.values()))}
+    from . import batches
+    named = batches.names([b["batch_id"] for b in batch_rows])
     for b in batch_rows:
         b["pipeline"] = pipes.get(pipe_by_batch.get(b["batch_id"]))
+        b["name"] = named.get(b["batch_id"], "")
         b["running"] = b["count"] - b["done"] - b["failed"]
         b["pct_done"] = round(100 * b["done"] / b["count"]) if b["count"] else 0
 
@@ -509,6 +545,7 @@ def run_list(request):
         if first is not None:
             shared.append({"batch_id": m.batch_id, "role": m.get_role_display().split(" —")[0],
                            "pipeline": first.pipeline, "owner": first.user,
+                           "name": batches.names([m.batch_id]).get(m.batch_id, ""),
                            "count": PipelineRun.objects.filter(batch_id=m.batch_id).count()})
 
     return render(request, "pipelines/runs.html", {
@@ -1153,7 +1190,14 @@ def batch_detail(request, batch_id):
 
     from . import review as review_mod
     photos_kind = kind == "photo"
+    from . import batches
+    started = [r["run"].started_at for r in rows if r["run"].started_at]
     return render(request, "pipelines/batch.html", {
+        # Its own name, else its pipeline's (memory/64).
+        "batch_name": batches.title(batch_id, runs[0].pipeline if runs else None),
+        "named": bool(batches.names([batch_id])),
+        "first_started": min(started) if started else None,
+        "last_started": max(started) if started else None,
         "can_share": can_share,
         # People invited to review or view it (memory/62).
         "members": (list(BatchMember.objects.filter(batch_id=batch_id).select_related("user"))
@@ -1237,6 +1281,21 @@ def batch_cancel(request, batch_id):
                                   "clips are skipped without using the GPU.")
     else:
         messages.info(request, "Nothing to cancel — every clip in this batch has finished.")
+    return redirect("pipelines:batch_detail", batch_id=batch_id)
+
+
+@login_required
+@require_POST
+def batch_rename(request, batch_id):
+    """Name a batch, or (blank) go back to its pipeline's name (memory/64).
+    Only the batch's launcher."""
+    from . import batches, sharing
+
+    if not sharing.owns_batch(request.user, batch_id):
+        raise Http404("No such batch.")
+    name = batches.rename(batch_id, request.user, request.POST.get("name", ""))
+    messages.success(request, f"Renamed to “{name}”." if name
+                     else "Name cleared: the batch shows its pipeline's name.")
     return redirect("pipelines:batch_detail", batch_id=batch_id)
 
 

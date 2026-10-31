@@ -145,7 +145,18 @@ class PeriodReviewView(LoginRequiredMixin, View):
                    "clips": clips_json, "trips": trips,
                    "trip_url": reverse("analysis:trip_review")}
         query = request.GET.copy()
+        # Opened from a batch: name it and link back (memory/64).
+        batch = None
+        if request.GET.get("batch"):
+            from apps.pipelines import batches
+            from apps.pipelines.models import PipelineRun
+            first = (PipelineRun.objects.filter(batch_id=request.GET["batch"])
+                     .select_related("pipeline").first())
+            if first is not None:
+                batch = {"name": batches.title(first.batch_id, first.pipeline),
+                         "url": reverse("pipelines:batch_detail", args=[first.batch_id])}
         return render(request, "analysis/period_review.html", {
+            "batch": batch,
             "data": data, "payload": payload,
             "from_value": data["start"].strftime("%Y-%m-%dT%H:%M"),
             "to_value": data["end"].strftime("%Y-%m-%dT%H:%M"),

@@ -48,8 +48,12 @@
               </div>
               {% endif %}
               {% if can_select %}
+              {% if in_batch_ids and v.pk in in_batch_ids %}
+              <span class="absolute top-1.5 left-1.5 z-10 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-white/90 text-gray-700">in this batch</span>
+              {% else %}
               <input type="checkbox" name="video_ids" value="{{ v.pk }}" id="cb-{{ v.pk }}"
                      class="vid-cb absolute top-1.5 left-1.5 rounded border-gray-300 z-10">
+              {% endif %}
               {% endif %}
               {% if v.duration_seconds %}
               <span class="absolute bottom-1.5 right-1.5 text-[10px] text-white bg-black/60 px-1.5 rounded">{{ v.duration_seconds|floatformat:0 }}s</span>

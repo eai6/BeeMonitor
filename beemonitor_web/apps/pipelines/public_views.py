@@ -67,10 +67,12 @@ def public_batch(request, token):
                               if outs else None)
     whens = [r["when"] for r in rows if r["when"]]
     sharing.record_view(share)
+    from . import batches
     return _no_index(render(request, "pipelines/batch_public.html", {
         "share": share,
         "token": token,
         "pipeline": runs[0].pipeline,
+        "batch_name": batches.title(share.batch_id, runs[0].pipeline),
         "rows": rows,
         "outcome": outcome,
         "devices": devices,

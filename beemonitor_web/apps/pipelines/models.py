@@ -220,6 +220,21 @@ class BatchShare(models.Model):
         return f"share {str(self.batch_id)[:8]} ({'off' if self.revoked_at else 'on'})"
 
 
+class Batch(models.Model):
+    """A batch's own name (memory/64). A batch is the runs sharing a
+    ``batch_id``; this row exists only once someone names it. No row, or a
+    blank name, means the batch shows its pipeline's title."""
+
+    batch_id = models.UUIDField(unique=True)
+    name = models.CharField(max_length=120, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                                   null=True, blank=True, related_name="+")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.name or str(self.batch_id)[:8]
+
+
 class BatchMember(models.Model):
     """Someone the batch's launcher invited (memory/62), like an annotation
     project's ``ProjectShare``. A reviewer watches, votes on events and trips,

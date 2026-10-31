@@ -45,6 +45,7 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
 
     <div class="flex-1 overflow-y-auto">
     <form method="get" id="filter-form" class="px-4 py-4 space-y-5">
+      {% if add_batch %}<input type="hidden" name="add_to" value="{{ add_batch.id }}">{% endif %}
       {% if owner_user %}
       <input type="hidden" name="owner" value="{{ owner_user.pk }}">
       <div class="flex items-center justify-between gap-2 rounded-md bg-blue-50 px-3 py-2 text-[13px] text-blue-900">
@@ -67,6 +68,11 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
     {% if can_manage_any and videos %}
     <div class="border-t border-gray-200 px-4 py-3 space-y-2">
       <div class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Pipeline to run</div>
+      {% if add_batch %}
+      {# Adding to a batch: its pipeline and settings, not a choice (memory/64). #}
+      <input type="hidden" name="add_to" value="{{ add_batch.id }}" form="run-form">
+      <div class="w-full rounded bg-gray-100 px-2 py-1.5 text-[13px] text-gray-700">{{ add_batch.pipeline.title }} (this batch's)</div>
+      {% else %}
       <select name="pipeline" form="run-form" class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px]">
         {% if pipelines %}<optgroup label="Your pipelines">
           {% for p in pipelines %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}>{{ p.title }}</option>{% endfor %}
@@ -78,7 +84,12 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
           {% for p in pipeline_published %}<option value="{{ p.pk }}" {% if p.pk|stringformat:"s" == request.GET.pipeline %}selected{% endif %}>{{ p.title }} — {{ p.user.username }}</option>{% endfor %}
         </optgroup>{% endif %}
       </select>
-      {% if kind != "photo" %}
+      <label class="flex flex-col gap-1 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Batch name (optional)
+        <input type="text" name="batch_name" form="run-form" maxlength="120" placeholder="The pipeline's name"
+               class="w-full border border-gray-300 rounded px-2 py-1.5 text-[13px] font-normal normal-case tracking-normal text-gray-900">
+      </label>
+      {% endif %}
+      {% if kind != "photo" and not add_batch %}
       <!-- Part of each clip (memory/53) -->
       <fieldset class="space-y-1.5" x-data="{ part: 'whole' }">
         <legend class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">How much of each clip</legend>
@@ -109,7 +120,7 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
       <div class="flex items-center gap-2">
         <button type="submit" form="run-form" id="run-btn" disabled
                 class="flex-1 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white px-3 py-2 rounded text-sm font-medium">
-          Run pipeline (<span id="sel-count">0</span>)
+          {% if add_batch %}Add <span id="sel-count">0</span> to the batch{% else %}Run pipeline (<span id="sel-count">0</span>){% endif %}
         </button>
         <button type="button" id="clear-sel" class="text-xs text-gray-500 hover:text-gray-700 hidden px-1">Clear</button>
       </div>
@@ -120,6 +131,16 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
 
   <!-- ── GRID ─────────────────────────────────────────────────────────── -->
   <main class="flex-1 min-w-0 flex flex-col">
+    {% if add_batch %}
+    <div class="bg-green-50 border-b border-green-200 px-5 py-3 flex flex-wrap items-center justify-between gap-3">
+      <div class="flex flex-col gap-0.5 text-sm">
+        <span class="text-gray-900">Adding clips to <strong>{{ add_batch.name }}</strong> ({{ add_batch.count }} clip{{ add_batch.count|pluralize }})</span>
+        <span class="text-[13px] text-green-800">Same pipeline and settings as the rest of the batch. Clips already in it are marked and can't be picked again.</span>
+        {% if add_batch.changed %}<span class="text-[13px] text-amber-800">{{ add_batch.pipeline.title }} was edited after this batch ran. Added clips use the batch's version, so every clip is counted the same way.</span>{% endif %}
+      </div>
+      <a href="{% url 'pipelines:batch_detail' add_batch.id %}" class="inline-flex items-center h-10 px-3.5 rounded-md border border-gray-300 bg-white text-sm text-gray-800 hover:bg-gray-50">Back to the batch</a>
+    </div>
+    {% endif %}
 
     {% if active_jobs %}
     <div class="bg-blue-50 border-b border-blue-100 px-5 py-2 flex items-center justify-between gap-3">
@@ -158,7 +179,7 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
 
       <!-- cards -->
       <div class="flex-1 overflow-y-auto px-5 pt-4" id="grid-scroll">
-        {% include "videos/_review_grid.html" with can_select=can_manage_any %}
+        {% include "videos/_review_grid.html" with can_select=can_manage_any in_batch_ids=add_batch.video_ids %}
         <div class="h-4"></div>
       </div>
 
@@ -196,7 +217,7 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
   // Picks survive filter changes: every filter is a page load, so the ticked
   // clips are kept for this tab and re-ticked wherever they show up again.
   // A run sends every pick, shown under this filter or not.
-  var PICKS_KEY = 'bm-hub-picks-{{ kind|default:"video" }}';
+  var PICKS_KEY = 'bm-hub-picks-{{ kind|default:"video" }}{% if add_batch %}-add-{{ add_batch.id }}{% endif %}';
   var picked = (function () {
     try { return new Set(JSON.parse(sessionStorage.getItem(PICKS_KEY) || '[]')); }
     catch (e) { return new Set(); }
@@ -329,6 +350,12 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
       .then(function (res) {
         var d = res.d || {};
         if (res.ok && d.ok) {
+          {% if add_batch %}
+          // Added to the batch: back to it, where they show as running.
+          picked.clear(); savePicks();
+          window.location.href = d.batch_url;
+          return;
+          {% endif %}
           toast(d.message || 'Submitted.', true);
           (d.video_ids || []).forEach(function (id) { picked.delete(String(id)); });
           savePicks();

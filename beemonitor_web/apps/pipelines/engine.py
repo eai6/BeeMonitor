@@ -108,7 +108,7 @@ def clip_window(video, window):
     return (start, None if duration and end >= duration else end)
 
 
-def launch_batch(pipeline, videos, user, fresh=False, window=None):
+def launch_batch(pipeline, videos, user, fresh=False, window=None, batch_id=None, steps=None):
     """Start one ``PipelineRun`` per video, all sharing a fresh ``batch_id``.
 
     The single place a pipeline is launched over a set of videos — used by the
@@ -117,6 +117,10 @@ def launch_batch(pipeline, videos, user, fresh=False, window=None):
     caller kicks ``analysis.views._drain_queue`` once so the batch drains in waves
     under the global SageMaker cap instead of flooding the endpoint.
 
+    ``batch_id`` and ``steps`` add clips to an existing batch (memory/64): its
+    id, and its own frozen steps (``batch_template``) in place of the
+    pipeline's current ones, so every clip in a batch is counted the same way.
+
     Raises ``accounts.quota.QuotaExceeded`` before starting anything when the
     batch doesn't fit the user's credits — never part of a batch.
 
@@ -124,12 +128,14 @@ def launch_batch(pipeline, videos, user, fresh=False, window=None):
     """
     from apps.accounts import quota
 
-    quota.check(user, quota.pipeline_work(pipeline.steps, videos, window))
-    batch_id = uuid.uuid4()
+    template = pipeline.steps if steps is None else steps
+    quota.check(user, quota.pipeline_work(template, videos, window))
+    batch_id = batch_id or uuid.uuid4()
     launched, invalid = [], 0
     for video in videos:
         part = clip_window(video, window) if window else None
-        steps_for_video = steps_with_video(pipeline, video.pk, part if part != (0, None) else None)
+        steps_for_video = steps_with_video_steps(template, video.pk,
+                                                 part if part != (0, None) else None)
         if validate_steps(steps_for_video):
             invalid += 1
             continue
@@ -139,6 +145,27 @@ def launch_batch(pipeline, videos, user, fresh=False, window=None):
         start_run(run, steps=steps_for_video, fresh=fresh, checked=True)
         launched.append(video.pk)
     return batch_id, launched, invalid
+
+
+def batch_template(batch_id):
+    """``(pipeline, steps, window)`` to add clips to a batch with: its first
+    run's frozen steps with the clip unbound, and the part of each clip it
+    analysed (``(start, length or None)``, or None for the whole clip)."""
+    first = (PipelineRun.objects.filter(batch_id=batch_id).select_related("pipeline")
+             .order_by("started_at", "id").first())
+    if first is None:
+        return None, None, None
+    steps = copy.deepcopy(first.steps or [])
+    window = None
+    for step in steps:
+        if step.get("block_type") in ("input.video", "input.photo"):
+            cfg = step.setdefault("config", {})
+            cfg.pop("video_id", None)
+            start, end = cfg.pop("start_seconds", None), cfg.pop("end_seconds", None)
+            if start is not None or end is not None:
+                start = float(start or 0)
+                window = (start, float(end) - start if end is not None else None)
+    return first.pipeline, steps, window
 
 
 def check_credits(user, steps):

@@ -576,6 +576,33 @@ from apps.videos import workspace  # noqa: E402
 from apps.videos.workspace import DEVICE_DOTS  # noqa: E402,F401
 
 
+def _add_batch(request):
+    """The batch the Processing hub is adding clips to (``?add_to=``), or None:
+    ``{id, name, count, pipeline, changed, video_ids}``. Only its launcher."""
+    import json as _json
+    import uuid as _uuid
+
+    from apps.pipelines import batches, engine, sharing
+    from apps.pipelines.aggregate import run_video_id
+    from apps.pipelines.models import PipelineRun
+
+    try:
+        batch_id = _uuid.UUID(request.GET.get("add_to") or "")
+    except ValueError:
+        return None
+    if not sharing.owns_batch(request.user, batch_id):
+        return None
+    pipeline, template, _window = engine.batch_template(batch_id)
+    runs = PipelineRun.objects.filter(batch_id=batch_id)
+    current = engine.steps_with_video_steps(pipeline.steps, 0)
+    frozen = engine.steps_with_video_steps(template, 0)
+    return {"id": batch_id, "name": batches.title(batch_id, pipeline), "count": runs.count(),
+            "pipeline": pipeline,
+            # The pipeline was edited since: added clips still use the batch's version.
+            "changed": _json.dumps(current, sort_keys=True) != _json.dumps(frozen, sort_keys=True),
+            "video_ids": {run_video_id(r) for r in runs}}
+
+
 class ProcessingHubView(LoginRequiredMixin, View):
     """Phase 0 'Processing' hub — the home of video processing.
 
@@ -685,6 +712,8 @@ class ProcessingHubView(LoginRequiredMixin, View):
         video_days = workspace.group_by_day(videos, dot_by_device)
 
         return render(request, self.template_name, {
+            # Adding clips to an existing batch (memory/64).
+            "add_batch": _add_batch(request),
             "kind": kind,
             "videos": videos,
             "recent_jobs": recent_jobs,
