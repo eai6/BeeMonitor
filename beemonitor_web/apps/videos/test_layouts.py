@@ -235,3 +235,46 @@ class AnalysisTests(Base):
         self.assertEqual([r["id"] for r in refs], [1, 2])
         self.assertAlmostEqual(refs[0]["box"][0], 180 / 1920, places=3)   # the higher flag is 1
         self.assertAlmostEqual(refs[1]["box"][0], (1600 + 0) / 1920, delta=0.003)
+
+
+class SameDayTests(Base):
+    """Save a layout for every clip recorded on a clip's day (the hotel was
+    bumped that day), as a copy on each."""
+
+    save = EditorTests.save
+
+    def setUp(self):
+        super().setUp()
+        from datetime import datetime, timezone as tz
+        self.unit = Device.objects.create(owner=self.user, name="natalies", key_hash="hn", prefix="pn")
+
+        def clip(n, when):
+            return Video.objects.create(user=self.user, device=self.unit, title=f"n{n}",
+                                        storage_key=f"n/{n}.mp4", file_size_bytes=1,
+                                        recorded_at=when, width=1920, height=1080)
+        self.day = [clip(0, datetime(2024, 5, 28, 14, 50, tzinfo=tz.utc)),
+                    clip(1, datetime(2024, 5, 28, 15, 0, tzinfo=tz.utc))]
+        self.next_day = clip(2, datetime(2024, 5, 29, 15, 0, tzinfo=tz.utc))
+
+    def test_the_editor_offers_the_day(self):
+        r = self.client.get(reverse("videos:layout", args=[self.day[0].pk]))
+        self.assertEqual(r.context["day"]["count"], 2)
+        self.assertContains(r, 'value="day"')
+
+    def test_saving_for_the_day_gives_each_clip_its_copy(self):
+        d = self.save(reverse("videos:layout", args=[self.day[0].pk]), scope="day").json()
+        self.assertIn("2 clips recorded on 28 May 2024", d["message"])
+        for v in self.day:
+            got = layout_for_video(v)
+            self.assertEqual((got["source"], got["nest_layout"]), ("video", [HOLE, FLAG]))
+        self.assertNotEqual(layout_for_video(self.next_day)["source"], "video")
+        r = self.client.post(reverse("videos:layout_recount", args=[self.day[1].pk]),
+                             '{"scope": "day"}', content_type="application/json")
+        self.assertEqual(r.json()["runs"], 0)
+
+    def test_back_to_a_batch_page_is_allowed(self):
+        r = self.client.get(reverse("videos:layout", args=[self.day[0].pk]),
+                            {"back": "/pipelines/batch/abc/"})
+        self.assertEqual(r.context["back_url"], "/pipelines/batch/abc/")
+        r = self.client.get(reverse("videos:layout", args=[self.day[0].pk]), {"back": "//evil.example/"})
+        self.assertEqual(r.context["back_url"], "")

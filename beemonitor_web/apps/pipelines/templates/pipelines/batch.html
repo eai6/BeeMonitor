@@ -391,6 +391,7 @@ their reason.
        {% if photos and r.photo %}data-photo="{% url 'pipelines:run_photo' pk=pipeline.pk run_id=r.run.pk %}"{% endif %}
        {% if r.job and r.result.tracking_csv_path %}data-overlay="{% url 'analysis:track_overlay' r.job.pk %}?run={{ r.run.pk }}"{% endif %}
        {% if r.job %}data-results="{% url 'analysis:results' r.job.pk %}?run={{ r.run.pk }}"{% endif %}
+       {% if can_share and not photos %}data-layout="{% url 'videos:layout' r.video.pk %}?back={{ request.path|urlencode }}"{% endif %}
        data-rotate="{% if r.video.device.rotate_180 %}1{% endif %}"{% endif %}>
     {% comment %}
       Both the still and the time open this clip's own results — the videos,

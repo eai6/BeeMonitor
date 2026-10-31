@@ -701,6 +701,32 @@ def _roi_shape(layout):
     return shape
 
 
+def same_day_clips(user, video):
+    """``(local date or None, clips)``: the clips recorded at the same place as
+    this one (its site, else its unit, else its typed site name) on the same
+    local day, that ``user`` may edit, this one included."""
+    from datetime import timedelta
+
+    from apps.pipelines.period import local_start
+
+    start = local_start(video)
+    if start is None:
+        return None, [video]
+    qs = Video.objects.all() if user.is_superuser else Video.deletable(user)
+    if video.site_id:
+        qs = qs.filter(site_id=video.site_id)
+    elif video.device_id:
+        qs = qs.filter(device_id=video.device_id)
+    elif video.site_name:
+        qs = qs.filter(user=video.user, site__isnull=True, site_name=video.site_name)
+    else:
+        return start.date(), [video]
+    # recorded_at is a UTC instant: a day either side covers every time zone.
+    near = qs.filter(recorded_at__gte=start - timedelta(days=2), recorded_at__lte=start + timedelta(days=2))
+    clips = [v for v in near if (s := local_start(v)) is not None and s.date() == start.date()]
+    return start.date(), sorted(clips, key=lambda v: (local_start(v), v.pk)) or [video]
+
+
 class LayoutEditorView(LoginRequiredMixin, View):
     """Draw the ROI and reference objects for a clip (``video_pk``) or a site
     (``site_pk``), on a full-resolution frame of a clip. Saving from a clip
@@ -762,8 +788,8 @@ class LayoutEditorView(LoginRequiredMixin, View):
         if video is None:
             recent = list(self._site_candidates(site).order_by("-uploaded_at")[:12])
         back = request.GET.get("back") or ""
-        if not (back.startswith("/analysis/") and "//" not in back):
-            back = ""  # only ever back to a results page on this site
+        if not (back.startswith(("/analysis/", "/pipelines/batch/")) and "//" not in back):
+            back = ""  # only ever back to a results or batch page on this site
         return render(request, self.template_name, {
             "back_url": back,
             "recent_clips": recent,
@@ -771,6 +797,10 @@ class LayoutEditorView(LoginRequiredMixin, View):
             "site": site, "video": video, "clip": clip,
             "site_name": (site.name if site else (video.site_name if video else "")),
             "site_clips": Video.objects.filter(site=site).count() if site else 0,
+            # Save for every clip of this clip's day (one copy each), e.g. after
+            # the hotel was bumped that day.
+            "day": (lambda d: {"date": d[0], "count": len(d[1])})(same_day_clips(request.user, video))
+                   if video is not None else None,
             "image_url": (reverse("videos:frame", args=[clip.pk]) + f"?t={t}") if clip else "",
             "t": t,
             "source_label": current.get("source_label", ""),
@@ -808,11 +838,22 @@ class LayoutEditorView(LoginRequiredMixin, View):
             # The clip it was drawn on joins the site, so the drawing applies to it.
             Video.everything.filter(pk=_clip.pk).update(site=site, site_name=site.name)
             rebase_site_clips(site)
+        day_clips = []
         if scope == "site":
             saved = Layout.save_new(site=site, roi=roi, polygon=polygon, nests=nests, user=request.user)
             versions = _layout_versions(Layout.objects.filter(site=site).select_related("saved_by"))
             n = Video.objects.filter(site=site).count()
             message = f"Saved for every clip at {site.name} ({n})."
+        elif scope == "day" and video is not None:
+            # A copy on each clip of the day: a clip's own layout comes first.
+            day, day_clips = same_day_clips(request.user, video)
+            for v in day_clips:
+                s = Layout.save_new(video=v, roi=roi, polygon=polygon, nests=nests, user=request.user)
+                if v.pk == video.pk:
+                    saved = s
+            versions = _layout_versions(Layout.objects.filter(video=video).select_related("saved_by"))
+            message = (f"Saved for the {len(day_clips)} clip{'s' if len(day_clips) != 1 else ''}"
+                       f" recorded on {day:%-d %b %Y}." if day else "Saved for this clip only.")
         else:
             saved = Layout.save_new(video=video, roi=roi, polygon=polygon, nests=nests, user=request.user)
             versions = _layout_versions(Layout.objects.filter(video=video).select_related("saved_by"))
@@ -822,12 +863,14 @@ class LayoutEditorView(LoginRequiredMixin, View):
             from apps.accounts.models import AdminAction
             AdminAction.record(request.user, "edit_layout",
                                f"Drew the ROI and references for {owner.username}'s "
-                               + (f"site {site.name}" if scope == "site" else f"clip {video.title}"),
+                               + (f"site {site.name}" if scope == "site" else
+                                  f"{len(day_clips)} clips on {video.title}'s day" if day_clips
+                                  else f"clip {video.title}"),
                                target=owner, layout=saved.pk)
         # Clips already analysed can be recounted against it from their saved
         # tracks (memory/63); the ROI, though, was used by tracking itself.
         from apps.pipelines import recount
-        clips = Video.objects.filter(site=site) if scope == "site" else [video]
+        clips = (Video.objects.filter(site=site) if scope == "site" else day_clips or [video])
         analysed = len(recount.runs_for_clips(clips))
         roi_changed = (before.get("roi_override") != saved.roi_override
                        or before.get("roi_polygon") != saved.roi_polygon)
@@ -852,10 +895,12 @@ class LayoutRecountView(LoginRequiredMixin, View):
         except ValueError:
             return JsonResponse({"error": "Invalid JSON."}, status=400)
         site, video, _clip = LayoutEditorView()._target(request, video_pk, site_pk)
-        scope = "site" if (site_pk is not None or body.get("scope") == "site") else "clip"
+        scope = ("site" if (site_pk is not None or body.get("scope") == "site")
+                 else "day" if body.get("scope") == "day" else "clip")
         if scope == "site" and site is None:
             return JsonResponse({"error": "This clip has no site."}, status=400)
-        clips = Video.objects.filter(site=site) if scope == "site" else [video]
+        clips = (Video.objects.filter(site=site) if scope == "site"
+                 else same_day_clips(request.user, video)[1] if scope == "day" else [video])
         done = recount.recount_clips(clips)
         if done["queued"]:
             message = (f"Recounting {done['queued']} analysed runs in the background. "

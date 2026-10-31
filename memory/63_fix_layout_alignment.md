@@ -72,6 +72,11 @@ After saving, the editor asks: **Recount N analysed clips now**.
   - If the ROI moved, the editor says tracking used the old ROI.
 - **Votes don't follow a moved event** (decided while building, replacing §5's proposal). A vote judged the tube, so it stays on the old event key, shows as no longer detected, and the recount reports how many need a fresh look.
 - **Not built:** days layouts, the alignment check, re-run tracking.
+
+## Built second (2026-10-31): "this day" and checking from the batch
+- **Every clip recorded on <day>:** a third choice in the clip editor, next to the site and this clip. `videos.views.same_day_clips` finds the day's clips: same site, else unit, else typed site name, on the same local day, that the user may edit.
+- Saving gives each of those clips its own copy (a clip layout), not a days layout as §3 planned. No new model and no lookup change; save again to change them. Recount takes `scope: "day"`.
+- **Batch page player:** *Hide/Show ROI & tubes* (on by default, remembered per viewer) and *Fix tubes ↗*, for the launcher. It opens the clip editor at the current second, and its back link returns to the batch (`back` may now be `/pipelines/batch/…`).
 - **Tests:** `apps/pipelines/tests/test_layout_recount.py`. jsdom drive of Move all → save → recount.
 
 ## Build order

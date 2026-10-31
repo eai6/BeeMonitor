@@ -69,6 +69,13 @@ class NameTests(BatchBase):
         page = self.client.get(reverse("pipelines:batch_detail", args=[batch]))
         self.assertEqual(page.context["batch_name"], "Foraging Trips")
 
+    def test_the_launcher_can_fix_tubes_from_the_player(self):
+        batch = self.first_batch()
+        page = self.client.get(reverse("pipelines:batch_detail", args=[batch]))
+        self.assertContains(page, reverse("videos:layout", args=[self.clips[0].pk])
+                            + "?back=/pipelines/batch/")
+        self.assertContains(page, 'id="cv-regions"')
+
     def test_named_at_launch(self):
         batch = self.first_batch(batch_name="Night captures")
         self.assertEqual(Batch.objects.get(batch_id=batch).name, "Night captures")

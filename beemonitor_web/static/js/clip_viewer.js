@@ -18,6 +18,27 @@
   var stage = document.getElementById('cv-stage');
   var overlay = window.TrackOverlay ? TrackOverlay(video, document.getElementById('cv-canvas')) : null;
   var overlayUrl = null;
+  // The ROI and tubes, on unless this viewer turned them off.
+  var regionsBtn = document.getElementById('cv-regions');
+  var showRegions = true;
+  try { showRegions = localStorage.getItem('cv-regions') !== '0'; } catch (e) {}
+  if (overlay) overlay.set({regions: showRegions});
+  function paintRegions() {
+    if (!regionsBtn) return;
+    regionsBtn.textContent = showRegions ? 'Hide ROI & tubes' : 'Show ROI & tubes';
+    regionsBtn.setAttribute('aria-pressed', showRegions ? 'true' : 'false');
+  }
+  // Fix tubes opens the editor on the frame playing now.
+  var layoutA = document.getElementById('cv-layout');
+  if (layoutA) layoutA.addEventListener('click', function () {
+    this.href = this.href.split('&t=')[0] + '&t=' + Math.floor(video.currentTime || 0);
+  });
+  if (regionsBtn) regionsBtn.addEventListener('click', function () {
+    showRegions = !showRegions;
+    try { localStorage.setItem('cv-regions', showRegions ? '1' : '0'); } catch (e) {}
+    if (overlay) overlay.set({regions: showRegions});
+    paintRegions();
+  });
 
   // A photo row: the photo, its boxes and species, fetched once per photo.
   function renderPhoto(row, url) {
@@ -26,6 +47,7 @@
     stage.hidden = true;
     if (overlay) { overlay.clear(); overlayUrl = null; }
     toggle.hidden = true;
+    if (regionsBtn) regionsBtn.hidden = true;
     photoBox.hidden = false;
     note.textContent = '';
     if (photoHtml[url]) { photoBox.innerHTML = photoHtml[url]; return; }
@@ -64,6 +86,8 @@
     var list = visible();
     pos.textContent = (list.indexOf(row) + 1) + ' of ' + list.length;
 
+    var layoutLink = document.getElementById('cv-layout'), layout = row.getAttribute('data-layout');
+    if (layoutLink) { layoutLink.hidden = !layout; if (layout) layoutLink.setAttribute('href', layout); }
     var results = row.getAttribute('data-results');
     resultsLink.hidden = !results;
     if (results) resultsLink.setAttribute('href', results);
@@ -87,6 +111,7 @@
     var url = row.getAttribute('data-overlay');
     toggle.hidden = !url || !overlay;
     toggle.textContent = showTracks ? 'Hide tracks' : 'Show tracks';
+    if (regionsBtn) { regionsBtn.hidden = !url || !overlay; paintRegions(); }
     if (!url || !overlay) {
       if (overlay) { overlay.clear(); overlayUrl = null; }
       note.textContent = 'This run produced no tracks, so this is the clip as recorded.';

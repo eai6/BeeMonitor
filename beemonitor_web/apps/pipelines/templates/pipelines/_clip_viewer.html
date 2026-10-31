@@ -19,6 +19,12 @@
            title="Crops, CSVs and the full per-clip breakdown">Full results ↗</a>
         <button type="button" id="cv-toggle" hidden
                 class="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white"></button>
+        {# The run's ROI and numbered tubes: a box beside its hole means the layout needs fixing. #}
+        <a id="cv-layout" href="#" hidden
+           class="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white whitespace-nowrap"
+           title="Move the tubes onto the real holes on this frame, then recount">Fix tubes ↗</a>
+        <button type="button" id="cv-regions" hidden aria-pressed="true"
+                class="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white"></button>
         <button type="button" id="cv-prev"
                 class="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white" title="Earlier clip (←)">← Earlier</button>
         <button type="button" id="cv-next"

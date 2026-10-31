@@ -67,11 +67,15 @@
       {% if site_name %}
       <label class="flex items-start gap-2"><input type="radio" name="scope" value="site" checked class="mt-1">
         <span>Every clip at <strong>{{ site_name }}</strong>{% if site %} ({{ site_clips }}){% endif %}</span></label>
-      <label class="flex items-start gap-2"><input type="radio" name="scope" value="clip" class="mt-1"><span>This clip only</span></label>
-      {% else %}
-      <p class="text-gray-600">This clip has no site, so the layout is for this clip only.
+      {% endif %}
+      {% if day and day.count > 1 %}
+      <label class="flex items-start gap-2"><input type="radio" name="scope" value="day" class="mt-1">
+        <span>Every clip recorded on <strong>{{ day.date|date:"j M Y" }}</strong> ({{ day.count }})</span></label>
+      {% endif %}
+      <label class="flex items-start gap-2"><input type="radio" name="scope" value="clip" {% if not site_name %}checked{% endif %} class="mt-1"><span>This clip only</span></label>
+      {% if not site_name %}
+      <p class="text-xs text-gray-600">This clip has no site, so there's no "every clip" option.
         <a href="{% url 'videos:sites_page' %}" class="text-amber-700 hover:underline">Sites</a></p>
-      <input type="radio" name="scope" value="clip" checked class="hidden">
       {% endif %}
       <p class="text-xs text-gray-500">New runs use it. Clips already analysed can be recounted against it after you save, with no GPU time.</p>
     </fieldset>
