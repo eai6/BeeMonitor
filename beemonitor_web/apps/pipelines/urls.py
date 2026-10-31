@@ -15,6 +15,7 @@ urlpatterns = [
     path("batch/<uuid:batch_id>/share/", views.batch_share, name="batch_share"),
     path("batch/<uuid:batch_id>/members/", views.batch_members, name="batch_members"),
     path("batch/<uuid:batch_id>/rename/", views.batch_rename, name="batch_rename"),
+    path("batch/<uuid:batch_id>/apply-groups/", views.batch_apply_groups, name="batch_apply_groups"),
     path("batch/<uuid:batch_id>/combined/<str:kind>.csv", views.batch_combined_csv, name="batch_combined_csv"),
     path("<uuid:pk>/", views.pipeline_editor, name="editor"),
     path("<uuid:pk>/save-graph/", views.save_graph, name="save_graph"),

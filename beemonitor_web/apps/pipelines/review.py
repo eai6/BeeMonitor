@@ -289,7 +289,8 @@ def batch_group_summary(runs, per_run=None):
         if step is None:
             continue
         out = (run.context or {}).get(step["id"]) or {}
-        if not out.get("group_filter"):
+        in_line = any((s.get("inputs") or {}).get("tracks") == step["id"] for s in run.steps or [])
+        if not (out.get("group_filter") and in_line):
             continue
         filtered_runs += 1
         kept.update(g for g in out.get("group_options") or [] if g not in (out.get("leave_out") or []))

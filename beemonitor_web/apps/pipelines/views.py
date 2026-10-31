@@ -1214,6 +1214,9 @@ def batch_detail(request, batch_id):
         "review_summary": (review_mod.batch_review_summary(
             [r["run"] for r in rows], {r["run"].pk: r.get("review") for r in rows})
             if not photos_kind else None),
+        # Apply the pipeline's insect groups here, without a re-run (memory/65).
+        "pipeline_groups": (_pipeline_groups(runs[0].pipeline)
+                            if can_share and runs and not photos_kind else None),
         # What its insect-group filters left out (memory/65).
         "group_summary": (review_mod.batch_group_summary(
             [r["run"] for r in rows], {r["run"].pk: r.get("review") for r in rows})
@@ -1300,6 +1303,45 @@ def batch_rename(request, batch_id):
     name = batches.rename(batch_id, request.user, request.POST.get("name", ""))
     messages.success(request, f"Renamed to “{name}”." if name
                      else "Name cleared: the batch shows its pipeline's name.")
+    return redirect("pipelines:batch_detail", batch_id=batch_id)
+
+
+def _pipeline_groups(pipeline):
+    """What the pipeline's Identify Species node is set to now, for the batch
+    page's Apply button; None when it has no such node."""
+    from . import regroup, taxon_groups
+
+    step = regroup.pipeline_group_step(pipeline)
+    if step is None:
+        return None
+    cfg = taxon_groups.settings(step.get("config"))
+    return {"on": cfg["on"], "leave_out": cfg["leave_out"],
+            "in_line": regroup._feeds_analyzers(pipeline, step.get("id")),
+            "rules": len(cfg["rules"])}
+
+
+@login_required
+@require_POST
+def batch_apply_groups(request, batch_id):
+    """Apply the pipeline's current Identify Species groups to this batch and
+    recount it in place (memory/65): no re-run, no new batch, no GPU. Only
+    the batch's launcher."""
+    from . import regroup, sharing
+
+    if not sharing.owns_batch(request.user, batch_id):
+        raise Http404("No such batch.")
+    done = regroup.apply_pipeline(batch_id, request.user)
+    if not done["applied"]:
+        messages.error(request, "No clip in this batch was tracked with Identify Species, so "
+                                "there are no crop readings to group. Re-run it with the node.")
+    else:
+        msg = f"Applied the pipeline's insect groups to {done['applied']} clips"
+        msg += (f": {done['recounted']} recounted, the other {done['queued']} in the next few "
+                f"minutes." if done["queued"] else ", and recounted them.")
+        if done["skipped"]:
+            msg += (f" {done['skipped']} were tracked without Identify Species and keep "
+                    f"every track.")
+        messages.success(request, msg + " No GPU-hours.")
     return redirect("pipelines:batch_detail", batch_id=batch_id)
 
 

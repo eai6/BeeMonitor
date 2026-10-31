@@ -313,3 +313,90 @@ class RegroupTests(FilterBase):
         self.assertEqual(summary["events"], 2)
         self.assertEqual(summary["by_group"][0]["group"], "Ants")
         self.assertIn("Bees", summary["kept"])
+
+
+class ApplyToBatchTests(FilterBase):
+    """Apply the pipeline's groups to a batch that already ran, in place."""
+
+    def _batch(self, n=2, steps=None):
+        import uuid
+        batch = uuid.uuid4()
+        runs = []
+        for _ in range(n):
+            run, _job = self._run(steps or self._steps_with_species(in_line=False))
+            runs.append(run)
+        PipelineRun.objects.filter(pk__in=[r.pk for r in runs]).update(batch_id=batch)
+        return batch, runs
+
+    def _post(self, batch):
+        self.client.force_login(self.user)
+        return self.client.post(reverse("pipelines:batch_apply_groups", args=[batch]))
+
+    def test_the_batch_is_recounted_in_place_with_the_filter(self):
+        batch, runs = self._batch()
+        self.assertEqual(len(runs[0].context["a"]["rows"]), 2)     # ants counted
+        self.pipeline.steps = self._steps_with_species({"model": "beemachine"})
+        self.pipeline.save()
+
+        res = self._post(batch)
+
+        self.assertEqual(res.status_code, 302)
+        for run in runs:
+            run.refresh_from_db()
+            self.assertEqual(run.context["a"]["rows"], [])          # ants left out
+            self.assertEqual(run.steps[4]["inputs"]["tracks"], "s")
+            # The run keeps the model its crops were read with.
+            self.assertEqual(run.steps[-1]["config"]["model"], "bioclip")
+        self.assertEqual(PipelineRun.objects.filter(batch_id=batch).count(), 2)  # no new runs
+
+    def test_beyond_the_first_few_the_sweep_finishes_the_job(self):
+        from apps.pipelines import regroup
+        batch, runs = self._batch(n=3)
+        self.pipeline.steps = self._steps_with_species()
+        self.pipeline.save()
+
+        done = regroup.apply_pipeline(batch, self.user, now=1)
+
+        self.assertEqual((done["applied"], done["recounted"], done["queued"]), (3, 1, 2))
+        self.assertEqual(recount.sweep(), 2)
+        for run in runs:
+            run.refresh_from_db()
+            self.assertEqual(run.context["a"]["rows"], [])
+
+    def test_taking_the_node_out_of_line_counts_every_track_again(self):
+        batch, runs = self._batch(n=1, steps=self._steps_with_species())
+        self.assertEqual(runs[0].context["a"]["rows"], [])
+        self.pipeline.steps = self._steps_with_species(in_line=False)
+        self.pipeline.save()
+
+        self._post(batch)
+
+        runs[0].refresh_from_db()
+        self.assertEqual(len(runs[0].context["a"]["rows"]), 2)
+        self.assertEqual(runs[0].steps[4]["inputs"]["tracks"], "m")
+
+    def test_runs_tracked_without_the_node_are_left_alone(self):
+        batch, runs = self._batch(n=1, steps=self._steps("analyze.events"))
+        self.pipeline.steps = self._steps_with_species()
+        self.pipeline.save()
+
+        self._post(batch)
+
+        runs[0].refresh_from_db()
+        self.assertFalse(any(s["block_type"] == "identify.species" for s in runs[0].steps))
+
+    def test_only_the_launcher_can_apply(self):
+        from django.contrib.auth.models import User
+        batch, _runs = self._batch(n=1)
+        self.client.force_login(User.objects.create_user("other", password="x"))
+        res = self.client.post(reverse("pipelines:batch_apply_groups", args=[batch]))
+        self.assertEqual(res.status_code, 404)
+
+    def test_the_batch_page_offers_it(self):
+        batch, _runs = self._batch(n=1)
+        self.pipeline.steps = self._steps_with_species()
+        self.pipeline.save()
+        self.client.force_login(self.user)
+        res = self.client.get(reverse("pipelines:batch_detail", args=[batch]))
+        self.assertContains(res, "Apply the pipeline's groups to this batch")
+        self.assertContains(res, "leaves out ants")

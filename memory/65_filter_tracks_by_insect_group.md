@@ -179,6 +179,13 @@ What's in it:
 - **Batch page:** an **Insect groups** card with what was left out by group, and how reviewed events on those tracks were called.
 - **Tests:** `apps/pipelines/tests/test_insect_groups.py` (23).
 
+- **Apply to a batch in place** (`pipelines:batch_apply_groups`, launcher only):
+  - **Apply the pipeline's groups to this batch** on the batch page's Insect groups card;
+  - `regroup.apply_pipeline` copies the pipeline's Identify Species settings and wiring (in line or not) into each finished run's steps, keeping the run's own model;
+  - it recounts the first 8 at once and queues the rest for the sweep;
+  - no re-run, no new batch, no GPU;
+  - runs tracked without Identify Species are skipped (no crop readings).
+
 Not built yet:
 - **The with/without precision toggle on the batch metrics.** The metrics already exclude left-out events; the card shows how reviewed ones were called.
 - **"Change its group" on the period review player.** Its overlay shows the groups and greys left-out tracks, but changing a group is on the clip results player.

@@ -302,11 +302,28 @@ their reason.
 {% endwith %}
 {% endif %}
 
-{% if group_summary %}
-{% with gs=group_summary %}
+{% if group_summary or pipeline_groups %}
+{% with gs=group_summary pg=pipeline_groups %}
 <section class="bg-white shadow rounded-lg p-4 mb-6 flex flex-col gap-1.5" aria-label="Insect groups">
   {% comment %}What the Identify Species group filter took out of the counts (memory/65).{% endcomment %}
-  <h2 class="text-sm font-semibold text-gray-900">Insect groups</h2>
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <h2 class="text-sm font-semibold text-gray-900">Insect groups</h2>
+    {% if pg %}
+    <form method="post" action="{% url 'pipelines:batch_apply_groups' batch_id %}" class="flex flex-col items-end gap-1">
+      {% csrf_token %}
+      <button type="submit" class="h-10 px-4 rounded-md text-sm font-semibold bg-green-700 hover:bg-green-800 text-white">Apply the pipeline's groups to this batch</button>
+      <span class="text-xs text-gray-600 text-right">
+        {% if not pg.in_line %}The pipeline's Identify Species isn't wired into Events, so nothing is filtered.
+        {% elif not pg.on %}The pipeline's filter is off: every track is counted.
+        {% else %}The pipeline leaves out {{ pg.leave_out|join:", "|lower|default:"nothing" }}{% if pg.rules %} · {{ pg.rules }} rule{{ pg.rules|pluralize }}{% endif %}.{% endif %}
+        Recounts here, no GPU-hours.
+      </span>
+    </form>
+    {% endif %}
+  </div>
+  {% if not gs %}
+  <p class="text-sm text-gray-700">This batch counts every track. Edit the pipeline's Identify Species node, then apply it here to recount these clips with the filter.</p>
+  {% else %}
   <p class="text-sm text-gray-700">Counting {{ gs.kept|join:", "|lower }}, plus tracks with no clear group.</p>
   {% if gs.tracks %}
   <p class="text-sm"><strong class="text-orange-800">{{ gs.tracks }}</strong> track{{ gs.tracks|pluralize }} not counted:
@@ -319,6 +336,7 @@ their reason.
   <p class="text-sm text-gray-700">Of your reviewed events, {{ gs.reviewed.reviewed }} were on tracks now not counted: <span class="text-red-700">{{ gs.reviewed.rejected }} you marked wrong</span> · <span class="text-green-700">{{ gs.reviewed.accepted }} you marked right</span>.</p>
   {% endif %}
   <p class="text-xs text-gray-600">Open a clip and click a track to change its group; the grouping is saved to the pipeline and this batch is recounted.</p>
+  {% endif %}
 </section>
 {% endwith %}
 {% endif %}
