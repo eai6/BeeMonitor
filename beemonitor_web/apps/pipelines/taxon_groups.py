@@ -58,17 +58,49 @@ def _clean(name) -> str:
 
 def _gbif(name: str) -> dict | None:
     """``{class, order, family, genus}`` for a name, ``{}`` when GBIF has no
-    match, or None when GBIF couldn't be asked (not cached, so it's retried)."""
+    match, or None when GBIF couldn't be asked (not cached, so it's retried).
+    One retry: a burst of lookups for a whole batch can be throttled."""
+    import time
+
     url = GBIF_URL + "?" + urllib.parse.urlencode({"name": name, "verbose": "false"})
-    try:
-        with urllib.request.urlopen(url, timeout=6) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception as exc:  # noqa: BLE001 - a lookup must never block a count
-        logger.warning("GBIF lookup failed for %r: %s", name, exc)
-        return None
+    for attempt in range(2):
+        try:
+            with urllib.request.urlopen(url, timeout=6) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            break
+        except Exception as exc:  # noqa: BLE001 - a lookup must never block a count
+            if attempt:
+                logger.warning("GBIF lookup failed for %r: %s", name, exc)
+                return None
+            time.sleep(0.5)
     if (data.get("matchType") or "NONE") == "NONE":
         return {}
     return {k: data.get(k) or "" for k in ("class", "order", "family", "genus")}
+
+
+def _bee_genera() -> frozenset:
+    """Every bee genus BeeMachine knows (354 taxa), so a bee is a bee even
+    when GBIF can't be asked or doesn't know the name."""
+    global _BEE_GENERA
+    if _BEE_GENERA is None:
+        try:
+            from beemonitor.identification.species import NON_BEE_TAXA, taxa
+            _BEE_GENERA = frozenset(t.split("_")[0] for t in taxa() if t not in NON_BEE_TAXA)
+        except Exception:  # noqa: BLE001 - the GBIF answer still works without it
+            logger.warning("BeeMachine taxa unavailable; bee genera come from GBIF only")
+            _BEE_GENERA = frozenset()
+    return _BEE_GENERA
+
+
+_BEE_GENERA = None
+
+
+def _known_bee(name: str) -> dict | None:
+    genus = _clean(name).split(" ")[0]
+    if genus in _bee_genera():
+        return {"class": "Insecta", "order": "Hymenoptera", "family": "", "genus": genus,
+                "bee": True}
+    return None
 
 
 def _cache_key(name) -> str:
@@ -96,9 +128,13 @@ def lineages(names) -> dict:
         with ThreadPoolExecutor(max_workers=8) as pool:
             found = list(pool.map(lambda n: _gbif(_clean(n)), todo))
         for name, lin in zip(todo, found):
-            if lin is None:
-                out[name] = {}
-                continue
+            if not lin:
+                # GBIF couldn't be asked or doesn't know it: a known bee genus
+                # still says bee. Not cached when GBIF failed, so it's retried.
+                out[name] = _known_bee(name) or {}
+                if lin is None:
+                    continue
+                lin = out[name]
             if not lin.get("genus"):
                 lin["genus"] = _clean(name).split(" ")[0] if " " in _clean(name) else ""
             cache.set(_cache_key(name), lin, _CACHE_SECONDS)
@@ -113,7 +149,7 @@ def default_group(lin: dict) -> str:
     family, order = lin.get("family") or "", lin.get("order") or ""
     if family == "Formicidae":
         return ANTS
-    if family in BEE_FAMILIES:
+    if family in BEE_FAMILIES or lin.get("bee"):
         return BEES
     if order == "Hymenoptera":
         return WASPS
@@ -259,13 +295,18 @@ def track_groups(readings: dict, cfg: dict, job_id=None) -> dict:
         read = len(crops)
         named = {g: c for g, c in tally.items() if g != UNCLEAR}
         best, votes = (max(named.items(), key=lambda kv: kv[1]) if named else (UNCLEAR, 0))
-        share = round(votes / read, 3) if read else 0.0
-        group = best if read >= MIN_CROPS and share >= cfg["share"] and best != UNCLEAR else UNCLEAR
+        # The share is of the crops that were placed in a group: a crop named
+        # something no group covers (a bat, a name GBIF doesn't know) says
+        # nothing about bee vs ant, so it doesn't dilute the vote.
+        placed = sum(named.values())
+        share = round(votes / placed, 3) if placed else 0.0
+        group = best if placed >= MIN_CROPS and share >= cfg["share"] else UNCLEAR
         top = max(species.items(), key=lambda kv: kv[1])[0] if species else ""
         why = "crops"
-        if read < MIN_CROPS:
-            why = f"only {read} crop{'s' if read != 1 else ''}"
-        elif group == UNCLEAR and named:
+        if placed < MIN_CROPS:
+            why = (f"only {placed} of {read} crop{'s' if read != 1 else ''} "
+                   f"named something in a group")
+        elif group == UNCLEAR:
             why = f"{round(share * 100)}% {best.lower()}"
         rule = index.get(("track", str(job_id or ""), str(tid)))
         if rule:

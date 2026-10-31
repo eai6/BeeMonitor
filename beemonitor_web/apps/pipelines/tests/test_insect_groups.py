@@ -77,7 +77,7 @@ class GroupingTests(SimpleTestCase):
         self.assertEqual(groups[1]["group"], "Unclear")
         self.assertTrue(groups[1]["counted"])
         self.assertEqual(groups[2]["group"], "Unclear")
-        self.assertEqual(groups[2]["why"], "only 2 crops")
+        self.assertEqual(groups[2]["why"], "only 2 of 2 crops named something in a group")
         self.assertTrue(groups[2]["counted"])
 
     def test_a_name_gbif_cant_place_is_unclear(self):
@@ -87,11 +87,25 @@ class GroupingTests(SimpleTestCase):
 
     def test_a_failed_lookup_is_unclear_and_retried_later(self):
         self.gbif.side_effect = lambda name: None
-        g = taxon_groups.track_groups({1: ["Bombus impatiens"] * 5}, cfg())[1]
+        g = taxon_groups.track_groups({1: ["Vespula maculifrons"] * 5}, cfg())[1]
         self.assertEqual(g["group"], "Unclear")
         self.gbif.side_effect = fake_gbif
-        g = taxon_groups.track_groups({1: ["Bombus impatiens"] * 5}, cfg())[1]
+        g = taxon_groups.track_groups({1: ["Vespula maculifrons"] * 5}, cfg())[1]
+        self.assertEqual(g["group"], "Wasps")
+
+    def test_a_bee_genus_is_a_bee_even_when_gbif_cant_be_asked(self):
+        self.gbif.side_effect = lambda name: None
+        g = taxon_groups.track_groups({1: ["Megachile sculpturalis"] * 4}, cfg())[1]
         self.assertEqual(g["group"], "Bees")
+
+    def test_crops_named_outside_every_group_dont_dilute_the_vote(self):
+        # Track 4 on natalies: a Megachile whose other crops were named
+        # things no group covers (a bat, names GBIF doesn't know).
+        crops = (["Megachile sculpturalis"] * 3 + ["Myotis lucifugus"] * 4
+                 + ["Not a real thing"] * 3 + ["Periplaneta americana"])
+        g = taxon_groups.track_groups({4: crops}, cfg())[4]
+        self.assertEqual(g["group"], "Bees")
+        self.assertEqual(g["share"], 0.75)
 
     def test_lookups_are_cached(self):
         taxon_groups.lineages(["Bombus impatiens"])

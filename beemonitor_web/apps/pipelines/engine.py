@@ -38,12 +38,51 @@ def _gpu_cache_key(run, step, context, index):
     built, _err = executors.build_job_config(step, run, context, index)
     if not built:
         return None
-    eff = {"video": built.get("video_id"), **(built.get("config") or {})}
+    eff = {"video": built.get("video_id"), **_tracking_config(built.get("config"))}
     payload = json.dumps(
         {"u": run.user_id, "b": step.get("block_type", ""), "c": eff},
         sort_keys=True, default=str,
     )
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+# In the job config but not in what tracking produces (memory/65): tracking
+# uses only the ROI; the tube positions fed the worker's own events, which
+# nothing reads any more (memory/60). Fixing a clip's tubes must not make a
+# re-run track it again. The pipeline tags are per-run labels.
+NOT_IN_TRACKING = ("nest_layout", "pipeline_run_id", "pipeline_step_id")
+
+
+def _tracking_config(config):
+    return {k: v for k, v in (config or {}).items() if k not in NOT_IN_TRACKING}
+
+
+def _cached_step(run, step, context, index, key):
+    """The cached output for a GPU step: by its key, else the saved result of
+    a finished job of this user on the same clip whose config differs only in
+    what tracking doesn't use. The second covers results cached before the
+    tube positions were left out of the key, and is then saved under the new
+    key so the next run finds it directly."""
+    from apps.analysis.models import Job
+
+    hit = StepResult.objects.filter(user=run.user, cache_key=key).first()
+    if hit is not None:
+        return hit
+    built, _err = executors.build_job_config(step, run, context, index)
+    if not built or not built.get("video_id"):
+        return None
+    want = json.dumps(_tracking_config(built.get("config")), sort_keys=True, default=str)
+    jobs = (Job.objects.filter(user=run.user, video_id=built["video_id"], status="completed")
+            .order_by("-created_at").values_list("pk", "config")[:25])
+    for job_pk, config in jobs:
+        if json.dumps(_tracking_config(config), sort_keys=True, default=str) != want:
+            continue
+        hit = (StepResult.objects.filter(user=run.user, block_type=step.get("block_type", ""),
+                                         output__job_id=job_pk).order_by("-updated_at").first())
+        if hit is not None:
+            _persist_step_result(run.user, key, hit.block_type, hit.output)
+            return hit
+    return None
 
 
 def _empty_photo_result(run, step, context, index, output):
@@ -261,7 +300,7 @@ def advance_run(run_pk):
                     # Reuse an identical GPU step's cached output (skips SageMaker),
                     # unless this run was launched fresh — see start_run.
                     key = _gpu_cache_key(run, step, context, index)
-                    cached = (StepResult.objects.filter(user=run.user, cache_key=key).first()
+                    cached = (_cached_step(run, step, context, index, key)
                               if key and not run.fresh else None)
                     if cached and _empty_photo_result(run, step, context, index, cached.output):
                         cached.delete()     # cached before the worker could do photos
