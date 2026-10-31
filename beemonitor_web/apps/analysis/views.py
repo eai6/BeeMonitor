@@ -2208,7 +2208,27 @@ def overlay_live(job, user=None):
                           a["end_frame"], a["id"], a["user"],
                           bool(user is not None and getattr(user, "pk", None) == a["user_id"])])
     return {"events": events, "interactions": interactions, "regions": regions,
-            "added": added, "style": STYLE}
+            "added": added, "style": STYLE, **_overlay_groups(run, user)}
+
+
+def _overlay_groups(run, user):
+    """Each track's insect group for the player (memory/65): ``groups`` is
+    ``{track: [group, counted, why, crops said, top species, family]}``, and
+    ``group_options`` / ``can_regroup`` drive the panel's "Change its group"."""
+    if run is None:
+        return {}
+    from apps.pipelines import regroup
+
+    _i, step = regroup.group_step(run)
+    if step is None:
+        return {}
+    out = (run.context or {}).get(step["id"]) or {}
+    groups = {t: [g.get("group"), bool(g.get("counted", True)), g.get("why", ""),
+                  g.get("said", ""), g.get("top", ""), g.get("family", "")]
+              for t, g in (out.get("track_groups") or {}).items()}
+    return {"groups": groups, "group_filter": bool(out.get("group_filter")),
+            "group_options": out.get("group_options") or [],
+            "can_regroup": bool(user is not None and regroup.can_regroup(user, run))}
 
 
 def render_spec(job, layers):
@@ -2269,6 +2289,33 @@ class EventReviewView(LoginRequiredMixin, View):
             return JsonResponse({"ok": False, "error": str(e)}, status=400)
         return JsonResponse({"ok": True, "verdict": verdict,
                              "counts": event_review.event_review_counts(run)})
+
+
+class TrackGroupView(LoginRequiredMixin, View):
+    """Change the insect group a track counts as, from the review (memory/65).
+
+    JSON ``{"track", "group", "scope": "track"|"name"|"genus"|"family"}``; an
+    empty group takes the rule away. The run's launcher only: the grouping is
+    part of their pipeline. This clip is recounted before the reply.
+    """
+
+    def post(self, request, pk):
+        import json as _json
+
+        from apps.pipelines import regroup
+        from apps.pipelines import review as event_review
+
+        job = get_object_or_404(Job, pk=pk)
+        run = event_review.run_for_review(job, request.GET.get("run"))
+        if run is None or not regroup.can_regroup(request.user, run):
+            raise Http404("You can't change the groups of this clip.")
+        try:
+            body = _json.loads(request.body or b"{}")
+            done = regroup.set_group(run, request.user, str(body.get("scope") or "track"),
+                                     int(body["track"]), body.get("group") or "")
+        except (KeyError, ValueError, TypeError) as e:
+            return JsonResponse({"ok": False, "error": str(e)}, status=400)
+        return JsonResponse({"ok": True, **done})
 
 
 class AddMissedEventView(LoginRequiredMixin, View):
@@ -2385,7 +2432,8 @@ def job_tracks(job, tracking):
     result = getattr(job, "result", None)
     if result is None:
         return [], {}, None, None
-    by_track = track_tables.by_track_of(result)
+    from apps.pipelines.executors import _run_for_job
+    by_track = track_tables.with_groups(track_tables.by_track_of(result), _run_for_job(job))
     fps = fps_with_source(result.summary_stats or {}, job.video)[0]
     start = timing.clip_start(job.video)
     return (track_tables.track_rows(_table_dicts(tracking), by_track, fps, start),

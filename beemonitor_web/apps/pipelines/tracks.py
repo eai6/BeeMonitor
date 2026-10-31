@@ -19,7 +19,8 @@ from __future__ import annotations
 # confidence floor, no "unidentified" — the confidence is a column, and the
 # reader filters on it.
 IDENTITY_FIELDS = ["species", "species_confidence", "species_votes",
-                   "species_vote_share", "marker_id", "marker_votes", "marker_vote_share"]
+                   "species_vote_share", "group", "group_share", "counted",
+                   "marker_id", "marker_votes", "marker_vote_share"]
 TRACK_FIELDS = (["track_id", "start_time", "end_time", "start_clip_sec", "end_clip_sec",
                  "duration_sec"] + IDENTITY_FIELDS)
 
@@ -64,6 +65,24 @@ def by_track_of(result):
     return (stats.get("identification") or {}).get("by_track") or {}
 
 
+def with_groups(by_track, run):
+    """``by_track`` with each track's insect group from the run's Identify
+    Species node (memory/65): ``group``, ``group_share`` and ``counted``."""
+    from .regroup import group_step
+
+    if run is None:
+        return by_track
+    _i, step = group_step(run)
+    if step is None:
+        return by_track
+    groups = ((run.context or {}).get(step["id"]) or {}).get("track_groups") or {}
+    out = {k: dict(v) for k, v in (by_track or {}).items()}
+    for tid, g in groups.items():
+        out.setdefault(str(tid), {}).update(
+            group=g.get("group"), group_share=g.get("share"), counted=g.get("counted"))
+    return out
+
+
 def identity(vote):
     """Identity columns for one track's vote."""
     vote = vote or {}
@@ -74,6 +93,9 @@ def identity(vote):
                    species_confidence=round(conf, 4) if conf is not None else "",
                    species_votes=vote.get("taxon_votes", ""),
                    species_vote_share=vote.get("taxon_vote_share", ""))
+    if vote.get("group"):
+        out.update(group=vote["group"], group_share=vote.get("group_share", ""),
+                   counted="yes" if vote.get("counted", True) else "no")
     if vote.get("marker") not in (None, ""):
         out.update(marker_id=vote["marker"], marker_votes=vote.get("marker_votes", ""),
                    marker_vote_share=vote.get("marker_vote_share", ""))

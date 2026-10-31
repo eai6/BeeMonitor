@@ -9,7 +9,8 @@
          data-overlay="{{ overlay_url }}"
          {% if can_review %}data-review-url="{% url 'analysis:event_review' job.pk %}{{ run_q }}"
          data-add-url="{% url 'analysis:add_missed_event' job.pk %}{{ run_q }}"{% endif %}
-         data-crops-url="{% url 'analysis:track_crops' job.pk 0 %}">
+         data-crops-url="{% url 'analysis:track_crops' job.pk 0 %}"
+         data-group-url="{% url 'analysis:track_group' job.pk %}{{ run_q }}">
   <div class="px-6 py-3 border-b border-gray-200 flex flex-wrap gap-3 justify-between items-center">
     <h2 class="text-lg font-medium text-gray-900">Video with tracks</h2>
     {% if can_review %}
@@ -161,6 +162,32 @@
           <div><dt class="text-xs text-gray-600">On screen</dt><dd data-ov-f="onscreen"></dd></div>
           <div><dt class="text-xs text-gray-600">Marker</dt><dd data-ov-f="marker"></dd></div>
         </dl>
+        {# Its insect group, and changing it (memory/65) #}
+        <div data-ov-group hidden class="flex flex-col gap-2 border-t border-gray-200 pt-3">
+          <div class="text-sm"><span class="block text-xs text-gray-600">Group</span>
+            <span data-ov-group-text class="font-medium"></span></div>
+          <p data-ov-group-why class="text-xs text-gray-600"></p>
+          <form data-ov-group-form hidden class="flex flex-col gap-2 text-sm">
+            <label class="flex flex-col gap-1">Change its group
+              <select data-ov-group-pick class="h-10 rounded border border-gray-300 bg-white px-2"></select>
+            </label>
+            <label data-ov-group-new-wrap hidden class="flex flex-col gap-1">New group name
+              <input data-ov-group-new type="text" maxlength="60" class="h-10 rounded border border-gray-300 px-2">
+            </label>
+            <fieldset class="flex flex-col gap-1.5">
+              <legend class="text-xs text-gray-600 mb-1">Apply to</legend>
+              <label class="flex items-start gap-2 min-h-[28px]"><input type="radio" name="ov-scope" value="track" checked class="mt-0.5 w-4 h-4"> <span>This track only</span></label>
+              <label data-ov-scope="name" class="flex items-start gap-2 min-h-[28px]"><input type="radio" name="ov-scope" value="name" class="mt-0.5 w-4 h-4"> <span>Every crop read as <em data-ov-scope-text></em></span></label>
+              <label data-ov-scope="genus" class="flex items-start gap-2 min-h-[28px]"><input type="radio" name="ov-scope" value="genus" class="mt-0.5 w-4 h-4"> <span>Its whole genus</span></label>
+              <label data-ov-scope="family" class="flex items-start gap-2 min-h-[28px]"><input type="radio" name="ov-scope" value="family" class="mt-0.5 w-4 h-4"> <span>Its whole family <span data-ov-scope-family></span></span></label>
+            </fieldset>
+            <div class="flex flex-wrap gap-2">
+              <button type="submit" class="h-11 px-4 rounded bg-green-700 hover:bg-green-800 text-white font-semibold">Save and recount</button>
+              <button type="button" data-ov-group-undo class="h-11 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50 text-gray-700" title="Take away the rule for the choice under Apply to">Undo that rule</button>
+            </div>
+            <p data-ov-group-msg class="text-xs text-gray-700" aria-live="polite"></p>
+          </form>
+        </div>
         <div class="flex flex-col gap-1.5">
           <div class="text-xs font-semibold text-gray-600 uppercase tracking-wide">Events</div>
           <div data-ov-events class="flex flex-col gap-1 text-sm"></div>
@@ -451,10 +478,84 @@
     return fetch(url + (url.indexOf('?') < 0 ? '?' : '&') + 'part=events', {credentials: 'same-origin'})
       .then(function (r) { return r.json(); }).then(function (live) {
         var d = ov.data();
-        if (d) { d.added = live.added || []; }
+        if (d) {
+          d.added = live.added || [];
+          d.events = live.events || [];
+          d.interactions = live.interactions || [];
+          d.groups = live.groups || {};
+          d.group_options = live.group_options || [];
+          d.can_regroup = !!live.can_regroup;
+        }
         nearKey = ''; renderNear(ov.frame()); renderMarks(); paintProgress();
+        ov.set({});
       }).catch(function () {});
   }
+
+  // Insect group of the followed track, and changing it (memory/65).
+  var groupUrl = root.getAttribute('data-group-url');
+  function paintGroup(id) {
+    var d = ov.data() || {}, g = (d.groups || {})[id], box = $('[data-ov-group]');
+    box.hidden = !g;
+    if (!g) return;
+    $('[data-ov-group-text]').textContent = g[0] + (g[1] ? ' · counted' : ' · not counted');
+    var why = g[2] === 'set by hand' ? 'You set this track’s group.'
+      : (g[2].indexOf('rule on') === 0 ? 'From your ' + g[2].replace('rule on ', 'rule on the ') + '.'
+      : (g[2] === 'crops' || g[2] === 'default' ? '' : 'No clear group (' + g[2] + '), so it’s counted.'));
+    $('[data-ov-group-why]').textContent = (g[3] ? 'Crops said: ' + g[3] + '. ' : '')
+      + (g[4] ? 'Most votes: ' + g[4] + (g[5] ? ' · ' + g[5] : '') + '. ' : '') + why;
+    var form = $('[data-ov-group-form]');
+    form.hidden = !(d.can_regroup && groupUrl);
+    if (form.hidden) return;
+    var pick = $('[data-ov-group-pick]');
+    pick.innerHTML = '';
+    (d.group_options || []).concat(['Unclear']).forEach(function (name) {
+      var o = document.createElement('option');
+      o.value = name; o.textContent = name; o.selected = name === g[0];
+      pick.appendChild(o);
+    });
+    var add = document.createElement('option');
+    add.value = '__new'; add.textContent = 'New group…';
+    pick.appendChild(add);
+    $('[data-ov-group-new-wrap]').hidden = true;
+    form.querySelectorAll('[data-ov-scope]').forEach(function (el) { el.hidden = !g[4]; });
+    $('[data-ov-scope-text]').textContent = g[4] || '';
+    $('[data-ov-scope-family]').textContent = g[5] || '';
+    form.querySelector('input[value="track"]').checked = true;
+    $('[data-ov-group-msg]').textContent = '';
+  }
+  $('[data-ov-group-pick]').addEventListener('change', function (e) {
+    $('[data-ov-group-new-wrap]').hidden = e.target.value !== '__new';
+    if (e.target.value === '__new') $('[data-ov-group-new]').focus();
+  });
+  function sendGroup(group) {
+    var id = ov.focused(), form = $('[data-ov-group-form]');
+    if (id == null) return;
+    var scope = (form.querySelector('input[name="ov-scope"]:checked') || {}).value || 'track';
+    var msg = $('[data-ov-group-msg]');
+    msg.textContent = 'Saving and recounting…';
+    fetch(groupUrl, {method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
+      body: JSON.stringify({track: id, scope: scope, group: group})})
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (!res.ok) { msg.textContent = res.error || 'Could not save.'; return; }
+        return refreshLive().then(function () {
+          paintGroup(id);
+          $('[data-ov-group-msg]').textContent = 'Saved. This clip was recounted'
+            + (res.queued ? '; the batch’s other ' + res.queued + ' clips are recounted in the next few minutes' : '')
+            + '. No GPU-hours.';
+        });
+      })
+      .catch(function () { msg.textContent = 'Could not save.'; });
+  }
+  $('[data-ov-group-form]').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var group = $('[data-ov-group-pick]').value;
+    if (group === '__new') group = $('[data-ov-group-new]').value.trim();
+    if (!group) { $('[data-ov-group-msg]').textContent = 'Name the group.'; return; }
+    sendGroup(group);
+  });
+  $('[data-ov-group-undo]').addEventListener('click', function () { sendGroup(''); });
   function removeAdded(id) {
     fetch(addUrl, {method: 'POST', credentials: 'same-origin',
       headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
@@ -673,6 +774,7 @@
     f('last', last != null ? fmt(sec(last)) : '—');
     f('onscreen', t.frames_seen ? (t.frames_seen / ov.fps()).toFixed(1) + ' s' : '—');
     f('marker', t.marker || 'none read');
+    paintGroup(id);
 
     // Timeline: where this track is on screen.
     var bar = $('[data-ov-spans]');

@@ -302,6 +302,27 @@ their reason.
 {% endwith %}
 {% endif %}
 
+{% if group_summary %}
+{% with gs=group_summary %}
+<section class="bg-white shadow rounded-lg p-4 mb-6 flex flex-col gap-1.5" aria-label="Insect groups">
+  {% comment %}What the Identify Species group filter took out of the counts (memory/65).{% endcomment %}
+  <h2 class="text-sm font-semibold text-gray-900">Insect groups</h2>
+  <p class="text-sm text-gray-700">Counting {{ gs.kept|join:", "|lower }}, plus tracks with no clear group.</p>
+  {% if gs.tracks %}
+  <p class="text-sm"><strong class="text-orange-800">{{ gs.tracks }}</strong> track{{ gs.tracks|pluralize }} not counted:
+    {% for g in gs.by_group %}{{ g.tracks }} {{ g.group|lower }}{% if not forloop.last %}, {% endif %}{% endfor %}
+    · {{ gs.events }} event{{ gs.events|pluralize }} not counted because of it</p>
+  {% else %}
+  <p class="text-sm text-gray-700">No tracks left out so far.</p>
+  {% endif %}
+  {% if gs.reviewed.reviewed %}
+  <p class="text-sm text-gray-700">Of your reviewed events, {{ gs.reviewed.reviewed }} were on tracks now not counted: <span class="text-red-700">{{ gs.reviewed.rejected }} you marked wrong</span> · <span class="text-green-700">{{ gs.reviewed.accepted }} you marked right</span>.</p>
+  {% endif %}
+  <p class="text-xs text-gray-600">Open a clip and click a track to change its group; the grouping is saved to the pipeline and this batch is recounted.</p>
+</section>
+{% endwith %}
+{% endif %}
+
 <!-- Per-run rows: the numbers when there are any, the reason when there are not -->
 <div class="bg-white shadow rounded-lg overflow-hidden mb-6">
   <div class="flex items-center gap-3 px-4 py-2.5 border-b border-gray-200">

@@ -34,6 +34,18 @@
     {% if step.output.note %}
     <div class="px-3 pb-2 -mt-1 text-[11px] text-gray-400">{{ step.output.note }}</div>
     {% endif %}
+    {% if step.output.group_counts %}
+    {# Insect groups (memory/65): what each group is, and whether it's counted. #}
+    <div class="px-3 pb-3 -mt-1 flex flex-wrap gap-1.5 text-xs">
+      {% for g in step.output.group_counts %}
+      <span class="px-2 py-0.5 rounded-full {% if g.counted %}bg-green-50 text-green-800{% else %}bg-orange-50 text-orange-800 border border-orange-300{% endif %}">{{ g.tracks }} {{ g.group|lower }} · {% if g.counted %}counted{% else %}not counted{% endif %}</span>
+      {% endfor %}
+      {% if not step.output.group_filter %}<span class="text-gray-500">Group filter off: every track is counted.</span>{% endif %}
+    </div>
+    {% endif %}
+    {% if step.output.groups_note %}
+    <div class="px-3 pb-2 -mt-1 text-[11px] text-gray-500">{{ step.output.groups_note }}</div>
+    {% endif %}
 
     {% if step.state == 'failed' %}
     <div class="px-3 pb-2 -mt-1 flex items-center gap-3">

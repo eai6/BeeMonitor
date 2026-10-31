@@ -1214,6 +1214,10 @@ def batch_detail(request, batch_id):
         "review_summary": (review_mod.batch_review_summary(
             [r["run"] for r in rows], {r["run"].pk: r.get("review") for r in rows})
             if not photos_kind else None),
+        # What its insect-group filters left out (memory/65).
+        "group_summary": (review_mod.batch_group_summary(
+            [r["run"] for r in rows], {r["run"].pk: r.get("review") for r in rows})
+            if not photos_kind else None),
         "outcome": outcome,
         "failure_groups": failure_groups,
         "downloads": downloads,

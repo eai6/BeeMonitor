@@ -30,6 +30,31 @@ RECOUNTED = ("analyze.events", "analyze.interactions",
              # Retired blocks run as the primitives now (memory/60).
              "analyze.foraging_trips", "analyze.visitation", "analyze.interaction")
 _REFERENCES = ("reference.", "roi.")
+# Re-run before the analyzers: its groups decide which tracks they count
+# (memory/65), and they are worked out on the web from saved crop readings.
+_GROUPS = "identify.species"
+
+
+def dependency_order(steps):
+    """Step indexes so every step comes after the steps it reads from. The
+    canvas can save Events before the Identify Species node that feeds it."""
+    from .executors import upstream_ids
+
+    ids = {s.get("id"): i for i, s in enumerate(steps)}
+    done, order = set(), []
+
+    def visit(i, path=()):
+        if i in done or i in path:
+            return
+        for up in upstream_ids(steps[i], steps, i):
+            if up in ids:
+                visit(ids[up], path + (i,))
+        done.add(i)
+        order.append(i)
+
+    for i in range(len(steps)):
+        visit(i)
+    return order
 
 
 def recount_run(run) -> dict:
@@ -38,14 +63,20 @@ def recount_run(run) -> dict:
     from . import executors
 
     steps = run.steps or []
-    if not any(s.get("block_type") in RECOUNTED for s in steps):
+    if not any(s.get("block_type") in RECOUNTED + (_GROUPS,) for s in steps):
         return {}
     context = dict(run.context or {})
-    counts = {}
-    for i, step in enumerate(steps):
+    counts, grouped = {}, False
+    for i in dependency_order(steps):
+        step = steps[i]
         bt = str(step.get("block_type", ""))
         sid = step.get("id")
-        if bt.startswith(_REFERENCES):
+        if bt == _GROUPS and sid in context and not context[sid].get("error"):
+            out = executors.run_local_step(step, run, context, i)
+            if out and not out.get("error"):
+                context[sid] = out
+                grouped = True
+        elif bt.startswith(_REFERENCES):
             out = executors.run_local_step(step, run, context, i)
             if out and not out.get("error"):
                 context[sid] = out
@@ -59,7 +90,7 @@ def recount_run(run) -> dict:
             context[sid] = out
             kind = out.get("table_kind")
             counts[kind] = counts.get(kind, 0) + len(out.get("rows") or [])
-    if counts:
+    if counts or grouped:
         run.context = context
         type(run).objects.filter(pk=run.pk).update(context=context)
         sync_job_counts(run)

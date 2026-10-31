@@ -498,6 +498,15 @@ def _analysis_inputs(step, run, context, inputs, index):
                                       exclude=[(roi or {}).get("label")])
     df = ops.filter_by_label(raw, _tracks_label(run, inputs),
                              exclude=[(roi or {}).get("label")])
+    # Tracks an Identify Species node left out by group (memory/65). The full
+    # table is kept so the analyzer can say what the filter took out.
+    dropped = set((up or {}).get("dropped_tracks") or [])
+    unfiltered = None
+    if dropped and df is not None and len(df):
+        id_col = ops._pick(df, ops._ID_COLS)
+        if id_col is not None:
+            unfiltered = df
+            df = df[~df[id_col].map(_int_or_none).isin(dropped)]
     tidy = ops.normalized_tracks(df, scale) if df is not None else None
     fps, fps_source = ops.fps_with_source(result, video)
     return tidy, refs, result, fps, fps_source, ref_source, {
@@ -505,6 +514,10 @@ def _analysis_inputs(step, run, context, inputs, index):
         "how": taxa_how,
         "aspect": ops.frame_aspect(scale),
         "video": video,
+        "dropped": dropped if unfiltered is not None else set(),
+        "unfiltered": (ops.normalized_tracks(unfiltered, scale)
+                       if unfiltered is not None else None),
+        "track_groups": (up or {}).get("track_groups") or {},
     }
 
 
@@ -812,12 +825,18 @@ def _exec_analyze_events(step, run, context, inputs, index):
         step, run, context, inputs, index)
     cfg = step.get("config") or {}
     rows, notes = [], _measurement_notes(tidy, refs, extra)
+    filtered_out = None
     if tidy is not None and refs:
         first, last = _frames_analysed(run, fps, extra.get("video"))
         events = ops.compute_events(
             tidy, refs, fps, padding_bl=_number(cfg.get("padding_bl"), 0.0),
             aspect=extra["aspect"], first_frame=first, last_frame=last)
         rows = primitives.events_from_computed(events, fps)
+        if extra["dropped"] and extra["unfiltered"] is not None:
+            every = primitives.events_from_computed(ops.compute_events(
+                extra["unfiltered"], refs, fps, padding_bl=_number(cfg.get("padding_bl"), 0.0),
+                aspect=extra["aspect"], first_frame=first, last_frame=last), fps)
+            filtered_out = _filtered_out(every, extra)
         if cfg.get("ml_scoring") in (True, "true", "on", "1", 1):
             from . import ml_scoring
 
@@ -834,9 +853,31 @@ def _exec_analyze_events(step, run, context, inputs, index):
         "counting_rules": _COUNTING_RULES,
         **primitives.summarize_events(rows),
     }
+    if filtered_out:
+        out["filtered_out"] = filtered_out
     if notes:
         out["note"] = " ".join(notes)
     return out
+
+
+def _filtered_out(every, extra):
+    """What an Identify Species group filter took out of this count: the
+    tracks, the events they would have made (by group) and those events' keys,
+    so reviewed events can be checked against it (memory/65)."""
+    from . import review
+
+    dropped, groups = extra["dropped"], extra["track_groups"]
+    gone = [e for e in every if _int_or_none(e.get("track_id")) in dropped]
+    by_group = {}
+    for t in dropped:
+        g = (groups.get(str(t)) or {}).get("group") or "?"
+        by_group.setdefault(g, {"group": g, "tracks": 0, "events": 0})["tracks"] += 1
+    for e in gone:
+        g = (groups.get(str(_int_or_none(e.get("track_id")))) or {}).get("group") or "?"
+        by_group.setdefault(g, {"group": g, "tracks": 0, "events": 0})["events"] += 1
+    return {"tracks": len(dropped), "events": len(gone),
+            "by_group": sorted(by_group.values(), key=lambda g: -g["tracks"]),
+            "event_keys": [review.event_key(e) for e in gone]}
 
 
 # Which event/interaction rules a saved output was counted under (memory/60).
@@ -1100,13 +1141,58 @@ def _exec_identify_species(step, run, context, inputs, index):
         return {"artifact": "table", "table_kind": "species", **photo_species(photo)}
     df = ops.filter_by_label(ops.load_tracking_df(result), _tracks_label(run, inputs))
     summary = ops.species_identities(df) if df is not None else None
-    if summary is not None and summary.get("rows"):
-        return {"artifact": "table", "table_kind": "species", **summary}
+    if summary is None or not summary.get("rows"):
+        summary = {"identified_tracks": 0, "unique_taxa": 0, "rows": [],
+                   "note": _species_note(result)}
+    # Tracks pass through, so analyzers wired after this node count only the
+    # groups it keeps (memory/65). Wired off to the side, nothing reads them.
+    out = {"artifact": "tracks", "table_kind": "species", **summary,
+           "result": result, "label": (up or {}).get("label", "")}
+    out.update(_species_groups(step, run, result, df, summary["rows"]))
+    return out
+
+
+def _species_groups(step, run, result, df, rows):
+    """Each track's insect group and whether the filter counts it (memory/65).
+
+    Worked out here, on the web, from the per-crop readings the worker saved:
+    changing the groups or the rules is a recount, never a GPU run."""
+    from . import aggregate, taxon_groups
+
+    cfg = taxon_groups.settings(step.get("config"))
+    try:
+        readings = taxon_groups.crop_readings(result, df)
+        groups = taxon_groups.track_groups(readings, cfg, aggregate.run_job_id(run))
+    except Exception:  # noqa: BLE001 - no groups must never lose the count
+        logger.exception("insect groups failed for run %s", run.pk)
+        return {"groups_note": "Insect groups could not be worked out; every track is counted."}
+    for row in rows:
+        g = groups.get(_int_or_none(row.get("track")))
+        if g:
+            row.update(group=g["group"], group_share=g["share"], counted=g["counted"])
+    counts = {}
+    for g in groups.values():
+        c = counts.setdefault(g["group"], {"group": g["group"], "tracks": 0, "counted": g["counted"]})
+        c["tracks"] += 1
+    order = taxon_groups.all_groups(cfg["custom"]) + [taxon_groups.UNCLEAR]
     return {
-        "artifact": "table", "table_kind": "species",
-        "identified_tracks": 0, "unique_taxa": 0, "rows": [],
-        "note": _species_note(result),
+        "group_filter": cfg["on"],
+        "leave_out": cfg["leave_out"] if cfg["on"] else [],
+        "group_options": taxon_groups.all_groups(cfg["custom"]),
+        "track_groups": {str(t): g for t, g in groups.items()},
+        "group_counts": sorted(counts.values(), key=lambda c: (
+            order.index(c["group"]) if c["group"] in order else len(order))),
+        "dropped_tracks": sorted(t for t, g in groups.items() if not g["counted"]),
+        "names_seen": taxon_groups.names_seen(readings),
     }
+
+
+def _int_or_none(value):
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return int(f) if f == int(f) else None
 
 
 def photo_detection_count(photo, regions=None):

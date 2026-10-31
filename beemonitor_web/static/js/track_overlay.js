@@ -129,10 +129,21 @@
       return i < 0 ? 0 : (frame - t.frames[i]) / fps();
     }
 
+    // Grey: a track the group filter leaves out of the count (memory/65).
+    var LEFT_OUT = [156, 163, 175, 1];
+    function isLeftOut(id) {
+      var g = (data.groups || {})[id];
+      return !!(g && !g[1]);
+    }
+
     function label(id, lost, frame) {
       var text = String(id);
       var tr = data.tracks[id];
       if (opts.species && tr && tr.species) text += ' · ' + tr.species;
+      // Its insect group, when an Identify Species node grouped the tracks
+      // (memory/65); a track the filter leaves out says so.
+      var g = (data.groups || {})[id];
+      if (g) text += ' · ' + g[0] + (g[1] ? '' : ' · not counted');
       if (lost) text += ' · lost ' + lostFor(id, frame).toFixed(1) + ' s';
       var inside = inRef[id];
       if (inside) text += ' · in ' + regionText(inside[3]) + ' · ' + ((frame - inside[0]) / fps()).toFixed(1) + ' s';
@@ -314,8 +325,9 @@
         var x = L.ox + rows[o + 2] * L.s, y = L.oy + rows[o + 3] * L.s;
         var w = (rows[o + 4] - rows[o + 2]) * L.s, h = (rows[o + 5] - rows[o + 3]) * L.s;
         var a = dim ? 0.25 : (lost ? STYLE.lost_alpha : 1);
+        var gone = isLeftOut(id);
         ctx.save();
-        ctx.strokeStyle = color(id, a);
+        ctx.strokeStyle = gone ? rgba(LEFT_OUT, a) : color(id, a);
         if (lost) ctx.setLineDash(STYLE.dash);
         ctx.lineWidth = focused === id ? 3 : STYLE.box_width;
         ctx.strokeRect(x, y, w, h);
@@ -325,7 +337,8 @@
         var text = label(id, lost, frame);
         var tw = ctx.measureText(text).width + 2 * STYLE.label_pad, th = STYLE.label_height;
         var ty = y - th - 1 < 0 ? y + h + 1 : y - th - 1;
-        ctx.fillStyle = color(id, lost ? STYLE.lost_alpha : 0.95);
+        ctx.fillStyle = gone ? rgba(LEFT_OUT, lost ? STYLE.lost_alpha : 0.95)
+                             : color(id, lost ? STYLE.lost_alpha : 0.95);
         ctx.fillRect(x, ty, tw, th);
         ctx.fillStyle = rgba(STYLE.label_text_rgba);
         ctx.fillText(text, x + STYLE.label_pad, ty + 2);
@@ -484,6 +497,9 @@
             payload.interactions = parts[1].interactions || [];
             payload.regions = parts[1].regions || [];
             payload.added = parts[1].added || [];
+            payload.groups = parts[1].groups || {};
+            payload.group_options = parts[1].group_options || [];
+            payload.can_regroup = !!parts[1].can_regroup;
             if (parts[1].style) STYLE = parts[1].style;
             index(payload); loop(); redraw(); return payload;
           });

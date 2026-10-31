@@ -264,10 +264,56 @@ def batch_review_counts(runs):
         keys = {event_key(r) for o in outs for r in (o.get("rows") or [])}
         mine = votes.get(run.pk, {})
         calls = [combined(v) for k, v in mine.items() if k in keys]
+        # Reviewed events on tracks an insect-group filter now leaves out
+        # (memory/65): how the reviewers called what the filter took away.
+        gone = {k for o in outs for k in ((o.get("filtered_out") or {}).get("event_keys") or [])}
+        left = [combined(v) for k, v in mine.items() if k in gone]
         out[run.pk] = {"events": len(keys), "reviewed": len(calls),
                        "accepted": calls.count("accepted"), "rejected": calls.count("rejected"),
-                       "disputed": calls.count("disputed"), "added": added.get(run.pk, 0)}
+                       "disputed": calls.count("disputed"), "added": added.get(run.pk, 0),
+                       "left_out": {"reviewed": len(left), "accepted": left.count("accepted"),
+                                    "rejected": left.count("rejected")}}
     return out
+
+
+def batch_group_summary(runs, per_run=None):
+    """What the batch's insect-group filters left out (memory/65): tracks and
+    events by group, and how reviewers had called the events it took away.
+    None when no run in the batch leaves anything out."""
+    from .aggregate import analyzer_outputs
+    from .regroup import group_step
+
+    groups, tracks, events, kept, filtered_runs = {}, 0, 0, set(), 0
+    for run in runs:
+        _i, step = group_step(run)
+        if step is None:
+            continue
+        out = (run.context or {}).get(step["id"]) or {}
+        if not out.get("group_filter"):
+            continue
+        filtered_runs += 1
+        kept.update(g for g in out.get("group_options") or [] if g not in (out.get("leave_out") or []))
+        for g in out.get("group_counts") or []:
+            if not g.get("counted"):
+                row = groups.setdefault(g["group"], {"group": g["group"], "tracks": 0, "events": 0})
+                row["tracks"] += g["tracks"]
+                tracks += g["tracks"]
+        for kind, o in analyzer_outputs(run):
+            if kind != "events":
+                continue
+            for g in (o.get("filtered_out") or {}).get("by_group") or []:
+                row = groups.setdefault(g["group"], {"group": g["group"], "tracks": 0, "events": 0})
+                row["events"] += g["events"]
+                events += g["events"]
+    if not filtered_runs:
+        return None
+    left = {"reviewed": 0, "accepted": 0, "rejected": 0}
+    for counts in (per_run or {}).values():
+        for k in left:
+            left[k] += ((counts or {}).get("left_out") or {}).get(k, 0)
+    return {"tracks": tracks, "events": events, "kept": sorted(kept),
+            "by_group": sorted(groups.values(), key=lambda g: -g["tracks"]),
+            "reviewed": left}
 
 
 def batch_review_summary(runs, per_run=None):

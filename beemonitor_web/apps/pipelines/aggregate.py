@@ -304,7 +304,8 @@ def primitive_csv(runs, kind):
         rows = [r for out in outputs for r in (out.get("rows") or [])]
         for out in [{"rows": rows}]:
             for row in tracks.primitive_with_identity(
-                    kind, out.get("rows") or [], tracks.by_track_of(result), fps, start,
+                    kind, out.get("rows") or [], tracks.with_groups(tracks.by_track_of(result), run),
+                    fps, start,
                     reviews=reviews, added=added_rows(run) if kind == "events" else None):
                 all_rows.append({**provenance, **row})
 

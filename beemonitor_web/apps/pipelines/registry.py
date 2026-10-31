@@ -17,6 +17,10 @@ so the editor UI + engine dispatch carry over unchanged. Two additions for BeeMo
 See ``memory/23_pipeline_builder_port_design.md`` for the design.
 """
 
+import json as _json
+
+from . import taxon_groups as _groups
+
 # ── Artifact types (edge "port" types) ────────────────────────────────────────
 # Ordered roughly by how data flows through an ecological pipeline. ``any`` matches
 # every type; ``none`` means the port is absent (source/sink blocks).
@@ -820,18 +824,19 @@ BLOCK_REGISTRY = {
     # ── Identify ──────────────────────────────────────────────────────────────
     "identify.species": {
         "display_name": "Identify Species",
-        "description": "Name the species of each tracked insect. After tracking, "
-                       "every saved crop of a track is classified and votes; the "
-                       "track takes the species with the most votes, so one "
-                       "blurred frame can't rename an animal. BeeMachine knows "
-                       "354 bee taxa; BioCLIP is zero-shot, limited to the "
-                       "species recorded near the device. Adding this node "
-                       "changes what the tracking job produces, so it re-runs.",
+        "description": "Name the species of each tracked insect, and its group "
+                       "(bees, wasps, ants…). After tracking, every saved crop of "
+                       "a track is classified; each name is looked up to its "
+                       "family and the crops vote on a group. Wire it between "
+                       "MOT and Events to count only the groups you keep; tracks "
+                       "with no clear group are always counted. Changing the "
+                       "groups recounts with no GPU-hours; changing the model "
+                       "re-runs tracking.",
         "category": "identify",
         "icon": "🔬",
         "input_type": "tracks",
         "accepts": ["tracks", "detections"],
-        "output_type": "table",
+        "output_type": "tracks",
         "backend": "local",
         "config_fields": [
             {
@@ -850,6 +855,53 @@ BLOCK_REGISTRY = {
             },
             # No confidence floor (memory/60): each track's species and its
             # confidence go in the CSV, and the reader filters on it.
+            # Groups (memory/65): worked out on the web from the per-crop
+            # readings, so none of these change the GPU job.
+            {
+                "name": "group_filter",
+                "label": "Filter by insect group",
+                "field_type": "select",
+                "required": False,
+                "default": "on",
+                "choices": [
+                    {"value": "on", "label": "On: leave out the groups ticked"},
+                    {"value": "off", "label": "Off: name groups, count every track"},
+                ],
+            },
+            {
+                "name": "leave_out",
+                "label": "Leave out these groups",
+                "field_type": "group_checklist",
+                "required": False,
+                "default": _json.dumps(_groups.DEFAULT_LEAVE_OUT),
+                "choices": [{"value": g, "label": g} for g in _groups.BUILTIN],
+                "show_if": {"field": "group_filter", "value": "on"},
+                "help": "Tracks of a ticked group are not counted by the analyzers "
+                        "wired after this node. Tracks with no clear group are "
+                        "always counted.",
+            },
+            {
+                "name": "agree_share",
+                "label": "Call a group when this share of crops agree",
+                "field_type": "number",
+                "required": False,
+                "default": 0.5,
+                "choices": None,
+                "help": "0.5 = half of a track's crops must name the same group, "
+                        "and at least 3 crops must be read; otherwise the track is "
+                        "unclear and counted.",
+            },
+            {
+                "name": "group_rules",
+                "label": "Groups and rules",
+                "field_type": "group_rules",
+                "required": False,
+                "default": "",
+                "choices": None,
+                "help": "Your own groups, and rules that put a species, genus, "
+                        "family or single track in a group. You can also change a "
+                        "track's group while reviewing the clip.",
+            },
         ],
     },
     "identify.marker": {

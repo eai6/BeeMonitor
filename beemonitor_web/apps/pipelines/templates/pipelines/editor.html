@@ -15,6 +15,13 @@
   .pl-field { display: flex; flex-direction: column; gap: 2px; }
   .pl-lab { font-size: 10px; color: #6b7280; }
   .pl-help { cursor: help; color: #9ca3af; }
+  .pl-group-list { display: flex; flex-direction: column; gap: 2px; }
+  .pl-group-item { display: flex; align-items: center; gap: 6px; font-size: 12px; min-height: 24px; cursor: pointer; }
+  .pl-group-item input { width: 15px; height: 15px; }
+  .pl-group-note { font-size: 11px; color: #6b7280; }
+  .pl-group-rules { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 12px; color: #374151; }
+  .pl-group-edit { height: 28px; padding: 0 10px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; font-size: 12px; }
+  .pl-group-edit:hover { background: #f9fafb; }
   /* Port labels: input dots get a label to their left, output dots to their
      right, so it's clear what connects where (e.g. video/rois in, tracks out). */
   .drawflow .drawflow-node .inputs .input,
@@ -168,6 +175,33 @@
   </div>
 </div>
 
+{% comment %}Identify Species: your own groups and the rules that put a species, genus,
+   family or one track in a group (memory/65). One dialog for every node.{% endcomment %}
+<dialog id="pl-groups" class="rounded-lg p-0 w-full max-w-2xl backdrop:bg-gray-900/50" aria-labelledby="pl-groups-title">
+  <form method="dialog" class="p-6 flex flex-col gap-4 text-sm">
+    <h2 id="pl-groups-title" class="text-lg font-semibold text-gray-900">Groups and rules</h2>
+    <p class="text-gray-600">Each species name a crop gets is looked up to its family and put in a group. Rules here win over that default: a species rule over a genus rule, over a family, over an order. Rules on single tracks come from reviewing a clip.</p>
+    <div class="flex flex-col gap-2">
+      <h3 class="font-semibold text-gray-800">Your groups</h3>
+      <div id="pl-groups-custom" class="flex flex-wrap gap-2"></div>
+      <div class="flex gap-2">
+        <label class="sr-only" for="pl-groups-new">New group name</label>
+        <input id="pl-groups-new" type="text" maxlength="60" placeholder="e.g. Small dark bees" class="h-10 flex-1 rounded border border-gray-300 px-2">
+        <button type="button" id="pl-groups-add" class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">Add group</button>
+      </div>
+    </div>
+    <div class="flex flex-col gap-2">
+      <h3 class="font-semibold text-gray-800">Rules</h3>
+      <div id="pl-groups-rules" class="flex flex-col gap-2"></div>
+      <button type="button" id="pl-groups-add-rule" class="self-start h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">Add a rule</button>
+    </div>
+    <div class="flex justify-end gap-2">
+      <button type="button" id="pl-groups-cancel" class="h-11 px-4 rounded border border-gray-300 bg-white hover:bg-gray-50">Cancel</button>
+      <button type="button" id="pl-groups-save" class="h-11 px-4 rounded bg-green-700 hover:bg-green-800 text-white font-semibold">Done</button>
+    </div>
+  </form>
+</dialog>
+
 <script src="{% static 'vendor/drawflow.min.js' %}"></script>
 <script>
 const BLOCKS = JSON.parse("{{ blocks_json|escapejs }}");
@@ -198,6 +232,14 @@ function ctrl(field, value){
     const dflt = field.field_type==='bee_model' ? 'BeeMonitor default bee model' : 'BeeMonitor default nest model';
     const opts=`<option value="">${dflt}</option>`+models.map(o=>`<option value="${esc(o.id)}" ${String(o.id)===String(v)?'selected':''}>${esc(o.name)}</option>`).join('');
     return `<select ${common}>${opts}</select>`;
+  }
+  if(field.field_type==='group_checklist'){
+    // Filled by plRenderGroups: the built-in groups plus the node's own.
+    return `<input type="hidden" ${common} value="${esc(v)}"><div class="pl-group-list" data-builtin="${esc(JSON.stringify((field.choices||[]).map(c=>c.value)))}"></div>`;
+  }
+  if(field.field_type==='group_rules'){
+    return `<input type="hidden" ${common} value="${esc(v)}"><div class="pl-group-rules"><span class="pl-group-sum"></span>`
+         + ` <button type="button" class="pl-group-edit" onmousedown="event.stopPropagation()">Edit</button></div>`;
   }
   if(field.field_type==='textarea'){ return `<textarea ${common} rows="2">${esc(v)}</textarea>`; }
   const t = field.field_type==='number' ? 'number' : 'text';
@@ -332,6 +374,147 @@ function plLabelPorts(){
   });
 }
 
+// ── Insect groups on Identify Species (memory/65) ──────────────────────────
+function plJson(s, dflt){ try { return s ? JSON.parse(s) : dflt; } catch(e){ return dflt; } }
+function plGroupRules(nodeEl){
+  const inp = nodeEl.querySelector('.pl-inp[data-cfg="group_rules"]');
+  const r = plJson(inp ? inp.value : '', {});
+  return {groups: Array.isArray(r.groups) ? r.groups : [], rules: Array.isArray(r.rules) ? r.rules : []};
+}
+function plRenderGroups(scope){
+  (scope || document).querySelectorAll('.pl-group-list').forEach(function(list){
+    const nodeEl = list.closest('.drawflow-node') || document;
+    const hidden = list.previousElementSibling;
+    const out = plJson(hidden.value, []);
+    const names = plJson(list.getAttribute('data-builtin'), []).concat(plGroupRules(nodeEl).groups);
+    list.innerHTML = '';
+    names.forEach(function(name){
+      const lab = document.createElement('label');
+      lab.className = 'pl-group-item';
+      lab.addEventListener('mousedown', e => e.stopPropagation());
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.checked = out.indexOf(name) !== -1; cb.disabled = READONLY;
+      cb.addEventListener('change', function(){
+        const now = plJson(hidden.value, []).filter(g => g !== name);
+        if(cb.checked) now.push(name);
+        hidden.value = JSON.stringify(now);
+        plMarkDirty();
+      });
+      lab.appendChild(cb);
+      lab.appendChild(document.createTextNode(' ' + name));
+      list.appendChild(lab);
+    });
+    const note = document.createElement('span');
+    note.className = 'pl-group-note';
+    note.textContent = 'Tracks with no clear group are always counted.';
+    list.appendChild(note);
+  });
+  (scope || document).querySelectorAll('.pl-group-rules').forEach(function(box){
+    const nodeEl = box.closest('.drawflow-node') || document;
+    const r = plGroupRules(nodeEl);
+    box.querySelector('.pl-group-sum').textContent =
+      (r.groups.length ? r.groups.length + ' of your groups · ' : '') +
+      (r.rules.length ? r.rules.length + ' rule' + (r.rules.length === 1 ? '' : 's') : 'No rules: family defaults');
+    const btn = box.querySelector('.pl-group-edit');
+    if(READONLY){ btn.textContent = 'See'; }
+    btn.onclick = function(){ plOpenGroups(nodeEl); };
+  });
+}
+const PL_KINDS = [['name','Species name'],['genus','Genus'],['family','Family'],['order','Order']];
+let plGroupsNode = null, plGroupsDraft = null;
+function plOpenGroups(nodeEl){
+  plGroupsNode = nodeEl;
+  plGroupsDraft = JSON.parse(JSON.stringify(plGroupRules(nodeEl)));
+  plPaintGroupsDialog();
+  document.getElementById('pl-groups').showModal();
+}
+function plAllGroups(){
+  const list = (plGroupsNode && plGroupsNode.querySelector('.pl-group-list'));
+  const builtin = plJson(list ? list.getAttribute('data-builtin') : '', []);
+  return builtin.concat(plGroupsDraft.groups.filter(g => builtin.indexOf(g) === -1)).concat(['Unclear']);
+}
+function plPaintGroupsDialog(){
+  const d = plGroupsDraft;
+  const custom = document.getElementById('pl-groups-custom');
+  custom.innerHTML = d.groups.length ? '' : '<span class="text-gray-500">None yet.</span>';
+  d.groups.forEach(function(g, i){
+    const chip = document.createElement('span');
+    chip.className = 'inline-flex items-center gap-1 rounded-full bg-gray-100 pl-3 pr-1 py-1';
+    chip.appendChild(document.createTextNode(g));
+    if(!READONLY){
+      const x = document.createElement('button');
+      x.type = 'button'; x.className = 'w-7 h-7 rounded-full hover:bg-gray-200'; x.textContent = '×';
+      x.setAttribute('aria-label', 'Remove group ' + g);
+      x.onclick = function(){ d.groups.splice(i, 1); plPaintGroupsDialog(); };
+      chip.appendChild(x);
+    }
+    custom.appendChild(chip);
+  });
+  const rules = document.getElementById('pl-groups-rules');
+  rules.innerHTML = d.rules.length ? '' : '<span class="text-gray-500">No rules: every name goes by its family.</span>';
+  const groups = plAllGroups();
+  d.rules.forEach(function(r, i){
+    const row = document.createElement('div');
+    row.className = 'flex flex-wrap items-center gap-2';
+    if(r.kind === 'track'){
+      const t = document.createElement('span');
+      t.className = 'flex-1'; t.textContent = 'Track ' + r.track + ' of job ' + r.job + ' (set while reviewing)';
+      row.appendChild(t);
+    } else {
+      const kind = document.createElement('select');
+      kind.className = 'h-10 rounded border border-gray-300 px-2'; kind.setAttribute('aria-label', 'Rule on');
+      PL_KINDS.forEach(function(k){ const o = new Option(k[1], k[0], false, k[0] === r.kind); kind.appendChild(o); });
+      kind.onchange = function(){ r.kind = kind.value; };
+      const val = document.createElement('input');
+      val.type = 'text'; val.value = r.value || ''; val.placeholder = 'e.g. Formicidae';
+      val.className = 'h-10 flex-1 min-w-[10rem] rounded border border-gray-300 px-2'; val.setAttribute('aria-label', 'Name');
+      val.oninput = function(){ r.value = val.value; };
+      row.appendChild(kind); row.appendChild(val);
+    }
+    const arrow = document.createElement('span'); arrow.textContent = '→'; row.appendChild(arrow);
+    const grp = document.createElement('select');
+    grp.className = 'h-10 rounded border border-gray-300 px-2'; grp.setAttribute('aria-label', 'Group');
+    groups.concat(groups.indexOf(r.group) === -1 && r.group ? [r.group] : []).forEach(function(g){
+      grp.appendChild(new Option(g, g, false, g === r.group));
+    });
+    grp.onchange = function(){ r.group = grp.value; };
+    row.appendChild(grp);
+    if(!READONLY){
+      const x = document.createElement('button');
+      x.type = 'button'; x.className = 'h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50'; x.textContent = 'Remove';
+      x.onclick = function(){ d.rules.splice(i, 1); plPaintGroupsDialog(); };
+      row.appendChild(x);
+    }
+    rules.appendChild(row);
+  });
+  document.querySelectorAll('#pl-groups input, #pl-groups select').forEach(el => { el.disabled = READONLY; });
+  ['pl-groups-add', 'pl-groups-add-rule', 'pl-groups-save'].forEach(id => { document.getElementById(id).hidden = READONLY; });
+}
+function plGroupsWire(){
+  const dlg = document.getElementById('pl-groups');
+  if(!dlg) return;
+  document.getElementById('pl-groups-add').onclick = function(){
+    const inp = document.getElementById('pl-groups-new');
+    const name = inp.value.trim().replace(/\s+/g, ' ');
+    if(name && plAllGroups().indexOf(name) === -1) plGroupsDraft.groups.push(name);
+    inp.value = ''; plPaintGroupsDialog();
+  };
+  document.getElementById('pl-groups-add-rule').onclick = function(){
+    plGroupsDraft.rules.push({kind: 'family', value: '', group: plAllGroups()[0]});
+    plPaintGroupsDialog();
+  };
+  document.getElementById('pl-groups-cancel').onclick = function(){ dlg.close(); };
+  document.getElementById('pl-groups-save').onclick = function(){
+    const d = plGroupsDraft;
+    d.rules = d.rules.filter(r => r.kind === 'track' || String(r.value || '').trim());
+    const inp = plGroupsNode.querySelector('.pl-inp[data-cfg="group_rules"]');
+    inp.value = JSON.stringify(d);
+    plRenderGroups(plGroupsNode);
+    plMarkDirty();
+    dlg.close();
+  };
+}
+
 // Conditional field visibility (e.g. show "SAM 3 prompt" only when Detector=SAM 3).
 function plApplyShowIf(scope){
   (scope || document).querySelectorAll('.pl-field[data-showif-field]').forEach(function(fieldEl){
@@ -367,11 +550,15 @@ window.addEventListener('DOMContentLoaded', () => {
     // Locked: pan and zoom only, every field shown but not editable.
     editor.editor_mode = 'view';
     document.querySelectorAll('#drawflow .pl-inp').forEach(el => { el.disabled = true; });
+    plGroupsWire();
+    plRenderGroups(document);
     plApplyShowIf(document);
     plLabelPorts();
     return;
   }
   plShowErrors(JSON.parse("{{ errors_json|escapejs }}") || []);
+  plGroupsWire();
+  plRenderGroups(document); // Identify Species group checklists and rules
   plApplyShowIf(document);  // initial visibility from saved config
   plLabelPorts();           // label input dots from the block's ports
 
@@ -379,7 +566,7 @@ window.addEventListener('DOMContentLoaded', () => {
   // events; config inputs are caught by delegation on the canvas.
   ['nodeCreated','nodeRemoved','nodeMoved','connectionCreated','connectionRemoved']
     .forEach(ev => { try { editor.on(ev, plMarkDirty); } catch(e){} });
-  try { editor.on('nodeCreated', function(){ plApplyShowIf(document); plLabelPorts(); }); } catch(e){}
+  try { editor.on('nodeCreated', function(){ plRenderGroups(document); plApplyShowIf(document); plLabelPorts(); }); } catch(e){}
   const canvas = document.getElementById('drawflow');
   if(canvas){
     canvas.addEventListener('input', (e)=>{ if(e.target.classList.contains('pl-inp')) plMarkDirty(); });
