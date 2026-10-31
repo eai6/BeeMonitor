@@ -129,7 +129,12 @@ TRACKER_FIELDS = [
              "Filters flickers of noise (a shadow detected for a frame or two). "
              "A real bee's frames from that wait are kept once it is confirmed. "
              "0 = a single detection is enough."),
-    _tf("beetrack_iou_threshold", "Match overlap (IoU)", 0.25, "beetrack"),
+    # BeeTrack matches by distance, not overlap: this value is the detector's
+    # duplicate-box (NMS) overlap on the worker, so changing it needs the GPU
+    # (memory/69).
+    _tf("beetrack_iou_threshold", "Detector duplicate-box overlap (IoU)", 0.25, "beetrack",
+        help="How much two detected boxes may overlap before the detector keeps "
+             "only one. Applied when detecting, so changing it needs a new GPU run."),
 
     _tf("byte_track_high_thresh", "High-score threshold", 0.25, "bytetrack,botsort"),
     _tf("byte_track_low_thresh", "Low-score threshold (second pass)", 0.1, "bytetrack,botsort"),

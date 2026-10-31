@@ -163,3 +163,36 @@ class AnalysisResultsIdentityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UpdateLogTests(unittest.TestCase):
+    """Every tracker.update() call is logged, and each detection says which
+    call it was fed in, so the web can replay the tracking exactly
+    (memory/69)."""
+
+    def setUp(self):
+        self.flatten = BeeTracking._build_detections_df.__get__(
+            object.__new__(BeeTracking), BeeTracking)
+
+    def test_calls_are_logged_with_empty_ones_and_lookback(self):
+        results = [
+            {"frame_num": 0, "mode": "motion_detection", "detections": [], "tracks": [],
+             "update_seq": 0},
+            {"frame_num": 0, "mode": "lookback", "detections": [], "tracks": [], "update_seq": 1},
+            {"frame_num": 1, "mode": "lookback", "detections": [_det(0, 0, 10, 10)],
+             "tracks": [], "update_seq": 2},
+            {"frame_num": 1, "mode": "tracking", "detections": [_det(1, 0, 11, 10)],
+             "tracks": [], "update_seq": 3},
+            # A backfill entry: not a call.
+            {"frame_num": 0, "mode": "tracking", "detections": [], "tracks": []},
+        ]
+        log = BeeTracking._build_update_log(results)
+        self.assertEqual(log.to_dict("records"), [
+            {"seq": 0, "frame": 0, "kind": "current"},
+            {"seq": 1, "frame": 0, "kind": "lookback"},
+            {"seq": 2, "frame": 1, "kind": "lookback"},
+            {"seq": 3, "frame": 1, "kind": "current"},
+        ])
+        df = self.flatten(results)
+        self.assertEqual(list(df["seq"]), [2, 3])
+        self.assertEqual(list(df["mode"]), ["lookback", "tracking"])

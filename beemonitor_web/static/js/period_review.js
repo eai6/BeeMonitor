@@ -350,7 +350,7 @@
       (e.marker ? ' · marker ' + e.marker : ' · no marker');
     var crops = $('[data-pr-trip-crops]', s.box);
     crops.innerHTML = '';
-    fetch(c.crops_url.replace(/\/0\/crops\.json$/, '/' + e.track_id + '/crops.json'), {credentials: 'same-origin'})
+    fetch(c.crops_url.replace(/\/0\/crops\.json(?=\?|$)/, '/' + e.track_id + '/crops.json'), {credentials: 'same-origin'})
       .then(function (r) { return r.ok ? r.json() : {crops: []}; })
       .then(function (d) {
         (d.crops || []).slice(0, 4).forEach(function (cr) {

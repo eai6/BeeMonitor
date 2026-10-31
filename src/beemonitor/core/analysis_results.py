@@ -41,7 +41,8 @@ class AnalysisResults:
         video_path: str,
         motion_data: Optional[pd.DataFrame] = None,
         config: Optional[Any] = None,
-        detections: Optional[pd.DataFrame] = None
+        detections: Optional[pd.DataFrame] = None,
+        update_log: Optional[pd.DataFrame] = None,
     ):
         """Initialize analysis results.
 
@@ -62,6 +63,7 @@ class AnalysisResults:
         self.motion_data = motion_data
         self.config = config
         self.detections = detections
+        self.update_log = update_log
     
     def to_csv(self, output_folder: str = "output", columns: Optional[List[str]] = None) -> None:
         """Export events and tracking results to CSV files.
@@ -110,6 +112,12 @@ class AnalysisResults:
                 Path(output_folder) / f"{base_filename}_detections.csv")
             self.detections.to_csv(detections_filename, index=False)
             logger.info(f"Saved {len(self.detections)} detections to {detections_filename}")
+
+        # Every tracker.update() call (memory/69), so the web can re-track
+        # these detections exactly with other settings.
+        if getattr(self, 'update_log', None) is not None and isinstance(self.update_log, pd.DataFrame):
+            self.update_log.to_csv(
+                str(Path(output_folder) / f"{base_filename}_update_log.csv"), index=False)
 
         # === SAVE TRACKING RESULTS ===
         tracking_filename = str(Path(output_folder) / f"{base_filename}_tracking_results.csv")

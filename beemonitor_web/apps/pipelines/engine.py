@@ -197,6 +197,9 @@ def batch_template(batch_id):
     steps = copy.deepcopy(first.steps or [])
     window = None
     for step in steps:
+        # New clips are tracked on the GPU with the node as it is now: the
+        # record of what an earlier GPU pass used doesn't apply (memory/69).
+        (step.get("config") or {}).pop("_gpu_mot", None)
         if step.get("block_type") in ("input.video", "input.photo"):
             cfg = step.setdefault("config", {})
             cfg.pop("video_id", None)

@@ -169,7 +169,10 @@ def clip_events(clip, user=None):
     from .aggregate import analyzer_outputs
 
     run, fps = clip["run"], clip["fps"]
-    by_track = tracks.by_track_of(clip["job"].result) if getattr(clip["job"], "result", None) else {}
+    from .retrack.run import effective_result
+
+    result = effective_result(clip["job"], run) if getattr(clip["job"], "result", None) else None
+    by_track = tracks.by_track_of(result) if result is not None else {}
     summaries = review.event_summaries(run)
     mine = review.user_votes(run, user) if user is not None else {}
     out = []
@@ -297,7 +300,8 @@ def trip_rows(trip_reviews):
         if run is None:
             return None, None, 25.0, {}
         video = videos.get(run_video_id(run))
-        stats = results.get(run_job_id(run)) or {}
+        # The run's own (re-tracked) stats first (memory/69).
+        stats = _run_stats(run) or results.get(run_job_id(run)) or {}
         fps = fps_with_source(stats, video)[0] if video else 25.0
         by_track = tracks.by_track_of({"summary_stats": stats})
         return video, local_start(video) if video else None, float(fps or 25), by_track
@@ -338,3 +342,14 @@ def trip_rows(trip_reviews):
             "review_notes": "; ".join(notes)})
     rows.sort(key=lambda r: (r["exit_time"], r["reference"]))
     return rows
+
+
+def _run_stats(run):
+    """A re-tracked run's own summary stats, else None (memory/69)."""
+    from .retrack.run import tracking_outputs
+
+    for sid in tracking_outputs(run):
+        result = run.context[sid].get("result") or {}
+        if result.get("retracked"):
+            return result.get("summary_stats") or {}
+    return None

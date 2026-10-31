@@ -144,15 +144,30 @@ def applied_steps(run_steps, pipeline):
     Analyzers that took the run's tracks straight from MOT take them from
     Identify Species when the pipeline wires it in line, and from MOT again
     when it doesn't."""
+    from .retrack.run import GPU_MOT_KEY, REPLAYABLE
+
     steps = [dict(s) for s in run_steps or []]
     by_id = {s.get("id"): s for s in (pipeline.steps or []) if pipeline}
     changed = False
     for s in steps:
         src_step = by_id.get(s.get("id"))
-        if (s.get("block_type") in ANALYZERS and src_step is not None
-                and src_step.get("block_type") == s.get("block_type")):
+        if src_step is None or src_step.get("block_type") != s.get("block_type"):
+            continue
+        if s.get("block_type") in ANALYZERS:
             s["config"] = dict(src_step.get("config") or {})
             changed = True
+        elif s.get("block_type") == "track.mot":
+            # BeeTrack's time windows are re-tracked on the web (memory/69);
+            # the rest of the node needs the GPU, so it stays as tracked.
+            mine, theirs = dict(s.get("config") or {}), src_step.get("config") or {}
+            if (mine.get("tracker") or "beetrack") != "beetrack" or \
+                    (theirs.get("tracker") or "beetrack") != "beetrack":
+                continue
+            cfg = {**mine, **{k: theirs[k] for k in REPLAYABLE if k in theirs}}
+            if {k: cfg.get(k) for k in REPLAYABLE} != {k: mine.get(k) for k in REPLAYABLE}:
+                cfg.setdefault(GPU_MOT_KEY, {k: v for k, v in mine.items() if k != GPU_MOT_KEY})
+                s["config"] = cfg
+                changed = True
 
     src = pipeline_group_step(pipeline)
     mine = next((s for s in steps if s.get("block_type") == "identify.species"), None)
@@ -182,6 +197,7 @@ def apply_pipeline(batch_id, user, now=APPLY_NOW) -> dict:
     runs whose groups couldn't be applied (tracked without Identify Species)."""
     from . import recount
     from .models import PipelineRun
+    from .retrack import run as retrack
 
     runs = list(PipelineRun.objects.filter(batch_id=batch_id, user=user,
                                            status=PipelineRun.Status.COMPLETED)
@@ -197,8 +213,15 @@ def apply_pipeline(batch_id, user, now=APPLY_NOW) -> dict:
             out["skipped"] += 1
         PipelineRun.objects.filter(pk=run.pk).update(steps=steps)
         out["applied"] += 1
+        run.steps = steps
+        if retrack.needs_retrack(run):
+            # Re-tracking takes seconds a clip: the sweep does it, in the
+            # background, a few clips per pass (memory/69).
+            PipelineRun.objects.filter(pk=run.pk).update(counting_rules=0)
+            out["queued"] += 1
+            out["retrack"] = out.get("retrack", 0) + 1
+            continue
         if out["recounted"] < now:
-            run.steps = steps
             try:
                 recount.recount_run(run)
                 PipelineRun.objects.filter(pk=run.pk).update(counting_rules=recount.CURRENT_RULES)
@@ -260,6 +283,7 @@ def pipeline_changes(run, pipeline) -> dict:
     applies (no GPU); ``gpu`` ones need tracking again. Each item is
     ``{step, field, before, after}``."""
     from .registry import get_block
+    from .retrack.run import REPLAYABLE
 
     web, gpu = [], []
     mine = {s.get("id"): s for s in run.steps or []}
@@ -299,7 +323,15 @@ def pipeline_changes(run, pipeline) -> dict:
                 item = {"step": name, "field": _field_label(bt, key),
                         "before": _label(bt, key, before.get(key)),
                         "after": _label(bt, key, after.get(key))}
-            gpu_side = block.get("backend") == "gpu" or key in _GPU_FIELDS.get(bt, set())
+            gpu_side = (block.get("backend") == "gpu" or key in _GPU_FIELDS.get(bt, set())
+                        # MOT: BeeTrack's time windows re-track on the web
+                        # (memory/69); its other settings need the GPU.
+                        or (bt == "track.mot" and not (
+                            key in REPLAYABLE
+                            and (after.get("tracker") or "beetrack") == "beetrack"
+                            and (before.get("tracker") or "beetrack") == "beetrack")))
+            if bt == "track.mot" and not gpu_side:
+                item["after"] += " (tracks again on the web)"
             (gpu if gpu_side else web).append(item)
         if (step.get("inputs") or {}) != (src.get("inputs") or {}) and block.get("backend") != "gpu":
             web.append({"step": name, "field": "Wiring", "before": "", "after": "changed"})

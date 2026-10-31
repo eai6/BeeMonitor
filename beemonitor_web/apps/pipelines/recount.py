@@ -65,6 +65,9 @@ def recount_run(run) -> dict:
     steps = run.steps or []
     if not any(s.get("block_type") in RECOUNTED + (_GROUPS,) for s in steps):
         return {}
+    # The MOT node's settings changed since the run's tracks were made: track
+    # its saved detections again first, on the web (memory/69).
+    retracked = _retrack_if_needed(run)
     context = dict(run.context or {})
     counts, grouped = {}, False
     for i in dependency_order(steps):
@@ -90,11 +93,49 @@ def recount_run(run) -> dict:
             context[sid] = out
             kind = out.get("table_kind")
             counts[kind] = counts.get(kind, 0) + len(out.get("rows") or [])
-    if counts or grouped:
+    if counts or grouped or retracked:
         run.context = context
         type(run).objects.filter(pk=run.pk).update(context=context)
         sync_job_counts(run)
+    if retracked:
+        from .retrack import votes
+
+        votes.move_votes(run, retracked.get("fps"))
     return counts
+
+
+def _retrack_if_needed(run):
+    """Re-track the run's clip when its MOT settings differ from those its
+    tracks were made with. ``{tracks, exact, fps}`` when it did, else None. A
+    clip that can't be replayed (no saved detections) keeps its tracks and
+    says so on its MOT output."""
+    from .retrack import run as retrack
+
+    try:
+        if not retrack.needs_retrack(run):
+            return None
+        done = retrack.retrack_run(run)
+    except retrack.NotReplayable as exc:
+        _note_not_replayable(run, str(exc))
+        return None
+    except Exception:
+        logger.exception("re-track of run %s failed", run.pk)
+        return None
+    stats = (retrack.gpu_result(run) or {}).get("summary_stats") or {}
+    return {**done, "fps": stats.get("video_fps")}
+
+
+def _note_not_replayable(run, why):
+    from .retrack import run as retrack
+
+    context = dict(run.context or {})
+    for sid in retrack.tracking_outputs(run) or [s.get("id") for s in run.steps or []
+                                                  if s.get("block_type") == "track.mot"]:
+        if sid in context:
+            context[sid] = {**context[sid], "retrack_note":
+                            f"Can't re-track on the web: {why}. Its tracks need one GPU run."}
+    run.context = context
+    type(run).objects.filter(pk=run.pk).update(context=context)
 
 
 def sync_job_counts(run):

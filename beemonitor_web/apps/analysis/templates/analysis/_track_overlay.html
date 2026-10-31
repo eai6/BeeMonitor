@@ -9,7 +9,7 @@
          data-overlay="{{ overlay_url }}"
          {% if can_review %}data-review-url="{% url 'analysis:event_review' job.pk %}{{ run_q }}"
          data-add-url="{% url 'analysis:add_missed_event' job.pk %}{{ run_q }}"{% endif %}
-         data-crops-url="{% url 'analysis:track_crops' job.pk 0 %}"
+         data-crops-url="{% url 'analysis:track_crops' job.pk 0 %}{{ run_q }}"
          data-group-url="{% url 'analysis:track_group' job.pk %}{{ run_q }}">
   <div class="px-6 py-3 border-b border-gray-200 flex flex-wrap gap-3 justify-between items-center">
     <h2 class="text-lg font-medium text-gray-900">Video with tracks</h2>
@@ -816,7 +816,7 @@
     var crops = $('[data-ov-crops]');
     crops.setAttribute('data-label', 'Track ' + id + (t.species ? ' · ' + t.species : ''));
     crops.innerHTML = '<span class="col-span-5 text-sm text-gray-500">Loading crops…</span>';
-    var url = root.getAttribute('data-crops-url').replace(/\/0\/crops\.json$/, '/' + id + '/crops.json');
+    var url = root.getAttribute('data-crops-url').replace(/\/0\/crops\.json(?=\?|$)/, '/' + id + '/crops.json');
     fetch(url, {credentials: 'same-origin'})
       .then(function (r) { return r.ok ? r.json() : {crops: []}; })
       .then(function (d) {

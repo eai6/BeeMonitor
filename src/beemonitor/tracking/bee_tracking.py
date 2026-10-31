@@ -401,6 +401,10 @@ class BeeTracking:
                 **self.tracker_params
             )
         
+        # Every tracker.update() call, numbered (memory/69): the frame log lets
+        # the web replay this clip's tracking exactly from its detections.
+        self._update_seq = 0
+
         # Set lookback buffer size based on FPS
         self.lookback_frames = int(fps * self.lookback_seconds)
         self.frame_buffer = []  # Reset buffer
@@ -753,6 +757,7 @@ class BeeTracking:
                         # Update tracker with lookback detections
                         if self.tracker is not None:
                             self._give_frame(buf_frame)
+                            buf_seq = self._next_update_seq()
                             buf_tracks = self.tracker.update(buf_detections, buf_frame_num)
                             # These frames are real detections too — the start
                             # of the bee's arrival — so they get crops.
@@ -762,7 +767,8 @@ class BeeTracking:
                                 'frame_num': buf_frame_num,
                                 'detections': buf_detections,
                                 'tracks': buf_tracks,
-                                'mode': 'lookback'
+                                'mode': 'lookback',
+                                'update_seq': buf_seq,
                             })
                     
                     self.frame_buffer = []  # Clear buffer
@@ -795,8 +801,10 @@ class BeeTracking:
         
         # Update tracker (full frame coordinates, no adjustment needed)
         tracks = []
+        update_seq = None
         if self.tracker is not None:
             self._give_frame(frame)
+            update_seq = self._next_update_seq()
             tracks = self.tracker.update(detections, frame_num)
             # A track confirmed this frame, at the frames it was seen in while
             # it waited: reported like lookback frames, sorted into place later.
@@ -841,7 +849,8 @@ class BeeTracking:
             'mode': self.mode,
             'num_detections': len(detections),
             'num_tracks': len(tracks),
-            'lookback_results': lookback_results  # Include lookback frames
+            'lookback_results': lookback_results,  # Include lookback frames
+            'update_seq': update_seq,
         }
         
         if visualize:
@@ -1025,6 +1034,7 @@ class BeeTracking:
         # actually want: the tracked table drops anything the tracker never
         # associated into a confirmed track.
         self.detections_df = self._build_detections_df(results)
+        self.update_log_df = self._build_update_log(results)
 
         # Define clean column list
         columns = ['frame', 'track_id', 'x1', 'y1', 'x2', 'y2', 'cx', 'cy',
@@ -1102,7 +1112,26 @@ class BeeTracking:
 
     # Column contract for the detections table (see _build_detections_df).
     DETECTION_COLUMNS = ['frame', 'x1', 'y1', 'x2', 'y2', 'cx', 'cy',
-                         'confidence', 'source', 'taxon', 'mode']
+                         'confidence', 'source', 'taxon', 'mode', 'seq']
+
+    def _next_update_seq(self):
+        seq = getattr(self, '_update_seq', 0)
+        self._update_seq = seq + 1
+        return seq
+
+    @staticmethod
+    def _build_update_log(results):
+        """Every tracker.update() call in order (memory/69): ``seq, frame,
+        kind`` — kind ``lookback`` for the frames replayed when motion
+        started, else ``current``, and empty calls included. With the
+        detections' ``seq`` it lets the web replay the tracking exactly."""
+        import pandas as pd
+
+        rows = [{'seq': r['update_seq'], 'frame': r.get('frame_num'),
+                 'kind': 'lookback' if r.get('mode') == 'lookback' else 'current'}
+                for r in results or [] if r.get('update_seq') is not None]
+        rows.sort(key=lambda r: r['seq'])
+        return pd.DataFrame(rows, columns=['seq', 'frame', 'kind'])
 
     def _build_detections_df(self, results):
         """Flatten every frame's raw detector output into one DataFrame.
@@ -1133,10 +1162,13 @@ class BeeTracking:
                     'source': det[5] if len(det) > 5 else 'unknown',
                     'taxon': det[6] if len(det) > 6 else 'bee',
                     'mode': mode,
+                    # Which tracker.update() call it was fed in (update_log).
+                    'seq': result.get('update_seq'),
                 })
         if not rows:
             return pd.DataFrame(columns=self.DETECTION_COLUMNS)
-        df = pd.DataFrame(rows).sort_values('frame').reset_index(drop=True)
+        # Stable, so detections keep the order the tracker received them in.
+        df = pd.DataFrame(rows).sort_values('frame', kind='stable').reset_index(drop=True)
         logger.info(f"Created detections DataFrame with {len(df)} rows "
                     f"({df['frame'].nunique()} frames with detections)")
         return df

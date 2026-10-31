@@ -110,7 +110,8 @@ class BeeMonitor:
         results = AnalysisResults(
             events=events, tracks=flat_tracking_df, nests=nests,
             video_path=video_path, motion_data=grouped_tracking_df, config=self.config,
-            detections=getattr(self, 'last_detections_df', None)
+            detections=getattr(self, 'last_detections_df', None),
+            update_log=getattr(self, 'last_update_log_df', None),
         )
         
         results.to_csv(output_folder=output_folder)
@@ -283,6 +284,7 @@ class BeeMonitor:
         # Raw pre-association detections, kept alongside the tracks so
         # analyze_video can export them (free — the tracker already had them).
         self.last_detections_df = getattr(tracker, 'detections_df', None)
+        self.last_update_log_df = getattr(tracker, 'update_log_df', None)
 
         logger.info(f"\n✓ Tracking complete:")
         logger.info(f"  Total detections: {len(tracking_df)}")

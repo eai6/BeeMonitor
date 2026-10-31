@@ -16,6 +16,8 @@ numpy>=1.26.0
 # DataFrames. Without it every one of them silently reports the job summary
 # instead of analysing anything, which is exactly what production did.
 pandas>=2.0
+# BeeTracker re-runs tracking on the web from saved detections (memory/69).
+scipy>=1.11
 # Optional ML scoring of events (memory/60). The event classifier in
 # models/event_classifier_model.pkl was pickled with exactly this version.
 scikit-learn==1.7.2

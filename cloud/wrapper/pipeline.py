@@ -387,6 +387,8 @@ class CloudPipeline:
             stats["identification"] = identification
         if result_paths.get("track_votes_csv"):
             stats["track_votes_csv"] = result_paths["track_votes_csv"]
+        if result_paths.get("update_log_csv"):
+            stats["update_log_csv"] = result_paths["update_log_csv"]
 
         # Persist nest bounding boxes for future use (avoids re-detection)
         if nests and isinstance(nests, dict) and nests.get("nests"):
@@ -768,6 +770,14 @@ class CloudPipeline:
             blob_path = f"{prefix}/detections.csv"
             self._storage.upload_file(container, blob_path, str(detections_files[0]))
             uploaded["detections_csv"] = blob_path
+
+        # Every tracker.update() call (memory/69): with the detections, lets
+        # the web re-track this clip exactly with other tracking settings.
+        log_files = list(output_dir.glob("*_update_log.csv"))
+        if log_files:
+            blob_path = f"{prefix}/update_log.csv"
+            self._storage.upload_file(container, blob_path, str(log_files[0]))
+            uploaded["update_log_csv"] = blob_path
 
         # Tracking CSV
         tracking_files = list(output_dir.glob(f"*_tracking_results.csv"))

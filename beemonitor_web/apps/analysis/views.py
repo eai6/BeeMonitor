@@ -1701,11 +1701,14 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         ctx["part"] = part_label(job.config, job.video)
 
         try:
-            result = job.result
-            ctx["result"] = result
+            job.result
         except JobResult.DoesNotExist:
             ctx["result"] = None
             return ctx
+        # The run's re-tracked tables when it has them (memory/69).
+        from apps.pipelines.retrack.run import effective_result
+        result = effective_result(job)
+        ctx["result"] = result
 
         # A photo job (memory/45) has no clip, tracks or tables: it is the
         # photo, its boxes and each insect's species, as on its run page.
@@ -2036,7 +2039,11 @@ class TrackCropsView(LoginRequiredMixin, View):
 
         job = get_object_or_404(Job.objects.for_viewer(request.user).filter(
             clip_access(request.user, photos=True)), pk=pk)
-        result = getattr(job, "result", None)
+        from apps.pipelines.executors import pin_run
+        from apps.pipelines.retrack.run import effective_result
+        pin_run(job, request.GET.get("run"))
+        # A re-tracked run's crops are under its new track ids (memory/69).
+        result = effective_result(job)
         df = _read_csv(getattr(result, "crops_csv_path", "") or "") if result else None
         crops = []
         if df is not None and len(df) and {"track_id", "crop_key"} <= set(df.columns):
@@ -2107,7 +2114,11 @@ def stored_overlay(job):
 
     from . import overlay
 
-    tracking_path = job.result.tracking_csv_path
+    from apps.pipelines.retrack.run import effective_result
+
+    # The run's re-tracked tracks when it has them (memory/69): stored beside
+    # their own CSV, so the GPU's and the re-tracked overlays never mix.
+    tracking_path = effective_result(job).tracking_csv_path
     s3 = get_s3_client()
     key = overlay.stored_path(tracking_path)
     try:
@@ -2386,7 +2397,8 @@ class JobPrimitiveCsvView(LoginRequiredMixin, View):
             clip_access(request.user, photos=True)), pk=pk)
         pipeline_executors.pin_run(job, request.GET.get("run"))
 
-        result = getattr(job, "result", None)
+        from apps.pipelines.retrack.run import effective_result
+        result = effective_result(job)
         tracking = (_load_csv_from_storage(getattr(result, "tracking_csv_path", "") or "")
                     if kind in ("tracks", "tracking") else {})
         tracks_rows, by_track, fps, start = job_tracks(job, tracking)
@@ -2429,7 +2441,9 @@ def job_tracks(job, tracking):
     from apps.pipelines.ops import fps_with_source
     from apps.videos import timing
 
-    result = getattr(job, "result", None)
+    from apps.pipelines.retrack.run import effective_result
+
+    result = effective_result(job)
     if result is None:
         return [], {}, None, None
     from apps.pipelines.executors import _run_for_job

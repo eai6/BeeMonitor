@@ -1208,6 +1208,8 @@ def batch_detail(request, batch_id):
     from . import regroup as regroup_mod
     from . import batches
     started = [r["run"].started_at for r in rows if r["run"].started_at]
+    from django.core.cache import cache
+
     return render(request, "pipelines/batch.html", {
         # Its own name, else its pipeline's (memory/64).
         "batch_name": batches.title(batch_id, runs[0].pipeline if runs else None),
@@ -1233,6 +1235,10 @@ def batch_detail(request, batch_id):
         # Apply the pipeline's insect groups here, without a re-run (memory/65).
         "pipeline_groups": (_pipeline_groups(runs[0].pipeline)
                             if can_share and runs and not photos_kind else None),
+        # Where an update has got to, and the last replay check (memory/69).
+        "update_status": (_update_status([r["run"] for r in rows])
+                          if can_share and not photos_kind else None),
+        "retrack_check": cache.get(f"retrack-check:{batch_id}") if can_share else None,
         # What changed in the pipeline since the batch was counted, for
         # "Update this batch" (memory/68).
         "changes": (regroup_mod.batch_changes([r["run"] for r in rows], runs[0].pipeline)
@@ -1324,6 +1330,50 @@ def batch_rename(request, batch_id):
     messages.success(request, f"Renamed to “{name}”." if name
                      else "Name cleared: the batch shows its pipeline's name.")
     return redirect("pipelines:batch_detail", batch_id=batch_id)
+
+
+@login_required
+@require_POST
+def batch_retrack_check(request, batch_id):
+    """How closely the web replay matches the GPU's tracking on a few of the
+    batch's clips (memory/69). Only the batch's launcher."""
+    from django.core.cache import cache
+
+    from . import sharing
+    from .retrack import check
+
+    if not sharing.owns_batch(request.user, batch_id):
+        raise Http404("No such batch.")
+    runs = list(PipelineRun.objects.filter(batch_id=batch_id, user=request.user,
+                                           status=PipelineRun.Status.COMPLETED)
+                .order_by("started_at"))
+    result = check.batch_agreement(runs)
+    cache.set(f"retrack-check:{batch_id}", result, 60 * 60 * 24 * 7)
+    return JsonResponse({"ok": result is not None, "check": result})
+
+
+def _update_status(runs):
+    """Where "Update this batch" has got to (memory/69): clips still queued,
+    clips re-tracked (exactly or closely), clips that can't be re-tracked."""
+    from .recount import CURRENT_RULES
+    from .retrack.run import tracking_outputs
+
+    status = {"pending": 0, "retracked": 0, "exact": 0, "not_replayable": 0}
+    for run in runs:
+        if run.status != PipelineRun.Status.COMPLETED:
+            continue
+        if run.counting_rules < CURRENT_RULES:
+            status["pending"] += 1
+        for sid in tracking_outputs(run):
+            out = run.context[sid]
+            done = (out.get("result") or {}).get("retracked")
+            if done:
+                status["retracked"] += 1
+                status["exact"] += int(bool(done.get("exact")))
+            if out.get("retrack_note"):
+                status["not_replayable"] += 1
+            break
+    return status
 
 
 def _pipeline_groups(pipeline):

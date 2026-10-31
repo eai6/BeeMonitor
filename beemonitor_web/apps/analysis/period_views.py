@@ -126,8 +126,8 @@ class PeriodReviewView(LoginRequiredMixin, View):
                            "track_id": a["track_id"], "by": a["user"],
                            "t": round(c["offset"] + a["frame"] / float(c["fps"] or 25), 3)}
                           for a in event_review.added_rows(c["run"])],
-                "crops_url": reverse("analysis:track_crops", args=[job.pk, 0]),
-                "results_url": reverse("analysis:results", args=[job.pk]),
+                "crops_url": reverse("analysis:track_crops", args=[job.pk, 0]) + run_q,
+                "results_url": reverse("analysis:results", args=[job.pk]) + run_q,
                 "events": evs,
             })
         votes = _trip_votes([c["run"] for c in data["clips"]], request.user)
