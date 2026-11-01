@@ -346,12 +346,12 @@
       b.children[1].className = 'italic text-amber-900';
       b.addEventListener('click', function () { seekTo(a[0]); });
       row.appendChild(b);
-      if (reviewUrl && a[7]) {
+      if (reviewUrl && (a[8] || a[7])) {
         var rm = document.createElement('button');
         rm.type = 'button';
         rm.className = 'h-9 px-2 rounded text-xs border border-gray-300 bg-white hover:bg-gray-50';
         rm.textContent = 'Remove';
-        rm.setAttribute('aria-label', 'Remove the event you added at ' + fmt(sec(a[0])));
+        rm.setAttribute('aria-label', 'Remove the event ' + (a[7] ? 'you' : a[6]) + ' added at ' + fmt(sec(a[0])));
         rm.addEventListener('click', function () { removeAdded(a[5]); });
         row.appendChild(rm);
       }

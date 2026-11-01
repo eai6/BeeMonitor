@@ -75,7 +75,22 @@ class MissedEventTests(EventReviewTests):
         live = json.loads(self.client.get(reverse("analysis:track_overlay", args=[self.job.pk]),
                                           {"part": "events"}).content)
         a = live["added"][0]
-        self.assertEqual((a[0], a[1], a[2], a[3], a[6], a[7]), (400, 9, "enter", "reference_1", "owner", True))
+        self.assertEqual((a[0], a[1], a[2], a[3], a[6], a[7], a[8]),
+                         (400, 9, "enter", "reference_1", "owner", True, True))
+
+    def test_the_owner_may_remove_a_reviewers_added_event(self):
+        BatchMember.objects.create(batch_id=self.batch, user=self.maria,
+                                   role=BatchMember.Role.REVIEWER)
+        self.add(user=self.maria, track_id="9")
+
+        def flags(user):
+            self.client.force_login(user)
+            live = json.loads(self.client.get(reverse("analysis:track_overlay", args=[self.job.pk]),
+                                              {"part": "events"}).content)
+            return live["added"][0][7], live["added"][0][8]
+
+        self.assertEqual(flags(self.owner), (False, True))
+        self.assertEqual(flags(self.maria), (True, True))
 
     def test_precision_and_recall(self):
         self.assertEqual(review.quality(9, 1, 1), (90, 90))

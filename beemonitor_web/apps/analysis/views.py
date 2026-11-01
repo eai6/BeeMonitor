@@ -2220,13 +2220,17 @@ def overlay_live(job, user=None):
     regions += [{"label": r["id"], "kind": "reference", "points": _outline(r["box"], r["points"])}
                 for r in ops.roi_references(geometry)]
     # Events reviewers said the system missed (memory/62 §3b):
-    # [frame, track_id|null, action, reference, end_frame, id, by, yours].
+    # [frame, track_id|null, action, reference, end_frame, id, by, yours,
+    #  removable]: the person who added it, or the run's owner, may take it
+    # back (review.remove_added).
     added = []
     if run is not None:
+        uid = getattr(user, "pk", None) if user is not None else None
         for a in event_review.added_rows(run):
+            yours = uid is not None and uid == a["user_id"]
             added.append([a["frame"], _int(a["track_id"]), a["action"], a["reference"],
-                          a["end_frame"], a["id"], a["user"],
-                          bool(user is not None and getattr(user, "pk", None) == a["user_id"])])
+                          a["end_frame"], a["id"], a["user"], yours,
+                          yours or (uid is not None and uid == run.user_id)])
     return {"events": events, "interactions": interactions, "regions": regions,
             "added": added, "style": STYLE, **_overlay_groups(run, user)}
 
