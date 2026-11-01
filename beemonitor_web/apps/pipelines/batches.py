@@ -55,3 +55,43 @@ def set_review_actions(batch_id, user, actions):
     row.save(update_fields=["review_actions", "updated_at"])
     return chosen
 
+
+def neighbours(run):
+    """Where a clip sits in its batch, for previous/next on its results page:
+    ``{position, total, prev, next, batch_url}`` (prev/next are
+    ``{url, title}`` or None), in recording order; None outside a batch."""
+    from django.urls import reverse
+
+    from apps.videos.models import Video
+
+    from .aggregate import run_job_id, run_video_id
+    from .models import PipelineRun
+
+    if run is None or not run.batch_id:
+        return None
+    runs = list(PipelineRun.objects.filter(batch_id=run.batch_id,
+                                           status=PipelineRun.Status.COMPLETED)
+                .only("pk", "context", "steps", "batch_id"))
+    videos = Video.everything.in_bulk([v for r in runs if (v := run_video_id(r))])
+    clips = []
+    for r in runs:
+        video, job = videos.get(run_video_id(r)), run_job_id(r)
+        if video is None or not job:
+            continue
+        clips.append((video.recorded_at is None, video.recorded_at, video.title or "", str(r.pk),
+                      job, video.title or f"Video {video.pk}"))
+    clips.sort(key=lambda c: c[:4])
+    at = next((i for i, c in enumerate(clips) if c[3] == str(run.pk)), None)
+    if at is None:
+        return None
+
+    def link(i):
+        if not 0 <= i < len(clips):
+            return None
+        c = clips[i]
+        return {"url": reverse("analysis:results", args=[c[4]]) + f"?run={c[3]}", "title": c[5]}
+
+    return {"position": at + 1, "total": len(clips), "prev": link(at - 1), "next": link(at + 1),
+            "batch_url": reverse("pipelines:batch_detail", args=[run.batch_id]),
+            "batch_name": title(run.batch_id, getattr(run, "pipeline", None))}
+

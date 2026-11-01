@@ -1697,6 +1697,9 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         from apps.pipelines.executors import pin_run
         pinned = pin_run(job, self.request.GET.get("run"))
         ctx["run_q"] = f"?run={pinned.pk}" if pinned else ""
+        # Previous / next clip of the batch, for reviewing clip after clip.
+        from apps.pipelines import batches as pipeline_batches
+        ctx["batch_nav"] = pipeline_batches.neighbours(pinned)
         from apps.videos.timecode import part_label
         ctx["part"] = part_label(job.config, job.video)
 

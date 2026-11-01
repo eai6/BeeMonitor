@@ -379,3 +379,20 @@ class SharedJobTests(PeriodBase):
     def test_the_period_form_keeps_the_batch(self):
         self.assertContains(self.page(batch=str(self.batch)),
                             f'name="batch" value="{self.batch}"')
+
+
+class ClipNavigationTests(PeriodBase):
+    """Previous / next clip on a batch clip's results page."""
+
+    def test_the_results_page_links_the_batchs_neighbouring_clips(self):
+        self.client.force_login(self.owner)
+        a, b = self.a, self.b
+        page = self.client.get(reverse("analysis:results", args=[a["job"].pk]) + f"?run={a['run'].pk}")
+        nav = page.context["batch_nav"]
+        self.assertEqual((nav["position"], nav["total"]), (1, 2))
+        self.assertIsNone(nav["prev"])
+        self.assertIn(f"?run={b['run'].pk}", nav["next"]["url"])
+        self.assertContains(page, "Next clip →")
+        page = self.client.get(nav["next"]["url"])
+        self.assertEqual(page.context["batch_nav"]["position"], 2)
+        self.assertIsNone(page.context["batch_nav"]["next"])

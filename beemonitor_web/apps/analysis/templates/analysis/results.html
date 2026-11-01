@@ -4,6 +4,25 @@
 
 {% block content %}
 
+{% if batch_nav %}
+{% comment %}Review a batch clip after clip without going back to its page.{% endcomment %}
+<nav class="flex flex-wrap items-center gap-2 mb-3 text-sm" aria-label="Clips in this batch">
+  <a href="{{ batch_nav.batch_url }}" class="text-amber-700 hover:underline">← {{ batch_nav.batch_name }}</a>
+  <span class="flex-1"></span>
+  {% if batch_nav.prev %}<a href="{{ batch_nav.prev.url }}" data-clip-prev title="{{ batch_nav.prev.title }} ([)" class="inline-flex items-center h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50 text-gray-800">← Previous clip</a>{% else %}<span class="inline-flex items-center h-10 px-3 rounded border border-gray-200 text-gray-400">← Previous clip</span>{% endif %}
+  <span class="text-gray-700 tabular-nums">{{ batch_nav.position }} of {{ batch_nav.total }}</span>
+  {% if batch_nav.next %}<a href="{{ batch_nav.next.url }}" data-clip-next title="{{ batch_nav.next.title }} (])" class="inline-flex items-center h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50 text-gray-800">Next clip →</a>{% else %}<span class="inline-flex items-center h-10 px-3 rounded border border-gray-200 text-gray-400">Next clip →</span>{% endif %}
+</nav>
+<script>
+  // [ and ] move to the previous / next clip (not while typing).
+  document.addEventListener('keydown', function (e) {
+    if (e.target.closest && e.target.closest('input, textarea, select, [contenteditable]')) return;
+    var a = e.key === '[' ? document.querySelector('[data-clip-prev]')
+          : e.key === ']' ? document.querySelector('[data-clip-next]') : null;
+    if (a) { e.preventDefault(); window.location.href = a.href; }
+  });
+</script>
+{% endif %}
 <h1 class="text-2xl font-bold text-gray-900 mb-2">Results for Job #{{ job.pk }}</h1>
 <p class="text-sm text-gray-500 mb-6">{% if photo_view %}Photo{% else %}Video{% endif %}: {{ job.video.title|sanitize_name }}{% if part %} · <span class="font-semibold text-blue-900">{{ part }}</span>. Times are positions in the whole clip; run the whole clip from Processing to see the rest.{% endif %}</p>
 
