@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Event classifiers - BeeMonitor{% endblock %}
+
+{% block content %}
+{% comment %}Event classifiers trained and evaluated on review data (memory/70).{% endcomment %}
+<div class="flex flex-col gap-5">
+  <div class="flex flex-wrap items-end justify-between gap-3">
+    <div class="flex flex-col gap-1">
+      <a href="{% url 'training:list' %}" class="text-sm text-amber-700 hover:underline">← Training</a>
+      <h1 class="text-2xl font-bold text-gray-900">Event classifiers from your reviews</h1>
+      <p class="text-sm text-gray-600 max-w-3xl">Each reviewed event is a labelled example: accepted = real, rejected = not. Its features come from its track on the clip's current tracks. Exits and entries train one model, stays another. The test set is always the left-out days; nothing on them is trained on.</p>
+    </div>
+    <a href="{% url 'training:models' %}" class="px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 font-medium">All models</a>
+  </div>
+
+  {% if not available %}
+  <p class="bg-white shadow rounded-lg p-5 text-sm text-gray-700">No reviewed events yet. Review events on a batch's clips (Review events, or Review this period) and they show up here as training data.</p>
+  {% else %}
+  <form method="get" class="bg-white shadow rounded-lg p-5 grid grid-cols-1 lg:grid-cols-3 gap-5" id="data-form">
+    <fieldset class="flex flex-col gap-1.5">
+      <legend class="text-sm font-semibold text-gray-900 mb-1">1 · Training data: reviewed events from</legend>
+      {% for b in available %}
+      <label class="flex items-center gap-2 text-sm min-h-[32px]"><input type="checkbox" name="batch" value="{{ b.id }}" {% if b.id in picked %}checked{% endif %} class="w-4 h-4"> {{ b.name }} <span class="text-gray-500">· {{ b.reviewed }} votes</span></label>
+      {% endfor %}
+    </fieldset>
+    <label class="flex flex-col gap-1.5 text-sm">
+      <span class="font-semibold text-gray-900">2 · Left-out days (the test set)</span>
+      <textarea name="left_out" rows="5" class="rounded border border-gray-300 px-2 py-1.5 font-mono text-xs" placeholder="mendels: 2024-04-21, 2024-04-30&#10;natalies: 2024-05-04">{{ left_out }}</textarea>
+      <span class="text-xs text-gray-600">One line per site, as in a project's Settings; filled in from your annotation projects. Whole days, never single events.</span>
+      {% for e in left_out_errors %}<span class="text-xs text-red-700">{{ e }}</span>{% endfor %}
+    </label>
+    <div class="flex flex-col gap-2 justify-end">
+      <button type="submit" name="show" value="1" class="h-11 px-4 rounded border border-gray-300 bg-white hover:bg-gray-50 text-sm font-semibold">Show the data</button>
+      <button type="submit" formaction="{% url 'training:event_dataset_csv' %}" class="h-11 px-4 rounded border border-gray-300 bg-white hover:bg-gray-50 text-sm">Download as CSV (features + labels)</button>
+    </div>
+  </form>
+
+  {% if summary %}
+  <section class="bg-white shadow rounded-lg p-5 flex flex-col gap-2" aria-label="The data">
+    <h2 class="font-semibold text-gray-900">{{ summary.events }} reviewed events</h2>
+    <p class="text-sm text-gray-700">{% for a, s in summary.by_action.items %}{{ a }}s {{ s.events }} ({{ s.accepted_pct }}% real, {{ s.test }} on left-out days){% if not forloop.last %} · {% endif %}{% endfor %}</p>
+    <p class="text-sm text-gray-700">Training on {{ summary.train_days }} day{{ summary.train_days|pluralize }}, testing on {{ summary.test_days }} left-out day{{ summary.test_days|pluralize }} ({{ summary.test_events }} events).{% for site, n in summary.days_by_site.items %} {{ site }}: {{ n }} day{{ n|pluralize }}{% if not forloop.last %},{% endif %}{% endfor %}</p>
+    <p class="text-xs text-gray-600">{{ summary.disputed }} disputed event{{ summary.disputed|pluralize }} left out · {{ summary.missed }} missed event{{ summary.missed|pluralize }} added (they count against recall, not as training rows){% if summary.unscorable %} · {{ summary.unscorable }} whose track couldn't be read{% endif %}.</p>
+    {% if not summary.test_days %}<p class="text-sm text-yellow-800">No reviewed events on the left-out days yet: models will train, but there will be no test numbers. Review some events on those days.</p>{% endif %}
+  </section>
+  {% endif %}
+
+  <form method="post" class="bg-white shadow rounded-lg p-5 flex flex-wrap items-end gap-4">
+    {% csrf_token %}
+    {% for b in picked %}<input type="hidden" name="batch" value="{{ b }}">{% endfor %}
+    <input type="hidden" name="left_out" value="{{ left_out }}">
+    <fieldset class="flex flex-col gap-1.5">
+      <legend class="text-sm font-semibold text-gray-900 mb-1">3 · Train</legend>
+      <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="kind" value="exit_enter" checked class="w-4 h-4"> Exit / enter model</label>
+      <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="kind" value="stay" class="w-4 h-4"> Stay model</label>
+    </fieldset>
+    <label class="flex flex-col gap-1 text-sm">Algorithm
+      <select name="algorithm" class="h-10 rounded border border-gray-300 bg-white px-2">
+        <option value="random_forest">Random forest (as the paper)</option>
+        <option value="gradient_boosting">Gradient boosting</option>
+      </select>
+    </label>
+    <button type="submit" class="h-11 px-5 rounded bg-green-700 hover:bg-green-800 text-white font-semibold">Train</button>
+    <span class="text-xs text-gray-600 basis-full">Takes seconds to a minute, no GPU. A trained model appears in the Events node's "Score exits and entries with" / "Score stays with"; Update this batch then applies it.</span>
+  </form>
+  {% endif %}
+
+  <section class="bg-white shadow rounded-lg overflow-hidden" aria-label="Compare">
+    <div class="px-5 py-3 border-b border-gray-200 flex flex-wrap justify-between gap-2">
+      <h2 class="font-semibold text-gray-900">4 · Compare on the left-out days</h2>
+      <span class="text-xs text-gray-600">At a cut-off of 0.5. Pipeline: precision among events kept, recall over every real event including missed ones you added.</span>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="min-w-full text-sm">
+        <thead class="bg-gray-50 text-xs uppercase tracking-wide text-gray-600">
+          <tr><th class="px-4 py-2 text-left">Model</th><th class="px-4 py-2 text-left">Scores</th><th class="px-4 py-2 text-left">Status</th><th class="px-4 py-2 text-right">Train / test events</th><th class="px-4 py-2 text-right">Validation AUC</th><th class="px-4 py-2 text-right">Test AUC</th><th class="px-4 py-2 text-right">Precision</th><th class="px-4 py-2 text-right">Recall</th><th class="px-4 py-2 text-right">Pipeline P</th><th class="px-4 py-2 text-right">Pipeline R</th></tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100">
+          {% if builtin and builtin.test %}
+          <tr>
+            <td class="px-4 py-2">Built-in (paper, 2024)</td><td class="px-4 py-2 text-gray-600">exits, entries</td><td class="px-4 py-2 text-gray-600">in use</td>
+            <td class="px-4 py-2 text-right">— / {{ builtin.test.events }}</td><td class="px-4 py-2 text-right">—</td>
+            <td class="px-4 py-2 text-right">{{ builtin.test.auc|default:"—" }}</td><td class="px-4 py-2 text-right">{{ builtin.test.precision|default:"—" }}%</td><td class="px-4 py-2 text-right">{{ builtin.test.recall|default:"—" }}%</td>
+            <td class="px-4 py-2 text-right">{{ builtin.test.pipeline_precision|default:"—" }}%</td><td class="px-4 py-2 text-right">{{ builtin.test.pipeline_recall|default:"—" }}%</td>
+          </tr>
+          {% endif %}
+          {% for m in models %}
+          {% with r=m.metrics %}
+          <tr>
+            <td class="px-4 py-2 font-medium">{{ m.name }} <span class="text-xs text-gray-500">· {{ m.created_at|date:"j M, H:i" }} · {{ m.base_model|cut:"_" }}</span></td>
+            <td class="px-4 py-2 text-gray-600">{{ m.classes|join:", " }}</td>
+            <td class="px-4 py-2 {% if m.status == 'failed' %}text-red-700{% elif m.status == 'training' %}text-blue-800{% else %}text-green-800{% endif %}">{{ m.get_status_display }}{% if r.note %}<span class="block text-xs text-gray-600">{{ r.note }}</span>{% endif %}{% if r.test_note %}<span class="block text-xs text-gray-600">{{ r.test_note }}</span>{% endif %}</td>
+            <td class="px-4 py-2 text-right">{{ r.train_events|default:"—" }} / {{ r.test_events|default:"—" }}</td>
+            <td class="px-4 py-2 text-right">{{ r.validation.auc|default:"—" }}</td>
+            <td class="px-4 py-2 text-right">{{ r.test.auc|default:"—" }}</td>
+            <td class="px-4 py-2 text-right">{% if r.test.precision is not None %}{{ r.test.precision }}%{% else %}—{% endif %}</td>
+            <td class="px-4 py-2 text-right">{% if r.test.recall is not None %}{{ r.test.recall }}%{% else %}—{% endif %}</td>
+            <td class="px-4 py-2 text-right">{% if r.test.pipeline_precision is not None %}{{ r.test.pipeline_precision }}%{% else %}—{% endif %}</td>
+            <td class="px-4 py-2 text-right">{% if r.test.pipeline_recall is not None %}{{ r.test.pipeline_recall }}%{% else %}—{% endif %}</td>
+          </tr>
+          {% if r.test.calibration %}
+          <tr><td colspan="10" class="px-4 pb-3 text-xs text-gray-600">Calibration (score → share real): {% for b in r.test.calibration %}{{ b.from }}–{{ b.to }}: {{ b.mean_score }} → {{ b.real_share }} ({{ b.events }}){% if not forloop.last %} · {% endif %}{% endfor %}</td></tr>
+          {% endif %}
+          {% endwith %}
+          {% empty %}
+          <tr><td colspan="10" class="px-4 py-4 text-gray-600">No models trained yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+{% if training %}<script>setTimeout(function () { location.reload(); }, 5000);</script>{% endif %}
+{% endblock %}

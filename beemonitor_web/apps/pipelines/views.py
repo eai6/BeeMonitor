@@ -158,6 +158,13 @@ def pipeline_editor(request, pk):
         "videos_json": json.dumps(videos),
         "bee_models_json": json.dumps(bee_models),
         "nest_models_json": json.dumps(nest_models),
+        # Event classifiers trained on reviews (memory/70).
+        "event_models_json": json.dumps([
+            {"id": f"model:{m.pk}", "name": m.name,
+             "kind": "stay" if (m.classes or []) == ["stay"] else "exit_enter"}
+            for m in CustomModel.objects.filter(
+                Q(user=request.user) | Q(visibility="public"), model_type="event_classifier",
+                status=CustomModel.Status.READY, is_active=True).exclude(storage_key="")]),
         "errors_json": json.dumps(validate_steps(pipeline.steps or [])),
         "recent_runs": [] if readonly else pipeline.runs.all()[:5],
         "readonly": readonly,
@@ -1117,7 +1124,12 @@ def batch_detail(request, batch_id):
     # pill per run and nothing else, so nine failures of two kinds could only be
     # triaged by opening nine pages.
     from . import failures as failure_taxonomy
-    rows = aggregate.batch_rows(runs)
+    from . import batches as batches_mod
+
+    # Which actions the review metrics count (memory/70).
+    review_actions = batches_mod.review_actions(batch_id)
+    counted = None if len(review_actions) == len(batches_mod.ACTIONS) else review_actions
+    rows = aggregate.batch_rows(runs, counted)
     outcome = aggregate.batch_summary(rows)
     # Which units these clips came from. A batch can span devices, so this is a
     # list, not the first row's device wearing the whole batch's name.
@@ -1230,8 +1242,11 @@ def batch_detail(request, batch_id):
         # Events and trips review metrics (memory/62); None until something
         # in the batch has been reviewed.
         "review_summary": (review_mod.batch_review_summary(
-            [r["run"] for r in rows], {r["run"].pk: r.get("review") for r in rows})
+            [r["run"] for r in rows], {r["run"].pk: r.get("review") for r in rows}, counted)
             if not photos_kind else None),
+        "review_actions": review_actions,
+        "action_choices": [("exit", "Exits"), ("enter", "Entries"), ("stay", "Stays")],
+        "cutoff_json": _cutoff_json(review_mod, rows, counted),
         # Apply the pipeline's insect groups here, without a re-run (memory/65).
         "pipeline_groups": (_pipeline_groups(runs[0].pipeline)
                             if can_share and runs and not photos_kind else None),
@@ -1343,6 +1358,30 @@ def batch_rename(request, batch_id):
     messages.success(request, f"Renamed to “{name}”." if name
                      else "Name cleared: the batch shows its pipeline's name.")
     return redirect("pipelines:batch_detail", batch_id=batch_id)
+
+
+def _cutoff_json(review_mod, rows, counted):
+    """The cut-off panel's data: reviewed events with a classifier score, and
+    the missed events added (they are real events no score can keep)."""
+    scored, added = [], 0
+    for r in rows:
+        counts = r.get("review") or {}
+        scored += counts.get("scored") or []
+        added += counts.get("added") or 0
+    return json.dumps({"scored": scored, "added": added})
+
+
+@login_required
+@require_POST
+def batch_review_actions(request, batch_id):
+    """Which event actions the batch's review metrics count (memory/70).
+    Only the batch's launcher; reviewing itself is unaffected."""
+    from . import batches, sharing
+
+    if not sharing.owns_batch(request.user, batch_id):
+        raise Http404("No such batch.")
+    batches.set_review_actions(batch_id, request.user, request.POST.getlist("actions"))
+    return redirect(reverse("pipelines:batch_detail", args=[batch_id]) + "#review")
 
 
 @login_required

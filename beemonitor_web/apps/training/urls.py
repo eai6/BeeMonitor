@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views
+from . import event_views, views
 
 app_name = "training"
 
@@ -10,6 +10,10 @@ urlpatterns = [
     path("<int:pk>/", views.TrainingDetailView.as_view(), name="detail"),
     path("poll/", views.PollTrainingJobsView.as_view(), name="poll"),
     path("models/", views.CustomModelListView.as_view(), name="models"),
+    # Event classifiers trained on review data (memory/70).
+    path("event-classifiers/", event_views.EventClassifiersView.as_view(), name="event_classifiers"),
+    path("event-classifiers/data.csv", event_views.EventDatasetCsvView.as_view(),
+         name="event_dataset_csv"),
     path("models/upload/", views.UploadModelView.as_view(), name="upload_model"),
     path("models/<int:pk>/", views.CustomModelDetailView.as_view(), name="model_detail"),
     path("models/<int:pk>/publish/", views.PublishModelView.as_view(), name="model_publish"),

@@ -296,14 +296,41 @@ their reason.
 {% with ev=review_summary.events tr=review_summary.trips %}
 <section class="bg-white shadow rounded-lg p-4 mb-6 grid grid-cols-1 md:grid-cols-2 gap-4" aria-label="Review">
   {% comment %}Only once someone has reviewed (memory/62): how far the review got, and how far to trust the system here.{% endcomment %}
-  <div class="flex flex-col gap-1.5">
-    <h2 class="text-sm font-semibold text-gray-900">Events review</h2>
+  <div class="flex flex-col gap-1.5" id="review">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <h2 class="text-sm font-semibold text-gray-900">Events review</h2>
+      {% comment %}Which actions the metrics count (memory/70). Every event can still be reviewed.{% endcomment %}
+      {% if can_share %}
+      <form method="post" action="{% url 'pipelines:batch_review_actions' batch_id %}" class="flex flex-wrap items-center gap-1.5 text-xs" data-review-actions>
+        {% csrf_token %}
+        <span class="text-gray-600">Count in metrics</span>
+        {% for a, label in action_choices %}
+        <label class="inline-flex items-center gap-1 h-8 px-2 rounded border cursor-pointer {% if a in review_actions %}border-green-600 bg-green-50 text-green-800 font-semibold{% else %}border-gray-300 bg-white text-gray-600{% endif %}">
+          <input type="checkbox" name="actions" value="{{ a }}" {% if a in review_actions %}checked{% endif %} class="w-3.5 h-3.5"> {{ label }}
+        </label>
+        {% endfor %}
+        <noscript><button type="submit" class="h-8 px-2 rounded border border-gray-300">Save</button></noscript>
+      </form>
+      {% endif %}
+    </div>
+    {% if ev.actions %}<p class="text-xs text-gray-600">{% for a, label in action_choices %}{% if a in ev.actions %}{{ label|lower }}{% if not forloop.last %} {% endif %}{% endif %}{% endfor %} only — {% for a, label in action_choices %}{% if a not in ev.actions %}{{ label|lower }} {% endif %}{% endfor %}left out of these numbers (still reviewable).</p>{% endif %}
     <p class="text-sm text-gray-700">{{ ev.reviewed }} of {{ ev.events }} detected events reviewed, in {{ ev.clips }} clip{{ ev.clips|pluralize }}</p>
     <p class="text-sm"><span class="text-green-700">{{ ev.accepted }} accepted</span> · <span class="text-red-700">{{ ev.rejected }} rejected</span>{% if ev.disputed %} · <span class="text-amber-800">{{ ev.disputed }} disputed</span>{% endif %} · {{ ev.added }} added as missed</p>
     <div class="flex gap-6 mt-1">
       <div><div class="text-xs text-gray-600">Precision</div><div class="text-xl font-bold text-gray-900">{% if ev.precision is not None %}{{ ev.precision }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">right among the events checked</div></div>
       <div><div class="text-xs text-gray-600">Recall</div><div class="text-xl font-bold text-gray-900">{% if ev.recall is not None %}{{ ev.recall }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">found among the events confirmed or added</div></div>
     </div>
+    {% if ev.scored %}
+    {% comment %}What a classifier cut-off would do, on the reviewed events it scored (memory/70). Nothing is dropped.{% endcomment %}
+    <div class="mt-2 pt-2 border-t border-gray-200 flex flex-col gap-1.5" data-cutoff data-scored="{{ cutoff_json }}">
+      <label class="flex items-center gap-2 text-sm text-gray-700">Classifier cut-off
+        <input type="range" min="0" max="0.95" step="0.05" value="0.5" data-cutoff-range class="flex-1">
+        <strong data-cutoff-value class="w-10 text-right">0.50</strong>
+      </label>
+      <p class="text-sm text-gray-700" data-cutoff-out></p>
+      <p class="text-xs text-gray-600">Reviewed events the classifier scored ({{ ev.scored|length }}): what precision and recall would be if events below the cut-off were dropped. Nothing is dropped from the batch.</p>
+    </div>
+    {% endif %}
   </div>
   <div class="flex flex-col gap-1.5">
     <h2 class="text-sm font-semibold text-gray-900">Trips review</h2>
@@ -317,6 +344,38 @@ their reason.
   </div>
 </section>
 {% endwith %}
+<script>
+  // Count in metrics (memory/70): saving on change.
+  document.querySelectorAll('[data-review-actions] input').forEach(function (cb) {
+    cb.addEventListener('change', function () { cb.form.submit(); });
+  });
+  // The cut-off panel: precision among reviewed events kept, and recall of
+  // real events (accepted + added as missed) kept.
+  (function () {
+    var box = document.querySelector('[data-cutoff]');
+    if (!box) return;
+    var data = JSON.parse(box.getAttribute('data-scored'));
+    var range = box.querySelector('[data-cutoff-range]');
+    function paint() {
+      var cut = parseFloat(range.value), acc = 0, rej = 0, accAll = 0, kept = 0;
+      data.scored.forEach(function (e) {
+        if (e[2] === 'accepted') accAll += 1;
+        if (e[1] < cut) return;
+        kept += 1;
+        if (e[2] === 'accepted') acc += 1; else if (e[2] === 'rejected') rej += 1;
+      });
+      var p = acc + rej ? Math.round(100 * acc / (acc + rej)) : null;
+      var real = accAll + data.added;
+      var r = real ? Math.round(100 * acc / real) : null;
+      box.querySelector('[data-cutoff-value]').textContent = cut.toFixed(2);
+      box.querySelector('[data-cutoff-out]').textContent = 'At ' + cut.toFixed(2) + ': precision '
+        + (p == null ? '—' : p + '%') + ' · recall ' + (r == null ? '—' : r + '%')
+        + ' · ' + kept + ' of ' + data.scored.length + ' scored reviewed events kept';
+    }
+    range.addEventListener('input', paint);
+    paint();
+  })();
+</script>
 {% endif %}
 
 {% if group_summary or pipeline_groups %}

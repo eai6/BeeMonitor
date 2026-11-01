@@ -227,6 +227,9 @@ class Batch(models.Model):
 
     batch_id = models.UUIDField(unique=True)
     name = models.CharField(max_length=120, blank=True)
+    # Which event actions the review metrics count (memory/70): e.g. exits and
+    # entries for foraging. Empty = all of them. Reviewing is unaffected.
+    review_actions = models.JSONField(default=list, blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
                                    null=True, blank=True, related_name="+")
     updated_at = models.DateTimeField(auto_now=True)

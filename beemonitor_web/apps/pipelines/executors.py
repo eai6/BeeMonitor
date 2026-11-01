@@ -840,12 +840,24 @@ def _exec_analyze_events(step, run, context, inputs, index):
                 aspect=extra["aspect"], first_frame=first, last_frame=last,
                 detected_only=detected_only), fps)
             filtered_out = _filtered_out(every, extra)
-        if cfg.get("ml_scoring") in (True, "true", "on", "1", 1):
+        spec = cfg.get("ml_scoring")
+        spec = None if spec in (None, "", "off", False, "false", "0", 0) else spec
+        stay_spec = cfg.get("ml_stay_model") or None
+        if spec or stay_spec:
             from . import ml_scoring
 
-            note = ml_scoring.score(rows, result, refs, extra)
+            note = ml_scoring.score(rows, result, refs, extra, spec, stay_spec)
             if note:
                 notes.append(note)
+            # Optional cut-off (memory/70): leave out scored events below it.
+            # Off by default: a score is a column and the reader decides.
+            cut = _number(cfg.get("ml_min_confidence"), None)
+            if cut is not None:
+                before = len(rows)
+                rows = [r for r in rows if r.get("ml_confidence") in (None, "")
+                        or float(r["ml_confidence"]) >= cut]
+                if before - len(rows):
+                    notes.append(f"{before - len(rows)} events scored below {cut:g} left out.")
 
     out = {
         "artifact": "events", "table_kind": "events",

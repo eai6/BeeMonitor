@@ -377,7 +377,7 @@ def run_error(run):
     return (real or candidates or [run.error_message or ""])[0]
 
 
-def batch_rows(runs):
+def batch_rows(runs, actions=None):
     """One row per run: clip, outcome, what it produced, what it cost.
 
     The batch page could only say "failed"; a row now carries the reason and
@@ -393,7 +393,7 @@ def batch_rows(runs):
     results = {r.job_id: r for r in JobResult.objects.filter(job_id__in=job_ids)}
 
     from .review import batch_review_counts
-    reviews = batch_review_counts(runs)
+    reviews = batch_review_counts(runs, actions)
 
     rows = []
     for run in runs:

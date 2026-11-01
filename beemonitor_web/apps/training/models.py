@@ -112,6 +112,9 @@ class CustomModel(models.Model):
         NEST_DETECTION = "nest_detection", "Nest Detection"
         BEE_TRACKING = "bee_tracking", "Bee Tracking"
         CUSTOM = "custom", "Custom"
+        # Scores detected events from review data (memory/70); classes are
+        # the actions it scores: ["exit", "enter"] or ["stay"].
+        EVENT_CLASSIFIER = "event_classifier", "Event classifier"
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,

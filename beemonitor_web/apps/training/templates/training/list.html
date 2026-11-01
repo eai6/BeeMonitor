@@ -8,6 +8,7 @@
     {# Auto-Adaptation + Domain Drift (memory/25 loop) hidden from the UI 2026-07-05; #}
     {# pages still live at training:adaptation / training:drift for direct access. #}
     <a href="{% url 'training:models' %}" class="px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 font-medium">Custom Models</a>
+    <a href="{% url 'training:event_classifiers' %}" class="px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 font-medium" title="Train and evaluate event classifiers on your reviews">Event classifiers</a>
     <a href="{% url 'training:create' %}" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-medium">New Training Job</a>
   </div>
 </div>

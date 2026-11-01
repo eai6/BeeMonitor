@@ -204,6 +204,7 @@ const INITIAL_STEPS = JSON.parse("{{ initial_steps_json|escapejs }}");
 const VIDEOS = JSON.parse("{{ videos_json|escapejs }}");
 const BEE_MODELS = JSON.parse("{{ bee_models_json|escapejs }}");
 const NEST_MODELS = JSON.parse("{{ nest_models_json|escapejs }}");
+const EVENT_MODELS = JSON.parse("{{ event_models_json|escapejs }}");
 const SAVE_URL = "{% url 'pipelines:save_graph' pk=pipeline.pk %}";
 const CSRF = "{{ csrf_token }}";
 const READONLY = {{ readonly|yesno:"true,false" }};
@@ -226,6 +227,13 @@ function ctrl(field, value){
     const models = field.field_type==='bee_model' ? BEE_MODELS : NEST_MODELS;
     const dflt = field.field_type==='bee_model' ? 'BeeMonitor default bee model' : 'BeeMonitor default nest model';
     const opts=`<option value="">${dflt}</option>`+models.map(o=>`<option value="${esc(o.id)}" ${String(o.id)===String(v)?'selected':''}>${esc(o.name)}</option>`).join('');
+    return `<select ${common}>${opts}</select>`;
+  }
+  if(field.field_type==='event_model'){
+    // Built-in choices, then the user's own event classifiers of this kind (memory/70).
+    const mine = EVENT_MODELS.filter(m => m.kind === field.model_kind);
+    const opts = (field.choices||[]).concat(mine.map(m => ({value: m.id, label: m.name})))
+      .map(c => `<option value="${esc(c.value)}" ${String(c.value)===String(v)?'selected':''}>${esc(c.label)}</option>`).join('');
     return `<select ${common}>${opts}</select>`;
   }
   if(field.field_type==='group_checklist'){

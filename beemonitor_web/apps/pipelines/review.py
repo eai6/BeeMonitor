@@ -225,19 +225,14 @@ def trip_reviews_for(runs):
     return list(latest.values())
 
 
-def batch_review_counts(runs):
-    """``{run pk: counts}`` (as ``event_review_counts``) for many runs in two
-    queries' worth of work; None for a run with no Events step."""
-    from .aggregate import analyzer_outputs
+def review_votes(runs):
+    """``{run pk: {event_key: [verdict per reviewer]}}`` for these runs.
+
+    Votes saved on another run of the same GPU job count too
+    (shared_job_runs); each reviewer's latest call on an event wins."""
     from .models import EventReview
 
-    from django.db.models import Count
-
-    from .models import AddedEvent
-
     runs = list(runs)
-    # Votes saved on another run of the same GPU job count too (shared_job_runs);
-    # a reviewer's latest call on an event wins.
     owners = shared_job_runs(runs, "event_reviews")
     latest = {}
     for run_id, key, user_id, verdict, when in (
@@ -249,10 +244,33 @@ def batch_review_counts(runs):
     votes = {}
     for (run_pk, key, _u), (verdict, _w) in latest.items():
         votes.setdefault(run_pk, {}).setdefault(key, []).append(verdict)
+    return votes
+
+
+def batch_review_counts(runs, actions=None):
+    """``{run pk: counts}`` (as ``event_review_counts``) for many runs in two
+    queries' worth of work; None for a run with no Events step.
+
+    ``actions`` limits the counts to those event actions (memory/70: e.g.
+    exits and entries for foraging); None counts all. ``scored`` lists each
+    reviewed event's ``[action, ml_confidence, call]`` where it has a score,
+    for the cut-off panel."""
+    from .aggregate import analyzer_outputs
+    from .models import EventReview
+
+    from django.db.models import Count
+
+    from .models import AddedEvent
+
+    runs = list(runs)
+    votes = review_votes(runs)
     added_owners = shared_job_runs(runs, "added_events")
     added = {}
-    for run_id, n in (AddedEvent.objects.filter(run_id__in=list(added_owners)).values("run_id")
-                      .annotate(n=Count("id")).values_list("run_id", "n")):
+    added_qs = AddedEvent.objects.filter(run_id__in=list(added_owners))
+    if actions is not None:
+        added_qs = added_qs.filter(action__in=list(actions))
+    for run_id, n in (added_qs.values("run_id").annotate(n=Count("id"))
+                      .values_list("run_id", "n")):
         own = added_owners[run_id].pk
         added[own] = added.get(own, 0) + n
     out = {}
@@ -261,9 +279,15 @@ def batch_review_counts(runs):
         if not outs:
             out[run.pk] = None
             continue
-        keys = {event_key(r) for o in outs for r in (o.get("rows") or [])}
+        rows = {event_key(r): r for o in outs for r in (o.get("rows") or [])
+                if actions is None or primitives.normalize_event(r).get("action") in actions}
+        keys = set(rows)
         mine = votes.get(run.pk, {})
         calls = [combined(v) for k, v in mine.items() if k in keys]
+        scored = [[primitives.normalize_event(rows[k]).get("action"),
+                   float(rows[k]["ml_confidence"]), combined(v)]
+                  for k, v in mine.items()
+                  if k in keys and rows[k].get("ml_confidence") not in (None, "")]
         # Reviewed events on tracks an insect-group filter now leaves out
         # (memory/65): how the reviewers called what the filter took away.
         gone = {k for o in outs for k in ((o.get("filtered_out") or {}).get("event_keys") or [])}
@@ -271,6 +295,7 @@ def batch_review_counts(runs):
         out[run.pk] = {"events": len(keys), "reviewed": len(calls),
                        "accepted": calls.count("accepted"), "rejected": calls.count("rejected"),
                        "disputed": calls.count("disputed"), "added": added.get(run.pk, 0),
+                       "scored": scored,
                        "left_out": {"reviewed": len(left), "accepted": left.count("accepted"),
                                     "rejected": left.count("rejected")}}
     return out
@@ -334,23 +359,27 @@ def batch_group_summary(runs, per_run=None):
             "reviewed": left}
 
 
-def batch_review_summary(runs, per_run=None):
+def batch_review_summary(runs, per_run=None, actions=None):
     """The batch page's review metrics (memory/62): events (precision and
     recall from reviewers' calls and added events) and trips. None when
     nothing in the batch has been reviewed."""
     runs = list(runs)
-    per_run = per_run if per_run is not None else batch_review_counts(runs)
+    per_run = per_run if per_run is not None else batch_review_counts(runs, actions)
     ev = {"accepted": 0, "rejected": 0, "disputed": 0, "added": 0, "reviewed": 0,
-          "events": 0, "clips": 0}
+          "events": 0, "clips": 0, "scored": []}
     for counts in per_run.values():
         if not counts:
             continue
         ev["events"] += counts["events"]
         for k in ("accepted", "rejected", "disputed", "added", "reviewed"):
             ev[k] += counts[k]
+        ev["scored"] += counts.get("scored") or []
         if counts["reviewed"] or counts["added"]:
             ev["clips"] += 1
     ev["precision"], ev["recall"] = quality(ev["accepted"], ev["rejected"], ev["added"])
+    # The actions counted (memory/70), and the scored reviewed events for the
+    # cut-off panel: [action, ml_confidence, call].
+    ev["actions"] = list(actions) if actions is not None else None
 
     by_exit = {}
     for r in trip_reviews_for(runs):
@@ -376,7 +405,7 @@ def batch_review_summary(runs, per_run=None):
     as_suggested = trips["accepted"] - trips["relinked"]
     trips["suggestion_right"] = (round(100 * as_suggested / trips["reviewed"])
                                  if trips["reviewed"] else None)
-    if not (ev["reviewed"] or ev["added"] or trips["reviewed"]):
+    if not (ev["reviewed"] or ev["added"] or trips["reviewed"]) and actions is None:
         return None
     return {"events": ev, "trips": trips}
 
