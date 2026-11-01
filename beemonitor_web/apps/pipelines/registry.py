@@ -684,15 +684,26 @@ BLOCK_REGISTRY = {
             {
                 # memory/72: an exit flying down past the tube below, its last
                 # detection on it, read as an entry there.
-                "name": "settle_seconds",
-                "label": "At the tube at least (seconds)",
+                "name": "entry_settle_seconds",
+                "label": "Entry: at the tube at least (seconds)",
                 "field_type": "number",
                 "required": False,
                 "default": 0,
                 "choices": None,
                 "help": "An entry counts only if the insect's last moments are at the tube "
-                        "this long; an exit only if its first are. Stops an insect flying "
-                        "past a tube from counting there. 0 = off. Try 0.2.",
+                        "this long. Stops an insect flying past a tube from counting as "
+                        "going in. 0 = off. Try 0.2.",
+            },
+            {
+                "name": "exit_settle_seconds",
+                "label": "Exit: at the tube at least (seconds)",
+                "field_type": "number",
+                "required": False,
+                "default": 0,
+                "choices": None,
+                "help": "An exit counts only if the insect's first moments are at the tube "
+                        "this long. Insects often take off at once, so keep this low. "
+                        "0 = off. Try 0 or 0.1.",
             },
         ],
     },

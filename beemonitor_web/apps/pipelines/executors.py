@@ -830,17 +830,17 @@ def _exec_analyze_events(step, run, context, inputs, index):
         first, last = _frames_analysed(run, fps, extra.get("video"))
         detected_only = cfg.get("track_rows") != "all"
         # An exit or entry needs the insect at the tube this long (memory/72).
-        settle = max(int(round((_number(cfg.get("settle_seconds"), 0.0) or 0.0) * fps)), 0)
+        settle = _settle_frames(cfg, fps)
         events = ops.compute_events(
             tidy, refs, fps, padding_bl=_number(cfg.get("padding_bl"), 0.0),
             aspect=extra["aspect"], first_frame=first, last_frame=last,
-            detected_only=detected_only, settle_frames=settle)
+            detected_only=detected_only, **settle)
         rows = primitives.events_from_computed(events, fps)
         if extra["dropped"] and extra["unfiltered"] is not None:
             every = primitives.events_from_computed(ops.compute_events(
                 extra["unfiltered"], refs, fps, padding_bl=_number(cfg.get("padding_bl"), 0.0),
                 aspect=extra["aspect"], first_frame=first, last_frame=last,
-                detected_only=detected_only, settle_frames=settle), fps)
+                detected_only=detected_only, **settle), fps)
             filtered_out = _filtered_out(every, extra)
         spec = cfg.get("ml_scoring")
         spec = None if spec in (None, "", "off", False, "false", "0", 0) else spec
@@ -876,6 +876,17 @@ def _exec_analyze_events(step, run, context, inputs, index):
     if notes:
         out["note"] = " ".join(notes)
     return out
+
+
+def _settle_frames(cfg, fps):
+    """The Events node's exit and entry settle times, in frames. The older
+    single ``settle_seconds`` is ignored: it would be a setting the node no
+    longer shows."""
+    def frames(name):
+        return max(int(round((_number(cfg.get(name), 0.0) or 0.0) * fps)), 0)
+
+    return {"exit_settle_frames": frames("exit_settle_seconds"),
+            "entry_settle_frames": frames("entry_settle_seconds")}
 
 
 def _filtered_out(every, extra):

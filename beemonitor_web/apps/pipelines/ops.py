@@ -624,7 +624,8 @@ def _run_frames(frames, where, ref, from_end=False):
 
 
 def compute_events(tidy, refs, fps, padding_bl=0.0, aspect=16 / 9,
-                   first_frame=0, last_frame=None, detected_only=True, settle_frames=0):
+                   first_frame=0, last_frame=None, detected_only=True, exit_settle_frames=0,
+                   entry_settle_frames=0):
     """Exits, entries and stays, one pass over each track's detected rows
     (or, with ``detected_only`` False, its whole trajectory: the tracker's
     predicted positions too).
@@ -644,10 +645,11 @@ def compute_events(tidy, refs, fps, padding_bl=0.0, aspect=16 / 9,
     ``last_frame`` None = the clip's length is unknown, and then an entry's
     flag is None, not a guess.
 
-    ``settle_frames`` (memory/72): an exit counts only if the track's first
-    rows stay at the tube that long, an entry only if its last rows do. A bee
-    flying away whose last detection happens to fall on the tube below isn't
-    an entry there. Events cut by the clip's start or end (``at_edge``) are
+    ``exit_settle_frames`` / ``entry_settle_frames`` (memory/72): an exit
+    counts only if the track's first rows stay at the tube that long, an entry
+    only if its last rows do. A bee flying away whose last detection happens to
+    fall on the tube below isn't an entry there; exits are quick, so theirs is
+    set apart. Events cut by the clip's start or end (``at_edge``) are
     exempt: the clip may have cut the stay short.
 
     Returns ``[{track, action, reference, frame, end_frame, at_edge}]`` (end_frame
@@ -685,11 +687,11 @@ def compute_events(tidy, refs, fps, padding_bl=0.0, aspect=16 / 9,
                            "at_edge": True if _at_start(frames[0]) or end_edge else end_edge})
             continue
         if start_ref is not None and (
-                _at_start(frames[0]) or _run_frames(frames, where, start_ref) >= settle_frames):
+                _at_start(frames[0]) or _run_frames(frames, where, start_ref) >= exit_settle_frames):
             events.append({"track": tid, "action": EXIT, "reference": start_ref,
                            "frame": frames[0], "at_edge": _at_start(frames[0])})
         if end_ref is not None and (
-                _at_end(frames[-1]) or _run_frames(frames, where, end_ref, True) >= settle_frames):
+                _at_end(frames[-1]) or _run_frames(frames, where, end_ref, True) >= entry_settle_frames):
             events.append({"track": tid, "action": ENTER, "reference": end_ref,
                            "frame": frames[-1], "at_edge": _at_end(frames[-1])})
 

@@ -49,3 +49,4 @@
 - **Tests:** `test_insect_groups.ApplyToBatchTests` (ticked, reviewed, nothing ticked).
 
 **Feedback:**
+- 2026-11-01: precision and recall went up with settle 0.2, but quick take-offs lost their exits (EXIT 35, track 10). Split into **Entry** (`entry_settle_seconds`) and **Exit** (`exit_settle_seconds`) on the Events node; `executors._settle_frames`. The old `settle_seconds` is ignored (no hidden setting). Suggested: entry 0.2, exit 0–0.1.
