@@ -19,6 +19,10 @@
       <span data-rv-progress class="text-gray-700"></span>
       <button type="button" data-am-open class="h-10 px-3 rounded border border-amber-700 text-amber-800 hover:bg-amber-50 font-semibold" title="An insect went in or came out and the system didn't catch it">+ Add missed event (A)</button>
       <button type="button" data-rv-start class="h-10 px-3 rounded bg-amber-700 hover:bg-amber-800 text-white font-semibold">Review events</button>
+      {# Done with this clip: counts it as reviewed even with nothing to vote on. #}
+      <button type="button" data-rv-done data-url="{% url 'analysis:clip_reviewed' job.pk %}{{ run_q }}" aria-pressed="{{ clip_reviewed|yesno:'true,false' }}"
+              class="h-10 px-3 rounded border font-semibold {% if clip_reviewed %}border-green-700 bg-green-50 text-green-800{% else %}border-gray-300 bg-white text-gray-800 hover:bg-gray-50{% endif %}"
+              title="You've watched this clip: its events are called and anything missed is added">{% if clip_reviewed %}✓ Clip reviewed{% else %}Mark clip reviewed{% endif %}</button>
       <button type="button" data-rv-exit hidden class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">Exit review</button>
     </div>
     {% endif %}
@@ -459,7 +463,11 @@
   function rvStart() {
     var d = ov.data();
     rv.list = ((d && d.events) || []).slice().sort(function (a, b) { return a[0] - b[0]; });
-    if (!rv.list.length) return;
+    if (!rv.list.length) {
+      status.textContent = 'No events in this clip to call. Watch it, add any the system missed, '
+        + 'then Mark clip reviewed.';
+      return;
+    }
     rv.on = true;
     root.querySelector('[data-rv-start]').hidden = true;
     root.querySelector('[data-rv-exit]').hidden = false;
@@ -471,8 +479,33 @@
     video.pause();
     root.querySelector('[data-rv-start]').hidden = false;
     root.querySelector('[data-rv-exit]').hidden = true;
-    if (finished) status.textContent = 'Review finished: every event in this clip has been shown.';
+    if (finished) {
+      status.textContent = 'Review finished: every event in this clip has been shown. Marked reviewed.';
+      markDone(true);
+    }
   }
+  // Mark the clip reviewed (or not): a clip with no events counts this way.
+  var doneBtn = root.querySelector('[data-rv-done]');
+  function paintDone(on) {
+    if (!doneBtn) return;
+    doneBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    doneBtn.textContent = on ? '\u2713 Clip reviewed' : 'Mark clip reviewed';
+    doneBtn.className = 'h-10 px-3 rounded border font-semibold ' + (on
+      ? 'border-green-700 bg-green-50 text-green-800'
+      : 'border-gray-300 bg-white text-gray-800 hover:bg-gray-50');
+  }
+  function markDone(on) {
+    if (!doneBtn) return;
+    fetch(doneBtn.getAttribute('data-url'), {method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
+      body: JSON.stringify({reviewed: on})})
+      .then(function (r) { return r.json(); })
+      .then(function (res) { if (res.ok) paintDone(res.reviewed); })
+      .catch(function () {});
+  }
+  if (doneBtn) doneBtn.addEventListener('click', function () {
+    markDone(doneBtn.getAttribute('aria-pressed') !== 'true');
+  });
   // Missed events (memory/62 §3b).
   var addUrl = root.getAttribute('data-add-url');
   function refreshLive() {

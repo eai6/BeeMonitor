@@ -273,16 +273,25 @@ def batch_review_counts(runs, actions=None):
                       .values_list("run_id", "n")):
         own = added_owners[run_id].pk
         added[own] = added.get(own, 0) + n
+    # Clips a reviewer marked done (ClipReview): counted as reviewed even
+    # with nothing to vote on.
+    from .models import ClipReview
+    done_owners = shared_job_runs(runs, "clip_reviews")
+    done = {done_owners[r].pk for r in ClipReview.objects.filter(
+        run_id__in=list(done_owners)).values_list("run_id", flat=True)}
     out = {}
     for run in runs:
         outs = [o for k, o in analyzer_outputs(run) if k == "events"]
         if not outs:
             out[run.pk] = None
             continue
+        all_keys = {event_key(r) for o in outs for r in (o.get("rows") or [])}
         rows = {event_key(r): r for o in outs for r in (o.get("rows") or [])
                 if actions is None or primitives.normalize_event(r).get("action") in actions}
         keys = set(rows)
         mine = votes.get(run.pk, {})
+        # Votes on events whose action the metrics leave out (e.g. stays).
+        other_votes = sum(1 for k in mine if k in all_keys and k not in keys)
         calls = [combined(v) for k, v in mine.items() if k in keys]
         scored = [[primitives.normalize_event(rows[k]).get("action"),
                    float(rows[k]["ml_confidence"]), combined(v)]
@@ -296,6 +305,7 @@ def batch_review_counts(runs, actions=None):
                        "accepted": calls.count("accepted"), "rejected": calls.count("rejected"),
                        "disputed": calls.count("disputed"), "added": added.get(run.pk, 0),
                        "scored": scored,
+                       "clip_reviewed": run.pk in done, "other_votes": other_votes,
                        "left_out": {"reviewed": len(left), "accepted": left.count("accepted"),
                                     "rejected": left.count("rejected")}}
     return out
@@ -374,7 +384,7 @@ def batch_review_summary(runs, per_run=None, actions=None):
         for k in ("accepted", "rejected", "disputed", "added", "reviewed"):
             ev[k] += counts[k]
         ev["scored"] += counts.get("scored") or []
-        if counts["reviewed"] or counts["added"]:
+        if counts["reviewed"] or counts["added"] or counts.get("clip_reviewed"):
             ev["clips"] += 1
     ev["precision"], ev["recall"] = quality(ev["accepted"], ev["rejected"], ev["added"])
     # The actions counted (memory/70), and the scored reviewed events for the
@@ -405,7 +415,7 @@ def batch_review_summary(runs, per_run=None, actions=None):
     as_suggested = trips["accepted"] - trips["relinked"]
     trips["suggestion_right"] = (round(100 * as_suggested / trips["reviewed"])
                                  if trips["reviewed"] else None)
-    if not (ev["reviewed"] or ev["added"] or trips["reviewed"]) and actions is None:
+    if not (ev["reviewed"] or ev["added"] or ev["clips"] or trips["reviewed"]) and actions is None:
         return None
     return {"events": ev, "trips": trips}
 

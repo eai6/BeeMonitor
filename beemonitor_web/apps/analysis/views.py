@@ -1697,6 +1697,12 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         from apps.pipelines.executors import pin_run
         pinned = pin_run(job, self.request.GET.get("run"))
         ctx["run_q"] = f"?run={pinned.pk}" if pinned else ""
+        # Whether this reviewer marked the clip done.
+        from apps.pipelines.models import ClipReview
+        from apps.pipelines.review import run_for_review
+        _rv = run_for_review(job, self.request.GET.get("run"))
+        ctx["clip_reviewed"] = bool(_rv and ClipReview.objects.filter(
+            run=_rv, user=self.request.user).exists())
         # Previous / next clip of the batch, for reviewing clip after clip.
         from apps.pipelines import batches as pipeline_batches
         ctx["batch_nav"] = pipeline_batches.neighbours(pinned)
@@ -2330,6 +2336,32 @@ class TrackGroupView(LoginRequiredMixin, View):
         except (KeyError, ValueError, TypeError) as e:
             return JsonResponse({"ok": False, "error": str(e)}, status=400)
         return JsonResponse({"ok": True, **done})
+
+
+class ClipReviewedView(LoginRequiredMixin, View):
+    """Mark the clip reviewed by this reviewer, or take it back: JSON
+    ``{"reviewed": true|false}``. A clip with nothing to vote on counts as
+    reviewed only this way."""
+
+    def post(self, request, pk):
+        import json as _json
+
+        from apps.pipelines import review as event_review
+        from apps.pipelines.models import ClipReview
+
+        job = get_object_or_404(Job, pk=pk)
+        run = event_review.run_for_review(job, request.GET.get("run"))
+        if run is None or not event_review.can_review(request.user, run):
+            raise Http404("You can't review this clip.")
+        try:
+            done = bool(_json.loads(request.body or b"{}").get("reviewed", True))
+        except ValueError:
+            return JsonResponse({"ok": False, "error": "Bad JSON."}, status=400)
+        if done:
+            ClipReview.objects.get_or_create(run=run, user=request.user)
+        else:
+            ClipReview.objects.filter(run=run, user=request.user).delete()
+        return JsonResponse({"ok": True, "reviewed": done})
 
 
 class AddMissedEventView(LoginRequiredMixin, View):

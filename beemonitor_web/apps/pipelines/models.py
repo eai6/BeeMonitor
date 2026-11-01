@@ -338,6 +338,23 @@ class TripReview(models.Model):
         return f"{self.user} {self.verdict} trip from {self.exit_key}"
 
 
+class ClipReview(models.Model):
+    """A reviewer watched this clip and is done with it (memory/62): its events
+    are called and anything missed was added. The only way a clip with no
+    events (nothing to vote on) counts as reviewed."""
+
+    run = models.ForeignKey(PipelineRun, on_delete=models.CASCADE, related_name="clip_reviews")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name="clip_reviews")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("run", "user")
+
+    def __str__(self):
+        return f"{self.user} reviewed {self.run_id}"
+
+
 class AddedEvent(models.Model):
     """An event a reviewer says the system missed (memory/62 §3b).
 

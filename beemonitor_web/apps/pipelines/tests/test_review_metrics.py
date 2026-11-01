@@ -79,3 +79,47 @@ class ReviewActionsTests(PeriodBase):
         self.assertIn(["stay", 0.2, "rejected"], data["scored"])
         self.assertEqual(data["added"], 1)
         self.assertContains(page, "Classifier cut-off")
+
+
+class ClipReviewedTests(PeriodBase):
+    """A clip with nothing to vote on counts as reviewed once marked."""
+
+    def test_marking_a_clip_reviewed_shows_on_the_batch(self):
+        from apps.pipelines.models import ClipReview
+        run, job = self.a["run"], self.a["job"]
+        run.context["e"]["rows"] = []            # a clip with no events
+        run.save()
+        counts = review.batch_review_counts([run])[run.pk]
+        self.assertFalse(counts["clip_reviewed"])
+
+        self.client.force_login(self.owner)
+        res = self.client.post(reverse("analysis:clip_reviewed", args=[job.pk]) + f"?run={run.pk}",
+                               json.dumps({"reviewed": True}), content_type="application/json")
+        self.assertTrue(res.json()["reviewed"])
+        self.assertTrue(ClipReview.objects.filter(run=run, user=self.owner).exists())
+        counts = review.batch_review_counts([run])[run.pk]
+        self.assertTrue(counts["clip_reviewed"])
+        self.assertEqual(review.batch_review_summary([run])["events"]["clips"], 1)
+        page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
+        self.assertContains(page, "✓ reviewed")
+        results = self.client.get(reverse("analysis:results", args=[job.pk]) + f"?run={run.pk}")
+        self.assertContains(results, "✓ Clip reviewed")
+
+        self.client.post(reverse("analysis:clip_reviewed", args=[job.pk]) + f"?run={run.pk}",
+                         json.dumps({"reviewed": False}), content_type="application/json")
+        self.assertFalse(ClipReview.objects.filter(run=run).exists())
+
+    def test_stays_only_clips_say_their_votes_are_left_out(self):
+        run = self.a["run"]
+        run.context["e"]["rows"] = [{"action": "stay", "reference": "reference_1", "track_id": 5,
+                                     "frame": 3, "end_frame": 9}]
+        run.save()
+        key = review.event_key(run.context["e"]["rows"][0])
+        EventReview.objects.create(run=run, event_key=key, action="stay", reference="reference_1",
+                                   track_id="5", frame=3, user=self.owner, verdict="accepted")
+        counts = review.batch_review_counts([run], ["exit", "enter"])[run.pk]
+        self.assertEqual((counts["reviewed"], counts["other_votes"]), (0, 1))
+        batches.set_review_actions(self.batch, self.owner, ["exit", "enter"])
+        self.client.force_login(self.owner)
+        page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
+        self.assertContains(page, "1 reviewed, left out")
