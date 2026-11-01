@@ -135,13 +135,14 @@ TRACKER_FIELDS = [
                  {"value": "speed", "label": "Follows its speed (a bee that stopped stays put)"}],
         help="How far a lost track may reach for a detection. Growing each frame lets a bee "
              "that went into a tube take another bee a few tubes away; following its speed "
-             "keeps a stopped bee's reach small and a fast one's wide."),
+             "keeps a stopped bee's reach small and a fast one's wide, and looks for a fast "
+             "one ahead of it, not behind."),
     _tf("beetrack_stay_in_reference", "A track lost at a tube stays at that tube", "off",
         "beetrack", field_type="select",
         choices=[{"value": "off", "label": "Off"},
                  {"value": "on", "label": "On: found again only at that tube"}],
         help="A bee that went into a tube comes back out of the same one: a detection at "
-             "another tube is a new bee, not the lost track."),
+             "another tube, or nearer another tube, is a new bee, not the lost track."),
     _tf("beetrack_match_distance_multiplier", "Max jump (bee widths)", 8.0, "beetrack",
         help="The farthest a track may reach for a detection, in bee widths."),
     # BeeTrack matches by distance, not overlap: this value is the detector's
@@ -679,6 +680,19 @@ BLOCK_REGISTRY = {
                 ],
                 "help": "Whole trajectory includes where the tracker predicted the insect "
                         "went after (or before) it was detected.",
+            },
+            {
+                # memory/72: an exit flying down past the tube below, its last
+                # detection on it, read as an entry there.
+                "name": "settle_seconds",
+                "label": "At the tube at least (seconds)",
+                "field_type": "number",
+                "required": False,
+                "default": 0,
+                "choices": None,
+                "help": "An entry counts only if the insect's last moments are at the tube "
+                        "this long; an exit only if its first are. Stops an insect flying "
+                        "past a tube from counting there. 0 = off. Try 0.2.",
             },
         ],
     },

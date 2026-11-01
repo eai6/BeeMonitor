@@ -223,6 +223,30 @@ class RetrackRunTests(PrimitiveBlockTestCase):
         self.assertEqual(done["settings"]["lost_search"], "speed")
         self.assertTrue(rt._reference_boxes(run, self.video))
 
+    def test_tracks_made_under_older_lost_track_rules_are_offered_again(self):
+        # memory/72: same settings, newer rules behind them.
+        batch = uuid.uuid4()
+        run, _job = self._run(batch)
+        steps = self._steps()
+        steps[2]["config"]["beetrack_lost_search"] = "speed"
+        self.pipeline.steps = steps
+        self.pipeline.save()
+        regroup.apply_pipeline(batch, self.user)
+        recount.sweep()
+        run.refresh_from_db()
+        self.assertFalse(rt.needs_retrack(run))
+        self.assertIsNone(regroup.batch_changes([run], self.pipeline))
+
+        # As a re-track before the rules changed recorded it.
+        ctx = run.context
+        ctx["m"]["result"]["retracked"]["settings"].pop("lost_rules")
+        PipelineRun.objects.filter(pk=run.pk).update(context=ctx)
+        run.refresh_from_db()
+        self.assertTrue(rt.needs_retrack(run))
+        changes = regroup.batch_changes([run], self.pipeline)
+        self.assertEqual(changes["web"][0]["field"], "Lost-track rules")
+        self.assertEqual(changes["gpu"], [])
+
     def test_review_votes_follow_their_event(self):
         run, _job = self._run()
         # A vote on an event as the GPU tracks had it, on a track id that the
@@ -364,6 +388,48 @@ class LostSearchTests(SimpleTestCase):
         before, after = ids_by_phase(calls, rp.tracker_params({**self.BASE, "lost_search": "speed"}),
                                      split=25)
         self.assertEqual(before, after)
+
+    # A track that dies (max age) and is revived: the same jump by the
+    # resurrection road, which must follow the settings too.
+    REVIVE = {"max_age_seconds": 0.1, "max_resurrection_seconds": 2.0,
+              "resurrection_search_multiplier": 8.0}
+
+    def test_today_a_dead_track_is_revived_at_the_next_tube(self):
+        before, after = ids_by_phase(teleport_calls(), rp.tracker_params(self.REVIVE))
+        self.assertEqual(before, after)
+
+    def test_revival_follows_its_speed(self):
+        before, after = ids_by_phase(teleport_calls(),
+                                     rp.tracker_params({**self.REVIVE, "lost_search": "speed"}))
+        self.assertTrue(before and after and not (before & after))
+
+    def test_revival_stays_at_its_tube(self):
+        params = rp.tracker_params({**self.REVIVE, "stay_in_reference": "on"})
+        before, after = ids_by_phase(teleport_calls(), params, [TUBE_A, TUBE_B])
+        self.assertTrue(before and after and not (before & after))
+
+    # memory/72 — a fast bee flies off right and is lost; another bee shows up
+    # behind it, where it came from. The reach is a circle; the heading isn't.
+    def fast_then_behind(self):
+        calls = [(f, [box(100 + 15 * f, 200)], "current") for f in range(0, 20)]
+        calls += [(f, [], "current") for f in range(20, 28)]
+        calls += [(f, [box(330, 200)], "current") for f in range(28, 40)]
+        return calls
+
+    def test_a_fast_bee_is_looked_for_ahead_not_behind(self):
+        before, after = ids_by_phase(self.fast_then_behind(),
+                                     rp.tracker_params({**self.BASE, "lost_search": "speed"}),
+                                     split=28)
+        self.assertTrue(before and after and not (before & after))
+
+    def test_a_bee_out_of_the_next_tube_is_another_bee(self):
+        # Tube N starts 4 px right of tube A: inside A's box widened by a bee.
+        tube_n = (266, 88, 300, 122)
+        calls = [c for c in teleport_calls() if c[0] < 31]
+        calls += [(f, [box(270, 95)], "current") for f in range(31, 45)]
+        params = rp.tracker_params({**self.BASE, "lost_search": "speed", "stay_in_reference": "on"})
+        before, after = ids_by_phase(calls, params, [TUBE_A, tube_n])
+        self.assertTrue(before and after and not (before & after))
 
     def test_the_settings_reach_the_tracker_from_the_mot_node(self):
         from apps.pipelines import executors

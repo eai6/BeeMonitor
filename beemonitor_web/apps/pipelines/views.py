@@ -409,7 +409,7 @@ def run_on_videos(request):
     # fresh: the cache is keyed on clip + config, not on the build, so running
     # the same pipeline again after a fix would hand back the old result.
     # Part of each clip (memory/53): "from m:ss for N minutes" (or to the end).
-    already = 0
+    already, returned = 0, set()
     if add_batch is not None:
         from .aggregate import run_video_id
         inside = {run_video_id(r) for r in PipelineRun.objects.filter(batch_id=add_batch)}
@@ -417,6 +417,20 @@ def run_on_videos(request):
         videos = [v for v in videos if v.pk not in inside]
         if not videos:
             return _fail("Every one of these clips is already in this batch.")
+        # Clips taken out of this batch come back as they were: their run,
+        # results and reviews, no GPU (memory/73).
+        returned = _return_removed(add_batch, request.user, videos)
+        videos = [v for v in videos if v.pk not in returned]
+        if not videos:
+            msg = (f"Put {len(returned)} clip{'s' if len(returned) != 1 else ''} back in the "
+                   "batch, with their results and reviews. No GPU-hours.")
+            from django.urls import reverse as url_for
+            batch_url = url_for("pipelines:batch_detail", kwargs={"batch_id": add_batch})
+            if is_ajax:
+                return JsonResponse({"ok": True, "submitted": 0, "returned": len(returned),
+                                     "message": msg, "batch_url": batch_url})
+            messages.success(request, msg)
+            return redirect(batch_url)
     try:
         window = batch_window if add_batch is not None else part_of_clip(request.POST)
     except ValueError as e:
@@ -468,6 +482,8 @@ def run_on_videos(request):
                f"“{batches.title(batch_id, pipeline)}”. They show as running below.")
         if already:
             msg += f" {already} were already in it."
+        if returned:
+            msg += f" {len(returned)} taken out before are back, with their results."
     else:
         if (request.POST.get("batch_name") or "").strip():
             batches.rename(batch_id, request.user, request.POST["batch_name"])
@@ -553,7 +569,7 @@ def run_list(request):
     # Runs with no batch — one-click analysis and single-clip pipeline runs.
     # Paged on their own (?solo_page=): they used to stop at the latest ten,
     # with no way back to anything older.
-    solo_page = Paginator(mine.filter(batch_id=None).select_related("pipeline")
+    solo_page = Paginator(mine.filter(batch_id=None, removed_from_batch=None).select_related("pipeline")
                           .order_by("-started_at", "-id"), 10
                           ).get_page(request.GET.get("solo_page"))
     solo = list(solo_page.object_list)
@@ -1134,6 +1150,7 @@ def batch_detail(request, batch_id):
     # Which units these clips came from. A batch can span devices, so this is a
     # list, not the first row's device wearing the whole batch's name.
     batch_devices = aggregate.batch_devices(rows)
+    batch_sites = aggregate.batch_sites(rows)
     failure_groups = failure_taxonomy.group([
         (r["video"].pk if r["video"] else None, r["error"], r["run"].started_at)
         for r in rows if r["status"] == "failed"
@@ -1258,6 +1275,11 @@ def batch_detail(request, batch_id):
         # "Update this batch" (memory/68).
         "changes": (regroup_mod.batch_changes([r["run"] for r in rows], runs[0].pipeline)
                     if can_share and runs and not photos_kind else None),
+        # Which clips to update (memory/72).
+        "update_counts": {
+            "all": sum(1 for r in rows if r["run"].status == PipelineRun.Status.COMPLETED),
+            "reviewed": sum(1 for r in rows if r["run"].status == PipelineRun.Status.COMPLETED
+                            and review_mod.clip_touched(r.get("review")))},
         # What its insect-group filters left out (memory/65).
         "group_summary": (review_mod.batch_group_summary(
             [r["run"] for r in rows], {r["run"].pk: r.get("review") for r in rows})
@@ -1276,6 +1298,7 @@ def batch_detail(request, batch_id):
         "skipped_sources": skipped_sources,
         "skipped_reasons": Counter(s["reason"] for s in skipped_sources).most_common(),
         "batch_devices": batch_devices,
+        "batch_sites": batch_sites,
         # Period review (memory/62): the batch's clips on one time axis, when
         # they are from one device or one site.
         "period_reviews": _period_reviews(rows, batch_id),
@@ -1384,6 +1407,83 @@ def batch_review_actions(request, batch_id):
     return redirect(reverse("pipelines:batch_detail", args=[batch_id]) + "#review")
 
 
+def _return_removed(batch_id, user, videos):
+    """Put back the runs of ``videos`` that were taken out of ``batch_id``;
+    the video ids put back."""
+    from .aggregate import run_video_id
+
+    wanted = {v.pk for v in videos}
+    back = {}
+    for run in PipelineRun.objects.filter(removed_from_batch=batch_id, user=user,
+                                          batch_id=None).order_by("-started_at"):
+        vid = run_video_id(run)
+        if vid in wanted and vid not in back:
+            back[vid] = run.pk
+    if back:
+        PipelineRun.objects.filter(pk__in=back.values()).update(
+            batch_id=batch_id, removed_from_batch=None)
+    return set(back)
+
+
+@login_required
+@require_POST
+def batch_remove_clips(request, batch_id):
+    """Take clips out of the batch (memory/73). Only its launcher; a clip
+    still running is cancelled first. Each run keeps its results and reviews
+    outside the batch, and Add clips puts it back."""
+    from . import sharing
+
+    if not sharing.owns_batch(request.user, batch_id):
+        raise Http404("No such batch.")
+    wanted = {str(pk) for pk in request.POST.getlist("run")}
+    runs = [r for r in PipelineRun.objects.filter(batch_id=batch_id, user=request.user)
+            if str(r.pk) in wanted]
+    running = [r for r in runs if not r.is_terminal]
+    done = [r.pk for r in runs if r.is_terminal]
+    if done:
+        PipelineRun.objects.filter(pk__in=done).update(batch_id=None, removed_from_batch=batch_id)
+    msg = (f"Took {len(done)} clip{'s' if len(done) != 1 else ''} out of the batch. "
+           "Their results and reviews are kept; Add clips puts them back." if done
+           else "No clips taken out.")
+    if running:
+        msg += (f" {len(running)} still running {'was' if len(running) == 1 else 'were'} left in: "
+                f"cancel {'it' if len(running) == 1 else 'them'} first.")
+    (messages.success if done else messages.error)(request, msg)
+    if not PipelineRun.objects.filter(batch_id=batch_id).exists():
+        return redirect("pipelines:run_list")
+    return redirect("pipelines:batch_detail", batch_id=batch_id)
+
+
+@login_required
+@require_POST
+def batch_review_metrics(request, batch_id):
+    """The review section for some of the batch's clips: the ones the clip
+    filter shows (memory/73). Anyone who can open the batch."""
+    from . import batches as batches_mod
+    from . import review as review_mod
+    from . import sharing
+
+    wanted = {str(pk) for pk in request.POST.getlist("run")}
+    runs = [r for r in _batch_runs(request, batch_id) if str(r.pk) in wanted]
+    review_actions = batches_mod.review_actions(batch_id)
+    counted = None if len(review_actions) == len(batches_mod.ACTIONS) else review_actions
+    per_run = review_mod.batch_review_counts(runs, counted)
+    rows = [{"run": r, "review": per_run.get(r.pk)} for r in runs]
+    summary = review_mod.batch_review_summary(runs, per_run, counted) if runs else None
+    if summary is None:
+        return HttpResponse(
+            '<p class="bg-white shadow rounded-lg p-4 mb-6 text-sm text-gray-600">'
+            f"Nothing reviewed among the {len(runs)} clip{'' if len(runs) == 1 else 's'} "
+            "the filter shows.</p>")
+    return render(request, "pipelines/_review_metrics.html", {
+        "review_summary": summary, "scope": {"clips": len(runs)},
+        "review_actions": review_actions, "batch_id": batch_id,
+        "action_choices": [("exit", "Exits"), ("enter", "Entries"), ("stay", "Stays")],
+        "cutoff_json": _cutoff_json(review_mod, rows, counted),
+        "can_share": sharing.owns_batch(request.user, batch_id),
+    })
+
+
 @login_required
 @require_POST
 def batch_retrack_check(request, batch_id):
@@ -1453,7 +1553,22 @@ def batch_apply_groups(request, batch_id):
 
     if not sharing.owns_batch(request.user, batch_id):
         raise Http404("No such batch.")
-    done = regroup.apply_pipeline(batch_id, request.user)
+    # Which clips (memory/72): all, the ones reviewed, or the ones picked.
+    which = request.POST.get("which") or "all"
+    only = None
+    if which == "reviewed":
+        from . import review
+        runs = list(PipelineRun.objects.filter(batch_id=batch_id, user=request.user,
+                                               status=PipelineRun.Status.COMPLETED))
+        counts = review.batch_review_counts(runs)
+        only = [r.pk for r in runs if review.clip_touched(counts.get(r.pk))]
+    elif which == "picked":
+        only = request.POST.getlist("run")
+    if only is not None and not only:
+        messages.error(request, "No clips to update: none reviewed yet." if which == "reviewed"
+                       else "No clips to update: tick the clips in the list first.")
+        return redirect("pipelines:batch_detail", batch_id=batch_id)
+    done = regroup.apply_pipeline(batch_id, request.user, only=only)
     if not done["applied"]:
         messages.error(request, "Nothing to apply: the pipeline's steps don't match this batch's "
                                 "(a node was replaced since it ran), or no clip has finished.")
@@ -1464,6 +1579,8 @@ def batch_apply_groups(request, batch_id):
         if done["skipped"]:
             msg += (f" {done['skipped']} were tracked without Identify Species, so their tracks "
                     f"can't be grouped and all count.")
+        if only is not None:
+            msg += " The batch's other clips keep their counts until you update them."
         messages.success(request, msg + " No GPU-hours.")
     return redirect("pipelines:batch_detail", batch_id=batch_id)
 

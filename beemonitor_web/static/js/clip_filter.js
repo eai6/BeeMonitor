@@ -4,7 +4,7 @@
 // place: no request, and it keeps up as you type.
 //
 // Rows carry what they can be filtered on as data-f-* attributes; controls
-// carry data-filter (q, unit, day, sort), data-filter-min (a row attribute to
+// carry data-filter (q, unit, site, day, reviewed, sort), data-filter-min (a row attribute to
 // be at least) or data-filter-status. The filter lives in the address bar, so
 // a filtered view survives the running batch's auto-refresh and can be sent on.
 (function () {
@@ -68,7 +68,7 @@
         var words = el.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
         var text = (row.getAttribute('data-f-text') || '').toLowerCase();
         for (var w = 0; w < words.length; w++) if (text.indexOf(words[w]) < 0) return false;
-      } else if (name === 'unit' || name === 'day') {
+      } else if (name === 'unit' || name === 'day' || name === 'site' || name === 'reviewed') {
         if (el.value && row.getAttribute('data-f-' + name) !== el.value) return false;
       } else if (name === 'empty') {
         if (el.checked && row.getAttribute('data-f-tracks') !== '0') return false;
@@ -152,6 +152,9 @@
     if (badge) badge.textContent = resultsOn ? ' (' + resultsOn + ')' : '';
     updateRerun(visible, filtered);
     writeUrl();
+    // Others follow the filter (memory/73: the review metrics, the selection).
+    document.dispatchEvent(new CustomEvent('clipfilter:change', {
+      detail: {visible: visible, filtered: filtered, rows: rows}}));
   }
 
   function clear() {

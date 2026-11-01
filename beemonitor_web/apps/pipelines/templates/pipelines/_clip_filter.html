@@ -2,6 +2,9 @@
   Filter and sort a batch's clips in the page (static/js/clip_filter.js).
   Shared by the batch page and its public share page. Takes:
     units   - the batch's devices ({pk, name}); the Unit menu shows for two or more
+    sites   - the batch's site names; the Site menu shows for two or more (memory/73)
+    reviewed_filter - offer "Reviewed / Not reviewed" (the batch page)
+    select  - offer "Select" (tick clips to update or remove; the launcher)
     public  - the share page: no error text, no re-run, its own status chips
     rerun   - offer "Re-run these N" (the batch page's re-run form follows the filter)
   and reads photos, batch_days and outcome from the page.
@@ -31,6 +34,14 @@
       </select>
     </label>
     {% endif %}
+    {% if sites|length > 1 %}
+    <label class="flex items-center gap-1.5 text-xs text-gray-700">Site
+      <select data-filter="site" class="h-9 border border-gray-300 rounded-md px-2 text-[13px] bg-white">
+        <option value="">All sites</option>
+        {% for s in sites %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+      </select>
+    </label>
+    {% endif %}
     {% if batch_days|length > 1 %}
     <label class="flex items-center gap-1.5 text-xs text-gray-700">Day
       <select data-filter="day" class="h-9 border border-gray-300 rounded-md px-2 text-[13px] bg-white">
@@ -39,9 +50,22 @@
       </select>
     </label>
     {% endif %}
+    {% if reviewed_filter and not photos %}
+    <label class="flex items-center gap-1.5 text-xs text-gray-700">Review
+      <select data-filter="reviewed" class="h-9 border border-gray-300 rounded-md px-2 text-[13px] bg-white">
+        <option value="">Any</option>
+        <option value="yes">Reviewed</option>
+        <option value="no">Not reviewed</option>
+      </select>
+    </label>
+    {% endif %}
     {% if not public or not photos %}
     <button type="button" id="cf-more" aria-expanded="false" aria-controls="cf-results"
             class="h-9 px-3 rounded-md border border-gray-300 bg-white text-[13px] text-gray-700 hover:border-amber-400">Results filters<span id="cf-results-badge"></span></button>
+    {% endif %}
+    {% if select and not photos %}
+    <button type="button" data-select-toggle aria-pressed="false"
+            class="h-9 px-3 rounded-md border border-gray-300 bg-white text-[13px] text-gray-700 hover:border-amber-400">Select</button>
     {% endif %}
     <label class="flex items-center gap-1.5 text-xs text-gray-700">Sort
       <select data-filter="sort" class="h-9 border border-gray-300 rounded-md px-2 text-[13px] bg-white">
@@ -87,6 +111,23 @@
   </div>
   {% endif %}
 
+  {% if select and not photos %}
+  {% comment %}Selected clips: update or take out of the batch (memory/73).{% endcomment %}
+  <div data-select-bar hidden data-update-url="{% url 'pipelines:batch_apply_groups' batch_id %}"
+       data-remove-url="{% url 'pipelines:batch_remove_clips' batch_id %}"
+       class="flex flex-wrap items-center gap-2 px-4 py-2 border-t border-amber-200 bg-amber-50 text-[13px] text-gray-800">
+    <span><strong data-select-count>0</strong> selected</span>
+    <button type="button" data-select-all class="text-amber-800 hover:underline min-h-[32px]">Select all shown (<span data-select-shown></span>)</button>
+    <span aria-hidden="true">·</span>
+    <button type="button" data-select-none class="text-amber-800 hover:underline min-h-[32px]">Clear</button>
+    <span class="flex-1"></span>
+    <button type="button" data-select-update {% if changes.web %}data-can{% endif %}
+            title="{% if changes.web %}Update these clips with the pipeline as it is now (no GPU){% else %}Every clip is up to date with the pipeline{% endif %}"
+            class="h-9 px-3 rounded-md text-sm font-semibold bg-green-700 hover:bg-green-800 text-white disabled:bg-gray-300 disabled:text-gray-600 disabled:cursor-not-allowed">Update these</button>
+    <button type="button" data-select-remove
+            class="h-9 px-3 rounded-md text-sm font-semibold border border-red-300 bg-white text-red-800 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed">Remove from batch</button>
+  </div>
+  {% endif %}
   <div class="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 py-2 border-t border-gray-200 bg-white text-xs text-gray-700">
     <span>Showing <strong id="cf-shown">{{ rows|length }}</strong> of {{ rows|length }} {% if photos %}photo{% else %}clip{% endif %}{{ rows|length|pluralize }}</span>
     <span data-filter-active hidden class="flex flex-wrap items-center gap-x-2">

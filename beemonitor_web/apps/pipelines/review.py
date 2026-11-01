@@ -311,6 +311,12 @@ def batch_review_counts(runs, actions=None):
     return out
 
 
+def clip_touched(counts) -> bool:
+    """Whether a clip has been reviewed at all: an event called, a missed one
+    added, or the clip marked reviewed. ``counts``: batch_review_counts's."""
+    return bool(counts and (counts["reviewed"] or counts["added"] or counts.get("clip_reviewed")))
+
+
 def batch_group_summary(runs, per_run=None):
     """What the batch's insect-group filters left out (memory/65): tracks and
     events by group, and how reviewers had called the events it took away.
@@ -384,7 +390,7 @@ def batch_review_summary(runs, per_run=None, actions=None):
         for k in ("accepted", "rejected", "disputed", "added", "reviewed"):
             ev[k] += counts[k]
         ev["scored"] += counts.get("scored") or []
-        if counts["reviewed"] or counts["added"] or counts.get("clip_reviewed"):
+        if clip_touched(counts):
             ev["clips"] += 1
     ev["precision"], ev["recall"] = quality(ev["accepted"], ev["rejected"], ev["added"])
     # The actions counted (memory/70), and the scored reviewed events for the

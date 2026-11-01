@@ -118,6 +118,9 @@ class PipelineRun(models.Model):
     # Runs launched together (one pipeline over many videos) share a batch_id so
     # results can be aggregated across videos (combined CSVs, cross-video trips).
     batch_id = models.UUIDField(null=True, blank=True, db_index=True)
+    # Taken out of a batch by its launcher (memory/73): the run keeps its
+    # results and reviews, outside every batch, and Add clips puts it back.
+    removed_from_batch = models.UUIDField(null=True, blank=True, db_index=True)
     # Frozen copy of the pipeline steps at launch time (so edits mid-run don't corrupt it).
     steps = models.JSONField(default=list, blank=True)
     # step_id -> artifact/output dict produced by that step.

@@ -57,3 +57,4 @@ A bee enters tube 50; its track goes lost; a different bee appears at tube 36, a
 - **A test that was already failing:** `src/beemonitor/tests/test_bioclip_env.py::…full_checkpoint_loading` fails locally on the clean tree too (environment).
 
 **Feedback:**
+- 2026-11-01: the jump still happened (track 2, tube 10 → 18). Gap found: **resurrection** (`_try_resurrect`, a dead track revived within `resurrection_search_multiplier` widths) ignored both settings. Now it skips tracks `_allowed` refuses and, in "speed" mode, caps the radius at the speed reach (frames since its last detection). Tests: `test_revival_follows_its_speed`, `test_revival_stays_at_its_tube`. Worker change, so it needs a GPU image bump for new GPU runs; Update this batch applies it on the web. Superseded by memory/72 (heading cone, nearest tube, settle rule).

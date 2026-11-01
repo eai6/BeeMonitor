@@ -427,6 +427,53 @@ class ApplyToBatchTests(FilterBase):
         runs[0].refresh_from_db()
         self.assertFalse(any(s["block_type"] == "identify.species" for s in runs[0].steps))
 
+    # memory/72: update only some clips.
+    def _update(self, batch, **data):
+        self.client.force_login(self.user)
+        return self.client.post(reverse("pipelines:batch_apply_groups", args=[batch]), data)
+
+    def test_only_the_ticked_clips_are_updated(self):
+        batch, runs = self._batch()
+        self.pipeline.steps = self._steps_with_species({"model": "beemachine"})
+        self.pipeline.save()
+
+        self._update(batch, which="picked", run=[runs[0].pk])
+
+        for run in runs:
+            run.refresh_from_db()
+        self.assertEqual(runs[0].context["a"]["rows"], [])          # updated
+        self.assertEqual(len(runs[1].context["a"]["rows"]), 2)      # as it was
+        from apps.pipelines import regroup
+        self.assertEqual(regroup.pipeline_changes(runs[0], self.pipeline)["web"], [])
+        self.assertTrue(regroup.pipeline_changes(runs[1], self.pipeline)["web"])
+
+    def test_only_the_reviewed_clips_are_updated(self):
+        from apps.pipelines.models import ClipReview
+        batch, runs = self._batch()
+        ClipReview.objects.create(run=runs[1], user=self.user)
+        self.pipeline.steps = self._steps_with_species({"model": "beemachine"})
+        self.pipeline.save()
+
+        self.client.force_login(self.user)
+        page = self.client.get(reverse("pipelines:batch_detail", args=[batch]))
+        self.assertEqual(page.context["update_counts"], {"all": 2, "reviewed": 1})
+        self.assertContains(page, "data-pick ", count=2)
+
+        self._update(batch, which="reviewed")
+
+        for run in runs:
+            run.refresh_from_db()
+        self.assertEqual(len(runs[0].context["a"]["rows"]), 2)
+        self.assertEqual(runs[1].context["a"]["rows"], [])
+
+    def test_ticking_nothing_updates_nothing(self):
+        batch, runs = self._batch(n=1)
+        self.pipeline.steps = self._steps_with_species({"model": "beemachine"})
+        self.pipeline.save()
+        self._update(batch, which="picked")
+        runs[0].refresh_from_db()
+        self.assertEqual(len(runs[0].context["a"]["rows"]), 2)
+
     def test_only_the_launcher_can_apply(self):
         from django.contrib.auth.models import User
         batch, _runs = self._batch(n=1)

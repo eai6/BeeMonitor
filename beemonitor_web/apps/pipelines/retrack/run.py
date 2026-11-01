@@ -57,13 +57,27 @@ def mot_step(run):
     return None
 
 
+# The lost-track rules behind "Follows its speed" and "stays at that tube":
+# 2 = the heading cone and the nearest tube (memory/72). Tracks made with
+# either setting on under older rules differ from today's though the settings
+# read the same, so the rules are part of the settings compared.
+LOST_RULES = 2
+
+
+def versioned(params):
+    """``params`` with the lost-track rules they run under, when they matter."""
+    if params.get("lost_search") == "speed" or params.get("stay_in_reference"):
+        return {**params, "lost_rules": LOST_RULES}
+    return params
+
+
 def settings_of(run):
     """The BeeTracker settings the run's MOT node asks for now."""
     from .. import executors
     from .replay import tracker_params
 
     step = mot_step(run)
-    return tracker_params(executors.tracker_settings((step or {}).get("config") or {}))
+    return versioned(tracker_params(executors.tracker_settings((step or {}).get("config") or {})))
 
 
 # Where "Update this batch" keeps the MOT settings the GPU tracked with, when
@@ -91,7 +105,10 @@ def tracked_with(run):
     cfg = (step or {}).get("config") or {}
     if isinstance(cfg.get(GPU_MOT_KEY), dict):
         return tracker_params(executors.tracker_settings(cfg[GPU_MOT_KEY]))
-    return settings_of(run)
+    # Unchanged since the GPU ran: its settings, under the rules its image had
+    # (not recorded: taken as older, so a clip tracked before memory/72 is
+    # re-tracked once).
+    return {k: v for k, v in settings_of(run).items() if k != "lost_rules"}
 
 
 def needs_retrack(run) -> bool:

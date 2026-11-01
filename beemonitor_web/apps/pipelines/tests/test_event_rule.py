@@ -221,3 +221,30 @@ class WholeTrajectory(SimpleTestCase):
         tidy = track(IN_R3, AWAY, AWAY, detected=[0, 1, 1])
         self.assertEqual(events(tidy), [])
         self.assertEqual(events(tidy, detected_only=False), [("exit", "reference_3", 10)])
+
+
+class SettleAtTheTube(SimpleTestCase):
+    """memory/72: an exit or entry needs the insect at the tube a while."""
+
+    def test_flying_away_over_the_tube_below_is_not_an_entry_there(self):
+        # Out of R3 (4 frames at it), away, and lost with one detection on R1.
+        tidy = track(IN_R3, IN_R3, IN_R3, IN_R3, AWAY, AWAY, IN_R1)
+        self.assertEqual(events(tidy), [("exit", "reference_3", 10), ("enter", "reference_1", 16)])
+        self.assertEqual(events(tidy, settle_frames=3), [("exit", "reference_3", 10)])
+
+    def test_landing_and_walking_in_is_still_an_entry(self):
+        self.assertEqual(events(track(AWAY, AWAY, IN_R3, IN_R3, IN_R3, IN_R3), settle_frames=3),
+                         [("enter", "reference_3", 15)])
+
+    def test_crossing_a_tube_on_first_sight_is_not_an_exit(self):
+        tidy = track(IN_R1, AWAY, AWAY, IN_R3, IN_R3, IN_R3)
+        self.assertEqual(events(tidy, settle_frames=3), [("enter", "reference_3", 15)])
+
+    def test_cut_by_the_clip_it_still_counts(self):
+        tidy = track(IN_R1, AWAY, AWAY, start=0)
+        self.assertEqual(events(tidy, settle_frames=3), [("exit", "reference_1", 0)])
+
+    def test_the_setting_reaches_the_events_node(self):
+        from apps.pipelines import registry
+        names = [f["name"] for f in registry.BLOCK_REGISTRY["analyze.events"]["config_fields"]]
+        self.assertIn("settle_seconds", names)

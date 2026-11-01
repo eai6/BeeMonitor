@@ -151,14 +151,8 @@ def reconcile_all(limit: int = 500) -> dict:
     except Exception:
         logger.exception("device pipeline schedules failed")
 
-    # Runs counted with older event rules, recounted from their saved
-    # tracks (memory/55): bounded batch per tick, no GPU.
-    recounted = 0
-    try:
-        from apps.pipelines import recount
-        recounted = recount.sweep()
-    except Exception:
-        logger.exception("event recount sweep failed")
+    # Runs waiting to be recounted (and re-tracked) from their saved tracks
+    # have their own loop (_recount_loop, memory/72), not this tick.
 
     # Raw heartbeats older than a week: folded into the per-minute health
     # history, then deleted (bounded batch per tick; image beats are kept).
@@ -185,7 +179,6 @@ def reconcile_all(limit: int = 500) -> dict:
             "preannot_finalized": preannot_done,
             "schedules_due": sched.get("due", 0),
             "scheduled_runs": sched.get("launched_runs", 0),
-            "runs_recounted": recounted,
             "beats_pruned": beats_pruned}
 
 
@@ -200,6 +193,28 @@ def _loop():
         except Exception:  # the loop must survive anything
             logger.exception("background reconcile pass failed")
         time.sleep(_INTERVAL_SECONDS)
+
+
+# Recounts and web re-tracks (Update this batch, a layout fix, new event
+# rules) work through their queue back to back, and only rest when it's empty
+# (memory/72). As one step of the reconcile tick they ran at most 90 s, then
+# waited 120 s: under half the time. Each gunicorn worker runs one; a run is
+# claimed before it's recounted, so two never take the same one.
+_RECOUNT_IDLE_SECONDS = 20
+
+
+def _recount_loop():
+    time.sleep(30 + random.uniform(0, 30))
+    while True:
+        done = 0
+        try:
+            from apps.pipelines import recount
+            done = recount.sweep()
+            if done:
+                logger.info("recounted %s runs", done)
+        except Exception:
+            logger.exception("event recount sweep failed")
+        time.sleep(1 if done else _RECOUNT_IDLE_SECONDS)
 
 
 # Don't spin up the loop for one-shot management commands.
@@ -221,4 +236,5 @@ def start_background_reconciler():
             return
         _started = True
     threading.Thread(target=_loop, name="bm-reconcile", daemon=True).start()
+    threading.Thread(target=_recount_loop, name="bm-recount", daemon=True).start()
     logger.info("background reconciler started (interval %ss)", _INTERVAL_SECONDS)

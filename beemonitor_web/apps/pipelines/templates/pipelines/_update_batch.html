@@ -34,10 +34,17 @@
         <span data-retrack-check-out class="text-gray-700">{% if retrack_check %}Last check, {{ retrack_check.clips }} clip{{ retrack_check.clips|pluralize }} replayed with the GPU's own settings: {{ retrack_check.boxes }}% of the GPU's boxes tracked, {{ retrack_check.same_track }}% kept together as the same track{% if retrack_check.events_pct is not None %}, {{ retrack_check.events_pct }}% of its events the same{% endif %}{% if not retrack_check.exact %} (close replay: clips from before the frame log){% endif %}.{% endif %}</span>
       </div>
     </div>
-    <form method="post" action="{% url 'pipelines:batch_apply_groups' batch_id %}" class="shrink-0">
+    {% comment %}Which clips (memory/72): all or the ones reviewed. Some clips: Select in the clip list, then Update these (memory/73).{% endcomment %}
+    <form method="post" action="{% url 'pipelines:batch_apply_groups' batch_id %}" id="update-form" class="shrink-0 flex flex-col gap-2 items-stretch">
       {% csrf_token %}
+      <fieldset class="flex flex-col gap-1 text-sm text-gray-800" {% if not changes.web %}disabled{% endif %}>
+        <legend class="sr-only">Which clips to update</legend>
+        <label class="flex items-center gap-2 min-h-[28px]"><input type="radio" name="which" value="all" checked class="w-4 h-4"> All clips ({{ update_counts.all }})</label>
+        <label class="flex items-center gap-2 min-h-[28px]"><input type="radio" name="which" value="reviewed" class="w-4 h-4" {% if not update_counts.reviewed %}disabled{% endif %}> Clips reviewed ({{ update_counts.reviewed }})</label>
+      </fieldset>
       <button type="submit" {% if not changes.web %}disabled{% endif %}
-              class="h-10 px-4 rounded-md text-sm font-semibold bg-green-700 hover:bg-green-800 text-white disabled:bg-gray-300 disabled:text-gray-600 disabled:cursor-not-allowed">Update this batch</button>
+              class="h-10 px-4 rounded-md text-sm font-semibold bg-green-700 hover:bg-green-800 text-white disabled:bg-gray-300 disabled:text-gray-600 disabled:cursor-not-allowed">Update</button>
+      <p class="text-xs text-gray-500 max-w-[16rem]">For some clips, use Select in the clip list. Clips left out keep their counts and stay listed as behind; until they're updated, batch totals mix the two.</p>
     </form>
   </div>
 </section>

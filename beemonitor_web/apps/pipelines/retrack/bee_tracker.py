@@ -134,6 +134,7 @@ class Track:
         self.last_detection_frame = frame_num
         self.start_frame = frame_num
         self.loss_speed = 0.0
+        self.loss_velocity = (0.0, 0.0)
         # Detections seen before the track was confirmed. Not reported then —
         # it might be noise — but they are the bee's first moments (often its
         # exit from a nest), so they are handed back once it is confirmed.
@@ -178,6 +179,7 @@ class Track:
             # Its speed as it was lost (pixels a frame), before the decay
             # below: how far it could have gone since (memory/71).
             self.loss_speed = float(np.hypot(*self.kf.state[2:4]))
+            self.loss_velocity = (float(self.kf.state[2]), float(self.kf.state[3]))
         if self.time_since_update > 0:
             self.kf.state[2:] *= self.LOST_VELOCITY_DECAY
         predicted_pos = self.kf.predict()
@@ -493,6 +495,13 @@ class BeeTracker:
     # its speed when lost times the frames lost times LOST_SLACK.
     LOST_BASE = 2.0
     LOST_SLACK = 1.5
+    # Beyond LOST_BASE widths, a bee lost while moving is looked for ahead of
+    # it only: within LOST_CONE degrees of its heading (memory/72). The reach
+    # alone is a circle — a fast bee flying off left a wide one behind it, and
+    # the next bee out of a tube there took its id.
+    LOST_CONE = 45.0
+    # Slower than this (pixels a frame) a bee has no heading to speak of.
+    LOST_MIN_HEADING_SPEED = 1.0
 
     def _gate(self, track, max_distance):
         missed = max(track.time_since_update - 1, 0)
@@ -502,6 +511,29 @@ class BeeTracker:
             return min(max_distance, reach)
         widths = self.GATE_BASE + self.GATE_PER_FRAME * missed
         return min(max_distance, size * widths)
+
+    def _ahead(self, track, detection):
+        """"speed" search: a detection beyond the base reach of a lost track
+        must lie ahead of it, within LOST_CONE of the way it was going."""
+        if self.lost_search != "speed" or track.time_since_update <= 1:
+            return True
+        vx, vy = track.loss_velocity
+        speed = float(np.hypot(vx, vy))
+        if speed < self.LOST_MIN_HEADING_SPEED:
+            return True
+        x1, y1, x2, y2 = track.last_bbox
+        dx = (detection[0] + detection[2]) / 2 - (x1 + x2) / 2
+        dy = (detection[1] + detection[3]) / 2 - (y1 + y2) / 2
+        dist = float(np.hypot(dx, dy))
+        if dist <= self.LOST_BASE * self._get_bee_size():
+            return True
+        return (dx * vx + dy * vy) / (dist * speed) >= np.cos(np.radians(self.LOST_CONE))
+
+    @staticmethod
+    def _box_distance(box, point):
+        dx = max(box[0] - point[0], 0.0, point[0] - box[2])
+        dy = max(box[1] - point[1], 0.0, point[1] - box[3])
+        return float(np.hypot(dx, dy))
 
     def _reference_of(self, point):
         for box in self.references:
@@ -513,7 +545,12 @@ class BeeTracker:
         """With stay_in_reference: a lost track whose last detection was
         inside a reference takes only detections at that reference (its box
         widened by a bee width) — a bee that went into a tube comes back out
-        of the same one; anything elsewhere is another bee."""
+        of the same one; anything elsewhere is another bee. A detection
+        nearer another reference is at that one (memory/72): tubes about a
+        bee width apart put the next tube's entrance inside the widened box.
+        The "speed" search's heading applies too (``_ahead``)."""
+        if not self._ahead(track, detection):
+            return False
         if not (self.stay_in_reference and self.references) or track.time_since_update <= 1:
             return True
         x1, y1, x2, y2 = track.last_bbox
@@ -521,9 +558,12 @@ class BeeTracker:
         if box is None:
             return True
         pad = self._get_bee_size()
-        cx = (detection[0] + detection[2]) / 2
-        cy = (detection[1] + detection[3]) / 2
-        return (box[0] - pad <= cx <= box[2] + pad) and (box[1] - pad <= cy <= box[3] + pad)
+        point = ((detection[0] + detection[2]) / 2, (detection[1] + detection[3]) / 2)
+        own = self._box_distance(box, point)
+        if own > pad:
+            return False
+        return not any(self._box_distance(other, point) < own
+                       for other in self.references if other is not box)
 
     def _is_duplicate_track(self, track: Track) -> bool:
         """
@@ -616,11 +656,21 @@ class BeeTracker:
                 self.dead_tracks.remove((track, frame_died))
                 continue
             
+            # The lost-track settings hold here too (memory/71): reviving a
+            # dead track is a lost track taking a detection, by another road.
+            if not self._allowed(track, detection):
+                continue
+            radius = search_radius
+            if self.lost_search == "speed":
+                missed = max(frame_num - track.last_detection_frame - 1, 0)
+                radius = min(radius, max(self.LOST_BASE * bee_size,
+                                         track.loss_speed * missed * self.LOST_SLACK))
+
             # Check distance
             distance = track.get_distance_to(det_pos)
             
             # STRICTER resurrection criteria
-            if distance < search_radius and distance < best_distance:
+            if distance < radius and distance < best_distance:
                 # Additional checks for resurrection
                 frames_dead = frame_num - frame_died
                 

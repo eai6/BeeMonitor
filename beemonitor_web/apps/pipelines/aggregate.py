@@ -387,12 +387,15 @@ def batch_rows(runs, actions=None):
     from apps.videos.models import Video
 
     video_ids = [v for r in runs if (v := run_video_id(r)) is not None]
-    videos = {v.pk: v for v in Video.everything.filter(pk__in=video_ids).select_related("device")}
+    videos = {v.pk: v for v in Video.everything.filter(pk__in=video_ids)
+              .select_related("device", "site")}
     job_ids = [j for r in runs if (j := run_job_id(r)) is not None]
     jobs = {j.pk: j for j in Job.objects.filter(pk__in=job_ids)}
     results = {r.job_id: r for r in JobResult.objects.filter(job_id__in=job_ids)}
 
-    from .review import batch_review_counts
+    from apps.annotations.leftout import video_site
+
+    from .review import batch_review_counts, clip_touched
     reviews = batch_review_counts(runs, actions)
 
     rows = []
@@ -410,6 +413,10 @@ def batch_rows(runs, actions=None):
             "primitives": primitive_counts(run),
             # Reviewers' calls on its events (memory/62); None = no Events step.
             "review": reviews.get(run.pk),
+            # For the clip filter (memory/73): its site, and whether anyone
+            # has reviewed it.
+            "site": video_site(video) if video else "",
+            "reviewed": clip_touched(reviews.get(run.pk)),
             "status": run.status,
             "error": run_error(run),
             # Stopped by its owner (memory/49): shown apart from failures.
@@ -423,6 +430,11 @@ def batch_rows(runs, actions=None):
         })
     rows.sort(key=lambda r: (r["when"] is None, r["when"]), reverse=True)
     return rows
+
+
+def batch_sites(rows):
+    """The distinct sites of the batch's clips, sorted (memory/73)."""
+    return sorted({r["site"] for r in rows if r.get("site")}, key=str.lower)
 
 
 def batch_devices(rows):

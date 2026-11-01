@@ -188,13 +188,15 @@ def applied_steps(run_steps, pipeline):
     return steps, True
 
 
-def apply_pipeline(batch_id, user, now=APPLY_NOW) -> dict:
+def apply_pipeline(batch_id, user, now=APPLY_NOW, only=None) -> dict:
     """Give every finished run of the batch its pipeline's current counting
     settings (analyzers, Identify Species and its wiring), then recount them:
     the first ``now`` here, the rest by the sweep within a reconcile pass. No
     GPU: everything is counted from the tracks and crop readings the runs
     already saved. ``{applied, recounted, queued, skipped}``; ``skipped`` are
-    runs whose groups couldn't be applied (tracked without Identify Species)."""
+    runs whose groups couldn't be applied (tracked without Identify Species).
+    ``only``: run ids to update (memory/72, e.g. the clips reviewed); the
+    others keep their counts and stay behind the pipeline."""
     from . import recount
     from .models import PipelineRun
     from .retrack import run as retrack
@@ -202,6 +204,9 @@ def apply_pipeline(batch_id, user, now=APPLY_NOW) -> dict:
     runs = list(PipelineRun.objects.filter(batch_id=batch_id, user=user,
                                            status=PipelineRun.Status.COMPLETED)
                 .select_related("pipeline").order_by("started_at"))
+    if only is not None:
+        only = {str(pk) for pk in only}
+        runs = [r for r in runs if str(r.pk) in only]
     out = {"applied": 0, "recounted": 0, "queued": 0, "skipped": 0}
     for i, run in enumerate(runs):
         applied = applied_steps(run.steps, run.pipeline)
@@ -335,6 +340,12 @@ def pipeline_changes(run, pipeline) -> dict:
             (gpu if gpu_side else web).append(item)
         if (step.get("inputs") or {}) != (src.get("inputs") or {}) and block.get("backend") != "gpu":
             web.append({"step": name, "field": "Wiring", "before": "", "after": "changed"})
+        if bt == "track.mot" and not any(c["step"] == name for c in web + gpu):
+            # Same settings, newer lost-track rules (memory/72).
+            from .retrack.run import needs_retrack
+            if needs_retrack(run):
+                web.append({"step": name, "field": "Lost-track rules", "before": "",
+                            "after": "updated (tracks again on the web)"})
     return {"web": web, "gpu": gpu}
 
 

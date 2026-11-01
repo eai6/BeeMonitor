@@ -292,67 +292,21 @@ their reason.
 </div>
 {% endif %}
 
-{% if review_summary %}
-{% with ev=review_summary.events tr=review_summary.trips %}
-<section class="bg-white shadow rounded-lg p-4 mb-6 grid grid-cols-1 md:grid-cols-2 gap-4" aria-label="Review">
-  {% comment %}Only once someone has reviewed (memory/62): how far the review got, and how far to trust the system here.{% endcomment %}
-  <div class="flex flex-col gap-1.5" id="review">
-    <div class="flex flex-wrap items-center justify-between gap-2">
-      <h2 class="text-sm font-semibold text-gray-900">Events review</h2>
-      {% comment %}Which actions the metrics count (memory/70). Every event can still be reviewed.{% endcomment %}
-      {% if can_share %}
-      <form method="post" action="{% url 'pipelines:batch_review_actions' batch_id %}" class="flex flex-wrap items-center gap-1.5 text-xs" data-review-actions>
-        {% csrf_token %}
-        <span class="text-gray-600">Count in metrics</span>
-        {% for a, label in action_choices %}
-        <label class="inline-flex items-center gap-1 h-8 px-2 rounded border cursor-pointer {% if a in review_actions %}border-green-600 bg-green-50 text-green-800 font-semibold{% else %}border-gray-300 bg-white text-gray-600{% endif %}">
-          <input type="checkbox" name="actions" value="{{ a }}" {% if a in review_actions %}checked{% endif %} class="w-3.5 h-3.5"> {{ label }}
-        </label>
-        {% endfor %}
-        <noscript><button type="submit" class="h-8 px-2 rounded border border-gray-300">Save</button></noscript>
-      </form>
-      {% endif %}
-    </div>
-    {% if ev.actions %}<p class="text-xs text-gray-600">{% for a, label in action_choices %}{% if a in ev.actions %}{{ label|lower }}{% if not forloop.last %} {% endif %}{% endif %}{% endfor %} only — {% for a, label in action_choices %}{% if a not in ev.actions %}{{ label|lower }} {% endif %}{% endfor %}left out of these numbers (still reviewable).</p>{% endif %}
-    <p class="text-sm text-gray-700">{{ ev.reviewed }} of {{ ev.events }} detected events reviewed, in {{ ev.clips }} clip{{ ev.clips|pluralize }}</p>
-    <p class="text-sm"><span class="text-green-700">{{ ev.accepted }} accepted</span> · <span class="text-red-700">{{ ev.rejected }} rejected</span>{% if ev.disputed %} · <span class="text-amber-800">{{ ev.disputed }} disputed</span>{% endif %} · {{ ev.added }} added as missed</p>
-    <div class="flex gap-6 mt-1">
-      <div><div class="text-xs text-gray-600">Precision</div><div class="text-xl font-bold text-gray-900">{% if ev.precision is not None %}{{ ev.precision }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">right among the events checked</div></div>
-      <div><div class="text-xs text-gray-600">Recall</div><div class="text-xl font-bold text-gray-900">{% if ev.recall is not None %}{{ ev.recall }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">found among the events confirmed or added</div></div>
-    </div>
-    {% if ev.scored %}
-    {% comment %}What a classifier cut-off would do, on the reviewed events it scored (memory/70). Nothing is dropped.{% endcomment %}
-    <div class="mt-2 pt-2 border-t border-gray-200 flex flex-col gap-1.5" data-cutoff data-scored="{{ cutoff_json }}">
-      <label class="flex items-center gap-2 text-sm text-gray-700">Classifier cut-off
-        <input type="range" min="0" max="0.95" step="0.05" value="0.5" data-cutoff-range class="flex-1">
-        <strong data-cutoff-value class="w-10 text-right">0.50</strong>
-      </label>
-      <p class="text-sm text-gray-700" data-cutoff-out></p>
-      <p class="text-xs text-gray-600">Reviewed events the classifier scored ({{ ev.scored|length }}): what precision and recall would be if events below the cut-off were dropped. Nothing is dropped from the batch.</p>
-    </div>
-    {% endif %}
-  </div>
-  <div class="flex flex-col gap-1.5">
-    <h2 class="text-sm font-semibold text-gray-900">Trips review</h2>
-    {% if tr.reviewed %}
-    <p class="text-sm text-gray-700">{{ tr.reviewed }} suggested trip{{ tr.reviewed|pluralize }} reviewed</p>
-    <p class="text-sm"><span class="text-green-700">{{ tr.accepted }} same bee</span>{% if tr.relinked %} ({{ tr.relinked }} re-linked){% endif %} · <span class="text-red-700">{{ tr.rejected }} not a trip</span>{% if tr.didnt_come_back %} ({{ tr.didnt_come_back }} didn't come back{% if tr.cant_tell %}, {{ tr.cant_tell }} can't tell{% endif %}){% elif tr.cant_tell %} ({{ tr.cant_tell }} can't tell){% endif %}{% if tr.disputed %} · <span class="text-amber-800">{{ tr.disputed }} disputed</span>{% endif %}</p>
-    <div class="mt-1"><div class="text-xs text-gray-600">Suggestion right as it stood</div><div class="text-xl font-bold text-gray-900">{% if tr.suggestion_right is not None %}{{ tr.suggestion_right }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">accepted without re-linking</div></div>
-    {% else %}
-    <p class="text-sm text-gray-600">No trips reviewed yet. Use Review this period › Review trips.</p>
-    {% endif %}
-  </div>
-</section>
-{% endwith %}
+<span hidden>{% csrf_token %}</span>
+<div id="review-metrics" data-url="{% url 'pipelines:batch_review_metrics' batch_id %}">
+{% if review_summary %}{% include "pipelines/_review_metrics.html" %}{% endif %}
+</div>
 <script>
+  // Wires the review section; again each time the filter swaps it (memory/73).
+  function initReviewMetrics(root) {
   // Count in metrics (memory/70): saving on change.
-  document.querySelectorAll('[data-review-actions] input').forEach(function (cb) {
+  root.querySelectorAll('[data-review-actions] input').forEach(function (cb) {
     cb.addEventListener('change', function () { cb.form.submit(); });
   });
   // The cut-off panel: precision among reviewed events kept, and recall of
   // real events (accepted + added as missed) kept.
   (function () {
-    var box = document.querySelector('[data-cutoff]');
+    var box = root.querySelector('[data-cutoff]');
     if (!box) return;
     var data = JSON.parse(box.getAttribute('data-scored'));
     var range = box.querySelector('[data-cutoff-range]');
@@ -375,8 +329,41 @@ their reason.
     range.addEventListener('input', paint);
     paint();
   })();
+  }
+  initReviewMetrics(document.getElementById('review-metrics'));
+  // The metrics follow the clip filter (memory/73): the clips shown are sent
+  // and the section comes back computed for them; no filter, the whole batch.
+  (function () {
+    var box = document.getElementById('review-metrics');
+    var whole = box.innerHTML, timer = null, seq = 0;
+    function csrf() { var el = document.querySelector('[name=csrfmiddlewaretoken]'); return el ? el.value : ''; }
+    document.addEventListener('clipfilter:change', function (e) {
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        var mine = ++seq;
+        if (!e.detail.filtered) { box.innerHTML = whole; initReviewMetrics(box); return; }
+        var body = new URLSearchParams();
+        e.detail.visible.forEach(function (r) { body.append('run', r.getAttribute('data-f-run')); });
+        box.setAttribute('aria-busy', 'true');
+        fetch(box.getAttribute('data-url'), {method: 'POST', credentials: 'same-origin',
+          headers: {'X-CSRFToken': csrf()}, body: body})
+          .then(function (r) { return r.ok ? r.text() : Promise.reject(r.status); })
+          .then(function (html) {
+            if (mine !== seq) return;
+            box.innerHTML = html;
+            initReviewMetrics(box);
+            box.querySelectorAll('[data-filter-clear]').forEach(function (b) {
+              b.addEventListener('click', function () {
+                document.querySelector('#clip-filter [data-filter-clear]').click();
+              });
+            });
+          })
+          .catch(function () {})
+          .then(function () { box.removeAttribute('aria-busy'); });
+      }, 250);
+    });
+  })();
 </script>
-{% endif %}
 
 {% if group_summary or pipeline_groups %}
 {% with gs=group_summary pg=pipeline_groups %}
@@ -463,7 +450,7 @@ their reason.
     stream view presigns the original and the tracks drawn over it are fetched
     when a row is opened, so this page costs nothing until a row is clicked.
   {% endcomment %}
-  {% if rows|length > 1 %}{% include "pipelines/_clip_filter.html" with units=batch_devices rerun=can_rerun %}{% endif %}
+  {% if rows|length > 1 %}{% include "pipelines/_clip_filter.html" with units=batch_devices sites=batch_sites reviewed_filter=True select=can_share rerun=can_rerun %}{% endif %}
 
   {% include "pipelines/_clip_viewer.html" %}
 
@@ -486,8 +473,9 @@ their reason.
   {% for r in rows %}
   <div class="clip-row grid {% if photos %}grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_88px]{% else %}grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_96px_112px_80px_88px]{% endif %} items-center px-4 py-2 border-b border-gray-100 hover:bg-gray-50"
        data-f-status="{% if r.status == "completed" %}completed{% elif r.cancelled %}cancelled{% elif r.status == "failed" %}failed{% else %}running{% endif %}"
-       data-f-text="{{ r.video.title }} {{ r.video.device.name }} {{ r.when|date:"j M Y H:i" }} {% if r.status == "failed" %}{{ r.error|failure_title }}{% endif %}"
+       data-f-text="{{ r.video.title }} {{ r.site }} {{ r.video.device.name }} {{ r.when|date:"j M Y H:i" }} {% if r.status == "failed" %}{{ r.error|failure_title }}{% endif %}"
        {% if r.video %}data-f-video="{{ r.video.pk }}"{% endif %}
+       data-f-run="{{ r.run.pk }}" data-f-site="{{ r.site }}" data-f-reviewed="{% if r.reviewed %}yes{% else %}no{% endif %}"
        {% if r.video.device %}data-f-unit="{{ r.video.device.pk }}"{% endif %}
        {% if r.when %}data-f-day="{{ r.when|date:"Y-m-d" }}"{% endif %}
        {% if photos %}{% if r.photo %}data-f-insects="{{ r.photo.insects }}" data-f-species="{{ r.photo.named }}"{% endif %}
@@ -508,7 +496,10 @@ their reason.
       means; a run that never produced a job has no results to open, so it
       falls back to the run's own page.
     {% endcomment %}
-    <div>
+    <div class="flex items-center gap-1">
+      {% if can_share and not photos and r.status == "completed" or can_share and not photos and r.status == "failed" %}
+      <label class="hidden shrink-0 p-1 -m-1" data-pick-label><span class="sr-only">Select this clip</span><input type="checkbox" value="{{ r.run.pk }}" data-pick {% if r.status == "completed" %}data-pick-done{% endif %} class="w-4 h-4"></label>
+      {% endif %}
       {% if r.video %}
       <button type="button" class="cv-open block" title="{% if photos %}View this photo{% else %}Watch this clip{% endif %}">
         <img src="{% url 'videos:thumbnail' r.video.pk %}" alt="" loading="lazy"
@@ -602,6 +593,66 @@ setTimeout(pollThenReload, 15000);
 <script src="{% static 'js/track_overlay.js' %}"></script>
 <script src="{% static 'js/clip_viewer.js' %}"></script>
 <script src="{% static 'js/clip_filter.js' %}"></script>
+{% if can_share and not photos %}
+<script>
+  // Select clips, then update or remove them (memory/73). "Select all shown"
+  // takes the clips the filter shows.
+  (function () {
+    var bar = document.querySelector('[data-select-bar]');
+    var toggle = document.querySelector('[data-select-toggle]');
+    if (!bar || !toggle) return;
+    var on = false;
+    function picks() { return Array.prototype.slice.call(document.querySelectorAll('[data-pick]')); }
+    function chosen() { return picks().filter(function (b) { return b.checked; }); }
+    function shown(b) { return b.closest('.clip-row').style.display !== 'none'; }
+    function paint() {
+      document.querySelectorAll('[data-pick-label]').forEach(function (l) { l.classList.toggle('hidden', !on); });
+      bar.hidden = !on;
+      toggle.setAttribute('aria-pressed', on ? 'true' : 'false');
+      toggle.textContent = on ? 'Done selecting' : 'Select';
+      var c = chosen(), done = c.filter(function (b) { return b.hasAttribute('data-pick-done'); });
+      bar.querySelector('[data-select-count]').textContent = c.length;
+      bar.querySelector('[data-select-shown]').textContent =
+        picks().filter(shown).length;
+      var upd = bar.querySelector('[data-select-update]');
+      upd.disabled = !done.length || !upd.hasAttribute('data-can');
+      bar.querySelector('[data-select-remove]').disabled = !c.length;
+    }
+    function post(url, extra, boxes) {
+      var f = document.createElement('form');
+      f.method = 'post'; f.action = url; f.hidden = true;
+      var fields = Object.assign({csrfmiddlewaretoken: document.querySelector('[name=csrfmiddlewaretoken]').value}, extra);
+      Object.keys(fields).forEach(function (k) {
+        var i = document.createElement('input'); i.name = k; i.value = fields[k]; f.appendChild(i);
+      });
+      boxes.forEach(function (b) {
+        var i = document.createElement('input'); i.name = 'run'; i.value = b.value; f.appendChild(i);
+      });
+      document.body.appendChild(f); f.submit();
+    }
+    toggle.addEventListener('click', function () { on = !on; paint(); });
+    document.addEventListener('change', function (e) { if (e.target.matches('[data-pick]')) paint(); });
+    document.addEventListener('clipfilter:change', paint);
+    bar.querySelector('[data-select-all]').addEventListener('click', function () {
+      picks().forEach(function (b) { b.checked = shown(b); }); paint();
+    });
+    bar.querySelector('[data-select-none]').addEventListener('click', function () {
+      picks().forEach(function (b) { b.checked = false; }); paint();
+    });
+    bar.querySelector('[data-select-update]').addEventListener('click', function () {
+      var c = chosen().filter(function (b) { return b.hasAttribute('data-pick-done'); });
+      post(bar.getAttribute('data-update-url'), {which: 'picked'}, c);
+    });
+    bar.querySelector('[data-select-remove]').addEventListener('click', function () {
+      var c = chosen();
+      if (!window.confirm('Take ' + c.length + ' clip' + (c.length === 1 ? '' : 's') + ' out of this batch? ' +
+          'Their results and reviews are kept, and Add clips puts them back.')) return;
+      post(bar.getAttribute('data-remove-url'), {}, c);
+    });
+    paint();
+  })();
+</script>
+{% endif %}
 
 
 {% if photos %}{% include "analysis/_crop_viewer.html" %}{% endif %}

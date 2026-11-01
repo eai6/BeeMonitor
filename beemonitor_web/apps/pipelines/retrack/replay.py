@@ -131,6 +131,7 @@ def run_calls(calls, fps, frame_height, params, references=None):
     backfill is not read."""
     from .bee_tracker import BeeTracker
 
+    params = {k: v for k, v in params.items() if k != "lost_rules"}
     tracker = BeeTracker(fps=fps, bee_size=None, frame_height=frame_height,
                          references=references, **params)
     results = []
