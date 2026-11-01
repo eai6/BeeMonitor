@@ -70,7 +70,10 @@ def settings_of(run):
 # it changes the run's MOT node (regroup.applied_steps).
 GPU_MOT_KEY = "_gpu_mot"
 # The MOT settings the web can change by re-tracking (BeeTrack's time windows).
-REPLAYABLE = ("beetrack_max_age_seconds", "beetrack_min_hits_seconds")
+REPLAYABLE = ("beetrack_max_age_seconds", "beetrack_min_hits_seconds",
+              # How a lost track searches (memory/71).
+              "beetrack_lost_search", "beetrack_stay_in_reference",
+              "beetrack_match_distance_multiplier")
 
 
 def tracked_with(run):
@@ -188,11 +191,12 @@ def replay_clip(run, job, base, params):
     video = getattr(job, "video", None)
     height = getattr(video, "height", None)
     log = _rows(stats.get("update_log_csv")) if stats.get("update_log_csv") else None
+    refs = _reference_boxes(run, video) if params.get("stay_in_reference") else None
 
     chunks = _chunks(job)
     if not chunks:
         first, last = _frame_range(run, job, fps, detections, params)
-        return replay(detections, fps, height, params, first, last, log), bool(log)
+        return replay(detections, fps, height, params, first, last, log, refs), bool(log)
 
     from apps.analysis import chunk_stitch
     from apps.analysis.views import _remap_chunk_track_id
@@ -204,13 +208,31 @@ def replay_clip(run, job, base, params):
         part_log = [e for e in (log or []) if start <= (_int(e.get("frame")) or -1)
                     and (end is None or (_int(e.get("frame")) or 0) < end)] or None
         last = (end - 1) if end is not None else _frame_range(run, job, fps, part, params)[1]
-        for r in replay(part, fps, height, params, start, last, part_log):
+        for r in replay(part, fps, height, params, start, last, part_log, refs):
             r["track_id"] = _remap_chunk_track_id(r["track_id"], i)
             rows.append(r)
         if end is not None:
             boundaries.append(end)
     chunk_stitch.stitch(rows, boundaries)
     return rows, bool(log)
+
+
+def _reference_boxes(run, video):
+    """The run's references (its Events step's) as boxes in pixels."""
+    from .. import executors
+
+    steps = run.steps or []
+    for i, step in enumerate(steps):
+        if step.get("block_type") != "analyze.events":
+            continue
+        roi = executors.find_reference(steps, i, run.context or {}, run)
+        from .. import ops
+        w, h = getattr(video, "width", None), getattr(video, "height", None)
+        if not (w and h):
+            return None
+        return [(r["box"][0] * w, r["box"][1] * h, r["box"][2] * w, r["box"][3] * h)
+                for r in ops.roi_references(roi)]
+    return None
 
 
 # ── Crops and species follow the new tracks ────────────────────────────────

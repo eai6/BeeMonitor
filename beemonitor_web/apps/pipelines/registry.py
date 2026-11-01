@@ -129,6 +129,21 @@ TRACKER_FIELDS = [
              "Filters flickers of noise (a shadow detected for a frame or two). "
              "A real bee's frames from that wait are kept once it is confirmed. "
              "0 = a single detection is enough."),
+    # Lost tracks jumping to another bee (memory/71). Off by default: as before.
+    _tf("beetrack_lost_search", "Lost-track search", "frames", "beetrack", field_type="select",
+        choices=[{"value": "frames", "label": "Grows each frame lost (as before)"},
+                 {"value": "speed", "label": "Follows its speed (a bee that stopped stays put)"}],
+        help="How far a lost track may reach for a detection. Growing each frame lets a bee "
+             "that went into a tube take another bee a few tubes away; following its speed "
+             "keeps a stopped bee's reach small and a fast one's wide."),
+    _tf("beetrack_stay_in_reference", "A track lost at a tube stays at that tube", "off",
+        "beetrack", field_type="select",
+        choices=[{"value": "off", "label": "Off"},
+                 {"value": "on", "label": "On: found again only at that tube"}],
+        help="A bee that went into a tube comes back out of the same one: a detection at "
+             "another tube is a new bee, not the lost track."),
+    _tf("beetrack_match_distance_multiplier", "Max jump (bee widths)", 8.0, "beetrack",
+        help="The farthest a track may reach for a detection, in bee widths."),
     # BeeTrack matches by distance, not overlap: this value is the detector's
     # duplicate-box (NMS) overlap on the worker, so changing it needs the GPU
     # (memory/69).

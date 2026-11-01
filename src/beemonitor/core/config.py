@@ -531,6 +531,11 @@ class TrackingConfig:
     
     # Other adaptive parameters
     adaptive_iou_threshold: float = 0.25  # IoU threshold for matching (dimensionless)
+    # How a lost track searches ("frames" | "speed") and whether one lost at
+    # a tube may only be found there again (memory/71). Off by default.
+    lost_search: str = "frames"
+    stay_in_reference: bool = False
+    match_distance_multiplier: float = 8.0
     adaptive_bee_size: Optional[float] = None  # Average bee size in pixels
                                                # None = auto-calculate from detections (recommended)
                                                # number = use fixed size (for fine-tuning)
@@ -652,7 +657,10 @@ class TrackingConfig:
             'max_resurrection_seconds': self.max_resurrection_seconds,
             'resurrection_search_multiplier': self.resurrection_search_multiplier,
             'duplicate_distance_multiplier': self.duplicate_distance_multiplier,
-            'iou_threshold': self.adaptive_iou_threshold
+            'iou_threshold': self.adaptive_iou_threshold,
+            'lost_search': self.lost_search,
+            'stay_in_reference': self.stay_in_reference,
+            'match_distance_multiplier': self.match_distance_multiplier,
         }
     
     # ═══════════════════════════════════════════════════════════════════════════

@@ -90,6 +90,8 @@ class BeeMonitor:
         flat_tracking_df, grouped_tracking_df = self.get_motion_tracking(
             video_path, nests['hotel'], output_folder, visualize=visualize,
             detection_mode=detection_mode, hotel_polygon=nests.get('hotel_polygon'),
+            # The tubes, so a track lost at one can be kept there (memory/71).
+            references=[b for b in (nests.get('nests') or {}).values() if b is not None],
         )
         
         if flat_tracking_df is None or flat_tracking_df.empty:
@@ -136,7 +138,7 @@ class BeeMonitor:
         return nests
     
     def get_motion_tracking(self, video_path, hotel_roi, output_folder, visualize=False,
-                            detection_mode='yolo', hotel_polygon=None):
+                            detection_mode='yolo', hotel_polygon=None, references=None):
         """Detect motion and track bees using YOLO-only mode (v2.2.1 CONFIG-BASED)."""
         from beemonitor.tracking.bee_tracking import BeeTracking
         from beemonitor.tracking.mot.bee_tracker import BeeTracker
@@ -250,6 +252,10 @@ class BeeMonitor:
             resurrection_search_multiplier=tracker_params['resurrection_search_multiplier'],
             duplicate_distance_multiplier=tracker_params['duplicate_distance_multiplier'],
             iou_threshold=tracker_params['iou_threshold'],
+            match_distance_multiplier=tracker_params.get('match_distance_multiplier', 8.0),
+            lost_search=tracker_params.get('lost_search', 'frames'),
+            stay_in_reference=tracker_params.get('stay_in_reference', False),
+            references=references,
             # Crop saving for identification training
             save_crops=getattr(self.config.tracking, 'save_crops', False),
             crops_per_track=getattr(self.config.tracking, 'crops_per_track', 0),

@@ -29,6 +29,8 @@ WORKER_DEFAULTS = {
     "resurrection_search_multiplier": 2.5,
     "duplicate_distance_multiplier": 1.2,
     "iou_threshold": 0.25,
+    "lost_search": "frames",
+    "stay_in_reference": False,
 }
 # BeeTracking.lookback_seconds.
 LOOKBACK_SECONDS = 0.5
@@ -45,7 +47,13 @@ def tracker_params(sent: dict | None) -> dict:
     (old frame-count settings) are ignored, as the worker ignores them."""
     params = dict(WORKER_DEFAULTS)
     for key, value in (sent or {}).items():
-        if key in params and value is not None:
+        if key not in params or value is None:
+            continue
+        if key == "lost_search":
+            params[key] = "speed" if str(value).lower() == "speed" else "frames"
+        elif key == "stay_in_reference":
+            params[key] = str(value).lower() in ("1", "true", "on", "yes")
+        else:
             params[key] = float(value)
     return params
 
@@ -115,7 +123,7 @@ def calls_from_detections(detections, fps, first_frame, last_frame):
     return out
 
 
-def run_calls(calls, fps, frame_height, params):
+def run_calls(calls, fps, frame_height, params, references=None):
     """Feed the calls to a fresh BeeTracker; the worker's per-frame results.
 
     As in BeeTracking.process_frame, the backfill of a track confirmed on a
@@ -123,7 +131,8 @@ def run_calls(calls, fps, frame_height, params):
     backfill is not read."""
     from .bee_tracker import BeeTracker
 
-    tracker = BeeTracker(fps=fps, bee_size=None, frame_height=frame_height, **params)
+    tracker = BeeTracker(fps=fps, bee_size=None, frame_height=frame_height,
+                         references=references, **params)
     results = []
     for frame, rows, kind in calls:
         tracks = tracker.update(rows, frame)
@@ -168,10 +177,12 @@ def tracking_rows(results):
     return rows
 
 
-def replay(detections, fps, frame_height, params, first_frame, last_frame, log=None):
-    """Tracking rows for one clip (or one chunk of one)."""
+def replay(detections, fps, frame_height, params, first_frame, last_frame, log=None,
+           references=None):
+    """Tracking rows for one clip (or one chunk of one). ``references``: the
+    tubes' boxes in pixels, for "a track lost at a tube stays there"."""
     if log:
         calls = calls_from_log(detections, log)
     else:
         calls = calls_from_detections(detections, fps, first_frame, last_frame)
-    return tracking_rows(run_calls(calls, fps, frame_height, params))
+    return tracking_rows(run_calls(calls, fps, frame_height, params, references))

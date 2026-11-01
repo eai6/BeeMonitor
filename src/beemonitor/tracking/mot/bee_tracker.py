@@ -128,6 +128,7 @@ class Track:
         self.last_source = detection[5] if len(detection) > 5 else 'unknown'
         self.last_detection_frame = frame_num
         self.start_frame = frame_num
+        self.loss_speed = 0.0
         # Detections seen before the track was confirmed. Not reported then —
         # it might be noise — but they are the bee's first moments (often its
         # exit from a nest), so they are handed back once it is confirmed.
@@ -168,6 +169,10 @@ class Track:
 
     def predict(self):
         """Predict next position."""
+        if self.time_since_update == 0:
+            # Its speed as it was lost (pixels a frame), before the decay
+            # below: how far it could have gone since (memory/71).
+            self.loss_speed = float(np.hypot(*self.kf.state[2:4]))
         if self.time_since_update > 0:
             self.kf.state[2:] *= self.LOST_VELOCITY_DECAY
         predicted_pos = self.kf.predict()
@@ -273,7 +278,15 @@ class BeeTracker:
         resurrection_search_multiplier: float = 3.0,
         duplicate_distance_multiplier: float = 1.2,
         # Other
-        iou_threshold: float = 0.3
+        iou_threshold: float = 0.3,
+        # How a lost track searches (memory/71): "frames" grows its reach a
+        # bee width per frame lost (as before); "speed" by how far its speed
+        # when lost could carry it, so a bee that stopped at a tube stays put.
+        lost_search: str = "frames",
+        # A track lost inside a reference (a tube) can only be found again
+        # there; ``references`` are their boxes in pixels.
+        stay_in_reference=False,
+        references=None,
     ):
         """
         Initialize BeeTracker with ADAPTIVE thresholds.
@@ -311,6 +324,10 @@ class BeeTracker:
         self.duplicate_distance_multiplier = duplicate_distance_multiplier
         
         self.iou_threshold = iou_threshold
+        self.lost_search = "speed" if str(lost_search).lower() == "speed" else "frames"
+        self.stay_in_reference = str(stay_in_reference).lower() in ("1", "true", "on", "yes")
+        self.references = [tuple(float(v) for v in b[:4]) for b in (references or [])
+                           if b is not None and len(b) >= 4]
         
         # Reset track ID counter for new video
         Track.reset_id_counter()
@@ -467,9 +484,41 @@ class BeeTracker:
     GATE_BASE = 3.0
     GATE_PER_FRAME = 1.0
 
+    # "speed" search: a lost track reaches at least this many bee widths, and
+    # its speed when lost times the frames lost times LOST_SLACK.
+    LOST_BASE = 2.0
+    LOST_SLACK = 1.5
+
     def _gate(self, track, max_distance):
-        widths = self.GATE_BASE + self.GATE_PER_FRAME * max(track.time_since_update - 1, 0)
-        return min(max_distance, self._get_bee_size() * widths)
+        missed = max(track.time_since_update - 1, 0)
+        size = self._get_bee_size()
+        if self.lost_search == "speed" and missed > 0:
+            reach = max(self.LOST_BASE * size, track.loss_speed * missed * self.LOST_SLACK)
+            return min(max_distance, reach)
+        widths = self.GATE_BASE + self.GATE_PER_FRAME * missed
+        return min(max_distance, size * widths)
+
+    def _reference_of(self, point):
+        for box in self.references:
+            if box[0] <= point[0] <= box[2] and box[1] <= point[1] <= box[3]:
+                return box
+        return None
+
+    def _allowed(self, track, detection):
+        """With stay_in_reference: a lost track whose last detection was
+        inside a reference takes only detections at that reference (its box
+        widened by a bee width) — a bee that went into a tube comes back out
+        of the same one; anything elsewhere is another bee."""
+        if not (self.stay_in_reference and self.references) or track.time_since_update <= 1:
+            return True
+        x1, y1, x2, y2 = track.last_bbox
+        box = self._reference_of(((x1 + x2) / 2, (y1 + y2) / 2))
+        if box is None:
+            return True
+        pad = self._get_bee_size()
+        cx = (detection[0] + detection[2]) / 2
+        cy = (detection[1] + detection[3]) / 2
+        return (box[0] - pad <= cx <= box[2] + pad) and (box[1] - pad <= cy <= box[3] + pad)
 
     def _is_duplicate_track(self, track: Track) -> bool:
         """
@@ -630,7 +679,8 @@ class BeeTracker:
                 sub = cost_matrix[np.ix_(stage, cols)]
                 for r, c in zip(*linear_sum_assignment(sub)):
                     # IoU is already factored into cost, no need for hard gate
-                    if sub[r, c] < self._gate(self.tracks[stage[r]], max_distance):
+                    if (sub[r, c] < self._gate(self.tracks[stage[r]], max_distance)
+                            and self._allowed(self.tracks[stage[r]], detections[cols[c]])):
                         row, col = stage[r], cols[c]
                         self.tracks[row].update(detections[col], frame_num)
                         matched_tracks.add(row)

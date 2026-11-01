@@ -218,6 +218,11 @@ class BeeTracking:
         resurrection_search_multiplier: float = 3.0,
         duplicate_distance_multiplier: float = 1.2,
         iou_threshold: float = 0.3,
+        # How a lost track searches, and whether one lost at a tube stays
+        # there (BeeTracker, memory/71); references are tube boxes in pixels.
+        lost_search: str = "frames",
+        stay_in_reference=False,
+        references=None,
         # Bee identification
         identifier=None,  # BeeIdentifierManager or ColorIdentifier instance
         # Species classifier (BeeMachine). Where `identifier` answers "which
@@ -329,8 +334,11 @@ class BeeTracking:
             'match_distance_multiplier': match_distance_multiplier,
             'resurrection_search_multiplier': resurrection_search_multiplier,
             'duplicate_distance_multiplier': duplicate_distance_multiplier,
-            'iou_threshold': iou_threshold
+            'iou_threshold': iou_threshold,
+            'lost_search': lost_search,
+            'stay_in_reference': stay_in_reference,
         }
+        self.references = list(references or [])
         
         # Tracker (will be initialized when video properties are known)
         self.tracker = None
@@ -398,6 +406,7 @@ class BeeTracking:
                 fps=fps,
                 bee_size=None,  # Auto-calculate from detections
                 frame_height=frame_height,  # For resolution-relative fallback
+                references=getattr(self, 'references', None),
                 **self.tracker_params
             )
         

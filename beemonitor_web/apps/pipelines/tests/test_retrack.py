@@ -206,6 +206,23 @@ class RetrackRunTests(PrimitiveBlockTestCase):
         self.assertFalse(rt.needs_retrack(run))
         self.assertEqual(run.steps[2]["config"]["_gpu_mot"]["beetrack_max_age_seconds"], 3.0)
 
+    def test_the_tube_rule_re_tracks_on_the_web_with_the_runs_tubes(self):
+        batch = uuid.uuid4()
+        run, _job = self._run(batch)
+        steps = self._steps()
+        steps[2]["config"]["beetrack_stay_in_reference"] = "on"
+        steps[2]["config"]["beetrack_lost_search"] = "speed"
+        self.pipeline.steps = steps
+        self.pipeline.save()
+        self.assertEqual(regroup.batch_changes([run], self.pipeline)["gpu"], [])
+        regroup.apply_pipeline(batch, self.user)
+        recount.sweep()
+        run.refresh_from_db()
+        done = run.context["m"]["result"]["retracked"]
+        self.assertTrue(done["settings"]["stay_in_reference"])
+        self.assertEqual(done["settings"]["lost_search"], "speed")
+        self.assertTrue(rt._reference_boxes(run, self.video))
+
     def test_review_votes_follow_their_event(self):
         run, _job = self._run()
         # A vote on an event as the GPU tracks had it, on a track id that the
@@ -293,3 +310,68 @@ class RetrackRunTests(PrimitiveBlockTestCase):
             {"action": "enter", "reference": "reference_1", "track_id": 9, "frame": 101}]
         votes.move_votes(run, FPS, same_tracks=False)
         self.assertEqual(EventReview.objects.get(run=run).event_key, "enter|reference_1|9|101")
+
+
+def ids_by_phase(calls, params, references=None, split=31):
+    """Track ids seen before and from ``split`` on."""
+    rows = rp.tracking_rows(rp.run_calls(calls, FPS, HEIGHT, params, references))
+    before = {r["track_id"] for r in rows if r["frame"] < split and r["detected"]}
+    after = {r["track_id"] for r in rows if r["frame"] >= split and r["detected"]}
+    return before, after
+
+
+TUBE_A, TUBE_B = (228, 88, 262, 122), (318, 88, 352, 122)
+
+
+def teleport_calls():
+    """A bee flies right, slows and stops in tube A (frames 0-20), is lost
+    in it; another bee appears in tube B, 90 px away, at frame 31."""
+    calls, x = [], 100.0
+    for f in range(0, 21):
+        step = 10.0 if f < 10 else max(0.0, 10.0 - (f - 9) * 1.0)
+        x += step
+        calls.append((f, [box(min(x, 235), 95)], "current"))
+    for f in range(21, 31):
+        calls.append((f, [], "current"))
+    for f in range(31, 45):
+        calls.append((f, [box(325, 95)], "current"))
+    return calls
+
+
+class LostSearchTests(SimpleTestCase):
+    """Lost tracks jumping to another bee (memory/71)."""
+
+    BASE = {"max_age_seconds": 3.0, "max_resurrection_seconds": 0.0}
+
+    def test_today_a_lost_track_takes_the_bee_at_the_next_tube(self):
+        before, after = ids_by_phase(teleport_calls(), rp.tracker_params(self.BASE))
+        self.assertEqual(before, after)                       # the teleport
+
+    def test_following_its_speed_a_stopped_bee_stays_put(self):
+        before, after = ids_by_phase(teleport_calls(),
+                                     rp.tracker_params({**self.BASE, "lost_search": "speed"}))
+        self.assertTrue(before and after and not (before & after))
+
+    def test_a_track_lost_at_a_tube_stays_there(self):
+        params = rp.tracker_params({**self.BASE, "stay_in_reference": "on"})
+        before, after = ids_by_phase(teleport_calls(), params, [TUBE_A, TUBE_B])
+        self.assertTrue(before and after and not (before & after))
+
+    def test_a_fast_bee_lost_mid_flight_is_still_found(self):
+        calls = [(f, [box(100 + 15 * f, 200)], "current") for f in range(0, 20)]
+        calls += [(f, [], "current") for f in range(20, 25)]
+        calls += [(f, [box(100 + 15 * f, 200)], "current") for f in range(25, 35)]
+        before, after = ids_by_phase(calls, rp.tracker_params({**self.BASE, "lost_search": "speed"}),
+                                     split=25)
+        self.assertEqual(before, after)
+
+    def test_the_settings_reach_the_tracker_from_the_mot_node(self):
+        from apps.pipelines import executors
+        sent = executors.tracker_settings({"tracker": "beetrack", "beetrack_lost_search": "speed",
+                                           "beetrack_stay_in_reference": "on",
+                                           "beetrack_match_distance_multiplier": 5})
+        p = rp.tracker_params(sent)
+        self.assertEqual((p["lost_search"], p["stay_in_reference"], p["match_distance_multiplier"]),
+                         ("speed", True, 5.0))
+        # Left at their defaults they aren't sent: GPU cache keys don't change.
+        self.assertNotIn("lost_search", executors.tracker_settings({"tracker": "beetrack"}))
