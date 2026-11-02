@@ -7,6 +7,11 @@ longer detected.
 
 Who may review a run: whoever launched it, and the people they invited to its
 batch as reviewers (``BatchMember``). Viewers and the public link watch only.
+
+An event (or a trip) has one call, the team's (memory/74): any reviewer may
+make it, change one someone else made, or take it back, and it carries who
+made it last. Calls from before then, when each reviewer kept their own, can
+still disagree ("disputed") until someone calls the event again.
 """
 
 from __future__ import annotations
@@ -52,13 +57,19 @@ def can_review(user, run) -> bool:
 
 # ── Event votes ──────────────────────────────────────────────────────────────
 
+def _same_event(run):
+    """The runs whose votes count for this run's events (shared_job_runs)."""
+    return list(shared_job_runs([run], "event_reviews"))
+
+
 def set_event_vote(run, user, key, verdict, reason=""):
-    """Store, change or (``verdict`` None) take back one reviewer's call.
-    Returns the stored verdict or None. Raises ValueError on a bad request."""
+    """Make, change or (``verdict`` None) take back the event's call, whoever
+    made it before (memory/74). Returns the stored verdict or None. Raises
+    ValueError on a bad request."""
     from .models import EventReview
 
     if verdict in (None, "", "none"):
-        EventReview.objects.filter(run=run, event_key=key, user=user).delete()
+        EventReview.objects.filter(run_id__in=_same_event(run), event_key=key).delete()
         return None
     if verdict not in EventReview.Verdict.values:
         raise ValueError("verdict must be accepted or rejected")
@@ -70,6 +81,8 @@ def set_event_vote(run, user, key, verdict, reason=""):
         frame = int(frame)
     except (TypeError, ValueError):
         frame = None
+    EventReview.objects.filter(run_id__in=_same_event(run), event_key=key).exclude(
+        run=run, user=user).delete()
     EventReview.objects.update_or_create(
         run=run, event_key=key, user=user,
         defaults={"verdict": verdict, "reason": reason if verdict == "rejected" else "",
@@ -108,14 +121,20 @@ def event_summaries(run):
     return out
 
 
-def user_votes(run, user):
-    """``{event_key: verdict}`` for this reviewer."""
+def current_calls(run, user=None):
+    """``{event_key: (verdict, by)}``: each event's call and who made it ("you"
+    for ``user``), from this run's votes. A disputed event (older votes that
+    disagree) has none until someone calls it again."""
     from .models import EventReview
 
-    if not getattr(user, "is_authenticated", False):
-        return {}
-    return dict(EventReview.objects.filter(run=run, user=user)
-                .values_list("event_key", "verdict"))
+    verdicts, by = {}, {}
+    for key, verdict, uid, name in (EventReview.objects.filter(run=run)
+                                    .order_by("updated_at")
+                                    .values_list("event_key", "verdict", "user_id",
+                                                 "user__username")):
+        verdicts.setdefault(key, set()).add(verdict)
+        by[key] = "you" if user is not None and uid == getattr(user, "pk", None) else name
+    return {k: (combined(v) if len(v) == 1 else None, by[k]) for k, v in verdicts.items()}
 
 
 def event_review_counts(run, rows=None):
@@ -211,7 +230,7 @@ def trip_reviews_for(runs):
 
     owners = shared_job_runs(runs, "trip_exits")
     keys, latest = {}, {}
-    for t in TripReview.objects.filter(exit_run_id__in=list(owners)):
+    for t in TripReview.objects.filter(exit_run_id__in=list(owners)).select_related("user"):
         own = owners[t.exit_run_id]
         if t.exit_run_id != own.pk:         # saved on another run: if this one has it
             if own.pk not in keys:
@@ -499,13 +518,32 @@ def add_event(run, user, *, frame, action, reference, track_id="", end_frame=Non
 
 
 def remove_added(run, user, pk):
-    """The person who added it, or the run's owner, may take it back."""
+    """Anyone who may review the run may take an added event back, whoever
+    added it (memory/74)."""
     from .models import AddedEvent
 
-    q = AddedEvent.objects.filter(run=run, pk=pk)
-    if run.user_id != user.pk:
-        q = q.filter(user=user)
-    return q.delete()[0] > 0
+    if not can_review(user, run):
+        return False
+    return AddedEvent.objects.filter(run=run, pk=pk).delete()[0] > 0
+
+
+def reviewers_by_run(runs):
+    """``{run pk: sorted usernames}``: who called an event or a trip, added a
+    missed event or marked the clip reviewed, on each run (or another run of
+    its GPU job, shared_job_runs). For the batch's Reviewed by filter."""
+    from .models import AddedEvent, ClipReview, EventReview, TripReview
+
+    runs = list(runs)
+    out = {r.pk: set() for r in runs}
+    for model, field, related in ((EventReview, "run_id", "event_reviews"),
+                                  (AddedEvent, "run_id", "added_events"),
+                                  (ClipReview, "run_id", "clip_reviews"),
+                                  (TripReview, "exit_run_id", "trip_exits")):
+        owners = shared_job_runs(runs, related)
+        for run_id, name in (model.objects.filter(**{f"{field}__in": list(owners)})
+                             .values_list(field, "user__username").distinct()):
+            out[owners[run_id].pk].add(name)
+    return {pk: sorted(names, key=str.lower) for pk, names in out.items()}
 
 
 def added_rows(run):

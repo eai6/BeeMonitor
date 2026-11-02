@@ -44,7 +44,7 @@ class MissedEventTests(EventReviewTests):
         self.assertEqual(self.add(action="hover").status_code, 400)
         self.assertEqual(self.add(reference="").status_code, 400)
 
-    def test_only_reviewers_add_and_only_the_adder_or_owner_removes(self):
+    def test_only_reviewers_add_and_any_reviewer_removes(self):
         self.assertEqual(self.add(user=self.stranger).status_code, 404)
         BatchMember.objects.create(batch_id=self.batch, user=self.maria, role="reviewer")
         BatchMember.objects.create(batch_id=self.batch, user=self.stranger, role="viewer")
@@ -53,10 +53,11 @@ class MissedEventTests(EventReviewTests):
         url = reverse("analysis:add_missed_event", args=[self.job.pk])
         third = self.owner.__class__.objects.create_user("third", password="x")
         BatchMember.objects.create(batch_id=self.batch, user=third, role="reviewer")
-        self.client.force_login(third)
+        # memory/74: any reviewer may take back an event someone else added.
+        self.client.force_login(self.stranger)
         self.assertEqual(self.client.post(url, json.dumps({"remove": pk}),
                                           content_type="application/json").status_code, 404)
-        self.client.force_login(self.owner)
+        self.client.force_login(third)
         self.assertEqual(self.client.post(url, json.dumps({"remove": pk}),
                                           content_type="application/json").status_code, 200)
         self.assertFalse(AddedEvent.objects.exists())
@@ -78,7 +79,7 @@ class MissedEventTests(EventReviewTests):
         self.assertEqual((a[0], a[1], a[2], a[3], a[6], a[7], a[8]),
                          (400, 9, "enter", "reference_1", "owner", True, True))
 
-    def test_the_owner_may_remove_a_reviewers_added_event(self):
+    def test_any_reviewer_may_remove_an_added_event(self):
         BatchMember.objects.create(batch_id=self.batch, user=self.maria,
                                    role=BatchMember.Role.REVIEWER)
         self.add(user=self.maria, track_id="9")
@@ -89,8 +90,11 @@ class MissedEventTests(EventReviewTests):
                                               {"part": "events"}).content)
             return live["added"][0][7], live["added"][0][8]
 
+        third = self.owner.__class__.objects.create_user("third", password="x")
+        BatchMember.objects.create(batch_id=self.batch, user=third, role=BatchMember.Role.REVIEWER)
         self.assertEqual(flags(self.owner), (False, True))
         self.assertEqual(flags(self.maria), (True, True))
+        self.assertEqual(flags(third), (False, True))
 
     def test_precision_and_recall(self):
         self.assertEqual(review.quality(9, 1, 1), (90, 90))

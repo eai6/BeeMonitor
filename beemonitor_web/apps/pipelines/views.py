@@ -1151,6 +1151,7 @@ def batch_detail(request, batch_id):
     # list, not the first row's device wearing the whole batch's name.
     batch_devices = aggregate.batch_devices(rows)
     batch_sites = aggregate.batch_sites(rows)
+    batch_reviewers = aggregate.batch_reviewers(rows)
     failure_groups = failure_taxonomy.group([
         (r["video"].pk if r["video"] else None, r["error"], r["run"].started_at)
         for r in rows if r["status"] == "failed"
@@ -1299,6 +1300,7 @@ def batch_detail(request, batch_id):
         "skipped_reasons": Counter(s["reason"] for s in skipped_sources).most_common(),
         "batch_devices": batch_devices,
         "batch_sites": batch_sites,
+        "batch_reviewers": batch_reviewers,
         # Period review (memory/62): the batch's clips on one time axis, when
         # they are from one device or one site.
         "period_reviews": _period_reviews(rows, batch_id),

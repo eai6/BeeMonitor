@@ -330,6 +330,13 @@
           btn.addEventListener('click', function () { vote(e, v[0]); });
           row.appendChild(btn);
         });
+        // Called by someone else (memory/74): theirs until you change it.
+        if (e[7] && e[10] && e[10] !== 'you') {
+          var who = document.createElement('span');
+          who.className = 'text-xs text-gray-600';
+          who.textContent = 'by ' + e[10];
+          row.appendChild(who);
+        }
       }
       box.appendChild(row);
     });
@@ -346,7 +353,7 @@
       b.children[1].className = 'italic text-amber-900';
       b.addEventListener('click', function () { seekTo(a[0]); });
       row.appendChild(b);
-      if (reviewUrl && (a[8] || a[7])) {
+      if (reviewUrl && a[8]) {
         var rm = document.createElement('button');
         rm.type = 'button';
         rm.className = 'h-9 px-2 rounded text-xs border border-gray-300 bg-white hover:bg-gray-50';
@@ -360,8 +367,9 @@
   }
 
   // ── Event review (memory/62) ────────────────────────────────────────────
-  // A vote sits beside the detected event; it never changes it. Clicking your
-  // vote again takes it back. Review mode plays to each event in turn, pauses
+  // A vote sits beside the detected event; it never changes it. An event has
+  // one call, whoever made it (memory/74): a reviewer's Yes / No replaces
+  // anyone else's, and clicking the call again takes it back. Review mode plays to each event in turn, pauses
   // on it and waits for Yes / No.
   var reviewUrl = root.getAttribute('data-review-url');
   function csrfToken() {
@@ -386,11 +394,10 @@
       body: JSON.stringify({event_key: e[6], verdict: v, reason: reason || ''})
     }).then(function (r) { return r.json(); }).then(function (d) {
       if (!d.ok) throw new Error(d.error || 'Could not save the vote');
-      if (e[7] === 'accepted') e[8] = Math.max(0, (e[8] || 0) - 1);
-      if (e[7] === 'rejected') e[9] = Math.max(0, (e[9] || 0) - 1);
       e[7] = d.verdict;
-      if (d.verdict === 'accepted') e[8] = (e[8] || 0) + 1;
-      if (d.verdict === 'rejected') e[9] = (e[9] || 0) + 1;
+      e[8] = d.verdict === 'accepted' ? 1 : 0;
+      e[9] = d.verdict === 'rejected' ? 1 : 0;
+      e[10] = d.verdict ? 'you' : null;
       paintProgress(); nearKey = ''; renderNear(ov.frame()); renderMarks(); paintCard();
       return d.verdict;
     }).catch(function (err) { status.textContent = String(err.message || err); });
@@ -437,7 +444,8 @@
     card.querySelector('[data-rv-title]').textContent =
       e[2].toUpperCase() + ' tube ' + tubeName(e[3]) + ' · track ' + e[1] + (e[5] ? ' · at edge' : '');
     card.querySelector('[data-rv-where]').textContent =
-      fmt(sec(e[0])) + ' · event ' + (rv.i + 1) + ' of ' + rv.list.length;
+      fmt(sec(e[0])) + ' · event ' + (rv.i + 1) + ' of ' + rv.list.length +
+      (e[7] && e[10] ? ' · ' + (e[7] === 'accepted' ? 'Yes' : 'No') + ' by ' + e[10] : '');
     card.querySelectorAll('[data-rv-vote]').forEach(function (b) {
       var on = e[7] === b.getAttribute('data-rv-vote');
       b.setAttribute('aria-pressed', on ? 'true' : 'false');

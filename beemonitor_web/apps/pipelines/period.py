@@ -174,7 +174,8 @@ def clip_events(clip, user=None):
     result = effective_result(clip["job"], run) if getattr(clip["job"], "result", None) else None
     by_track = tracks.by_track_of(result) if result is not None else {}
     summaries = review.event_summaries(run)
-    mine = review.user_votes(run, user) if user is not None else {}
+    # The event's call, whoever made it (memory/74).
+    calls = review.current_calls(run, user)
     out = []
     for raw in (r for k, o in analyzer_outputs(run) if k == "events" for r in (o.get("rows") or [])):
         e = primitives.normalize_event(raw)
@@ -193,7 +194,8 @@ def clip_events(clip, user=None):
             "reference": str(e.get("reference") or ""), "end_frame": e.get("end_frame"),
             "at_edge": e.get("at_edge"), "species": ident.get("species", ""),
             "species_confidence": ident.get("species_confidence", ""),
-            "marker": ident.get("marker_id", ""), "mine": mine.get(key),
+            "marker": ident.get("marker_id", ""), "mine": calls.get(key, (None,))[0],
+            "called_by": calls.get(key, (None, None))[1],
             "accepted": s.get("accepted", 0), "rejected": s.get("rejected", 0)})
     out.sort(key=lambda e: e["t"])
     return out
@@ -232,13 +234,16 @@ def suggest_trips(events):
 # ── Trip votes ───────────────────────────────────────────────────────────────
 
 def set_trip_vote(user, exit_run, exit_key, entry_run, entry_key, verdict, reason="", relinked=False):
-    """Store, change or (verdict None) take back one reviewer's call on the
-    trip starting at this exit. Raises ValueError on a bad request."""
+    """Make, change or (verdict None) take back the call on the trip starting
+    at this exit, whoever made it before (memory/74). Raises ValueError on a
+    bad request."""
     from .models import TripReview
-    from .review import TRIP_REASONS
+    from .review import TRIP_REASONS, shared_job_runs
 
+    same = TripReview.objects.filter(
+        exit_run_id__in=list(shared_job_runs([exit_run], "trip_exits")), exit_key=exit_key)
     if verdict in (None, "", "none"):
-        TripReview.objects.filter(exit_run=exit_run, exit_key=exit_key, user=user).delete()
+        same.delete()
         return None
     if verdict not in TripReview.Verdict.values:
         raise ValueError("verdict must be accepted or rejected")
@@ -260,6 +265,7 @@ def set_trip_vote(user, exit_run, exit_key, entry_run, entry_key, verdict, reaso
 
     ref, exit_track, exit_frame = _split(exit_key)
     _r, entry_track, entry_frame = _split(entry_key) if entry_key else ("", "", None)
+    same.exclude(exit_run=exit_run, user=user).delete()
     TripReview.objects.update_or_create(
         exit_run=exit_run, exit_key=exit_key, user=user,
         defaults={"entry_run": entry_run if entry_key else None, "entry_key": entry_key or "",

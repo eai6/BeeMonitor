@@ -2180,7 +2180,8 @@ def overlay_live(job, user=None):
 
     run = pipeline_executors._run_for_job(job)
     summaries = event_review.event_summaries(run) if run is not None else {}
-    mine = event_review.user_votes(run, user) if run is not None and user is not None else {}
+    # Each event's call, whoever made it (memory/74): any reviewer may change it.
+    calls = event_review.current_calls(run, user) if run is not None else {}
     events, interactions = [], []
     try:
         for e in primitives.normalized(
@@ -2190,9 +2191,10 @@ def overlay_live(job, user=None):
                 continue
             key = event_review.event_key(e)
             s = summaries.get(key) or {}
+            call, by = calls.get(key, (None, None))
             events.append([frame, tid, e.get("action") or "", str(e.get("reference") or ""),
                            _int(e.get("end_frame")), e.get("at_edge"),
-                           key, mine.get(key), s.get("accepted", 0), s.get("rejected", 0)])
+                           key, call, s.get("accepted", 0), s.get("rejected", 0), by])
         for r in primitives.normalized(
                 "interactions", pipeline_executors.primitives_for_job(job, "interactions")):
             start, end, tid = _int(r.get("start_frame")), _int(r.get("end_frame")), _int(r.get("track_id"))
@@ -2221,16 +2223,16 @@ def overlay_live(job, user=None):
                 for r in ops.roi_references(geometry)]
     # Events reviewers said the system missed (memory/62 §3b):
     # [frame, track_id|null, action, reference, end_frame, id, by, yours,
-    #  removable]: the person who added it, or the run's owner, may take it
-    # back (review.remove_added).
+    #  removable]: anyone who may review the clip may take it back, whoever
+    # added it (review.remove_added, memory/74).
     added = []
     if run is not None:
         uid = getattr(user, "pk", None) if user is not None else None
+        removable = user is not None and event_review.can_review(user, run)
         for a in event_review.added_rows(run):
             yours = uid is not None and uid == a["user_id"]
             added.append([a["frame"], _int(a["track_id"]), a["action"], a["reference"],
-                          a["end_frame"], a["id"], a["user"], yours,
-                          yours or (uid is not None and uid == run.user_id)])
+                          a["end_frame"], a["id"], a["user"], yours, removable])
     return {"events": events, "interactions": interactions, "regions": regions,
             "added": added, "style": STYLE, **_overlay_groups(run, user)}
 

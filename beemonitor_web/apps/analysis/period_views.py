@@ -86,13 +86,18 @@ def _gather(request):
 
 
 def _trip_votes(runs, user):
-    """``{(run pk, exit key): {"mine": {...} or None, "accepted", "rejected"}}``."""
-    out = {}
+    """``{(run pk, exit key): {"mine": {...} or None, "accepted", "rejected"}}``.
+    ``mine`` is the trip's call, the latest whoever made it (memory/74): any
+    reviewer may change it; ``by`` says who."""
+    out, when = {}, {}
     for t in event_review.trip_reviews_for(runs):
-        s = out.setdefault((t.own_run.pk, t.exit_key), {"mine": None, "accepted": 0, "rejected": 0})
+        k = (t.own_run.pk, t.exit_key)
+        s = out.setdefault(k, {"mine": None, "accepted": 0, "rejected": 0})
         s[t.verdict] += 1
-        if t.user_id == user.pk:
-            s["mine"] = {"verdict": t.verdict, "entry_key": t.entry_key, "reason": t.reason}
+        if k not in when or t.updated_at > when[k]:
+            when[k] = t.updated_at
+            s["mine"] = {"verdict": t.verdict, "entry_key": t.entry_key, "reason": t.reason,
+                         "by": "you" if t.user_id == user.pk else t.user.username}
     return out
 
 

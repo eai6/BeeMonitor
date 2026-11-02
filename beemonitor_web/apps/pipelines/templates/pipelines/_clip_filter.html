@@ -4,6 +4,7 @@
     units   - the batch's devices ({pk, name}); the Unit menu shows for two or more
     sites   - the batch's site names; the Site menu shows for two or more (memory/73)
     reviewed_filter - offer "Reviewed / Not reviewed" (the batch page)
+    reviewers - usernames for "Reviewed by" (with reviewed_filter; memory/74)
     select  - offer "Select" (tick clips to update or remove; the launcher)
     public  - the share page: no error text, no re-run, its own status chips
     rerun   - offer "Re-run these N" (the batch page's re-run form follows the filter)
@@ -58,6 +59,15 @@
         <option value="no">Not reviewed</option>
       </select>
     </label>
+    {% if reviewers %}
+    <label class="flex items-center gap-1.5 text-xs text-gray-700">Reviewed by
+      <select data-filter="by" class="h-9 border border-gray-300 rounded-md px-2 text-[13px] bg-white">
+        <option value="">Anyone</option>
+        {% for name in reviewers %}<option value="{{ name }}">{% if name == request.user.username %}You ({{ name }}){% else %}{{ name }}{% endif %}</option>{% endfor %}
+        {% for name in reviewers %}<option value="!{{ name }}">Not by {% if name == request.user.username %}you{% else %}{{ name }}{% endif %}</option>{% endfor %}
+      </select>
+    </label>
+    {% endif %}
     {% endif %}
     {% if not public or not photos %}
     <button type="button" id="cf-more" aria-expanded="false" aria-controls="cf-results"

@@ -395,8 +395,9 @@ def batch_rows(runs, actions=None):
 
     from apps.annotations.leftout import video_site
 
-    from .review import batch_review_counts, clip_touched
+    from .review import batch_review_counts, clip_touched, reviewers_by_run
     reviews = batch_review_counts(runs, actions)
+    reviewers = reviewers_by_run(runs)
 
     rows = []
     for run in runs:
@@ -417,6 +418,8 @@ def batch_rows(runs, actions=None):
             # has reviewed it.
             "site": video_site(video) if video else "",
             "reviewed": clip_touched(reviews.get(run.pk)),
+            # Who reviewed it, for the Reviewed by filter (memory/74).
+            "reviewers": reviewers.get(run.pk, []),
             "status": run.status,
             "error": run_error(run),
             # Stopped by its owner (memory/49): shown apart from failures.
@@ -435,6 +438,11 @@ def batch_rows(runs, actions=None):
 def batch_sites(rows):
     """The distinct sites of the batch's clips, sorted (memory/73)."""
     return sorted({r["site"] for r in rows if r.get("site")}, key=str.lower)
+
+
+def batch_reviewers(rows):
+    """Everyone who reviewed a clip of the batch, sorted (memory/74)."""
+    return sorted({n for r in rows for n in r.get("reviewers") or []}, key=str.lower)
 
 
 def batch_devices(rows):

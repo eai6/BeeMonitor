@@ -450,7 +450,7 @@ their reason.
     stream view presigns the original and the tracks drawn over it are fetched
     when a row is opened, so this page costs nothing until a row is clicked.
   {% endcomment %}
-  {% if rows|length > 1 %}{% include "pipelines/_clip_filter.html" with units=batch_devices sites=batch_sites reviewed_filter=True select=can_share rerun=can_rerun %}{% endif %}
+  {% if rows|length > 1 %}{% include "pipelines/_clip_filter.html" with units=batch_devices sites=batch_sites reviewers=batch_reviewers reviewed_filter=True select=can_share rerun=can_rerun %}{% endif %}
 
   {% include "pipelines/_clip_viewer.html" %}
 
@@ -475,7 +475,7 @@ their reason.
        data-f-status="{% if r.status == "completed" %}completed{% elif r.cancelled %}cancelled{% elif r.status == "failed" %}failed{% else %}running{% endif %}"
        data-f-text="{{ r.video.title }} {{ r.site }} {{ r.video.device.name }} {{ r.when|date:"j M Y H:i" }} {% if r.status == "failed" %}{{ r.error|failure_title }}{% endif %}"
        {% if r.video %}data-f-video="{{ r.video.pk }}"{% endif %}
-       data-f-run="{{ r.run.pk }}" data-f-site="{{ r.site }}" data-f-reviewed="{% if r.reviewed %}yes{% else %}no{% endif %}"
+       data-f-run="{{ r.run.pk }}" data-f-site="{{ r.site }}" data-f-reviewed="{% if r.reviewed %}yes{% else %}no{% endif %}" data-f-by="{{ r.reviewers|join:' ' }}"
        {% if r.video.device %}data-f-unit="{{ r.video.device.pk }}"{% endif %}
        {% if r.when %}data-f-day="{{ r.when|date:"Y-m-d" }}"{% endif %}
        {% if photos %}{% if r.photo %}data-f-insects="{{ r.photo.insects }}" data-f-species="{{ r.photo.named }}"{% endif %}

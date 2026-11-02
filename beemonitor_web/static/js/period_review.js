@@ -282,11 +282,11 @@
     var e = x.e, clip = P.clips[x.c];
     return post(clip.review_url, {event_key: e.key, verdict: verdict, reason: reason || ''})
       .then(function (d) {
-        if (e.mine === 'accepted') e.accepted = Math.max(0, (e.accepted || 0) - 1);
-        if (e.mine === 'rejected') e.rejected = Math.max(0, (e.rejected || 0) - 1);
+        // One call per event (memory/74): this one replaces anyone else's.
         e.mine = d.verdict;
-        if (d.verdict === 'accepted') e.accepted = (e.accepted || 0) + 1;
-        if (d.verdict === 'rejected') e.rejected = (e.rejected || 0) + 1;
+        e.called_by = d.verdict ? 'you' : null;
+        e.accepted = d.verdict === 'accepted' ? 1 : 0;
+        e.rejected = d.verdict === 'rejected' ? 1 : 0;
         renderLanes();
       }).catch(function (err) { status.textContent = String(err.message || err); });
   }
@@ -478,9 +478,10 @@
       entry_key: entry ? entry.key : '',
       verdict: verdict, reason: reason || '', relinked: !!relinked
     }).then(function (d) {
-      if (t.mine) t[t.mine.verdict] = Math.max(0, (t[t.mine.verdict] || 0) - 1);
-      t.mine = d.verdict ? {verdict: d.verdict, entry_key: entry ? entry.key : ''} : null;
-      if (d.verdict) t[d.verdict] = (t[d.verdict] || 0) + 1;
+      // One call per trip (memory/74): this one replaces anyone else's.
+      t.mine = d.verdict ? {verdict: d.verdict, entry_key: entry ? entry.key : '', by: 'you'} : null;
+      t.accepted = d.verdict === 'accepted' ? 1 : 0;
+      t.rejected = d.verdict === 'rejected' ? 1 : 0;
       renderLanes();
     }).catch(function (err) { status.textContent = String(err.message || err); });
   }

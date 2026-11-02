@@ -248,12 +248,15 @@ class TripVoteTests(PeriodBase):
         self.vote(None)
         self.assertFalse(TripReview.objects.exists())
 
-    def test_two_reviewers_who_disagree_make_it_disputed(self):
+    def test_a_reviewer_changes_someone_elses_trip_call(self):
+        # memory/74: one call per trip; any reviewer may change or take it back.
         BatchMember.objects.create(batch_id=self.batch, user=self.maria)
         self.vote("accepted")
         self.assertEqual(self.vote("rejected", user=self.maria, reason="can't tell").status_code, 200)
         row = self.csv_rows()[0]
-        self.assertEqual((row["review"], row["reviewed_by"]), ("disputed", "maria;owner"))
+        self.assertEqual((row["review"], row["reviewed_by"]), ("rejected", "maria"))
+        self.vote(None)
+        self.assertFalse(TripReview.objects.exists())
 
     def test_viewers_and_strangers_cannot_vote(self):
         BatchMember.objects.create(batch_id=self.batch, user=self.maria,

@@ -4,7 +4,7 @@
 // place: no request, and it keeps up as you type.
 //
 // Rows carry what they can be filtered on as data-f-* attributes; controls
-// carry data-filter (q, unit, site, day, reviewed, sort), data-filter-min (a row attribute to
+// carry data-filter (q, unit, site, day, reviewed, by, sort), data-filter-min (a row attribute to
 // be at least) or data-filter-status. The filter lives in the address bar, so
 // a filtered view survives the running batch's auto-refresh and can be sent on.
 (function () {
@@ -70,6 +70,13 @@
         for (var w = 0; w < words.length; w++) if (text.indexOf(words[w]) < 0) return false;
       } else if (name === 'unit' || name === 'day' || name === 'site' || name === 'reviewed') {
         if (el.value && row.getAttribute('data-f-' + name) !== el.value) return false;
+      } else if (name === 'by') {
+        // Reviewed by someone, or ("!name") not by them (memory/74).
+        if (!el.value) continue;
+        var not = el.value.charAt(0) === '!';
+        var who = not ? el.value.slice(1) : el.value;
+        var by = (row.getAttribute('data-f-by') || '').split(' ').indexOf(who) >= 0;
+        if (by === not) return false;
       } else if (name === 'empty') {
         if (el.checked && row.getAttribute('data-f-tracks') !== '0') return false;
       }

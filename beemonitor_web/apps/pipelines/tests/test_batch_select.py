@@ -40,6 +40,22 @@ class BatchSelectTests(FilterBase):
         self.assertContains(page, f'data-f-run="{self.run_b.pk}" data-f-site="natalies" data-f-reviewed="no"')
         self.assertContains(page, "data-select-toggle")
 
+    def test_rows_say_who_reviewed_them(self):
+        # memory/74: the Reviewed by filter.
+        from django.contrib.auth import get_user_model
+        from apps.pipelines.models import AddedEvent
+
+        pat = get_user_model().objects.create_user("pat", password="x")
+        ClipReview.objects.create(run=self.run_a, user=self.user)
+        AddedEvent.objects.create(run=self.run_a, user=pat, frame=1, action="enter", reference="1")
+        page = self.page()
+        names = sorted([self.user.username, "pat"], key=str.lower)
+        self.assertEqual(page.context["batch_reviewers"], names)
+        self.assertContains(page, 'data-filter="by"')
+        self.assertContains(page, f'data-f-by="{" ".join(names)}"')
+        self.assertContains(page, f'value="!pat">Not by pat')
+        self.assertContains(page, f'>You ({self.user.username})<')
+
     def test_review_metrics_for_the_clips_shown(self):
         event = self.run_a.context["a"]["rows"][0]
         from apps.pipelines.review import event_key

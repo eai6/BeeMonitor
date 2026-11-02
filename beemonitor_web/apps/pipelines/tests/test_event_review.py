@@ -94,13 +94,32 @@ class EventReviewTests(TestCase):
         self.assertEqual((rejected[0]["reviewed_by"], rejected[0]["review_notes"]),
                          ("owner", "not an event"))
 
-    def test_two_reviewers_who_disagree_make_it_disputed(self):
+    def test_a_reviewer_changes_someone_elses_call(self):
+        # memory/74: one call per event; any reviewer may change it.
         BatchMember.objects.create(batch_id=self.batch, user=self.maria,
                                    role=BatchMember.Role.REVIEWER)
         self.vote(self.owner, "accepted")
         self.assertEqual(self.vote(self.maria, "rejected", "can't tell").status_code, 200)
         row = [r for r in self.csv_rows() if r["review"]][0]
+        self.assertEqual((row["review"], row["reviewed_by"]), ("rejected", "maria"))
+        self.assertEqual(review.current_calls(self.run, self.owner)[self.key], ("rejected", "maria"))
+        self.assertEqual(review.current_calls(self.run, self.maria)[self.key], ("rejected", "you"))
+
+    def test_a_reviewer_takes_back_someone_elses_call(self):
+        BatchMember.objects.create(batch_id=self.batch, user=self.maria,
+                                   role=BatchMember.Role.REVIEWER)
+        self.vote(self.owner, "accepted")
+        self.assertIsNone(self.vote(self.maria, None).json()["verdict"])
+        self.assertFalse(EventReview.objects.exists())
+
+    def test_older_calls_that_disagree_stay_disputed_until_called_again(self):
+        EventReview.objects.create(run=self.run, event_key=self.key, user=self.owner, verdict="accepted")
+        EventReview.objects.create(run=self.run, event_key=self.key, user=self.maria, verdict="rejected")
+        row = [r for r in self.csv_rows() if r["review"]][0]
         self.assertEqual((row["review"], row["reviewed_by"]), ("disputed", "maria;owner"))
+        self.assertIsNone(review.current_calls(self.run)[self.key][0])
+        self.vote(self.owner, "accepted")
+        self.assertEqual(EventReview.objects.get().user, self.owner)
 
     def test_only_the_launcher_and_invited_reviewers_may_vote(self):
         self.assertEqual(self.vote(self.stranger, "accepted").status_code, 404)
