@@ -274,7 +274,7 @@ class TripVoteTests(PeriodBase):
         page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
         self.assertIn("trips", [d["kind"] for d in page.context["downloads"]])
         body = self.client.get(reverse("pipelines:batch_combined_csv",
-                                       kwargs={"batch_id": self.batch, "kind": "trips"})).content.decode()
+                                       kwargs={"batch_id": self.batch, "kind": "trips"})).getvalue().decode()
         self.assertIn("reference_1", body)
 
 
@@ -367,7 +367,7 @@ class SharedJobTests(PeriodBase):
         self.assertEqual((summary["trips"]["reviewed"], summary["events"]["reviewed"]), (1, 1))
         self.assertIn("trips", [d["kind"] for d in page.context["downloads"]])
         body = self.client.get(reverse("pipelines:batch_combined_csv", kwargs={
-            "batch_id": self.batch, "kind": "trips"})).content.decode()
+            "batch_id": self.batch, "kind": "trips"})).getvalue().decode()
         self.assertEqual(len(list(csv.DictReader(io.StringIO(body)))), 1)
 
     def test_a_reviewers_latest_call_wins_across_runs(self):

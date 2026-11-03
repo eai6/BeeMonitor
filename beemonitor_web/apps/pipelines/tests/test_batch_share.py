@@ -195,14 +195,14 @@ class BatchShareTests(TestCase):
                    "location": "North meadow plot 4", "duration_sec": 1.0}])
 
         with mock.patch.object(sharing, "batch_csv", return_value=table):
-            body = self._public(share, "public_batch_csv", "interactions").content.decode()
+            body = self._public(share, "public_batch_csv", "interactions").getvalue().decode()
         self.assertTrue(body.startswith("video_title,device_name,duration_sec"))
         self.assertNotIn("North meadow", body)
 
         share.show_locations = True
         share.save()
         with mock.patch.object(sharing, "batch_csv", return_value=table):
-            body = self._public(share, "public_batch_csv", "interactions").content.decode()
+            body = self._public(share, "public_batch_csv", "interactions").getvalue().decode()
         self.assertIn("North meadow plot 4", body)
 
     def test_an_unknown_token_is_the_link_off_page(self):

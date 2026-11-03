@@ -315,7 +315,7 @@ class PrimitiveExportTests(TestCase):
     def _download(self, kind):
         return self.client.get(reverse(
             "pipelines:batch_combined_csv",
-            kwargs={"batch_id": self.batch_id, "kind": kind})).content.decode()
+            kwargs={"batch_id": self.batch_id, "kind": kind})).getvalue().decode()
 
     def test_rows_saved_under_the_old_rules_export_in_the_new_columns(self):
         self._run_with(self.INTERACTION)
@@ -606,8 +606,8 @@ class FullResultsLinkTests(TestCase):
         self.assertIn("data-results=", html)
 
     def test_a_run_that_never_produced_a_job_offers_no_dead_link(self):
-        PipelineRun.objects.filter(batch_id=self.batch_id).update(
-            context={"v": {"artifact": "video", "video_id": self.video.pk}})
+        for pk in PipelineRun.objects.filter(batch_id=self.batch_id).values_list("pk", flat=True):
+            PipelineRun.write_context(pk, {"v": {"artifact": "video", "video_id": self.video.pk}})
 
         html = self._html()
 

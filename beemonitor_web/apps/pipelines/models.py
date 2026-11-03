@@ -129,6 +129,12 @@ class PipelineRun(models.Model):
     # kept in step with it by save() (memory/75). "Which runs share this
     # clip's job" used to load every run's whole context to find out.
     gpu_job_id = models.IntegerField(null=True, blank=True, db_index=True)
+    # ``context`` slimmed for pages that list many clips (runsummary, memory/76),
+    # kept in step with it by save() and write_context().
+    summary = models.JSONField(default=dict, blank=True)
+    # Re-run in place on the GPU by Update (memory/76): when it completes, its
+    # review votes move to the matching new events (retrack.votes).
+    rerun_votes = models.BooleanField(default=False)
     # step_id -> STEP_* status.
     step_status = models.JSONField(default=dict, blank=True)
     error_message = models.TextField(blank=True)
@@ -152,14 +158,37 @@ class PipelineRun(models.Model):
         return f"Run {self.id} — {self.pipeline.title} [{self.status}]"
 
     def save(self, *args, **kwargs):
+        from . import runsummary
         from .aggregate import run_job_id
 
         fields = kwargs.get("update_fields")
         if fields is None or "context" in fields:
-            self.gpu_job_id = run_job_id(self)
-            if fields is not None:
-                kwargs["update_fields"] = list(fields) + ["gpu_job_id"]
+            if getattr(self, "_slim", False):
+                # Its context is the slim copy (runsummary.use_slim): saving
+                # it would write that over the real results.
+                raise ValueError("A run read through its summary can't be saved.")
+            if "context" in self.get_deferred_fields():
+                fields = [f.attname for f in self._meta.concrete_fields
+                          if f.attname not in ("context", "summary", "gpu_job_id", "id")] \
+                    if fields is None else [f for f in fields if f != "context"]
+                kwargs["update_fields"] = fields
+            else:
+                self.gpu_job_id = run_job_id(self)
+                self.summary = runsummary.build(self.context)
+                if fields is not None:
+                    kwargs["update_fields"] = list(fields) + ["gpu_job_id", "summary"]
         super().save(*args, **kwargs)
+
+    @classmethod
+    def write_context(cls, pk, context):
+        """Save a run's context with a queryset update, keeping the columns
+        save() keeps in step with it (memory/75, memory/76)."""
+        from . import runsummary
+        from .aggregate import run_job_id
+
+        run = cls(pk=pk, context=context)
+        cls.objects.filter(pk=pk).update(context=context, gpu_job_id=run_job_id(run),
+                                         summary=runsummary.build(context))
 
     # ── Convenience accessors used by the engine + templates ──────────────────
     def step_state(self, step_id):

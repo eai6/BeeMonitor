@@ -314,6 +314,15 @@ def primitive_csv(runs, kind):
     return _primitive_fieldnames(kind, all_rows), all_rows
 
 
+def combined_fieldnames(path_key):
+    """The columns of a combined tracking or detections download."""
+    from . import tracks
+
+    fields = (tracks.TRACKING_FIELDS if path_key == "tracking_csv_path"
+              else tracks.DETECTION_FIELDS)
+    return PROVENANCE_FIELDS + list(fields)
+
+
 def combined_csv(sources, path_key):
     """Every clip's tracking or detections rows, as the columns people download
     (memory/60): times instead of bare frames, the worker's internal columns
@@ -347,6 +356,21 @@ def combined_csv(sources, path_key):
     if not read_any:
         return None, []
     return PROVENANCE_FIELDS + list(fields), all_rows
+
+
+def whole_runs(runs, chunk=10):
+    """``runs`` (slim copies, memory/76) read whole, ``chunk`` at a time, in
+    the same order: for exports that need every row, without holding the
+    whole batch's results at once."""
+    from .models import PipelineRun
+
+    runs = list(runs)
+    for i in range(0, len(runs), chunk):
+        part = runs[i:i + chunk]
+        full = PipelineRun.objects.select_related("pipeline").in_bulk([r.pk for r in part])
+        for r in part:
+            if r.pk in full:
+                yield full[r.pk]
 
 
 def run_job_id(run):

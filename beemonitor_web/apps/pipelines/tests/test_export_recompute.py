@@ -87,7 +87,7 @@ class ExportRecomputeTests(TestCase):
             kwargs={"batch_id": self.batch_id, "kind": kind}))
 
     def _download(self, kind):
-        return self._response(kind).content.decode()
+        return self._response(kind).getvalue().decode()
 
     def test_the_bee_inside_the_tube_reaches_the_export(self):
         body = self._download("interactions")

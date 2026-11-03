@@ -95,7 +95,7 @@ def recount_run(run) -> dict:
             counts[kind] = counts.get(kind, 0) + len(out.get("rows") or [])
     if counts or grouped or retracked:
         run.context = context
-        type(run).objects.filter(pk=run.pk).update(context=context)
+        type(run).write_context(run.pk, context)
         sync_job_counts(run)
     if counts:
         # Votes follow their events: an event's key holds its frame and track,
@@ -144,7 +144,7 @@ def _note_not_replayable(run, why):
             context[sid] = {**context[sid], "retrack_note":
                             f"Can't re-track on the web: {why}. Its tracks need one GPU run."}
     run.context = context
-    type(run).objects.filter(pk=run.pk).update(context=context)
+    type(run).write_context(run.pk, context)
 
 
 def sync_job_counts(run):
@@ -229,7 +229,6 @@ def runs_for_clips(videos):
 
     from apps.analysis.models import Job
 
-    from .aggregate import run_job_id
     from .models import PipelineRun
 
     jobs = list(Job.objects.filter(video__in=videos, status="completed")
@@ -244,9 +243,9 @@ def runs_for_clips(videos):
     if when:
         runs = runs.filter(started_at__gte=min(when) - timedelta(days=1),
                            started_at__lte=max(when) + timedelta(days=1))
-    return [run for run in runs
-            if run_job_id(run) in ids
-            and any(s.get("block_type") in RECOUNTED for s in (run.steps or []))]
+    # Not their results (memory/76): a site's runs, to count or queue them.
+    return [run for run in runs.defer("context", "summary")
+            if any(s.get("block_type") in RECOUNTED for s in (run.steps or []))]
 
 
 def recount_clips(videos, now=RECOUNT_NOW) -> dict:
@@ -263,6 +262,7 @@ def recount_clips(videos, now=RECOUNT_NOW) -> dict:
         out["queued"] = PipelineRun.objects.filter(pk__in=[r.pk for r in runs]).update(counting_rules=0)
         return out
     for run in runs:
+        run = PipelineRun.objects.get(pk=run.pk)          # whole, to recount it
         try:
             counts = recount_run(run)
         except Exception:

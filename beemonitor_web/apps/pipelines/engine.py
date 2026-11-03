@@ -397,6 +397,25 @@ def _finalize_if_terminal(run, steps, status):
             sync_job_counts(run)
         except Exception:  # noqa: BLE001 - a count must never fail a run
             logger.exception("could not copy run %s counts to its job", run.pk)
+    if run.rerun_votes and run.status in (PipelineRun.Status.COMPLETED, PipelineRun.Status.FAILED):
+        # Re-run on the GPU by Update (memory/76): its votes were cast on the
+        # old tracks, so they follow by time to the new events.
+        _move_rerun_votes(run)
+
+
+def _move_rerun_votes(run):
+    from .aggregate import run_gpu_result
+    from .retrack import votes
+
+    PipelineRun.objects.filter(pk=run.pk).update(rerun_votes=False)
+    run.rerun_votes = False
+    if run.status != PipelineRun.Status.COMPLETED:
+        return
+    try:
+        fps = ((run_gpu_result(run) or {}).get("summary_stats") or {}).get("video_fps")
+        votes.move_votes(run, fps, same_tracks=False)
+    except Exception:  # noqa: BLE001 - votes stay put (shown as no longer detected)
+        logger.exception("could not move votes after the GPU re-run of %s", run.pk)
 
 
 def reconcile_user_runs(user, limit=50):
@@ -410,8 +429,11 @@ def reconcile_user_runs(user, limit=50):
     """
     from apps.analysis.models import Job
 
+    from . import runsummary
+
     try:
-        runs = list(PipelineRun.objects.filter(
+        # Only each running step's job id is read: the slim copy (memory/76).
+        runs = runsummary.slim_runs(PipelineRun.objects.filter(
             user=user,
             status__in=[PipelineRun.Status.PENDING, PipelineRun.Status.RUNNING],
         ).order_by("-started_at")[:limit])
@@ -473,6 +495,14 @@ def on_job_finished(job):
             status = dict(run.step_status or {})
             context = dict(run.context or {})
             job_status = getattr(job, "status", "")
+            # Only the job this step is waiting on (memory/76). The run page's
+            # poll calls this for every finished job of the run, every few
+            # seconds: an applied one rewrote the whole run each time, and a
+            # clip run again in place has its old job too, whose result must
+            # never land on the new step.
+            if (status.get(step_id) != PipelineRun.STEP_RUNNING
+                    or (context.get(step_id) or {}).get("job_id") != job.pk):
+                return
 
             result = _job_result_summary(job) if job_status == "completed" else {}
             if (job_status == "completed" and config.get("task") == "detect_photo"

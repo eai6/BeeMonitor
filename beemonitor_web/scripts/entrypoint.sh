@@ -17,16 +17,23 @@ echo "Starting Gunicorn..."
 # threads>1 switches to the gthread worker: one slow request can no longer
 # starve the site. Timeout sits just UNDER App Runner's hard 120s cap — past
 # that the proxy has already 504'd, so a longer-running request only pins a
-# thread serving a dead connection.
+# thread serving a dead connection. A worker is replaced after ~300 requests,
+# so memory one big request made it take is given back (memory/76).
 gunicorn config.wsgi:application \
     --bind 0.0.0.0:8000 \
     --workers 2 \
     --threads 4 \
     --timeout 115 \
+    --max-requests 300 \
+    --max-requests-jitter 50 \
     --access-logfile - \
     --error-logfile - &
 
 GUNICORN_PID=$!
+
+# Each run's slim copy of its results, for pages that list many clips
+# (memory/76). Pages build any still missing as they meet them.
+(python manage.py fill_run_summaries || true) &
 
 # Fold stored heartbeats into the per-minute health history (idempotent).
 (python manage.py backfill_health_samples || true) &

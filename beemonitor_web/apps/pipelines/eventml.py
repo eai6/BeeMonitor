@@ -89,16 +89,24 @@ def dataset(user, batch_ids, left_out_text=""):
     from .models import AddedEvent, PipelineRun
 
     rules = leftout.parse(left_out_text)[0]
-    runs = list(PipelineRun.objects.filter(user=user, batch_id__in=list(batch_ids),
-                                           status=PipelineRun.Status.COMPLETED))
+    from . import runsummary
+
+    # Which clips were reviewed, from their slim copies; then each reviewed
+    # one whole, one at a time (memory/76).
+    runs = runsummary.slim_runs(PipelineRun.objects.filter(
+        user=user, batch_id__in=list(batch_ids), status=PipelineRun.Status.COMPLETED))
     votes = review.review_votes(runs)
+    added_by_run = {}
+    for run_id, action in AddedEvent.objects.filter(run__in=runs).values_list("run_id", "action"):
+        added_by_run.setdefault(run_id, []).append(action)
     rows, disputed, unscorable = [], 0, 0
     missed = []
-    for run in runs:
-        mine = votes.get(run.pk) or {}
-        added = list(AddedEvent.objects.filter(run=run).values_list("action", flat=True))
+    for slim in runs:
+        mine = votes.get(slim.pk) or {}
+        added = added_by_run.get(slim.pk, [])
         if not mine and not added:
             continue
+        run = PipelineRun.objects.get(pk=slim.pk)
         steps = run.steps or []
         idx = next((i for i, s in enumerate(steps) if s.get("block_type") == "analyze.events"), None)
         if idx is None:

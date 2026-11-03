@@ -240,7 +240,7 @@ class RetrackRunTests(PrimitiveBlockTestCase):
         # As a re-track before the rules changed recorded it.
         ctx = run.context
         ctx["m"]["result"]["retracked"]["settings"].pop("lost_rules")
-        PipelineRun.objects.filter(pk=run.pk).update(context=ctx)
+        PipelineRun.write_context(run.pk, ctx)
         run.refresh_from_db()
         self.assertTrue(rt.needs_retrack(run))
         changes = regroup.batch_changes([run], self.pipeline)

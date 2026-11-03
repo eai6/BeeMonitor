@@ -377,7 +377,7 @@ class ApplyToBatchTests(FilterBase):
     def test_the_batch_is_recounted_in_place_with_the_filter(self):
         batch, runs = self._batch()
         self.assertEqual(len(runs[0].context["a"]["rows"]), 2)     # ants counted
-        self.pipeline.steps = self._steps_with_species({"model": "beemachine"})
+        self.pipeline.steps = self._steps_with_species()
         self.pipeline.save()
 
         res = self._post(batch)
@@ -387,9 +387,52 @@ class ApplyToBatchTests(FilterBase):
             run.refresh_from_db()
             self.assertEqual(run.context["a"]["rows"], [])          # ants left out
             self.assertEqual(run.steps[4]["inputs"]["tracks"], "s")
-            # The run keeps the model its crops were read with.
-            self.assertEqual(run.steps[-1]["config"]["model"], "bioclip")
         self.assertEqual(PipelineRun.objects.filter(batch_id=batch).count(), 2)  # no new runs
+
+    def test_a_change_that_needs_the_gpu_runs_the_chosen_clips_again_in_place(self):
+        # memory/76: e.g. a new species model; only the picked clip, same run.
+        batch, runs = self._batch()
+        self.pipeline.steps = self._steps_with_species({"model": "beemachine"})
+        self.pipeline.save()
+        self.client.force_login(self.user)
+        with mock.patch("apps.pipelines.engine.start_run") as start, \
+                mock.patch("apps.analysis.views._drain_queue"):
+            res = self.client.post(reverse("pipelines:batch_apply_groups", args=[batch]),
+                                   {"which": "picked", "run": [runs[0].pk]})
+        self.assertEqual(res.status_code, 302)
+        self.assertEqual(start.call_count, 1)
+        run, kwargs = start.call_args[0][0], start.call_args[1]
+        self.assertEqual(run.pk, runs[0].pk)
+        self.assertEqual(kwargs["steps"][-1]["config"]["model"], "beemachine")
+        self.assertEqual(kwargs["steps"][0]["config"]["video_id"], str(self.video.pk))
+        self.assertTrue(PipelineRun.objects.get(pk=runs[0].pk).rerun_votes)
+        self.assertFalse(PipelineRun.objects.get(pk=runs[1].pk).rerun_votes)
+        self.assertEqual(PipelineRun.objects.filter(batch_id=batch).count(), 2)  # no new runs
+
+    def test_a_re_run_keeps_its_part_of_the_clip(self):
+        from apps.pipelines import regroup
+        steps = self._steps_with_species()
+        steps[0]["config"].update(start_seconds=60, end_seconds=120)
+        self.assertEqual(regroup._window_of(steps), (60.0, 120.0))
+        self.assertIsNone(regroup._window_of(self._steps_with_species()))
+
+    def test_votes_follow_to_the_new_events_when_the_re_run_finishes(self):
+        from apps.pipelines import engine
+        from apps.pipelines.models import EventReview
+        from apps.pipelines.review import event_key
+
+        batch, runs = self._batch(n=1, steps=self._steps_with_species(in_line=False))
+        run = PipelineRun.objects.get(pk=runs[0].pk)
+        row = run.context["a"]["rows"][0]
+        EventReview.objects.create(run=run, event_key="x|old|99|" + str(row["frame"]),
+                                   action=row["action"], reference=row["reference"],
+                                   track_id="99", frame=row["frame"], user=self.user,
+                                   verdict="accepted")
+        run.rerun_votes = True
+        engine._move_rerun_votes(run)
+        vote = EventReview.objects.get()
+        self.assertEqual(vote.event_key, event_key(row))
+        self.assertFalse(PipelineRun.objects.get(pk=run.pk).rerun_votes)
 
     def test_beyond_the_first_few_the_sweep_finishes_the_job(self):
         from apps.pipelines import regroup
@@ -434,7 +477,7 @@ class ApplyToBatchTests(FilterBase):
 
     def test_only_the_ticked_clips_are_updated(self):
         batch, runs = self._batch()
-        self.pipeline.steps = self._steps_with_species({"model": "beemachine"})
+        self.pipeline.steps = self._steps_with_species()
         self.pipeline.save()
 
         self._update(batch, which="picked", run=[runs[0].pk])
@@ -451,7 +494,7 @@ class ApplyToBatchTests(FilterBase):
         from apps.pipelines.models import ClipReview
         batch, runs = self._batch()
         ClipReview.objects.create(run=runs[1], user=self.user)
-        self.pipeline.steps = self._steps_with_species({"model": "beemachine"})
+        self.pipeline.steps = self._steps_with_species()
         self.pipeline.save()
 
         self.client.force_login(self.user)

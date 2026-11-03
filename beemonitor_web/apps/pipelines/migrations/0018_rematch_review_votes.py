@@ -19,10 +19,10 @@ def rematch(apps, schema_editor):
     from apps.pipelines.retrack.run import gpu_result, tracking_outputs
 
     # The live model, newer than this migration: columns added after it
-    # (0021's removed_from_batch, 0022's gpu_job_id) don't exist yet on a
+    # (0021-0023: removed_from_batch, gpu_job_id, summary) don't exist yet on a
     # fresh database.
     runs = (PipelineRun.objects.filter(Q(event_reviews__isnull=False) | Q(trip_exits__isnull=False))
-            .defer("removed_from_batch", "gpu_job_id").distinct())
+            .defer("removed_from_batch", "gpu_job_id", "summary", "rerun_votes").distinct())
     for run in runs.iterator():
         retracked = any((run.context[s].get("result") or {}).get("retracked")
                         for s in tracking_outputs(run))

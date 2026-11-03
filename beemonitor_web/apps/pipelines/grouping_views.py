@@ -220,9 +220,11 @@ def grouping_preview(request, pk, step_id):
     deadline = time.monotonic() + PREVIEW_SECONDS
     now, after = {}, {}
     events_now = events_after = clips = skipped = 0
-    runs = list(PipelineRun.objects.filter(batch_id=batch, user=request.user,
-                                           status=PipelineRun.Status.COMPLETED))
-    for run in runs:
+    # Streamed a few at a time, never the whole batch at once (memory/76).
+    finished = PipelineRun.objects.filter(batch_id=batch, user=request.user,
+                                          status=PipelineRun.Status.COMPLETED)
+    total = finished.count()
+    for run in finished.iterator(chunk_size=10):
         _i, gstep = group_step(run)
         if gstep is None or time.monotonic() > deadline:
             skipped += 1
@@ -262,7 +264,7 @@ def grouping_preview(request, pk, step_id):
     names = sorted(set(now) | set(after),
                    key=lambda g: order.index(g) if g in order else len(order))
     return JsonResponse({
-        "ok": True, "clips": clips, "skipped": skipped, "of": len(runs),
+        "ok": True, "clips": clips, "skipped": skipped, "of": total,
         "rows": [{"group": g, "now": now.get(g, 0), "after": after.get(g, 0),
                   "counted": g not in leave_out} for g in names],
         "events_now": events_now, "events_after": events_after,

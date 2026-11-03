@@ -201,12 +201,15 @@ def apply_pipeline(batch_id, user, now=APPLY_NOW, only=None) -> dict:
     from .models import PipelineRun
     from .retrack import run as retrack
 
-    runs = list(PipelineRun.objects.filter(batch_id=batch_id, user=user,
-                                           status=PipelineRun.Status.COMPLETED)
-                .select_related("pipeline").order_by("started_at"))
+    from . import runsummary
+
+    qs = PipelineRun.objects.filter(batch_id=batch_id, user=user,
+                                    status=PipelineRun.Status.COMPLETED)
     if only is not None:
-        only = {str(pk) for pk in only}
-        runs = [r for r in runs if str(r.pk) in only]
+        qs = qs.filter(pk__in=list(only))
+    # Slim copies (memory/76): only the clips recounted right here need their
+    # whole results, and those are read one at a time.
+    runs = runsummary.slim_runs(qs.select_related("pipeline").order_by("started_at"))
     out = {"applied": 0, "recounted": 0, "queued": 0, "skipped": 0}
     for i, run in enumerate(runs):
         applied = applied_steps(run.steps, run.pipeline)
@@ -228,7 +231,7 @@ def apply_pipeline(batch_id, user, now=APPLY_NOW, only=None) -> dict:
             continue
         if out["recounted"] < now:
             try:
-                recount.recount_run(run)
+                recount.recount_run(PipelineRun.objects.get(pk=run.pk))
                 PipelineRun.objects.filter(pk=run.pk).update(counting_rules=recount.CURRENT_RULES)
                 out["recounted"] += 1
                 continue
@@ -237,6 +240,64 @@ def apply_pipeline(batch_id, user, now=APPLY_NOW, only=None) -> dict:
         PipelineRun.objects.filter(pk=run.pk).update(counting_rules=0)
         out["queued"] += 1
     return out
+
+
+def split_by_change(runs, pipeline):
+    """``(web, gpu)``: the runs a recount brings up to the pipeline, and the
+    ones whose changes need the GPU (a new detector, a new threshold...)."""
+    web, gpu = [], []
+    for run in runs:
+        (gpu if pipeline_changes(run, pipeline)["gpu"] else web).append(run)
+    return web, gpu
+
+
+def _window_of(steps):
+    """(start, end or None) of the clip part a run analysed, or None."""
+    for step in steps or []:
+        if step.get("block_type") == "input.video":
+            cfg = step.get("config") or {}
+            start, end = cfg.get("start_seconds"), cfg.get("end_seconds")
+            if start is not None or end is not None:
+                return (float(start or 0), float(end) if end is not None else None)
+    return None
+
+
+def rerun_on_gpu(runs, pipeline, user) -> int:
+    """Run these finished clips again with the pipeline as it is now, in place
+    (memory/76): same run, same batch, same part of the clip; the GPU steps
+    run again and everything below them. Their review votes follow to the new
+    events when each finishes (engine._move_rerun_votes). Raises
+    ``accounts.quota.QuotaExceeded`` before starting any when they don't fit.
+    Returns how many started."""
+    from apps.accounts import quota
+    from apps.videos.models import Video
+
+    from . import engine
+    from .aggregate import run_video_id
+
+    plans = []
+    videos = Video.everything.in_bulk([v for r in runs if (v := run_video_id(r))])
+    for run in runs:
+        video = videos.get(run_video_id(run))
+        if video is None:
+            continue
+        steps = engine.steps_with_video_steps(pipeline.steps, video.pk, _window_of(run.steps))
+        if engine.validate_steps(steps):
+            continue
+        plans.append((run, steps, video))
+    quota.check(user, [w for _r, steps, video in plans
+                       for w in quota.pipeline_work(steps, [video])])
+    for run, steps, _video in plans:
+        type(run).objects.filter(pk=run.pk).update(rerun_votes=True)
+        full = type(run).objects.get(pk=run.pk)       # not a slim copy: it is saved
+        engine.start_run(full, steps=steps, checked=True)
+    if plans:
+        try:
+            from apps.analysis.views import _drain_queue
+            _drain_queue()
+        except Exception:  # noqa: BLE001 - the reconciler drains it anyway
+            logger.exception("rerun: could not kick the GPU queue")
+    return len(plans)
 
 
 # ── What changed in the pipeline since a batch was counted ─────────────────

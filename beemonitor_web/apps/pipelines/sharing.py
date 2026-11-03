@@ -63,9 +63,13 @@ def turn_off(batch_id) -> int:
 
 
 def shared_runs(share):
-    return list(PipelineRun.objects
-                .filter(batch_id=share.batch_id, user=share.created_by)
-                .select_related("pipeline").order_by("started_at", "id"))
+    """The shared batch's runs, read through their slim copy (memory/76);
+    downloads read each whole in turn (aggregate.whole_runs)."""
+    from . import runsummary
+
+    return runsummary.slim_runs(
+        PipelineRun.objects.filter(batch_id=share.batch_id, user=share.created_by)
+        .select_related("pipeline").order_by("started_at", "id"))
 
 
 def record_view(share):
@@ -109,6 +113,10 @@ def batch_csv(runs, batch_id, kind):
     from . import aggregate
 
     stem = f"{kind}_batch_{str(batch_id)[:8]}.csv"
+    # Rows are made one clip at a time from its whole results, and streamed
+    # (memory/76): ``runs`` may be slim copies, and a batch's export must
+    # never hold every clip's results, or every clip's rows, at once.
+    whole = aggregate.whole_runs
     if kind == "trips":
         from .models import TripReview
         from .period import TRIP_FIELDS, trip_rows
@@ -119,16 +127,22 @@ def batch_csv(runs, batch_id, kind):
             raise EmptyExport("No reviewed trips in this batch yet.")
         return stem, TRIP_FIELDS, rows
     if kind == "photos":
-        rows = aggregate.photo_rows(runs)
+        rows = (row for run in whole(runs) for row in aggregate.photo_rows([run]))
         fields = ["photo_id", "taken_at", "run_id", "insect", "class", "confidence",
                   "species", "species_confidence", "x", "y", "w", "h"]
         return stem, fields, rows
+    # In recording order, worked out from the slim copies.
+    ordered = [s["run"] for s in aggregate.collect_sources(runs)[0]]
     if kind == "tracks":
         from . import tracks
-        sources, _ = aggregate.collect_sources(runs)
-        rows = tracks.batch_track_rows(sources, aggregate.read_processed_csv,
-                                       aggregate._provenance)
-        if not rows:
+
+        def track_rows():
+            for run in whole(ordered):
+                sources, _ = aggregate.collect_sources([run])
+                yield from tracks.batch_track_rows(sources, aggregate.read_processed_csv,
+                                                   aggregate._provenance)
+        rows = _nonempty(track_rows())
+        if rows is None:
             raise EmptyExport("No tracks in this batch — its pipeline has no tracking step.")
         return stem, aggregate.PROVENANCE_FIELDS + tracks.TRACK_FIELDS, rows
     path_key = {"events": "events_csv_path",
@@ -142,9 +156,10 @@ def batch_csv(runs, batch_id, kind):
     # so a bee inside a large flower never appears in it, and a download that
     # quietly hands back a different answer is worse than one that fails.
     if kind in aggregate.PRIMITIVE_KINDS:
-        fieldnames, rows = aggregate.primitive_csv(runs, kind)
-        if fieldnames:
-            return stem, fieldnames, rows
+        rows = _nonempty(row for run in whole(runs)
+                         for row in aggregate.primitive_csv([run], kind)[1])
+        if rows is not None:
+            return stem, aggregate._primitive_fieldnames(kind, None), rows
         raise EmptyExport(
             f"No {kind} could be computed for this batch. That usually means no "
             "reference reached the analyzer — save the device's ROI and reference "
@@ -152,14 +167,30 @@ def batch_csv(runs, batch_id, kind):
             "Tracking CSV is unaffected.")
 
     from .views import _backfill_interactions_paths
-    sources, _ = aggregate.collect_sources(runs)
-    if path_key == "interactions_csv_path":
-        _backfill_interactions_paths(sources)
-    fieldnames, rows = aggregate.combined_csv(sources, path_key)
-    if fieldnames is None:
+
+    def file_rows():
+        for run in whole(ordered):
+            sources, _ = aggregate.collect_sources([run])
+            if path_key == "interactions_csv_path":
+                _backfill_interactions_paths(sources)
+            yield from aggregate.combined_csv(sources, path_key)[1]
+    rows = _nonempty(file_rows())
+    if rows is None:
         raise EmptyExport(f"No {kind} data available for this batch — "
                           "none of its completed runs produced that CSV.")
-    return stem, fieldnames, rows
+    return stem, aggregate.combined_fieldnames(path_key), rows
+
+
+def _nonempty(rows):
+    """``rows`` (an iterator), or None when it has none: peeks at the first."""
+    import itertools
+
+    rows = iter(rows)
+    try:
+        first = next(rows)
+    except StopIteration:
+        return None
+    return itertools.chain([first], rows)
 
 
 def without_locations(fieldnames):

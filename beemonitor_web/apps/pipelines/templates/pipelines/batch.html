@@ -641,6 +641,8 @@ setTimeout(pollThenReload, 15000);
     });
     bar.querySelector('[data-select-update]').addEventListener('click', function () {
       var c = chosen().filter(function (b) { return b.hasAttribute('data-pick-done'); });
+      var form = document.getElementById('update-form');
+      if (form && window.bmConfirmGpu && !window.bmConfirmGpu(form, c.length)) return;
       post(bar.getAttribute('data-update-url'), {which: 'picked'}, c);
     });
     bar.querySelector('[data-select-remove]').addEventListener('click', function () {

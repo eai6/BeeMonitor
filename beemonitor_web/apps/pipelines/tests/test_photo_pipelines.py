@@ -181,7 +181,8 @@ class OldWorkerTests(TestCase):
 
         steps = steps_with_video_steps(photo_steps(), self.photo.pk)
         run = PipelineRun.objects.create(pipeline=self.pipeline, user=self.user, steps=steps,
-                                         context={"d": {"_cache_key": "k"}})
+                                         step_status={"d": PipelineRun.STEP_RUNNING},
+                                         context={"d": {"_cache_key": "k", "job_id": 1}})
         job = SimpleNamespace(pk=1, status="completed", error_message="",
                               config={"pipeline_run_id": run.pk, "pipeline_step_id": "d",
                                       "task": "detect_photo"})

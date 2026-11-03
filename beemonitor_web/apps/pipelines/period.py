@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from . import runsummary
+
 MAX_CLIPS = 200
 MAX_DAYS = 7
 
@@ -72,7 +74,7 @@ def runs_for_videos(videos):
         started_at__gte=min(when) - timedelta(days=1),
         started_at__lte=max(when) + timedelta(days=1)).order_by("-started_at")
     by_job = {}                             # a job re-used by later runs: the newest
-    for run in runs:
+    for run in runsummary.slim_runs(runs):  # chosen from slim copies (memory/76)
         jid = run_job_id(run)
         if jid is not None and any(k == "events" for k, _o in analyzer_outputs(run)):
             by_job.setdefault(jid, run)
@@ -80,7 +82,16 @@ def runs_for_videos(videos):
     for job in jobs:                        # newest first
         if job.video_id not in out and job.pk in by_job:
             out[job.video_id] = (job, by_job[job.pk])
-    return out
+    return _whole(out)
+
+
+def _whole(out):
+    """``out`` with each chosen run read whole: the period page shows their
+    events with each insect's identity."""
+    from .models import PipelineRun
+
+    full = PipelineRun.objects.in_bulk([run.pk for _job, run in out.values()])
+    return {vid: (job, full.get(run.pk, run)) for vid, (job, run) in out.items()}
 
 
 def batch_runs(batch_id):
@@ -93,7 +104,8 @@ def batch_runs(batch_id):
     from .models import PipelineRun
 
     runs = {}
-    for run in PipelineRun.objects.filter(batch_id=batch_id, status=PipelineRun.Status.COMPLETED):
+    for run in runsummary.slim_runs(
+            PipelineRun.objects.filter(batch_id=batch_id, status=PipelineRun.Status.COMPLETED)):
         jid = run_job_id(run)
         if jid is not None and any(k == "events" for k, _o in analyzer_outputs(run)):
             runs[jid] = run
@@ -145,7 +157,7 @@ def gather(user, device=None, site=None, start=None, end=None, prefer=None):
 
     runs = runs_for_videos([v for _s, v in placed])
     shown = {v.pk for _s, v in placed}
-    runs.update({vid: jr for vid, jr in (prefer or {}).items() if vid in shown})
+    runs.update(_whole({vid: jr for vid, jr in (prefer or {}).items() if vid in shown}))
     clips = []
     for s, v in placed:
         if v.pk not in runs:
@@ -291,12 +303,16 @@ def trip_rows(trip_reviews):
     from .review import combined
     from apps.videos.models import Video
 
-    reviews = list(trip_reviews.select_related("user", "exit_run", "entry_run"))
-    runs = {}
+    from .models import PipelineRun
+
+    # Each run once (memory/76): joining them on every review decoded the same
+    # clip's whole results again for each trip called on it.
+    reviews = list(trip_reviews.select_related("user"))
+    runs = PipelineRun.objects.in_bulk(
+        {pk for r in reviews for pk in (r.exit_run_id, r.entry_run_id) if pk})
     for r in reviews:
-        for run in (r.exit_run, r.entry_run):
-            if run is not None:
-                runs[run.pk] = run
+        r.exit_run = runs.get(r.exit_run_id)
+        r.entry_run = runs.get(r.entry_run_id) if r.entry_run_id else None
     videos = {v.pk: v for v in Video.everything.filter(
         pk__in=[run_video_id(r) for r in runs.values() if run_video_id(r)])}
     results = {j: res for j, res in JobResult.objects.filter(

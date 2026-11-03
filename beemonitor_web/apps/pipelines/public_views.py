@@ -12,6 +12,7 @@ from django.shortcuts import get_object_or_404, render
 from django.views.decorators.http import require_GET
 
 from . import aggregate, sharing
+from .models import PipelineRun
 
 
 def _no_index(response):
@@ -29,11 +30,18 @@ def _share_or_off(request, token):
     return share, runs, None
 
 
-def _shared_or_404(token):
+def _shared_or_404(token, ids_only=False):
+    """The share and its runs. ``ids_only``: just which clips and jobs are in
+    it (pk, steps, gpu_job_id), for the per-file requests a page makes one per
+    row (memory/76)."""
     share = sharing.share_for_token(token)
     if share is None:
         raise Http404("This link isn't shared.")
-    runs = sharing.shared_runs(share)
+    if ids_only:
+        runs = list(PipelineRun.objects.filter(batch_id=share.batch_id, user=share.created_by)
+                    .only("pk", "steps", "gpu_job_id"))
+    else:
+        runs = sharing.shared_runs(share)
     if not runs:
         raise Http404("This link isn't shared.")
     return share, runs
@@ -104,7 +112,7 @@ def public_csv(request, token, kind):
 def _shared_video(token, video_pk):
     from apps.videos.models import Video
 
-    share, runs = _shared_or_404(token)
+    share, runs = _shared_or_404(token, ids_only=True)
     if not share.show_videos:
         raise Http404("Videos aren't shared on this link.")
     if video_pk not in {aggregate.run_video_id(r) for r in runs}:
@@ -133,7 +141,7 @@ def public_overlay(request, token, job_pk):
     from apps.analysis.models import Job
     from apps.analysis.views import overlay_response
 
-    share, runs = _shared_or_404(token)
+    share, runs = _shared_or_404(token, ids_only=True)
     if not share.show_videos:
         raise Http404("Videos aren't shared on this link.")
     if job_pk not in {r.gpu_job_id for r in runs}:

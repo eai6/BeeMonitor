@@ -1096,30 +1096,51 @@ def clone_pipeline(request, pk):
 
 # ── Batch (multi-video) aggregate results ────────────────────────────────────
 
-def _batch_runs(request, batch_id):
+def _uuids(values):
+    import uuid
+
+    out = []
+    for v in values:
+        try:
+            out.append(uuid.UUID(str(v)))
+        except ValueError:
+            continue
+    return out
+
+
+def _batch_runs(request, batch_id, only=None):
     """The batch's runs, visible to the launcher — or to device-share users
-    for the runs whose videos live on devices shared with them."""
-    runs = list(PipelineRun.objects.filter(batch_id=batch_id)
-                .select_related("pipeline").order_by("started_at", "id"))
-    if not runs:
+    for the runs whose videos live on devices shared with them.
+
+    Read through their slim copy (runsummary, memory/76): a page listing the
+    batch must not hold every clip's whole results; a download reads each
+    whole in turn (aggregate.whole_runs). ``only`` limits it to those run pks."""
+    from . import runsummary
+
+    qs = PipelineRun.objects.filter(batch_id=batch_id)
+    if only is not None:
+        qs = qs.filter(pk__in=list(only))
+    runs = list(qs.defer("context").select_related("pipeline").order_by("started_at", "id"))
+    if not runs and only is None:
         raise Http404("No such batch.")
+    done = runsummary.use_slim
     if all(r.user_id == request.user.id for r in runs):
-        return runs
+        return done(runs)
     # Invited to it (memory/62): the whole batch, read-only.
     from .models import BatchMember
     if BatchMember.objects.filter(batch_id=batch_id, user=request.user).exists():
-        return runs
+        return done(runs)
     from apps.videos.models import Video
     from . import aggregate
     accessible = set(
         Video.accessible(request.user, photos=True)
         .filter(pk__in=[v for r in runs if (v := aggregate.run_video_id(r)) is not None])
         .values_list("pk", flat=True))
-    runs = [r for r in runs
+    seen = [r for r in runs
             if r.user_id == request.user.id or aggregate.run_video_id(r) in accessible]
-    if not runs:
+    if runs and not seen:
         raise Http404("No such batch.")
-    return runs
+    return done(seen)
 
 
 # How many clips may be probed for their measured properties per page render.
@@ -1276,6 +1297,10 @@ def batch_detail(request, batch_id):
         # "Update this batch" (memory/68).
         "changes": (regroup_mod.batch_changes([r["run"] for r in rows], runs[0].pipeline)
                     if can_share and runs and not photos_kind else None),
+        # A GPU re-run's rough cost (memory/76): the batch's GPU time a clip.
+        "gpu_hours_per_clip": (outcome.get("gpu_seconds", 0) / 3600 / max(1, sum(
+            1 for r in rows if r["run"].status == PipelineRun.Status.COMPLETED))
+            if isinstance(outcome, dict) and outcome.get("gpu_seconds") else None),
         # Which clips to update (memory/72).
         "update_counts": {
             "all": sum(1 for r in rows if r["run"].status == PipelineRun.Status.COMPLETED),
@@ -1466,7 +1491,7 @@ def batch_review_metrics(request, batch_id):
     from . import sharing
 
     wanted = {str(pk) for pk in request.POST.getlist("run")}
-    runs = [r for r in _batch_runs(request, batch_id) if str(r.pk) in wanted]
+    runs = _batch_runs(request, batch_id, only=_uuids(wanted))
     review_actions = batches_mod.review_actions(batch_id)
     counted = None if len(review_actions) == len(batches_mod.ACTIONS) else review_actions
     per_run = review_mod.batch_review_counts(runs, counted)
@@ -1498,10 +1523,12 @@ def batch_retrack_check(request, batch_id):
 
     if not sharing.owns_batch(request.user, batch_id):
         raise Http404("No such batch.")
-    runs = list(PipelineRun.objects.filter(batch_id=batch_id, user=request.user,
-                                           status=PipelineRun.Status.COMPLETED)
-                .order_by("started_at"))
-    result = check.batch_agreement(runs)
+    # One whole run at a time, as the check asks for them: it stops after a
+    # couple of clips, and the batch may hold hundreds (memory/76).
+    pks = (PipelineRun.objects.filter(batch_id=batch_id, user=request.user,
+                                      status=PipelineRun.Status.COMPLETED)
+           .order_by("started_at").values_list("pk", flat=True))
+    result = check.batch_agreement(PipelineRun.objects.get(pk=pk) for pk in pks.iterator())
     cache.set(f"retrack-check:{batch_id}", result, 60 * 60 * 24 * 7)
     return JsonResponse({"ok": result is not None, "check": result})
 
@@ -1555,23 +1582,52 @@ def batch_apply_groups(request, batch_id):
 
     if not sharing.owns_batch(request.user, batch_id):
         raise Http404("No such batch.")
+    from . import runsummary
+
     # Which clips (memory/72): all, the ones reviewed, or the ones picked.
     which = request.POST.get("which") or "all"
+    finished = PipelineRun.objects.filter(batch_id=batch_id, user=request.user,
+                                          status=PipelineRun.Status.COMPLETED)
     only = None
     if which == "reviewed":
         from . import review
-        runs = list(PipelineRun.objects.filter(batch_id=batch_id, user=request.user,
-                                               status=PipelineRun.Status.COMPLETED))
+        runs = runsummary.slim_runs(finished)
         counts = review.batch_review_counts(runs)
         only = [r.pk for r in runs if review.clip_touched(counts.get(r.pk))]
     elif which == "picked":
-        only = request.POST.getlist("run")
+        only = _uuids(request.POST.getlist("run"))
     if only is not None and not only:
         messages.error(request, "No clips to update: none reviewed yet." if which == "reviewed"
                        else "No clips to update: tick the clips in the list first.")
         return redirect("pipelines:batch_detail", batch_id=batch_id)
+
+    # Changes that need the GPU (a new detector, a new threshold): those
+    # clips run again in place, in this batch (memory/76); the rest recount.
+    chosen = finished if only is None else finished.filter(pk__in=only)
+    first = chosen.select_related("pipeline").first()
+    if first is None:
+        messages.error(request, "No finished clips to update.")
+        return redirect("pipelines:batch_detail", batch_id=batch_id)
+    web, gpu = regroup.split_by_change(runsummary.slim_runs(chosen), first.pipeline)
+    rerun = 0
+    if gpu:
+        from apps.accounts import quota
+        try:
+            rerun = regroup.rerun_on_gpu(gpu, first.pipeline, request.user)
+        except quota.QuotaExceeded as e:
+            messages.error(request, f"Not started: {e.message}")
+            return redirect("pipelines:batch_detail", batch_id=batch_id)
+        messages.success(request, f"Running {rerun} clip{'s' if rerun != 1 else ''} again on the "
+                                  "GPU with the pipeline as it is now, in this batch. Their "
+                                  "review votes move to the matching new events when each "
+                                  "finishes.")
+        if not web:
+            return redirect("pipelines:batch_detail", batch_id=batch_id)
+        only = [r.pk for r in web]
     done = regroup.apply_pipeline(batch_id, request.user, only=only)
-    if not done["applied"]:
+    if not done["applied"] and rerun:
+        pass
+    elif not done["applied"]:
         messages.error(request, "Nothing to apply: the pipeline's steps don't match this batch's "
                                 "(a node was replaced since it ran), or no clip has finished.")
     else:
@@ -1581,7 +1637,7 @@ def batch_apply_groups(request, batch_id):
         if done["skipped"]:
             msg += (f" {done['skipped']} were tracked without Identify Species, so their tracks "
                     f"can't be grouped and all count.")
-        if only is not None:
+        if which != "all":
             msg += " The batch's other clips keep their counts until you update them."
         messages.success(request, msg + " No GPU-hours.")
     return redirect("pipelines:batch_detail", batch_id=batch_id)
@@ -1647,14 +1703,27 @@ def batch_share(request, batch_id):
     return redirect(reverse("pipelines:batch_detail", args=[batch_id]) + "#share")
 
 
+class _Echo:
+    def write(self, value):
+        return value
+
+
 def _csv_response(filename, fieldnames, rows):
+    """A CSV download, streamed as its rows are made (memory/76): a batch's
+    export never sits whole in the server's memory."""
     import csv as _csv
 
-    response = HttpResponse(content_type="text/csv")
+    from django.http import StreamingHttpResponse
+
+    writer = _csv.DictWriter(_Echo(), fieldnames=fieldnames, extrasaction="ignore")
+
+    def lines():
+        yield writer.writeheader()
+        for row in rows:
+            yield writer.writerow(row)
+
+    response = StreamingHttpResponse(lines(), content_type="text/csv")
     response["Content-Disposition"] = f'attachment; filename="{filename}"'
-    writer = _csv.DictWriter(response, fieldnames=fieldnames, extrasaction="ignore")
-    writer.writeheader()
-    writer.writerows(rows)
     return response
 
 

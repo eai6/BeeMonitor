@@ -425,7 +425,7 @@ def retrack_run(run) -> dict:
         out["result"] = result
         context[sid] = out
     run.context = context
-    type(run).objects.filter(pk=run.pk).update(context=context)
+    type(run).write_context(run.pk, context)
     return {"tracks": tracks, "exact": exact}
 
 

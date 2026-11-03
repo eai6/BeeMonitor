@@ -1,4 +1,4 @@
-{% comment %}Update this batch with the pipeline as it is now (memory/68): a recount from the tracking it saved, in place, no GPU. Changes to detection or tracking can't be applied this way and are listed for a new run.{% endcomment %}
+{% comment %}Update this batch with the pipeline as it is now (memory/68): a recount from the tracking it saved, in place, no GPU. Changes that need the GPU (detection, most tracking settings) run the chosen clips again on the GPU, in this batch (memory/76).{% endcomment %}
 {% if can_share and not photos %}
 <section class="flex flex-col gap-2 pb-4 mb-4 border-b border-gray-200" aria-labelledby="update-title">
   <div class="flex flex-wrap items-start justify-between gap-3">
@@ -14,8 +14,9 @@
       </ul>
       {% endif %}
       {% if changes.gpu %}
-      <p class="text-sm text-yellow-800">Need tracking again, so not applied here (start a new batch below; anything unchanged is reused):
-        {% for c in changes.gpu %}{{ c.step }}{% if c.field %} · {{ c.field }}{% endif %}{% if c.before %} ({{ c.before }} → {{ c.after }}){% endif %}{% if not forloop.last %}; {% endif %}{% endfor %}.</p>
+      <p class="text-sm text-yellow-800">Need the GPU again:
+        {% for c in changes.gpu %}{{ c.step }}{% if c.field %} · {{ c.field }}{% endif %}{% if c.before %} ({{ c.before }} → {{ c.after }}){% endif %}{% if not forloop.last %}; {% endif %}{% endfor %}.
+        Update runs the clips you choose again on the GPU, in this batch{% if gpu_hours_per_clip %} (about {{ gpu_hours_per_clip|floatformat:2 }} GPU-hours a clip){% endif %}; their review votes move to the matching new events.</p>
       {% endif %}
       {% endif %}
       {% if update_status.pending %}
@@ -35,20 +36,76 @@
       </div>
     </div>
     {% comment %}Which clips (memory/72): all or the ones reviewed. Some clips: Select in the clip list, then Update these (memory/73).{% endcomment %}
-    <form method="post" action="{% url 'pipelines:batch_apply_groups' batch_id %}" id="update-form" class="shrink-0 flex flex-col gap-2 items-stretch">
+    <form method="post" action="{% url 'pipelines:batch_apply_groups' batch_id %}" id="update-form"{% if changes.gpu %} data-gpu{% endif %}{% if gpu_hours_per_clip %} data-gpu-per-clip="{{ gpu_hours_per_clip|stringformat:'.4f' }}"{% endif %} class="shrink-0 flex flex-col gap-2 items-stretch">
       {% csrf_token %}
-      <fieldset class="flex flex-col gap-1 text-sm text-gray-800" {% if not changes.web %}disabled{% endif %}>
+      <fieldset class="flex flex-col gap-1 text-sm text-gray-800" {% if not changes %}disabled{% endif %}>
         <legend class="sr-only">Which clips to update</legend>
         <label class="flex items-center gap-2 min-h-[28px]"><input type="radio" name="which" value="all" checked class="w-4 h-4"> All clips ({{ update_counts.all }})</label>
         <label class="flex items-center gap-2 min-h-[28px]"><input type="radio" name="which" value="reviewed" class="w-4 h-4" {% if not update_counts.reviewed %}disabled{% endif %}> Clips reviewed ({{ update_counts.reviewed }})</label>
+        {% comment %}Shown while the clip list is filtered (memory/76): the clips it shows.{% endcomment %}
+        <label class="flex items-center gap-2 min-h-[28px]" data-update-shown hidden><input type="radio" name="which" value="shown" class="w-4 h-4"> Clips the filter shows (<span data-update-shown-n>0</span>)</label>
       </fieldset>
-      <button type="submit" {% if not changes.web %}disabled{% endif %}
+      <span data-update-shown-ids></span>
+      <button type="submit" {% if not changes %}disabled{% endif %}
               class="h-10 px-4 rounded-md text-sm font-semibold bg-green-700 hover:bg-green-800 text-white disabled:bg-gray-300 disabled:text-gray-600 disabled:cursor-not-allowed">Update</button>
-      <p class="text-xs text-gray-500 max-w-[16rem]">For some clips, use Select in the clip list. Clips left out keep their counts and stay listed as behind; until they're updated, batch totals mix the two.</p>
+      <p class="text-xs text-gray-500 max-w-[16rem]">For some clips, filter the clip list, or use Select there. Clips left out keep their counts and stay listed as behind; until they're updated, batch totals mix the two.{% if changes.gpu %} Uses GPU-hours for the clips that run again.{% endif %}</p>
     </form>
   </div>
 </section>
 <script>
+  // GPU changes run the chosen clips again on the GPU (memory/76): say how
+  // many and roughly how many GPU-hours before starting.
+  window.bmConfirmGpu = function (form, n) {
+    var per = parseFloat(form.getAttribute('data-gpu-per-clip') || '');
+    if (!form.hasAttribute('data-gpu')) return true;
+    var hours = isNaN(per) ? '' : ' (about ' + (per * n).toFixed(per * n < 10 ? 2 : 1) + ' GPU-hours)';
+    return window.confirm('Run ' + n + ' clip' + (n === 1 ? '' : 's') + ' again on the GPU' + hours +
+      ', in this batch? Their review votes move to the matching new events.');
+  };
+  (function () {
+    var form = document.getElementById('update-form');
+    if (!form) return;
+    form.addEventListener('submit', function (ev) {
+      var picked = form.querySelector('[name=which]:checked');
+      if (!picked || picked.value === 'shown' || picked.value === 'picked') return;
+      var n = parseInt(((picked.parentNode.textContent || '').match(/\((\d+)\)/) || [])[1] || '0', 10);
+      if (!window.bmConfirmGpu(form, n)) ev.preventDefault();
+    });
+  })();
+
+  // "Clips the filter shows" (memory/76): follows the clip filter, and posts
+  // the shown clips' runs as a pick.
+  (function () {
+    var form = document.getElementById('update-form');
+    var row = form && form.querySelector('[data-update-shown]');
+    if (!row) return;
+    var shown = [];
+    document.addEventListener('clipfilter:change', function (ev) {
+      var d = ev.detail || {};
+      shown = (d.visible || []).map(function (r) { return r.getAttribute('data-f-run'); })
+        .filter(function (id, i, all) { return id && all.indexOf(id) === i; });
+      row.hidden = !d.filtered;
+      row.querySelector('[data-update-shown-n]').textContent = shown.length;
+      var radio = row.querySelector('input');
+      radio.disabled = !shown.length;
+      if (!d.filtered && radio.checked) form.querySelector('[value=all]').checked = true;
+    });
+    form.addEventListener('submit', function (ev) {
+      var radio = row.querySelector('input');
+      if (!radio.checked) return;
+      if (!window.bmConfirmGpu(form, shown.length)) { ev.preventDefault(); return; }
+      if (!shown.length) { ev.preventDefault(); return; }
+      var box = form.querySelector('[data-update-shown-ids]');
+      box.innerHTML = '';
+      radio.value = 'picked';
+      shown.forEach(function (id) {
+        var input = document.createElement('input');
+        input.type = 'hidden'; input.name = 'run'; input.value = id;
+        box.appendChild(input);
+      });
+    });
+  })();
+
   // How close the web re-tracking is (memory/69): replays a couple of clips
   // with the GPU's own settings and compares; takes a little while.
   (function () {

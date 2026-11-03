@@ -131,8 +131,8 @@
     <span aria-hidden="true">·</span>
     <button type="button" data-select-none class="text-amber-800 hover:underline min-h-[32px]">Clear</button>
     <span class="flex-1"></span>
-    <button type="button" data-select-update {% if changes.web %}data-can{% endif %}
-            title="{% if changes.web %}Update these clips with the pipeline as it is now (no GPU){% else %}Every clip is up to date with the pipeline{% endif %}"
+    <button type="button" data-select-update {% if changes %}data-can{% endif %}
+            title="{% if changes.gpu %}Run these clips again on the GPU with the pipeline as it is now, in this batch{% elif changes %}Update these clips with the pipeline as it is now (no GPU){% else %}Every clip is up to date with the pipeline{% endif %}"
             class="h-9 px-3 rounded-md text-sm font-semibold bg-green-700 hover:bg-green-800 text-white disabled:bg-gray-300 disabled:text-gray-600 disabled:cursor-not-allowed">Update these</button>
     <button type="button" data-select-remove
             class="h-9 px-3 rounded-md text-sm font-semibold border border-red-300 bg-white text-red-800 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed">Remove from batch</button>

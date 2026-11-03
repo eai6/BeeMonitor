@@ -625,16 +625,25 @@ def _run_for_job(job):
     pinned = getattr(job, "_pinned_run", None)
     if pinned is not None:
         return pinned
+    if getattr(job, "_no_run", False):
+        return None
     when = job.created_at
     if not when:
         return None
     # By the indexed job column (memory/75); it used to read up to 400 runs'
     # whole contexts.
-    return (PipelineRun.objects
-            .filter(gpu_job_id=job.pk, user_id=job.user_id,
-                    started_at__gte=when - timedelta(days=1),
-                    started_at__lte=when + timedelta(days=1))
-            .order_by("-started_at").first())
+    run = (PipelineRun.objects
+           .filter(gpu_job_id=job.pk, user_id=job.user_id,
+                   started_at__gte=when - timedelta(days=1),
+                   started_at__lte=when + timedelta(days=1))
+           .order_by("-started_at").first())
+    # Remembered on the job for the rest of the request (memory/76): a results
+    # page asked for it about ten times, each a fetch of the whole run.
+    if run is None:
+        job._no_run = True
+    else:
+        job._pinned_run = run
+    return run
 
 
 def pin_run(job, run_pk):
@@ -647,6 +656,9 @@ def pin_run(job, run_pk):
     from . import aggregate
     from .models import PipelineRun
 
+    pinned = getattr(job, "_pinned_run", None)
+    if pinned is not None and run_pk and str(pinned.pk) == str(run_pk):
+        return pinned                       # already fetched this request
     try:
         run = PipelineRun.objects.filter(pk=uuid.UUID(str(run_pk))).first() if run_pk else None
     except ValueError:
