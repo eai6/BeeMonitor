@@ -136,7 +136,7 @@ def public_overlay(request, token, job_pk):
     share, runs = _shared_or_404(token)
     if not share.show_videos:
         raise Http404("Videos aren't shared on this link.")
-    if job_pk not in {aggregate.run_job_id(r) for r in runs}:
+    if job_pk not in {r.gpu_job_id for r in runs}:
         raise Http404("Not in this batch.")
     job = get_object_or_404(Job.objects.select_related("video"), pk=job_pk)
     return _no_index(overlay_response(request, job, cache_control="private, max-age=600"))

@@ -68,6 +68,7 @@ def runs_for_videos(videos):
     runs = PipelineRun.objects.filter(
         status=PipelineRun.Status.COMPLETED,
         user_id__in={j.user_id for j in jobs},
+        gpu_job_id__in=[j.pk for j in jobs],
         started_at__gte=min(when) - timedelta(days=1),
         started_at__lte=max(when) + timedelta(days=1)).order_by("-started_at")
     by_job = {}                             # a job re-used by later runs: the newest

@@ -105,7 +105,8 @@ class ResultsPageAgreesWithBatchTests(RecountTests):
         JobResult.objects.create(job=job, tracking_csv_path=self.tracking_csv,
                                  summary_stats={"video_fps": 25.0})
         run.context["m"]["job_id"] = job.pk
-        PipelineRun.objects.filter(pk=run.pk).update(context=run.context)
+        # A queryset update skips save(), which keeps gpu_job_id in step (memory/75).
+        PipelineRun.objects.filter(pk=run.pk).update(context=run.context, gpu_job_id=job.pk)
         return job
 
     def test_the_clip_page_reads_the_runs_own_rows(self):

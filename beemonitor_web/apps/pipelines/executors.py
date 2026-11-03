@@ -620,7 +620,6 @@ def _run_for_job(job):
     """
     from datetime import timedelta
 
-    from . import aggregate
     from .models import PipelineRun
 
     pinned = getattr(job, "_pinned_run", None)
@@ -629,15 +628,13 @@ def _run_for_job(job):
     when = job.created_at
     if not when:
         return None
-    nearby = (PipelineRun.objects
-              .filter(user_id=job.user_id,
-                      started_at__gte=when - timedelta(days=1),
-                      started_at__lte=when + timedelta(days=1))
-              .order_by("-started_at")[:400])
-    for run in nearby:
-        if aggregate.run_job_id(run) == job.pk:
-            return run
-    return None
+    # By the indexed job column (memory/75); it used to read up to 400 runs'
+    # whole contexts.
+    return (PipelineRun.objects
+            .filter(gpu_job_id=job.pk, user_id=job.user_id,
+                    started_at__gte=when - timedelta(days=1),
+                    started_at__lte=when + timedelta(days=1))
+            .order_by("-started_at").first())
 
 
 def pin_run(job, run_pk):

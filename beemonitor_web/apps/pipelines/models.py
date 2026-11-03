@@ -125,6 +125,10 @@ class PipelineRun(models.Model):
     steps = models.JSONField(default=list, blank=True)
     # step_id -> artifact/output dict produced by that step.
     context = models.JSONField(default=dict, blank=True)
+    # The GPU job this run submitted (aggregate.run_job_id of ``context``),
+    # kept in step with it by save() (memory/75). "Which runs share this
+    # clip's job" used to load every run's whole context to find out.
+    gpu_job_id = models.IntegerField(null=True, blank=True, db_index=True)
     # step_id -> STEP_* status.
     step_status = models.JSONField(default=dict, blank=True)
     error_message = models.TextField(blank=True)
@@ -146,6 +150,16 @@ class PipelineRun(models.Model):
 
     def __str__(self):
         return f"Run {self.id} — {self.pipeline.title} [{self.status}]"
+
+    def save(self, *args, **kwargs):
+        from .aggregate import run_job_id
+
+        fields = kwargs.get("update_fields")
+        if fields is None or "context" in fields:
+            self.gpu_job_id = run_job_id(self)
+            if fields is not None:
+                kwargs["update_fields"] = list(fields) + ["gpu_job_id"]
+        super().save(*args, **kwargs)
 
     # ── Convenience accessors used by the engine + templates ──────────────────
     def step_state(self, step_id):

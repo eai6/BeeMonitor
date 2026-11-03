@@ -64,18 +64,19 @@ def neighbours(run):
 
     from apps.videos.models import Video
 
-    from .aggregate import run_job_id, run_video_id
+    from .aggregate import run_video_id
     from .models import PipelineRun
 
     if run is None or not run.batch_id:
         return None
+    # Not the contexts (memory/75): each run's job is its own column.
     runs = list(PipelineRun.objects.filter(batch_id=run.batch_id,
                                            status=PipelineRun.Status.COMPLETED)
-                .only("pk", "context", "steps", "batch_id"))
+                .only("pk", "steps", "batch_id", "gpu_job_id"))
     videos = Video.everything.in_bulk([v for r in runs if (v := run_video_id(r))])
     clips = []
     for r in runs:
-        video, job = videos.get(run_video_id(r)), run_job_id(r)
+        video, job = videos.get(run_video_id(r)), r.gpu_job_id
         if video is None or not job:
             continue
         clips.append((video.recorded_at is None, video.recorded_at, video.title or "", str(r.pk),

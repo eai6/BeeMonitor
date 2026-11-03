@@ -142,7 +142,7 @@
     <span>Showing <strong id="cf-shown">{{ rows|length }}</strong> of {{ rows|length }} {% if photos %}photo{% else %}clip{% endif %}{{ rows|length|pluralize }}</span>
     <span data-filter-active hidden class="flex flex-wrap items-center gap-x-2">
       · <button type="button" data-filter-clear class="text-amber-700 hover:underline">Clear filters</button>
-      {% if rerun %}· <a href="#rerun" class="text-amber-700 hover:underline">Re-run these <span data-rerun-shown></span> →</a>{% endif %}
+      {% if rerun %}· <a href="#rerun" data-rerun-jump class="text-amber-700 hover:underline">Re-run these <span data-rerun-shown></span> →</a>{% endif %}
     </span>
   </div>
 </div>

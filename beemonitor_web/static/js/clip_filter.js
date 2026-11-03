@@ -131,6 +131,23 @@
     document.querySelectorAll('[data-rerun-shown]').forEach(function (el) { el.textContent = ids.length; });
   }
 
+  // "Re-run these N": the form is further up the page, and a bare #rerun jump
+  // went unnoticed (or nowhere, clicked twice). Bring it into view, mark it
+  // for a moment and put the cursor on its pipeline menu.
+  document.querySelectorAll('[data-rerun-jump]').forEach(function (a) {
+    a.addEventListener('click', function (ev) {
+      var form = document.getElementById('rerun');
+      if (!form) return;
+      ev.preventDefault();
+      form.scrollIntoView({behavior: 'smooth', block: 'center'});
+      var card = form.parentNode;
+      card.classList.add('ring-2', 'ring-amber-500');
+      setTimeout(function () { card.classList.remove('ring-2', 'ring-amber-500'); }, 2500);
+      var pick = form.querySelector('select, [type=submit]');
+      if (pick) pick.focus({preventScroll: true});
+    });
+  });
+
   function apply() {
     var sortEl = bar.querySelector('[data-filter="sort"]');
     sortRows(sortEl ? sortEl.value : 'new');

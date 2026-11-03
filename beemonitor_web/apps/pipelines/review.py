@@ -207,11 +207,13 @@ def shared_job_runs(runs, reviewed_by):
     runs = list(runs)
     out = {r.pk: r for r in runs}
     by_job = {j: r for r in runs if (j := run_job_id(r)) is not None}
-    for other in (PipelineRun.objects.filter(**{f"{reviewed_by}__isnull": False})
-                  .exclude(pk__in=list(out)).distinct().only("pk", "context")):
-        own = by_job.get(run_job_id(other))
-        if own is not None:
-            out[other.pk] = own
+    if not by_job:
+        return out
+    # By the indexed job column (memory/75), never by reading contexts.
+    for pk, job_id in (PipelineRun.objects
+                       .filter(gpu_job_id__in=list(by_job), **{f"{reviewed_by}__isnull": False})
+                       .exclude(pk__in=list(out)).values_list("pk", "gpu_job_id").distinct()):
+        out[pk] = by_job[job_id]
     return out
 
 
@@ -449,14 +451,15 @@ def member_job_ids(user):
     """GPU job pks of every run in a batch the user was invited to
     (``BatchMember``): their clips' results, overlay, crops and CSVs open for
     them, and nothing else does."""
-    from .aggregate import run_job_id
     from .models import BatchMember, PipelineRun
 
     if not getattr(user, "is_authenticated", False):
         return []
-    batches = BatchMember.objects.filter(user=user).values_list("batch_id", flat=True)
-    return [j for run in PipelineRun.objects.filter(batch_id__in=batches).only("context")
-            if (j := run_job_id(run)) is not None]
+    # A subquery on the indexed job column (memory/75): it used to load every
+    # run of every such batch, whole contexts and all, on each page and request.
+    batches = BatchMember.objects.filter(user=user).values("batch_id")
+    return (PipelineRun.objects.filter(batch_id__in=batches, gpu_job_id__isnull=False)
+            .values("gpu_job_id"))
 
 
 # ── Missed events (memory/62 §3b) ────────────────────────────────────────────

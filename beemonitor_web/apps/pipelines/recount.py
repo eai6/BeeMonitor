@@ -239,7 +239,8 @@ def runs_for_clips(videos):
     ids = {pk for pk, _u, _c in jobs}
     when = [c for _p, _u, c in jobs if c]
     runs = PipelineRun.objects.filter(status=PipelineRun.Status.COMPLETED,
-                                      user_id__in={u for _p, u, _c in jobs})
+                                      user_id__in={u for _p, u, _c in jobs},
+                                      gpu_job_id__in=ids)
     if when:
         runs = runs.filter(started_at__gte=min(when) - timedelta(days=1),
                            started_at__lte=max(when) + timedelta(days=1))
