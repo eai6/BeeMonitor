@@ -19,7 +19,7 @@ clip is skipped, a running one stops within about 20 seconds.
         <li><b>{{ running }} unfinished</b>: any running now stop within about 20 seconds; the rest are skipped without using the GPU.</li>
       </ul>
       <p class="text-[13px] text-gray-600">GPU time already spent is still billed. You can re-run the cancelled clips later from this page.</p>
-      <form method="post" action="{% url 'pipelines:batch_cancel' batch_id %}" class="flex justify-end gap-2 pt-1">
+      <form method="post" action="{% url 'pipelines:batch_cancel' batch_id %}" data-in-turns class="flex justify-end gap-2 pt-1">
         {% csrf_token %}
         <button type="button" @click="open = false"
                 class="h-10 px-4 rounded-md text-sm border border-gray-300 bg-white text-gray-800 hover:bg-gray-50">Keep running</button>

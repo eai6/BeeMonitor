@@ -89,12 +89,9 @@ class BatchPageControlTests(TestCase):
         self.assertNotIn("No references were defined", html)
 
 
-class InlineClipReviewTests(TestCase):
-    """Watching a clip without leaving the batch page.
-
-    Scanning a day's footage is watching one clip after another; a round trip
-    to a detail page between each turns a minute of review into ten.
-    """
+class ClipRowOpensResultsTests(TestCase):
+    """A clip's row opens its results page, where its events are reviewed.
+    It carries no video of its own: the batch page has no player for clips."""
 
     def setUp(self):
         from apps.analysis.models import Job, JobResult
@@ -124,29 +121,14 @@ class InlineClipReviewTests(TestCase):
             reverse("pipelines:batch_detail", kwargs={"batch_id": self.batch_id})
         ).content.decode()
 
-    def test_the_row_carries_the_clip_and_its_tracks(self):
-        """The viewer plays the original with the run's tracks drawn over it
-        (memory/46), so a row carries both, and no rendered video."""
-        self.result.tracking_csv_path = "cv/tracking.csv"
-        self.result.save(update_fields=["tracking_csv_path"])
-
+    def test_the_row_opens_the_clip_and_holds_no_player(self):
         html = self._html()
 
-        self.assertIn(reverse("videos:stream", kwargs={"pk": self.video.pk}), html)
-        self.assertIn(reverse("analysis:track_overlay", kwargs={"pk": self.job.pk}), html)
-        self.assertNotIn("data-annotated=", html)
-
-    def test_a_run_without_tracks_offers_only_the_original(self):
-        html = self._html()
-
-        self.assertIn(reverse("videos:stream", kwargs={"pk": self.video.pk}), html)
+        self.assertIn("data-href=", html)
+        self.assertIn(reverse("analysis:results", kwargs={"pk": self.job.pk}), html)
+        self.assertNotIn('id="clip-viewer"', html)
+        self.assertNotIn("data-original=", html)
         self.assertNotIn("data-overlay=", html)
-
-    def test_the_viewer_is_present_and_starts_hidden(self):
-        html = self._html()
-
-        self.assertIn('id="clip-viewer"', html)
-        self.assertIn("hidden", html.split('id="clip-viewer"')[1][:40])
 
     def test_the_sources_are_lazy_endpoints_not_presigned_urls(self):
         """Presigning every clip up front would cost a signature per row on a
@@ -441,7 +423,7 @@ class OutcomeRowLayoutTests(TestCase):
         html = self._html()
 
         grid = html.index("lg:grid-cols-[300px")
-        table = html.index('id="clip-viewer"')
+        table = html.index('id="clip-rows"')
         self.assertLess(grid, html.index('id="rerun-pipeline"'))
         self.assertLess(html.index('id="rerun-pipeline"'), table)
 
@@ -597,13 +579,7 @@ class FullResultsLinkTests(TestCase):
         html = self._html()
 
         self.assertIn(reverse("analysis:results", kwargs={"pk": self.job.pk}), html)
-        self.assertIn("crops &amp; CSVs", html)
-
-    def test_the_viewer_carries_the_link_too(self):
-        html = self._html()
-
-        self.assertIn('id="cv-results"', html)
-        self.assertIn("data-results=", html)
+        self.assertNotIn("crops &amp; CSVs", html)
 
     def test_a_run_that_never_produced_a_job_offers_no_dead_link(self):
         for pk in PipelineRun.objects.filter(batch_id=self.batch_id).values_list("pk", flat=True):

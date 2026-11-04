@@ -6,11 +6,13 @@ import uuid
 from unittest import mock
 
 from django.urls import reverse
+from django.utils import timezone
 
-from apps.pipelines import runsummary
+from apps.pipelines import aggregate, engine, period, review, runsummary
 from apps.pipelines.models import AddedEvent, EventReview, PipelineRun
 from apps.pipelines.tests.test_batch_select import BatchSelectTests
 from apps.pipelines.tests.test_event_review import EventReviewTests
+from apps.videos.models import Video
 
 
 def _whole(context):
@@ -204,3 +206,287 @@ class ScaleTests(EventReviewTests):
         for name, fn in pages.items():
             with self.subTest(name):
                 self.assertLess(self._peak_mb(fn), 40, name)
+
+
+class BigBatchTests(EventReviewTests):
+    """memory/77: a batch of thousands of clips, and launching one."""
+
+    def _clips(self, n):
+        return [Video.objects.create(
+            user=self.owner, device=self.video.device, title=f"c{i}", storage_key=f"big/{i}.mp4",
+            file_size_bytes=2_000_000, status=Video.Status.READY, recorded_at=timezone.now(),
+            fps=25.0, width=1920, height=1080, duration_seconds=4.0) for i in range(n)]
+
+    def _launch(self, clips, **extra):
+        self.client.force_login(self.owner)
+        return self.client.post(
+            reverse("pipelines:run_on_videos"), {"video_ids": [c.pk for c in clips], **extra},
+            headers={"X-Requested-With": "XMLHttpRequest"}).json()
+
+    def test_a_big_launch_goes_in_turns_and_resending_skips_what_started(self):
+        pipeline = self.run.pipeline
+        pipeline.steps = [{"id": "v", "block_type": "input.video", "config": {}}]
+        pipeline.save()
+        clips = self._clips(5)
+        with mock.patch("apps.pipelines.views.LAUNCH_CHUNK", 2):
+            first = self._launch(clips, pipeline=pipeline.pk)
+            self.assertEqual((first["submitted"], first["more"]), (2, 3))
+            second = self._launch(clips, add_to=first["batch_id"])
+            self.assertEqual((second["submitted"], second["more"]), (2, 1))
+            last = self._launch(clips, add_to=first["batch_id"])
+        self.assertEqual((last["submitted"], last["more"]), (1, 0))
+        self.assertEqual(aggregate.batch_video_ids(first["batch_id"]), {c.pk for c in clips})
+        self.assertEqual(PipelineRun.objects.filter(batch_id=first["batch_id"]).count(), 5)
+
+    def test_runs_of_a_batch_share_their_steps_and_pipeline(self):
+        other = PipelineRun.objects.create(
+            pipeline=self.run.pipeline, user=self.owner, status="completed", batch_id=self.batch,
+            started_at=self.job.created_at, context=self.run.context,
+            steps=[{**self.run.steps[0], "config": {"video_id": "999"}}, *self.run.steps[1:]])
+        one, two = runsummary.share_steps(
+            PipelineRun.objects.filter(pk__in=[self.run.pk, other.pk]).order_by("id"))
+        self.assertIs(one.steps[1], two.steps[1])
+        self.assertIs(one.pipeline, two.pipeline)
+        self.assertEqual({aggregate.run_video_id(one), aggregate.run_video_id(two)},
+                         {self.video.pk, 999})
+
+    def test_a_big_running_batch_stops_reloading_itself(self):
+        PipelineRun.objects.filter(pk=self.run.pk).update(status="running")
+        self.client.force_login(self.owner)
+        url = reverse("pipelines:batch_detail", args=[self.batch])
+        self.assertContains(self.client.get(url), "pollThenReload")
+        with mock.patch("apps.pipelines.views.BIG_BATCH", 0):
+            res = self.client.get(url)
+        self.assertNotContains(res, "pollThenReload")
+        self.assertContains(res, "Reload the page")
+
+    def test_the_batch_page_reads_no_job_config_or_result_summary(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        self.client.force_login(self.owner)
+        with CaptureQueriesContext(connection) as seen:
+            self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
+        for q in seen.captured_queries:
+            self.assertNotIn('"analysis_jobresult"."summary_stats"', q["sql"])
+            self.assertNotIn('"analysis_job"."config"', q["sql"])
+
+    def test_the_loop_checks_each_user_with_running_runs_once(self):
+        from apps.analysis import reconcile
+
+        PipelineRun.objects.filter(pk=self.run.pk).update(status="running")
+        for _ in range(3):
+            PipelineRun.objects.create(pipeline=self.run.pipeline, user=self.owner,
+                                       status="running", started_at=timezone.now(), steps=[])
+        with mock.patch("apps.pipelines.engine.reconcile_user_runs") as check, \
+                mock.patch("apps.analysis.views._poll_sagemaker_results", return_value=0), \
+                mock.patch("apps.analysis.views._drain_queue", return_value=0):
+            reconcile.reconcile_all()
+        self.assertEqual(check.call_count, 1)
+
+    def test_runs_that_started_first_are_rechecked_first(self):
+        from datetime import timedelta
+
+        PipelineRun.objects.filter(pk=self.run.pk).update(
+            status="running", started_at=timezone.now() - timedelta(days=1),
+            step_status={"m": PipelineRun.STEP_RUNNING})
+        for _ in range(2):
+            PipelineRun.objects.create(pipeline=self.run.pipeline, user=self.owner,
+                                       status="running", started_at=timezone.now(), steps=[])
+        with mock.patch("apps.pipelines.engine.on_job_finished") as finished:
+            PipelineRun.objects.filter(pk=self.run.pk).update(
+                steps=[{"id": "m", "block_type": "track.mot"}])
+            engine.reconcile_user_runs(self.owner, limit=1)
+        finished.assert_called_once()
+
+    def _batch_of(self, n, status="completed"):
+        for video in self._clips(n):
+            PipelineRun.objects.create(
+                pipeline=self.run.pipeline, user=self.owner, status=status, batch_id=self.batch,
+                started_at=timezone.now(), context={"v": {"artifact": "video", "video_id": video.pk}},
+                steps=[{"id": "v", "block_type": "input.video",
+                        "config": {"video_id": str(video.pk)}}])
+
+    def test_a_big_batch_sends_a_page_of_rows_and_everything_the_filter_needs(self):
+        self._batch_of(4)
+        self.client.force_login(self.owner)
+        url = reverse("pipelines:batch_detail", args=[self.batch])
+        with mock.patch("apps.pipelines.views.BIG_BATCH", 2), \
+                mock.patch("apps.pipelines.views.CLIPS_PER_PAGE", 2):
+            res = self.client.get(url)
+        html = res.content.decode()
+        self.assertEqual(html.count('class="clip-row'), 2)
+        self.assertEqual(len(res.context["clip_index"]), 5)
+        self.assertIn('id="clip-index"', html)
+        self.assertIn('id="clip-pager"', html)
+        self.assertIn("csrfmiddlewaretoken", html[html.index('id="clip-pager"'):])
+        first = res.context["clip_index"][0]
+        self.assertIn(f'data-f-run="{first["run"]}"', html)
+        self.assertEqual(first["status"], "completed")
+
+    def test_a_small_batch_keeps_every_row_and_no_pager(self):
+        self._batch_of(2)
+        self.client.force_login(self.owner)
+        html = self.client.get(reverse("pipelines:batch_detail", args=[self.batch])).content.decode()
+        self.assertEqual(html.count('class="clip-row'), 3)
+        self.assertNotIn('id="clip-index"', html)
+        self.assertNotIn('id="clip-pager"', html)
+
+    def test_rows_of_a_page_come_in_the_order_asked_for(self):
+        self._batch_of(3)
+        self.client.force_login(self.owner)
+        pks = [str(pk) for pk in PipelineRun.objects.filter(batch_id=self.batch)
+               .order_by("started_at").values_list("pk", flat=True)][::-1][:3]
+        url = reverse("pipelines:batch_rows", args=[self.batch])
+        html = self.client.post(url, {"run": pks}).content.decode()
+        self.assertEqual(re.findall(r'data-f-run="([^"]+)"', html), pks)
+        self.assertNotIn("rows", "".join(re.findall(r'back=([^"]*)"', html)))
+
+    def test_a_stranger_gets_no_rows(self):
+        self.client.force_login(self.stranger)
+        res = self.client.post(reverse("pipelines:batch_rows", args=[self.batch]),
+                               {"run": [str(self.run.pk)]})
+        self.assertIn(res.status_code, (403, 404))
+
+    def _queued(self, n):
+        from apps.analysis.models import Job
+
+        jobs = []
+        for i, video in enumerate(self._clips(n)):
+            job = Job.objects.create(user=self.owner, video=video, status="queued",
+                                     modal_job_id=f"q{i}")
+            jobs.append(job)
+            PipelineRun.objects.create(
+                pipeline=self.run.pipeline, user=self.owner, status="running", batch_id=self.batch,
+                started_at=timezone.now(), step_status={"m": PipelineRun.STEP_RUNNING},
+                context={"m": {"job_id": job.pk}},
+                steps=[{"id": "v", "block_type": "input.video", "config": {"video_id": str(video.pk)}},
+                       {"id": "m", "block_type": "track.mot"}])
+        return jobs
+
+    def _turn(self, name, **data):
+        self.client.force_login(self.owner)
+        return self.client.post(reverse(f"pipelines:{name}", args=[self.batch]), data,
+                                headers={"X-Requested-With": "XMLHttpRequest"}).json()
+
+    def test_cancel_stops_every_waiting_job_at_once_and_closes_runs_in_turns(self):
+        jobs = self._queued(5)
+        with mock.patch("apps.pipelines.views.TURN_CLIPS", 2):
+            first = self._turn("batch_cancel")
+            self.assertEqual(first, {"done": 2, "left": 3})
+            for job in jobs:
+                job.refresh_from_db()
+                self.assertEqual(job.status, "cancelled")
+            second = self._turn("batch_cancel", done=first["done"])
+            self.assertEqual(second, {"done": 4, "left": 1})
+            self.assertEqual(self._turn("batch_cancel", done=second["done"]), {"done": 5, "left": 0})
+        self.assertFalse(PipelineRun.objects.filter(batch_id=self.batch, status="running").exists())
+
+    def test_rerun_goes_in_turns_and_each_turn_moves_on(self):
+        self._queued(5)
+        with mock.patch("apps.pipelines.views.TURN_CLIPS", 10):
+            self._turn("batch_cancel")
+        with mock.patch("apps.pipelines.views.TURN_CLIPS", 2):
+            first = self._turn("batch_retry_failed")
+            self.assertEqual((first["done"], first["left"]), (2, 3))
+            second = self._turn("batch_retry_failed", done=first["done"], after=first["after"])
+            self.assertEqual((second["done"], second["left"]), (4, 1))
+            # These clips fail again at once: the turns still come to an end.
+            last = self._turn("batch_retry_failed", done=second["done"], after=second["after"])
+        self.assertEqual(last, {"done": 5, "left": 0})
+
+    def test_a_clip_row_opens_its_results_with_no_inline_viewer(self):
+        self.client.force_login(self.owner)
+        html = self.client.get(reverse("pipelines:batch_detail", args=[self.batch])).content.decode()
+        url = reverse("analysis:results", args=[self.job.pk]) + f"?run={self.run.pk}"
+        self.assertIn(f'data-href="{url}"', html)
+        self.assertIn(f'<a href="{url}"', html)
+        self.assertNotIn("crops &amp; CSVs", html)
+        self.assertNotIn('id="clip-viewer"', html)
+        self.assertNotIn("js/clip_viewer.js", html)
+
+
+class TripQualityTests(EventReviewTests):
+    """Precision and recall of trips against the reviewed events."""
+
+    def _clip(self, rows, title, minute):
+        from datetime import datetime, timezone as tz
+
+        video = Video.objects.create(
+            user=self.owner, device=self.video.device, title=title, storage_key=f"tq/{title}.mp4",
+            file_size_bytes=2_000_000, status=Video.Status.READY, fps=10.0, width=10, height=10,
+            recorded_at=datetime(2024, 5, 8, 12, minute, tzinfo=tz.utc), duration_seconds=600.0)
+        return PipelineRun.objects.create(
+            pipeline=self.run.pipeline, user=self.owner, status="completed", batch_id=uuid.uuid4(),
+            started_at=timezone.now(), steps=[{"id": "v", "block_type": "input.video",
+                                               "config": {"video_id": str(video.pk)}}],
+            context={"e": {"table_kind": "events", "rows": rows}})
+
+    def _row(self, action, frame, track, tube="1"):
+        return {"frame": frame, "track_id": track, "action": action, "reference": tube}
+
+    def _vote(self, run, row, verdict):
+        EventReview.objects.create(run=run, user=self.owner, verdict=verdict,
+                                   event_key=review.event_key(row))
+
+    def test_a_rejected_entry_and_an_added_one_cost_the_trips_around_them(self):
+        rows = [self._row("exit", 10, 1), self._row("enter", 100, 2), self._row("exit", 200, 3),
+                self._row("enter", 300, 4)]
+        run = self._clip(rows, "a", 0)
+        for row in rows[:3]:
+            self._vote(run, row, "accepted")
+        self._vote(run, rows[3], "rejected")
+        AddedEvent.objects.create(run=run, user=self.owner, frame=400, action="enter", reference="1")
+        q = period.trip_quality([run])
+        self.assertEqual((q["found"], q["true"], q["matched"]), (2, 2, 1))
+        self.assertEqual((q["precision"], q["recall"], q["clips"]), (50, 50, 1))
+
+    def test_a_clip_not_fully_reviewed_counts_for_nothing_and_breaks_the_stretch(self):
+        out, back = self._row("exit", 10, 1), self._row("enter", 20, 2)
+        done = self._clip([out], "a", 0)
+        self._vote(done, out, "accepted")
+        partly = self._clip([back, self._row("exit", 30, 3)], "b", 10)
+        self._vote(partly, back, "accepted")
+        last = self._clip([back], "c", 20)
+        self._vote(last, back, "accepted")
+        q = period.trip_quality([done, partly, last])
+        self.assertEqual((q["found"], q["true"], q["clips"]), (0, 0, 2))
+
+    def test_nothing_fully_reviewed_gives_no_numbers(self):
+        self.assertIsNone(period.trip_quality([self._clip([self._row("exit", 1, 1)], "a", 0)]))
+
+    def test_the_panel_shows_them(self):
+        rows = [self._row("exit", 10, 1), self._row("enter", 100, 2)]
+        run = self._clip(rows, "a", 0)
+        for row in rows:
+            self._vote(run, row, "accepted")
+        PipelineRun.objects.filter(pk=run.pk).update(batch_id=self.batch)
+        self.client.force_login(self.owner)
+        html = self.client.get(reverse("pipelines:batch_detail", args=[self.batch])).content.decode()
+        self.assertIn("1 of 1 true trips found", html)
+        self.assertNotIn("Suggestion right", html)
+
+    def test_the_trips_node_needs_no_update_and_is_no_swap_for_an_analyzer(self):
+        from apps.pipelines import regroup
+        from apps.pipelines.registry import get_block
+        from apps.pipelines.views import analyzer_options
+
+        pipeline = self.run.pipeline
+        pipeline.steps = [*self.run.steps, {"id": "t", "block_type": "analyze.trips",
+                                            "config": {"min_trip_seconds": 5},
+                                            "inputs": {"events": "e"}}]
+        changes = regroup.pipeline_changes(self.run, pipeline)
+        self.assertEqual((changes["web"], changes["gpu"]), ([], []))
+        self.assertFalse(get_block("analyze.trips").get("hidden"))
+        self.assertNotIn("analyze.trips", [o["key"] for o in analyzer_options(self.run)[1]])
+
+    def test_a_pipeline_with_the_trips_node_runs(self):
+        from apps.pipelines.engine import validate_steps
+
+        steps = [{"id": "v", "block_type": "input.video", "config": {"video_id": str(self.video.pk)}},
+                 {"id": "r", "block_type": "reference.layout", "config": {"source": "device_layout"},
+                  "inputs": {"video": "v"}},
+                 {"id": "e", "block_type": "analyze.events", "config": {},
+                  "inputs": {"tracks": "m", "rois": "r"}},
+                 {"id": "t", "block_type": "analyze.trips", "config": {}, "inputs": {"events": "e"}}]
+        self.assertEqual([p for p in validate_steps(steps) if "Trips" in str(p)], [])

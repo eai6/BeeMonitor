@@ -88,9 +88,9 @@ class HiddenBlockTests(SimpleTestCase):
             "detect.objects",
             "reference.layout",
             "track.mot",
-            # Two primitives, not four questions: trips and visit counts are
-            # reads over these, not blocks of their own.
-            "analyze.events", "analyze.interactions",
+            # Two primitives, not four questions: visit counts are a read over
+            # these. Trips are one too; their node holds the pairing rules.
+            "analyze.events", "analyze.interactions", "analyze.trips",
             "analyze.detection_count",
             "identify.marker", "identify.species",
         })

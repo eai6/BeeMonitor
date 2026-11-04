@@ -137,7 +137,8 @@ class PeriodReviewView(LoginRequiredMixin, View):
             })
         votes = _trip_votes([c["run"] for c in data["clips"]], request.user)
         trips = []
-        for t in period.suggest_trips(pairs):
+        rules = period.trip_rules(data["clips"][0]["run"].pipeline) if data["clips"] else None
+        for t in period.suggest_trips(pairs, rules):
             (eci, ee), (nci, ne) = t["exit"], t["entry"]
             v = votes.get((data["clips"][eci]["run"].pk, ee["key"])) or {}
             trips.append({"exit": {"clip": eci, "key": ee["key"]},

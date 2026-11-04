@@ -214,34 +214,177 @@ def clip_events(clip, user=None):
     return out
 
 
-def suggest_trips(events):
-    """Each exit → the next entry into the same tube later in the period.
+def trip_rules(pipeline):
+    """The pipeline's Trips node as ``{min_seconds, max_seconds}`` (None = no
+    limit). Read from the pipeline as it is now: trips run across clips, so
+    they aren't part of what a clip's run froze."""
+    def number(config, key, scale=1):
+        try:
+            return float(config.get(key)) * scale
+        except (TypeError, ValueError):
+            return None
 
-    ``events`` are ``(clip_index, event)`` pairs from every clip. When the exit
-    and an entry both carry a marker, the next entry by the same marker wins;
-    otherwise the next entry by any track. Never an entry earlier than the exit.
+    step = next((s for s in (pipeline.steps if pipeline else None) or []
+                 if s.get("block_type") == "analyze.trips"), None)
+    config = (step or {}).get("config") or {}
+    return {"min_seconds": number(config, "min_trip_seconds"),
+            "max_seconds": number(config, "max_trip_minutes", 60)}
+
+
+def suggest_trips(events, rules=None):
+    """Each exit → the entry that ends its trip, one to one, within a day.
+
+    ``events`` are ``(clip_index, event)`` pairs from every clip. An exit pairs
+    with the next exit-or-entry at its tube, when that is an entry; another exit
+    first means the entry between them was missed, and no trip is claimed. When
+    the exit carries a marker, the next unused entry by that marker wins. No
+    entry ends two trips, and a pair outside ``rules`` (``trip_rules``) is none.
     """
-    entries = {}
+    rules = rules or {}
+    tubes = {}
     for ci, e in events:
-        if e["action"] == "enter":
-            entries.setdefault(e["reference"], []).append((ci, e))
-    for lst in entries.values():
-        lst.sort(key=lambda p: p[1]["t"])
+        if e["action"] in ("exit", "enter"):
+            tubes.setdefault((e["reference"], (e.get("clock") or "")[:10]), []).append((ci, e))
     trips = []
-    for ci, e in sorted(events, key=lambda p: p[1]["t"]):
-        if e["action"] != "exit":
-            continue
-        later = [p for p in entries.get(e["reference"], []) if p[1]["t"] > e["t"]]
-        if not later:
-            continue
-        pick = None
-        if e.get("marker"):
-            pick = next((p for p in later if p[1].get("marker") == e["marker"]), None)
-        pick = pick or later[0]
-        trips.append({"exit": (ci, e), "entry": pick,
-                      "same_marker": bool(e.get("marker")) and pick[1].get("marker") == e["marker"],
-                      "gap_sec": round(pick[1]["t"] - e["t"], 1)})
+    for lst in tubes.values():
+        lst.sort(key=lambda p: p[1]["t"])
+        used = set()
+        for i, (ci, e) in enumerate(lst):
+            if e["action"] != "exit":
+                continue
+            later = range(i + 1, len(lst))
+            at = None
+            if e.get("marker"):
+                at = next((j for j in later if lst[j][1]["action"] == "enter" and j not in used
+                           and lst[j][1].get("marker") == e["marker"]), None)
+            if at is None and i + 1 < len(lst) and lst[i + 1][1]["action"] == "enter" \
+                    and i + 1 not in used:
+                at = i + 1
+            if at is None:
+                continue
+            pick = lst[at]
+            gap = pick[1]["t"] - e["t"]
+            if gap <= 0 or (rules.get("min_seconds") is not None and gap < rules["min_seconds"]) \
+                    or (rules.get("max_seconds") is not None and gap > rules["max_seconds"]):
+                continue
+            used.add(at)
+            trips.append({"exit": (ci, e), "entry": pick,
+                          "same_marker": bool(e.get("marker")) and pick[1].get("marker") == e["marker"],
+                          "gap_sec": round(gap, 1)})
+    trips.sort(key=lambda t: t["exit"][1]["t"])
     return trips
+
+
+def trip_quality(runs):
+    """Trip precision and recall over the batch's fully reviewed clips.
+
+    Reviewed events are taken as the truth: every exit and entry people kept or
+    added, none they rejected. The same pairing runs on those and on the events
+    as detected, and a detected trip is right when both its ends are the true
+    trip's. An event added or rejected shifts the pairs around it, so these
+    count what event errors cost trips. A stretch of clips stops at a clip that
+    isn't fully reviewed, because its events can't be trusted either way.
+    ``None`` when no clip is fully reviewed.
+    """
+    from apps.videos.models import Video
+
+    from . import primitives, review
+    from .aggregate import analyzer_outputs, run_video_id
+    from .models import AddedEvent
+    from .ops import fps_with_source
+
+    runs = list(runs)
+    actions = ("exit", "enter")
+    counts = review.batch_review_counts(runs, actions)
+
+    def complete(c):
+        return bool(c and (c["clip_reviewed"] or (c["events"] and c["reviewed"] >= c["events"])))
+
+    if not any(complete(c) for c in counts.values()):
+        return None
+    videos = Video.everything.filter(pk__in=[run_video_id(r) for r in runs]).in_bulk()
+    days = {}
+    for run in runs:
+        video = videos.get(run_video_id(run))
+        start = local_start(video) if video else None
+        place = (video.device_id and ("d", video.device_id)) or \
+                (video.site_id and ("s", video.site_id)) if video else None
+        if counts.get(run.pk) is not None and start is not None and place:
+            days.setdefault((place, start.date()), []).append((start, run, video))
+
+    votes = review.review_votes(runs)
+    added = {}
+    owners = review.shared_job_runs(runs, "added_events")
+    for pk, run_id, frame, action, reference in (
+            AddedEvent.objects.filter(run_id__in=list(owners), action__in=actions)
+            .values_list("pk", "run_id", "frame", "action", "reference")):
+        added.setdefault(owners[run_id].pk, []).append((pk, frame, action, reference))
+
+    def events_of(start, run, video):
+        """``(detected, reviewed)`` events of a clip, each with its one id."""
+        stats = _run_stats(run) or {}
+        fps = float(fps_with_source(stats, video)[0] or 25)
+
+        def event(uid, frame, action, reference):
+            when = start + timedelta(seconds=frame / fps)
+            return (0, {"uid": uid, "action": action, "reference": str(reference or ""),
+                        "t": when.timestamp(), "clock": when.isoformat()})
+
+        detected, reviewed = [], []
+        calls = votes.get(run.pk, {})
+        for raw in (r for k, o in analyzer_outputs(run) if k == "events"
+                    for r in (o.get("rows") or [])):
+            e = primitives.normalize_event(raw)
+            if e.get("action") not in actions:
+                continue
+            try:
+                frame = int(e["frame"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            key = review.event_key(e)
+            one = event((run.pk, key), frame, e["action"], e.get("reference"))
+            detected.append(one)
+            if review.combined(calls.get(key, [])) != "rejected":
+                reviewed.append(one)
+        for pk, frame, action, reference in added.get(run.pk, []):
+            reviewed.append(event(("added", pk), frame, action, reference))
+        return detected, reviewed
+
+    rules = trip_rules(runs[0].pipeline)
+    found = true = matched = clips = 0
+
+    def score(stretch):
+        nonlocal found, true, matched, clips
+        if not stretch:
+            return
+        detected, reviewed = [], []
+        for clip in stretch:
+            d, r = events_of(*clip)
+            detected += d
+            reviewed += r
+
+        def pairs(events):
+            return {(t["exit"][1]["uid"], t["entry"][1]["uid"])
+                    for t in suggest_trips(events, rules)}
+
+        mine, truth = pairs(detected), pairs(reviewed)
+        found += len(mine)
+        true += len(truth)
+        matched += len(mine & truth)
+        clips += len(stretch)
+
+    for clips_of_day in days.values():
+        stretch = []
+        for clip in sorted(clips_of_day, key=lambda c: c[0]):
+            if complete(counts[clip[1].pk]):
+                stretch.append(clip)
+            else:
+                score(stretch)
+                stretch = []
+        score(stretch)
+    return {"precision": round(100 * matched / found) if found else None,
+            "recall": round(100 * matched / true) if true else None,
+            "matched": matched, "found": found, "true": true, "clips": clips}
 
 
 # ── Trip votes ───────────────────────────────────────────────────────────────

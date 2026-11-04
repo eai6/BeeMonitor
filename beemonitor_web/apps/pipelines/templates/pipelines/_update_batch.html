@@ -82,8 +82,8 @@
     var shown = [];
     document.addEventListener('clipfilter:change', function (ev) {
       var d = ev.detail || {};
-      shown = (d.visible || []).map(function (r) { return r.getAttribute('data-f-run'); })
-        .filter(function (id, i, all) { return id && all.indexOf(id) === i; });
+      shown = Array.from(new Set((d.visible || []).map(function (r) { return r.getAttribute('data-f-run'); })
+        .filter(Boolean)));
       row.hidden = !d.filtered;
       row.querySelector('[data-update-shown-n]').textContent = shown.length;
       var radio = row.querySelector('input');

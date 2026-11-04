@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% load static %}
-{% block title %}Review a period - BeeMonitor{% endblock %}
+{% block title %}Review trips - BeeMonitor{% endblock %}
 
 {% block content %}
 {% comment %}
-Period review (memory/62): every analysed clip of one device or site between
+Trip review (memory/62): every analysed clip of one device or site between
 two local times on ONE time axis, so an exit in one clip and the entry in a
-later one sit on the same tube lane. Review walks every event across clips;
-trip review walks each suggested exit → entry pair. Logic: pipelines/period.py.
+later one sit on the same tube lane. It walks each suggested exit → entry pair.
+Events are reviewed on each clip's own page. Logic: pipelines/period.py.
 {% endcomment %}
 <div id="period-review" class="flex flex-col gap-3">
   {% csrf_token %}
@@ -15,7 +15,7 @@ trip review walks each suggested exit → entry pair. Logic: pipelines/period.py
     {# Opened from a batch: keep showing (and voting on) that batch's runs. #}
     {% if request.GET.batch %}<input type="hidden" name="batch" value="{{ request.GET.batch }}">{% endif %}
     <div class="flex-1 min-w-[220px]">
-      <h1 class="text-lg font-semibold text-gray-900">Review a period{% if batch %} · <a href="{{ batch.url }}" class="text-amber-700 hover:underline">{{ batch.name }}</a>{% endif %}</h1>
+      <h1 class="text-lg font-semibold text-gray-900">Review trips{% if batch %} · <a href="{{ batch.url }}" class="text-amber-700 hover:underline">{{ batch.name }}</a>{% endif %}</h1>
       <p class="text-[13px] text-gray-600">{% if data.device %}{{ data.device.name }}{% else %}{{ data.site.name }}{% endif %} · every analysed clip in the range, in recording order</p>
     </div>
     <label class="flex flex-col gap-1 text-xs text-gray-700">Device
@@ -48,9 +48,7 @@ trip review walks each suggested exit → entry pair. Logic: pipelines/period.py
         <label class="flex items-center gap-1.5"><input type="checkbox" data-pr-links checked> Link each exit to the next entry on the same tube</label>
         <a href="{{ csv_url }}" class="text-amber-700 hover:underline">Reviewed trips CSV</a>
         {% if any_review %}
-        <button type="button" data-am-open class="h-10 px-3 rounded border border-amber-700 text-amber-800 hover:bg-amber-50 font-semibold" title="An insect went in or came out and the system didn't catch it">+ Add missed event (A)</button>
-        <button type="button" data-pr-review-events class="h-10 px-3 rounded bg-amber-700 hover:bg-amber-800 text-white font-semibold">Review events</button>
-        <button type="button" data-pr-review-trips class="h-10 px-3 rounded border border-amber-700 text-amber-800 hover:bg-amber-50 font-semibold">Review trips</button>
+        <button type="button" data-pr-review-trips class="h-10 px-3 rounded bg-amber-700 hover:bg-amber-800 text-white font-semibold">Review trips</button>
         <button type="button" data-pr-exit hidden class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">Exit review</button>
         {% endif %}
       </span>
@@ -80,28 +78,6 @@ trip review walks each suggested exit → entry pair. Logic: pipelines/period.py
         <video data-pr-video controls playsinline preload="metadata" class="w-full block" style="max-height: 62vh"></video>
         <canvas data-pr-canvas class="absolute left-0 top-0 pointer-events-none"></canvas>
         <span data-pr-clip class="absolute left-2 top-2 font-mono text-xs text-white bg-black/60 px-1.5 py-0.5 rounded"></span>
-        <div data-pr-card hidden role="dialog" aria-label="Review this event"
-             class="absolute left-1/2 bottom-12 -translate-x-1/2 w-[min(560px,92%)] rounded-lg bg-gray-900/95 text-white p-3.5 flex flex-col gap-2.5 z-10">
-          <div class="flex items-baseline justify-between gap-3">
-            <strong data-pr-card-title class="text-[15px]"></strong>
-            <span data-pr-card-where class="font-mono text-xs text-gray-300"></span>
-          </div>
-          <p class="text-[13px] text-gray-200 m-0">Paused on the event. Is this right?</p>
-          <div class="flex flex-wrap gap-2 items-center">
-            <button type="button" data-pr-vote="accepted" class="h-11 px-5 rounded bg-green-700 hover:bg-green-800 font-bold">Yes <span class="font-normal opacity-80">(Y)</span></button>
-            <button type="button" data-pr-vote="rejected" class="h-11 px-5 rounded bg-red-700 hover:bg-red-800 font-bold">No <span class="font-normal opacity-80">(N)</span></button>
-            <button type="button" data-pr-replay class="h-11 px-3.5 rounded border border-gray-500 hover:bg-gray-800">Replay 2 s (R)</button>
-            <button type="button" data-pr-skip class="h-11 px-3.5 rounded border border-gray-500 hover:bg-gray-800 ml-auto">Skip (→)</button>
-          </div>
-          <div data-pr-reasons hidden class="flex flex-wrap gap-1.5 items-center text-[13px]">
-            <span class="text-gray-300">What's wrong? (optional)</span>
-            <button type="button" data-pr-reason="not an event" class="h-8 px-2.5 rounded-full border border-gray-400 hover:bg-gray-800">Not an event</button>
-            <button type="button" data-pr-reason="wrong tube" class="h-8 px-2.5 rounded-full border border-gray-400 hover:bg-gray-800">Wrong tube</button>
-            <button type="button" data-pr-reason="wrong action" class="h-8 px-2.5 rounded-full border border-gray-400 hover:bg-gray-800">Wrong action</button>
-            <button type="button" data-pr-reason="can't tell" class="h-8 px-2.5 rounded-full border border-gray-400 hover:bg-gray-800">Can't tell</button>
-            <button type="button" data-pr-next class="h-8 px-2.5 rounded-full bg-gray-700 hover:bg-gray-600 ml-auto">Next →</button>
-          </div>
-        </div>
       </div>
       <div class="flex flex-wrap items-center justify-between gap-3">
         <p data-pr-status class="text-xs text-gray-600"></p>
@@ -131,6 +107,10 @@ trip review walks each suggested exit → entry pair. Logic: pipelines/period.py
       <button type="button" data-pr-trip-play="whole" class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">Whole trip</button>
       <span data-pr-trip-now class="text-[13px] text-gray-600"></span>
     </div>
+    <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label="Playback speed">
+      <span class="text-[13px] text-gray-600 mr-1">Speed</span>
+      <span data-pr-speeds class="flex flex-wrap gap-1.5"></span>
+    </div>
     <div class="flex flex-col gap-1">
       <div data-pr-trip-bar class="relative h-6 rounded bg-gray-200 cursor-pointer" title="The trip from 2 s before the exit to 2 s after the entry — click to watch that moment"></div>
       <div class="flex justify-between font-mono text-[11px] text-gray-600"><span data-pr-trip-bar-from></span><span data-pr-trip-bar-to></span></div>
@@ -158,6 +138,5 @@ trip review walks each suggested exit → entry pair. Logic: pipelines/period.py
 </div>
 {{ payload|json_script:"period-data" }}
 <script src="{% static 'js/track_overlay.js' %}"></script>
-<script src="{% static 'js/add_missed.js' %}"></script>
 <script src="{% static 'js/period_review.js' %}"></script>
 {% endblock %}

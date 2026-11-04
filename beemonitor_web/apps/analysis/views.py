@@ -583,7 +583,7 @@ def _add_batch(request):
     import uuid as _uuid
 
     from apps.pipelines import batches, engine, sharing
-    from apps.pipelines.aggregate import run_video_id
+    from apps.pipelines.aggregate import batch_video_ids
     from apps.pipelines.models import PipelineRun
 
     try:
@@ -600,7 +600,7 @@ def _add_batch(request):
             "pipeline": pipeline,
             # The pipeline was edited since: added clips still use the batch's version.
             "changed": _json.dumps(current, sort_keys=True) != _json.dumps(frozen, sort_keys=True),
-            "video_ids": {run_video_id(r) for r in runs}}
+            "video_ids": batch_video_ids(batch_id)}
 
 
 class ProcessingHubView(LoginRequiredMixin, View):

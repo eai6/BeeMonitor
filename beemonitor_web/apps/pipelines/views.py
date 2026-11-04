@@ -411,8 +411,8 @@ def run_on_videos(request):
     # Part of each clip (memory/53): "from m:ss for N minutes" (or to the end).
     already, returned = 0, set()
     if add_batch is not None:
-        from .aggregate import run_video_id
-        inside = {run_video_id(r) for r in PipelineRun.objects.filter(batch_id=add_batch)}
+        from .aggregate import batch_video_ids
+        inside = batch_video_ids(add_batch)
         already = sum(1 for v in videos if v.pk in inside)
         videos = [v for v in videos if v.pk not in inside]
         if not videos:
@@ -442,11 +442,21 @@ def run_on_videos(request):
         videos = kept
         if not videos:
             return _fail("Every selected clip ends before that start time.")
+    # A launch is one request, and thousands of clips outlast it: one stopped
+    # at 4,831 of its clips with no word of it (memory/77).
+    # The hub sends what's left in turn, adding to the batch this one started;
+    # clips already in it are skipped, so resending is always safe.
+    more = 0
+    if is_ajax and len(videos) > LAUNCH_CHUNK:
+        more = len(videos) - LAUNCH_CHUNK
+        videos = videos[:LAUNCH_CHUNK]
     # "Run the ones that fit": after a refusal, the hub resends with fit_only
     # and the batch is cut to the clips the credits cover, in list order.
     if request.POST.get("fit_only") == "1":
-        videos = videos[:quota.how_many_fit(
-            request.user, [quota.pipeline_work(work_steps, [v], window) for v in videos])]
+        fits = quota.how_many_fit(
+            request.user, [quota.pipeline_work(work_steps, [v], window) for v in videos])
+        more = more if fits == len(videos) else 0
+        videos = videos[:fits]
         if not videos:
             return _fail("None of these clips fit your credits.", status=402)
     try:
@@ -503,7 +513,7 @@ def run_on_videos(request):
     if is_ajax:
         return JsonResponse({"ok": True, "submitted": len(launched), "skipped": invalid,
                              "message": msg, "video_ids": launched,
-                             "batch_url": batch_url})
+                             "batch_url": batch_url, "batch_id": str(batch_id), "more": more})
     messages.success(request, msg)
     return redirect(batch_url)
 
@@ -698,6 +708,17 @@ def _failed_step_ids(run):
     return reset
 
 
+def _in_turns(request):
+    """Asked by the batch page's script, which sends the form again until
+    nothing is left (memory/77)."""
+    return request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+
+def _done_so_far(request):
+    done = request.POST.get("done", "")
+    return int(done) if done.isdigit() else 0
+
+
 @login_required
 @require_POST
 def batch_retry_failed(request, batch_id):
@@ -711,23 +732,39 @@ def batch_retry_failed(request, batch_id):
     from . import aggregate
 
     wanted = {int(v) for v in request.POST.getlist("video_ids") if str(v).isdigit()}
-    runs = PipelineRun.objects.filter(batch_id=batch_id, user=request.user,
-                                      status=PipelineRun.Status.FAILED)
-    retried = 0
-    for run in runs:
-        if wanted and aggregate.run_video_id(run) not in wanted:
-            continue
-        reset = _failed_step_ids(run)
-        if not reset:
-            continue
-        _reset_steps(run, reset)
-        engine.advance_run(run.pk)
-        retried += 1
-    if retried:
-        messages.success(request, f"Re-running {retried} failed clip{'s' if retried != 1 else ''} "
+    failed = PipelineRun.objects.filter(batch_id=batch_id, user=request.user,
+                                        status=PipelineRun.Status.FAILED)
+    # In turns (memory/77), each going on from the last clip of the one before:
+    # a clip that fails again at once must not come round for ever.
+    after = _uuids([request.POST.get("after", "")])
+    if after:
+        failed = failed.filter(pk__gt=after[0])
+    pks = list(failed.order_by("pk").values_list("pk", flat=True))
+    retried, left, last = 0, 0, None
+    for start in range(0, len(pks), 50):
+        for run in PipelineRun.objects.filter(pk__in=pks[start:start + 50]).order_by("pk"):
+            if wanted and aggregate.run_video_id(run) not in wanted:
+                continue
+            reset = _failed_step_ids(run)
+            if not reset:
+                continue
+            if retried >= TURN_CLIPS:
+                left += 1
+                continue
+            _reset_steps(run, reset)
+            engine.advance_run(run.pk)
+            retried += 1
+            last = run.pk
+    done = _done_so_far(request) + retried
+    if left and _in_turns(request):
+        return JsonResponse({"done": done, "left": left, "after": str(last)})
+    if done:
+        messages.success(request, f"Re-running {done} failed clip{'s' if done != 1 else ''} "
                                   "in this batch. The rest keep their results.")
     else:
         messages.info(request, "Nothing to re-run — no failed clips matched.")
+    if _in_turns(request):
+        return JsonResponse({"done": done, "left": 0})
     return redirect("pipelines:batch_detail", batch_id=batch_id)
 
 
@@ -749,7 +786,7 @@ def analyzer_options(run):
     for key, block in BLOCK_REGISTRY.items():
         if block.get("category") != "analyze":
             continue
-        if block.get("hidden") and key != current:
+        if block.get("swappable") is False or (block.get("hidden") and key != current):
             continue
         options.append({
             "key": key,
@@ -786,7 +823,7 @@ def run_reanalyze(request, pk, run_id):
     old = get_object_or_404(PipelineRun, pk=run_id, user=request.user)
     new_type = request.POST.get("block_type", "")
     block = BLOCK_REGISTRY.get(new_type)
-    if not block or block.get("category") != "analyze":
+    if not block or block.get("category") != "analyze" or block.get("swappable") is False:
         messages.error(request, "That is not an analyzer.")
         return redirect("pipelines:run_detail", pk=pk, run_id=run_id)
 
@@ -1120,7 +1157,7 @@ def _batch_runs(request, batch_id, only=None):
     qs = PipelineRun.objects.filter(batch_id=batch_id)
     if only is not None:
         qs = qs.filter(pk__in=list(only))
-    runs = list(qs.defer("context").select_related("pipeline").order_by("started_at", "id"))
+    runs = runsummary.share_steps(qs.defer("context").order_by("started_at", "id"))
     if not runs and only is None:
         raise Http404("No such batch.")
     done = runsummary.use_slim
@@ -1145,6 +1182,15 @@ def _batch_runs(request, batch_id, only=None):
 
 # How many clips may be probed for their measured properties per page render.
 PROBES_PER_RENDER = 8
+# Clips one hub request starts (a turn of a bigger launch, memory/77): well inside
+# the 120-second request limit.
+LAUNCH_CHUNK = 300
+# Clips a request closes or re-runs: a turn of Cancel or Re-run (memory/77).
+TURN_CLIPS = 300
+# Past this a batch's page shows its clips a page at a time and stops reloading
+# itself every 15 seconds (memory/77).
+BIG_BATCH = 500
+CLIPS_PER_PAGE = 100
 
 
 @login_required
@@ -1233,6 +1279,10 @@ def batch_detail(request, batch_id):
                       "hint": "One row per insect: photo, time taken, box, class, "
                               "species and its confidence."}]
 
+    for row in rows:
+        row["attrs"] = aggregate.row_attrs(row, kind == "photo")
+    paged = len(rows) > BIG_BATCH
+
     # Re-runs go through a pipeline that starts from the same kind of input,
     # this batch's own first — re-running it is the commonest choice.
     rerun_pipelines = [p for p in (Pipeline.objects
@@ -1278,6 +1328,12 @@ def batch_detail(request, batch_id):
                       if share else ""),
         "photos": kind == "photo",
         "rows": rows,
+        # A big batch: the first page of rows, and what the clip filter reads
+        # of all of them (memory/77).
+        "shown_rows": rows[:CLIPS_PER_PAGE] if paged else rows,
+        "clip_index": [r["attrs"] for r in rows] if paged else None,
+        "page_size": CLIPS_PER_PAGE,
+        "batch_path": request.path,
         # Events and trips review metrics (memory/62); None until something
         # in the batch has been reviewed.
         "review_summary": (review_mod.batch_review_summary(
@@ -1370,28 +1426,46 @@ def batch_cancel(request, batch_id):
     cancelled — which now also tells the GPU, so a queued clip is skipped and a
     running one stops within about 20 seconds — and its run is closed as
     cancelled, so the in-place re-run can resume it later.
+
+    Everything stops at once: one statement for the waiting jobs, then the few
+    on the GPU. Closing the runs goes in turns (memory/77), ``TURN_CLIPS`` a
+    request; if the page goes away partway, nothing more is spent, and the
+    reconciler closes the rest as it replays their cancelled jobs.
     """
+    from django.utils import timezone
+
     from apps.analysis.cancelling import ACTIVE, CANCELLED_MESSAGE, cancel_jobs
     from apps.analysis.models import Job
 
-    from . import sharing
+    from . import runsummary, sharing
 
     if not sharing.owns_batch(request.user, batch_id):
         raise Http404("No such batch.")
-    runs = list(PipelineRun.objects.filter(
+    open_runs = PipelineRun.objects.filter(
         batch_id=batch_id, user=request.user,
-        status__in=[PipelineRun.Status.PENDING, PipelineRun.Status.RUNNING]))
+        status__in=[PipelineRun.Status.PENDING, PipelineRun.Status.RUNNING])
+    Job.objects.filter(status=Job.Status.QUEUED, pk__in=open_runs.values("gpu_job_id")).update(
+        status=Job.Status.CANCELLED, completed_at=timezone.now(), error_message=CANCELLED_MESSAGE)
+    cancel_jobs(Job.objects.filter(status__in=ACTIVE, pk__in=open_runs.values("gpu_job_id")))
+
+    runs = runsummary.slim_runs(open_runs.order_by("started_at", "id")[:TURN_CLIPS])
     job_ids = [out.get("job_id") for run in runs for out in (run.context or {}).values()
                if isinstance(out, dict) and out.get("job_id")]
     cancel_jobs(Job.objects.filter(pk__in=job_ids, status__in=ACTIVE))
     for run in runs:
         engine.cancel_run(run.pk, CANCELLED_MESSAGE)
-    if runs:
-        messages.success(request, f"Cancelled {len(runs)} clip{'s' if len(runs) != 1 else ''}. "
+    left = open_runs.count()
+    done = _done_so_far(request) + len(runs)
+    if left and _in_turns(request):
+        return JsonResponse({"done": done, "left": left})
+    if done:
+        messages.success(request, f"Cancelled {done} clip{'s' if done != 1 else ''}. "
                                   "Running clips stop within about 20 seconds; waiting "
                                   "clips are skipped without using the GPU.")
     else:
         messages.info(request, "Nothing to cancel — every clip in this batch has finished.")
+    if _in_turns(request):
+        return JsonResponse({"done": done, "left": 0})
     return redirect("pipelines:batch_detail", batch_id=batch_id)
 
 
@@ -1479,6 +1553,36 @@ def batch_remove_clips(request, batch_id):
     if not PipelineRun.objects.filter(batch_id=batch_id).exists():
         return redirect("pipelines:run_list")
     return redirect("pipelines:batch_detail", batch_id=batch_id)
+
+
+@login_required
+@require_POST
+def batch_rows(request, batch_id):
+    """A page of a big batch's clips, as rows, in the order asked for
+    (memory/77). Anyone who can open the batch sees the clips they can see."""
+    from . import aggregate
+    from . import batches as batches_mod
+    from . import sharing
+    from .registry import pipeline_input_kind
+
+    order = {pk: i for i, pk in enumerate(_uuids(request.POST.getlist("run"))[:CLIPS_PER_PAGE])}
+    runs = _batch_runs(request, batch_id, only=order)
+    if not runs:
+        return HttpResponse("")
+    review_actions = batches_mod.review_actions(batch_id)
+    counted = None if len(review_actions) == len(batches_mod.ACTIONS) else review_actions
+    rows = aggregate.batch_rows(runs, counted)
+    photos = pipeline_input_kind(runs[0].steps) == "photo"
+    for row in rows:
+        if photos:
+            row["photo"] = aggregate.photo_counts(row["run"])
+        row["attrs"] = aggregate.row_attrs(row, photos)
+    rows.sort(key=lambda r: order[r["run"].pk])
+    return render(request, "pipelines/_clip_rows.html", {
+        "rows": rows, "photos": photos, "pipeline": runs[0].pipeline,
+        "can_share": sharing.owns_batch(request.user, batch_id),
+        "batch_path": reverse("pipelines:batch_detail", args=[batch_id]),
+    })
 
 
 @login_required

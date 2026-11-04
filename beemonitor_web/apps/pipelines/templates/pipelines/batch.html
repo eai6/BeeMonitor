@@ -69,13 +69,13 @@ their reason.
     {% if can_share %}{% include "pipelines/_people_panel.html" %}{% include "pipelines/_share_panel.html" %}{% endif %}
     {% if period_reviews and not photos %}
     {% if period_reviews|length == 1 %}
-    <a href="{{ period_reviews.0.url }}" class="inline-flex items-center h-10 px-4 rounded-md text-sm font-semibold border border-gray-300 bg-white text-gray-800 hover:bg-gray-50" title="Every analysed clip of this batch's unit or site on one time axis: review events and trips across clips">Review this period</a>
+    <a href="{{ period_reviews.0.url }}" class="inline-flex items-center h-10 px-4 rounded-md text-sm font-semibold border border-gray-300 bg-white text-gray-800 hover:bg-gray-50" title="Every analysed clip of this batch's unit or site on one time axis: review events and trips across clips">Review trips</a>
     {% else %}
     {% comment %}Clips from several units or sites: a period is one place, so one review per place.{% endcomment %}
     <details class="relative">
-      <summary class="list-none cursor-pointer inline-flex items-center h-10 px-4 rounded-md text-sm font-semibold border border-gray-300 bg-white text-gray-800 hover:bg-gray-50">Review this period ▾</summary>
+      <summary class="list-none cursor-pointer inline-flex items-center h-10 px-4 rounded-md text-sm font-semibold border border-gray-300 bg-white text-gray-800 hover:bg-gray-50">Review trips ▾</summary>
       <div class="absolute right-0 mt-1 z-20 w-64 bg-white border border-gray-200 rounded-md shadow-lg p-1 flex flex-col">
-        <span class="px-3 py-1.5 text-xs text-gray-600">This batch's clips come from {{ period_reviews|length }} places; a period is one.</span>
+        <span class="px-3 py-1.5 text-xs text-gray-600">This batch's clips come from {{ period_reviews|length }} places; pick one.</span>
         {% for p in period_reviews %}
         <a href="{{ p.url }}" class="px-3 py-2 rounded text-sm text-gray-800 hover:bg-gray-100">{{ p.label }} <span class="text-gray-500">· {{ p.clips }} clip{{ p.clips|pluralize }}</span></a>
         {% endfor %}
@@ -168,7 +168,7 @@ their reason.
           the results split across two batches.
         {% endcomment %}
         {% if can_rerun and g.video_ids and g.cause.retryable is not False %}
-        <form method="post" action="{% url 'pipelines:batch_retry_failed' batch_id %}" class="mt-2">
+        <form method="post" action="{% url 'pipelines:batch_retry_failed' batch_id %}" data-in-turns class="mt-2">
           {% csrf_token %}
           {% for vid in g.video_ids %}<input type="hidden" name="video_ids" value="{{ vid }}">{% endfor %}
           <button type="submit" class="text-xs font-medium px-3 py-1.5 rounded {% if cancelled == 'cancelled' %}bg-amber-700 hover:bg-amber-800{% else %}bg-red-700 hover:bg-red-800{% endif %} text-white">
@@ -288,7 +288,7 @@ their reason.
 
 {% if running %}
 <div class="bg-blue-50 border border-blue-200 rounded p-3 mb-4 text-sm text-blue-800">
-  {{ running }} run(s) still in progress — results below cover the completed videos so far. This page refreshes automatically.
+  {{ running }} run(s) still in progress — results below cover the completed videos so far. {% if not clip_index %}This page refreshes automatically.{% else %}Reload the page to see the latest.{% endif %}
 </div>
 {% endif %}
 
@@ -443,16 +443,13 @@ their reason.
     Tracks, events and interactions are what every pipeline produces; trips,
     visits and dwell are reads over them, and the reader can do their own.
   {% endcomment %}
-  {% comment %}
-    Reviewing a clip without leaving the batch. Scanning a day's footage means
-    watching one clip after another, and a round trip to a detail page and back
-    between each turns a minute of review into ten. The sources are lazy: the
-    stream view presigns the original and the tracks drawn over it are fetched
-    when a row is opened, so this page costs nothing until a row is clicked.
-  {% endcomment %}
   {% if rows|length > 1 %}{% include "pipelines/_clip_filter.html" with units=batch_devices sites=batch_sites reviewers=batch_reviewers reviewed_filter=True select=can_share rerun=can_rerun %}{% endif %}
 
-  {% include "pipelines/_clip_viewer.html" %}
+  {% comment %}
+    A clip's row opens its results page, where its events are reviewed. A photo
+    has no such review: it opens here, without leaving the batch.
+  {% endcomment %}
+  {% if photos %}{% include "pipelines/_clip_viewer.html" %}{% endif %}
 
   {% if photos %}
   <div class="grid grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_88px] gap-0 px-4 py-2 border-b border-gray-100 text-[11px] font-semibold text-gray-500">
@@ -470,98 +467,17 @@ their reason.
   </div>
   {% endif %}
 
-  {% for r in rows %}
-  <div class="clip-row grid {% if photos %}grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_88px]{% else %}grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_96px_112px_80px_88px]{% endif %} items-center px-4 py-2 border-b border-gray-100 hover:bg-gray-50"
-       data-f-status="{% if r.status == "completed" %}completed{% elif r.cancelled %}cancelled{% elif r.status == "failed" %}failed{% else %}running{% endif %}"
-       data-f-text="{{ r.video.title }} {{ r.site }} {{ r.video.device.name }} {{ r.when|date:"j M Y H:i" }} {% if r.status == "failed" %}{{ r.error|failure_title }}{% endif %}"
-       {% if r.video %}data-f-video="{{ r.video.pk }}"{% endif %}
-       data-f-run="{{ r.run.pk }}" data-f-site="{{ r.site }}" data-f-reviewed="{% if r.reviewed %}yes{% else %}no{% endif %}" data-f-by="{{ r.reviewers|join:' ' }}"
-       {% if r.video.device %}data-f-unit="{{ r.video.device.pk }}"{% endif %}
-       {% if r.when %}data-f-day="{{ r.when|date:"Y-m-d" }}"{% endif %}
-       {% if photos %}{% if r.photo %}data-f-insects="{{ r.photo.insects }}" data-f-species="{{ r.photo.named }}"{% endif %}
-       {% else %}{% if r.result %}data-f-tracks="{{ r.result.unique_tracks }}"{% endif %}
-       {% if r.primitives.events is not None %}data-f-events="{{ r.primitives.events }}"{% endif %}
-       {% if r.primitives.interactions is not None %}data-f-inter="{{ r.primitives.interactions }}"{% endif %}
-       {% if r.video.duration_seconds %}data-f-length="{{ r.video.duration_seconds|unlocalize }}"{% endif %}{% endif %}
-       {% if r.video %}data-title="{{ r.when|date:"j M, H:i"|default:"clip" }}{% if r.video.device %} · {{ r.video.device.name }}{% endif %}"
-       data-original="{% url 'videos:stream' r.video.pk %}"
-       {% if photos and r.photo %}data-photo="{% url 'pipelines:run_photo' pk=pipeline.pk run_id=r.run.pk %}"{% endif %}
-       {% if r.job and r.result.tracking_csv_path %}data-overlay="{% url 'analysis:track_overlay' r.job.pk %}?run={{ r.run.pk }}"{% endif %}
-       {% if r.job %}data-results="{% url 'analysis:results' r.job.pk %}?run={{ r.run.pk }}"{% endif %}
-       {% if can_share and not photos %}data-layout="{% url 'videos:layout' r.video.pk %}?back={{ request.path|urlencode }}"{% endif %}
-       data-rotate="{% if r.video.device.rotate_180 %}1{% endif %}"{% endif %}>
-    {% comment %}
-      Both the still and the time open this clip's own results — the videos,
-      the per-clip numbers and its four CSVs. That page is what "open the clip"
-      means; a run that never produced a job has no results to open, so it
-      falls back to the run's own page.
-    {% endcomment %}
-    <div class="flex items-center gap-1">
-      {% if can_share and not photos and r.status == "completed" or can_share and not photos and r.status == "failed" %}
-      <label class="hidden shrink-0 p-1 -m-1" data-pick-label><span class="sr-only">Select this clip</span><input type="checkbox" value="{{ r.run.pk }}" data-pick {% if r.status == "completed" %}data-pick-done{% endif %} class="w-4 h-4"></label>
-      {% endif %}
-      {% if r.video %}
-      <button type="button" class="cv-open block" title="{% if photos %}View this photo{% else %}Watch this clip{% endif %}">
-        <img src="{% url 'videos:thumbnail' r.video.pk %}" alt="" loading="lazy"
-             class="w-12 rounded object-cover" style="aspect-ratio:16/9" onerror="this.remove()">
-      </button>
-      {% endif %}
-    </div>
-    {% comment %}
-      The device under the time: a batch can span units, and "which unit was
-      this" is the first thing you need before trusting a row — or before
-      watching the clip in the viewer above.
-    {% endcomment %}
-    <div class="text-[13px] font-medium text-gray-900 min-w-0">
-      {% if r.video %}
-      <button type="button" class="cv-open hover:underline text-left block truncate w-full" title="{% if photos %}View this photo{% else %}Watch this clip{% endif %}">
-        {{ r.when|date:"H:i"|default:"—" }}
-      </button>
-      <span class="block text-[10px] text-gray-500 truncate" title="{% if r.video.device %}{{ r.video.device.name }} · {% endif %}{{ r.video.title }}">{% if r.video.device %}{{ r.video.device.name }} · {% endif %}{{ r.video.title }}</span>
-      {% else %}—{% endif %}
-    </div>
-    <div class="flex items-center gap-2 min-w-0">
-      {% if r.status == "completed" %}
-        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 shrink-0">completed</span>
-      {% elif r.cancelled %}
-        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-700 shrink-0">cancelled</span>
-      {% elif r.status == "failed" %}
-        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 shrink-0">failed</span>
-        <span class="text-xs text-gray-500 truncate" title="{{ r.error }}">{{ r.error|failure_title }}</span>
-      {% else %}
-        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 shrink-0">running</span>
-      {% endif %}
-      {% if r.job %}
-      <a href="{% url 'analysis:results' r.job.pk %}?run={{ r.run.pk }}"
-         class="text-[11px] text-amber-700 hover:underline shrink-0 ml-auto"
-         title="{% if photos %}The photo, its boxes and each insect's species{% else %}Per-track crops, the raw CSVs and the full breakdown for this clip{% endif %}">{% if photos %}full results →{% else %}crops &amp; CSVs →{% endif %}</a>
-      {% endif %}
-    </div>
-    {% if photos %}
-    <div class="text-right text-[13px] {% if r.photo %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.photo %}{{ r.photo.insects }}{% else %}—{% endif %}</div>
-    <div class="text-right text-[13px] {% if r.photo %}text-gray-900{% else %}text-gray-300{% endif %}"
-         title="Distinct species named at or above the pipeline's minimum confidence">{% if r.photo %}{{ r.photo.named }}{% else %}—{% endif %}</div>
-    {% else %}
-    <div class="text-right text-[13px] {% if r.result %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.result %}{{ r.result.unique_tracks }}{% else %}—{% endif %}</div>
-    {% comment %}
-      Events and interactions come from this run's analyzers, the same source as
-      the clip's own page and this batch's CSV downloads — not from the worker's
-      stored counters, which match an insect to a reference by centroid distance
-      under a flat 50 px and so disagree with every table we render. A dash
-      means this pipeline ran no analyzer for that primitive; zero would claim
-      it measured none.
-    {% endcomment %}
-    <div class="text-right text-[13px] {% if r.primitives.events is None %}text-gray-300{% else %}text-gray-900{% endif %}"
-         {% if r.primitives.events is None %}title="This pipeline ran no events analyzer"{% endif %}>{% if r.primitives.events is None %}—{% else %}{{ r.primitives.events }}{% endif %}</div>
-    <div class="text-right text-[13px] {% if r.primitives.interactions is None %}text-gray-300{% else %}text-gray-900{% endif %}"
-         {% if r.primitives.interactions is None %}title="This pipeline ran no interactions analyzer"{% endif %}>{% if r.primitives.interactions is None %}—{% else %}{{ r.primitives.interactions }}{% endif %}</div>
-    <div class="text-right text-[13px] {% if not r.review or not r.review.reviewed %}text-gray-400{% else %}text-gray-900{% endif %}"
-         {% if r.review %}title="{{ r.review.accepted }} accepted, {{ r.review.rejected }} rejected{% if r.review.disputed %}, {{ r.review.disputed }} disputed{% endif %}{% if r.review.added %}, {{ r.review.added }} added as missed{% endif %} — of {{ r.review.events }} events"{% endif %}>{% if r.review is None %}—{% elif not r.review.reviewed and not r.review.added %}{% if r.review.clip_reviewed %}<span class="text-green-700" title="Marked reviewed{% if not r.review.events %}: no events to count{% endif %}">✓ reviewed</span>{% elif r.review.other_votes %}<span title="Its reviewed events are actions the metrics leave out">{{ r.review.other_votes }} reviewed, left out</span>{% else %}not reviewed{% endif %}{% else %}{{ r.review.reviewed }} / {{ r.review.events }}{% if r.review.rejected %} · <span class="text-red-700">{{ r.review.rejected }} rej.</span>{% endif %}{% if r.review.added %} · <span class="text-amber-800">+{{ r.review.added }}</span>{% endif %}{% endif %}</div>
-    <div class="text-right text-xs text-gray-500">{% if r.video.duration_seconds %}{{ r.video.duration_seconds|duration_min }}{% else %}—{% endif %}</div>
-    {% endif %}
-    <div class="text-right text-xs text-gray-500">{% if r.gpu_seconds %}{{ r.gpu_seconds|duration_min }}{% else %}—{% endif %}</div>
+  <div id="clip-rows">{% include "pipelines/_clip_rows.html" with rows=shown_rows %}</div>
+  {% if clip_index %}
+  {{ clip_index|json_script:"clip-index" }}
+  <div id="clip-pager" data-page-size="{{ page_size }}" data-url="{% url 'pipelines:batch_rows' batch_id %}"
+       class="flex items-center justify-between gap-3 px-4 py-2.5 border-t border-gray-200 text-[13px] text-gray-700">
+    {% csrf_token %}
+    <button type="button" data-page-prev class="h-9 px-3 rounded-md border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50">Previous</button>
+    <span aria-live="polite">Page <strong data-page-now>1</strong> of <strong data-page-all>1</strong></span>
+    <button type="button" data-page-next class="h-9 px-3 rounded-md border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50">Next</button>
   </div>
-  {% endfor %}
+  {% endif %}
   <div id="cf-empty" hidden class="px-4 py-8 text-center text-[13px] text-gray-600">
     Nothing matches. <button type="button" data-filter-clear class="text-amber-700 hover:underline">Clear filters</button>
   </div>
@@ -574,7 +490,7 @@ their reason.
   The batch page reports what was measured; the CSVs carry it out.
 {% endcomment %}
 
-{% if running %}
+{% if running and not clip_index %}
 <script>
 // Poll the job checker (it detects finished SageMaker jobs and advances the
 // pipeline runs), then refresh — without this, runs only advance while the
@@ -590,8 +506,55 @@ setTimeout(pollThenReload, 15000);
 </script>
 {% endif %}
 
+<script>
+// Cancel and Re-run on a batch of thousands go in turns (memory/77): each
+// request does some and says how many are left, and the same form goes again.
+// Each turn only picks up what is still to do, so stopping partway loses nothing.
+document.addEventListener('submit', function (ev) {
+  var form = ev.target;
+  if (!form.matches('[data-in-turns]')) return;
+  ev.preventDefault();
+  var button = form.querySelector('[type=submit]'), done = 0, after = '';
+  button.disabled = true;
+  window.bmHoldRefresh = true;
+  (function turn() {
+    var body = new FormData(form);
+    body.set('done', done);
+    body.set('after', after);
+    fetch(form.action, {method: 'POST', credentials: 'same-origin', body: body,
+                        headers: {'X-Requested-With': 'XMLHttpRequest'}})
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+      .then(function (d) {
+        done = d.done;
+        after = d.after || '';
+        if (!d.left) { window.location.reload(); return; }
+        button.textContent = done + ' done, ' + d.left + ' to go…';
+        turn();
+      })
+      .catch(function () {
+        button.disabled = false;
+        button.textContent = done + ' done. Stopped: press to carry on';
+      });
+  })();
+});
+</script>
+
+{% if photos %}
 <script src="{% static 'js/track_overlay.js' %}"></script>
 <script src="{% static 'js/clip_viewer.js' %}"></script>
+{% else %}
+<script>
+// The whole row opens the clip, unless the click was on something of its own,
+// was selecting text, or the list is being picked from.
+document.getElementById('clip-rows').addEventListener('click', function (ev) {
+  if (ev.target.closest('a, button, input, label')) return;
+  var row = ev.target.closest('.clip-row[data-href]');
+  var bar = document.querySelector('[data-select-bar]');
+  if (!row || (bar && !bar.hidden) || String(window.getSelection())) return;
+  window.location.href = row.getAttribute('data-href');
+});
+</script>
+{% endif %}
 <script src="{% static 'js/clip_filter.js' %}"></script>
 {% if can_share and not photos %}
 <script>
@@ -602,18 +565,31 @@ setTimeout(pollThenReload, 15000);
     var toggle = document.querySelector('[data-select-toggle]');
     if (!bar || !toggle) return;
     var on = false;
-    function picks() { return Array.prototype.slice.call(document.querySelectorAll('[data-pick]')); }
-    function chosen() { return picks().filter(function (b) { return b.checked; }); }
+    // Picks live here, not in the boxes: a big batch shows a page of its clips
+    // at a time (memory/77), and a pick outlasts its row.
+    var picked = new Set();
+    function boxes() { return Array.prototype.slice.call(document.querySelectorAll('[data-pick]')); }
     function shown(b) { return b.closest('.clip-row').style.display !== 'none'; }
+    function clips() {
+      if (window.bmClipRows) return window.bmClipRows
+        .filter(function (r) { return r.getAttribute('data-f-pick'); })
+        .map(function (r) { return {value: r.getAttribute('data-f-run'), shown: r.style.display !== 'none',
+                                    done: r.getAttribute('data-f-pick') === 'done'}; });
+      return boxes().map(function (b) {
+        return {value: b.value, shown: shown(b), done: b.hasAttribute('data-pick-done')};
+      });
+    }
+    function chosen() { return clips().filter(function (c) { return picked.has(c.value); }); }
     function paint() {
       document.querySelectorAll('[data-pick-label]').forEach(function (l) { l.classList.toggle('hidden', !on); });
+      boxes().forEach(function (b) { b.checked = picked.has(b.value); });
       bar.hidden = !on;
       toggle.setAttribute('aria-pressed', on ? 'true' : 'false');
       toggle.textContent = on ? 'Done selecting' : 'Select';
-      var c = chosen(), done = c.filter(function (b) { return b.hasAttribute('data-pick-done'); });
+      var c = chosen(), done = c.filter(function (b) { return b.done; });
       bar.querySelector('[data-select-count]').textContent = c.length;
       bar.querySelector('[data-select-shown]').textContent =
-        picks().filter(shown).length;
+        clips().filter(function (b) { return b.shown; }).length;
       var upd = bar.querySelector('[data-select-update]');
       upd.disabled = !done.length || !upd.hasAttribute('data-can');
       bar.querySelector('[data-select-remove]').disabled = !c.length;
@@ -631,16 +607,22 @@ setTimeout(pollThenReload, 15000);
       document.body.appendChild(f); f.submit();
     }
     toggle.addEventListener('click', function () { on = !on; paint(); });
-    document.addEventListener('change', function (e) { if (e.target.matches('[data-pick]')) paint(); });
+    document.addEventListener('change', function (e) {
+      if (!e.target.matches('[data-pick]')) return;
+      if (e.target.checked) picked.add(e.target.value); else picked.delete(e.target.value);
+      paint();
+    });
     document.addEventListener('clipfilter:change', paint);
+    document.addEventListener('cliprows:change', paint);
     bar.querySelector('[data-select-all]').addEventListener('click', function () {
-      picks().forEach(function (b) { b.checked = shown(b); }); paint();
+      picked = new Set(clips().filter(function (c) { return c.shown; }).map(function (c) { return c.value; }));
+      paint();
     });
     bar.querySelector('[data-select-none]').addEventListener('click', function () {
-      picks().forEach(function (b) { b.checked = false; }); paint();
+      picked = new Set(); paint();
     });
     bar.querySelector('[data-select-update]').addEventListener('click', function () {
-      var c = chosen().filter(function (b) { return b.hasAttribute('data-pick-done'); });
+      var c = chosen().filter(function (b) { return b.done; });
       var form = document.getElementById('update-form');
       if (form && window.bmConfirmGpu && !window.bmConfirmGpu(form, c.length)) return;
       post(bar.getAttribute('data-update-url'), {which: 'picked'}, c);

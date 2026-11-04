@@ -358,7 +358,8 @@ def pipeline_changes(run, pipeline) -> dict:
         block = get_block(bt) or {}
         step = mine.get(src.get("id"))
         name = block.get("display_name") or bt
-        if bt.startswith("input."):
+        # The Trips node's rules are read live, across clips: nothing to update.
+        if bt.startswith("input.") or bt == "analyze.trips":
             continue
         if step is None or step.get("block_type") != bt:
             (gpu if block.get("backend") == "gpu" else web).append(

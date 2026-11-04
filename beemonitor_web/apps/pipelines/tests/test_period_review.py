@@ -144,7 +144,7 @@ class GatherTests(PeriodBase):
         batch = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
         reviews = batch.context["period_reviews"]
         self.assertEqual({r["label"] for r in reviews}, {"Hotel", "Second"})
-        self.assertContains(batch, "a period is one")
+        self.assertContains(batch, "places; pick one")
         hotel = next(r for r in reviews if r["label"] == "Hotel")
         page = self.client.get(hotel["url"])
         self.assertEqual([c["title"] for c in page.context["payload"]["clips"]], ["a"])
@@ -399,3 +399,43 @@ class ClipNavigationTests(PeriodBase):
         page = self.client.get(nav["next"]["url"])
         self.assertEqual(page.context["batch_nav"]["position"], 2)
         self.assertIsNone(page.context["batch_nav"]["next"])
+
+
+class TripsOnlyPageTests(PeriodBase):
+    """Events are reviewed on each clip's page; this page is for trips."""
+
+    def test_it_offers_trips_and_a_speed_control_and_no_event_review(self):
+        self.client.force_login(self.owner)
+        r = self.client.get(reverse("analysis:period_review"), {"batch": str(self.batch)})
+        self.assertContains(r, "data-pr-review-trips")
+        self.assertContains(r, "data-pr-speeds")
+        for gone in ("data-pr-review-events", "data-am-open", "data-pr-card", "add_missed.js"):
+            self.assertNotContains(r, gone)
+
+
+class TripPairingTests(TestCase):
+    def ev(self, action, t, day="2024-05-08", tube="1"):
+        return (0, {"action": action, "t": t, "reference": tube, "key": f"{action}{t}",
+                    "clock": f"{day}T10:00:00", "marker": ""})
+
+    def keys(self, trips):
+        return [(t["exit"][1]["key"], t["entry"][1]["key"]) for t in trips]
+
+    def test_an_entry_ends_one_trip_and_a_second_exit_breaks_the_pair(self):
+        trips = period.suggest_trips([self.ev("exit", 1), self.ev("exit", 2), self.ev("enter", 3),
+                                      self.ev("enter", 4)])
+        self.assertEqual(self.keys(trips), [("exit2", "enter3")])
+
+    def test_a_trip_stays_within_its_day(self):
+        self.assertEqual(period.suggest_trips([self.ev("exit", 1, "2024-05-08"),
+                                               self.ev("enter", 2, "2024-05-09")]), [])
+
+    def test_the_trips_node_sets_the_shortest_and_longest(self):
+        events = [self.ev("exit", 0), self.ev("enter", 5), self.ev("exit", 10), self.ev("enter", 100),
+                  self.ev("exit", 200), self.ev("enter", 1000)]
+        pipeline = Pipeline(steps=[{"block_type": "analyze.trips", "config": {
+            "min_trip_seconds": 10, "max_trip_minutes": 2}}])
+        rules = period.trip_rules(pipeline)
+        self.assertEqual(rules, {"min_seconds": 10.0, "max_seconds": 120.0})
+        self.assertEqual(self.keys(period.suggest_trips(events, rules)), [("exit10", "enter100")])
+        self.assertEqual(period.trip_rules(Pipeline(steps=[])), {"min_seconds": None, "max_seconds": None})

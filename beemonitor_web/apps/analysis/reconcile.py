@@ -65,7 +65,9 @@ def reconcile_all(limit: int = 500) -> dict:
     run_user_ids = list(
         PipelineRun.objects.filter(
             status__in=[PipelineRun.Status.PENDING, PipelineRun.Status.RUNNING],
-        ).values_list("user_id", flat=True).distinct()[:50]
+        # order_by(): the model's ordering would make DISTINCT keep every run,
+        # and one user with thousands of them filled all 50 places.
+        ).order_by().values_list("user_id", flat=True).distinct()[:50]
     )
     for uid in run_user_ids:
         engine.reconcile_user_runs(uid)

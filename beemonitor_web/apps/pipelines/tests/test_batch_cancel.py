@@ -74,12 +74,13 @@ class BatchCancelTests(TestCase):
         self.job.refresh_from_db()
         self.assertEqual(self.job.status, "cancelled")
 
-    def test_each_cancelled_job_tells_the_gpu(self):
+    def test_each_job_on_the_gpu_is_told_and_a_waiting_one_never_reaches_it(self):
         _, s3 = self._cancel()
 
-        keys = sorted(c.args[1] for c in s3.upload_stream.call_args_list)
-        self.assertEqual(keys, sorted([f"cancel/{self.job.modal_job_id}",
-                                       f"cancel/{self.queued_job.modal_job_id}"]))
+        keys = [c.args[1] for c in s3.upload_stream.call_args_list]
+        self.assertEqual(keys, [f"cancel/{self.job.modal_job_id}"])
+        self.queued_job.refresh_from_db()
+        self.assertEqual(self.queued_job.status, "cancelled")
         self.assertTrue(all(c.args[0] == "processed" for c in s3.upload_stream.call_args_list))
 
     def test_only_the_launcher_can_cancel(self):

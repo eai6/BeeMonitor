@@ -30,6 +30,16 @@ def run_video_id(run):
     return None
 
 
+def batch_video_ids(batch_id):
+    """The clips in a batch: its runs' steps and nothing else, a few at a time."""
+    from types import SimpleNamespace
+
+    from .models import PipelineRun
+
+    steps = PipelineRun.objects.filter(batch_id=batch_id).values_list("steps", flat=True)
+    return {run_video_id(SimpleNamespace(steps=s)) for s in steps.iterator(chunk_size=200)}
+
+
 def run_gpu_result(run):
     """The detect/track step's JobResult summary dict stored in run.context.
 
@@ -414,8 +424,11 @@ def batch_rows(runs, actions=None):
     videos = {v.pk: v for v in Video.everything.filter(pk__in=video_ids)
               .select_related("device", "site")}
     job_ids = [j for r in runs if (j := run_job_id(r)) is not None]
-    jobs = {j.pk: j for j in Job.objects.filter(pk__in=job_ids)}
-    results = {r.job_id: r for r in JobResult.objects.filter(job_id__in=job_ids)}
+    # Not the job's config or the result's summary: a row uses neither, and
+    # across a big batch they were most of the page's memory (memory/77).
+    jobs = {j.pk: j for j in Job.objects.filter(pk__in=job_ids).defer("config", "stage_seconds")}
+    results = {r.job_id: r for r in JobResult.objects.filter(job_id__in=job_ids)
+               .defer("summary_stats")}
 
     from apps.annotations.leftout import video_site
 
@@ -457,6 +470,53 @@ def batch_rows(runs, actions=None):
         })
     rows.sort(key=lambda r: (r["when"] is None, r["when"]), reverse=True)
     return rows
+
+
+def row_attrs(row, photos=False):
+    """What the clip filter reads about a row (static/js/clip_filter.js): its
+    ``data-f-*`` attributes on the page, and all a big batch sends of the clips
+    not on screen (memory/77). Leaves out what a clip doesn't have."""
+    from django.utils import dateformat, timezone
+
+    from .failures import classify
+
+    video, run, when = row["video"], row["run"], row["when"]
+    device = video.device if video else None
+    if when is not None and timezone.is_aware(when):
+        when = timezone.localtime(when)
+    failed = row["status"] == "failed"
+    status = ("completed" if row["status"] == "completed" else "cancelled" if row["cancelled"]
+              else "failed" if failed else "running")
+    attrs = {
+        "status": status,
+        "text": " ".join(filter(None, [
+            video.title if video else "", row["site"], device.name if device else "",
+            dateformat.format(when, "j M Y H:i") if when else "",
+            classify(row["error"])["title"] if failed else ""])),
+        "run": str(run.pk), "site": row["site"],
+        "reviewed": "yes" if row["reviewed"] else "no",
+        "by": " ".join(row["reviewers"]),
+    }
+    if video:
+        attrs["video"] = video.pk
+    if device:
+        attrs["unit"] = device.pk
+    if when:
+        attrs["day"] = dateformat.format(when, "Y-m-d")
+    if photos:
+        if row.get("photo"):
+            attrs.update(insects=row["photo"]["insects"], species=row["photo"]["named"])
+    else:
+        if row["result"]:
+            attrs["tracks"] = row["result"].unique_tracks
+        for key, name in (("events", "events"), ("interactions", "inter")):
+            if row["primitives"].get(key) is not None:
+                attrs[name] = row["primitives"][key]
+        if video and video.duration_seconds:
+            attrs["length"] = video.duration_seconds
+    if status in ("completed", "failed"):
+        attrs["pick"] = "done" if status == "completed" else "failed"
+    return attrs
 
 
 def batch_sites(rows):

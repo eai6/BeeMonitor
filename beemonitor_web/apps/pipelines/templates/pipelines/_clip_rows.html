@@ -1,0 +1,84 @@
+{% load batch_extras l10n %}{% comment %}
+  A batch's clips, one row each: the page's list, and a page of a big batch's
+  list fetched by static/js/clip_filter.js (memory/77). Takes rows, photos,
+  can_share, pipeline and batch_path.
+{% endcomment %}{% for r in rows %}
+  {% if r.job %}{% url 'analysis:results' r.job.pk as clip_url %}{% else %}{% url 'pipelines:run_detail' pk=pipeline.pk run_id=r.run.pk as clip_url %}{% endif %}
+  <div class="clip-row {% if not photos %}cursor-pointer {% endif %}grid {% if photos %}grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_88px]{% else %}grid-cols-[60px_132px_minmax(0,1fr)_80px_80px_96px_112px_80px_88px]{% endif %} items-center px-4 py-2 border-b border-gray-100 hover:bg-gray-50"
+       {% for k, v in r.attrs.items %}data-f-{{ k }}="{{ v }}" {% endfor %}
+       {% if not photos %}data-href="{{ clip_url }}{% if r.job %}?run={{ r.run.pk }}{% endif %}"
+       {% elif r.video %}data-title="{{ r.when|date:"j M, H:i"|default:"clip" }}{% if r.video.device %} · {{ r.video.device.name }}{% endif %}"
+       data-original="{% url 'videos:stream' r.video.pk %}"
+       {% if r.photo %}data-photo="{% url 'pipelines:run_photo' pk=pipeline.pk run_id=r.run.pk %}"{% endif %}
+       {% if r.job %}data-results="{% url 'analysis:results' r.job.pk %}?run={{ r.run.pk }}"{% endif %}
+       data-rotate="{% if r.video.device.rotate_180 %}1{% endif %}"{% endif %}>
+    {% comment %}
+      A clip's row opens its own results, where its events are reviewed: the
+      whole row (batch.html), and the still and the time as links, for a new
+      tab. A run that never produced a job falls back to the run's own page.
+      A photo opens in the viewer above the list.
+    {% endcomment %}
+    <div class="flex items-center gap-1">
+      {% if can_share and not photos and r.status == "completed" or can_share and not photos and r.status == "failed" %}
+      <label class="hidden shrink-0 p-1 -m-1" data-pick-label><span class="sr-only">Select this clip</span><input type="checkbox" value="{{ r.run.pk }}" data-pick {% if r.status == "completed" %}data-pick-done{% endif %} class="w-4 h-4"></label>
+      {% endif %}
+      {% if r.video %}
+      {% if photos %}<button type="button" class="cv-open block" title="View this photo">{% else %}<a href="{{ clip_url }}{% if r.job %}?run={{ r.run.pk }}{% endif %}" class="block" title="Open this clip">{% endif %}
+        <img src="{% url 'videos:thumbnail' r.video.pk %}" alt="" loading="lazy"
+             class="w-12 rounded object-cover" style="aspect-ratio:16/9" onerror="this.remove()">
+      {% if photos %}</button>{% else %}</a>{% endif %}
+      {% endif %}
+    </div>
+    {% comment %}
+      The device under the time: a batch can span units, and "which unit was
+      this" is the first thing you need before trusting a row.
+    {% endcomment %}
+    <div class="text-[13px] font-medium text-gray-900 min-w-0">
+      {% if r.video %}
+      {% if photos %}<button type="button" class="cv-open hover:underline text-left block truncate w-full" title="View this photo">{{ r.when|date:"H:i"|default:"—" }}</button>
+      {% else %}<a href="{{ clip_url }}{% if r.job %}?run={{ r.run.pk }}{% endif %}" class="hover:underline block truncate w-full" title="Open this clip">{{ r.when|date:"H:i"|default:"—" }}</a>{% endif %}
+      <span class="block text-[10px] text-gray-500 truncate" title="{% if r.video.device %}{{ r.video.device.name }} · {% endif %}{{ r.video.title }}">{% if r.video.device %}{{ r.video.device.name }} · {% endif %}{{ r.video.title }}</span>
+      {% else %}—{% endif %}
+    </div>
+    <div class="flex items-center gap-2 min-w-0">
+      {% if r.status == "completed" %}
+        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 shrink-0">completed</span>
+      {% elif r.cancelled %}
+        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-700 shrink-0">cancelled</span>
+      {% elif r.status == "failed" %}
+        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 shrink-0">failed</span>
+        <span class="text-xs text-gray-500 truncate" title="{{ r.error }}">{{ r.error|failure_title }}</span>
+      {% else %}
+        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 shrink-0">running</span>
+      {% endif %}
+      {% if r.job and photos %}
+      <a href="{% url 'analysis:results' r.job.pk %}?run={{ r.run.pk }}"
+         class="text-[11px] text-amber-700 hover:underline shrink-0 ml-auto"
+         title="The photo, its boxes and each insect's species">full results →</a>
+      {% endif %}
+    </div>
+    {% if photos %}
+    <div class="text-right text-[13px] {% if r.photo %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.photo %}{{ r.photo.insects }}{% else %}—{% endif %}</div>
+    <div class="text-right text-[13px] {% if r.photo %}text-gray-900{% else %}text-gray-300{% endif %}"
+         title="Distinct species named at or above the pipeline's minimum confidence">{% if r.photo %}{{ r.photo.named }}{% else %}—{% endif %}</div>
+    {% else %}
+    <div class="text-right text-[13px] {% if r.result %}text-gray-900{% else %}text-gray-300{% endif %}">{% if r.result %}{{ r.result.unique_tracks }}{% else %}—{% endif %}</div>
+    {% comment %}
+      Events and interactions come from this run's analyzers, the same source as
+      the clip's own page and this batch's CSV downloads — not from the worker's
+      stored counters, which match an insect to a reference by centroid distance
+      under a flat 50 px and so disagree with every table we render. A dash
+      means this pipeline ran no analyzer for that primitive; zero would claim
+      it measured none.
+    {% endcomment %}
+    <div class="text-right text-[13px] {% if r.primitives.events is None %}text-gray-300{% else %}text-gray-900{% endif %}"
+         {% if r.primitives.events is None %}title="This pipeline ran no events analyzer"{% endif %}>{% if r.primitives.events is None %}—{% else %}{{ r.primitives.events }}{% endif %}</div>
+    <div class="text-right text-[13px] {% if r.primitives.interactions is None %}text-gray-300{% else %}text-gray-900{% endif %}"
+         {% if r.primitives.interactions is None %}title="This pipeline ran no interactions analyzer"{% endif %}>{% if r.primitives.interactions is None %}—{% else %}{{ r.primitives.interactions }}{% endif %}</div>
+    <div class="text-right text-[13px] {% if not r.review or not r.review.reviewed %}text-gray-400{% else %}text-gray-900{% endif %}"
+         {% if r.review %}title="{{ r.review.accepted }} accepted, {{ r.review.rejected }} rejected{% if r.review.disputed %}, {{ r.review.disputed }} disputed{% endif %}{% if r.review.added %}, {{ r.review.added }} added as missed{% endif %} — of {{ r.review.events }} events"{% endif %}>{% if r.review is None %}—{% elif not r.review.reviewed and not r.review.added %}{% if r.review.clip_reviewed %}<span class="text-green-700" title="Marked reviewed{% if not r.review.events %}: no events to count{% endif %}">✓ reviewed</span>{% elif r.review.other_votes %}<span title="Its reviewed events are actions the metrics leave out">{{ r.review.other_votes }} reviewed, left out</span>{% else %}not reviewed{% endif %}{% else %}{{ r.review.reviewed }} / {{ r.review.events }}{% if r.review.rejected %} · <span class="text-red-700">{{ r.review.rejected }} rej.</span>{% endif %}{% if r.review.added %} · <span class="text-amber-800">+{{ r.review.added }}</span>{% endif %}{% endif %}</div>
+    <div class="text-right text-xs text-gray-500">{% if r.video.duration_seconds %}{{ r.video.duration_seconds|duration_min }}{% else %}—{% endif %}</div>
+    {% endif %}
+    <div class="text-right text-xs text-gray-500">{% if r.gpu_seconds %}{{ r.gpu_seconds|duration_min }}{% else %}—{% endif %}</div>
+  </div>
+{% endfor %}

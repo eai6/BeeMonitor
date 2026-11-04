@@ -41,13 +41,17 @@
   </div>
   <div class="flex flex-col gap-1.5">
     <h2 class="text-sm font-semibold text-gray-900">Trips review</h2>
-    {% if tr.reviewed %}
-    <p class="text-sm text-gray-700">{{ tr.reviewed }} suggested trip{{ tr.reviewed|pluralize }} reviewed</p>
-    <p class="text-sm"><span class="text-green-700">{{ tr.accepted }} same bee</span>{% if tr.relinked %} ({{ tr.relinked }} re-linked){% endif %} · <span class="text-red-700">{{ tr.rejected }} not a trip</span>{% if tr.didnt_come_back %} ({{ tr.didnt_come_back }} didn't come back{% if tr.cant_tell %}, {{ tr.cant_tell }} can't tell{% endif %}){% elif tr.cant_tell %} ({{ tr.cant_tell }} can't tell){% endif %}{% if tr.disputed %} · <span class="text-amber-800">{{ tr.disputed }} disputed</span>{% endif %}</p>
-    <div class="mt-1"><div class="text-xs text-gray-600">Suggestion right as it stood</div><div class="text-xl font-bold text-gray-900">{% if tr.suggestion_right is not None %}{{ tr.suggestion_right }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">accepted without re-linking</div></div>
+    {% with q=tr.quality %}
+    {% if q and q.true or q and q.found %}
+    <div class="flex gap-6">
+      <div><div class="text-xs text-gray-600">Precision</div><div class="text-xl font-bold text-gray-900">{% if q.precision is not None %}{{ q.precision }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">{{ q.matched }} of {{ q.found }} trips from the detected events are right</div></div>
+      <div><div class="text-xs text-gray-600">Recall</div><div class="text-xl font-bold text-gray-900">{% if q.recall is not None %}{{ q.recall }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">{{ q.matched }} of {{ q.true }} true trips found</div></div>
+    </div>
+    <p class="text-xs text-gray-600">True trips are rebuilt from the reviewed events (accepted and added, not rejected) of {{ q.clips }} fully reviewed clip{{ q.clips|pluralize }}.</p>
     {% else %}
-    <p class="text-sm text-gray-600">No trips reviewed yet. Use Review this period › Review trips.</p>
+    <p class="text-sm text-gray-600">No trips yet in fully reviewed clips. Trip precision and recall need clips with all their events reviewed.</p>
     {% endif %}
+    {% endwith %}
   </div>
 </section>
 {% endwith %}

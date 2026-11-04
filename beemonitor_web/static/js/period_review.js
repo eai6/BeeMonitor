@@ -200,10 +200,8 @@
 
   function paintProgress() {
     var el = $('[data-pr-progress]');
-    var reviewed = all.filter(function (x) { return (x.e.accepted || 0) + (x.e.rejected || 0) > 0; }).length;
     var tripsDone = P.trips.filter(function (t) { return t.mine || t.accepted || t.rejected; }).length;
-    el.textContent = all.length + ' events · ' + reviewed + ' reviewed · ' +
-      P.trips.length + ' suggested trips · ' + tripsDone + ' reviewed';
+    el.textContent = P.trips.length + ' suggested trips · ' + tripsDone + ' reviewed';
   }
 
   // ── The player ───────────────────────────────────────────────────────────
@@ -232,14 +230,13 @@
   // At the end of a clip, the next one.
   video.addEventListener('ended', function () {
     if (tp.on) { tp.k++; tpStart(); return; }
-    if (rv.on || trip.on || cur + 1 >= P.clips.length) return;
+    if (trip.on || cur + 1 >= P.clips.length) return;
     loadClip(cur + 1, 0, true);
   });
   if (ov) ov.onFrame(function (info) {
     var c = P.clips[cur];
     var now = $('[data-pr-now]');
     if (now && c) now.style.left = pct(c.offset + info.frame / c.fps) + '%';
-    if (rv.on && !rv.waiting && rv.target && rv.target.c === cur && info.frame >= rv.target.e.frame) rvArrive();
     if (trip.on) tripHead();
     if (tp.on) {
       var sg = tp.segs[tp.k];
@@ -247,88 +244,58 @@
     }
   });
 
-  // ── Event review across clips ────────────────────────────────────────────
-  var rv = {on: false, list: [], i: 0, target: null, waiting: false, ourSeek: false};
-  var card = $('[data-pr-card]');
-  // An event was clicked (a mark, the side list). In review mode the review
-  // goes to it, card and all; otherwise it is a plain jump.
-  function goToEvent(x) {
-    if (!rv.on) { loadClip(x.c, x.e.frame, false); return; }
-    var idx = rv.list.indexOf(x);
-    if (idx < 0) { loadClip(x.c, x.e.frame, false); return; }
-    rv.i = idx; rv.target = x; rv.waiting = false; rv.ourSeek = true;
-    card.hidden = true; $('[data-pr-reasons]').hidden = true;
-    loadClip(x.c, x.e.frame, false).then(rvArrive);
-  }
-  // The viewer scrubbed the video themselves: review carries on to the next
-  // event after that point instead of showing a card for one it left.
-  video.addEventListener('seeked', function () { rv.ourSeek = false; });
-  video.addEventListener('seeking', function () {
-    if (!rv.on || rv.ourSeek) return;
-    var frame = Math.round(video.currentTime * (P.clips[cur] ? P.clips[cur].fps : 25));
-    var idx = -1;
-    for (var k = 0; k < rv.list.length; k++) {
-      var y = rv.list[k];
-      if (y.c > cur || (y.c === cur && y.e.frame >= frame)) { idx = k; break; }
-    }
-    card.hidden = true; $('[data-pr-reasons]').hidden = true;
-    rv.waiting = false;
-    if (idx < 0) { rv.target = null; status.textContent = 'No events after this point. Jump back, or Exit review.'; return; }
-    rv.i = idx; rv.target = rv.list[idx];
-    if (rv.target.c !== cur) { rvGo(idx); return; }
-    var p = video.play(); if (p && p.catch) p.catch(function () {});
-  });
-  function vote(x, verdict, reason) {
-    var e = x.e, clip = P.clips[x.c];
-    return post(clip.review_url, {event_key: e.key, verdict: verdict, reason: reason || ''})
-      .then(function (d) {
-        // One call per event (memory/74): this one replaces anyone else's.
-        e.mine = d.verdict;
-        e.called_by = d.verdict ? 'you' : null;
-        e.accepted = d.verdict === 'accepted' ? 1 : 0;
-        e.rejected = d.verdict === 'rejected' ? 1 : 0;
-        renderLanes();
-      }).catch(function (err) { status.textContent = String(err.message || err); });
-  }
-  function rvGo(i) {
-    if (i >= rv.list.length) { stopReview('Review finished: every event in this period has been shown.'); return; }
-    rv.i = i; rv.waiting = false; rv.target = rv.list[i];
-    card.hidden = true; $('[data-pr-reasons]').hidden = true;
-    var x = rv.target, c = P.clips[x.c];
-    rv.ourSeek = true;
-    loadClip(x.c, Math.max(0, x.e.frame - Math.round(2 * c.fps)), true);
-  }
-  function rvArrive() {
-    rv.waiting = true;          // first: pausing redraws, which calls back here
-    video.pause();
-    rv.ourSeek = true;
-    ov.seekFrame(rv.target.e.frame);
-    var e = rv.target.e;
-    $('[data-pr-card-title]').textContent = e.action.toUpperCase() + ' tube ' + tube(e.reference) +
-      ' · track ' + e.track_id + (e.at_edge ? ' · at edge' : '');
-    $('[data-pr-card-where]').textContent = clock(e.clock).slice(11) + ' · event ' + (rv.i + 1) + ' of ' + rv.list.length;
-    card.hidden = false;
-  }
-  function startEvents() {
-    rv.list = all.filter(function (x) { return P.clips[x.c].can_review; });
-    if (!rv.list.length) return;
-    rv.on = true; trip.on = false;
-    $('[data-pr-trip]') && ($('[data-pr-trip]').hidden = true);
-    toggleButtons(true);
-    rvGo(0);
-  }
+  // A mark or the side list: go to that moment. Events are reviewed on each
+  // clip's own page; here they only place the trips.
+  function goToEvent(x) { loadClip(x.c, x.e.frame, false); }
   function stopReview(msg) {
-    rv.on = false; rv.waiting = false; trip.on = false; tp.on = false;
+    trip.on = false; tp.on = false;
     if (ov) ov.focus(null);
-    if (card) card.hidden = true;
     if ($('[data-pr-trip]')) $('[data-pr-trip]').hidden = true;
     video.pause();
+    applySpeed(1);
     toggleButtons(false);
     if (msg) status.textContent = msg;
   }
   function toggleButtons(reviewing) {
-    ['[data-pr-review-events]', '[data-pr-review-trips]'].forEach(function (s) { if ($(s)) $(s).hidden = reviewing; });
+    if ($('[data-pr-review-trips]')) $('[data-pr-review-trips]').hidden = reviewing;
     if ($('[data-pr-exit]')) $('[data-pr-exit]').hidden = !reviewing;
+  }
+
+  // Playback speed in trip review. Set as the default too: a new clip's video
+  // starts at the default, and a trip runs across clips.
+  var SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16];
+  var speed = 1;
+  try { speed = Number(localStorage.getItem('pr-speed')) || 1; } catch (e) {}
+  if (SPEEDS.indexOf(speed) < 0) speed = 1;
+  function applySpeed(rate) {
+    try { video.defaultPlaybackRate = rate; video.playbackRate = rate; } catch (e) {}
+  }
+  function paintSpeed() {
+    $$('[data-pr-speed]').forEach(function (b) {
+      var on = Number(b.getAttribute('data-pr-speed')) === speed;
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      b.classList.toggle('bg-amber-700', on);
+      b.classList.toggle('text-white', on);
+      b.classList.toggle('bg-white', !on);
+    });
+  }
+  var speedBox = $('[data-pr-speeds]');
+  if (speedBox) {
+    SPEEDS.forEach(function (rate) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'h-10 min-w-[44px] px-2 rounded border border-gray-300 bg-white hover:bg-gray-50 text-[13px]';
+      b.setAttribute('data-pr-speed', rate);
+      b.textContent = rate + '×';
+      b.addEventListener('click', function () {
+        speed = rate;
+        try { localStorage.setItem('pr-speed', rate); } catch (e) {}
+        applySpeed(rate);
+        paintSpeed();
+      });
+      speedBox.appendChild(b);
+    });
+    paintSpeed();
   }
 
   // ── Trip review ──────────────────────────────────────────────────────────
@@ -397,7 +364,6 @@
       return;
     }
     if (now) now.textContent = 'Playing ' + TP_LABEL[tp.mode] + ' · clip ' + clock(P.clips[sg.c].start).slice(11, 16);
-    rv.ourSeek = true;
     loadClip(sg.c, sg.from, true).then(function () {
       if (ov) ov.focus(sg.focus != null && sg.focus !== '' ? Number(sg.focus) : null);
     });
@@ -436,7 +402,6 @@
         var c = P.clips[ci];
         if (t >= c.offset && t < c.offset + (c.duration || 0)) {
           tp.on = false;
-          rv.ourSeek = true;
           loadClip(ci, Math.round((t - c.offset) * c.fps), false);
           $('[data-pr-trip-now]').textContent = 'At ' + clock(c.start).slice(11, 16) + ' clip — press play to watch on.';
           return;
@@ -516,33 +481,16 @@
   function startTrips() {
     trip.list = P.trips.filter(function (t) { return P.clips[t.exit.clip].can_review; });
     if (!trip.list.length) { status.textContent = 'No suggested trips in this period.'; return; }
-    trip.on = true; rv.on = false;
-    if (card) card.hidden = true;
+    trip.on = true;
+    applySpeed(speed);
     toggleButtons(true);
     tripGo(0);
   }
 
   // ── Wiring ───────────────────────────────────────────────────────────────
-  if ($('[data-pr-review-events]')) {
-    $('[data-pr-review-events]').addEventListener('click', startEvents);
+  if ($('[data-pr-review-trips]')) {
     $('[data-pr-review-trips]').addEventListener('click', startTrips);
     $('[data-pr-exit]').addEventListener('click', function () { stopReview(''); });
-    $$('[data-pr-vote]').forEach(function (b) {
-      b.addEventListener('click', function () {
-        var verdict = b.getAttribute('data-pr-vote');
-        vote(rv.target, verdict, '').then(function () {
-          if (verdict === 'accepted') rvGo(rv.i + 1); else $('[data-pr-reasons]').hidden = false;
-        });
-      });
-    });
-    $$('[data-pr-reason]').forEach(function (b) {
-      b.addEventListener('click', function () {
-        vote(rv.target, 'rejected', b.getAttribute('data-pr-reason')).then(function () { rvGo(rv.i + 1); });
-      });
-    });
-    $('[data-pr-next]').addEventListener('click', function () { rvGo(rv.i + 1); });
-    $('[data-pr-replay]').addEventListener('click', function () { rvGo(rv.i); });
-    $('[data-pr-skip]').addEventListener('click', function () { rvGo(rv.i + 1); });
     $('[data-pr-trip-yes]').addEventListener('click', function () {
       var t = trip.list[trip.i];
       tripVote(t, t.entry, 'accepted', '', false).then(function () { tripGo(trip.i + 1); });
@@ -553,55 +501,16 @@
       b.addEventListener('click', function () { tripPlay(b.getAttribute('data-pr-trip-play')); });
     });
     document.addEventListener('keydown', function (ev) {
-      if (!(rv.on || trip.on) || /^(INPUT|TEXTAREA|SELECT)$/.test((ev.target || {}).tagName || '')) return;
+      if (!trip.on || /^(INPUT|TEXTAREA|SELECT)$/.test((ev.target || {}).tagName || '')) return;
       var k = ev.key.toLowerCase(), hit = true;
-      if (trip.on) {
-        if (k === 'p') tripPlay('moments');
-        else if (k === 'y') $('[data-pr-trip-yes]').click();
-        else if (k === 'n') $('[data-pr-trip-no]').click();
-        else if (ev.key === 'ArrowRight') tripGo(trip.i + 1);
-        else if (ev.key === 'Escape') stopReview('');
-        else hit = false;
-      } else {
-        if (k === 'y' && rv.waiting) $('[data-pr-vote="accepted"]').click();
-        else if (k === 'n' && rv.waiting) $('[data-pr-vote="rejected"]').click();
-        else if (k === 'r') rvGo(rv.i);
-        else if (ev.key === 'ArrowRight') rvGo(rv.i + 1);
-        else if (ev.key === 'Escape') stopReview('');
-        else hit = false;
-      }
+      if (k === 'p') tripPlay('moments');
+      else if (k === 'y') $('[data-pr-trip-yes]').click();
+      else if (k === 'n') $('[data-pr-trip-no]').click();
+      else if (ev.key === 'ArrowRight') tripGo(trip.i + 1);
+      else if (ev.key === 'Escape') stopReview('');
+      else hit = false;
       if (hit) { ev.preventDefault(); ev.stopPropagation(); }
     }, true);
-  }
-
-  // Add a missed event to the clip in the player (memory/62 §3b).
-  var adder = (window.AddMissed && ov && $('[data-am-open]')) ? AddMissed({
-    stage: $('[data-pr-stage]'), video: video, ov: ov, rotated: false,
-    context: function () { return {url: P.clips[cur].add_url, csrf: csrf()}; },
-    onSaved: function (d, saved) {
-      var c = P.clips[cur];
-      c.added = c.added || [];
-      c.added.push({id: d.id, frame: saved.frame, end_frame: saved.end_frame, action: saved.action,
-                    reference: d.reference, track_id: saved.track_id, by: 'you',
-                    t: c.offset + saved.frame / (c.fps || 25)});
-      status.textContent = 'Added to ' + c.title + '. It shows dashed on the lanes and in the Events CSV as review = added.';
-      renderLanes();
-    }
-  }) : null;
-  if (adder) {
-    var canAdd = function () { return cur >= 0 && P.clips[cur] && P.clips[cur].can_review; };
-    $('[data-am-open]').addEventListener('click', function () {
-      if (!canAdd()) { status.textContent = 'You can\'t review this clip.'; return; }
-      if (card) card.hidden = true;
-      adder.open();
-    });
-    document.addEventListener('keydown', function (ev) {
-      if (ev.key.toLowerCase() !== 'a' || adder.isOpen() || ev.metaKey || ev.ctrlKey || !canAdd() ||
-          /^(INPUT|TEXTAREA|SELECT)$/.test((ev.target || {}).tagName || '')) return;
-      ev.preventDefault();
-      if (card) card.hidden = true;
-      adder.open();
-    });
   }
 
   renderTicks();

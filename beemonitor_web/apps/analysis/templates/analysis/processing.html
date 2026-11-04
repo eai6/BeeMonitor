@@ -334,14 +334,20 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
   }
 
   var form = document.getElementById('run-form');
-  function submitRun(fitOnly) {
+  var launching = false;
+  // A big launch goes in turns (memory/77): each response says how many are
+  // left and which batch they join, and the same form goes again.
+  function submitRun(fitOnly, addTo, sent) {
+    sent = sent || 0;
     var token = form.querySelector('[name=csrfmiddlewaretoken]').value;
     var body = new FormData(form);
     // Picks made under other filters ride along with the ones shown here.
     elsewhere().forEach(function (id) { body.append('video_ids', id); });
     if (fitOnly) body.set('fit_only', '1');
+    if (addTo) body.set('add_to', addTo);
     btn.disabled = true;
-    if (credLine) credLine.textContent = 'Submitting…';
+    launching = true;
+    if (credLine) credLine.textContent = sent ? sent + ' started, the rest going in…' : 'Submitting…';
     fetch(form.action, {
       method: 'POST',
       headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': token},
@@ -350,13 +356,21 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
       .then(function (res) {
         var d = res.d || {};
         if (res.ok && d.ok) {
+          sent += d.submitted || 0;
+          if (d.more) {
+            (d.video_ids || []).forEach(function (id) { picked.delete(String(id)); });
+            savePicks();
+            submitRun(fitOnly, d.batch_id, sent);
+            return;
+          }
+          launching = false;
           {% if add_batch %}
           // Added to the batch: back to it, where they show as running.
           picked.clear(); savePicks();
           window.location.href = d.batch_url;
           return;
           {% endif %}
-          toast(d.message || 'Submitted.', true);
+          toast(sent > (d.submitted || 0) ? 'Started ' + sent + ' clips.' : (d.message || 'Submitted.'), true);
           (d.video_ids || []).forEach(function (id) { picked.delete(String(id)); });
           savePicks();
           (d.video_ids || []).forEach(function (id) {
@@ -366,20 +380,30 @@ Media is fetched per clip LOOKED AT, not per clip listed: thumbnails are lazy
             active.add(String(id));
           });
           if (all) all.checked = false;
+        } else if (sent) {
+          launching = false;
+          toast(sent + ' clips started, then: ' + ((d && d.error) || 'the rest could not start.'), false);
         } else if (!fitOnly && d.fits > 0 && d.fits < d.total &&
                    confirm(d.error + '\n\nYour credits cover ' + d.fits + ' of these ' + d.total +
                            ' clips. Run those ' + d.fits + ' now?')) {
           submitRun(true);
           return;
         } else {
+          launching = false;
           toast((d && d.error) || 'Could not start analysis.', false);
         }
-      }).catch(function () { toast('Could not start analysis.', false); })
-      .then(function () { refresh(); });
+        refresh();
+      }).catch(function () {
+        launching = false;
+        toast(sent ? sent + ' clips started, then the connection dropped. Use Add clips on the ' +
+                     'batch with the same filter: clips already in it are skipped.'
+                   : 'Could not start analysis.', false);
+        refresh();
+      });
   }
   if (form) form.addEventListener('submit', function (e) {
     e.preventDefault();
-    if (!btn || btn.disabled) return;
+    if (!btn || btn.disabled || launching) return;
     submitRun(false);
   });
 

@@ -123,6 +123,24 @@ def use_slim(runs):
     return runs
 
 
+def share_steps(qs):
+    """``qs`` (PipelineRuns) as a list whose runs share what they have in
+    common. A batch's runs hold the same steps but for the clip they are bound
+    to, each a separate copy, as is the pipeline a join brings with every row:
+    tens of KB per clip, for a read-only page, and most of what a batch of
+    thousands costs (memory/77)."""
+    seen, pipelines, runs = {}, {}, []
+    for run in qs.iterator(chunk_size=200):
+        run.steps = [seen.setdefault(json.dumps(s, sort_keys=True, default=str), s)
+                     for s in run.steps or []]
+        if run.pipeline_id in pipelines:
+            run.pipeline = pipelines[run.pipeline_id]
+        else:
+            pipelines[run.pipeline_id] = run.pipeline
+        runs.append(run)
+    return runs
+
+
 def slim_runs(qs):
     """``qs`` (PipelineRuns) as a list of runs reading their slim copy."""
     return use_slim(list(qs.defer("context")))

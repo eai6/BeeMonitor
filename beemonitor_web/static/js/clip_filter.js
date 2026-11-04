@@ -7,17 +7,38 @@
 // carry data-filter (q, unit, site, day, reviewed, by, sort), data-filter-min (a row attribute to
 // be at least) or data-filter-status. The filter lives in the address bar, so
 // a filtered view survives the running batch's auto-refresh and can be sent on.
+//
+// A big batch (memory/77) can't put every row in the page. It sends #clip-index,
+// each clip's data-f-* values, and rows here are stand-ins for those: filtering,
+// sorting and everything that follows the filter work on them as on real rows,
+// and only the page of clips on screen is fetched as rows.
 (function () {
   var bar = document.getElementById('clip-filter');
   if (!bar) return;
-  var rows = Array.prototype.slice.call(document.querySelectorAll('.clip-row'));
+  var indexEl = document.getElementById('clip-index');
+  var pager = document.getElementById('clip-pager');
+  function standIn(attrs) {
+    return {style: {},
+            getAttribute: function (n) {
+              var k = n.replace('data-f-', '');
+              return k in attrs ? String(attrs[k]) : null;
+            },
+            setAttribute: function (n, v) { attrs[n.replace('data-f-', '')] = v; }};
+  }
+  var rows = indexEl ? JSON.parse(indexEl.textContent).map(standIn)
+                     : Array.prototype.slice.call(document.querySelectorAll('.clip-row'));
   if (!rows.length) return;
-  var parent = rows[0].parentNode;
+  if (indexEl) window.bmClipRows = rows;
+  var parent = indexEl ? null : rows[0].parentNode;
   // The server's order (newest first), so "Newest" puts it back exactly.
   rows.forEach(function (r, i) { r.setAttribute('data-f-order', i); });
   // Sorted rows go back in before this, wherever they now are.
-  var end = document.createComment('clip rows end');
-  parent.insertBefore(end, rows[rows.length - 1].nextSibling);
+  var end = null;
+  if (parent) {
+    end = document.createComment('clip rows end');
+    parent.insertBefore(end, rows[rows.length - 1].nextSibling);
+  }
+  var ordered = rows, page = 1;
 
   var controls = Array.prototype.slice.call(bar.querySelectorAll('[data-filter],[data-filter-min]'));
   var chips = Array.prototype.slice.call(document.querySelectorAll('[data-filter-status]'));
@@ -38,6 +59,7 @@
       if (el.type === 'checkbox') el.checked = v === '1'; else el.value = v;
     });
     status = params.get('status') || 'all';
+    page = Math.max(1, parseInt(params.get('page'), 10) || 1);
   }
 
   function writeUrl() {
@@ -48,6 +70,7 @@
       if (v) params.set(key(el), v); else params.delete(key(el));
     });
     if (status !== 'all') params.set('status', status); else params.delete('status');
+    if (pager && page > 1) params.set('page', page); else params.delete('page');
     var qs = params.toString();
     history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '') + window.location.hash);
   }
@@ -97,17 +120,58 @@
       if (y === null) return -1;
       return y - x;
     });
-    sorted.forEach(function (r) { parent.insertBefore(r, end); });
+    ordered = sorted;
+    if (parent) sorted.forEach(function (r) { parent.insertBefore(r, end); });
+  }
+
+  // The page of clips on screen, fetched as rows. A later page wins: an answer
+  // that comes back after the filter moved on is dropped.
+  var showing = null, asked = 0;
+  function showPage(visible) {
+    var size = Number(pager.getAttribute('data-page-size'));
+    var pages = Math.max(1, Math.ceil(visible.length / size));
+    page = Math.min(page, pages);
+    pager.querySelector('[data-page-now]').textContent = page;
+    pager.querySelector('[data-page-all]').textContent = pages;
+    pager.querySelector('[data-page-prev]').disabled = page <= 1;
+    pager.querySelector('[data-page-next]').disabled = page >= pages;
+    var box = document.getElementById('clip-rows');
+    var ids = visible.slice((page - 1) * size, page * size)
+      .map(function (r) { return r.getAttribute('data-f-run'); });
+    if (showing === null) {
+      showing = Array.prototype.map.call(box.querySelectorAll('.clip-row'), function (r) {
+        return r.getAttribute('data-f-run');
+      }).join();
+    }
+    if (ids.join() === showing) return;
+    showing = ids.join();
+    var mine = ++asked;
+    if (!ids.length) { box.innerHTML = ''; return; }
+    var body = new URLSearchParams();
+    ids.forEach(function (id) { body.append('run', id); });
+    box.setAttribute('aria-busy', 'true');
+    fetch(pager.getAttribute('data-url'), {method: 'POST', credentials: 'same-origin', body: body,
+      headers: {'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value}})
+      .then(function (r) { return r.ok ? r.text() : Promise.reject(r.status); })
+      .then(function (html) {
+        if (mine !== asked) return;
+        box.innerHTML = html;
+        box.removeAttribute('aria-busy');
+        document.dispatchEvent(new CustomEvent('cliprows:change'));
+      })
+      .catch(function () {
+        if (mine !== asked) return;
+        showing = '';
+        box.removeAttribute('aria-busy');
+        box.innerHTML = '<p class="px-4 py-8 text-center text-[13px] text-red-700">Could not load these clips. Reload the page to try again.</p>';
+      });
   }
 
   // The "Run these clips through a pipeline" form follows the filter, so
   // "re-run the clips with no tracks" is: filter, then Run.
   function updateRerun(visible, filtered) {
-    var ids = [];
-    visible.forEach(function (r) {
-      var v = r.getAttribute('data-f-video');
-      if (v && ids.indexOf(v) < 0) ids.push(v);
-    });
+    var ids = Array.from(new Set(visible.map(function (r) { return r.getAttribute('data-f-video'); })
+      .filter(Boolean)));
     document.querySelectorAll('[data-rerun-form]').forEach(function (form) {
       var box = form.querySelector('[data-rerun-ids]');
       if (!form._allIds) form._allIds = box.innerHTML;
@@ -152,11 +216,12 @@
     var sortEl = bar.querySelector('[data-filter="sort"]');
     sortRows(sortEl ? sortEl.value : 'new');
     var visible = [];
-    rows.forEach(function (r) {
+    ordered.forEach(function (r) {
       var ok = matches(r);
       r.style.display = ok ? '' : 'none';
       if (ok) visible.push(r);
     });
+    if (pager) showPage(visible);
     var filtered = visible.length !== rows.length;
     if (shownEl) shownEl.textContent = visible.length;
     filteredOnly.forEach(function (el) { el.hidden = !filtered; });
@@ -188,16 +253,23 @@
       else el.value = '';
     });
     status = 'all';
-    apply();
+    fresh();
   }
 
+  // A changed filter starts from its first page.
+  function fresh() { page = 1; apply(); }
+
   controls.forEach(function (el) {
-    el.addEventListener(el.tagName === 'SELECT' || el.type === 'checkbox' ? 'change' : 'input', apply);
+    el.addEventListener(el.tagName === 'SELECT' || el.type === 'checkbox' ? 'change' : 'input', fresh);
   });
   chips.forEach(function (c) {
-    c.addEventListener('click', function () { status = c.getAttribute('data-filter-status'); apply(); });
+    c.addEventListener('click', function () { status = c.getAttribute('data-filter-status'); fresh(); });
   });
   clearEls.forEach(function (el) { el.addEventListener('click', clear); });
+  if (pager) {
+    pager.querySelector('[data-page-prev]').addEventListener('click', function () { page -= 1; apply(); });
+    pager.querySelector('[data-page-next]').addEventListener('click', function () { page += 1; apply(); });
+  }
 
   var more = document.getElementById('cf-more');
   var panel = document.getElementById('cf-results');

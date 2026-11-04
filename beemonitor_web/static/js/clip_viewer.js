@@ -162,10 +162,18 @@
     open(list[Math.min(Math.max(i + delta, 0), list.length - 1)]);
   }
 
-  rows.forEach(function (row) {
-    row.querySelectorAll('.cv-open').forEach(function (btn) {
-      btn.addEventListener('click', function () { open(row); });
+  function bind() {
+    rows.forEach(function (row) {
+      row.querySelectorAll('.cv-open').forEach(function (btn) {
+        btn.addEventListener('click', function () { open(row); });
+      });
     });
+  }
+  bind();
+  // A big batch's next page of clips (memory/77).
+  document.addEventListener('cliprows:change', function () {
+    rows = Array.prototype.slice.call(document.querySelectorAll('.clip-row[data-original]'));
+    bind();
   });
   document.getElementById('cv-prev').addEventListener('click', function () { step(1); });
   document.getElementById('cv-next').addEventListener('click', function () { step(-1); });

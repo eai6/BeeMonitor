@@ -1389,6 +1389,8 @@ LOCAL_EXECUTORS = {
     "analyze.events": _exec_analyze_events,
     "analyze.interactions": _exec_analyze_interactions,
     "analyze.detection_count": _exec_analyze_detection_count,
+    # Rules read across a batch's clips (period.trip_rules): nothing per clip.
+    "analyze.trips": lambda s, r, c, i, idx: {"artifact": "trips"},
     # ── Legacy (still runnable; not in the palette) ──
     "input.image_set": lambda s, r, c, i, idx: {"artifact": "frames", "source": (s.get("config") or {}).get("source", "device_crops")},
     "roi.nest_layout": _exec_roi_nest_layout,

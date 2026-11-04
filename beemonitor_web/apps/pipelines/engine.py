@@ -433,10 +433,12 @@ def reconcile_user_runs(user, limit=50):
 
     try:
         # Only each running step's job id is read: the slim copy (memory/76).
+        # Oldest first: a big batch's newest runs are all still queued, and the
+        # ones with a job to finish are the ones that started first.
         runs = runsummary.slim_runs(PipelineRun.objects.filter(
             user=user,
             status__in=[PipelineRun.Status.PENDING, PipelineRun.Status.RUNNING],
-        ).order_by("-started_at")[:limit])
+        ).order_by("started_at")[:limit])
         for run in runs:
             for step in (run.steps or []):
                 sid = step.get("id")

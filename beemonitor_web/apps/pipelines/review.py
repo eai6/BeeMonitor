@@ -444,6 +444,8 @@ def batch_review_summary(runs, per_run=None, actions=None):
                                  if trips["reviewed"] else None)
     if not (ev["reviewed"] or ev["added"] or ev["clips"] or trips["reviewed"]) and actions is None:
         return None
+    from .period import trip_quality
+    trips["quality"] = trip_quality(runs)
     return {"events": ev, "trips": trips}
 
 

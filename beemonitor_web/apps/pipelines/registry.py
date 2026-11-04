@@ -33,6 +33,7 @@ ARTIFACT_TYPES = {
     "detections":   "Per-frame detections",
     "tracks":       "Tracks (trajectories)",
     "events":       "Events (foraging trips / interactions)",
+    "trips":        "Trips",
     "observations": "Observations (taxa + counts)",
     "table":        "Table (rows for export / plot)",
     # scalar types carried over from the Workshop builder
@@ -704,6 +705,43 @@ BLOCK_REGISTRY = {
                 "help": "An exit counts only if the insect's first moments are at the tube "
                         "this long. Insects often take off at once, so keep this low. "
                         "0 = off. Try 0 or 0.1.",
+            },
+        ],
+    },
+    "analyze.trips": {
+        "display_name": "Trips",
+        "description": "How exits and entries are paired into trips: each exit with "
+                       "the next event at its tube, when that is an entry, on the "
+                       "same day, each entry used once. Trips run across clips, so "
+                       "these rules are read when a batch's trips are worked out; "
+                       "changing them needs no re-run and no Update.",
+        "category": "analyze",
+        "icon": "🔁",
+        "input_type": "events",
+        "accepts": ["events"],
+        "output_type": "trips",
+        "backend": "local",
+        # Rules for the batch, not a measurement of a clip: not a swap for one.
+        "swappable": False,
+        "config_fields": [
+            {
+                "name": "min_trip_seconds",
+                "label": "Shortest trip (seconds)",
+                "field_type": "number",
+                "required": False,
+                "default": "",
+                "choices": None,
+                "help": "Blank = no minimum. A shorter pair isn't a trip, e.g. a bee "
+                        "turning round at the tube.",
+            },
+            {
+                "name": "max_trip_minutes",
+                "label": "Longest trip (minutes)",
+                "field_type": "number",
+                "required": False,
+                "default": "",
+                "choices": None,
+                "help": "Blank = no maximum within the day. A longer pair isn't a trip.",
             },
         ],
     },
