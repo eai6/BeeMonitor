@@ -36,12 +36,11 @@
     </label>
     {% endif %}
     {% if sites|length > 1 %}
-    <label class="flex items-center gap-1.5 text-xs text-gray-700">Site
-      <select data-filter="site" class="h-9 border border-gray-300 rounded-md px-2 text-[13px] bg-white">
-        <option value="">All sites</option>
-        {% for s in sites %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
-      </select>
-    </label>
+    {% comment %}Any number of sites; none ticked is all of them (static/js/clip_filter.js).{% endcomment %}
+    <div class="flex flex-wrap items-center gap-1.5 text-xs text-gray-700" role="group" aria-label="Sites">Site
+      <input type="hidden" data-filter="site">
+      {% for s in sites %}<label class="flex items-center gap-1.5 h-9 px-2 border border-gray-300 rounded-md bg-white text-[13px]"><input type="checkbox" data-site-pick value="{{ s }}"> {{ s }}</label>{% endfor %}
+    </div>
     {% endif %}
     {% if batch_days|length > 1 %}
     <label class="flex items-center gap-1.5 text-xs text-gray-700">Day

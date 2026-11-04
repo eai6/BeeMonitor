@@ -117,3 +117,12 @@ class BatchSelectTests(FilterBase):
         res = self.client.post(reverse("pipelines:batch_apply_groups", args=[self.batch]),
                                {"which": "picked", "run": [self.run_a.pk]})
         self.assertEqual(res.status_code, 302)
+
+
+class MetricsBySiteTests(BatchSelectTests):
+    def test_sites_can_be_ticked_above_the_metrics_and_in_the_filter(self):
+        ClipReview.objects.create(run=self.run_a, user=self.user)
+        html = self.page().content.decode()
+        self.assertEqual(html.count('data-site-pick value="mendels"'), 2)
+        self.assertEqual(html.count('data-site-pick value="natalies"'), 2)
+        self.assertLess(html.index("Metrics for"), html.index('id="review-metrics"'))

@@ -293,6 +293,14 @@ their reason.
 {% endif %}
 
 <span hidden>{% csrf_token %}</span>
+{% if review_summary and batch_sites|length > 1 %}
+{% comment %}The same sites as the clip filter's: ticking one here filters both.{% endcomment %}
+<div class="flex flex-wrap items-center gap-1.5 mb-2 text-xs text-gray-700" role="group" aria-label="Sites in the metrics">
+  <span class="font-semibold mr-1">Metrics for</span>
+  {% for s in batch_sites %}<label class="flex items-center gap-1.5 h-9 px-2 border border-gray-300 rounded-md bg-white text-[13px]"><input type="checkbox" data-site-pick value="{{ s }}"> {{ s }}</label>{% endfor %}
+  <span class="ml-1 text-gray-600">None ticked = all sites. The clip list follows.</span>
+</div>
+{% endif %}
 <div id="review-metrics" data-url="{% url 'pipelines:batch_review_metrics' batch_id %}">
 {% if review_summary %}{% include "pipelines/_review_metrics.html" %}{% endif %}
 </div>

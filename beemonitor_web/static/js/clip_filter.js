@@ -91,8 +91,10 @@
         var words = el.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
         var text = (row.getAttribute('data-f-text') || '').toLowerCase();
         for (var w = 0; w < words.length; w++) if (text.indexOf(words[w]) < 0) return false;
-      } else if (name === 'unit' || name === 'day' || name === 'site' || name === 'reviewed') {
+      } else if (name === 'unit' || name === 'day' || name === 'reviewed') {
         if (el.value && row.getAttribute('data-f-' + name) !== el.value) return false;
+      } else if (name === 'site') {
+        if (el.value && el.value.split('|').indexOf(row.getAttribute('data-f-site')) < 0) return false;
       } else if (name === 'by') {
         // Reviewed by someone, or ("!name") not by them (memory/74).
         if (!el.value) continue;
@@ -212,7 +214,26 @@
     });
   });
 
+  // Sites: any number, in the filter bar and above the metrics, held in the one
+  // hidden control as "a|b".
+  var siteEl = bar.querySelector('[data-filter="site"]');
+  function sitePicks() { return Array.prototype.slice.call(document.querySelectorAll('[data-site-pick]')); }
+  function paintSites() {
+    if (!siteEl) return;
+    var on = siteEl.value ? siteEl.value.split('|') : [];
+    sitePicks().forEach(function (b) { b.checked = on.indexOf(b.value) >= 0; });
+  }
+  document.addEventListener('change', function (ev) {
+    if (!siteEl || !ev.target.matches('[data-site-pick]')) return;
+    var on = siteEl.value ? siteEl.value.split('|') : [];
+    on = on.filter(function (s) { return s !== ev.target.value; });
+    if (ev.target.checked) on.push(ev.target.value);
+    siteEl.value = on.join('|');
+    fresh();
+  });
+
   function apply() {
+    paintSites();
     var sortEl = bar.querySelector('[data-filter="sort"]');
     sortRows(sortEl ? sortEl.value : 'new');
     var visible = [];
