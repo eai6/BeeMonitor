@@ -112,7 +112,11 @@ class PeriodReviewView(LoginRequiredMixin, View):
         clips_json, pairs = [], []
         for ci, c in enumerate(data["clips"]):
             evs = period.clip_events(c, request.user)
-            pairs += [(ci, e) for e in evs]
+            # Trips run over the events people stand by: not ones they
+            # rejected, and those they added as missed (below).
+            pairs += [(ci, e) for e in evs if e.get("mine") != "rejected"]
+            added = period.added_events(c, event_review.added_rows(c["run"]))
+            pairs += [(ci, a) for a in added]
             job, run_q = c["job"], f"?run={c['run'].pk}"
             clips_json.append({
                 "job": job.pk, "run": str(c["run"].pk), "title": c["video"].title, "offset": c["offset"],
@@ -126,11 +130,7 @@ class PeriodReviewView(LoginRequiredMixin, View):
                 "add_url": reverse("analysis:add_missed_event", args=[job.pk]) + run_q,
                 # Events reviewers added as missed (memory/62 §3b), placed on
                 # the period's axis like the detected ones.
-                "added": [{"id": a["id"], "frame": a["frame"], "end_frame": a["end_frame"],
-                           "action": a["action"], "reference": a["reference"],
-                           "track_id": a["track_id"], "by": a["user"],
-                           "t": round(c["offset"] + a["frame"] / float(c["fps"] or 25), 3)}
-                          for a in event_review.added_rows(c["run"])],
+                "added": added,
                 "crops_url": reverse("analysis:track_crops", args=[job.pk, 0]) + run_q,
                 "results_url": reverse("analysis:results", args=[job.pk]) + run_q,
                 "events": evs,

@@ -34,7 +34,7 @@
     <p class="text-sm text-gray-700">{{ tr.reviewed }} suggested trip{{ tr.reviewed|pluralize }} reviewed</p>
     <div class="flex gap-6">
       <div><div class="text-xs text-gray-600">Precision</div><div class="text-xl font-bold text-gray-900">{% if tr.precision is not None %}{{ tr.precision }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">{{ tr.right }} of {{ tr.suggested }} suggested trips right</div></div>
-      <div><div class="text-xs text-gray-600">Recall</div><div class="text-xl font-bold text-gray-900">{% if tr.recall is not None %}{{ tr.recall }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">{{ tr.right }} of {{ tr.real }} confirmed trips found{% if tr.relinked %}; {{ tr.relinked }} re-linked{% endif %}</div></div>
+      <div><div class="text-xs text-gray-600">Recall</div><div class="text-xl font-bold text-gray-900">{% if tr.recall is not None %}{{ tr.recall }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">{{ tr.right }} of {{ tr.real }} confirmed trips found{% if tr.missed %}; {{ tr.missed }} needed an added event or a re-link{% endif %}</div></div>
     </div>
     {% else %}
     <p class="text-sm text-gray-600">No trips reviewed yet. Open Review trips at the top of this page.</p>

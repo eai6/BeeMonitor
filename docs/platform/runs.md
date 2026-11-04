@@ -109,9 +109,8 @@ green accepted, red rejected, amber where reviewers disagree.
 **Over a period.** **Review a period** (on a unit's page, or **Review this period** on a batch from one unit or
 site) puts every analysed clip between two times — a few hours or up to a week — on one time axis. A strip
 shows the clips (striped where nothing was recorded), and the tube lanes run across the whole period, so a
-bee leaving in one clip and coming back in a later one sit on the same lane. **Review events** walks every
-event in the period in time order, moving from clip to clip by itself. Click a tube's name to list its events
-across the period.
+bee leaving in one clip and coming back in a later one sit on the same lane. The page opens on the first trip not
+yet reviewed. Click a mark or band on a lane to review that trip.
 
 **Trips.** A faint band joins each exit to the next entry into the same tube, across clips too (the next entry
 by the same marker first, when markers were read). These are suggestions only. **Review trips** plays each
@@ -121,9 +120,8 @@ to the entry across clips, skipping time with no recording), and the trip bar le
 between. Below the player are the bee that left and the bee that came back, with their species, marker and
 crops. Then it asks whether it is the same bee:
 
-- **Same bee, a trip (Y)** accepts it.
-- **Not this pair (N)** lets you link the exit to a different later entry into that tube, or mark
-  "didn't come back in this period" or "can't tell".
+- **Yes (Y)** accepts it: the same bee went out and came back.
+- **No (N)** rejects it, with an optional note saying why.
 
 **Missed events.** Review also catches what the system missed. **+ Add missed event (A)**, in the player
 header or on the review card ("Missed one here?"), pauses on the current frame and asks what happened

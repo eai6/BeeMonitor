@@ -371,8 +371,9 @@ class TripReview(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
                              related_name="trip_reviews")
     verdict = models.CharField(max_length=16, choices=Verdict.choices)
-    # "relinked", "didn't come back", "can't tell", or blank.
-    reason = models.CharField(max_length=40, blank=True)
+    # The reviewer's note on a rejected pair, or blank. Older calls hold
+    # "relinked", "didn't come back" or "can't tell".
+    reason = models.CharField(max_length=300, blank=True)
     relinked = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

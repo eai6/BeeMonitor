@@ -114,11 +114,9 @@
     (showAll ? order : order.slice(0, MAX_LANES)).forEach(function (ref) {
       var row = document.createElement('div');
       row.className = 'flex items-center gap-2';
-      var name = document.createElement('button');
-      name.type = 'button';
-      name.className = 'w-[68px] shrink-0 text-right font-mono text-xs font-semibold text-gray-700 hover:underline';
+      var name = document.createElement('span');
+      name.className = 'w-[68px] shrink-0 text-right font-mono text-xs font-semibold text-gray-700';
       name.textContent = 'tube ' + tube(ref);
-      name.addEventListener('click', function () { renderSide(ref); });
       var track = document.createElement('div');
       track.className = 'relative flex-1 h-4 rounded-sm bg-gray-100';
       if (links) {
@@ -126,7 +124,8 @@
           if (tr.reference !== ref) return;
           var a = findEvent(tr.exit), b = findEvent(tr.entry);
           if (!a || !b) return;
-          var band = document.createElement('span');
+          var band = document.createElement('button');
+          band.type = 'button';
           var called = tripCall(tr);
           band.className = 'absolute top-1.5 h-1.5 rounded-full';
           band.style.left = pct(a.t) + '%';
@@ -135,6 +134,11 @@
             : called === 'disputed' ? '#b45309' : 'rgba(3,105,161,0.18)';
           band.title = 'exit → next entry: ' + Math.round(tr.gap_sec / 60) + ' min' +
             (tr.same_marker ? ' (same marker)' : '') + ' · ' + (TRIP_CALL[called] || 'not reviewed');
+          band.setAttribute('aria-label', band.title);
+          band.addEventListener('click', function () {
+            var i = trip.list.indexOf(tr);
+            if (i >= 0) tripGo(i);
+          });
           track.appendChild(band);
         });
       }
@@ -160,7 +164,7 @@
         m.style.border = '2px dashed ' + (COLORS[a.action] || '#374151');
         m.title = a.action + ' tube ' + tube(ref) + ', added by ' + a.by;
         m.setAttribute('aria-label', m.title);
-        m.addEventListener('click', function () { loadClip(y.c, a.frame, false); });
+        m.addEventListener('click', function () { goToEvent({c: y.c, e: a}); });
         track.appendChild(m);
       });
       var count = document.createElement('span');
@@ -184,23 +188,9 @@
 
   function findEvent(ref) {
     var c = P.clips[ref.clip];
-    return c && c.events.filter(function (e) { return e.key === ref.key; })[0];
-  }
-
-  function renderSide(ref) {
-    $('[data-pr-side-title]').textContent = 'Tube ' + tube(ref) + ' across the period';
-    var box = $('[data-pr-side]');
-    box.innerHTML = '';
-    all.filter(function (x) { return x.e.reference === ref; }).forEach(function (x) {
-      var b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'text-left hover:underline';
-      b.innerHTML = '<span class="font-mono text-gray-600"></span> <span></span>';
-      b.children[0].textContent = clock(x.e.clock).slice(11);
-      b.children[1].textContent = x.e.action + ' · track ' + x.e.track_id + ' · ' + P.clips[x.c].title;
-      b.addEventListener('click', function () { goToEvent(x); });
-      box.appendChild(b);
-    });
+    if (!c) return null;
+    var same = function (e) { return e.key === ref.key; };
+    return c.events.filter(same)[0] || (c.added || []).filter(same)[0];
   }
 
   function paintProgress() {
@@ -250,9 +240,16 @@
     }
   });
 
-  // A mark or the side list: go to that moment. Events are reviewed on each
-  // clip's own page; here they only place the trips.
-  function goToEvent(x) { loadClip(x.c, x.e.frame, false); }
+  // A mark: review the trip it starts or ends. An event in no trip is shown at
+  // its moment.
+  function goToEvent(x) {
+    var i = trip.list.findIndex(function (t) {
+      return [t.exit, t.entry].some(function (r) { return r.clip === x.c && r.key === x.e.key; });
+    });
+    if (i >= 0) { tripGo(i); return; }
+    loadClip(x.c, x.e.frame, false);
+    status.textContent = 'This event is not part of a suggested trip.';
+  }
   // Playback speed in trip review. Set as the default too: a new clip's video
   // starts at the default, and a trip runs across clips.
   var SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16];
@@ -304,11 +301,13 @@
     var chipEl = $('[data-pr-trip-chip]', s.box);
     chipEl.textContent = chip + ' ' + tube(e.reference) + ' · ' + clock(e.clock).slice(11);
     chipEl.style.background = COLORS[e.action] || '#374151';
-    $('[data-pr-trip-who]', s.box).textContent = 'Clip ' + clock(c.start).slice(11, 16) + ' · track ' + e.track_id +
+    $('[data-pr-trip-who]', s.box).textContent = 'Clip ' + clock(c.start).slice(11, 16) +
+      (e.by ? ' · added by ' + e.by : '') + (e.track_id ? ' · track ' + e.track_id : '') +
       (e.species ? ' · ' + e.species + (e.species_confidence !== '' ? ' ' + Number(e.species_confidence).toFixed(2) : '') : '') +
-      (e.marker ? ' · marker ' + e.marker : ' · no marker');
+      (e.by ? '' : e.marker ? ' · marker ' + e.marker : ' · no marker');
     var crops = $('[data-pr-trip-crops]', s.box);
     crops.innerHTML = '';
+    if (!e.track_id) return;
     fetch(c.crops_url.replace(/\/0\/crops\.json(?=\?|$)/, '/' + e.track_id + '/crops.json'), {credentials: 'same-origin'})
       .then(function (r) { return r.ok ? r.json() : {crops: []}; })
       .then(function (d) {
@@ -467,33 +466,16 @@
       renderLanes();
     }).catch(function (err) { status.textContent = String(err.message || err); });
   }
-  function relinkChooser(t) {
-    var a = findEvent(t.exit), list = $('[data-pr-relink-list]');
-    list.innerHTML = '';
-    all.filter(function (x) {
-      return x.e.action === 'enter' && x.e.reference === t.reference && x.e.t > a.t && x.e.key !== t.entry.key;
-    }).slice(0, 12).forEach(function (x) {
-      var b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'h-9 px-2.5 rounded-md border border-gray-300 bg-white hover:bg-gray-50';
-      b.textContent = clock(x.e.clock).slice(11) + ' · track ' + x.e.track_id + (x.e.marker ? ' · ' + x.e.marker : '');
-      b.addEventListener('click', function () {
-        tripVote(t, {clip: x.c, key: x.e.key}, 'accepted', 'relinked', true).then(function () { tripNext(); });
-      });
-      list.appendChild(b);
-    });
-    [['didn\'t come back', 'Didn\'t come back in this period'], ['can\'t tell', 'Can\'t tell']].forEach(function (r) {
-      var b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'h-9 px-2.5 rounded-md border border-gray-300 bg-white hover:bg-gray-50';
-      b.textContent = r[1];
-      b.addEventListener('click', function () {
-        tripVote(t, r[0] === 'didn\'t come back' ? null : t.entry, 'rejected', r[0], false)
-          .then(function () { tripNext(); });
-      });
-      list.appendChild(b);
-    });
-    $('[data-pr-relink]').hidden = false;
+  // Not this pair: a note on why, in the reviewer's own words, then on.
+  function askWhy(t) {
+    var box = $('[data-pr-relink]'), note = $('[data-pr-trip-note]');
+    note.value = '';
+    box.hidden = false;
+    note.focus();
+    box.onsubmit = function (ev) {
+      ev.preventDefault();
+      tripVote(t, t.entry, 'rejected', note.value, false).then(function () { tripNext(); });
+    };
   }
   // This page is for reviewing trips: it opens on the first still to do, or
   // with none left, at the top to look them over.
@@ -512,7 +494,7 @@
       var t = trip.list[trip.i];
       tripVote(t, t.entry, 'accepted', '', false).then(function () { tripNext(); });
     });
-    $('[data-pr-trip-no]').addEventListener('click', function () { relinkChooser(trip.list[trip.i]); });
+    $('[data-pr-trip-no]').addEventListener('click', function () { askWhy(trip.list[trip.i]); });
     $('[data-pr-trip-next]').addEventListener('click', function () {
       if (trip.i + 1 < trip.list.length) tripGo(trip.i + 1);
     });

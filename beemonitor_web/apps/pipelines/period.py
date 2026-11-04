@@ -214,6 +214,23 @@ def clip_events(clip, user=None):
     return out
 
 
+def added_events(clip, rows):
+    """A gathered clip's added events (``review.added_rows``) on the period's
+    axis, in the shape of ``clip_events``, so a trip can start or end on one."""
+    from .review import event_key
+
+    fps = float(clip["fps"] or 25)
+    out = []
+    for a in rows:
+        sec = a["frame"] / fps
+        out.append({"id": a["id"], "key": event_key(a), "frame": a["frame"],
+                    "end_frame": a["end_frame"], "action": a["action"],
+                    "reference": str(a["reference"] or ""), "track_id": a["track_id"],
+                    "by": a["user"], "t": round(clip["offset"] + sec, 3), "marker": "",
+                    "clock": (clip["start"] + timedelta(seconds=sec)).isoformat(timespec="milliseconds")})
+    return out
+
+
 def trip_rules(pipeline):
     """The pipeline's Trips node as ``{min_seconds, max_seconds}`` (None = no
     limit). Read from the pipeline as it is now: trips run across clips, so
@@ -291,9 +308,10 @@ def set_trip_vote(user, exit_run, exit_key, entry_run, entry_key, verdict, reaso
         return None
     if verdict not in TripReview.Verdict.values:
         raise ValueError("verdict must be accepted or rejected")
-    reason = (reason or "").strip().lower()
-    if reason and reason not in TRIP_REASONS:
-        raise ValueError("unknown reason")
+    # The reviewer's own words; the two the metrics know are matched by case.
+    reason = (reason or "").strip()[:300]
+    if reason.lower() in TRIP_REASONS:
+        reason = reason.lower()
     if relinked:
         reason = "relinked"
     if verdict == "accepted" and not entry_key:

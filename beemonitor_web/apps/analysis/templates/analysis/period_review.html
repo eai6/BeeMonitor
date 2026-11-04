@@ -58,7 +58,7 @@ Events are reviewed on each clip's own page. Logic: pipelines/period.py.
       <span class="w-[52px] shrink-0"></span>
     </div>
     <div data-pr-lanes class="flex flex-col gap-0.5"></div>
-    <p class="ml-[76px] text-xs text-gray-600">One time axis for the whole period; striped = no recording. Marks: <strong style="color:#0369a1">exit</strong>, <strong style="color:#b45309">enter</strong>, <strong style="color:#6d28d9">stay</strong>. A band joins each exit to its entry on the same tube, across clips too: <strong style="color:#15803d">green</strong> = same bee, <strong style="color:#b91c1c">red</strong> = not this pair, faint = not reviewed yet. A trip is in your data only when a reviewer accepts it.</p>
+    <p class="ml-[76px] text-xs text-gray-600">One time axis for the whole period; striped = no recording. Marks: <strong style="color:#0369a1">exit</strong>, <strong style="color:#b45309">enter</strong>, <strong style="color:#6d28d9">stay</strong>. A band joins each exit to its entry on the same tube, across clips too: <strong style="color:#15803d">green</strong> = same bee, <strong style="color:#b91c1c">red</strong> = not this pair, faint = not reviewed yet. Click a mark or band to review that trip. A trip is in your data only when a reviewer accepts it.</p>
   </section>
 
   {% if data.skipped %}
@@ -81,10 +81,6 @@ Events are reviewed on each clip's own page. Logic: pipelines/period.py.
         <label class="flex items-center gap-1.5 text-[13px] text-gray-700 ml-auto"><input type="checkbox" data-pr-regions checked> Show ROI and tubes</label>
       </div>
     </div>
-    <aside class="flex flex-col gap-2 bg-white border border-gray-200 rounded-lg p-3 text-[13px]" style="flex: 1 1 280px; min-width: 0">
-      <h2 data-pr-side-title class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Click a tube to see its events across the period</h2>
-      <div data-pr-side class="flex flex-col gap-1"></div>
-    </aside>
   </div>
 
   {% if any_review %}
@@ -122,15 +118,17 @@ Events are reviewed on each clip's own page. Logic: pipelines/period.py.
       {% endfor %}
     </div>
     <div class="flex flex-wrap gap-2 items-center">
-      <button type="button" data-pr-trip-yes class="h-11 px-5 rounded bg-green-700 hover:bg-green-800 text-white font-bold">Same bee, a trip (Y)</button>
-      <button type="button" data-pr-trip-no class="h-11 px-5 rounded bg-red-700 hover:bg-red-800 text-white font-bold">Not this pair (N)</button>
+      <button type="button" data-pr-trip-yes class="h-11 px-5 rounded bg-green-700 hover:bg-green-800 text-white font-bold">Yes (Y)</button>
+      <button type="button" data-pr-trip-no class="h-11 px-5 rounded bg-red-700 hover:bg-red-800 text-white font-bold">No (N)</button>
       <button type="button" data-pr-trip-back class="h-11 px-3.5 rounded border border-gray-300 bg-white hover:bg-gray-50 ml-auto disabled:opacity-50">← Previous</button>
       <button type="button" data-pr-trip-next class="h-11 px-3.5 rounded border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50">Next →</button>
     </div>
-    <div data-pr-relink hidden class="bg-gray-50 border border-gray-200 rounded-md p-3 flex flex-col gap-2 text-[13px]">
-      <span>Did this bee come back on a different entry into this tube?</span>
-      <div data-pr-relink-list class="flex flex-wrap gap-1.5"></div>
-    </div>
+    <form data-pr-relink hidden class="bg-gray-50 border border-gray-200 rounded-md p-3 flex flex-wrap items-center gap-2 text-[13px]">
+      <label class="flex-1 min-w-[240px] flex flex-col gap-1">Why not? (optional)
+        <input type="text" data-pr-trip-note maxlength="300" class="h-10 border border-gray-300 rounded-md px-2 text-sm">
+      </label>
+      <button type="submit" class="h-10 px-4 self-end rounded bg-amber-700 hover:bg-amber-800 text-white font-semibold">Save</button>
+    </form>
   </section>
   {% endif %}
 </div>

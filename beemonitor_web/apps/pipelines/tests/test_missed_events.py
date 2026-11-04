@@ -128,12 +128,23 @@ class BatchReviewSummaryTests(EventReviewTests):
         self.assertEqual((s["trips"]["reviewed"], s["trips"]["accepted"], s["trips"]["relinked"],
                           s["trips"]["didnt_come_back"], s["trips"]["precision"],
                           s["trips"]["recall"]), (3, 2, 1, 1, 33, 50))
+        # A real trip ending on an added event is one the pipeline missed:
+        # recall falls, precision doesn't, and a rejected one counts for neither.
+        for i, verdict in enumerate(("accepted", "rejected")):
+            AddedEvent.objects.create(run=self.run, user=self.owner, frame=700 + i, action="enter",
+                                      reference="1", track_id="")
+            TripReview.objects.create(exit_run=self.run, exit_key=f"a{i}", user=self.owner,
+                                      entry_run=self.run, entry_key=f"enter|1||{700 + i}",
+                                      verdict=verdict)
+        s = review.batch_review_summary([self.run])
+        self.assertEqual((s["trips"]["right"], s["trips"]["missed"], s["trips"]["precision"],
+                          s["trips"]["recall"]), (1, 2, 33, 33))
         # Can't tell judges nothing: it leaves precision and recall alone.
         TripReview.objects.create(exit_run=self.run, exit_key="k4", user=self.owner,
                                   verdict="rejected", reason="can't tell")
         s = review.batch_review_summary([self.run])
         self.assertEqual((s["trips"]["reviewed"], s["trips"]["precision"], s["trips"]["recall"]),
-                         (4, 33, 50))
+                         (6, 33, 33))
         self.client.force_login(self.owner)
         page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
         self.assertContains(page, "Events review")

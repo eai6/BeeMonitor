@@ -440,3 +440,36 @@ class TripPairingTests(TestCase):
         self.assertEqual(rules, {"min_seconds": 10.0, "max_seconds": 120.0})
         self.assertEqual(self.keys(period.suggest_trips(events, rules)), [("exit10", "enter100")])
         self.assertEqual(period.trip_rules(Pipeline(steps=[])), {"min_seconds": None, "max_seconds": None})
+
+
+class TripNoteTests(PeriodBase):
+    def test_not_this_pair_keeps_the_reviewers_own_words(self):
+        trip_review = period.set_trip_vote(self.owner, self.a["run"], "exit|reference_1|1|10",
+                                           self.a["run"], "enter|reference_1|2|20", "rejected",
+                                           "  Different bee, it had pollen  ")
+        self.assertEqual(trip_review, "rejected")
+        self.assertEqual(TripReview.objects.get().reason, "Different bee, it had pollen")
+
+
+class TripsOverReviewedEventsTests(PeriodBase):
+    def test_a_trip_ends_on_an_added_entry_and_not_on_a_rejected_one(self):
+        from apps.pipelines import review
+        from apps.pipelines.models import AddedEvent
+
+        p = self.payload(self.page())
+        trip = p["trips"][0]
+        reference = trip["reference"]
+        for e in p["clips"][1]["events"]:
+            if e["action"] == "enter":
+                EventReview.objects.create(run=self.b["run"], user=self.owner, verdict="rejected",
+                                           event_key=e["key"])
+        added = AddedEvent.objects.create(run=self.b["run"], user=self.owner, frame=500,
+                                          action="enter", reference=reference)
+        p = self.payload(self.page())
+        ended = [t for t in p["trips"] if t["exit"]["key"] == trip["exit"]["key"]]
+        self.assertEqual(len(ended), 1)
+        key = review.event_key({"action": "enter", "reference": reference, "track_id": "",
+                                "frame": 500})
+        self.assertEqual(ended[0]["entry"]["key"], key)
+        self.assertEqual(p["clips"][1]["added"][0]["id"], added.pk)
+        self.assertEqual(p["clips"][1]["added"][0]["key"], key)

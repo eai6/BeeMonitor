@@ -47,3 +47,6 @@
 - Gone from the web: the Events node's three settings, `eventml.py`, `ml_scoring.py`, Training › Event classifiers, the batch cut-off panel, and the `ml_confidence` column.
 - Older steps still carry the settings; they're ignored, and `pipeline_changes` skips them.
 - Left on purpose: `CustomModel.Type.EVENT_CLASSIFIER` (saved rows stay valid), `scikit-learn` in requirements (the lock needs regenerating), `models/event_classifier_model.pkl`, and `src/beemonitor/processing/event_classifier.py` (GPU image code).
+- Not this pair now asks for a free-text note (`TripReview.reason`, 300 chars, migration 0024) instead of the re-link buttons (user: "this should just be a text input"). Recall still works: a confirmed trip with an added end counts as one the pipeline missed (user: "it should not break recall").
+- Suggested trips now pair over reviewed events on the Review trips page: rejected events are left out and added ones count (`period.added_events`), so a trip can end on an added entry.
+- Side panel removed from Review trips. Timeline stays: clicking a mark or band opens that trip.
