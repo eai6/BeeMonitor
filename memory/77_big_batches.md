@@ -38,8 +38,12 @@
 - Trip review has speed buttons (0.25×–16×), remembered per browser (`pr-speed`), back to 1× on leaving review.
 
 ## Trips: precision, recall and the Trips module (same day, user)
-- User's idea: fully reviewed clips hold every real exit and entry, so true trips can be rebuilt from them and the pipeline's trips scored against them.
-- `period.trip_quality`: pairs from detected events vs pairs from reviewed events (accepted + added, not rejected), over stretches of fully reviewed clips, per place and day. A trip matches when both ends are the same event. A stretch stops at a clip not fully reviewed.
-- These replace the trips stats on the batch page ("Suggestion right" is gone from the panel). Trip calls don't feed it.
+- Trip precision and recall come from the trips people called (`review.batch_review_summary`), as the user asked after seeing a version built from event reviews (732 trips, when only 8 had been reviewed): precision = same bee as suggested ÷ all judged (not-a-pair and re-linked are wrong); recall = same bee as suggested ÷ (those + re-linked). "Can't tell" and disputed count for neither. Recall only knows re-links, so it reads high.
 - `suggest_trips`: one to one; an exit pairs only with the next exit-or-entry at its tube, when that's an entry; same day; marker first.
 - `analyze.trips` module in the builder: shortest (seconds) and longest (minutes). Read live from the pipeline (`period.trip_rules`), so changes need no re-run or Update.
+- Trip review resumes at the first uncalled trip; a vote goes to the next uncalled one; Previous and Next (← →) step one trip at a time. Bands are coloured by the trip's call; the event rings are gone from this page.
+
+## Event classifier removed (user, 2026-11-04: "We don't need it")
+- Gone from the web: the Events node's three settings, `eventml.py`, `ml_scoring.py`, Training › Event classifiers, the batch cut-off panel, and the `ml_confidence` column.
+- Older steps still carry the settings; they're ignored, and `pipeline_changes` skips them.
+- Left on purpose: `CustomModel.Type.EVENT_CLASSIFIER` (saved rows stay valid), `scikit-learn` in requirements (the lock needs regenerating), `models/event_classifier_model.pkl`, and `src/beemonitor/processing/event_classifier.py` (GPU image code).

@@ -407,9 +407,10 @@ class TripsOnlyPageTests(PeriodBase):
     def test_it_offers_trips_and_a_speed_control_and_no_event_review(self):
         self.client.force_login(self.owner)
         r = self.client.get(reverse("analysis:period_review"), {"batch": str(self.batch)})
-        self.assertContains(r, "data-pr-review-trips")
+        self.assertContains(r, "data-pr-trip-next")
         self.assertContains(r, "data-pr-speeds")
-        for gone in ("data-pr-review-events", "data-am-open", "data-pr-card", "add_missed.js"):
+        for gone in ("data-pr-review-events", "data-pr-review-trips", "data-am-open", "data-pr-card",
+                     "add_missed.js"):
             self.assertNotContains(r, gone)
 
 

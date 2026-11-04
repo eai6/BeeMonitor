@@ -303,32 +303,6 @@ their reason.
   root.querySelectorAll('[data-review-actions] input').forEach(function (cb) {
     cb.addEventListener('change', function () { cb.form.submit(); });
   });
-  // The cut-off panel: precision among reviewed events kept, and recall of
-  // real events (accepted + added as missed) kept.
-  (function () {
-    var box = root.querySelector('[data-cutoff]');
-    if (!box) return;
-    var data = JSON.parse(box.getAttribute('data-scored'));
-    var range = box.querySelector('[data-cutoff-range]');
-    function paint() {
-      var cut = parseFloat(range.value), acc = 0, rej = 0, accAll = 0, kept = 0;
-      data.scored.forEach(function (e) {
-        if (e[2] === 'accepted') accAll += 1;
-        if (e[1] < cut) return;
-        kept += 1;
-        if (e[2] === 'accepted') acc += 1; else if (e[2] === 'rejected') rej += 1;
-      });
-      var p = acc + rej ? Math.round(100 * acc / (acc + rej)) : null;
-      var real = accAll + data.added;
-      var r = real ? Math.round(100 * acc / real) : null;
-      box.querySelector('[data-cutoff-value]').textContent = cut.toFixed(2);
-      box.querySelector('[data-cutoff-out]').textContent = 'At ' + cut.toFixed(2) + ': precision '
-        + (p == null ? '—' : p + '%') + ' · recall ' + (r == null ? '—' : r + '%')
-        + ' · ' + kept + ' of ' + data.scored.length + ' scored reviewed events kept';
-    }
-    range.addEventListener('input', paint);
-    paint();
-  })();
   }
   initReviewMetrics(document.getElementById('review-metrics'));
   // The metrics follow the clip filter (memory/73): the clips shown are sent

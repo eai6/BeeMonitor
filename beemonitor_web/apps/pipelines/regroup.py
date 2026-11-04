@@ -367,7 +367,9 @@ def pipeline_changes(run, pipeline) -> dict:
             continue
         before, after = _effective(bt, step.get("config")), _effective(bt, src.get("config"))
         for key in after:
-            if key in ("video_id", "start_seconds", "end_seconds"):
+            # The last three are the retired event classifier's, on older steps.
+            if key in ("video_id", "start_seconds", "end_seconds",
+                       "ml_scoring", "ml_stay_model", "ml_min_confidence"):
                 continue
             if json.dumps(before.get(key), sort_keys=True, default=str) == \
                     json.dumps(after.get(key), sort_keys=True, default=str):

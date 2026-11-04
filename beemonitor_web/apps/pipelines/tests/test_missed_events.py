@@ -126,7 +126,14 @@ class BatchReviewSummaryTests(EventReviewTests):
         self.assertEqual((s["events"]["accepted"], s["events"]["added"], s["events"]["precision"],
                           s["events"]["recall"]), (1, 1, 100, 50))
         self.assertEqual((s["trips"]["reviewed"], s["trips"]["accepted"], s["trips"]["relinked"],
-                          s["trips"]["didnt_come_back"], s["trips"]["suggestion_right"]), (3, 2, 1, 1, 33))
+                          s["trips"]["didnt_come_back"], s["trips"]["precision"],
+                          s["trips"]["recall"]), (3, 2, 1, 1, 33, 50))
+        # Can't tell judges nothing: it leaves precision and recall alone.
+        TripReview.objects.create(exit_run=self.run, exit_key="k4", user=self.owner,
+                                  verdict="rejected", reason="can't tell")
+        s = review.batch_review_summary([self.run])
+        self.assertEqual((s["trips"]["reviewed"], s["trips"]["precision"], s["trips"]["recall"]),
+                         (4, 33, 50))
         self.client.force_login(self.owner)
         page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
         self.assertContains(page, "Events review")

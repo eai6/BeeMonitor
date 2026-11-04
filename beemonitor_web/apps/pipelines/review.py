@@ -273,9 +273,7 @@ def batch_review_counts(runs, actions=None):
     queries' worth of work; None for a run with no Events step.
 
     ``actions`` limits the counts to those event actions (memory/70: e.g.
-    exits and entries for foraging); None counts all. ``scored`` lists each
-    reviewed event's ``[action, ml_confidence, call]`` where it has a score,
-    for the cut-off panel."""
+    exits and entries for foraging); None counts all."""
     from .aggregate import analyzer_outputs
     from .models import EventReview
 
@@ -314,10 +312,6 @@ def batch_review_counts(runs, actions=None):
         # Votes on events whose action the metrics leave out (e.g. stays).
         other_votes = sum(1 for k in mine if k in all_keys and k not in keys)
         calls = [combined(v) for k, v in mine.items() if k in keys]
-        scored = [[primitives.normalize_event(rows[k]).get("action"),
-                   float(rows[k]["ml_confidence"]), combined(v)]
-                  for k, v in mine.items()
-                  if k in keys and rows[k].get("ml_confidence") not in (None, "")]
         # Reviewed events on tracks an insect-group filter now leaves out
         # (memory/65): how the reviewers called what the filter took away.
         gone = {k for o in outs for k in ((o.get("filtered_out") or {}).get("event_keys") or [])}
@@ -325,7 +319,6 @@ def batch_review_counts(runs, actions=None):
         out[run.pk] = {"events": len(keys), "reviewed": len(calls),
                        "accepted": calls.count("accepted"), "rejected": calls.count("rejected"),
                        "disputed": calls.count("disputed"), "added": added.get(run.pk, 0),
-                       "scored": scored,
                        "clip_reviewed": run.pk in done, "other_votes": other_votes,
                        "left_out": {"reviewed": len(left), "accepted": left.count("accepted"),
                                     "rejected": left.count("rejected")}}
@@ -403,19 +396,17 @@ def batch_review_summary(runs, per_run=None, actions=None):
     runs = list(runs)
     per_run = per_run if per_run is not None else batch_review_counts(runs, actions)
     ev = {"accepted": 0, "rejected": 0, "disputed": 0, "added": 0, "reviewed": 0,
-          "events": 0, "clips": 0, "scored": []}
+          "events": 0, "clips": 0}
     for counts in per_run.values():
         if not counts:
             continue
         ev["events"] += counts["events"]
         for k in ("accepted", "rejected", "disputed", "added", "reviewed"):
             ev[k] += counts[k]
-        ev["scored"] += counts.get("scored") or []
         if clip_touched(counts):
             ev["clips"] += 1
     ev["precision"], ev["recall"] = quality(ev["accepted"], ev["rejected"], ev["added"])
-    # The actions counted (memory/70), and the scored reviewed events for the
-    # cut-off panel: [action, ml_confidence, call].
+    # The actions counted (memory/70).
     ev["actions"] = list(actions) if actions is not None else None
 
     by_exit = {}
@@ -438,14 +429,19 @@ def batch_review_summary(runs, per_run=None, actions=None):
                 trips["didnt_come_back"] += 1
             if "can't tell" in reasons:
                 trips["cant_tell"] += 1
-    # How often the suggested pairing was right as it stood.
+    # From the trips people called, as for events: a suggested pair called the
+    # same bee was right; one called not a pair, or re-linked, was wrong; a
+    # re-linked trip is a real trip the suggestion missed. "Can't tell" and
+    # disputed calls judge nothing, so they count for neither.
     as_suggested = trips["accepted"] - trips["relinked"]
-    trips["suggestion_right"] = (round(100 * as_suggested / trips["reviewed"])
-                                 if trips["reviewed"] else None)
+    wrong = trips["rejected"] - trips["cant_tell"]
+    trips["right"] = as_suggested
+    trips["suggested"] = as_suggested + wrong + trips["relinked"]
+    trips["real"] = as_suggested + trips["relinked"]
+    trips["precision"], trips["recall"] = quality(as_suggested, wrong + trips["relinked"],
+                                                  trips["relinked"])
     if not (ev["reviewed"] or ev["added"] or ev["clips"] or trips["reviewed"]) and actions is None:
         return None
-    from .period import trip_quality
-    trips["quality"] = trip_quality(runs)
     return {"events": ev, "trips": trips}
 
 

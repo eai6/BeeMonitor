@@ -158,13 +158,6 @@ def pipeline_editor(request, pk):
         "videos_json": json.dumps(videos),
         "bee_models_json": json.dumps(bee_models),
         "nest_models_json": json.dumps(nest_models),
-        # Event classifiers trained on reviews (memory/70).
-        "event_models_json": json.dumps([
-            {"id": f"model:{m.pk}", "name": m.name,
-             "kind": "stay" if (m.classes or []) == ["stay"] else "exit_enter"}
-            for m in CustomModel.objects.filter(
-                Q(user=request.user) | Q(visibility="public"), model_type="event_classifier",
-                status=CustomModel.Status.READY, is_active=True).exclude(storage_key="")]),
         "errors_json": json.dumps(validate_steps(pipeline.steps or [])),
         "recent_runs": [] if readonly else pipeline.runs.all()[:5],
         "readonly": readonly,
@@ -1341,7 +1334,6 @@ def batch_detail(request, batch_id):
             if not photos_kind else None),
         "review_actions": review_actions,
         "action_choices": [("exit", "Exits"), ("enter", "Entries"), ("stay", "Stays")],
-        "cutoff_json": _cutoff_json(review_mod, rows, counted),
         # Apply the pipeline's insect groups here, without a re-run (memory/65).
         "pipeline_groups": (_pipeline_groups(runs[0].pipeline)
                             if can_share and runs and not photos_kind else None),
@@ -1484,17 +1476,6 @@ def batch_rename(request, batch_id):
     return redirect("pipelines:batch_detail", batch_id=batch_id)
 
 
-def _cutoff_json(review_mod, rows, counted):
-    """The cut-off panel's data: reviewed events with a classifier score, and
-    the missed events added (they are real events no score can keep)."""
-    scored, added = [], 0
-    for r in rows:
-        counts = r.get("review") or {}
-        scored += counts.get("scored") or []
-        added += counts.get("added") or 0
-    return json.dumps({"scored": scored, "added": added})
-
-
 @login_required
 @require_POST
 def batch_review_actions(request, batch_id):
@@ -1610,7 +1591,6 @@ def batch_review_metrics(request, batch_id):
         "review_summary": summary, "scope": {"clips": len(runs)},
         "review_actions": review_actions, "batch_id": batch_id,
         "action_choices": [("exit", "Exits"), ("enter", "Entries"), ("stay", "Stays")],
-        "cutoff_json": _cutoff_json(review_mod, rows, counted),
         "can_share": sharing.owns_batch(request.user, batch_id),
     })
 

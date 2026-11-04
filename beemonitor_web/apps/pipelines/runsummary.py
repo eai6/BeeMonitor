@@ -33,7 +33,7 @@ KEEP_STATS = ("photo", "video_fps", "fps")
 # What an event row keeps: enough for its key (review.event_key), its score
 # and its place in time.
 EVENT_FIELDS = ("frame", "track_id", "action", "reference", "at_edge", "end_frame",
-                "duration_sec", "ml_confidence")
+                "duration_sec")
 # Stands in for a per-track mapping that was left out: truthy, so "has it?"
 # still answers yes, and empty of tracks.
 PRESENT = {"_slim": True}

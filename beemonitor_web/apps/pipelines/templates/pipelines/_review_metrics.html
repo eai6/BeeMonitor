@@ -27,31 +27,18 @@
       <div><div class="text-xs text-gray-600">Precision</div><div class="text-xl font-bold text-gray-900">{% if ev.precision is not None %}{{ ev.precision }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">right among the events checked</div></div>
       <div><div class="text-xs text-gray-600">Recall</div><div class="text-xl font-bold text-gray-900">{% if ev.recall is not None %}{{ ev.recall }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">found among the events confirmed or added</div></div>
     </div>
-    {% if ev.scored %}
-    {% comment %}What a classifier cut-off would do, on the reviewed events it scored (memory/70). Nothing is dropped.{% endcomment %}
-    <div class="mt-2 pt-2 border-t border-gray-200 flex flex-col gap-1.5" data-cutoff data-scored="{{ cutoff_json }}">
-      <label class="flex items-center gap-2 text-sm text-gray-700">Classifier cut-off
-        <input type="range" min="0" max="0.95" step="0.05" value="0.5" data-cutoff-range class="flex-1">
-        <strong data-cutoff-value class="w-10 text-right">0.50</strong>
-      </label>
-      <p class="text-sm text-gray-700" data-cutoff-out></p>
-      <p class="text-xs text-gray-600">Reviewed events the classifier scored ({{ ev.scored|length }}): what precision and recall would be if events below the cut-off were dropped. Nothing is dropped from the batch.</p>
-    </div>
-    {% endif %}
   </div>
   <div class="flex flex-col gap-1.5">
     <h2 class="text-sm font-semibold text-gray-900">Trips review</h2>
-    {% with q=tr.quality %}
-    {% if q and q.true or q and q.found %}
+    {% if tr.reviewed %}
+    <p class="text-sm text-gray-700">{{ tr.reviewed }} suggested trip{{ tr.reviewed|pluralize }} reviewed</p>
     <div class="flex gap-6">
-      <div><div class="text-xs text-gray-600">Precision</div><div class="text-xl font-bold text-gray-900">{% if q.precision is not None %}{{ q.precision }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">{{ q.matched }} of {{ q.found }} trips from the detected events are right</div></div>
-      <div><div class="text-xs text-gray-600">Recall</div><div class="text-xl font-bold text-gray-900">{% if q.recall is not None %}{{ q.recall }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">{{ q.matched }} of {{ q.true }} true trips found</div></div>
+      <div><div class="text-xs text-gray-600">Precision</div><div class="text-xl font-bold text-gray-900">{% if tr.precision is not None %}{{ tr.precision }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">{{ tr.right }} of {{ tr.suggested }} suggested trips right</div></div>
+      <div><div class="text-xs text-gray-600">Recall</div><div class="text-xl font-bold text-gray-900">{% if tr.recall is not None %}{{ tr.recall }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">{{ tr.right }} of {{ tr.real }} confirmed trips found{% if tr.relinked %}; {{ tr.relinked }} re-linked{% endif %}</div></div>
     </div>
-    <p class="text-xs text-gray-600">True trips are rebuilt from the reviewed events (accepted and added, not rejected) of {{ q.clips }} fully reviewed clip{{ q.clips|pluralize }}.</p>
     {% else %}
-    <p class="text-sm text-gray-600">No trips yet in fully reviewed clips. Trip precision and recall need clips with all their events reviewed.</p>
+    <p class="text-sm text-gray-600">No trips reviewed yet. Open Review trips at the top of this page.</p>
     {% endif %}
-    {% endwith %}
   </div>
 </section>
 {% endwith %}

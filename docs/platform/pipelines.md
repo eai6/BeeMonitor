@@ -81,5 +81,3 @@ or add a second Detect step for a reference that moves.
 - **Padding** (Events, Interactions): grows every reference by this many body lengths. Default 0.
 - **Insect ↔ insect radius** (Interactions): how close two insects must be, in body lengths, to count as near
   each other. Default 2.
-- **Score events with the ML classifier** (Events): off by default. On, every exit and enter gets an
-  `ml_confidence` column; nothing is removed.

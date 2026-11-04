@@ -630,43 +630,6 @@ BLOCK_REGISTRY = {
                 "choices": None,
             },
             {
-                # On: every exit/enter gets the trained event classifier's
-                # score in an ml_confidence column. Nothing is dropped; the
-                # reader picks their own cut-off (memory/60).
-                "name": "ml_scoring",
-                "label": "Score exits and entries with",
-                "field_type": "event_model",
-                "model_kind": "exit_enter",
-                "required": False,
-                "default": "off",
-                "choices": [
-                    {"value": "off", "label": "Off"},
-                    {"value": "on", "label": "Built-in classifier (paper, 2024)"},
-                ],
-                "help": "Adds ml_confidence to each exit and entry. Your own models, trained "
-                        "on your reviews (Training › Event classifiers), are listed too.",
-            },
-            {
-                # A stay model trained on reviewed stays (memory/70).
-                "name": "ml_stay_model",
-                "label": "Score stays with",
-                "field_type": "event_model",
-                "model_kind": "stay",
-                "required": False,
-                "default": "",
-                "choices": [{"value": "", "label": "Nothing (stays get no score)"}],
-            },
-            {
-                "name": "ml_min_confidence",
-                "label": "Leave out events scored below",
-                "field_type": "number",
-                "required": False,
-                "default": "",
-                "choices": None,
-                "help": "Blank keeps every event; the score is a column to filter on. "
-                        "A value (e.g. 0.5) drops scored events below it from the count.",
-            },
-            {
                 # Where a track starts and ends. Detections only (memory/60)
                 # misses a bee that flew off once the detector lost it: its
                 # last detection is at the tube, so it reads as an entry.

@@ -182,9 +182,9 @@ class ResultsTableConsistencyTests(JobPrimitiveTests):
                                        kwargs={"pk": self.job.pk,
                                                "kind": "events"})).content.decode()
 
-        self.assertEqual(body.splitlines()[0].split(",")[:8],
+        self.assertEqual(body.splitlines()[0].split(",")[:7],
                          ["timestamp", "clip_sec", "track_id", "action", "reference",
-                          "duration_sec", "at_edge", "ml_confidence"])
+                          "duration_sec", "at_edge"])
         self.assertIn("at_edge", page)
         self.assertNotIn("target_kind", page)
 

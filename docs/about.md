@@ -102,10 +102,6 @@ contiguous runs of frames in which a track is inside a reference or near another
 (15 frames by default) doesn't break an episode. Each episode becomes an **interaction**, and its start and
 end become **enter** and **exit** events. Because both tables come from the same pass, they always agree.
 
-At nest tubes, a Random Forest classifier also judges entries and exits. It uses 20 features of each track
-near a tube (shape, speed, distance to the nest, direction) to separate real entries and exits from bees
-that just walk past. Those rows are marked `source = gpu`.
-
 ### Accuracy
 
 Validated on bee hotels: on 110 minutes of video with 300 hand-annotated foraging events, precision was

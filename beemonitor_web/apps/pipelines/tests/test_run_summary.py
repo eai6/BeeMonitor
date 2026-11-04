@@ -8,7 +8,7 @@ from unittest import mock
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.pipelines import aggregate, engine, period, review, runsummary
+from apps.pipelines import aggregate, engine, runsummary
 from apps.pipelines.models import AddedEvent, EventReview, PipelineRun
 from apps.pipelines.tests.test_batch_select import BatchSelectTests
 from apps.pipelines.tests.test_event_review import EventReviewTests
@@ -406,66 +406,7 @@ class BigBatchTests(EventReviewTests):
         self.assertNotIn("js/clip_viewer.js", html)
 
 
-class TripQualityTests(EventReviewTests):
-    """Precision and recall of trips against the reviewed events."""
-
-    def _clip(self, rows, title, minute):
-        from datetime import datetime, timezone as tz
-
-        video = Video.objects.create(
-            user=self.owner, device=self.video.device, title=title, storage_key=f"tq/{title}.mp4",
-            file_size_bytes=2_000_000, status=Video.Status.READY, fps=10.0, width=10, height=10,
-            recorded_at=datetime(2024, 5, 8, 12, minute, tzinfo=tz.utc), duration_seconds=600.0)
-        return PipelineRun.objects.create(
-            pipeline=self.run.pipeline, user=self.owner, status="completed", batch_id=uuid.uuid4(),
-            started_at=timezone.now(), steps=[{"id": "v", "block_type": "input.video",
-                                               "config": {"video_id": str(video.pk)}}],
-            context={"e": {"table_kind": "events", "rows": rows}})
-
-    def _row(self, action, frame, track, tube="1"):
-        return {"frame": frame, "track_id": track, "action": action, "reference": tube}
-
-    def _vote(self, run, row, verdict):
-        EventReview.objects.create(run=run, user=self.owner, verdict=verdict,
-                                   event_key=review.event_key(row))
-
-    def test_a_rejected_entry_and_an_added_one_cost_the_trips_around_them(self):
-        rows = [self._row("exit", 10, 1), self._row("enter", 100, 2), self._row("exit", 200, 3),
-                self._row("enter", 300, 4)]
-        run = self._clip(rows, "a", 0)
-        for row in rows[:3]:
-            self._vote(run, row, "accepted")
-        self._vote(run, rows[3], "rejected")
-        AddedEvent.objects.create(run=run, user=self.owner, frame=400, action="enter", reference="1")
-        q = period.trip_quality([run])
-        self.assertEqual((q["found"], q["true"], q["matched"]), (2, 2, 1))
-        self.assertEqual((q["precision"], q["recall"], q["clips"]), (50, 50, 1))
-
-    def test_a_clip_not_fully_reviewed_counts_for_nothing_and_breaks_the_stretch(self):
-        out, back = self._row("exit", 10, 1), self._row("enter", 20, 2)
-        done = self._clip([out], "a", 0)
-        self._vote(done, out, "accepted")
-        partly = self._clip([back, self._row("exit", 30, 3)], "b", 10)
-        self._vote(partly, back, "accepted")
-        last = self._clip([back], "c", 20)
-        self._vote(last, back, "accepted")
-        q = period.trip_quality([done, partly, last])
-        self.assertEqual((q["found"], q["true"], q["clips"]), (0, 0, 2))
-
-    def test_nothing_fully_reviewed_gives_no_numbers(self):
-        self.assertIsNone(period.trip_quality([self._clip([self._row("exit", 1, 1)], "a", 0)]))
-
-    def test_the_panel_shows_them(self):
-        rows = [self._row("exit", 10, 1), self._row("enter", 100, 2)]
-        run = self._clip(rows, "a", 0)
-        for row in rows:
-            self._vote(run, row, "accepted")
-        PipelineRun.objects.filter(pk=run.pk).update(batch_id=self.batch)
-        self.client.force_login(self.owner)
-        html = self.client.get(reverse("pipelines:batch_detail", args=[self.batch])).content.decode()
-        self.assertIn("1 of 1 true trips found", html)
-        self.assertNotIn("Suggestion right", html)
-
+class TripsNodeTests(EventReviewTests):
     def test_the_trips_node_needs_no_update_and_is_no_swap_for_an_analyzer(self):
         from apps.pipelines import regroup
         from apps.pipelines.registry import get_block

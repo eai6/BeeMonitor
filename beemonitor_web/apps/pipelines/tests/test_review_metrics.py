@@ -1,8 +1,7 @@
 """Review metrics count the actions the batch chooses (memory/70).
 
 Foraging needs exits and entries: stays are still reviewed, but the batch's
-precision and recall can leave them out. A classifier's cut-off can be tried
-on the reviewed events it scored.
+precision and recall can leave them out.
 """
 
 import json
@@ -67,18 +66,6 @@ class ReviewActionsTests(PeriodBase):
         res = self.client.post(reverse("pipelines:batch_review_actions", args=[self.batch]),
                                {"actions": ["stay"]})
         self.assertEqual(res.status_code, 404)
-
-    def test_scored_reviewed_events_feed_the_cut_off_panel(self):
-        run = self.a["run"]
-        for r in run.context["e"]["rows"]:
-            r["ml_confidence"] = 0.9 if r["action"] != "stay" else 0.2
-        run.save()
-        self.client.force_login(self.owner)
-        page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
-        data = json.loads(page.context["cutoff_json"])
-        self.assertIn(["stay", 0.2, "rejected"], data["scored"])
-        self.assertEqual(data["added"], 1)
-        self.assertContains(page, "Classifier cut-off")
 
 
 class ClipReviewedTests(PeriodBase):

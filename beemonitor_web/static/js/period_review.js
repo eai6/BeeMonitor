@@ -90,6 +90,13 @@
     strip.appendChild(now);
   }
 
+  // A trip's call, whoever made it: what the lanes colour and review resumes by.
+  var TRIP_CALL = {accepted: 'same bee', rejected: 'not this pair', disputed: 'reviewers disagree'};
+  function tripCall(t) {
+    if (t.mine) return t.mine.verdict;
+    return t.accepted && t.rejected ? 'disputed' : t.accepted ? 'accepted' : t.rejected ? 'rejected' : '';
+  }
+
   var showAll = false;
   function renderLanes() {
     var box = $('[data-pr-lanes]');
@@ -120,13 +127,14 @@
           var a = findEvent(tr.exit), b = findEvent(tr.entry);
           if (!a || !b) return;
           var band = document.createElement('span');
+          var called = tripCall(tr);
           band.className = 'absolute top-1.5 h-1.5 rounded-full';
           band.style.left = pct(a.t) + '%';
           band.style.width = Math.max(0.2, pct(b.t) - pct(a.t)) + '%';
-          band.style.background = tr.mine && tr.mine.verdict === 'accepted' ? 'rgba(21,128,61,0.35)'
-            : 'rgba(3,105,161,0.18)';
+          band.style.background = called === 'accepted' ? '#15803d' : called === 'rejected' ? '#b91c1c'
+            : called === 'disputed' ? '#b45309' : 'rgba(3,105,161,0.18)';
           band.title = 'exit → next entry: ' + Math.round(tr.gap_sec / 60) + ' min' +
-            (tr.same_marker ? ' (same marker)' : '');
+            (tr.same_marker ? ' (same marker)' : '') + ' · ' + (TRIP_CALL[called] || 'not reviewed');
           track.appendChild(band);
         });
       }
@@ -137,9 +145,6 @@
         m.style.left = pct(e.t) + '%';
         m.style.width = '3px';
         m.style.background = COLORS[e.action] || '#374151';
-        var acc = e.accepted || 0, rej = e.rejected || 0;
-        if (acc || rej) m.style.boxShadow = '0 0 0 2px var(--bm-surface, #fff), 0 0 0 4px ' +
-          (acc && rej ? '#b45309' : rej ? '#b91c1c' : '#15803d');
         m.title = clock(e.clock) + ' ' + e.action + ' tube ' + tube(ref) + ' · track ' + e.track_id;
         m.setAttribute('aria-label', m.title);
         m.addEventListener('click', function () { goToEvent(x); });
@@ -200,8 +205,9 @@
 
   function paintProgress() {
     var el = $('[data-pr-progress]');
-    var tripsDone = P.trips.filter(function (t) { return t.mine || t.accepted || t.rejected; }).length;
-    el.textContent = P.trips.length + ' suggested trips · ' + tripsDone + ' reviewed';
+    var tripsDone = P.trips.filter(tripCall).length;
+    el.textContent = P.trips.length + ' suggested trips · ' + tripsDone + ' reviewed · ' +
+      (P.trips.length - tripsDone) + ' to go';
   }
 
   // ── The player ───────────────────────────────────────────────────────────
@@ -247,20 +253,6 @@
   // A mark or the side list: go to that moment. Events are reviewed on each
   // clip's own page; here they only place the trips.
   function goToEvent(x) { loadClip(x.c, x.e.frame, false); }
-  function stopReview(msg) {
-    trip.on = false; tp.on = false;
-    if (ov) ov.focus(null);
-    if ($('[data-pr-trip]')) $('[data-pr-trip]').hidden = true;
-    video.pause();
-    applySpeed(1);
-    toggleButtons(false);
-    if (msg) status.textContent = msg;
-  }
-  function toggleButtons(reviewing) {
-    if ($('[data-pr-review-trips]')) $('[data-pr-review-trips]').hidden = reviewing;
-    if ($('[data-pr-exit]')) $('[data-pr-exit]').hidden = !reviewing;
-  }
-
   // Playback speed in trip review. Set as the default too: a new clip's video
   // starts at the default, and a trip runs across clips.
   var SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16];
@@ -418,9 +410,10 @@
     head.style.left = Math.max(0, Math.min(100, 100 * (t - t0) / span)) + '%';
   }
 
-  function tripGo(i) {
+  // ``still``: show the trip without playing it, as the page opens (a browser
+  // won't start a video nobody asked for).
+  function tripGo(i, still) {
     var panel = $('[data-pr-trip]');
-    if (i >= trip.list.length) { stopReview('Trip review finished: every suggested trip has been shown.'); return; }
     trip.i = i;
     var t = trip.list[i], a = findEvent(t.exit), b = findEvent(t.entry);
     $('[data-pr-relink]').hidden = true;
@@ -428,12 +421,36 @@
       ' → back ' + clock(b.clock).slice(11);
     $('[data-pr-trip-where]').textContent = Math.round(t.gap_sec / 60) + ' min out · trip ' + (i + 1) + ' of ' +
       trip.list.length + (t.same_marker ? ' · same marker' : '');
+    var call = tripCall(t), callEl = $('[data-pr-trip-call]');
+    callEl.hidden = !call;
+    callEl.textContent = call ? 'Already reviewed: ' + TRIP_CALL[call] +
+      (t.mine && t.mine.by ? ' (' + t.mine.by + ')' : '') + '. Vote again to change it.' : '';
+    $('[data-pr-trip-back]').disabled = i === 0;
+    $('[data-pr-trip-next]').disabled = i + 1 >= trip.list.length;
     showSide('A', t.exit, a, 'EXIT');
     showSide('B', t.entry, b, 'ENTER');
     panel.hidden = false;
     tp.a = a; tp.b = b;
     renderTripBar();
-    tripPlay('moments');
+    if (still) {
+      var at = segsBetween(a.t - PAD, a.t + PAD, null)[0];
+      tp.on = false;
+      $('[data-pr-trip-now]').textContent = 'Press P to play the exit, then the entry.';
+      if (at) loadClip(at.c, at.from, false);
+    } else {
+      tripPlay('moments');
+    }
+  }
+  // After a vote, on to the next trip nobody has called, coming round to any
+  // passed over.
+  function tripNext() {
+    var n = trip.list.length;
+    for (var k = 1; k < n; k++) {
+      var i = (trip.i + k) % n;
+      if (!tripCall(trip.list[i])) { tripGo(i); return; }
+    }
+    tripGo(trip.i, true);
+    $('[data-pr-trip-now]').textContent = 'Every suggested trip here has been reviewed.';
   }
   function tripVote(t, entry, verdict, reason, relinked) {
     var exitClip = P.clips[t.exit.clip];
@@ -461,7 +478,7 @@
       b.className = 'h-9 px-2.5 rounded-md border border-gray-300 bg-white hover:bg-gray-50';
       b.textContent = clock(x.e.clock).slice(11) + ' · track ' + x.e.track_id + (x.e.marker ? ' · ' + x.e.marker : '');
       b.addEventListener('click', function () {
-        tripVote(t, {clip: x.c, key: x.e.key}, 'accepted', 'relinked', true).then(function () { tripGo(trip.i + 1); });
+        tripVote(t, {clip: x.c, key: x.e.key}, 'accepted', 'relinked', true).then(function () { tripNext(); });
       });
       list.appendChild(b);
     });
@@ -472,31 +489,34 @@
       b.textContent = r[1];
       b.addEventListener('click', function () {
         tripVote(t, r[0] === 'didn\'t come back' ? null : t.entry, 'rejected', r[0], false)
-          .then(function () { tripGo(trip.i + 1); });
+          .then(function () { tripNext(); });
       });
       list.appendChild(b);
     });
     $('[data-pr-relink]').hidden = false;
   }
+  // This page is for reviewing trips: it opens on the first still to do, or
+  // with none left, at the top to look them over.
   function startTrips() {
     trip.list = P.trips.filter(function (t) { return P.clips[t.exit.clip].can_review; });
-    if (!trip.list.length) { status.textContent = 'No suggested trips in this period.'; return; }
+    if (!$('[data-pr-trip]') || !trip.list.length) return false;
     trip.on = true;
     applySpeed(speed);
-    toggleButtons(true);
-    tripGo(0);
+    tripGo(Math.max(0, trip.list.findIndex(function (t) { return !tripCall(t); })), true);
+    return true;
   }
 
   // ── Wiring ───────────────────────────────────────────────────────────────
-  if ($('[data-pr-review-trips]')) {
-    $('[data-pr-review-trips]').addEventListener('click', startTrips);
-    $('[data-pr-exit]').addEventListener('click', function () { stopReview(''); });
+  if ($('[data-pr-trip]')) {
     $('[data-pr-trip-yes]').addEventListener('click', function () {
       var t = trip.list[trip.i];
-      tripVote(t, t.entry, 'accepted', '', false).then(function () { tripGo(trip.i + 1); });
+      tripVote(t, t.entry, 'accepted', '', false).then(function () { tripNext(); });
     });
     $('[data-pr-trip-no]').addEventListener('click', function () { relinkChooser(trip.list[trip.i]); });
-    $('[data-pr-trip-skip]').addEventListener('click', function () { tripGo(trip.i + 1); });
+    $('[data-pr-trip-next]').addEventListener('click', function () {
+      if (trip.i + 1 < trip.list.length) tripGo(trip.i + 1);
+    });
+    $('[data-pr-trip-back]').addEventListener('click', function () { if (trip.i > 0) tripGo(trip.i - 1); });
     $$('[data-pr-trip-play]').forEach(function (b) {
       b.addEventListener('click', function () { tripPlay(b.getAttribute('data-pr-trip-play')); });
     });
@@ -506,8 +526,8 @@
       if (k === 'p') tripPlay('moments');
       else if (k === 'y') $('[data-pr-trip-yes]').click();
       else if (k === 'n') $('[data-pr-trip-no]').click();
-      else if (ev.key === 'ArrowRight') tripGo(trip.i + 1);
-      else if (ev.key === 'Escape') stopReview('');
+      else if (ev.key === 'ArrowRight') $('[data-pr-trip-next]').click();
+      else if (ev.key === 'ArrowLeft') $('[data-pr-trip-back]').click();
       else hit = false;
       if (hit) { ev.preventDefault(); ev.stopPropagation(); }
     }, true);
@@ -516,6 +536,9 @@
   renderTicks();
   renderStrip();
   renderLanes();
-  if (P.clips.length) loadClip(0, 0, false);
-  else status.textContent = 'No analysed clips with an Events step in this period.';
+  if (!P.clips.length) status.textContent = 'No analysed clips with an Events step in this period.';
+  else if (!startTrips()) {
+    loadClip(0, 0, false);
+    status.textContent = 'No suggested trips in this period.';
+  }
 })();

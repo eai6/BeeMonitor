@@ -221,7 +221,6 @@ site's time zone on **Videos → Sites**; until you do, times from that site hav
 | `reference` | The reference, for example `reference_3` (the id from your layout, the same across a site's clips) |
 | `duration_sec` | For a stay: how long it stayed |
 | `at_edge` | `true` for an exit on the first frame analysed or an enter on the last (the insect may have been there before recording started, or still there after it stopped). Blank for an enter or a stay when the clip's length is unknown |
-| `ml_confidence` | 0–1, the event classifier's score, when **Score events with the ML classifier** is on in the Events step. Nothing is removed; filter on it yourself |
 
 ### Interactions
 
