@@ -98,7 +98,14 @@ own page. Logic: pipelines/period.py.
     <div class="flex flex-wrap gap-2 items-center">
       <button type="button" data-pr-trip-yes class="h-11 px-5 rounded bg-green-700 hover:bg-green-800 text-white font-bold">Yes (Y)</button>
       <button type="button" data-pr-trip-no class="h-11 px-5 rounded bg-red-700 hover:bg-red-800 text-white font-bold">No (N)</button>
-      <button type="button" data-pr-trip-back class="h-11 px-3.5 rounded border border-gray-300 bg-white hover:bg-gray-50 ml-auto disabled:opacity-50">← Previous</button>
+      <form data-pr-trip-jump class="flex items-center gap-1.5 ml-auto text-[13px]">
+        <button type="button" data-pr-trip-first class="h-11 px-3.5 rounded border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50">First</button>
+        <label class="flex items-center gap-1.5">Trip
+          <input type="number" min="1" step="1" data-pr-trip-to class="h-11 w-20 border border-gray-300 rounded-md px-2 text-sm">
+        </label>
+        <button type="submit" class="h-11 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">Go</button>
+      </form>
+      <button type="button" data-pr-trip-back class="h-11 px-3.5 rounded border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50">← Previous</button>
       <button type="button" data-pr-trip-next class="h-11 px-3.5 rounded border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50">Next →</button>
     </div>
     <form data-pr-relink hidden class="bg-gray-50 border border-gray-200 rounded-md p-3 flex flex-wrap items-center gap-2 text-[13px]">

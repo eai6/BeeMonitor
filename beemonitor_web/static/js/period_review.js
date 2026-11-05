@@ -286,6 +286,9 @@
     callEl.textContent = call ? 'Already reviewed: ' + TRIP_CALL[call] +
       (t.mine && t.mine.by ? ' (' + t.mine.by + ')' : '') + '.' +
       (t.mine && t.mine.reason ? ' Note: ' + t.mine.reason + '.' : '') + ' Vote again to change it.' : '';
+    $('[data-pr-trip-first]').disabled = i === 0;
+    $('[data-pr-trip-to]').value = i + 1;
+    $('[data-pr-trip-to]').max = trip.list.length;
     $('[data-pr-trip-back]').disabled = i === 0;
     $('[data-pr-trip-next]').disabled = i + 1 >= trip.list.length;
     paintType(t);
@@ -428,6 +431,14 @@
       if (trip.i + 1 < trip.list.length) tripGo(trip.i + 1);
     });
     $('[data-pr-trip-back]').addEventListener('click', function () { if (trip.i > 0) tripGo(trip.i - 1); });
+    $('[data-pr-trip-first]').addEventListener('click', function () { tripGo(0); });
+    $('[data-pr-trip-jump]').addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      var to = $('[data-pr-trip-to]'), n = parseInt(to.value, 10);
+      to.blur();
+      if (n >= 1 && n <= trip.list.length) tripGo(n - 1);
+      else to.value = trip.i + 1;
+    });
     $$('[data-pr-trip-play]').forEach(function (b) {
       b.addEventListener('click', function () { tripPlay(b.getAttribute('data-pr-trip-play')); });
     });
