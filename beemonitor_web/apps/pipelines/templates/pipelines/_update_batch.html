@@ -28,7 +28,7 @@
       {% if update_status.not_replayable %}
       <p class="text-sm text-yellow-800">{{ update_status.not_replayable }} clip{{ update_status.not_replayable|pluralize }} can't be re-tracked on the web (no saved detections): {% if update_status.not_replayable == 1 %}it keeps its{% else %}they keep their{% endif %} tracks until run on the GPU again.</p>
       {% endif %}
-      <p class="text-xs text-gray-500">Loads each clip's saved detections and tracking and works them out again with the pipeline's current tracking time windows, Events, Interactions and insect groups. Only detection and the species reading need the GPU. Same batch; review votes move to the matching new events; no GPU-hours.</p>
+      <p class="text-xs text-gray-500">Loads each clip's saved detections and tracking and works them out again with the pipeline's current tracking time windows, Events, Interactions and insect groups. Only detection and the species reading need the GPU. Same batch; review votes move to the matching new events; no GPU-hours. The Trips node needs no Update: Review trips uses its rules as soon as the pipeline is saved.</p>
       <div class="flex flex-wrap items-center gap-2 text-sm" data-retrack-check>
         <button type="button" data-retrack-check-run data-url="{% url 'pipelines:batch_retrack_check' batch_id %}"
                 class="h-9 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50 text-gray-800">How close is the web re-tracking?</button>

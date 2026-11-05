@@ -258,6 +258,12 @@
     head.style.left = Math.max(0, Math.min(100, 100 * (t - t0) / span)) + '%';
   }
 
+  function tripLength(sec) {
+    if (sec < 60) return Math.round(sec) + ' s';
+    var min = Math.round(sec / 60);
+    return min < 60 ? min + ' min' : Math.floor(min / 60) + ' h ' + (min % 60) + ' min';
+  }
+
   // ``still``: show the trip without playing it, as the page opens (a browser
   // won't start a video nobody asked for).
   function tripGo(i, still) {
@@ -267,7 +273,7 @@
     $('[data-pr-relink]').hidden = true;
     $('[data-pr-trip-title]').textContent = 'Tube ' + tube(t.reference) + ' · out ' + clock(a.clock).slice(11) +
       ' → back ' + clock(b.clock).slice(11);
-    $('[data-pr-trip-where]').textContent = Math.round(t.gap_sec / 60) + ' min out · trip ' + (i + 1) + ' of ' +
+    $('[data-pr-trip-where]').textContent = tripLength(t.gap_sec) + ' out · trip ' + (i + 1) + ' of ' +
       trip.list.length + (t.same_marker ? ' · same marker' : '');
     var call = tripCall(t), callEl = $('[data-pr-trip-call]');
     callEl.hidden = !call;
