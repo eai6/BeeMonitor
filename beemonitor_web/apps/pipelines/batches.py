@@ -59,8 +59,7 @@ def set_review_actions(batch_id, user, actions):
 def neighbours(run):
     """Where a clip sits in its batch, for previous/next on its results page:
     ``{position, total, prev, next, batch_url}`` (prev/next are
-    ``{url, title}`` or None), in the batch page's order, newest first, so next
-    is the row below; None outside a batch."""
+    ``{url, title}`` or None), in recording order; None outside a batch."""
     from django.urls import reverse
 
     from apps.videos.models import Video
@@ -82,7 +81,7 @@ def neighbours(run):
             continue
         clips.append((video.recorded_at is None, video.recorded_at, video.title or "", str(r.pk),
                       job, video.title or f"Video {video.pk}"))
-    clips.sort(key=lambda c: c[:4], reverse=True)
+    clips.sort(key=lambda c: c[:4])
     at = next((i for i, c in enumerate(clips) if c[3] == str(run.pk)), None)
     if at is None:
         return None

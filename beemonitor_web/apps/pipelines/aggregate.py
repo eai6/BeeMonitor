@@ -468,7 +468,8 @@ def batch_rows(runs, actions=None):
             # the work; a price is a claim about a rate card that drifts.
             "gpu_seconds": float(job.execution_seconds) if job and job.execution_seconds else 0.0,
         })
-    rows.sort(key=lambda r: (r["when"] is None, r["when"]), reverse=True)
+    # Oldest first: the row below is the next clip forward in time.
+    rows.sort(key=lambda r: (r["when"] is None, r["when"]))
     return rows
 
 

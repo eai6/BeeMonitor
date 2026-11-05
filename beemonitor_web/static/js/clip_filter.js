@@ -30,7 +30,7 @@
   if (!rows.length) return;
   if (indexEl) window.bmClipRows = rows;
   var parent = indexEl ? null : rows[0].parentNode;
-  // The server's order (newest first), so "Newest" puts it back exactly.
+  // The server's order (oldest first), so "Oldest" puts it back exactly.
   rows.forEach(function (r, i) { r.setAttribute('data-f-order', i); });
   // Sorted rows go back in before this, wherever they now are.
   var end = null;
@@ -66,7 +66,7 @@
     var params = new URLSearchParams(window.location.search);
     controls.forEach(function (el) {
       var v = el.type === 'checkbox' ? (el.checked ? '1' : '') : el.value.trim();
-      if (el.getAttribute('data-filter') === 'sort' && v === 'new') v = '';
+      if (el.getAttribute('data-filter') === 'sort' && v === 'old') v = '';
       if (v) params.set(key(el), v); else params.delete(key(el));
     });
     if (status !== 'all') params.set('status', status); else params.delete('status');
@@ -111,7 +111,7 @@
 
   function sortRows(by) {
     var field = by === 'new' || by === 'old' || !by ? 'order' : by;
-    var sign = by === 'old' ? -1 : 1;
+    var sign = by === 'new' ? -1 : 1;
     var sorted = rows.slice().sort(function (a, b) {
       var x = num(a.getAttribute('data-f-' + field));
       var y = num(b.getAttribute('data-f-' + field));
@@ -235,7 +235,7 @@
   function apply() {
     paintSites();
     var sortEl = bar.querySelector('[data-filter="sort"]');
-    sortRows(sortEl ? sortEl.value : 'new');
+    sortRows(sortEl ? sortEl.value : 'old');
     var visible = [];
     ordered.forEach(function (r) {
       var ok = matches(r);

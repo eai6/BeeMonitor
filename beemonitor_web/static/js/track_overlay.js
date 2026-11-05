@@ -67,7 +67,7 @@
     var data = null;          // payload
     var byFrame = null;       // frame -> [start row, count] (Int32Array pairs)
     var perTrack = {};        // id -> {frames, cx, cy, lost}
-    var opts = {boxes: true, species: true, trails: true, lost: true, regions: false,
+    var opts = {boxes: true, species: true, trails: true, lost: true, regions: true,
                 events: true, interactions: true};
     var focused = null;
     var onlyRef = null;       // show one reference's events and spells only
