@@ -125,14 +125,16 @@ def _videos_payload(device, limit: int = 12) -> list:
 
 
 def _usb_text(usb) -> "dict | None":
-    """Turn the device's raw usb-status dict into {ok, text, running?, pct?}."""
+    """Turn the device's raw usb-status dict into {ok, text, running?, pct?,
+    space?}. ``space`` is the stick's size and room as of the last copy."""
     if not usb:
         return None
     state = usb.get("state")
+    space = _usb_space(usb)
     if state == "running":
         pct = int(usb.get("pct") or 0)
         done, total = usb.get("done") or 0, usb.get("total") or 0
-        return {"ok": True, "running": True, "pct": pct,
+        return {"ok": True, "running": True, "pct": pct, "space": space,
                 "text": f"Copying to USB… {pct}% ({done}/{total})"}
     if state == "ejected":
         return {"ok": True, "text": "USB ejected — safe to remove."}
@@ -144,9 +146,20 @@ def _usb_text(usb) -> "dict | None":
             parts.append(f"{s} already on USB")
         if f:
             parts.append(f"{f} failed")
-        return {"ok": True, "text": "USB: " + ", ".join(parts)}
+        return {"ok": True, "text": "USB: " + ", ".join(parts), "space": space}
     detail = usb.get("detail", "")
-    return {"ok": False, "text": _USB_ERRORS.get(detail, detail or "USB transfer failed.")}
+    return {"ok": False, "space": space,
+            "text": _USB_ERRORS.get(detail, detail or "USB transfer failed.")}
+
+
+def _usb_space(usb):
+    """ "12.4 GB free of 32 GB", or "" before a unit reports it."""
+    from django.template.defaultfilters import filesizeformat
+
+    size, free = usb.get("size_bytes"), usb.get("free_bytes")
+    if not size:
+        return ""
+    return f"{filesizeformat(free or 0)} free of {filesizeformat(size)}".replace("\xa0", " ")
 
 
 def _fetch_weather(lat: float, lon: float, start_date: str, end_date: str,

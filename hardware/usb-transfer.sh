@@ -44,9 +44,15 @@ write_status() {  # ok(true|false) detail
     local pct=0
     [ "$total_to_copy" -gt 0 ] && pct=$(( done_count * 100 / total_to_copy ))
     [ "$STATE" = "done" ] && pct=100
-    printf '{"at":"%s","state":"%s","ok":%s,"detail":"%s","device":"%s","copied":%s,"skipped":%s,"failed":%s,"done":%s,"total":%s,"pct":%s,"bytes":%s,"human":"%s"}\n' \
+    # The stick's size and space left, for the device page.
+    local size=0 free=0
+    if [ -d "${TARGET:-}" ]; then
+        read -r size free < <(df -B1 --output=size,avail "$TARGET" 2>/dev/null | tail -1)
+    fi
+    printf '{"at":"%s","state":"%s","ok":%s,"detail":"%s","device":"%s","copied":%s,"skipped":%s,"failed":%s,"done":%s,"total":%s,"pct":%s,"bytes":%s,"human":"%s","size_bytes":%s,"free_bytes":%s}\n' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$STATE" "$1" "$2" "$STATUS_DEV" \
         "$copied" "$skipped" "$failed" "$done_count" "$total_to_copy" "$pct" "$bytes" "$human" \
+        "${size:-0}" "${free:-0}" \
         > "$STATUS_FILE" 2>/dev/null
     chmod 644 "$STATUS_FILE" 2>/dev/null
 }

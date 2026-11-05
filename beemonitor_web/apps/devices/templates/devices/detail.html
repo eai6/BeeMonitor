@@ -141,6 +141,8 @@
         <div class="mt-2 text-2xl font-semibold {% if storage_pct is None or not online %}text-gray-300{% else %}text-gray-900{% endif %}" id="m-storage-pct">{% if online and storage_pct is not None %}{{ storage_pct|floatformat:1 }}%{% else %}—{% endif %}</div>
         <div class="dev-offline mt-1 text-xs text-red-700 flex items-center gap-1.5 {% if online %}hidden{% endif %}"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>Offline</div>
         <div class="mt-1 text-xs text-gray-400" id="m-storage-free">{% if online and storage_pct is not None %}{{ metrics.storage_free_human|default:"—" }} free (whole card){% endif %}</div>
+        {% comment %}The USB stick: connected now, the last copy, and its room then.{% endcomment %}
+        <div class="mt-1 text-xs text-gray-500" id="m-usb">{% if online %}{% if usb_present %}USB connected{% if usb_status %} · {% endif %}{% endif %}{% if usb_status %}{{ usb_status.text }}{% if usb_status.space %} · {{ usb_status.space }}{% endif %}{% endif %}{% endif %}</div>
         <div class="mt-1 text-xs text-gray-500" id="m-recordings">{% if online and metrics.recordings_human %}Clips: <span class="font-medium text-gray-700">{{ metrics.recordings_human }}</span>{% if metrics.videos_recorded %} · {{ metrics.videos_recorded }} on device{% endif %}{% endif %}</div>
       </div>
       <!-- Uptime -->
@@ -1202,6 +1204,16 @@
         if (ver) ver.innerHTML = d.code_commit
           ? 'version <span class="font-mono font-medium text-gray-700">' + esc(d.code_commit) + '</span>'
           : '<span class="text-gray-400">version unknown (waiting for a beat)</span>';
+        var usbEl = document.getElementById('m-usb');
+        if (usbEl) {
+          var usbParts = [];
+          if (d.usb_present) usbParts.push('USB connected');
+          if (d.usb_status) {
+            usbParts.push(d.usb_status.text);
+            if (d.usb_status.space) usbParts.push(d.usb_status.space);
+          }
+          usbEl.textContent = usbParts.join(' · ');
+        }
         var rec = document.getElementById('m-recordings');
         if (rec) {
           if (d.recordings_human) {

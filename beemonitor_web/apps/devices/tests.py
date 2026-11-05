@@ -229,3 +229,17 @@ class FixedDeviceSettingsBeatTests(TestCase):
         self.assertEqual(resp["record_post_roll"], 5)
         self.assertEqual(resp["record_max_segment"], 600)
         self.assertEqual(resp["video_upload_mode"], "auto")
+
+
+class UsbTextTests(TestCase):
+    def test_a_finished_copy_says_how_much_room_the_stick_has(self):
+        from apps.devices.views import _usb_text
+
+        out = _usb_text({"state": "done", "ok": True, "copied": 3, "skipped": 1,
+                         "size_bytes": 32 * 2**30, "free_bytes": 12 * 2**30})
+        self.assertEqual(out["space"], "12.0 GB free of 32.0 GB")
+
+    def test_a_unit_on_older_software_reports_no_space(self):
+        from apps.devices.views import _usb_text
+
+        self.assertEqual(_usb_text({"state": "done", "ok": True, "copied": 3})["space"], "")
