@@ -162,15 +162,25 @@
       (e.by ? '' : e.marker ? ' · marker ' + e.marker : ' · no marker');
     var crops = $('[data-pr-trip-crops]', s.box);
     crops.innerHTML = '';
+    crops.setAttribute('data-for', e.key);
+    crops.setAttribute('data-label', chip + ' ' + tube(e.reference) + ' · track ' + e.track_id +
+      (e.species ? ' · ' + e.species : ''));
     if (!e.track_id) return;
     fetch(c.crops_url.replace(/\/0\/crops\.json(?=\?|$)/, '/' + e.track_id + '/crops.json'), {credentials: 'same-origin'})
       .then(function (r) { return r.ok ? r.json() : {crops: []}; })
       .then(function (d) {
-        (d.crops || []).slice(0, 4).forEach(function (cr) {
+        // Moved on to another trip while these loaded.
+        if (crops.getAttribute('data-for') !== e.key) return;
+        (d.crops || []).forEach(function (cr) {
+          var a = document.createElement('a');
+          a.href = cr.url; a.className = 'shrink-0';
+          a.setAttribute('data-crop', '');
+          if (cr.frame != null) a.title = 'frame ' + cr.frame;
           var img = document.createElement('img');
           img.src = cr.url; img.alt = 'track ' + e.track_id; img.loading = 'lazy';
-          img.className = 'w-12 h-12 object-contain bg-gray-50 rounded border border-gray-200';
-          crops.appendChild(img);
+          img.className = 'w-12 h-12 object-contain bg-gray-50 rounded border border-gray-200 hover:border-amber-400';
+          a.appendChild(img);
+          crops.appendChild(a);
         });
       }).catch(function () {});
   }
@@ -442,6 +452,9 @@
     });
     document.addEventListener('keydown', function (ev) {
       if (!trip.on || /^(INPUT|TEXTAREA|SELECT)$/.test((ev.target || {}).tagName || '')) return;
+      // The crop viewer is open: these keys aren't a vote.
+      var viewer = document.getElementById('crop-viewer');
+      if (viewer && !viewer.classList.contains('hidden')) return;
       var k = ev.key.toLowerCase(), hit = true;
       if (k === 'p') tripPlay('moments');
       else if (k === 'y') $('[data-pr-trip-yes]').click();

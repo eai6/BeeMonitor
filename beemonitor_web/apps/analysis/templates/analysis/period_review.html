@@ -88,10 +88,10 @@ own page. Logic: pipelines/period.py.
     </div>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
       {% for side in "AB" %}
-      <div class="flex flex-col gap-1.5" data-pr-side-{{ side }}>
+      <div class="flex flex-col gap-1.5 min-w-0" data-pr-side-{{ side }}>
         <span data-pr-trip-chip class="self-start font-mono text-xs font-bold text-white px-1.5 py-0.5 rounded"></span>
         <span data-pr-trip-who class="text-[13px] text-gray-700"></span>
-        <div data-pr-trip-crops class="flex gap-1"></div>
+        <div data-pr-trip-crops data-crop-strip class="flex gap-1 overflow-x-auto pb-1"></div>
       </div>
       {% endfor %}
     </div>
@@ -117,6 +117,7 @@ own page. Logic: pipelines/period.py.
   </section>
   {% endif %}
 </div>
+{% include "analysis/_crop_viewer.html" %}
 {{ payload|json_script:"period-data" }}
 <script src="{% static 'js/track_overlay.js' %}"></script>
 <script src="{% static 'js/period_review.js' %}"></script>
