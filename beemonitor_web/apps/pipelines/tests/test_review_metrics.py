@@ -110,3 +110,35 @@ class ClipReviewedTests(PeriodBase):
         self.client.force_login(self.owner)
         page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
         self.assertContains(page, "1 reviewed, left out")
+
+
+class MarkedClipWithVotesTests(PeriodBase):
+    def setUp(self):
+        super().setUp()
+        self.job, self.run = self.a["job"], self.a["run"]
+        self.url = reverse("analysis:clip_reviewed", args=[self.job.pk]) + f"?run={self.run.pk}"
+
+    def mark(self, user, on=True):
+        self.client.force_login(user)
+        return self.client.post(self.url, json.dumps({"reviewed": on}),
+                                content_type="application/json")
+
+    def test_a_marked_clip_with_votes_shows_it_in_the_list(self):
+        key = review.event_key(next(r for o in [self.run.context[k] for k in self.run.context]
+                                    if isinstance(o, dict) and o.get("table_kind") == "events"
+                                    for r in o["rows"]))
+        EventReview.objects.create(run=self.run, user=self.owner, event_key=key, verdict="accepted")
+        self.mark(self.owner)
+        page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
+        self.assertContains(page, 'title="Marked reviewed">✓</span> 1 / ')
+
+    def test_the_mark_is_shared_by_the_reviewers(self):
+        from apps.pipelines.models import BatchMember, ClipReview
+
+        BatchMember.objects.create(batch_id=self.batch, user=self.maria, role="reviewer")
+        self.mark(self.owner)
+        self.client.force_login(self.maria)
+        page = self.client.get(reverse("analysis:results", args=[self.job.pk]) + f"?run={self.run.pk}")
+        self.assertContains(page, "✓ Clip reviewed")
+        self.assertEqual(self.mark(self.maria, False).status_code, 200)
+        self.assertFalse(ClipReview.objects.exists())

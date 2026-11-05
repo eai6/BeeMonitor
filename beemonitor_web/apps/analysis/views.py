@@ -1697,12 +1697,12 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         from apps.pipelines.executors import pin_run
         pinned = pin_run(job, self.request.GET.get("run"))
         ctx["run_q"] = f"?run={pinned.pk}" if pinned else ""
-        # Whether this reviewer marked the clip done.
+        # Whether anyone marked the clip done: one shared call (memory/74).
         from apps.pipelines.models import ClipReview
-        from apps.pipelines.review import run_for_review
+        from apps.pipelines.review import run_for_review, shared_job_runs
         _rv = run_for_review(job, self.request.GET.get("run"))
         ctx["clip_reviewed"] = bool(_rv and ClipReview.objects.filter(
-            run=_rv, user=self.request.user).exists())
+            run_id__in=list(shared_job_runs([_rv], "clip_reviews"))).exists())
         # Previous / next clip of the batch, for reviewing clip after clip.
         from apps.pipelines import batches as pipeline_batches
         ctx["batch_nav"] = pipeline_batches.neighbours(pinned)
@@ -2345,8 +2345,8 @@ class TrackGroupView(LoginRequiredMixin, View):
 
 
 class ClipReviewedView(LoginRequiredMixin, View):
-    """Mark the clip reviewed by this reviewer, or take it back: JSON
-    ``{"reviewed": true|false}``. A clip with nothing to vote on counts as
+    """Mark the clip reviewed, or take it back, whoever marked it (memory/74):
+    JSON ``{"reviewed": true|false}``. A clip with nothing to vote on counts as
     reviewed only this way."""
 
     def post(self, request, pk):
@@ -2366,7 +2366,8 @@ class ClipReviewedView(LoginRequiredMixin, View):
         if done:
             ClipReview.objects.get_or_create(run=run, user=request.user)
         else:
-            ClipReview.objects.filter(run=run, user=request.user).delete()
+            ClipReview.objects.filter(
+                run_id__in=list(event_review.shared_job_runs([run], "clip_reviews"))).delete()
         return JsonResponse({"ok": True, "reviewed": done})
 
 
