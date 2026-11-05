@@ -48,6 +48,12 @@ def _place(request):
             device = videos[0].device
         elif len(sites) == 1 and None not in sites:
             site = videos[0].site
+        # The range of the place asked for: a batch can mix units from years
+        # apart, and its first week may hold none of this one's clips.
+        if g.get("device") or g.get("site_id"):
+            here = [v for v in videos if str(v.device_id) == g.get("device")
+                    or str(v.site_id) == g.get("site_id")]
+            videos = here or videos
         starts = [s for s in (period.local_start(v) for v in videos) if s]
         if starts and not start:
             start = min(starts).replace(minute=0, second=0, microsecond=0)

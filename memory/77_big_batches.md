@@ -50,3 +50,4 @@
 - Not this pair now asks for a free-text note (`TripReview.reason`, 300 chars, migration 0024) instead of the re-link buttons (user: "this should just be a text input"). Recall still works: a confirmed trip with an added end counts as one the pipeline missed (user: "it should not break recall").
 - Suggested trips now pair over reviewed events on the Review trips page: rejected events are left out and added ones count (`period.added_events`), so a trip can end on an added entry.
 - Side panel removed from Review trips. Timeline stays: clicking a mark or band opens that trip.
+- The event-by-event walk (Review events, its card) is gone from the clip page: jumping between events hid missed events (user). Voting is in Events near now as the clip plays; Mark clip reviewed is by hand.

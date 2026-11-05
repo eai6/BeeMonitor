@@ -153,7 +153,8 @@ class EventReviewTests(TestCase):
             page = self.client.get(reverse("analysis:results", args=[self.job.pk]))
         self.assertTrue(page.context["can_review"])
         self.assertEqual(page.context["review_counts"]["rejected"], 1)
-        self.assertContains(page, "data-rv-start")
+        self.assertContains(page, "data-ov-near")
+        self.assertNotContains(page, "data-rv-start")
 
     def test_the_batch_table_reports_review_progress(self):
         self.vote(self.owner, "rejected")

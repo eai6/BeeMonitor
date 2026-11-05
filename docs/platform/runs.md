@@ -101,9 +101,8 @@ the batch page (by username or email). A **Viewer** can watch and download but n
 appear under **Runs › Shared with me**. The public link stays view-only.
 
 **On a clip.** Next to each event in **Events near now**, click **Yes** or **No**; click again to take your
-vote back. **Review events** plays the clip from 2 seconds before each event, pauses on it and asks
-"Is this right?": **Yes (Y)**, **No (N)**, **Replay 2 s (R)** or **Skip (→)**. After a No you can say what's
-wrong (not an event, wrong tube, wrong action, can't tell). Reviewed marks on the tube lanes get a ring:
+vote back. Watch the whole clip as you go, so you catch what the system missed, and press **Mark clip reviewed**
+when you're done. Reviewed marks on the tube lanes get a ring:
 green accepted, red rejected, amber where reviewers disagree.
 
 **Over a period.** **Review a period** (on a unit's page, or **Review this period** on a batch from one unit or

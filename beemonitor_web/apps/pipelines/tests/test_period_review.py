@@ -127,6 +127,18 @@ class GatherTests(PeriodBase):
         r = self.client.get(reverse("analysis:period_review"), {"batch": str(self.batch)})
         self.assertEqual([c["title"] for c in r.context["payload"]["clips"]], ["a", "b"])
 
+    def test_a_place_in_a_batch_opens_on_its_own_clips_dates(self):
+        # A unit recorded two years after the batch's first clips: its link
+        # must not open on the batch's first week, where it has nothing.
+        other = Device.objects.create(owner=self.owner, name="Later", key_hash="hpr3",
+                                      prefix="bmk_pr3")
+        Video.objects.filter(pk=self.b["video"].pk).update(
+            device=other, recorded_at=datetime(2026, 7, 15, 11, 0, tzinfo=dt_timezone.utc))
+        self.client.force_login(self.owner)
+        r = self.client.get(reverse("analysis:period_review"),
+                            {"batch": str(self.batch), "device": other.pk})
+        self.assertEqual([c["title"] for c in r.context["payload"]["clips"]], ["b"])
+
     def test_the_batch_and_device_pages_link_to_it(self):
         self.client.force_login(self.owner)
         batch = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
