@@ -391,10 +391,6 @@ class SharedJobTests(PeriodBase):
                                 ).context["review_summary"]["trips"]
         self.assertEqual((trips["reviewed"], trips["rejected"], trips["disputed"]), (1, 1, 0))
 
-    def test_the_period_form_keeps_the_batch(self):
-        self.assertContains(self.page(batch=str(self.batch)),
-                            f'name="batch" value="{self.batch}"')
-
 
 class ClipNavigationTests(PeriodBase):
     """Previous / next clip on a batch clip's results page."""
@@ -492,3 +488,39 @@ class TripsOverReviewedEventsTests(PeriodBase):
         self.assertEqual(ended[0]["entry"]["key"], key)
         self.assertEqual(p["clips"][1]["added"][0]["id"], added.pk)
         self.assertEqual(p["clips"][1]["added"][0]["key"], key)
+
+
+class WholePlaceTests(PeriodBase):
+    """Opened from a batch: every trip of a unit or site, whatever the dates."""
+
+    def open(self, **params):
+        self.client.force_login(self.owner)
+        return self.client.get(reverse("analysis:period_review"),
+                               {"batch": str(self.batch), **params})
+
+    def test_no_limit_on_dates_or_clips(self):
+        Video.objects.filter(pk=self.b["video"].pk).update(
+            recorded_at=datetime(2026, 7, 15, 11, 0, tzinfo=dt_timezone.utc))
+        with mock.patch("apps.pipelines.period.MAX_CLIPS", 1):
+            r = self.open()
+        p = r.context["payload"]
+        self.assertEqual([c["title"] for c in p["clips"]], ["a", "b"])
+        self.assertFalse(r.context["data"]["notes"])
+        self.assertEqual(p["clips"][0]["fps"], self.payload(self.page())["clips"][0]["fps"])
+
+    def test_clips_of_other_places_are_left_out_and_offered(self):
+        other = Device.objects.create(owner=self.owner, name="Second", key_hash="hpr4",
+                                      prefix="bmk_pr4")
+        Video.objects.filter(pk=self.b["video"].pk).update(device=other)
+        r = self.open(device=other.pk)
+        self.assertEqual([c["title"] for c in r.context["payload"]["clips"]], ["b"])
+        self.assertContains(r, "data-pr-place")
+        self.assertEqual({(p["label"], p["on"]) for p in r.context["places"]},
+                         {("Hotel", False), ("Second", True)})
+
+    def test_it_has_the_clip_pages_layers_and_no_timeline_or_dates(self):
+        r = self.open()
+        for opt in ("boxes", "species", "trails", "lost", "regions", "events", "interactions"):
+            self.assertContains(r, f'data-pr-opt="{opt}"')
+        for gone in ("data-pr-lanes", "data-pr-strip", 'name="from"', "data-pr-side-title"):
+            self.assertNotContains(r, gone)

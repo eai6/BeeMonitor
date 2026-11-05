@@ -1,11 +1,8 @@
-// Period review (memory/62 §4, §4b): every event of one device or site over
-// hours or days on one time axis, one player that moves from clip to clip,
-// event review across clips, and review of suggested exit → entry trips.
+// Trip review (memory/62 §4b): every trip of one unit or site, one after
+// another, in one player that moves from clip to clip.
 //
-// The page carries the period as JSON (#period-data): clips (each with its
-// offset on the axis, frame rate, overlay / stream / review URLs and events)
-// and the suggested trips. Votes go to each clip's own review endpoint, so
-// the clip page, the batch and the CSVs show them too.
+// The page carries them as JSON (#period-data): clips (each with its offset,
+// frame rate, overlay and stream URLs and events) and the trips.
 (function () {
   'use strict';
   var root = document.getElementById('period-review');
@@ -15,31 +12,20 @@
   var $ = function (sel, el) { return (el || root).querySelector(sel); };
   var $$ = function (sel, el) { return Array.prototype.slice.call((el || root).querySelectorAll(sel)); };
   var COLORS = {exit: '#0369a1', enter: '#b45309', stay: '#6d28d9'};
-  var MAX_LANES = 12;
 
   var video = $('[data-pr-video]'), canvas = $('[data-pr-canvas]');
   var status = $('[data-pr-status]');
   var ov = window.TrackOverlay ? TrackOverlay(video, canvas) : null;
-  // The ROI and tubes, so a reviewer can see which hole an event was counted
-  // against. On unless this viewer turned it off.
-  var regionsBox = $('[data-pr-regions]');
-  if (regionsBox) {
-    try { if (localStorage.getItem('pr-regions') === '0') regionsBox.checked = false; } catch (e) {}
-    if (ov) ov.set({regions: regionsBox.checked});
-    regionsBox.addEventListener('change', function () {
-      if (ov) ov.set({regions: regionsBox.checked});
-      try { localStorage.setItem('pr-regions', regionsBox.checked ? '1' : '0'); } catch (e) {}
+  // What the player draws, as on the clip page.
+  $$('[data-pr-opt]').forEach(function (box) {
+    box.addEventListener('change', function () {
+      var o = {}; o[box.getAttribute('data-pr-opt')] = box.checked;
+      if (ov) ov.set(o);
     });
-  }
+  });
   var cur = -1;                 // index of the loaded clip
   var pendingFrame = null;      // frame to seek to once the clip has loaded
 
-  // Every event, with the clip it belongs to.
-  var all = [];
-  P.clips.forEach(function (c, ci) { c.events.forEach(function (e) { all.push({c: ci, e: e}); }); });
-  all.sort(function (a, b) { return a.e.t - b.e.t; });
-
-  function pct(t) { return Math.max(0, Math.min(100, 100 * t / (P.span || 1))); }
   function tube(ref) { return String(ref || '').replace(/^reference_/, ''); }
   function clock(iso) { return (iso || '').replace('T', ' ').slice(0, 19); }
   function csrf() { var el = $('[name=csrfmiddlewaretoken]'); return el ? el.value : ''; }
@@ -50,47 +36,7 @@
       .then(function (d) { if (!d.ok) throw new Error(d.error || 'Could not save'); return d; });
   }
 
-  // ── The axis ─────────────────────────────────────────────────────────────
-  function renderTicks() {
-    var box = $('[data-pr-ticks]');
-    box.innerHTML = '';
-    var start = new Date(P.start), hours = P.span / 3600;
-    var step = hours <= 12 ? 1 : hours <= 48 ? 6 : 24;
-    var first = new Date(start); first.setMinutes(0, 0, 0);
-    if (first < start) first.setHours(first.getHours() + 1);
-    for (var t = first; (t - start) / 1000 <= P.span; t = new Date(t.getTime() + step * 3600e3)) {
-      if (step > 1 && t.getHours() % step) continue;
-      var s = document.createElement('span');
-      s.className = 'absolute -translate-x-1/2 whitespace-nowrap';
-      s.style.left = pct((t - start) / 1000) + '%';
-      s.textContent = step >= 24 ? (t.getMonth() + 1) + '/' + t.getDate()
-        : String(t.getHours()).padStart(2, '0') + ':00';
-      box.appendChild(s);
-    }
-  }
-
-  function renderStrip() {
-    var strip = $('[data-pr-strip]');
-    strip.innerHTML = '';
-    P.clips.forEach(function (c, ci) {
-      var b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'absolute top-0.5 bottom-0.5 rounded-sm';
-      b.style.left = pct(c.offset) + '%';
-      b.style.width = Math.max(0.3, pct(c.duration)) + '%';
-      b.style.background = ci === cur ? '#15803d' : '#6b7280';
-      b.title = c.title + ' · ' + clock(c.start);
-      b.setAttribute('aria-label', 'Load clip ' + b.title);
-      b.addEventListener('click', function () { loadClip(ci, 0, true); });
-      strip.appendChild(b);
-    });
-    var now = document.createElement('div');
-    now.setAttribute('data-pr-now', '');
-    now.className = 'absolute -top-0.5 -bottom-0.5 w-0.5 bg-gray-900 pointer-events-none';
-    strip.appendChild(now);
-  }
-
-  // A trip's call, whoever made it: what the lanes colour and review resumes by.
+  // A trip's call, whoever made it: what review resumes by.
   var TRIP_CALL = {accepted: 'same bee', rejected: 'not this pair', disputed: 'reviewers disagree'};
   function tripCall(t) {
     if (t.mine) return t.mine.verdict;
@@ -102,95 +48,6 @@
   var stage = 'before';
   try { if (localStorage.getItem('pr-stage') === 'after') stage = 'after'; } catch (e) {}
   function stageTrips() { return P.trips.filter(function (t) { return t[stage]; }); }
-
-  var showAll = false;
-  function renderLanes() {
-    var box = $('[data-pr-lanes]');
-    box.innerHTML = '';
-    var by = {}, addedBy = {};
-    all.forEach(function (x) { (by[x.e.reference] = by[x.e.reference] || []).push(x); });
-    P.clips.forEach(function (c, ci) {
-      (c.added || []).forEach(function (a) {
-        by[a.reference] = by[a.reference] || [];
-        (addedBy[a.reference] = addedBy[a.reference] || []).push({c: ci, a: a});
-      });
-    });
-    var order = Object.keys(by).sort(function (a, b) { return by[b].length - by[a].length; });
-    var links = $('[data-pr-links]').checked;
-    (showAll ? order : order.slice(0, MAX_LANES)).forEach(function (ref) {
-      var row = document.createElement('div');
-      row.className = 'flex items-center gap-2';
-      var name = document.createElement('span');
-      name.className = 'w-[68px] shrink-0 text-right font-mono text-xs font-semibold text-gray-700';
-      name.textContent = 'tube ' + tube(ref);
-      var track = document.createElement('div');
-      track.className = 'relative flex-1 h-4 rounded-sm bg-gray-100';
-      if (links) {
-        stageTrips().forEach(function (tr) {
-          if (tr.reference !== ref) return;
-          var a = findEvent(tr.exit), b = findEvent(tr.entry);
-          if (!a || !b) return;
-          var band = document.createElement('button');
-          band.type = 'button';
-          var called = tripCall(tr);
-          band.className = 'absolute top-1.5 h-1.5 rounded-full';
-          band.style.left = pct(a.t) + '%';
-          band.style.width = Math.max(0.2, pct(b.t) - pct(a.t)) + '%';
-          band.style.background = called === 'accepted' ? '#15803d' : called === 'rejected' ? '#b91c1c'
-            : called === 'disputed' ? '#b45309' : 'rgba(3,105,161,0.18)';
-          band.title = 'exit → next entry: ' + Math.round(tr.gap_sec / 60) + ' min' +
-            (tr.same_marker ? ' (same marker)' : '') + ' · ' + (TRIP_CALL[called] || 'not reviewed');
-          band.setAttribute('aria-label', band.title);
-          band.addEventListener('click', function () {
-            var i = trip.list.indexOf(tr);
-            if (i >= 0) tripGo(i);
-          });
-          track.appendChild(band);
-        });
-      }
-      by[ref].forEach(function (x) {
-        var e = x.e, m = document.createElement('button');
-        m.type = 'button';
-        m.className = 'absolute top-0.5 bottom-0.5 rounded-sm';
-        m.style.left = pct(e.t) + '%';
-        m.style.width = '3px';
-        m.style.background = COLORS[e.action] || '#374151';
-        m.title = clock(e.clock) + ' ' + e.action + ' tube ' + tube(ref) + ' · track ' + e.track_id;
-        m.setAttribute('aria-label', m.title);
-        m.addEventListener('click', function () { goToEvent(x); });
-        track.appendChild(m);
-      });
-      // Added as missed by a reviewer: hollow and dashed (memory/62 §3b).
-      (addedBy[ref] || []).forEach(function (y) {
-        var a = y.a, m = document.createElement('button');
-        m.type = 'button';
-        m.className = 'absolute top-0.5 bottom-0.5 rounded-sm bg-white';
-        m.style.left = pct(a.t) + '%';
-        m.style.width = '6px';
-        m.style.border = '2px dashed ' + (COLORS[a.action] || '#374151');
-        m.title = a.action + ' tube ' + tube(ref) + ', added by ' + a.by;
-        m.setAttribute('aria-label', m.title);
-        m.addEventListener('click', function () { goToEvent({c: y.c, e: a}); });
-        track.appendChild(m);
-      });
-      var count = document.createElement('span');
-      count.className = 'w-[52px] shrink-0 font-mono text-[11px] text-gray-600';
-      count.textContent = by[ref].filter(function (x) { return x.e.action === 'exit'; }).length + ' / ' +
-        by[ref].filter(function (x) { return x.e.action === 'enter'; }).length;
-      row.appendChild(name); row.appendChild(track); row.appendChild(count);
-      box.appendChild(row);
-    });
-    if (order.length > MAX_LANES) {
-      var more = document.createElement('button');
-      more.type = 'button';
-      more.className = 'self-start ml-[76px] text-xs text-amber-700 hover:underline min-h-[28px]';
-      more.textContent = showAll ? 'Show the ' + MAX_LANES + ' busiest tubes' : '+ ' + (order.length - MAX_LANES) + ' more tubes';
-      more.addEventListener('click', function () { showAll = !showAll; renderLanes(); });
-      box.appendChild(more);
-    }
-    paintProgress();
-  }
-  $('[data-pr-links]').addEventListener('change', renderLanes);
 
   function findEvent(ref) {
     var c = P.clips[ref.clip];
@@ -219,7 +76,6 @@
     pendingFrame = frame;
     $('[data-pr-clip]').textContent = c.title + ' · ' + clock(c.start);
     video.src = c.stream_url;
-    renderStrip();
     status.textContent = 'Loading ' + c.title + '…';
     return ov.load(c.overlay_url).then(function () {
       status.textContent = '';
@@ -236,9 +92,6 @@
     loadClip(cur + 1, 0, true);
   });
   if (ov) ov.onFrame(function (info) {
-    var c = P.clips[cur];
-    var now = $('[data-pr-now]');
-    if (now && c) now.style.left = pct(c.offset + info.frame / c.fps) + '%';
     if (trip.on) tripHead();
     if (tp.on) {
       var sg = tp.segs[tp.k];
@@ -246,16 +99,6 @@
     }
   });
 
-  // A mark: review the trip it starts or ends. An event in no trip is shown at
-  // its moment.
-  function goToEvent(x) {
-    var i = trip.list.findIndex(function (t) {
-      return [t.exit, t.entry].some(function (r) { return r.clip === x.c && r.key === x.e.key; });
-    });
-    if (i >= 0) { tripGo(i); return; }
-    loadClip(x.c, x.e.frame, false);
-    status.textContent = 'This event is not part of a suggested trip.';
-  }
   // Playback speed in trip review. Set as the default too: a new clip's video
   // starts at the default, and a trip runs across clips.
   var SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16];
@@ -469,7 +312,7 @@
       t.mine = d.verdict ? {verdict: d.verdict, entry_key: entry ? entry.key : '', by: 'you'} : null;
       t.accepted = d.verdict === 'accepted' ? 1 : 0;
       t.rejected = d.verdict === 'rejected' ? 1 : 0;
-      renderLanes();
+      paintProgress();
     }).catch(function (err) { status.textContent = String(err.message || err); });
   }
   // Not this pair: a note on why, in the reviewer's own words, then on.
@@ -510,7 +353,7 @@
       stage = b.getAttribute('data-pr-list');
       try { localStorage.setItem('pr-stage', stage); } catch (e) {}
       paintStage();
-      renderLanes();
+      paintProgress();
       if (!startTrips()) status.textContent = 'No trips in this list.';
     });
   });
@@ -542,10 +385,11 @@
     }, true);
   }
 
-  renderTicks();
-  renderStrip();
-  renderLanes();
+  if ($('[data-pr-place]')) $('[data-pr-place]').addEventListener('change', function () {
+    window.location.href = this.value;
+  });
   paintStage();
+  paintProgress();
   if (!P.clips.length) status.textContent = 'No analysed clips with an Events step in this period.';
   else if (!startTrips()) {
     loadClip(0, 0, false);

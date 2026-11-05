@@ -105,14 +105,11 @@ vote back. Watch the whole clip as you go, so you catch what the system missed, 
 when you're done. Reviewed marks on the tube lanes get a ring:
 green accepted, red rejected, amber where reviewers disagree.
 
-**Over a period.** **Review a period** (on a unit's page, or **Review this period** on a batch from one unit or
-site) puts every analysed clip between two times — a few hours or up to a week — on one time axis. A strip
-shows the clips (striped where nothing was recorded), and the tube lanes run across the whole period, so a
-bee leaving in one clip and coming back in a later one sit on the same lane. The page opens on the first trip not
-yet reviewed. Click a mark or band on a lane to review that trip.
-
-**Trips.** A faint band joins each exit to the next entry into the same tube, across clips too (the next entry
-by the same marker first, when markers were read). These are suggestions only. **Review trips** plays each
+**Trips.** **Review trips** on a batch shows every trip of one unit or site in that batch; pick another from the
+menu at the top. An exit pairs with the next event at its tube when that is an entry, on the same day, and each
+entry ends one trip. **Before events review** lists the trips from every detected event and gives precision.
+**After events review** leaves out rejected events, adds the ones people added, and gives recall. The page opens on
+the first trip not yet reviewed, and **← Previous** and **Next →** step through them. It plays each
 one in the player: 2 seconds either side of the exit, then 2 seconds either side of the entry, following the
 bee each time. **Exit ±2 s**, **Entry ±2 s** and **Whole trip** replay a part (the whole trip runs from the exit
 to the entry across clips, skipping time with no recording), and the trip bar lets you jump to any moment in

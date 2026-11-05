@@ -1188,14 +1188,11 @@ git -C ~/BeeMonitor rev-parse --short HEAD                 # current version
 
 ## Field USB Transfer (copy clips without a laptop)
 
-For sites with no usable WiFi, you can pull recordings onto a USB stick in the
-field, then upload them to the cloud later. Transfers are tracked per-clip with a
-`<clip>.mp4.usb` sidecar — the same idea as the `.uploaded` cloud marker — so
-re-plugging only copies *new* clips, and the device page shows the count
+For sites with no usable WiFi, plug a USB stick into the unit: it copies every clip
+on the unit to the stick by itself. Clips already on that stick at the same size are
+skipped, so re-plugging only adds what's new, and a new stick gets everything. Any
+USB drive works (no special label needed). The device page shows the count
 (`Clips: … · N to USB`).
-
-There are three ways to trigger it: a **dashboard button**, **auto on plug-in**,
-or **manually**. All accept **any** USB drive (no special label needed).
 
 **One-time setup:**
 ```bash
@@ -1205,19 +1202,11 @@ chmod +x usb-transfer.sh
 sudo cp systemd/beemonitor-usb-transfer@.service /etc/systemd/system/
 sudo cp cellular/99-beemonitor-usb.rules /etc/udev/rules.d/
 sudo udevadm control --reload && sudo systemctl daemon-reload
-# let the dashboard "Copy to USB" button run it (telemetry runs as 'beemonitor';
-# mounting the USB needs root)
-echo 'beemonitor ALL=(root) NOPASSWD: /home/beemonitor/BeeMonitor/hardware/usb-transfer.sh' \
-  | sudo tee /etc/sudoers.d/beemonitor-usb >/dev/null
-sudo chmod 440 /etc/sudoers.d/beemonitor-usb && sudo visudo -cf /etc/sudoers.d/beemonitor-usb
 ```
 
-**Dashboard button:** on the device page, **Copy to USB** (managers/owner) queues
-the copy; the device runs it on its next check-in to whatever USB is plugged in.
-
-**Auto on plug-in:** just plug a USB in — new clips are copied to
-`BeeMonitor/<hostname>/…` (date structure preserved) with a `manifest.csv`,
-sidecars written, stick unmounted. Watch it:
+**Auto on plug-in:** just plug a USB in — clips are copied to
+`BeeMonitor/<location>/…` (date structure preserved) with a `manifest.csv`, and the
+stick is unmounted when it's done. Watch it:
 ```bash
 journalctl -u 'beemonitor-usb-transfer@*' -f      # "done: copied N, skipped …"
 ```
@@ -1226,7 +1215,6 @@ journalctl -u 'beemonitor-usb-transfer@*' -f      # "done: copied N, skipped …
 ```bash
 sudo bash ~/BeeMonitor/hardware/usb-transfer.sh                 # auto-detect any plugged USB
 sudo bash ~/BeeMonitor/hardware/usb-transfer.sh /media/pi/STICK # or a mountpoint / /dev/sda1
-BEEMONITOR_USB_ALL=1 sudo bash usb-transfer.sh …               # re-copy everything
 ```
 
 **Get them into the cloud:** on the web app, **Videos → Upload** (or batch),

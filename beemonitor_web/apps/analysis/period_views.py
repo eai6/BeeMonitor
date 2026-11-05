@@ -20,6 +20,24 @@ from apps.pipelines import review as event_review
 from .models import Job
 
 
+def _batch_places(videos, batch_id):
+    """The units and sites of a batch's clips, most clips first: a clip's place
+    is its unit, else its site."""
+    places = {}
+    for v in videos:
+        if v.device_id:
+            key, label = f"device={v.device_id}", v.device.name
+        elif v.site_id:
+            key, label = f"site_id={v.site_id}", v.site.name
+        else:
+            continue
+        place = places.setdefault(key, {"label": label, "clips": 0, "device": v.device,
+                                        "site": None if v.device_id else v.site,
+                                        "url": f"?batch={batch_id}&{key}"})
+        place["clips"] += 1
+    return sorted(places.values(), key=lambda p: -p["clips"])
+
+
 def _place(request):
     """``(device, site, start, end, notes)`` from the request, or Http404.
 
@@ -65,6 +83,9 @@ def _place(request):
         device = get_object_or_404(Device, pk=g["device"])
     elif g.get("site_id"):
         site = get_object_or_404(Site, pk=g["site_id"])
+    if device is None and site is None and g.get("batch"):
+        places = _batch_places(videos, g["batch"])
+        device, site = places[0]["device"], places[0]["site"]
     if device is None and site is None:
         raise Http404("Pick a device or a site.")
     if start is None:
@@ -77,9 +98,12 @@ def _place(request):
 def _gather(request):
     device, site, start, end = _place(request)
     # Opened from a batch: its clips show (and take votes on) the batch's runs.
-    prefer = period.batch_runs(request.GET["batch"]) if request.GET.get("batch") else None
-    data = period.gather(request.user, device=device, site=site, start=start, end=end,
-                         prefer=prefer)
+    if request.GET.get("batch") and not request.GET.get("from") and not request.GET.get("to"):
+        data = period.gather_batch(request.user, request.GET["batch"], device=device, site=site)
+    else:
+        prefer = period.batch_runs(request.GET["batch"]) if request.GET.get("batch") else None
+        data = period.gather(request.user, device=device, site=site, start=start, end=end,
+                             prefer=prefer)
     if not data["clips"] and not data["skipped"]:
         # Nothing the user can see here: not a page about someone else's unit.
         from apps.devices.models import Device
@@ -109,14 +133,11 @@ def _trip_votes(runs, user):
 
 class PeriodReviewView(LoginRequiredMixin, View):
     def get(self, request):
-        from apps.devices.models import Device
-        from apps.videos.models import Site
-
         from apps.pipelines import review as event_review
 
         data = _gather(request)
         clips_json, pairs, detected = [], [], []
-        for ci, c in enumerate(data["clips"]):
+        for ci, c in period.whole_clips(data):
             evs = period.clip_events(c, request.user)
             # Two sets of trips: from the events as detected, before anyone
             # reviewed them, and from those people stand by (not the rejected,
@@ -166,23 +187,28 @@ class PeriodReviewView(LoginRequiredMixin, View):
                    "clips": clips_json, "trips": trips,
                    "trip_url": reverse("analysis:trip_review")}
         query = request.GET.copy()
-        # Opened from a batch: name it and link back (memory/64).
-        batch = None
+        # Opened from a batch: name it and link back (memory/64), and offer its
+        # other units and sites.
+        batch, places = None, []
         if request.GET.get("batch"):
             from apps.pipelines import batches
+            from apps.pipelines.aggregate import batch_video_ids
             from apps.pipelines.models import PipelineRun
+            from apps.videos.models import Video
             first = (PipelineRun.objects.filter(batch_id=request.GET["batch"])
                      .select_related("pipeline").first())
             if first is not None:
                 batch = {"name": batches.title(first.batch_id, first.pipeline),
                          "url": reverse("pipelines:batch_detail", args=[first.batch_id])}
+                places = _batch_places(
+                    Video.objects.filter(pk__in=batch_video_ids(first.batch_id))
+                    .select_related("device", "site"), first.batch_id)
+                for place in places:
+                    place["on"] = (place["device"] == data["device"]
+                                   and place["site"] == (None if data["device"] else data["site"]))
         return render(request, "analysis/period_review.html", {
-            "batch": batch,
+            "batch": batch, "places": places,
             "data": data, "payload": payload,
-            "from_value": data["start"].strftime("%Y-%m-%dT%H:%M"),
-            "to_value": data["end"].strftime("%Y-%m-%dT%H:%M"),
-            "devices": Device.accessible(request.user).order_by("name"),
-            "sites": Site.objects.filter(user=request.user).order_by("name"),
             "csv_url": reverse("analysis:period_trips_csv") + "?" + query.urlencode(),
             "any_review": any(c["can_review"] for c in data["clips"]),
         })

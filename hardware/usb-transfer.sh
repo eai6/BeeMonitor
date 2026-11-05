@@ -1,11 +1,13 @@
 #!/bin/bash
 # Copy BeeMonitor recordings onto a plugged-in USB drive in the field (no laptop).
 #
-# Tracks each transfer with a per-clip ``<clip>.mp4.usb`` sidecar — the same
-# pattern uploader.py uses with ``.uploaded`` for the cloud — so re-runs only
-# copy NEW clips. It also writes a manifest.csv on the USB so the clips can later
-# be uploaded to the cloud and attributed to the right device (Videos → Upload,
-# pick the device; see the web "upload for a specific device" flow).
+# Copies every clip on the device to the drive, skipping only those already on
+# this drive at the same size, so any stick ends up with all of them and a
+# re-plug picks up what's new. A ``<clip>.mp4.usb`` sidecar records that a clip
+# went to a USB, for the dashboard's count. It also writes a manifest.csv on the
+# USB so the clips can later be uploaded to the cloud and attributed to the right
+# device (Videos → Upload, pick the device; see the web "upload for a specific
+# device" flow).
 #
 # A headless Pi has no "allow this USB" prompt like a desktop, so this script
 # does the mounting itself and writes a STATUS FILE (usb-status.json) reporting
@@ -17,7 +19,6 @@
 #   sudo bash usb-transfer.sh /media/pi/STICK      # copy to an already-mounted dir
 #   sudo bash usb-transfer.sh /dev/sda1            # mount this partition, copy, unmount
 #   sudo bash usb-transfer.sh                      # auto-detect a single removable drive
-#   BEEMONITOR_USB_ALL=1 sudo bash usb-transfer.sh …   # re-copy everything (ignore sidecars)
 #
 # Auto-runs on plug-in via 99-beemonitor-usb.rules + beemonitor-usb-transfer@.service
 # (any USB partition triggers it — no special label needed).
@@ -25,7 +26,6 @@ set -uo pipefail
 
 RECORD_DIR="${BEEMONITOR_RECORD_DIR:-/home/beemonitor/Desktop/cameraOutput/beeHotel}"
 ENV_FILE="${BEEMONITOR_ENV:-/etc/beemonitor/uploader.env}"
-COPY_ALL="${BEEMONITOR_USB_ALL:-0}"
 STATE_DIR="${BEEMONITOR_STATE_DIR:-/home/beemonitor/.beemonitor}"
 STATUS_FILE="$STATE_DIR/usb-status.json"
 HOST="$(hostname)"
@@ -152,10 +152,15 @@ MANIFEST="$DEST/manifest.csv"
 # --- copy ----------------------------------------------------------------
 cd "$RECORD_DIR" 2>/dev/null || fail "no_record_dir" "record dir $RECORD_DIR missing"
 
+# Already on this drive, whole: the same clip at the same size.
+on_stick() {  # $1=clip path relative to RECORD_DIR
+    [ -f "$DEST/${1#./}" ] && [ "$(stat -c%s "$1")" = "$(stat -c%s "$DEST/${1#./}")" ]
+}
+
 # Count how many clips we'll actually copy (those not already on this USB), so
 # the dashboard can show a real percentage. Quick extra scan.
 while IFS= read -r -d '' f; do
-    if [ "$COPY_ALL" = "1" ] || [ ! -f "$f.usb" ]; then total_to_copy=$((total_to_copy+1)); fi
+    on_stick "$f" || total_to_copy=$((total_to_copy+1))
 done < <(find . -type f -name '*.mp4' -print0)
 STATE=running
 write_status true "starting"
@@ -165,7 +170,10 @@ step=$(( total_to_copy / 50 )); [ "$step" -lt 1 ] && step=1
 while IFS= read -r -d '' mp4; do
     rel="${mp4#./}"
     sidecar="$mp4.usb"
-    if [ "$COPY_ALL" != "1" ] && [ -f "$sidecar" ]; then skipped=$((skipped+1)); continue; fi
+    if on_stick "$mp4"; then
+        [ -f "$sidecar" ] || printf 'transferred=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$sidecar"
+        skipped=$((skipped+1)); continue
+    fi
     out="$DEST/$rel"
     mkdir -p "$(dirname "$out")"
     if cp -p "$mp4" "$out" 2>/dev/null && [ "$(stat -c%s "$mp4")" = "$(stat -c%s "$out")" ]; then

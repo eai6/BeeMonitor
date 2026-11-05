@@ -94,10 +94,11 @@ def _whole(out):
     return {vid: (job, full.get(run.pk, run)) for vid, (job, run) in out.items()}
 
 
-def batch_runs(batch_id):
+def batch_runs(batch_id, light=False):
     """``{video pk: (job, run)}`` for a batch's completed runs with an Events
     step. A clip can have several runs (a re-run re-uses its GPU job), and a
-    period opened from a batch must show, and take votes on, that batch's."""
+    period opened from a batch must show, and take votes on, that batch's.
+    ``light``: the jobs without their results, for thousands of clips."""
     from apps.analysis.models import Job
 
     from .aggregate import analyzer_outputs, run_job_id, run_video_id
@@ -110,7 +111,8 @@ def batch_runs(batch_id):
         if jid is not None and any(k == "events" for k, _o in analyzer_outputs(run)):
             runs[jid] = run
     out = {}
-    for job in Job.objects.filter(pk__in=runs, status="completed").select_related("result"):
+    jobs = Job.objects.filter(pk__in=runs, status="completed")
+    for job in jobs.defer("config") if light else jobs.select_related("result"):
         if run_video_id(runs[job.pk]) == job.video_id:
             out[job.video_id] = (job, runs[job.pk])
     return out
@@ -171,6 +173,66 @@ def gather(user, device=None, site=None, start=None, end=None, prefer=None):
                       "duration": float(v.duration_seconds or 0), "fps": float(fps or 25),
                       "can_review": can_review(user, run)})
     return {"clips": clips, "skipped": skipped, "notes": notes, "start": start, "end": end}
+
+
+def gather_batch(user, batch_id, device=None, site=None):
+    """Every clip of one unit or site in a batch, as ``gather`` but with no
+    limit on dates or clips: trips are reviewed across all of them. Light: read
+    the clips whole a few at a time, with ``whole_clips``."""
+    from apps.videos.models import Video
+
+    from .review import can_review
+
+    chosen = batch_runs(batch_id, light=True)
+    qs = Video.objects.select_related("device", "site").filter(pk__in=list(chosen))
+    videos = list(qs.filter(device=device) if device is not None else qs.filter(site=site))
+    visible = visible_video_ids(user, [v.pk for v in videos])
+    placed, skipped = [], []
+    for v in videos:
+        s = local_start(v)
+        if v.pk not in visible:
+            continue
+        if s is None:
+            skipped.append({"title": v.title, "reason": "recording time unknown"})
+        else:
+            placed.append((s, v))
+    placed.sort(key=lambda p: (p[0], p[1].pk))
+    start = placed[0][0] if placed else datetime.now()
+    clips = []
+    for s, v in placed:
+        job, run = chosen[v.pk]
+        clips.append({"video": v, "job": job, "run": run, "start": s,
+                      "offset": (s - start).total_seconds(),
+                      "duration": float(v.duration_seconds or 0), "fps": 25.0,
+                      "can_review": can_review(user, run)})
+    end = placed[-1][0] + timedelta(hours=1) if placed else start
+    return {"clips": clips, "skipped": skipped, "notes": [], "start": start, "end": end,
+            "light": True}
+
+
+def whole_clips(data, chunk=25):
+    """Each of ``data``'s clips with its run and job read whole, a few at a
+    time, so a site's thousands of clips are never all in memory (memory/76).
+    Sets each clip's frame rate. Yields ``(index, clip)``."""
+    from apps.analysis.models import Job
+
+    from .models import PipelineRun
+    from .ops import fps_with_source
+
+    clips = data["clips"]
+    if not data.get("light"):
+        yield from enumerate(clips)
+        return
+    for at in range(0, len(clips), chunk):
+        part = clips[at:at + chunk]
+        runs = PipelineRun.objects.in_bulk([c["run"].pk for c in part])
+        jobs = Job.objects.select_related("result").in_bulk([c["job"].pk for c in part])
+        for i, c in enumerate(part, at):
+            job = jobs[c["job"].pk]
+            result = getattr(job, "result", None)
+            c["fps"] = float(fps_with_source((result.summary_stats if result else None) or {},
+                                             c["video"])[0] or 25)
+            yield i, {**c, "job": job, "run": runs[c["run"].pk]}
 
 
 def clip_events(clip, user=None):

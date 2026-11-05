@@ -1,7 +1,7 @@
 [Unit]
 Description=BeeMonitor USB transfer (%i)
-# Triggered by udev (99-beemonitor-usb.rules) when a USB drive labelled
-# BEEMONITOR is plugged in. %i is the kernel block name, e.g. sda1.
+# Triggered by udev (99-beemonitor-usb.rules) when any USB drive is plugged
+# in. %i is the kernel block name, e.g. sda1.
 After=local-fs.target
 
 [Service]

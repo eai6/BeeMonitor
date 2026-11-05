@@ -4,88 +4,47 @@
 
 {% block content %}
 {% comment %}
-Trip review (memory/62): every analysed clip of one device or site between
-two local times on ONE time axis, so an exit in one clip and the entry in a
-later one sit on the same tube lane. It walks each suggested exit → entry pair.
-Events are reviewed on each clip's own page. Logic: pipelines/period.py.
+Trip review (memory/62): all the trips of one unit or site in a batch, one
+after another in one player, across clips. Events are reviewed on each clip's
+own page. Logic: pipelines/period.py.
 {% endcomment %}
 <div id="period-review" class="flex flex-col gap-3">
   {% csrf_token %}
-  <form method="get" class="flex flex-wrap items-end gap-3 bg-white border border-gray-200 rounded-lg px-4 py-3">
-    {# Opened from a batch: keep showing (and voting on) that batch's runs. #}
-    {% if request.GET.batch %}<input type="hidden" name="batch" value="{{ request.GET.batch }}">{% endif %}
-    <div class="flex-1 min-w-[220px]">
-      <h1 class="text-lg font-semibold text-gray-900">Review trips{% if batch %} · <a href="{{ batch.url }}" class="text-amber-700 hover:underline">{{ batch.name }}</a>{% endif %}</h1>
-      <p class="text-[13px] text-gray-600">{% if data.device %}{{ data.device.name }}{% else %}{{ data.site.name }}{% endif %} · every analysed clip in the range, in recording order</p>
-    </div>
-    <label class="flex flex-col gap-1 text-xs text-gray-700">Device
-      <select name="device" class="h-10 border border-gray-300 rounded-md px-2 text-sm">
-        <option value="">—</option>
-        {% for d in devices %}<option value="{{ d.pk }}" {% if data.device and d.pk == data.device.pk %}selected{% endif %}>{{ d.name }}</option>{% endfor %}
+  <div class="flex flex-wrap items-center gap-3 bg-white border border-gray-200 rounded-lg px-4 py-3 text-[13px] text-gray-700">
+    <h1 class="text-lg font-semibold text-gray-900">Review trips{% if batch %} · <a href="{{ batch.url }}" class="text-amber-700 hover:underline">{{ batch.name }}</a>{% endif %}</h1>
+    {% if places|length > 1 %}
+    <label class="flex items-center gap-1.5 text-xs">Unit or site
+      <select data-pr-place class="h-10 border border-gray-300 rounded-md px-2 text-sm">
+        {% for p in places %}<option value="{{ p.url }}" {% if p.on %}selected{% endif %}>{{ p.label }} ({{ p.clips }} clip{{ p.clips|pluralize }})</option>{% endfor %}
       </select>
     </label>
-    <label class="flex flex-col gap-1 text-xs text-gray-700">or site
-      <select name="site_id" class="h-10 border border-gray-300 rounded-md px-2 text-sm">
-        <option value="">—</option>
-        {% for s in sites %}<option value="{{ s.pk }}" {% if data.site and s.pk == data.site.pk %}selected{% endif %}>{{ s.name }}</option>{% endfor %}
-      </select>
-    </label>
-    <label class="flex flex-col gap-1 text-xs text-gray-700">From
-      <input type="datetime-local" name="from" value="{{ from_value }}" class="h-10 border border-gray-300 rounded-md px-2 text-sm">
-    </label>
-    <label class="flex flex-col gap-1 text-xs text-gray-700">To
-      <input type="datetime-local" name="to" value="{{ to_value }}" class="h-10 border border-gray-300 rounded-md px-2 text-sm">
-    </label>
-    <button type="submit" class="h-10 px-4 rounded-md border border-gray-300 bg-white hover:bg-gray-50 text-sm font-semibold">Show</button>
-  </form>
+    {% endif %}
+    <span class="flex rounded-md border border-gray-300 overflow-hidden" role="group" aria-label="Which trips"
+          title="Before: the trips from every detected event, for precision. After: rejected events out and added ones in, for recall.">
+      <button type="button" data-pr-list="before" class="h-10 px-3 bg-white">Before events review (<span data-pr-list-n></span>)</button>
+      <button type="button" data-pr-list="after" class="h-10 px-3 bg-white border-l border-gray-300">After events review (<span data-pr-list-n></span>)</button>
+    </span>
+    <span><span data-pr-progress></span>{% if data.skipped %} · {{ data.skipped|length }} clip{{ data.skipped|length|pluralize }} with no recording time left out{% endif %}</span>
+    <a href="{{ csv_url }}" class="text-amber-700 hover:underline ml-auto">Reviewed trips CSV</a>
+  </div>
 
-  {% for n in data.notes %}<p class="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">{{ n }}</p>{% endfor %}
-
-  <section class="bg-white border border-gray-200 rounded-lg px-4 py-3 flex flex-col gap-2">
-    <div class="flex flex-wrap items-center justify-between gap-3 text-[13px] text-gray-700">
-      <span><strong>{{ data.clips|length }} clip{{ data.clips|length|pluralize }}</strong> · <span data-pr-progress></span></span>
-      <span class="flex flex-wrap items-center gap-3">
-        <span class="flex rounded-md border border-gray-300 overflow-hidden" role="group" aria-label="Which trips"
-              title="Before: the trips from every detected event, for precision. After: rejected events out and added ones in, for recall.">
-          <button type="button" data-pr-list="before" class="h-10 px-3 bg-white">Before events review (<span data-pr-list-n></span>)</button>
-          <button type="button" data-pr-list="after" class="h-10 px-3 bg-white border-l border-gray-300">After events review (<span data-pr-list-n></span>)</button>
-        </span>
-        <label class="flex items-center gap-1.5"><input type="checkbox" data-pr-links checked> Link each exit to the next entry on the same tube</label>
-        <a href="{{ csv_url }}" class="text-amber-700 hover:underline">Reviewed trips CSV</a>
-      </span>
-    </div>
-    <div class="relative h-[18px] ml-[76px] mr-[60px] font-mono text-[11px] text-gray-600" data-pr-ticks aria-hidden="true"></div>
-    <div class="flex items-center gap-2">
-      <span class="w-[68px] shrink-0 text-right font-mono text-xs font-semibold text-gray-700">clips</span>
-      <div class="relative flex-1 h-[22px] rounded-sm" data-pr-strip
-           style="background: repeating-linear-gradient(135deg, var(--bm-stripe-a) 0 6px, var(--bm-stripe-b) 6px 8px)"
-           aria-label="Clips in the period; striped = no recording"></div>
-      <span class="w-[52px] shrink-0"></span>
-    </div>
-    <div data-pr-lanes class="flex flex-col gap-0.5"></div>
-    <p class="ml-[76px] text-xs text-gray-600">One time axis for the whole period; striped = no recording. Marks: <strong style="color:#0369a1">exit</strong>, <strong style="color:#b45309">enter</strong>, <strong style="color:#6d28d9">stay</strong>. A band joins each exit to its entry on the same tube, across clips too: <strong style="color:#15803d">green</strong> = same bee, <strong style="color:#b91c1c">red</strong> = not this pair, faint = not reviewed yet. Click a mark or band to review that trip. A trip is in your data only when a reviewer accepts it.</p>
-  </section>
-
-  {% if data.skipped %}
-  <details class="bg-white border border-gray-200 rounded-lg px-4 py-2 text-sm text-gray-700">
-    <summary class="cursor-pointer">{{ data.skipped|length }} clip{{ data.skipped|length|pluralize }} not placed</summary>
-    <ul class="mt-2 space-y-1">{% for s in data.skipped %}<li>{{ s.title }} — {{ s.reason }}</li>{% endfor %}</ul>
-  </details>
-  {% endif %}
-
-  <div class="flex flex-wrap gap-4">
-    <div class="min-w-0 flex flex-col gap-2" style="flex: 999 1 640px">
+  <div class="flex flex-col gap-2">
       <div class="relative bg-black rounded overflow-hidden" data-pr-stage>
         <video data-pr-video controls playsinline preload="metadata" class="w-full block" style="max-height: 62vh"></video>
         <canvas data-pr-canvas class="absolute left-0 top-0 pointer-events-none"></canvas>
         <span data-pr-clip class="absolute left-2 top-2 font-mono text-xs text-white bg-black/60 px-1.5 py-0.5 rounded"></span>
       </div>
-      <div class="flex flex-wrap items-center justify-between gap-3">
-        <p data-pr-status class="text-xs text-gray-600"></p>
-        {# The ROI (green) and each tube with its number, from the run's own layout: which hole an event was counted against. #}
-        <label class="flex items-center gap-1.5 text-[13px] text-gray-700 ml-auto"><input type="checkbox" data-pr-regions checked> Show ROI and tubes</label>
+      {% comment %}The same layers as the clip page's player.{% endcomment %}
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-gray-700">
+        <label class="flex items-center gap-1.5"><input type="checkbox" data-pr-opt="boxes" checked> Boxes and ids</label>
+        <label class="flex items-center gap-1.5"><input type="checkbox" data-pr-opt="species" checked> Species on the label</label>
+        <label class="flex items-center gap-1.5"><input type="checkbox" data-pr-opt="trails" checked> Trails (last 2 s)</label>
+        <label class="flex items-center gap-1.5"><input type="checkbox" data-pr-opt="lost" checked> Lost tracks (dashed)</label>
+        <label class="flex items-center gap-1.5"><input type="checkbox" data-pr-opt="regions" checked> ROI and reference objects</label>
+        <label class="flex items-center gap-1.5"><input type="checkbox" data-pr-opt="events" checked> Events (exit, enter, stay)</label>
+        <label class="flex items-center gap-1.5"><input type="checkbox" data-pr-opt="interactions" checked> Interactions</label>
       </div>
-    </div>
+      <p data-pr-status class="text-xs text-gray-600"></p>
   </div>
 
   {% if any_review %}
