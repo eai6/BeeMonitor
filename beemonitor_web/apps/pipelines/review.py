@@ -421,44 +421,59 @@ def batch_review_summary(runs, per_run=None, actions=None):
                       run_id__in={pk for c in trip_calls
                                   for pk in (c.exit_run_id, c.entry_run_id) if pk})
                   .values_list("run_id", "action", "reference", "track_id", "frame")}
-    trips = {"reviewed": len(by_trip), "accepted": 0, "relinked": 0, "rejected": 0,
-             "didnt_come_back": 0, "cant_tell": 0, "disputed": 0, "right": 0, "wrong": 0,
-             "missed": 0}
+    def tally():
+        return {"reviewed": 0, "accepted": 0, "relinked": 0, "rejected": 0, "didnt_come_back": 0,
+                "cant_tell": 0, "disputed": 0, "right": 0, "wrong": 0, "missed": 0}
+
+    from .models import TripReview
+    from .period import auto_trip_type, hops_for
+
+    hops = hops_for({pk for c in trip_calls for pk in (c.exit_run_id, c.entry_run_id) if pk})
+    all_trips = tally()
+    types = {value: tally() for value in TripReview.Type.values}
     for calls in by_trip.values():
+        first = calls[0]
+        kind = next((c.trip_type for c in calls if c.trip_type), "") or auto_trip_type(
+            first.exit_key, first.entry_key, hops.get(first.exit_run_id), hops.get(first.entry_run_id))
         call = combined([c.verdict for c in calls])
         # The pipeline's own pair, made before any event was reviewed.
         before = all(c.before_review for c in calls) and not any(
             (c.exit_run_id, c.exit_key) in added_ends
             or (c.entry_run_id, c.entry_key) in added_ends for c in calls)
-        if call == "disputed":
-            trips["disputed"] += 1
-        elif call == "accepted":
-            trips["accepted"] += 1
-            relinked = any(c.relinked for c in calls)
-            if relinked:
-                trips["relinked"] += 1
-                trips["wrong"] += 1
-            if relinked or not before:
-                trips["missed"] += 1
+        for trips in (all_trips, types.get(kind) or tally()):
+            trips["reviewed"] += 1
+            if call == "disputed":
+                trips["disputed"] += 1
+            elif call == "accepted":
+                trips["accepted"] += 1
+                relinked = any(c.relinked for c in calls)
+                if relinked:
+                    trips["relinked"] += 1
+                    trips["wrong"] += 1
+                if relinked or not before:
+                    trips["missed"] += 1
+                else:
+                    trips["right"] += 1
             else:
-                trips["right"] += 1
-        else:
-            trips["rejected"] += 1
-            reasons = {c.reason for c in calls}
-            if "didn't come back" in reasons:
-                trips["didnt_come_back"] += 1
-            if "can't tell" in reasons:
-                trips["cant_tell"] += 1
-            elif before:
-                trips["wrong"] += 1
+                trips["rejected"] += 1
+                reasons = {c.reason for c in calls}
+                if "didn't come back" in reasons:
+                    trips["didnt_come_back"] += 1
+                if "can't tell" in reasons:
+                    trips["cant_tell"] += 1
+                elif before:
+                    trips["wrong"] += 1
     # From the trips people called. Precision is over the pipeline's trips
     # before events review, false events and all, as on unseen data: right when
     # called the same bee, wrong when not or re-linked. Recall is over the real
     # trips found after it: one only reviewed events make is one the pipeline
     # missed. "Can't tell" and disputed calls count for neither.
-    trips["suggested"] = trips["right"] + trips["wrong"]
-    trips["real"] = trips["right"] + trips["missed"]
-    trips["precision"], trips["recall"] = quality(trips["right"], trips["wrong"], trips["missed"])
+    for trips in (all_trips, *types.values()):
+        trips["suggested"] = trips["right"] + trips["wrong"]
+        trips["real"] = trips["right"] + trips["missed"]
+        trips["precision"], trips["recall"] = quality(trips["right"], trips["wrong"], trips["missed"])
+    trips = all_trips
+    trips["by_type"] = [{"label": TripReview.Type(value).label, **t} for value, t in types.items()]
     if not (ev["reviewed"] or ev["added"] or ev["clips"] or trips["reviewed"]) and actions is None:
         return None
     return {"events": ev, "trips": trips}

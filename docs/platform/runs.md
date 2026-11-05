@@ -108,7 +108,11 @@ green accepted, red rejected, amber where reviewers disagree.
 **Trips.** **Review trips** on a batch shows every trip of one unit or site in that batch; pick another from the
 menu at the top. An exit pairs with the next event at its tube when that is an entry, on the same day, and each
 entry ends one trip. **Before events review** lists the trips from every detected event and gives precision.
-**After events review** leaves out rejected events, adds the ones people added, and gives recall. The page opens on
+**After events review** leaves out rejected events, adds the ones people added, and gives recall. Each trip has a
+type: **Tube hop** when one track links its exit to going into a tube, or its entry to coming out of one, and
+**Direct** when no hop was seen. A hop split across two tracks or clips stays Direct, so a reviewer can change the
+type on the trip, and **All**, **Direct** and **Tube hop** at the top filter the list. Nothing is left out of trips
+because of its type; the batch's metrics show each type. The page opens on
 the first trip not yet reviewed, and **← Previous** and **Next →** step through them. It plays each
 one in the player: 2 seconds either side of the exit, then 2 seconds either side of the entry, following the
 bee each time. **Exit ±2 s**, **Entry ±2 s** and **Whole trip** replay a part (the whole trip runs from the exit
@@ -140,7 +144,7 @@ same bee, re-linked, not a trip, and how often the suggestion was right as it st
 | Events CSV (clip and batch) | `review` (accepted, rejected, disputed when reviewers disagree, blank if unreviewed), `reviewed_by`, `review_notes`; an added event is its own row with `review = added`, `reviewed_by` = who added it and `review_notes` = their note |
 | Clip page | "12 reviewed · 9 accepted · 3 rejected" under Events |
 | Batch page | a **Reviewed** column (with "+N" added), and the Events review and Trips review panels once something is reviewed |
-| **Reviewed trips** CSV (period page and batch) | one row per pair a reviewer called: `reference, exit_time, entry_time, duration_sec, exit_clip, exit_track, entry_clip, entry_track, species, marker_id, review, reviewed_by, review_notes` |
+| **Reviewed trips** CSV (period page and batch) | one row per pair a reviewer called: `reference, exit_time, entry_time, duration_sec, exit_clip, exit_track, entry_clip, entry_track, species, marker_id, review, reviewed_by, review_notes, trip_type, trip_type_set_by` |
 
 Only reviewed trips are ever exported. A suggestion nobody looked at is not a trip in your data.
 

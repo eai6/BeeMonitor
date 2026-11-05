@@ -358,6 +358,10 @@ class TripReview(models.Model):
         ACCEPTED = "accepted", "Same bee, a trip"
         REJECTED = "rejected", "Not this pair"
 
+    class Type(models.TextChoices):
+        DIRECT = "direct", "Direct"
+        TUBE_HOP = "tube_hop", "Tube hop"
+
     exit_run = models.ForeignKey(PipelineRun, on_delete=models.CASCADE, related_name="trip_exits")
     exit_key = models.CharField(max_length=200)
     entry_run = models.ForeignKey(PipelineRun, on_delete=models.SET_NULL, null=True, blank=True,
@@ -379,6 +383,9 @@ class TripReview(models.Model):
     # anyone reviewed them. Precision reads these; a pair only reviewed events
     # make is one the pipeline missed (memory/77).
     before_review = models.BooleanField(default=True)
+    # The type a reviewer gave this trip; blank = the automatic one, worked out
+    # from the tracks whenever it's read (period.hops_of, memory/78).
+    trip_type = models.CharField(max_length=16, choices=Type.choices, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

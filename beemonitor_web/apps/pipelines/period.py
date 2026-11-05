@@ -354,19 +354,107 @@ def suggest_trips(events, rules=None):
     return trips
 
 
+# ── Trip types (memory/78) ───────────────────────────────────────────────────
+
+def hops_of(run):
+    """``{event key: {track, from, to}}``: the exits and entries of a run that
+    belong to a tube hop, an exit whose track's next exit or entry is an entry.
+    One track is the only evidence used, so a hop split across two tracks or
+    two clips isn't seen. Reads the slim copy as well as the whole context."""
+    from . import primitives
+    from .aggregate import analyzer_outputs
+    from .review import event_key
+
+    by_track = {}
+    for raw in (r for k, o in analyzer_outputs(run) if k == "events" for r in (o.get("rows") or [])):
+        e = primitives.normalize_event(raw)
+        try:
+            frame = int(e["frame"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if e.get("action") in ("exit", "enter") and e.get("track_id") not in (None, ""):
+            by_track.setdefault(str(e["track_id"]), []).append((frame, e))
+    hops = {}
+    for track, rows in by_track.items():
+        rows.sort(key=lambda r: r[0])
+        for (_f, a), (_g, b) in zip(rows, rows[1:]):
+            if a["action"] == "exit" and b["action"] == "enter":
+                hops[event_key(a)] = hops[event_key(b)] = {
+                    "track": track, "from": str(a.get("reference") or ""),
+                    "to": str(b.get("reference") or "")}
+    return hops
+
+
+def hops_for(run_ids):
+    """``{run pk: hops_of(run)}``, from the slim copies, a few at a time."""
+    from .models import PipelineRun
+    from .runsummary import slim_runs
+
+    ids, out = list(run_ids), {}
+    for i in range(0, len(ids), 200):
+        for run in slim_runs(PipelineRun.objects.filter(pk__in=ids[i:i + 200]).only("pk", "summary")):
+            out[run.pk] = hops_of(run)
+    return out
+
+
+def auto_trip_type(exit_key, entry_key, exit_hops, entry_hops):
+    """A trip's type from the tracks: a Tube hop when either end is one."""
+    from .models import TripReview
+
+    hop = exit_key in (exit_hops or {}) or entry_key in (entry_hops or {})
+    return TripReview.Type.TUBE_HOP.value if hop else TripReview.Type.DIRECT.value
+
+
+def hop_text(exit_key, entry_key, exit_hops, entry_hops):
+    """Why a trip is a Tube hop, in words, or ""."""
+    def tube(ref):
+        return ref.replace("reference_", "")
+
+    hop = (exit_hops or {}).get(exit_key) or (entry_hops or {}).get(entry_key)
+    if not hop:
+        return ""
+    if hop["from"] == hop["to"]:
+        return f"Track {hop['track']} left tube {tube(hop['from'])} and went back in without leaving view."
+    return f"Track {hop['track']} left tube {tube(hop['from'])} and went into tube {tube(hop['to'])}."
+
+
 # ── Trip votes ───────────────────────────────────────────────────────────────
 
-def set_trip_vote(user, exit_run, exit_key, entry_run, entry_key, verdict, reason="", relinked=False,
-                  before_review=True):
-    """Make, change or (verdict None) take back the call on this exit and
-    entry, whoever made it before (memory/74). Raises ValueError on a bad
-    request."""
+def _same_trip(exit_run, exit_key, entry_key):
     from .models import TripReview
-    from .review import TRIP_REASONS, shared_job_runs
+    from .review import shared_job_runs
 
-    same = TripReview.objects.filter(
+    return TripReview.objects.filter(
         exit_run_id__in=list(shared_job_runs([exit_run], "trip_exits")), exit_key=exit_key,
         entry_key=entry_key or "")
+
+
+def _check_type(trip_type):
+    from .models import TripReview
+
+    if trip_type and trip_type not in TripReview.Type.values:
+        raise ValueError("unknown trip type")
+
+
+def set_trip_type(exit_run, exit_key, entry_key, trip_type):
+    """A reviewer's type on a trip already called; blank goes back to the
+    automatic one. Raises ValueError on a bad type."""
+    _check_type(trip_type)
+    _same_trip(exit_run, exit_key, entry_key).update(trip_type=trip_type or "")
+
+
+def set_trip_vote(user, exit_run, exit_key, entry_run, entry_key, verdict, reason="", relinked=False,
+                  before_review=True, trip_type=None):
+    """Make, change or (verdict None) take back the call on this exit and
+    entry, whoever made it before (memory/74). ``trip_type`` None keeps the
+    type a reviewer gave it. Raises ValueError on a bad request."""
+    from .models import TripReview
+    from .review import TRIP_REASONS
+
+    same = _same_trip(exit_run, exit_key, entry_key)
+    _check_type(trip_type)
+    if trip_type is None:
+        trip_type = same.exclude(trip_type="").values_list("trip_type", flat=True).first() or ""
     if verdict in (None, "", "none"):
         same.delete()
         return None
@@ -395,7 +483,7 @@ def set_trip_vote(user, exit_run, exit_key, entry_run, entry_key, verdict, reaso
     TripReview.objects.update_or_create(
         exit_run=exit_run, exit_key=exit_key, entry_key=entry_key or "", user=user,
         defaults={"entry_run": entry_run if entry_key else None,
-                  "before_review": bool(before_review),
+                  "before_review": bool(before_review), "trip_type": trip_type or "",
                   "reference": ref, "exit_track": exit_track, "exit_frame": exit_frame,
                   "entry_track": entry_track or "", "entry_frame": entry_frame,
                   "verdict": verdict, "reason": reason, "relinked": bool(relinked)})
@@ -404,7 +492,7 @@ def set_trip_vote(user, exit_run, exit_key, entry_run, entry_key, verdict, reaso
 
 TRIP_FIELDS = ["reference", "exit_time", "entry_time", "duration_sec", "exit_clip", "exit_track",
                "entry_clip", "entry_track", "species", "marker_id", "review", "reviewed_by",
-               "review_notes"]
+               "review_notes", "trip_type", "trip_type_set_by"]
 
 
 def trip_rows(trip_reviews):
@@ -449,6 +537,7 @@ def trip_rows(trip_reviews):
         t = start + timedelta(seconds=frame / fps)
         return t.isoformat(timespec="milliseconds"), t
 
+    hops = {pk: hops_of(run) for pk, run in runs.items()}
     groups = {}
     for r in reviews:
         # By GPU job, not run: calls saved on two runs of one clip are one trip.
@@ -467,6 +556,7 @@ def trip_rows(trip_reviews):
         for r in rs:
             if r.reason and r.reason not in notes:
                 notes.append(r.reason)
+        chosen = next((r.trip_type for r in rs if r.trip_type), "")
         rows.append({
             "reference": first.reference, "exit_time": exit_iso, "entry_time": entry_iso,
             "duration_sec": (round((entry_t - exit_t).total_seconds(), 2)
@@ -476,7 +566,11 @@ def trip_rows(trip_reviews):
             "species": ident.get("species", ""), "marker_id": ident.get("marker_id", ""),
             "review": combined([r.verdict for r in rs]),
             "reviewed_by": ";".join(sorted(r.user.username for r in rs)),
-            "review_notes": "; ".join(notes)})
+            "review_notes": "; ".join(notes),
+            "trip_type": chosen or auto_trip_type(first.exit_key, first.entry_key,
+                                                  hops.get(first.exit_run_id),
+                                                  hops.get(first.entry_run_id)),
+            "trip_type_set_by": "reviewer" if chosen else "auto"})
     rows.sort(key=lambda r: (r["exit_time"], r["reference"]))
     return rows
 

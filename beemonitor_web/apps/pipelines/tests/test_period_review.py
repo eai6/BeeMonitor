@@ -470,6 +470,73 @@ class TripNoteTests(PeriodBase):
         self.assertEqual(mine["reason"], "Different bee")
 
 
+class TripTypeTests(PeriodBase):
+    def run_with(self, rows):
+        run = self.a["run"]
+        run.context = {"e": {"table_kind": "events", "rows": rows}}
+        return run
+
+    def ev(self, action, frame, tube="reference_1", track=7):
+        return {"action": action, "frame": frame, "reference": tube, "track_id": track}
+
+    def test_a_hop_is_an_exit_and_entry_on_one_track(self):
+        hops = period.hops_of(self.run_with([self.ev("enter", 90, "reference_2"), self.ev("exit", 10)]))
+        self.assertEqual(sorted(hops), ["enter|reference_2|7|90", "exit|reference_1|7|10"])
+        self.assertEqual(hops["exit|reference_1|7|10"],
+                         {"track": "7", "from": "reference_1", "to": "reference_2"})
+
+    def test_returning_to_the_same_tube_on_one_track_is_a_hop(self):
+        self.assertEqual(len(period.hops_of(self.run_with([self.ev("exit", 10), self.ev("enter", 90)]))), 2)
+
+    def test_two_tracks_blank_tracks_and_lone_ends_are_not(self):
+        self.assertEqual(period.hops_of(self.run_with([
+            self.ev("exit", 10, track=1), self.ev("enter", 20, track=2),
+            self.ev("exit", 30, track=""), self.ev("enter", 40, track=""),
+            self.ev("enter", 50, track=3), self.ev("exit", 60, track=3)])), {})
+
+    def test_either_end_makes_a_trip_a_tube_hop(self):
+        hop = {"track": "7", "from": "reference_1", "to": "reference_2"}
+        self.assertEqual(period.auto_trip_type("a", "b", {"a": hop}, {}), "tube_hop")
+        self.assertEqual(period.auto_trip_type("a", "b", {}, {"b": hop}), "tube_hop")
+        self.assertEqual(period.auto_trip_type("a", "b", {}, {}), "direct")
+        self.assertEqual(period.hop_text("a", "b", {"a": hop}, {}),
+                         "Track 7 left tube 1 and went into tube 2.")
+
+    def test_a_reviewers_type_is_kept_and_wins_everywhere(self):
+        from apps.pipelines import review
+
+        trip = self.payload(self.page())["trips"][0]
+        self.assertEqual((trip["auto_type"], trip["type_set"]), ("direct", ""))
+        keys = (trip["exit"]["key"], trip["entry"]["key"])
+        run_a, run_b = self.a["run"], self.b["run"]
+        period.set_trip_vote(self.owner, run_a, keys[0], run_b, keys[1], "accepted", trip_type="tube_hop")
+        # Voting again without a type keeps it.
+        period.set_trip_vote(self.owner, run_a, keys[0], run_b, keys[1], "accepted")
+        self.assertEqual(self.payload(self.page())["trips"][0]["type_set"], "tube_hop")
+        row = period.trip_rows(TripReview.objects.all())[0]
+        self.assertEqual((row["trip_type"], row["trip_type_set_by"]), ("tube_hop", "reviewer"))
+        by_type = {t["label"]: t for t in review.batch_review_summary(
+            [run_a, run_b])["trips"]["by_type"]}
+        self.assertEqual((by_type["Tube hop"]["reviewed"], by_type["Direct"]["reviewed"]), (1, 0))
+        period.set_trip_type(run_a, keys[0], keys[1], "")
+        row = period.trip_rows(TripReview.objects.all())[0]
+        self.assertEqual((row["trip_type"], row["trip_type_set_by"]), ("direct", "auto"))
+
+    def test_an_unknown_type_is_refused(self):
+        with self.assertRaises(ValueError):
+            period.set_trip_type(self.a["run"], "x", "y", "bad")
+
+    def test_the_types_add_up_to_all_trips(self):
+        from apps.pipelines import review
+
+        trip = self.payload(self.page())["trips"][0]
+        period.set_trip_vote(self.owner, self.a["run"], trip["exit"]["key"], self.b["run"],
+                             trip["entry"]["key"], "rejected")
+        trips = review.batch_review_summary([self.a["run"], self.b["run"]])["trips"]
+        for field in ("reviewed", "right", "wrong", "missed"):
+            self.assertEqual(sum(t[field] for t in trips["by_type"]), trips[field])
+
+
 class TripsOverReviewedEventsTests(PeriodBase):
     def test_a_trip_ends_on_an_added_entry_and_not_on_a_rejected_one(self):
         from apps.pipelines import review

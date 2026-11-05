@@ -127,6 +127,7 @@ def _trip_votes(runs, user):
         if k not in when or t.updated_at > when[k]:
             when[k] = t.updated_at
             s["mine"] = {"verdict": t.verdict, "entry_key": t.entry_key, "reason": t.reason,
+                         "trip_type": t.trip_type,
                          "by": "you" if t.user_id == user.pk else t.user.username}
     return out
 
@@ -136,9 +137,10 @@ class PeriodReviewView(LoginRequiredMixin, View):
         from apps.pipelines import review as event_review
 
         data = _gather(request)
-        clips_json, pairs, detected = [], [], []
+        clips_json, pairs, detected, hops = [], [], [], {}
         for ci, c in period.whole_clips(data):
             evs = period.clip_events(c, request.user)
+            hops[ci] = period.hops_of(c["run"])
             # Two sets of trips: from the events as detected, before anyone
             # reviewed them, and from those people stand by (not the rejected,
             # and the added). The first gives precision, the second recall.
@@ -179,7 +181,10 @@ class PeriodReviewView(LoginRequiredMixin, View):
                     "reference": ee["reference"], "gap_sec": t["gap_sec"],
                     "same_marker": t["same_marker"], "mine": v.get("mine"),
                     "accepted": v.get("accepted", 0), "rejected": v.get("rejected", 0),
-                    "t": ee["t"], "before": False, "after": False})
+                    "t": ee["t"], "before": False, "after": False,
+                    "auto_type": period.auto_trip_type(ee["key"], ne["key"], hops[eci], hops[nci]),
+                    "type_reason": period.hop_text(ee["key"], ne["key"], hops[eci], hops[nci]),
+                    "type_set": (v.get("mine") or {}).get("trip_type", "")})
                 trip[stage] = True
         trips = sorted(trips.values(), key=lambda t: t["t"])
         span = (data["end"] - data["start"]).total_seconds()
@@ -232,7 +237,8 @@ class TripReviewView(LoginRequiredMixin, View):
     """Record, change or take back one reviewer's call on a suggested trip.
 
     JSON ``{exit_job, exit_key, entry_job|null, entry_key, verdict, reason,
-    relinked}``. Only reviewers of the exit's run; the entry must be a clip
+    relinked, trip_type}``, or ``{exit_job, exit_key, entry_key, set_type: true,
+    trip_type}`` to change only a called trip's type. Only reviewers of the exit's run; the entry must be a clip
     they can see."""
 
     def post(self, request):
@@ -254,10 +260,15 @@ class TripReviewView(LoginRequiredMixin, View):
             if entry_run is None:
                 raise Http404("No such entry.")
         try:
+            if body.get("set_type"):
+                period.set_trip_type(exit_run, str(body.get("exit_key", "")),
+                                     str(body.get("entry_key") or ""), body.get("trip_type") or "")
+                return JsonResponse({"ok": True})
             verdict = period.set_trip_vote(
                 request.user, exit_run, str(body.get("exit_key", "")), entry_run,
                 str(body.get("entry_key") or ""), body.get("verdict"), body.get("reason", ""),
-                bool(body.get("relinked")), bool(body.get("before_review", True)))
+                bool(body.get("relinked")), bool(body.get("before_review", True)),
+                body.get("trip_type"))
         except ValueError as e:
             return JsonResponse({"ok": False, "error": str(e)}, status=400)
         return JsonResponse({"ok": True, "verdict": verdict})

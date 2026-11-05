@@ -677,7 +677,9 @@ BLOCK_REGISTRY = {
                        "the next event at its tube, when that is an entry, on the "
                        "same day, each entry used once. Trips run across clips, so "
                        "these rules are read when a batch's trips are worked out; "
-                       "changing them needs no re-run and no Update.",
+                       "changing them needs no re-run and no Update. Each trip gets "
+                       "a type: Tube hop when one track links its exit or entry to "
+                       "a tube, otherwise Direct.",
         "category": "analyze",
         "icon": "🔁",
         "input_type": "events",

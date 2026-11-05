@@ -25,6 +25,12 @@ own page. Logic: pipelines/period.py.
       <button type="button" data-pr-list="after" class="h-10 px-3 bg-white border-l border-gray-300">After events review (<span data-pr-list-n></span>)</button>
     </span>
     <span><span data-pr-progress></span>{% if data.skipped %} · {{ data.skipped|length }} clip{{ data.skipped|length|pluralize }} with no recording time left out{% endif %}</span>
+    <span class="flex rounded-md border border-gray-300 overflow-hidden" role="group" aria-label="Which trip type"
+          title="Tube hop: one track links the exit or entry to a tube. Direct: no hop seen.">
+      <button type="button" data-pr-kind="all" class="h-10 px-3 bg-white">All (<span data-pr-kind-n></span>)</button>
+      <button type="button" data-pr-kind="direct" class="h-10 px-3 bg-white border-l border-gray-300">Direct (<span data-pr-kind-n></span>)</button>
+      <button type="button" data-pr-kind="tube_hop" class="h-10 px-3 bg-white border-l border-gray-300">Tube hop (<span data-pr-kind-n></span>)</button>
+    </span>
     <a href="{{ csv_url }}" class="text-amber-700 hover:underline ml-auto">Reviewed trips CSV</a>
   </div>
 
@@ -52,6 +58,14 @@ own page. Logic: pipelines/period.py.
     <div class="flex flex-wrap items-baseline justify-between gap-2">
       <strong data-pr-trip-title class="text-base"></strong>
       <span data-pr-trip-where class="font-mono text-[13px] text-gray-700"></span>
+    </div>
+    <div class="flex flex-wrap items-center gap-2 text-[13px]">
+      <span class="font-semibold text-gray-900">Trip type</span>
+      <span class="flex rounded-md border border-gray-300 overflow-hidden" role="group" aria-label="Trip type">
+        <button type="button" data-pr-type="direct" class="h-10 px-3 bg-white">Direct</button>
+        <button type="button" data-pr-type="tube_hop" class="h-10 px-3 bg-white border-l border-gray-300">Tube hop</button>
+      </span>
+      <span data-pr-type-why class="text-gray-600"></span>
     </div>
     <p class="text-[13px] text-gray-600 m-0">Is it the same bee going out and coming back?</p>
     <p data-pr-trip-call hidden class="text-[13px] font-semibold text-amber-800 m-0"></p>

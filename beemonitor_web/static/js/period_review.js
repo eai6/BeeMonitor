@@ -48,6 +48,12 @@
   var stage = 'before';
   try { if (localStorage.getItem('pr-stage') === 'after') stage = 'after'; } catch (e) {}
   function stageTrips() { return P.trips.filter(function (t) { return t[stage]; }); }
+  // A trip's type (memory/78): a reviewer's, else the one from the tracks.
+  var kind = 'all';
+  function tripType(t) { return t.type_set || t.auto_type; }
+  function shownTrips() {
+    return stageTrips().filter(function (t) { return kind === 'all' || tripType(t) === kind; });
+  }
 
   function findEvent(ref) {
     var c = P.clips[ref.clip];
@@ -58,7 +64,7 @@
 
   function paintProgress() {
     var el = $('[data-pr-progress]');
-    var shown = stageTrips(), tripsDone = shown.filter(tripCall).length;
+    var shown = shownTrips(), tripsDone = shown.filter(tripCall).length;
     el.textContent = shown.length + ' trips · ' + tripsDone + ' reviewed · ' +
       (shown.length - tripsDone) + ' to go';
   }
@@ -282,6 +288,7 @@
       (t.mine && t.mine.reason ? ' Note: ' + t.mine.reason + '.' : '') + ' Vote again to change it.' : '';
     $('[data-pr-trip-back]').disabled = i === 0;
     $('[data-pr-trip-next]').disabled = i + 1 >= trip.list.length;
+    paintType(t);
     showSide('A', t.exit, a, 'EXIT');
     showSide('B', t.entry, b, 'ENTER');
     panel.hidden = false;
@@ -313,7 +320,8 @@
       exit_job: exitClip.job, exit_run: exitClip.run, exit_key: t.exit.key,
       entry_job: entry ? P.clips[entry.clip].job : null, entry_run: entry ? P.clips[entry.clip].run : null,
       entry_key: entry ? entry.key : '',
-      verdict: verdict, reason: reason || '', relinked: !!relinked, before_review: !!t.before
+      verdict: verdict, reason: reason || '', relinked: !!relinked, before_review: !!t.before,
+      trip_type: t.type_set || ''
     }).then(function (d) {
       // One call per trip (memory/74): this one replaces anyone else's.
       t.mine = d.verdict ? {verdict: d.verdict, entry_key: entry ? entry.key : '', reason: (reason || '').trim(),
@@ -337,7 +345,7 @@
   // This page is for reviewing trips: it opens on the first still to do, or
   // with none left, at the top to look them over.
   function startTrips() {
-    trip.list = stageTrips().filter(function (t) { return P.clips[t.exit.clip].can_review; });
+    trip.list = shownTrips().filter(function (t) { return P.clips[t.exit.clip].can_review; });
     if ($('[data-pr-trip]')) $('[data-pr-trip]').hidden = !trip.list.length;
     if (!$('[data-pr-trip]') || !trip.list.length) { trip.on = false; return false; }
     trip.on = true;
@@ -346,13 +354,43 @@
     return true;
   }
 
+  function paintButton(b, on) {
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    b.classList.toggle('bg-amber-700', on);
+    b.classList.toggle('text-white', on);
+    b.classList.toggle('bg-white', !on);
+  }
+  function paintKinds() {
+    var list = stageTrips();
+    $$('[data-pr-kind]').forEach(function (b) {
+      var name = b.getAttribute('data-pr-kind');
+      paintButton(b, name === kind);
+      $('[data-pr-kind-n]', b).textContent = list.filter(function (t) {
+        return name === 'all' || tripType(t) === name;
+      }).length;
+    });
+  }
+  function paintType(t) {
+    $$('[data-pr-type]').forEach(function (b) { paintButton(b, b.getAttribute('data-pr-type') === tripType(t)); });
+    $('[data-pr-type-why]').textContent = t.type_set ? 'Changed by a reviewer.' :
+      t.type_reason ? 'Set automatically: ' + t.type_reason : 'No tube hop seen.';
+  }
+  // On a trip already called this saves now; otherwise with the Yes or No.
+  function setType(t, type) {
+    t.type_set = type === t.auto_type ? '' : type;
+    paintType(t);
+    paintKinds();
+    if (!t.mine) return;
+    var exitClip = P.clips[t.exit.clip];
+    post(P.trip_url, {exit_job: exitClip.job, exit_run: exitClip.run, exit_key: t.exit.key,
+                      entry_key: t.mine.entry_key, set_type: true, trip_type: t.type_set})
+      .catch(function (err) { status.textContent = String(err.message || err); });
+  }
+
   function paintStage() {
     $$('[data-pr-list]').forEach(function (b) {
-      var name = b.getAttribute('data-pr-list'), on = name === stage;
-      b.setAttribute('aria-pressed', on ? 'true' : 'false');
-      b.classList.toggle('bg-amber-700', on);
-      b.classList.toggle('text-white', on);
-      b.classList.toggle('bg-white', !on);
+      var name = b.getAttribute('data-pr-list');
+      paintButton(b, name === stage);
       $('[data-pr-list-n]', b).textContent = P.trips.filter(function (t) { return t[name]; }).length;
     });
   }
@@ -361,10 +399,20 @@
       stage = b.getAttribute('data-pr-list');
       try { localStorage.setItem('pr-stage', stage); } catch (e) {}
       paintStage();
-      paintProgress();
-      if (!startTrips()) status.textContent = 'No trips in this list.';
+      showList();
     });
   });
+  $$('[data-pr-kind]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      kind = b.getAttribute('data-pr-kind');
+      showList();
+    });
+  });
+  function showList() {
+    paintKinds();
+    paintProgress();
+    status.textContent = startTrips() ? '' : 'No trips in this list.';
+  }
 
   // ── Wiring ───────────────────────────────────────────────────────────────
   if ($('[data-pr-trip]')) {
@@ -373,6 +421,9 @@
       tripVote(t, t.entry, 'accepted', '', false).then(function () { tripNext(); });
     });
     $('[data-pr-trip-no]').addEventListener('click', function () { askWhy(trip.list[trip.i]); });
+    $$('[data-pr-type]').forEach(function (b) {
+      b.addEventListener('click', function () { setType(trip.list[trip.i], b.getAttribute('data-pr-type')); });
+    });
     $('[data-pr-trip-next]').addEventListener('click', function () {
       if (trip.i + 1 < trip.list.length) tripGo(trip.i + 1);
     });
@@ -397,6 +448,7 @@
     window.location.href = this.value;
   });
   paintStage();
+  paintKinds();
   paintProgress();
   if (!P.clips.length) status.textContent = 'No analysed clips with an Events step in this period.';
   else if (!startTrips()) {
