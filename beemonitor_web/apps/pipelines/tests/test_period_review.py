@@ -253,12 +253,13 @@ class TripVoteTests(PeriodBase):
         t = TripReview.objects.get()
         self.assertTrue(t.relinked)
         self.assertEqual((t.entry_track, t.reason), ("4", "relinked"))
+        # A call is on a pair: another entry for this exit is another call.
         self.vote("rejected", entry=False, reason="didn't come back")
-        t.refresh_from_db()
-        self.assertEqual((t.verdict, t.entry_key, t.reason), ("rejected", "", "didn't come back"))
-        self.assertEqual(self.csv_rows()[0]["review_notes"], "didn't come back")
-        self.vote(None)
-        self.assertFalse(TripReview.objects.exists())
+        self.assertEqual(TripReview.objects.count(), 2)
+        t = TripReview.objects.get(entry_key="")
+        self.assertEqual((t.verdict, t.reason), ("rejected", "didn't come back"))
+        self.vote(None, entry=False)
+        self.assertEqual(TripReview.objects.get().entry_key, other["key"])
 
     def test_a_reviewer_changes_someone_elses_trip_call(self):
         # memory/74: one call per trip; any reviewer may change or take it back.
@@ -384,8 +385,7 @@ class SharedJobTests(PeriodBase):
 
     def test_a_reviewers_latest_call_wins_across_runs(self):
         self.vote("accepted", exit_run=self.clips[0]["run"])
-        self.vote("rejected", entry=False, reason="didn't come back",
-                  exit_run=str(self.later_runs[0].pk))
+        self.vote("rejected", reason="didn't come back", exit_run=str(self.later_runs[0].pk))
         self.client.force_login(self.owner)
         trips = self.client.get(reverse("pipelines:batch_detail", args=[self.batch])
                                 ).context["review_summary"]["trips"]
@@ -421,6 +421,8 @@ class TripsOnlyPageTests(PeriodBase):
         r = self.client.get(reverse("analysis:period_review"), {"batch": str(self.batch)})
         self.assertContains(r, "data-pr-trip-next")
         self.assertContains(r, "data-pr-speeds")
+        self.assertContains(r, 'data-pr-list="before"')
+        self.assertContains(r, 'data-pr-list="after"')
         for gone in ("data-pr-review-events", "data-pr-review-trips", "data-am-open", "data-pr-card",
                      "add_missed.js"):
             self.assertNotContains(r, gone)
@@ -478,8 +480,13 @@ class TripsOverReviewedEventsTests(PeriodBase):
         added = AddedEvent.objects.create(run=self.b["run"], user=self.owner, frame=500,
                                           action="enter", reference=reference)
         p = self.payload(self.page())
-        ended = [t for t in p["trips"] if t["exit"]["key"] == trip["exit"]["key"]]
+        ended = [t for t in p["trips"] if t["exit"]["key"] == trip["exit"]["key"] and t["after"]]
         self.assertEqual(len(ended), 1)
+        self.assertFalse(ended[0]["before"])
+        # The pipeline's own trip stays, for precision, rejected entry and all.
+        kept = [t for t in p["trips"] if t["before"] and t["exit"]["key"] == trip["exit"]["key"]]
+        self.assertEqual([t["entry"]["key"] for t in kept], [trip["entry"]["key"]])
+        self.assertFalse(kept[0]["after"])
         key = review.event_key({"action": "enter", "reference": reference, "track_id": "",
                                 "frame": 500})
         self.assertEqual(ended[0]["entry"]["key"], key)

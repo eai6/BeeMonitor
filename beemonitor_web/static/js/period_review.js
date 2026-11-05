@@ -97,6 +97,12 @@
     return t.accepted && t.rejected ? 'disputed' : t.accepted ? 'accepted' : t.rejected ? 'rejected' : '';
   }
 
+  // Which trips are shown: the pipeline's, from every detected event, or those
+  // of the reviewed events (rejected out, added in). A trip in both is one trip.
+  var stage = 'before';
+  try { if (localStorage.getItem('pr-stage') === 'after') stage = 'after'; } catch (e) {}
+  function stageTrips() { return P.trips.filter(function (t) { return t[stage]; }); }
+
   var showAll = false;
   function renderLanes() {
     var box = $('[data-pr-lanes]');
@@ -120,7 +126,7 @@
       var track = document.createElement('div');
       track.className = 'relative flex-1 h-4 rounded-sm bg-gray-100';
       if (links) {
-        P.trips.forEach(function (tr) {
+        stageTrips().forEach(function (tr) {
           if (tr.reference !== ref) return;
           var a = findEvent(tr.exit), b = findEvent(tr.entry);
           if (!a || !b) return;
@@ -195,9 +201,9 @@
 
   function paintProgress() {
     var el = $('[data-pr-progress]');
-    var tripsDone = P.trips.filter(tripCall).length;
-    el.textContent = P.trips.length + ' suggested trips · ' + tripsDone + ' reviewed · ' +
-      (P.trips.length - tripsDone) + ' to go';
+    var shown = stageTrips(), tripsDone = shown.filter(tripCall).length;
+    el.textContent = shown.length + ' trips · ' + tripsDone + ' reviewed · ' +
+      (shown.length - tripsDone) + ' to go';
   }
 
   // ── The player ───────────────────────────────────────────────────────────
@@ -457,7 +463,7 @@
       exit_job: exitClip.job, exit_run: exitClip.run, exit_key: t.exit.key,
       entry_job: entry ? P.clips[entry.clip].job : null, entry_run: entry ? P.clips[entry.clip].run : null,
       entry_key: entry ? entry.key : '',
-      verdict: verdict, reason: reason || '', relinked: !!relinked
+      verdict: verdict, reason: reason || '', relinked: !!relinked, before_review: !!t.before
     }).then(function (d) {
       // One call per trip (memory/74): this one replaces anyone else's.
       t.mine = d.verdict ? {verdict: d.verdict, entry_key: entry ? entry.key : '', by: 'you'} : null;
@@ -480,13 +486,34 @@
   // This page is for reviewing trips: it opens on the first still to do, or
   // with none left, at the top to look them over.
   function startTrips() {
-    trip.list = P.trips.filter(function (t) { return P.clips[t.exit.clip].can_review; });
-    if (!$('[data-pr-trip]') || !trip.list.length) return false;
+    trip.list = stageTrips().filter(function (t) { return P.clips[t.exit.clip].can_review; });
+    if ($('[data-pr-trip]')) $('[data-pr-trip]').hidden = !trip.list.length;
+    if (!$('[data-pr-trip]') || !trip.list.length) { trip.on = false; return false; }
     trip.on = true;
     applySpeed(speed);
     tripGo(Math.max(0, trip.list.findIndex(function (t) { return !tripCall(t); })), true);
     return true;
   }
+
+  function paintStage() {
+    $$('[data-pr-list]').forEach(function (b) {
+      var name = b.getAttribute('data-pr-list'), on = name === stage;
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      b.classList.toggle('bg-amber-700', on);
+      b.classList.toggle('text-white', on);
+      b.classList.toggle('bg-white', !on);
+      $('[data-pr-list-n]', b).textContent = P.trips.filter(function (t) { return t[name]; }).length;
+    });
+  }
+  $$('[data-pr-list]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      stage = b.getAttribute('data-pr-list');
+      try { localStorage.setItem('pr-stage', stage); } catch (e) {}
+      paintStage();
+      renderLanes();
+      if (!startTrips()) status.textContent = 'No trips in this list.';
+    });
+  });
 
   // ── Wiring ───────────────────────────────────────────────────────────────
   if ($('[data-pr-trip]')) {
@@ -518,6 +545,7 @@
   renderTicks();
   renderStrip();
   renderLanes();
+  paintStage();
   if (!P.clips.length) status.textContent = 'No analysed clips with an Events step in this period.';
   else if (!startTrips()) {
     loadClip(0, 0, false);

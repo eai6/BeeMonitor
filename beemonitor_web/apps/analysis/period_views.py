@@ -97,7 +97,7 @@ def _trip_votes(runs, user):
     reviewer may change it; ``by`` says who."""
     out, when = {}, {}
     for t in event_review.trip_reviews_for(runs):
-        k = (t.own_run.pk, t.exit_key)
+        k = (t.own_run.pk, t.exit_key, t.entry_key)
         s = out.setdefault(k, {"mine": None, "accepted": 0, "rejected": 0})
         s[t.verdict] += 1
         if k not in when or t.updated_at > when[k]:
@@ -115,11 +115,13 @@ class PeriodReviewView(LoginRequiredMixin, View):
         from apps.pipelines import review as event_review
 
         data = _gather(request)
-        clips_json, pairs = [], []
+        clips_json, pairs, detected = [], [], []
         for ci, c in enumerate(data["clips"]):
             evs = period.clip_events(c, request.user)
-            # Trips run over the events people stand by: not ones they
-            # rejected, and those they added as missed (below).
+            # Two sets of trips: from the events as detected, before anyone
+            # reviewed them, and from those people stand by (not the rejected,
+            # and the added). The first gives precision, the second recall.
+            detected += [(ci, e) for e in evs]
             pairs += [(ci, e) for e in evs if e.get("mine") != "rejected"]
             added = period.added_events(c, event_review.added_rows(c["run"]))
             pairs += [(ci, a) for a in added]
@@ -142,16 +144,23 @@ class PeriodReviewView(LoginRequiredMixin, View):
                 "events": evs,
             })
         votes = _trip_votes([c["run"] for c in data["clips"]], request.user)
-        trips = []
         rules = period.trip_rules(data["clips"][0]["run"].pipeline) if data["clips"] else None
-        for t in period.suggest_trips(pairs, rules):
-            (eci, ee), (nci, ne) = t["exit"], t["entry"]
-            v = votes.get((data["clips"][eci]["run"].pk, ee["key"])) or {}
-            trips.append({"exit": {"clip": eci, "key": ee["key"]},
-                          "entry": {"clip": nci, "key": ne["key"]},
-                          "reference": ee["reference"], "gap_sec": t["gap_sec"],
-                          "same_marker": t["same_marker"], "mine": v.get("mine"),
-                          "accepted": v.get("accepted", 0), "rejected": v.get("rejected", 0)})
+        trips = {}
+        for stage, events in (("before", detected), ("after", pairs)):
+            for t in period.suggest_trips(events, rules):
+                (eci, ee), (nci, ne) = t["exit"], t["entry"]
+                run_pk = data["clips"][eci]["run"].pk
+                v = (votes.get((run_pk, ee["key"], ne["key"]))
+                     or votes.get((run_pk, ee["key"], "")) or {})
+                trip = trips.setdefault((eci, ee["key"], nci, ne["key"]), {
+                    "exit": {"clip": eci, "key": ee["key"]},
+                    "entry": {"clip": nci, "key": ne["key"]},
+                    "reference": ee["reference"], "gap_sec": t["gap_sec"],
+                    "same_marker": t["same_marker"], "mine": v.get("mine"),
+                    "accepted": v.get("accepted", 0), "rejected": v.get("rejected", 0),
+                    "t": ee["t"], "before": False, "after": False})
+                trip[stage] = True
+        trips = sorted(trips.values(), key=lambda t: t["t"])
         span = (data["end"] - data["start"]).total_seconds()
         payload = {"start": data["start"].isoformat(timespec="seconds"), "span": span,
                    "clips": clips_json, "trips": trips,
@@ -222,7 +231,7 @@ class TripReviewView(LoginRequiredMixin, View):
             verdict = period.set_trip_vote(
                 request.user, exit_run, str(body.get("exit_key", "")), entry_run,
                 str(body.get("entry_key") or ""), body.get("verdict"), body.get("reason", ""),
-                bool(body.get("relinked")))
+                bool(body.get("relinked")), bool(body.get("before_review", True)))
         except ValueError as e:
             return JsonResponse({"ok": False, "error": str(e)}, status=400)
         return JsonResponse({"ok": True, "verdict": verdict})

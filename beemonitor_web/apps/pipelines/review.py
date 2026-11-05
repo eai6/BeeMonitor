@@ -239,7 +239,7 @@ def trip_reviews_for(runs):
                 keys[own.pk] = _event_keys(own)
             if t.exit_key not in keys[own.pk]:
                 continue
-        k = (own.pk, t.exit_key, t.user_id)
+        k = (own.pk, t.exit_key, t.entry_key, t.user_id)
         if k not in latest or t.updated_at > latest[k].updated_at:
             t.own_run = own
             latest[k] = t
@@ -409,10 +409,10 @@ def batch_review_summary(runs, per_run=None, actions=None):
     # The actions counted (memory/70).
     ev["actions"] = list(actions) if actions is not None else None
 
-    by_exit = {}
+    by_trip = {}
     trip_calls = trip_reviews_for(runs)
     for r in trip_calls:
-        by_exit.setdefault((r.own_run.pk, r.exit_key), []).append(r)
+        by_trip.setdefault((r.own_run.pk, r.exit_key, r.entry_key), []).append(r)
     # Ends of called trips that people added: the pipeline never had that event.
     from .models import AddedEvent
     added_ends = {(run_id, event_key({"action": action, "reference": reference,
@@ -421,13 +421,15 @@ def batch_review_summary(runs, per_run=None, actions=None):
                       run_id__in={pk for c in trip_calls
                                   for pk in (c.exit_run_id, c.entry_run_id) if pk})
                   .values_list("run_id", "action", "reference", "track_id", "frame")}
-    trips = {"reviewed": len(by_exit), "accepted": 0, "relinked": 0, "rejected": 0,
+    trips = {"reviewed": len(by_trip), "accepted": 0, "relinked": 0, "rejected": 0,
              "didnt_come_back": 0, "cant_tell": 0, "disputed": 0, "right": 0, "wrong": 0,
              "missed": 0}
-    for calls in by_exit.values():
+    for calls in by_trip.values():
         call = combined([c.verdict for c in calls])
-        added = any((c.exit_run_id, c.exit_key) in added_ends
-                    or (c.entry_run_id, c.entry_key) in added_ends for c in calls)
+        # The pipeline's own pair, made before any event was reviewed.
+        before = all(c.before_review for c in calls) and not any(
+            (c.exit_run_id, c.exit_key) in added_ends
+            or (c.entry_run_id, c.entry_key) in added_ends for c in calls)
         if call == "disputed":
             trips["disputed"] += 1
         elif call == "accepted":
@@ -436,7 +438,7 @@ def batch_review_summary(runs, per_run=None, actions=None):
             if relinked:
                 trips["relinked"] += 1
                 trips["wrong"] += 1
-            if relinked or added:
+            if relinked or not before:
                 trips["missed"] += 1
             else:
                 trips["right"] += 1
@@ -447,13 +449,13 @@ def batch_review_summary(runs, per_run=None, actions=None):
                 trips["didnt_come_back"] += 1
             if "can't tell" in reasons:
                 trips["cant_tell"] += 1
-            elif not added:
+            elif before:
                 trips["wrong"] += 1
-    # From the trips people called, as for events. A trip between two detected
-    # events is the pipeline's: right when called the same bee, wrong when not
-    # or re-linked. A real trip with an added end, or re-linked, is one it
-    # missed: recall counts it, precision can't, as it never suggested it.
-    # "Can't tell" and disputed calls judge nothing, so count for neither.
+    # From the trips people called. Precision is over the pipeline's trips
+    # before events review, false events and all, as on unseen data: right when
+    # called the same bee, wrong when not or re-linked. Recall is over the real
+    # trips found after it: one only reviewed events make is one the pipeline
+    # missed. "Can't tell" and disputed calls count for neither.
     trips["suggested"] = trips["right"] + trips["wrong"]
     trips["real"] = trips["right"] + trips["missed"]
     trips["precision"], trips["recall"] = quality(trips["right"], trips["wrong"], trips["missed"])

@@ -51,3 +51,4 @@
 - Suggested trips now pair over reviewed events on the Review trips page: rejected events are left out and added ones count (`period.added_events`), so a trip can end on an added entry.
 - Side panel removed from Review trips. Timeline stays: clicking a mark or band opens that trip.
 - The event-by-event walk (Review events, its card) is gone from the clip page: jumping between events hid missed events (user). Voting is in Events near now as the clip plays; Mark clip reviewed is by hand.
+- Trips before and after events review (user, 2026-11-05: the platform must reflect unseen data). Review trips switches between two lists: Before (pairs from every detected event, rejected included, nothing added) gives precision; After (rejected out, added in) gives recall. A pair in both is one trip. Calls are per exit and entry; `TripReview.before_review` says the pipeline made the pair (migration 0025). Older calls count as before, unless an end was added.

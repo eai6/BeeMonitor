@@ -45,6 +45,11 @@ Events are reviewed on each clip's own page. Logic: pipelines/period.py.
     <div class="flex flex-wrap items-center justify-between gap-3 text-[13px] text-gray-700">
       <span><strong>{{ data.clips|length }} clip{{ data.clips|length|pluralize }}</strong> · <span data-pr-progress></span></span>
       <span class="flex flex-wrap items-center gap-3">
+        <span class="flex rounded-md border border-gray-300 overflow-hidden" role="group" aria-label="Which trips"
+              title="Before: the trips from every detected event, for precision. After: rejected events out and added ones in, for recall.">
+          <button type="button" data-pr-list="before" class="h-10 px-3 bg-white">Before events review (<span data-pr-list-n></span>)</button>
+          <button type="button" data-pr-list="after" class="h-10 px-3 bg-white border-l border-gray-300">After events review (<span data-pr-list-n></span>)</button>
+        </span>
         <label class="flex items-center gap-1.5"><input type="checkbox" data-pr-links checked> Link each exit to the next entry on the same tube</label>
         <a href="{{ csv_url }}" class="text-amber-700 hover:underline">Reviewed trips CSV</a>
       </span>

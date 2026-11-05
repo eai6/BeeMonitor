@@ -375,11 +375,16 @@ class TripReview(models.Model):
     # "relinked", "didn't come back" or "can't tell".
     reason = models.CharField(max_length=300, blank=True)
     relinked = models.BooleanField(default=False)
+    # Whether the pipeline made this pair from its events as detected, before
+    # anyone reviewed them. Precision reads these; a pair only reviewed events
+    # make is one the pipeline missed (memory/77).
+    before_review = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = ("exit_run", "exit_key", "user")
+        # One exit can pair differently before and after events review.
+        unique_together = ("exit_run", "exit_key", "entry_key", "user")
 
     def __str__(self):
         return f"{self.user} {self.verdict} trip from {self.exit_key}"

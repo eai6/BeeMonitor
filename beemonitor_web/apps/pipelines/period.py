@@ -294,15 +294,17 @@ def suggest_trips(events, rules=None):
 
 # ── Trip votes ───────────────────────────────────────────────────────────────
 
-def set_trip_vote(user, exit_run, exit_key, entry_run, entry_key, verdict, reason="", relinked=False):
-    """Make, change or (verdict None) take back the call on the trip starting
-    at this exit, whoever made it before (memory/74). Raises ValueError on a
-    bad request."""
+def set_trip_vote(user, exit_run, exit_key, entry_run, entry_key, verdict, reason="", relinked=False,
+                  before_review=True):
+    """Make, change or (verdict None) take back the call on this exit and
+    entry, whoever made it before (memory/74). Raises ValueError on a bad
+    request."""
     from .models import TripReview
     from .review import TRIP_REASONS, shared_job_runs
 
     same = TripReview.objects.filter(
-        exit_run_id__in=list(shared_job_runs([exit_run], "trip_exits")), exit_key=exit_key)
+        exit_run_id__in=list(shared_job_runs([exit_run], "trip_exits")), exit_key=exit_key,
+        entry_key=entry_key or "")
     if verdict in (None, "", "none"):
         same.delete()
         return None
@@ -329,8 +331,9 @@ def set_trip_vote(user, exit_run, exit_key, entry_run, entry_key, verdict, reaso
     _r, entry_track, entry_frame = _split(entry_key) if entry_key else ("", "", None)
     same.exclude(exit_run=exit_run, user=user).delete()
     TripReview.objects.update_or_create(
-        exit_run=exit_run, exit_key=exit_key, user=user,
-        defaults={"entry_run": entry_run if entry_key else None, "entry_key": entry_key or "",
+        exit_run=exit_run, exit_key=exit_key, entry_key=entry_key or "", user=user,
+        defaults={"entry_run": entry_run if entry_key else None,
+                  "before_review": bool(before_review),
                   "reference": ref, "exit_track": exit_track, "exit_frame": exit_frame,
                   "entry_track": entry_track or "", "entry_frame": entry_frame,
                   "verdict": verdict, "reason": reason, "relinked": bool(relinked)})
