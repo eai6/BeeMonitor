@@ -306,14 +306,12 @@
       tripPlay('moments');
     }
   }
-  // After a vote, on to the next trip nobody has called, coming round to any
-  // passed over.
+  // After a vote, on to the next trip in the list, called or not; from the
+  // last, round to any passed over.
   function tripNext() {
-    var n = trip.list.length;
-    for (var k = 1; k < n; k++) {
-      var i = (trip.i + k) % n;
-      if (!tripCall(trip.list[i])) { tripGo(i); return; }
-    }
+    if (trip.i + 1 < trip.list.length) { tripGo(trip.i + 1); return; }
+    var i = trip.list.findIndex(function (t) { return !tripCall(t); });
+    if (i >= 0) { tripGo(i); return; }
     tripGo(trip.i, true);
     $('[data-pr-trip-now]').textContent = 'Every suggested trip here has been reviewed.';
   }
