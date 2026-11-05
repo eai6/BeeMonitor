@@ -390,11 +390,12 @@ class ClipNavigationTests(PeriodBase):
     def test_the_results_page_links_the_batchs_neighbouring_clips(self):
         self.client.force_login(self.owner)
         a, b = self.a, self.b
-        page = self.client.get(reverse("analysis:results", args=[a["job"].pk]) + f"?run={a['run'].pk}")
+        # Newest first, as the batch page lists them: next is the row below.
+        page = self.client.get(reverse("analysis:results", args=[b["job"].pk]) + f"?run={b['run'].pk}")
         nav = page.context["batch_nav"]
         self.assertEqual((nav["position"], nav["total"]), (1, 2))
         self.assertIsNone(nav["prev"])
-        self.assertIn(f"?run={b['run'].pk}", nav["next"]["url"])
+        self.assertIn(f"?run={a['run'].pk}", nav["next"]["url"])
         self.assertContains(page, "Next clip →")
         page = self.client.get(nav["next"]["url"])
         self.assertEqual(page.context["batch_nav"]["position"], 2)
