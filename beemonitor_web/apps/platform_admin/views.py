@@ -19,7 +19,10 @@ from django.db.models import Count, F, Q, Sum
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
+from django.utils.crypto import get_random_string
 from django.utils.dateparse import parse_date
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import never_cache
 from django.views.generic import TemplateView, View
 
 from apps.accounts import charts, quota
@@ -149,6 +152,7 @@ class UserListView(PlatformPage):
         return resp
 
 
+@method_decorator(never_cache, name="dispatch")
 class UserDetailView(PlatformPage):
     template_name = "platform_admin/user.html"
     section = "users"
@@ -161,7 +165,9 @@ class UserDetailView(PlatformPage):
         events = UsageEvent.objects.filter(user=u)
         weeks, series = charts.credits_by_period(events, split="kind")
         life = events.aggregate(cost=Sum("cost_usd"), cr=Sum("credits"))
+        shown = self.request.session.pop(TEMP_PASSWORD_KEY, None)
         ctx.update(
+            temp_password=shown["password"] if shown and shown["user"] == u.pk else None,
             u=u, profile=profile, tier=stats.tier_label(u), status=stats.status(u),
             unlimited=quota.is_unlimited(u),
             left=quota.available(u), pending=quota.pending(u),
@@ -180,6 +186,10 @@ class UserDetailView(PlatformPage):
             pro_default_until=(timezone.localdate() + timedelta(days=PRO_DEFAULT_DAYS)).isoformat(),
         )
         return ctx
+
+
+# Holds a new password from the POST that made it to the page that shows it.
+TEMP_PASSWORD_KEY = "platform_admin_temp_password"
 
 
 class UserActionView(SuperuserMixin, View):
@@ -265,6 +275,21 @@ class UserActionView(SuperuserMixin, View):
         AdminAction.record(request.user, "password_reset", f"Sent {target.username} a password reset link",
                            target=target, reason=reason)
         messages.success(request, f"Sent a reset link to {target.email}. Email status shows whether it went.")
+
+    def do_temp_password(self, request, target, profile, reason):
+        """Set a new password for someone locked out, for when reset email
+        can't reach them. It is shown once, to this admin, and kept nowhere:
+        not in the log, and not in a message, which would ride in a cookie."""
+        if target == request.user:
+            messages.error(request, "Change your own password on your profile page.")
+            return
+        password = get_random_string(14, "abcdefghjkmnpqrstuvwxyzACDEFGHJKLMNPQRTUVWXY2346789")
+        target.set_password(password)
+        target.save(update_fields=["password"])
+        request.session[TEMP_PASSWORD_KEY] = {"user": target.pk, "password": password}
+        AdminAction.record(request.user, "temp_password",
+                           f"Set a temporary password for {target.username}",
+                           target=target, reason=reason)
 
 
 class RequestsView(PlatformPage):

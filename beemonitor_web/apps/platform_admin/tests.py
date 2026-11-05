@@ -171,6 +171,35 @@ class ActionTests(TestCase):
         self.admin.refresh_from_db()
         self.assertTrue(self.admin.is_active)
 
+    def test_a_temporary_password_works_is_shown_once_and_isnt_logged(self):
+        res = self.client.post(reverse("platform_admin:user_action", args=[self.alice.pk, "temp_password"]),
+                               follow=True)
+        password = res.context["temp_password"]
+        self.assertEqual(len(password), 14)
+        self.assertContains(res, password)
+        self.assertIn("no-store", res["Cache-Control"])
+        self.alice.refresh_from_db()
+        self.assertTrue(self.alice.check_password(password))
+        log = self.last_log()
+        self.assertEqual(log.action, "temp_password")
+        self.assertNotIn(password, f"{log.summary}{log.detail}")
+        again = self.client.get(reverse("platform_admin:user", args=[self.alice.pk]))
+        self.assertNotContains(again, password)
+
+    def test_an_admin_cant_set_their_own_this_way(self):
+        before = self.admin.password
+        self.client.post(reverse("platform_admin:user_action", args=[self.admin.pk, "temp_password"]))
+        self.admin.refresh_from_db()
+        self.assertEqual(self.admin.password, before)
+
+    def test_only_a_platform_admin_can_set_one(self):
+        self.client.force_login(self.alice)
+        before = self.alice.password
+        res = self.client.post(reverse("platform_admin:user_action", args=[self.alice.pk, "temp_password"]))
+        self.assertIn(res.status_code, (302, 403, 404))
+        self.alice.refresh_from_db()
+        self.assertEqual(self.alice.password, before)
+
     def test_send_password_reset_emails_a_link(self):
         self.act("reset")
         self.assertEqual(len(mail.outbox), 1)

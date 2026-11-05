@@ -22,6 +22,8 @@
     <a href="{% url 'analysis:processing' %}?owner={{ u.pk }}" class="h-10 px-4 inline-flex items-center bg-green-600 text-white rounded-md text-sm font-semibold hover:bg-green-700">Their clips</a>
     <form method="post" action="{% url 'platform_admin:user_action' u.pk 'reset' %}">{% csrf_token %}
       <button type="submit" class="h-10 px-4 border border-gray-300 bg-white rounded-md text-sm font-semibold hover:bg-gray-50" {% if not u.email %}disabled title="No email address"{% endif %}>Send password reset</button></form>
+    <form method="post" action="{% url 'platform_admin:user_action' u.pk 'temp_password' %}" onsubmit="return confirm('Replace {{ u.username|escapejs }}\'s password with a new one? Their old password stops working and they are signed out.');">{% csrf_token %}
+      <button type="submit" class="h-10 px-4 border border-gray-300 bg-white rounded-md text-sm font-semibold hover:bg-gray-50">Set temporary password</button></form>
     {% if u.is_active %}
     <form method="post" action="{% url 'platform_admin:user_action' u.pk 'suspend' %}" onsubmit="return confirm('Suspend {{ u.username|escapejs }}? They are signed out everywhere and can\'t sign in or use API keys until reactivated. Their units keep uploading.')">{% csrf_token %}
       <button type="submit" class="h-10 px-4 border border-red-300 bg-white text-red-700 rounded-md text-sm font-semibold hover:bg-red-50" {% if u == request.user %}disabled title="You can't suspend yourself"{% endif %}>Suspend</button></form>
@@ -31,6 +33,14 @@
     {% endif %}
   </div>
 </div>
+
+{% if temp_password %}
+<div class="bg-amber-50 border border-amber-300 rounded-lg p-4 flex flex-col gap-1.5 text-sm text-amber-900">
+  <p class="font-semibold">Temporary password for {{ u.username }}</p>
+  <code class="font-mono text-base select-all">{{ temp_password }}</code>
+  <p>Copy it now: it won't be shown again. Send it to them privately, and ask them to change it on their profile page after signing in.</p>
+</div>
+{% endif %}
 
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
   <div class="lg:col-span-2 flex flex-col gap-5">

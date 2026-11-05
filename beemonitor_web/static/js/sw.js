@@ -56,11 +56,13 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Page navigation: network-first, offline fallback
+  // Page navigation: network-first, offline fallback. A page that says
+  // no-store (one showing a temporary password) is never kept.
   if (request.mode === "navigate") {
     event.respondWith(
       fetch(request)
         .then((response) => {
+          if ((response.headers.get("Cache-Control") || "").includes("no-store")) return response;
           const clone = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
           return response;
