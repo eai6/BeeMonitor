@@ -278,7 +278,8 @@
     var call = tripCall(t), callEl = $('[data-pr-trip-call]');
     callEl.hidden = !call;
     callEl.textContent = call ? 'Already reviewed: ' + TRIP_CALL[call] +
-      (t.mine && t.mine.by ? ' (' + t.mine.by + ')' : '') + '. Vote again to change it.' : '';
+      (t.mine && t.mine.by ? ' (' + t.mine.by + ')' : '') + '.' +
+      (t.mine && t.mine.reason ? ' Note: ' + t.mine.reason + '.' : '') + ' Vote again to change it.' : '';
     $('[data-pr-trip-back]').disabled = i === 0;
     $('[data-pr-trip-next]').disabled = i + 1 >= trip.list.length;
     showSide('A', t.exit, a, 'EXIT');
@@ -315,7 +316,8 @@
       verdict: verdict, reason: reason || '', relinked: !!relinked, before_review: !!t.before
     }).then(function (d) {
       // One call per trip (memory/74): this one replaces anyone else's.
-      t.mine = d.verdict ? {verdict: d.verdict, entry_key: entry ? entry.key : '', by: 'you'} : null;
+      t.mine = d.verdict ? {verdict: d.verdict, entry_key: entry ? entry.key : '', reason: (reason || '').trim(),
+                            by: 'you'} : null;
       t.accepted = d.verdict === 'accepted' ? 1 : 0;
       t.rejected = d.verdict === 'rejected' ? 1 : 0;
       paintProgress();
@@ -324,7 +326,7 @@
   // Not this pair: a note on why, in the reviewer's own words, then on.
   function askWhy(t) {
     var box = $('[data-pr-relink]'), note = $('[data-pr-trip-note]');
-    note.value = '';
+    note.value = (t.mine && t.mine.reason) || '';
     box.hidden = false;
     note.focus();
     box.onsubmit = function (ev) {

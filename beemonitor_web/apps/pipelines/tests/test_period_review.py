@@ -460,6 +460,15 @@ class TripNoteTests(PeriodBase):
         self.assertEqual(trip_review, "rejected")
         self.assertEqual(TripReview.objects.get().reason, "Different bee, it had pollen")
 
+    def test_the_note_comes_back_to_the_page(self):
+        from apps.analysis.period_views import _trip_votes
+
+        period.set_trip_vote(self.owner, self.a["run"], "exit|reference_1|1|10", self.a["run"],
+                             "enter|reference_1|2|20", "rejected", "Different bee")
+        votes = _trip_votes([self.a["run"]], self.owner)
+        mine = votes[(self.a["run"].pk, "exit|reference_1|1|10", "enter|reference_1|2|20")]["mine"]
+        self.assertEqual(mine["reason"], "Different bee")
+
 
 class TripsOverReviewedEventsTests(PeriodBase):
     def test_a_trip_ends_on_an_added_entry_and_not_on_a_rejected_one(self):
