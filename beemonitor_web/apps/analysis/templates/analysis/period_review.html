@@ -76,6 +76,11 @@ own page. Logic: pipelines/period.py.
     <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label="Playback speed">
       <span class="text-[13px] text-gray-600 mr-1">Speed</span>
       <span data-pr-speeds class="flex flex-wrap gap-1.5"></span>
+      <span class="flex items-center gap-1.5 ml-3" role="group" aria-label="Step one frame">
+        <span class="text-[13px] text-gray-600">Frame</span>
+        <button type="button" data-pr-step="-1" aria-label="Back one frame" title="Back one frame (,)" class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">‹</button>
+        <button type="button" data-pr-step="1" aria-label="Forward one frame" title="Forward one frame (.)" class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">›</button>
+      </span>
     </div>
     <div class="flex flex-col gap-1">
       <div data-pr-trip-bar class="relative h-6 rounded bg-gray-200 cursor-pointer" title="The trip from 2 s before the exit to 2 s after the entry — click to watch that moment"></div>

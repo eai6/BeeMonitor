@@ -421,6 +421,12 @@
     });
     $('[data-pr-trip-back]').addEventListener('click', function () { if (trip.i > 0) tripGo(trip.i - 1); });
     $('[data-pr-trip-first]').addEventListener('click', function () { tripGo(0); });
+    $$('[data-pr-step]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        tp.on = false;
+        if (ov) ov.step(Number(b.getAttribute('data-pr-step')));
+      });
+    });
     $('[data-pr-trip-jump]').addEventListener('submit', function (ev) {
       ev.preventDefault();
       var to = $('[data-pr-trip-to]'), n = parseInt(to.value, 10);
@@ -440,6 +446,8 @@
       if (k === 'p') tripPlay('moments');
       else if (k === 'y') $('[data-pr-trip-yes]').click();
       else if (k === 'n') $('[data-pr-trip-no]').click();
+      else if (k === ',') $('[data-pr-step="-1"]').click();
+      else if (k === '.') $('[data-pr-step="1"]').click();
       else if (ev.key === 'ArrowRight') $('[data-pr-trip-next]').click();
       else if (ev.key === 'ArrowLeft') $('[data-pr-trip-back]').click();
       else hit = false;
