@@ -48,8 +48,13 @@
   // A trip's type (memory/78): a reviewer's, else the one from the tracks.
   var kind = 'all';
   function tripType(t) { return t.type_set || t.auto_type; }
+  // Whose call to show: '*' anyone, '' nobody's yet, else a reviewer's name.
+  var who = '*';
+  function reviewer(t) { return t.mine ? t.mine.by : ''; }
+  function ofKind(t, name) { return name === 'all' || tripType(t) === name; }
+  function ofWho(t) { return who === '*' || reviewer(t) === who; }
   function shownTrips() {
-    return P.trips.filter(function (t) { return kind === 'all' || tripType(t) === kind; });
+    return P.trips.filter(function (t) { return ofKind(t, kind) && ofWho(t); });
   }
 
   function findEvent(ref) {
@@ -347,6 +352,7 @@
                             by: 'you'} : null;
       t.accepted = d.verdict === 'accepted' ? 1 : 0;
       t.rejected = d.verdict === 'rejected' ? 1 : 0;
+      paintKinds();
       paintProgress();
     }).catch(function (err) { status.textContent = String(err.message || err); });
   }
@@ -384,9 +390,30 @@
       var name = b.getAttribute('data-pr-kind');
       paintButton(b, name === kind);
       $('[data-pr-kind-n]', b).textContent = P.trips.filter(function (t) {
-        return name === 'all' || tripType(t) === name;
+        return ofKind(t, name) && ofWho(t);
       }).length;
     });
+    paintWho();
+  }
+  // The Reviewed by menu: who has calls in this type, with how many.
+  function paintWho() {
+    var menu = $('[data-pr-who]'), counts = {}, trips = P.trips.filter(function (t) { return ofKind(t, kind); });
+    if (!menu) return;
+    trips.forEach(function (t) { counts[reviewer(t)] = (counts[reviewer(t)] || 0) + 1; });
+    var names = Object.keys(counts).filter(Boolean);
+    if (who !== '*' && who && names.indexOf(who) < 0) names.push(who);
+    names.sort(function (a, b) { return a.toLowerCase() < b.toLowerCase() ? -1 : 1; });
+    menu.textContent = '';
+    var add = function (value, label, n) {
+      var o = document.createElement('option');
+      o.value = value;
+      o.textContent = label + ' (' + n + ')';
+      menu.appendChild(o);
+    };
+    add('*', 'Anyone', trips.length);
+    add('', 'Not reviewed', counts[''] || 0);
+    names.forEach(function (name) { add(name, name === 'you' ? 'You' : name, counts[name] || 0); });
+    menu.value = who;
   }
   function paintType(t) {
     $$('[data-pr-type]').forEach(function (b) { paintButton(b, b.getAttribute('data-pr-type') === tripType(t)); });
@@ -410,6 +437,11 @@
       kind = b.getAttribute('data-pr-kind');
       showList();
     });
+  });
+  if ($('[data-pr-who]')) $('[data-pr-who]').addEventListener('change', function () {
+    who = this.value;
+    this.blur();
+    showList();
   });
   function showList() {
     paintKinds();

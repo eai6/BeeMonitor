@@ -115,7 +115,8 @@ nothing. Each trip has a
 type: **Tube hop** when one track links its exit to going into a tube, or its entry to coming out of one, and
 **Direct** when no hop was seen. A hop split across two tracks or clips stays Direct, so a reviewer can change the
 type on the trip, and **All**, **Direct** and **Tube hop** at the top filter the list. Nothing is left out of trips
-because of its type; the batch's metrics show each type. The page opens on
+because of its type; the batch's metrics show each type. **Reviewed by** shows the trips one person last called,
+or those nobody has. The page opens on
 the first trip not yet reviewed, and **← Previous** and **Next →** step through them. **Next unreviewed** (or U)
 skips to the next trip nobody has reviewed. It plays each
 one in the player: 2 seconds either side of the exit, then 2 seconds either side of the entry, following the

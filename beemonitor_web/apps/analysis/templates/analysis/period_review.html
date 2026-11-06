@@ -26,6 +26,9 @@ own page. Logic: pipelines/period.py.
       <button type="button" data-pr-kind="direct" class="h-10 px-3 bg-white border-l border-gray-300">Direct (<span data-pr-kind-n></span>)</button>
       <button type="button" data-pr-kind="tube_hop" class="h-10 px-3 bg-white border-l border-gray-300">Tube hop (<span data-pr-kind-n></span>)</button>
     </span>
+    <label class="flex items-center gap-1.5 text-xs">Reviewed by
+      <select data-pr-who class="h-10 border border-gray-300 rounded-md px-2 text-sm"></select>
+    </label>
     <a href="{{ csv_url }}" class="text-amber-700 hover:underline ml-auto">Reviewed trips CSV</a>
   </div>
 
