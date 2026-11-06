@@ -468,6 +468,16 @@
       var i = nextOpen();
       if (i >= 0) tripGo(i);
     });
+    // Pauses where it is: a trip's playback carries on from there.
+    var toggle = $('[data-pr-toggle]');
+    toggle.addEventListener('click', function () {
+      if (!video.paused) { video.pause(); return; }
+      var p = video.play();
+      if (p && p.catch) p.catch(function () {});
+    });
+    ['play', 'pause'].forEach(function (name) {
+      video.addEventListener(name, function () { toggle.textContent = video.paused ? 'Play' : 'Pause'; });
+    });
     $$('[data-pr-step]').forEach(function (b) {
       b.addEventListener('click', function () {
         tp.on = false;
@@ -494,6 +504,7 @@
       else if (k === 'y') $('[data-pr-trip-yes]').click();
       else if (k === 'n') $('[data-pr-trip-no]').click();
       else if (k === 'u') $('[data-pr-trip-open]').click();
+      else if (k === ' ') $('[data-pr-toggle]').click();
       else if (k === ',') $('[data-pr-step="-1"]').click();
       else if (k === '.') $('[data-pr-step="1"]').click();
       else if (ev.key === 'ArrowRight') $('[data-pr-trip-next]').click();
