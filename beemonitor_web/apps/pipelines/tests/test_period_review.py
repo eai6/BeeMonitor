@@ -21,7 +21,7 @@ from apps.analysis.models import Job, JobResult
 from apps.analysis.test_job_primitives import _csv
 from apps.devices.models import Device
 from apps.pipelines import period
-from apps.pipelines.models import (BatchMember, EventReview, Pipeline, PipelineRun,
+from apps.pipelines.models import (BatchMember, ClipReview, EventReview, Pipeline, PipelineRun,
                                    TripReview)
 from apps.pipelines.recount import recount_run
 from apps.videos.models import Video
@@ -389,7 +389,8 @@ class SharedJobTests(PeriodBase):
         self.client.force_login(self.owner)
         trips = self.client.get(reverse("pipelines:batch_detail", args=[self.batch])
                                 ).context["review_summary"]["trips"]
-        self.assertEqual((trips["reviewed"], trips["rejected"], trips["disputed"]), (1, 1, 0))
+        self.assertEqual(trips["reviewed"], 1)
+        self.assertEqual(TripReview.objects.filter(verdict="rejected").count(), 1)
 
 
 class ClipNavigationTests(PeriodBase):
@@ -514,9 +515,6 @@ class TripTypeTests(PeriodBase):
         self.assertEqual(self.payload(self.page())["trips"][0]["type_set"], "tube_hop")
         row = period.trip_rows(TripReview.objects.all())[0]
         self.assertEqual((row["trip_type"], row["trip_type_set_by"]), ("tube_hop", "reviewer"))
-        by_type = {t["label"]: t for t in review.batch_review_summary(
-            [run_a, run_b])["trips"]["by_type"]}
-        self.assertEqual((by_type["Tube hop"]["reviewed"], by_type["Direct"]["reviewed"]), (1, 0))
         period.set_trip_type(run_a, keys[0], keys[1], "")
         row = period.trip_rows(TripReview.objects.all())[0]
         self.assertEqual((row["trip_type"], row["trip_type_set_by"]), ("direct", "auto"))
@@ -525,15 +523,73 @@ class TripTypeTests(PeriodBase):
         with self.assertRaises(ValueError):
             period.set_trip_type(self.a["run"], "x", "y", "bad")
 
-    def test_the_types_add_up_to_all_trips(self):
+
+class TripScoreTests(PeriodBase):
+    """The pipeline's trips against the Yes answers (memory/79). Scoring has no
+    markers, so the pipeline's trip here is the exit and the next entry."""
+
+    def setUp(self):
+        super().setUp()
+        self.exit = "exit|reference_1|3|0"
+        self.first, self.second = "enter|reference_1|4|39", "enter|reference_1|6|79"
+        for clip in (self.a, self.b):
+            ClipReview.objects.create(run=clip["run"], user=self.owner)
+
+    def answer(self, entry, verdict, **extra):
+        period.set_trip_vote(self.owner, self.a["run"], self.exit, self.b["run"], entry, verdict, **extra)
+
+    def scores(self):
         from apps.pipelines import review
 
-        trip = self.payload(self.page())["trips"][0]
-        period.set_trip_vote(self.owner, self.a["run"], trip["exit"]["key"], self.b["run"],
-                             trip["entry"]["key"], "rejected")
-        trips = review.batch_review_summary([self.a["run"], self.b["run"]])["trips"]
-        for field in ("reviewed", "right", "wrong", "missed"):
-            self.assertEqual(sum(t[field] for t in trips["by_type"]), trips[field])
+        return review.batch_review_summary([self.a["run"], self.b["run"]])["trips"]
+
+    def test_a_trip_with_no_answer_waits(self):
+        t = self.scores()
+        self.assertEqual((t["right"], t["wrong"], t["missed"], t["waiting"], t["clips"]), (0, 0, 0, 1, 2))
+        self.assertIsNone(t["precision"])
+
+    def test_yes_is_right_and_no_is_wrong(self):
+        self.answer(self.first, "accepted")
+        t = self.scores()
+        self.assertEqual((t["right"], t["wrong"], t["precision"], t["recall"]), (1, 0, 100, 100))
+        self.answer(self.first, "rejected")
+        t = self.scores()
+        self.assertEqual((t["right"], t["wrong"], t["precision"]), (0, 1, 0))
+
+    def test_a_trip_on_a_rejected_event_is_wrong_with_no_vote_and_the_real_one_missed(self):
+        EventReview.objects.create(run=self.b["run"], user=self.owner, verdict="rejected",
+                                   event_key=self.first)
+        t = self.scores()
+        self.assertEqual((t["wrong"], t["waiting"]), (1, 1))
+        self.answer(self.second, "accepted")
+        t = self.scores()
+        self.assertEqual((t["right"], t["wrong"], t["missed"], t["precision"], t["recall"]),
+                         (0, 1, 1, 0, 0))
+
+    def test_a_yes_on_a_rejected_event_is_not_a_true_trip(self):
+        EventReview.objects.create(run=self.b["run"], user=self.owner, verdict="rejected",
+                                   event_key=self.first)
+        self.answer(self.first, "accepted")
+        self.assertEqual((self.scores()["right"], self.scores()["wrong"]), (0, 1))
+
+    def test_a_trip_counts_only_with_both_clips_marked_reviewed(self):
+        self.answer(self.first, "accepted")
+        ClipReview.objects.filter(run=self.b["run"]).delete()
+        t = self.scores()
+        self.assertEqual((t["right"], t["wrong"], t["missed"], t["clips"]), (0, 0, 0, 1))
+
+    def test_cant_tell_counts_for_nothing(self):
+        self.answer(self.first, "rejected", reason="can't tell")
+        t = self.scores()
+        self.assertEqual((t["wrong"], t["waiting"]), (0, 1))
+
+    def test_the_types_add_up_to_all_trips_and_a_reviewers_type_counts(self):
+        self.answer(self.first, "accepted", trip_type="tube_hop")
+        t = self.scores()
+        by_type = {x["label"]: x for x in t["by_type"]}
+        self.assertEqual((by_type["Tube hop"]["right"], by_type["Direct"]["right"]), (1, 0))
+        for field in ("right", "wrong", "missed", "waiting"):
+            self.assertEqual(sum(x[field] for x in t["by_type"]), t[field])
 
 
 class TripsOverReviewedEventsTests(PeriodBase):
@@ -551,13 +607,8 @@ class TripsOverReviewedEventsTests(PeriodBase):
         added = AddedEvent.objects.create(run=self.b["run"], user=self.owner, frame=500,
                                           action="enter", reference=reference)
         p = self.payload(self.page())
-        ended = [t for t in p["trips"] if t["exit"]["key"] == trip["exit"]["key"] and t["after"]]
+        ended = [t for t in p["trips"] if t["exit"]["key"] == trip["exit"]["key"]]
         self.assertEqual(len(ended), 1)
-        self.assertFalse(ended[0]["before"])
-        # The pipeline's own trip stays, for precision, rejected entry and all.
-        kept = [t for t in p["trips"] if t["before"] and t["exit"]["key"] == trip["exit"]["key"]]
-        self.assertEqual([t["entry"]["key"] for t in kept], [trip["entry"]["key"]])
-        self.assertFalse(kept[0]["after"])
         key = review.event_key({"action": "enter", "reference": reference, "track_id": "",
                                 "frame": 500})
         self.assertEqual(ended[0]["entry"]["key"], key)

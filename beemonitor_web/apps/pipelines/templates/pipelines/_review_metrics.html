@@ -31,17 +31,17 @@
   <div class="flex flex-col gap-1.5">
     <h2 class="text-sm font-semibold text-gray-900">Trips review</h2>
     {% if tr.reviewed %}
-    <p class="text-sm text-gray-700">{{ tr.reviewed }} suggested trip{{ tr.reviewed|pluralize }} reviewed</p>
+    <p class="text-sm text-gray-700">{{ tr.reviewed }} trip{{ tr.reviewed|pluralize }} reviewed. Scored over the {{ tr.clips }} clip{{ tr.clips|pluralize }} marked reviewed{% if tr.waiting %}; {{ tr.waiting }} trip{{ tr.waiting|pluralize }} there still to answer{% endif %}.</p>
     <div class="flex gap-6">
-      <div><div class="text-xs text-gray-600">Precision</div><div class="text-xl font-bold text-gray-900">{% if tr.precision is not None %}{{ tr.precision }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">{{ tr.right }} of {{ tr.suggested }} trips from before events review are right</div></div>
-      <div><div class="text-xs text-gray-600">Recall</div><div class="text-xl font-bold text-gray-900">{% if tr.recall is not None %}{{ tr.recall }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">{{ tr.right }} of {{ tr.real }} confirmed trips were found before events review</div></div>
+      <div><div class="text-xs text-gray-600">Precision</div><div class="text-xl font-bold text-gray-900">{% if tr.precision is not None %}{{ tr.precision }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">{{ tr.right }} of {{ tr.suggested }} of the pipeline's trips are true trips</div></div>
+      <div><div class="text-xs text-gray-600">Recall</div><div class="text-xl font-bold text-gray-900">{% if tr.recall is not None %}{{ tr.recall }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">{{ tr.right }} of {{ tr.real }} true trips were made by the pipeline</div></div>
     </div>
     {% comment %}By trip type (memory/78).{% endcomment %}
     <div class="overflow-x-auto">
       <table class="w-full text-xs text-gray-700 mt-1">
-        <thead><tr class="text-left text-gray-600"><th class="font-medium pr-3">Type</th><th class="font-medium pr-3">Reviewed</th><th class="font-medium pr-3">Precision</th><th class="font-medium">Recall</th></tr></thead>
+        <thead><tr class="text-left text-gray-600"><th class="font-medium pr-3">Type</th><th class="font-medium pr-3">Precision</th><th class="font-medium">Recall</th></tr></thead>
         <tbody>
-          {% for t in tr.by_type %}<tr><td class="pr-3">{{ t.label }}</td><td class="pr-3">{{ t.reviewed }}</td><td class="pr-3">{% if t.precision is not None %}{{ t.precision }}% ({{ t.right }} of {{ t.suggested }}){% else %}—{% endif %}</td><td>{% if t.recall is not None %}{{ t.recall }}% ({{ t.right }} of {{ t.real }}){% else %}—{% endif %}</td></tr>{% endfor %}
+          {% for t in tr.by_type %}<tr><td class="pr-3">{{ t.label }}</td><td class="pr-3">{% if t.precision is not None %}{{ t.precision }}% ({{ t.right }} of {{ t.suggested }}){% else %}—{% endif %}</td><td>{% if t.recall is not None %}{{ t.recall }}% ({{ t.right }} of {{ t.real }}){% else %}—{% endif %}</td></tr>{% endfor %}
         </tbody>
       </table>
     </div>

@@ -107,9 +107,11 @@ green accepted, red rejected, amber where reviewers disagree.
 
 **Trips.** **Review trips** on a batch shows every trip of one unit or site in that batch; pick another from the
 menu at the top. An exit pairs with the next event at its tube when that is an entry, on the same day, and each
-entry ends one trip. The list holds the trips from every detected event, which give precision, and the trips from
-reviewed events (rejected ones left out, added ones in), which give recall. A trip in both is listed once, and a trip
-only reviewed events make says **found after events review**. Each trip has a
+entry ends one trip. The list holds the trips from reviewed events: rejected ones left out, added ones in. Your Yes
+answers are the true trips, and the batch's metrics compare the pipeline's own trips, from every detected event, with
+them. A pipeline trip is right when it is a true trip and wrong when it isn't; a true trip the pipeline didn't make is
+missed. Only trips with both ends in clips marked reviewed count, and a trip still without an answer counts for
+nothing. Each trip has a
 type: **Tube hop** when one track links its exit to going into a tube, or its entry to coming out of one, and
 **Direct** when no hop was seen. A hop split across two tracks or clips stays Direct, so a reviewer can change the
 type on the trip, and **All**, **Direct** and **Tube hop** at the top filter the list. Nothing is left out of trips

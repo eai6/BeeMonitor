@@ -43,9 +43,8 @@
     return t.accepted && t.rejected ? 'disputed' : t.accepted ? 'accepted' : t.rejected ? 'rejected' : '';
   }
 
-  // One list: the pipeline's trips, from every detected event, and those of the
-  // reviewed events (rejected out, added in). A trip in both is one trip;
-  // ``before`` says which give precision.
+  // One list: the trips of the reviewed events, rejected out and added in
+  // (memory/79). The pipeline's own trips are scored against the Yes answers.
   // A trip's type (memory/78): a reviewer's, else the one from the tracks.
   var kind = 'all';
   function tripType(t) { return t.type_set || t.auto_type; }
@@ -288,7 +287,7 @@
     $('[data-pr-trip-title]').textContent = 'Tube ' + tube(t.reference) + ' · out ' + clock(a.clock).slice(11) +
       ' → back ' + clock(b.clock).slice(11);
     $('[data-pr-trip-where]').textContent = tripLength(t.gap_sec) + ' out · trip ' + (i + 1) + ' of ' +
-      trip.list.length + (t.same_marker ? ' · same marker' : '') + (t.before ? '' : ' · found after events review');
+      trip.list.length + (t.same_marker ? ' · same marker' : '');
     var call = tripCall(t), callEl = $('[data-pr-trip-call]');
     callEl.hidden = !call;
     callEl.textContent = call ? 'Already reviewed: ' + TRIP_CALL[call] +
@@ -329,7 +328,7 @@
       exit_job: exitClip.job, exit_run: exitClip.run, exit_key: t.exit.key,
       entry_job: entry ? P.clips[entry.clip].job : null, entry_run: entry ? P.clips[entry.clip].run : null,
       entry_key: entry ? entry.key : '',
-      verdict: verdict, reason: reason || '', relinked: !!relinked, before_review: !!t.before,
+      verdict: verdict, reason: reason || '', relinked: !!relinked,
       trip_type: t.type_set || ''
     }).then(function (d) {
       // One call per trip (memory/74): this one replaces anyone else's.

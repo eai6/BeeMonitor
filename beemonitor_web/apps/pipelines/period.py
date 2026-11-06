@@ -385,18 +385,6 @@ def hops_of(run):
     return hops
 
 
-def hops_for(run_ids):
-    """``{run pk: hops_of(run)}``, from the slim copies, a few at a time."""
-    from .models import PipelineRun
-    from .runsummary import slim_runs
-
-    ids, out = list(run_ids), {}
-    for i in range(0, len(ids), 200):
-        for run in slim_runs(PipelineRun.objects.filter(pk__in=ids[i:i + 200]).only("pk", "summary")):
-            out[run.pk] = hops_of(run)
-    return out
-
-
 def auto_trip_type(exit_key, entry_key, exit_hops, entry_hops):
     """A trip's type from the tracks: a Tube hop when either end is one."""
     from .models import TripReview
@@ -416,6 +404,142 @@ def hop_text(exit_key, entry_key, exit_hops, entry_hops):
     if hop["from"] == hop["to"]:
         return f"Track {hop['track']} left tube {tube(hop['from'])} and went back in without leaving view."
     return f"Track {hop['track']} left tube {tube(hop['from'])} and went into tube {tube(hop['to'])}."
+
+
+# ── Scoring the pipeline's trips (memory/79) ─────────────────────────────────
+
+def _scored_events(run, video, start, votes, added):
+    """A clip's exits and entries for ``suggest_trips``, from the slim copy, as
+    ``(detected, confirmed)``: all it detected, then those without the rejected
+    and with the added. No markers: the slim copy has none."""
+    from . import primitives
+    from .aggregate import analyzer_outputs
+    from .ops import fps_with_source
+    from .review import combined, event_key
+
+    stats = next((v["result"].get("summary_stats") or {} for v in (run.context or {}).values()
+                  if isinstance(v, dict) and isinstance(v.get("result"), dict)), {})
+    fps = float(fps_with_source(stats, video)[0] or 25)
+
+    def event(key, action, reference, frame):
+        at = start + timedelta(seconds=frame / fps)
+        return (run.pk, {"key": key, "action": action, "reference": str(reference or ""),
+                         "t": (at - datetime(2000, 1, 1)).total_seconds(),
+                         "clock": at.isoformat(), "marker": ""})
+
+    detected, confirmed = [], []
+    for raw in (r for k, o in analyzer_outputs(run) if k == "events" for r in (o.get("rows") or [])):
+        e = primitives.normalize_event(raw)
+        try:
+            frame = int(e["frame"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if e.get("action") not in ("exit", "enter"):
+            continue
+        key = event_key(e)
+        row = event(key, e["action"], e.get("reference"), frame)
+        detected.append(row)
+        if combined(votes.get(key, [])) != "rejected":
+            confirmed.append(row)
+    for a in added:
+        if a.action in ("exit", "enter"):
+            confirmed.append(event(event_key({"action": a.action, "reference": a.reference,
+                                              "track_id": a.track_id, "frame": a.frame}),
+                                   a.action, a.reference, a.frame))
+    return detected, confirmed
+
+
+def trip_scores(runs, reviewed, calls):
+    """The pipeline's trips against the trips reviewers confirmed.
+
+    ``runs`` read slim; ``reviewed``: the pks of the clips marked reviewed;
+    ``calls``: ``{(run pk, exit key, entry key): [TripReview]}``. Pairing runs
+    over every clip of a unit or site, then only trips with both ends in
+    reviewed clips count. The true trips are those of the reviewed events that
+    someone answered Yes. A pipeline trip is right when it is one of them and
+    wrong when it isn't, by a No or because its events didn't survive review; a
+    true trip the pipeline didn't make is missed. A trip of the reviewed events
+    with no answer yet waits, and counts for nothing.
+
+    ``{clips, right, wrong, missed, waiting, types: {type: the same four}}``.
+    """
+    from apps.videos.models import Video
+
+    from .aggregate import run_video_id
+    from .models import AddedEvent, TripReview
+    from .review import combined, review_votes, shared_job_runs
+
+    def tally():
+        return {"right": 0, "wrong": 0, "missed": 0, "waiting": 0}
+
+    out = {"clips": len(reviewed), **tally(),
+           "types": {value: tally() for value in TripReview.Type.values}}
+    if not reviewed:
+        return out
+    by_video = {}
+    for run in runs:
+        if run_video_id(run):
+            by_video.setdefault(run_video_id(run), run)
+    places = {}
+    for v in Video.objects.filter(pk__in=list(by_video)).select_related("device", "site"):
+        place = ("device", v.device_id) if v.device_id else ("site", v.site_id) if v.site_id else None
+        start = local_start(v)
+        if place and start is not None:
+            places.setdefault(place, []).append((by_video[v.pk], v, start))
+    places = [clips for clips in places.values() if any(c[0].pk in reviewed for c in clips)]
+    chosen = {c[0].pk: c[0] for clips in places for c in clips}
+    if not chosen:
+        return out
+    votes = review_votes(chosen.values())
+    owners = shared_job_runs(chosen.values(), "added_events")
+    added = {}
+    for a in AddedEvent.objects.filter(run_id__in=list(owners)):
+        added.setdefault(owners[a.run_id].pk, []).append(a)
+    rules = trip_rules(next(iter(chosen.values())).pipeline)
+    hops = {}
+
+    def hops_at(pk):
+        if pk not in hops:
+            hops[pk] = hops_of(chosen[pk])
+        return hops[pk]
+
+    def trip_keys(events):
+        keys = set()
+        for t in suggest_trips(events, rules):
+            (exit_run, e), (entry_run, n) = t["exit"], t["entry"]
+            if exit_run in reviewed and entry_run in reviewed:
+                keys.add((exit_run, e["key"], entry_run, n["key"]))
+        return keys
+
+    def count(field, keys):
+        for k in keys:
+            mine = calls.get((k[0], k[1], k[3]), [])
+            kind = next((c.trip_type for c in mine if c.trip_type), "") or auto_trip_type(
+                k[1], k[3], hops_at(k[0]), hops_at(k[2]))
+            out[field] += 1
+            out["types"][kind][field] += 1
+
+    def answer(k):
+        mine = calls.get((k[0], k[1], k[3]), [])
+        if any(c.reason == "can't tell" for c in mine):
+            return ""
+        call = combined([c.verdict for c in mine])
+        return "" if call == "disputed" else call
+
+    for clips in places:
+        detected, confirmed = [], []
+        for run, video, start in clips:
+            d, c = _scored_events(run, video, start, votes.get(run.pk, {}), added.get(run.pk, []))
+            detected += d
+            confirmed += c
+        pipeline, listed = trip_keys(detected), trip_keys(confirmed)
+        true = {k for k in listed if answer(k) == "accepted"}
+        waiting = {k for k in listed if not answer(k)}
+        count("right", pipeline & true)
+        count("wrong", pipeline - true - waiting)
+        count("missed", true - pipeline)
+        count("waiting", waiting)
+    return out
 
 
 # ── Trip votes ───────────────────────────────────────────────────────────────

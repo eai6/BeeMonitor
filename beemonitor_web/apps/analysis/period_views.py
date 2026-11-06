@@ -137,14 +137,12 @@ class PeriodReviewView(LoginRequiredMixin, View):
         from apps.pipelines import review as event_review
 
         data = _gather(request)
-        clips_json, pairs, detected, hops = [], [], [], {}
+        clips_json, pairs, hops = [], [], {}
         for ci, c in period.whole_clips(data):
             evs = period.clip_events(c, request.user)
             hops[ci] = period.hops_of(c["run"])
-            # Two sets of trips: from the events as detected, before anyone
-            # reviewed them, and from those people stand by (not the rejected,
-            # and the added). The first gives precision, the second recall.
-            detected += [(ci, e) for e in evs]
+            # The trips to review are those of the events people stand by: not
+            # the rejected, and the added (memory/79).
             pairs += [(ci, e) for e in evs if e.get("mine") != "rejected"]
             added = period.added_events(c, event_review.added_rows(c["run"]))
             pairs += [(ci, a) for a in added]
@@ -168,25 +166,22 @@ class PeriodReviewView(LoginRequiredMixin, View):
             })
         votes = _trip_votes([c["run"] for c in data["clips"]], request.user)
         rules = period.trip_rules(data["clips"][0]["run"].pipeline) if data["clips"] else None
-        trips = {}
-        for stage, events in (("before", detected), ("after", pairs)):
-            for t in period.suggest_trips(events, rules):
-                (eci, ee), (nci, ne) = t["exit"], t["entry"]
-                run_pk = data["clips"][eci]["run"].pk
-                v = (votes.get((run_pk, ee["key"], ne["key"]))
-                     or votes.get((run_pk, ee["key"], "")) or {})
-                trip = trips.setdefault((eci, ee["key"], nci, ne["key"]), {
-                    "exit": {"clip": eci, "key": ee["key"]},
-                    "entry": {"clip": nci, "key": ne["key"]},
-                    "reference": ee["reference"], "gap_sec": t["gap_sec"],
-                    "same_marker": t["same_marker"], "mine": v.get("mine"),
-                    "accepted": v.get("accepted", 0), "rejected": v.get("rejected", 0),
-                    "t": ee["t"], "before": False, "after": False,
-                    "auto_type": period.auto_trip_type(ee["key"], ne["key"], hops[eci], hops[nci]),
-                    "type_reason": period.hop_text(ee["key"], ne["key"], hops[eci], hops[nci]),
-                    "type_set": (v.get("mine") or {}).get("trip_type", "")})
-                trip[stage] = True
-        trips = sorted(trips.values(), key=lambda t: t["t"])
+        trips = []
+        for t in period.suggest_trips(pairs, rules):
+            (eci, ee), (nci, ne) = t["exit"], t["entry"]
+            run_pk = data["clips"][eci]["run"].pk
+            v = (votes.get((run_pk, ee["key"], ne["key"]))
+                 or votes.get((run_pk, ee["key"], "")) or {})
+            trips.append({
+                "exit": {"clip": eci, "key": ee["key"]},
+                "entry": {"clip": nci, "key": ne["key"]},
+                "reference": ee["reference"], "gap_sec": t["gap_sec"],
+                "same_marker": t["same_marker"], "mine": v.get("mine"),
+                "accepted": v.get("accepted", 0), "rejected": v.get("rejected", 0),
+                "t": ee["t"],
+                "auto_type": period.auto_trip_type(ee["key"], ne["key"], hops[eci], hops[nci]),
+                "type_reason": period.hop_text(ee["key"], ne["key"], hops[eci], hops[nci]),
+                "type_set": (v.get("mine") or {}).get("trip_type", "")})
         span = (data["end"] - data["start"]).total_seconds()
         payload = {"start": data["start"].isoformat(timespec="seconds"), "span": span,
                    "clips": clips_json, "trips": trips,
