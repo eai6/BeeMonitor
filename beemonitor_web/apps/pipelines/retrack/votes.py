@@ -28,6 +28,13 @@ def _events(run):
     return out
 
 
+def _filtered_keys(run):
+    from ..aggregate import analyzer_outputs
+
+    return {k for kind, o in analyzer_outputs(run) if kind == "events"
+            for k in (o.get("filtered_out") or {}).get("event_keys") or []}
+
+
 def _matcher(events, fps, same_tracks):
     """``match(action, reference, frame, track)`` -> ``(frame, key, track)``.
 
@@ -73,12 +80,15 @@ def move_votes(run, fps, same_tracks=False) -> dict:
     events = _events(run)
     if not events:
         return {"moved": 0, "gone": 0}
+    # Left out by an insect-group filter, not gone: their votes wait where they
+    # are, for the filter coming off (memory/65).
+    known = set(events) | _filtered_keys(run)
     match = _matcher(events, fps, same_tracks)
     moved = gone = 0
 
     owners = shared_job_runs([run], "event_reviews")
     for v in EventReview.objects.filter(run_id__in=list(owners)):
-        if owners[v.run_id].pk != run.pk or v.event_key in events:
+        if owners[v.run_id].pk != run.pk or v.event_key in known:
             continue
         hit = match(v.action, v.reference, v.frame, v.track_id)
         if hit is None:
@@ -100,13 +110,13 @@ def move_votes(run, fps, same_tracks=False) -> dict:
     for t in TripReview.objects.filter(exit_run_id__in=list(owners)):
         if owners[t.exit_run_id].pk != run.pk:
             continue
-        new_exit = (None if t.exit_key in events
+        new_exit = (None if t.exit_key in known
                     else match("exit", t.reference, t.exit_frame, t.exit_track))
         same_job_entry = t.entry_run_id is not None and owners.get(t.entry_run_id) is run
         new_entry = None
-        if same_job_entry and t.entry_key and t.entry_key not in events:
+        if same_job_entry and t.entry_key and t.entry_key not in known:
             new_entry = match("enter", t.reference, t.entry_frame, t.entry_track)
-        if t.exit_key not in events and new_exit is None:
+        if t.exit_key not in known and new_exit is None:
             gone += 1
             continue
         if new_exit is None and new_entry is None:

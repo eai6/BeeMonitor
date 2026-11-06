@@ -323,6 +323,19 @@ class RetrackRunTests(PrimitiveBlockTestCase):
         self.assertEqual(votes.move_votes(run, FPS, same_tracks=True), {"moved": 1, "gone": 0})
         self.assertEqual(EventReview.objects.get(run=run).event_key, "enter|reference_1|4|190")
 
+    def test_a_vote_on_an_event_a_group_filter_left_out_waits_for_it(self):
+        # An ant's entry beside a bee's: the vote must not land on the bee's.
+        run, _job = self._run()
+        EventReview.objects.create(run=run, event_key="enter|reference_1|4|100", action="enter",
+                                   reference="reference_1", track_id="4", frame=100,
+                                   user=self.user, verdict="rejected")
+        from apps.pipelines.retrack import votes
+        run.context["a"]["rows"] = [
+            {"action": "enter", "reference": "reference_1", "track_id": 9, "frame": 101}]
+        run.context["a"]["filtered_out"] = {"event_keys": ["enter|reference_1|4|100"]}
+        self.assertEqual(votes.move_votes(run, FPS, same_tracks=True), {"moved": 0, "gone": 0})
+        self.assertEqual(EventReview.objects.get(run=run).event_key, "enter|reference_1|4|100")
+
     def test_after_a_re_track_a_same_numbered_track_is_not_trusted(self):
         run, _job = self._run()
         EventReview.objects.create(run=run, event_key="enter|reference_1|4|100", action="enter",
