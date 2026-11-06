@@ -559,6 +559,30 @@ class TripScoreTests(PeriodBase):
             self.assertEqual(sum(x[field] for x in t["by_type"]), t[field])
 
 
+class SameTrackTests(TestCase):
+    def event(self, action, t, track, tube="reference_1"):
+        return {"action": action, "reference": tube, "t": t, "clock": "2024-05-08T10:00:00",
+                "key": f"{action}|{tube}|{track}|{t}"}
+
+    def trips(self, *events):
+        return [(t["exit"][1]["key"], t["entry"][1]["key"]) for t in period.suggest_trips(list(events))]
+
+    def test_one_track_out_of_a_tube_and_back_in_is_no_trip(self):
+        self.assertEqual(self.trips((0, self.event("exit", 1, 7)), (0, self.event("enter", 9, 7))), [])
+
+    def test_the_same_number_in_another_clip_is_another_track(self):
+        self.assertEqual(len(self.trips((0, self.event("exit", 1, 7)), (1, self.event("enter", 9, 7)))), 1)
+
+    def test_two_tracks_are_a_trip_and_an_added_event_has_no_track(self):
+        self.assertEqual(len(self.trips((0, self.event("exit", 1, 7)), (0, self.event("enter", 9, 8)))), 1)
+        self.assertEqual(len(self.trips((0, self.event("exit", 1, "")), (0, self.event("enter", 9, "")))), 1)
+
+    def test_the_next_exit_still_pairs(self):
+        self.assertEqual(self.trips((0, self.event("exit", 1, 7)), (0, self.event("enter", 2, 7)),
+                                    (0, self.event("exit", 3, 8)), (0, self.event("enter", 9, 9))),
+                         [("exit|reference_1|8|3", "enter|reference_1|9|9")])
+
+
 class TripCsvTests(PeriodBase):
     """The Trips CSV: every trip with its review, as the events CSV. Like the
     scores it has no markers, so the trip here is the exit and the next entry."""

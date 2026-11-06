@@ -20,7 +20,7 @@
 ## The rule
 - Per clip and per track, take the detected exit and enter events in frame order.
 - An exit whose next event on that track is an enter is a hop. Both event keys are marked.
-- This includes a return to the same tube (the bee never left view). The user accepted this recommendation.
+- A return to the same tube on one track is no trip at all (`period.suggest_trips`, 2026-11-06): the bee turned round in view. The user asked for this; the calls on those pairs stay saved and stop counting.
 - A trip is a Tube hop when its exit key or entry key is marked.
 - Pairing, the trip list, and the Before and After lists don't change. No event is discarded.
 - Only detected events are read. Rejected events still count, and an added event isn't linked; a reviewer can set the type by hand.

@@ -675,7 +675,9 @@ BLOCK_REGISTRY = {
         "display_name": "Trips",
         "description": "How exits and entries are paired into trips: each exit with "
                        "the next event at its tube, when that is an entry, on the "
-                       "same day, each entry used once. Trips run across clips, so "
+                       "same day, each entry used once. One track leaving a tube and "
+                       "going back in is no trip: the bee turned round in view. Trips "
+                       "run across clips, so "
                        "these rules are read when a batch's trips are worked out; "
                        "changing them needs no re-run and no Update. Each trip gets "
                        "a type: Tube hop when one track links its exit or entry to "

@@ -318,6 +318,15 @@ def trip_rules(pipeline):
             "max_seconds": number(config, "max_trip_minutes", 60)}
 
 
+def _one_track(ci, event, other):
+    """Whether ``other`` (``(clip, event)``) is on ``event``'s track. Track
+    numbers belong to a clip, and an added event may have none."""
+    def track(e):
+        return (str(e.get("key", "")).split("|") + ["", "", ""])[2]
+
+    return other[0] == ci and bool(track(event)) and track(event) == track(other[1])
+
+
 def suggest_trips(events, rules=None):
     """Each exit → the entry that ends its trip, one to one, within a day.
 
@@ -326,6 +335,8 @@ def suggest_trips(events, rules=None):
     first means the entry between them was missed, and no trip is claimed. When
     the exit carries a marker, the next unused entry by that marker wins. No
     entry ends two trips, and a pair outside ``rules`` (``trip_rules``) is none.
+    Nor is one track leaving a tube and going back in: the bee turned round in
+    view and never went to forage.
     """
     rules = rules or {}
     tubes = {}
@@ -350,6 +361,9 @@ def suggest_trips(events, rules=None):
             if at is None:
                 continue
             pick = lst[at]
+            if _one_track(ci, e, pick):
+                used.add(at)
+                continue
             gap = pick[1]["t"] - e["t"]
             if gap <= 0 or (rules.get("min_seconds") is not None and gap < rules["min_seconds"]) \
                     or (rules.get("max_seconds") is not None and gap > rules["max_seconds"]):
