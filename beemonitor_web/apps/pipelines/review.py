@@ -268,6 +268,24 @@ def review_votes(runs):
     return votes
 
 
+def reviewed_runs(runs):
+    """The pks of ``runs`` a reviewer marked done (ClipReview): counted as
+    reviewed even with nothing to vote on."""
+    from .models import ClipReview
+
+    owners = shared_job_runs(runs, "clip_reviews")
+    return {owners[r].pk for r in ClipReview.objects.filter(
+        run_id__in=list(owners)).values_list("run_id", flat=True)}
+
+
+def trip_calls(runs):
+    """``{(run pk, exit key, entry key): [TripReview]}`` for ``runs``."""
+    by_trip = {}
+    for r in trip_reviews_for(runs):
+        by_trip.setdefault((r.own_run.pk, r.exit_key, r.entry_key), []).append(r)
+    return by_trip
+
+
 def batch_review_counts(runs, actions=None):
     """``{run pk: counts}`` (as ``event_review_counts``) for many runs in two
     queries' worth of work; None for a run with no Events step.
@@ -292,12 +310,7 @@ def batch_review_counts(runs, actions=None):
                       .values_list("run_id", "n")):
         own = added_owners[run_id].pk
         added[own] = added.get(own, 0) + n
-    # Clips a reviewer marked done (ClipReview): counted as reviewed even
-    # with nothing to vote on.
-    from .models import ClipReview
-    done_owners = shared_job_runs(runs, "clip_reviews")
-    done = {done_owners[r].pk for r in ClipReview.objects.filter(
-        run_id__in=list(done_owners)).values_list("run_id", flat=True)}
+    done = reviewed_runs(runs)
     out = {}
     for run in runs:
         outs = [o for k, o in analyzer_outputs(run) if k == "events"]
@@ -409,9 +422,7 @@ def batch_review_summary(runs, per_run=None, actions=None):
     # The actions counted (memory/70).
     ev["actions"] = list(actions) if actions is not None else None
 
-    by_trip = {}
-    for r in trip_reviews_for(runs):
-        by_trip.setdefault((r.own_run.pk, r.exit_key, r.entry_key), []).append(r)
+    by_trip = trip_calls(runs)
     # The pipeline's trips against those reviewers confirmed (memory/79), over
     # the clips marked reviewed. Precision is over all the pipeline's trips,
     # false events and all, as on unseen data; recall over all the true trips.

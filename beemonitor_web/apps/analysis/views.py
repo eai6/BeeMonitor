@@ -1810,6 +1810,8 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
                                  and event_review.can_review(self.request.user, review_run))
         ctx["review_counts"] = (event_review.event_review_counts(review_run)
                                 if review_run and "events" in ctx["measured"] else None)
+        from apps.pipelines import period
+        ctx["has_trips"] = bool(review_run and period.has_trips(review_run.pipeline))
 
         # The page shows the head of each long table; the CSV beside it has
         # every row. A 10-minute clip's tracking table is ~100k rows x 17
@@ -2433,18 +2435,28 @@ class JobPrimitiveCsvView(LoginRequiredMixin, View):
 
         from apps.pipelines import tracks as track_tables
 
-        if kind not in ("events", "interactions", "tracks", "tracking", "detections"):
+        if kind not in ("events", "interactions", "tracks", "tracking", "detections", "trips"):
             raise Http404("Unknown table.")
         job = get_object_or_404(Job.objects.for_viewer(request.user).filter(
             clip_access(request.user, photos=True)), pk=pk)
         pipeline_executors.pin_run(job, request.GET.get("run"))
+        from apps.pipelines import aggregate, period
+        from apps.pipelines import review as event_review
+        run = event_review.run_for_job(job)
 
         from apps.pipelines.retrack.run import effective_result
         result = effective_result(job)
         tracking = (_load_csv_from_storage(getattr(result, "tracking_csv_path", "") or "")
                     if kind in ("tracks", "tracking") else {})
         tracks_rows, by_track, fps, start = job_tracks(job, tracking)
-        if kind == "tracks":
+        if kind == "trips":
+            if run is None or not period.has_trips(run.pipeline):
+                raise Http404("This clip's pipeline has no Trips step.")
+            # Only trips inside this clip; the batch's Trips CSV pairs across clips.
+            rows = period.trip_rows([run], event_review.reviewed_runs([run]),
+                                    event_review.trip_calls([run]))
+            fields = aggregate.PROVENANCE_FIELDS + period.TRIP_FIELDS
+        elif kind == "tracks":
             rows, fields = tracks_rows, track_tables.TRACK_FIELDS
         elif kind == "tracking":
             rows = track_tables.tracking_export(_table_dicts(tracking), by_track, fps, start)
@@ -2456,12 +2468,14 @@ class JobPrimitiveCsvView(LoginRequiredMixin, View):
         else:
             if kind not in pipeline_executors.measured_kinds(job):
                 raise Http404(f"This clip's pipeline has no {kind} step.")
-            from apps.pipelines import review as event_review
             rows = track_tables.primitive_with_identity(
                 kind, pipeline_executors.primitives_for_job(job, kind), by_track, fps, start,
                 reviews=event_review.summaries_for_job(job) if kind == "events" else None,
                 added=event_review.added_for_job(job) if kind == "events" else None)
-            fields = (list(primitives.EVENT_FIELDS) + track_tables.IDENTITY_FIELDS
+            if kind == "events":
+                done = "true" if run and run.pk in event_review.reviewed_runs([run]) else "false"
+                rows = [{**r, "clip_reviewed": done} for r in rows]
+            fields = (list(primitives.EVENT_FIELDS) + track_tables.IDENTITY_FIELDS + ["clip_reviewed"]
                       if kind == "events" else
                       list(primitives.INTERACTION_FIELDS) + track_tables.IDENTITY_FIELDS
                       + ["with_species", "with_marker_id"])

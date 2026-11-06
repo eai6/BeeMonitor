@@ -5,10 +5,10 @@ in it with a known recording start and a finished run that has an Events step
 is placed on ONE time axis, in the clip's local wall-clock time, so an exit
 in one clip and the entry in a later one sit on the same tube lane.
 
-Trips are suggestions, never results: each exit is paired with the next entry
-into the same tube later in the period (the same marker first, when markers
-were read). A trip becomes data only when a reviewer calls it
-(``TripReview``), and only reviewed pairs are ever exported.
+Each exit is paired with the next entry into the same tube later in the period
+(the same marker first, when markers were read). A trip is the pipeline's
+suggestion until a reviewer calls it (``TripReview``); the Trips CSV has both,
+as the events CSV does (``trip_rows``).
 """
 
 from __future__ import annotations
@@ -293,6 +293,16 @@ def added_events(clip, rows):
     return out
 
 
+def _trips_step(pipeline):
+    return next((s for s in (pipeline.steps if pipeline else None) or []
+                 if s.get("block_type") == "analyze.trips"), None)
+
+
+def has_trips(pipeline):
+    """Whether the pipeline has a Trips node, so its trips can be downloaded."""
+    return _trips_step(pipeline) is not None
+
+
 def trip_rules(pipeline):
     """The pipeline's Trips node as ``{min_seconds, max_seconds}`` (None = no
     limit). Read from the pipeline as it is now: trips run across clips, so
@@ -303,9 +313,7 @@ def trip_rules(pipeline):
         except (TypeError, ValueError):
             return None
 
-    step = next((s for s in (pipeline.steps if pipeline else None) or []
-                 if s.get("block_type") == "analyze.trips"), None)
-    config = (step or {}).get("config") or {}
+    config = (_trips_step(pipeline) or {}).get("config") or {}
     return {"min_seconds": number(config, "min_trip_seconds"),
             "max_seconds": number(config, "max_trip_minutes", 60)}
 
@@ -449,6 +457,82 @@ def _scored_events(run, video, start, votes, added):
     return detected, confirmed
 
 
+def _trip_places(runs):
+    """The clips of ``runs`` by place (device, else site): a list of lists of
+    ``(run, video, local start)``. Pairing runs within a place."""
+    from apps.videos.models import Video
+
+    from .aggregate import run_video_id
+
+    by_video = {}
+    for run in runs:
+        if run_video_id(run):
+            by_video.setdefault(run_video_id(run), run)
+    places = {}
+    for v in Video.objects.filter(pk__in=list(by_video)).select_related("device", "site"):
+        place = ("device", v.device_id) if v.device_id else ("site", v.site_id) if v.site_id else None
+        start = local_start(v)
+        if place and start is not None:
+            places.setdefault(place, []).append((by_video[v.pk], v, start))
+    return list(places.values())
+
+
+def _trip_sets(places):
+    """Per place ``(pipeline, listed, kept)``: the trips of the detected events
+    and of the reviewed events, each ``{(exit run, exit key, entry run, entry
+    key): trip}``, and the ``(run, key)`` of the events that survived review."""
+    from .models import AddedEvent
+    from .review import review_votes, shared_job_runs
+
+    chosen = {c[0].pk: c[0] for clips in places for c in clips}
+    if not chosen:
+        return
+    votes = review_votes(chosen.values())
+    owners = shared_job_runs(chosen.values(), "added_events")
+    added = {}
+    for a in AddedEvent.objects.filter(run_id__in=list(owners)):
+        added.setdefault(owners[a.run_id].pk, []).append(a)
+    rules = trip_rules(next(iter(chosen.values())).pipeline)
+
+    def paired(events):
+        return {(t["exit"][0], t["exit"][1]["key"], t["entry"][0], t["entry"][1]["key"]): t
+                for t in suggest_trips(events, rules)}
+
+    for clips in places:
+        detected, confirmed = [], []
+        for run, video, start in clips:
+            d, c = _scored_events(run, video, start, votes.get(run.pk, {}), added.get(run.pk, []))
+            detected += d
+            confirmed += c
+        yield paired(detected), paired(confirmed), {(pk, e["key"]) for pk, e in confirmed}
+
+
+def _trip_call(mine):
+    """The trip's call from its ``TripReview``s: accepted, rejected, disputed,
+    or blank for none or "can't tell"."""
+    from .review import combined
+
+    if any(c.reason == "can't tell" for c in mine):
+        return ""
+    return combined([c.verdict for c in mine])
+
+
+def _trip_kind(k, mine, hops_at):
+    return next((c.trip_type for c in mine if c.trip_type), "") or auto_trip_type(
+        k[1], k[3], hops_at(k[0]), hops_at(k[2]))
+
+
+def _hops_cache(places):
+    chosen = {c[0].pk: c[0] for clips in places for c in clips}
+    hops = {}
+
+    def hops_at(pk):
+        if pk not in hops:
+            hops[pk] = hops_of(chosen[pk])
+        return hops[pk]
+    return hops_at
+
+
 def trip_scores(runs, reviewed, calls):
     """The pipeline's trips against the trips reviewers confirmed.
 
@@ -463,11 +547,7 @@ def trip_scores(runs, reviewed, calls):
 
     ``{clips, right, wrong, missed, waiting, types: {type: the same four}}``.
     """
-    from apps.videos.models import Video
-
-    from .aggregate import run_video_id
-    from .models import AddedEvent, TripReview
-    from .review import combined, review_votes, shared_job_runs
+    from .models import TripReview
 
     def tally():
         return {"right": 0, "wrong": 0, "missed": 0, "waiting": 0}
@@ -476,63 +556,24 @@ def trip_scores(runs, reviewed, calls):
            "types": {value: tally() for value in TripReview.Type.values}}
     if not reviewed:
         return out
-    by_video = {}
-    for run in runs:
-        if run_video_id(run):
-            by_video.setdefault(run_video_id(run), run)
-    places = {}
-    for v in Video.objects.filter(pk__in=list(by_video)).select_related("device", "site"):
-        place = ("device", v.device_id) if v.device_id else ("site", v.site_id) if v.site_id else None
-        start = local_start(v)
-        if place and start is not None:
-            places.setdefault(place, []).append((by_video[v.pk], v, start))
-    places = [clips for clips in places.values() if any(c[0].pk in reviewed for c in clips)]
-    chosen = {c[0].pk: c[0] for clips in places for c in clips}
-    if not chosen:
-        return out
-    votes = review_votes(chosen.values())
-    owners = shared_job_runs(chosen.values(), "added_events")
-    added = {}
-    for a in AddedEvent.objects.filter(run_id__in=list(owners)):
-        added.setdefault(owners[a.run_id].pk, []).append(a)
-    rules = trip_rules(next(iter(chosen.values())).pipeline)
-    hops = {}
+    places = [clips for clips in _trip_places(runs) if any(c[0].pk in reviewed for c in clips)]
+    hops_at = _hops_cache(places)
 
-    def hops_at(pk):
-        if pk not in hops:
-            hops[pk] = hops_of(chosen[pk])
-        return hops[pk]
-
-    def trip_keys(events):
-        keys = set()
-        for t in suggest_trips(events, rules):
-            (exit_run, e), (entry_run, n) = t["exit"], t["entry"]
-            if exit_run in reviewed and entry_run in reviewed:
-                keys.add((exit_run, e["key"], entry_run, n["key"]))
-        return keys
+    def in_reviewed(trips):
+        return {k for k in trips if k[0] in reviewed and k[2] in reviewed}
 
     def count(field, keys):
         for k in keys:
-            mine = calls.get((k[0], k[1], k[3]), [])
-            kind = next((c.trip_type for c in mine if c.trip_type), "") or auto_trip_type(
-                k[1], k[3], hops_at(k[0]), hops_at(k[2]))
+            kind = _trip_kind(k, calls.get((k[0], k[1], k[3]), []), hops_at)
             out[field] += 1
             out["types"][kind][field] += 1
 
     def answer(k):
-        mine = calls.get((k[0], k[1], k[3]), [])
-        if any(c.reason == "can't tell" for c in mine):
-            return ""
-        call = combined([c.verdict for c in mine])
+        call = _trip_call(calls.get((k[0], k[1], k[3]), []))
         return "" if call == "disputed" else call
 
-    for clips in places:
-        detected, confirmed = [], []
-        for run, video, start in clips:
-            d, c = _scored_events(run, video, start, votes.get(run.pk, {}), added.get(run.pk, []))
-            detected += d
-            confirmed += c
-        pipeline, listed = trip_keys(detected), trip_keys(confirmed)
+    for pipeline, listed, _kept in _trip_sets(places):
+        pipeline, listed = in_reviewed(pipeline), in_reviewed(listed)
         true = {k for k in listed if answer(k) == "accepted"}
         waiting = {k for k in listed if not answer(k)}
         count("right", pipeline & true)
@@ -615,86 +656,77 @@ def set_trip_vote(user, exit_run, exit_key, entry_run, entry_key, verdict, reaso
 
 
 TRIP_FIELDS = ["reference", "exit_time", "entry_time", "duration_sec", "exit_clip", "exit_track",
-               "entry_clip", "entry_track", "species", "marker_id", "review", "reviewed_by",
-               "review_notes", "trip_type", "trip_type_set_by"]
+               "entry_clip", "entry_track", "species", "marker_id", "source", "review",
+               "reviewed_by", "review_notes", "trip_type", "trip_type_set_by", "clip_reviewed"]
 
 
-def trip_rows(trip_reviews):
-    """One row per reviewed (exit, entry) pair — only what reviewers called."""
+def trip_rows(runs, reviewed, calls):
+    """The Trips CSV: every trip of the detected events (``source`` pipeline)
+    and of the reviewed events (``review``), scored as ``trip_scores`` scores
+    them, so the file gives its numbers.
+
+    ``review`` is the call on the trip, or for a pipeline trip the reviewed
+    events don't make, why: ``event_rejected``, or ``pairing_changed`` when both
+    its events stand but a rejected or added one changed what pairs with what.
+    ``clip_reviewed``: both ends in clips marked reviewed. Arguments as
+    ``trip_scores``; each clip is read whole in turn for its species.
+    """
     from apps.analysis.models import JobResult
 
     from . import tracks
-    from .aggregate import run_job_id, run_video_id
-    from .ops import fps_with_source
-    from .review import combined
-    from apps.videos.models import Video
+    from .aggregate import _provenance, run_job_id, whole_runs
 
-    from .models import PipelineRun
+    places = _trip_places(runs)
+    clips = {c[0].pk: c for place in places for c in place}
+    hops_at = _hops_cache(places)
+    where = {pk: _provenance({"video": c[1], "title": c[1].title or f"Video {c[1].pk}"})
+             for pk, c in clips.items()}
 
-    # Each run once (memory/76): joining them on every review decoded the same
-    # clip's whole results again for each trip called on it.
-    reviews = list(trip_reviews.select_related("user"))
-    runs = PipelineRun.objects.in_bulk(
-        {pk for r in reviews for pk in (r.exit_run_id, r.entry_run_id) if pk})
-    for r in reviews:
-        r.exit_run = runs.get(r.exit_run_id)
-        r.entry_run = runs.get(r.entry_run_id) if r.entry_run_id else None
-    videos = {v.pk: v for v in Video.everything.filter(
-        pk__in=[run_video_id(r) for r in runs.values() if run_video_id(r)])}
-    results = {j: res for j, res in JobResult.objects.filter(
-        job_id__in=[run_job_id(r) for r in runs.values() if run_job_id(r)])
-        .values_list("job_id", "summary_stats")}
+    def stamp(event):
+        return datetime.fromisoformat(event["clock"]).isoformat(timespec="milliseconds")
 
-    def _clip(run):
-        if run is None:
-            return None, None, 25.0, {}
-        video = videos.get(run_video_id(run))
+    def track(key):
+        return (str(key).split("|") + ["", "", ""])[2]
+
+    rows, identify = [], {}
+    for pipeline, listed, kept in _trip_sets(places):
+        for k in {**pipeline, **listed}:
+            t = listed.get(k) or pipeline[k]
+            e, n = t["exit"][1], t["entry"][1]
+            called = calls.get((k[0], k[1], k[3]), [])
+            mine = called if k in listed else []
+            if k in listed:
+                review = _trip_call(mine)
+            elif (k[0], k[1]) in kept and (k[2], k[3]) in kept:
+                review = "pairing_changed"
+            else:
+                review = "event_rejected"
+            notes = []
+            for c in mine:
+                if c.reason and c.reason not in notes:
+                    notes.append(c.reason)
+            chosen = next((c.trip_type for c in called if c.trip_type), "")
+            row = {**where[k[0]], "reference": e["reference"], "exit_time": stamp(e),
+                   "entry_time": stamp(n), "duration_sec": round(n["t"] - e["t"], 2),
+                   "exit_clip": where[k[0]]["video_title"], "exit_track": track(k[1]),
+                   "entry_clip": where[k[2]]["video_title"], "entry_track": track(k[3]),
+                   "species": "", "marker_id": "",
+                   "source": "pipeline" if k in pipeline else "review", "review": review,
+                   "reviewed_by": ";".join(sorted(c.user.username for c in mine)),
+                   "review_notes": "; ".join(notes),
+                   "trip_type": _trip_kind(k, called, hops_at),
+                   "trip_type_set_by": "reviewer" if chosen else "auto",
+                   "clip_reviewed": "true" if k[0] in reviewed and k[2] in reviewed else "false"}
+            rows.append(row)
+            identify.setdefault(k[0], []).append(row)
+    for run in whole_runs([clips[pk][0] for pk in identify]):
         # The run's own (re-tracked) stats first (memory/69).
-        stats = _run_stats(run) or results.get(run_job_id(run)) or {}
-        fps = fps_with_source(stats, video)[0] if video else 25.0
+        stats = _run_stats(run) or JobResult.objects.filter(job_id=run_job_id(run)).values_list(
+            "summary_stats", flat=True).first() or {}
         by_track = tracks.by_track_of({"summary_stats": stats})
-        return video, local_start(video) if video else None, float(fps or 25), by_track
-
-    def _time(start, fps, frame):
-        if start is None or frame is None:
-            return "", None
-        t = start + timedelta(seconds=frame / fps)
-        return t.isoformat(timespec="milliseconds"), t
-
-    hops = {pk: hops_of(run) for pk, run in runs.items()}
-    groups = {}
-    for r in reviews:
-        # By GPU job, not run: calls saved on two runs of one clip are one trip.
-        groups.setdefault((run_job_id(r.exit_run), r.exit_key,
-                           run_job_id(r.entry_run) if r.entry_run else None, r.entry_key),
-                          []).append(r)
-    rows = []
-    for (_er, _ek, _nr, _nk), rs in groups.items():
-        first = rs[0]
-        ev, es, efps, by_track = _clip(first.exit_run)
-        nv, ns, nfps, _bt = _clip(first.entry_run)
-        exit_iso, exit_t = _time(es, efps, first.exit_frame)
-        entry_iso, entry_t = _time(ns, nfps, first.entry_frame)
-        ident = tracks.identity(by_track.get(str(first.exit_track)))
-        notes = []
-        for r in rs:
-            if r.reason and r.reason not in notes:
-                notes.append(r.reason)
-        chosen = next((r.trip_type for r in rs if r.trip_type), "")
-        rows.append({
-            "reference": first.reference, "exit_time": exit_iso, "entry_time": entry_iso,
-            "duration_sec": (round((entry_t - exit_t).total_seconds(), 2)
-                             if exit_t and entry_t else ""),
-            "exit_clip": ev.title if ev else "", "exit_track": first.exit_track,
-            "entry_clip": nv.title if nv else "", "entry_track": first.entry_track,
-            "species": ident.get("species", ""), "marker_id": ident.get("marker_id", ""),
-            "review": combined([r.verdict for r in rs]),
-            "reviewed_by": ";".join(sorted(r.user.username for r in rs)),
-            "review_notes": "; ".join(notes),
-            "trip_type": chosen or auto_trip_type(first.exit_key, first.entry_key,
-                                                  hops.get(first.exit_run_id),
-                                                  hops.get(first.entry_run_id)),
-            "trip_type_set_by": "reviewer" if chosen else "auto"})
+        for row in identify[run.pk]:
+            ident = tracks.identity(by_track.get(row["exit_track"]))
+            row.update(species=ident.get("species", ""), marker_id=ident.get("marker_id", ""))
     rows.sort(key=lambda r: (r["exit_time"], r["reference"]))
     return rows
 

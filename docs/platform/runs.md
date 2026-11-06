@@ -140,18 +140,25 @@ detected ones. Whoever added one, or the batch owner, can remove it.
 checked events that were right; **recall** is accepted ÷ (accepted + added), the share of real events the
 system found. Once anything in a batch has been reviewed, the batch page shows an **Events review** panel
 (reviewed, accepted, rejected, disputed, added, precision, recall) and a **Trips review** panel (reviewed,
-same bee, re-linked, not a trip, and how often the suggestion was right as it stood).
+precision and recall, overall and by trip type).
 
 **What it adds to the data.**
 
 | Where | What |
 |---|---|
-| Events CSV (clip and batch) | `review` (accepted, rejected, disputed when reviewers disagree, blank if unreviewed), `reviewed_by`, `review_notes`; an added event is its own row with `review = added`, `reviewed_by` = who added it and `review_notes` = their note |
+| Events CSV (clip and batch) | `review` (accepted, rejected, disputed when reviewers disagree, blank if unreviewed), `reviewed_by`, `review_notes`, `clip_reviewed` (the clip is marked reviewed); an added event is its own row with `review = added`, `reviewed_by` = who added it and `review_notes` = their note |
 | Clip page | "12 reviewed · 9 accepted · 3 rejected" under Events |
 | Batch page | a **Reviewed** column (with "+N" added), and the Events review and Trips review panels once something is reviewed |
-| **Reviewed trips** CSV (period page and batch) | one row per pair a reviewer called: `reference, exit_time, entry_time, duration_sec, exit_clip, exit_track, entry_clip, entry_track, species, marker_id, review, reviewed_by, review_notes, trip_type, trip_type_set_by` |
+| **Trips** CSV (batch, share link and clip, with a Trips node) | one row per trip: `reference, exit_time, entry_time, duration_sec, exit_clip, exit_track, entry_clip, entry_track, species, marker_id, source, review, reviewed_by, review_notes, trip_type, trip_type_set_by, clip_reviewed`, after the site and device columns |
 
-Only reviewed trips are ever exported. A suggestion nobody looked at is not a trip in your data.
+The Trips CSV holds every trip the pipeline made (`source` = pipeline) and every trip that exists only after
+review (`source` = review). `review` is accepted, rejected, disputed or blank. A pipeline trip the reviewed events
+don't make says why: `event_rejected`, or `pairing_changed` when both its events stand but a rejected or added
+event changed what pairs with what. A clip's file has only trips inside that clip; the batch's pairs across clips.
+
+The batch's trip metrics come from this file. Keep rows with `clip_reviewed` = true, then: **right** is pipeline
+and accepted; **wrong** is pipeline and rejected, event_rejected or pairing_changed; **missed** is review and
+accepted; the rest wait. Calls on trips that no longer exist aren't in it.
 
 ## The tables
 

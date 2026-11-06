@@ -27,7 +27,6 @@ urlpatterns = [
     # Period review across clips, and its trips (memory/62).
     path("review/", period_views.PeriodReviewView.as_view(), name="period_review"),
     path("review/trips", period_views.TripReviewView.as_view(), name="trip_review"),
-    path("review/trips.csv", period_views.PeriodTripsCsvView.as_view(), name="period_trips_csv"),
     path("<int:pk>/stream/", period_views.PeriodStreamView.as_view(), name="period_stream"),
     path("<int:pk>/results/<str:kind>.csv", views.JobPrimitiveCsvView.as_view(),
          name="results_csv"),

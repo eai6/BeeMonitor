@@ -14,3 +14,10 @@
 ## Limits
 - Metrics read the slim copy, which has no markers, so the scored pipeline trips ignore marker pairing. The page's list uses markers. A clip set with marked bees could score lower than it should.
 - `TripReview.before_review` and `relinked` are no longer read by metrics.
+
+## Trips CSV (2026-11-06)
+- One file replaces the Reviewed trips CSV, which is gone from the batch, the share link and Review trips. This drops memory/62's rule that only reviewed pairs are exported: the user asked for trips with their review, as the events CSV.
+- `period.trip_rows(runs, reviewed, calls)` and `trip_scores` read the same `_trip_sets`, so the file gives the metrics: keep `clip_reviewed` = true; right = pipeline + accepted; wrong = pipeline + rejected, event_rejected or pairing_changed; missed = review + accepted; the rest wait.
+- Offered with a Trips node (`period.has_trips`) on the batch, the share link and the clip widget. A clip's file pairs inside that clip only.
+- Calls on trips that no longer exist are in no export. Pairing has no markers, so a call on a marker pair isn't attached to a row.
+- Events CSVs gained `clip_reviewed`.

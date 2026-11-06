@@ -3,13 +3,12 @@ trips in it (memory/62 §4, §4b). The logic is ``apps.pipelines.period``."""
 
 from __future__ import annotations
 
-import csv
 import json
 import uuid
 from datetime import datetime, timedelta
 
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.http import Http404, HttpResponse, JsonResponse
+from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.views import View
@@ -209,7 +208,6 @@ class PeriodReviewView(LoginRequiredMixin, View):
         return render(request, "analysis/period_review.html", {
             "batch": batch, "places": places,
             "data": data, "payload": payload,
-            "csv_url": reverse("analysis:period_trips_csv") + "?" + query.urlencode(),
             "any_review": any(c["can_review"] for c in data["clips"]),
         })
 
@@ -269,24 +267,3 @@ class TripReviewView(LoginRequiredMixin, View):
         return JsonResponse({"ok": True, "verdict": verdict})
 
 
-def trips_csv_response(trip_reviews, filename):
-    rows = period.trip_rows(trip_reviews)
-    response = HttpResponse(content_type="text/csv")
-    response["Content-Disposition"] = f'attachment; filename="{filename}"'
-    writer = csv.DictWriter(response, fieldnames=period.TRIP_FIELDS)
-    writer.writeheader()
-    writer.writerows(rows)
-    return response
-
-
-class PeriodTripsCsvView(LoginRequiredMixin, View):
-    """The period's reviewed trips: only pairs a reviewer called."""
-
-    def get(self, request):
-        from apps.pipelines.models import TripReview
-
-        data = _gather(request)
-        runs = [c["run"] for c in data["clips"]]
-        reviews = event_review.trip_reviews_for(runs)
-        return trips_csv_response(TripReview.objects.filter(pk__in=[t.pk for t in reviews]),
-                                  f"trips_{data['start']:%Y%m%d_%H%M}.csv")

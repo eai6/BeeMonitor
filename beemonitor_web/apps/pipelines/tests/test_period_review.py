@@ -2,8 +2,7 @@
 
 Two clips an hour apart on one unit: a bee leaves tube 1 in the first and
 comes back in the second. The period puts both on one axis, suggests the trip
-across clips (the same marker first), and a trip is data only once a reviewer
-calls it.
+across clips (the same marker first), and reviewers call it.
 """
 
 import csv
@@ -21,7 +20,7 @@ from apps.analysis.models import Job, JobResult
 from apps.analysis.test_job_primitives import _csv
 from apps.devices.models import Device
 from apps.pipelines import period
-from apps.pipelines.models import (BatchMember, ClipReview, EventReview, Pipeline, PipelineRun,
+from apps.pipelines.models import (AddedEvent, BatchMember, ClipReview, EventReview, Pipeline, PipelineRun,
                                    TripReview)
 from apps.pipelines.recount import recount_run
 from apps.videos.models import Video
@@ -228,25 +227,6 @@ class TripVoteTests(PeriodBase):
         return self.client.post(reverse("analysis:trip_review"), json.dumps(body),
                                 content_type="application/json")
 
-    def csv_rows(self):
-        self.client.force_login(self.owner)
-        body = self.client.get(reverse("analysis:period_trips_csv"), {
-            "device": self.device.pk, "from": "2024-05-08T09:00",
-            "to": "2024-05-08T13:00"}).content.decode()
-        return list(csv.DictReader(io.StringIO(body)))
-
-    def test_no_trip_is_exported_until_someone_reviews_it(self):
-        self.assertEqual(self.csv_rows(), [])
-
-    def test_an_accepted_trip_is_exported_with_its_times(self):
-        self.assertEqual(self.vote("accepted").json()["verdict"], "accepted")
-        row = self.csv_rows()[0]
-        self.assertEqual((row["reference"], row["exit_track"], row["entry_track"], row["review"]),
-                         ("reference_1", "3", "6", "accepted"))
-        self.assertTrue(row["exit_time"].startswith("2024-05-08T10:00:00"))
-        self.assertAlmostEqual(float(row["duration_sec"]), 3600 + 79 / 25, places=1)
-        self.assertEqual((row["exit_clip"], row["entry_clip"]), ("a", "b"))
-
     def test_relink_and_didnt_come_back_and_taking_it_back(self):
         other = [e for e in self.clips[1]["events"] if "|4|" in e["key"]][0]
         self.vote("accepted", entry_key=other["key"], relinked=True)
@@ -266,8 +246,8 @@ class TripVoteTests(PeriodBase):
         BatchMember.objects.create(batch_id=self.batch, user=self.maria)
         self.vote("accepted")
         self.assertEqual(self.vote("rejected", user=self.maria, reason="can't tell").status_code, 200)
-        row = self.csv_rows()[0]
-        self.assertEqual((row["review"], row["reviewed_by"]), ("rejected", "maria"))
+        t = TripReview.objects.get()
+        self.assertEqual((t.verdict, t.user), ("rejected", self.maria))
         self.vote(None)
         self.assertFalse(TripReview.objects.exists())
 
@@ -278,17 +258,6 @@ class TripVoteTests(PeriodBase):
         self.assertEqual(self.vote("accepted", user=self.stranger).status_code, 404)
         self.assertEqual(self.vote("maybe").status_code, 400)
         self.assertFalse(TripReview.objects.exists())
-
-    def test_the_batch_offers_reviewed_trips_only_after_a_review(self):
-        self.client.force_login(self.owner)
-        page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
-        self.assertNotIn("trips", [d["kind"] for d in page.context["downloads"]])
-        self.vote("accepted")
-        page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
-        self.assertIn("trips", [d["kind"] for d in page.context["downloads"]])
-        body = self.client.get(reverse("pipelines:batch_combined_csv",
-                                       kwargs={"batch_id": self.batch, "kind": "trips"})).getvalue().decode()
-        self.assertIn("reference_1", body)
 
 
 class SharedJobTests(PeriodBase):
@@ -375,6 +344,8 @@ class SharedJobTests(PeriodBase):
         self.client.post(self.clips[0]["review_url"], json.dumps(
             {"event_key": e["key"], "verdict": "accepted"}), content_type="application/json")
         self.assertEqual(TripReview.objects.get().exit_run_id, self.later_runs[0].pk)
+        self.pipeline.steps = [{"id": "t", "block_type": "analyze.trips", "config": {}}]
+        self.pipeline.save()
         page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
         summary = page.context["review_summary"]
         self.assertEqual((summary["trips"]["reviewed"], summary["events"]["reviewed"]), (1, 1))
@@ -513,11 +484,7 @@ class TripTypeTests(PeriodBase):
         # Voting again without a type keeps it.
         period.set_trip_vote(self.owner, run_a, keys[0], run_b, keys[1], "accepted")
         self.assertEqual(self.payload(self.page())["trips"][0]["type_set"], "tube_hop")
-        row = period.trip_rows(TripReview.objects.all())[0]
-        self.assertEqual((row["trip_type"], row["trip_type_set_by"]), ("tube_hop", "reviewer"))
         period.set_trip_type(run_a, keys[0], keys[1], "")
-        row = period.trip_rows(TripReview.objects.all())[0]
-        self.assertEqual((row["trip_type"], row["trip_type_set_by"]), ("direct", "auto"))
 
     def test_an_unknown_type_is_refused(self):
         with self.assertRaises(ValueError):
@@ -590,6 +557,130 @@ class TripScoreTests(PeriodBase):
         self.assertEqual((by_type["Tube hop"]["right"], by_type["Direct"]["right"]), (1, 0))
         for field in ("right", "wrong", "missed", "waiting"):
             self.assertEqual(sum(x[field] for x in t["by_type"]), t[field])
+
+
+class TripCsvTests(PeriodBase):
+    """The Trips CSV: every trip with its review, as the events CSV. Like the
+    scores it has no markers, so the trip here is the exit and the next entry."""
+
+    def setUp(self):
+        super().setUp()
+        self.pipeline.steps = [{"id": "t", "block_type": "analyze.trips", "config": {}}]
+        self.pipeline.save()
+        self.runs = [self.a["run"], self.b["run"]]
+        self.exit = "exit|reference_1|3|0"
+        self.first, self.second = "enter|reference_1|4|39", "enter|reference_1|6|79"
+        for clip in (self.a, self.b):
+            ClipReview.objects.create(run=clip["run"], user=self.owner)
+
+    def rows(self):
+        from apps.pipelines import review
+
+        return period.trip_rows(self.runs, review.reviewed_runs(self.runs), review.trip_calls(self.runs))
+
+    def answer(self, entry, verdict, **extra):
+        period.set_trip_vote(self.owner, self.a["run"], self.exit, self.b["run"], entry, verdict, **extra)
+
+    def reject(self, key):
+        EventReview.objects.create(run=self.b["run"], user=self.owner, verdict="rejected", event_key=key)
+
+    def download(self, kind):
+        self.client.force_login(self.owner)
+        body = self.client.get(reverse("pipelines:batch_combined_csv",
+                                       kwargs={"batch_id": self.batch, "kind": kind})).getvalue().decode()
+        return list(csv.DictReader(io.StringIO(body)))
+
+    def test_a_trip_nobody_answered_is_a_row_with_a_blank_review(self):
+        row = self.rows()[0]
+        self.assertEqual((row["source"], row["review"], row["reviewed_by"], row["clip_reviewed"]),
+                         ("pipeline", "", "", "true"))
+        self.assertEqual((row["reference"], row["exit_track"], row["entry_track"]), ("reference_1", "3", "4"))
+        self.assertEqual((row["exit_clip"], row["entry_clip"], row["marker_id"]), ("a", "b", "red"))
+        self.assertTrue(row["exit_time"].startswith("2024-05-08T10:00:00"))
+        self.assertAlmostEqual(row["duration_sec"], 3600 + 39 / 25, places=1)
+
+    def test_a_call_shows_with_who_made_it_and_the_note(self):
+        self.answer(self.first, "rejected", reason="not a bee")
+        row = self.rows()[0]
+        self.assertEqual((row["review"], row["reviewed_by"], row["review_notes"]),
+                         ("rejected", "owner", "not a bee"))
+
+    def test_cant_tell_is_a_blank_review_with_the_words_kept(self):
+        self.answer(self.first, "rejected", reason="can't tell")
+        row = self.rows()[0]
+        self.assertEqual((row["review"], row["review_notes"]), ("", "can't tell"))
+
+    def test_a_reviewers_type_wins(self):
+        self.answer(self.first, "accepted", trip_type="tube_hop")
+        row = self.rows()[0]
+        self.assertEqual((row["trip_type"], row["trip_type_set_by"]), ("tube_hop", "reviewer"))
+
+    def test_a_trip_on_a_rejected_event_and_the_one_review_makes(self):
+        self.reject(self.first)
+        rows = {r["entry_track"]: r for r in self.rows()}
+        self.assertEqual((rows["4"]["source"], rows["4"]["review"]), ("pipeline", "event_rejected"))
+        self.assertEqual((rows["6"]["source"], rows["6"]["review"]), ("review", ""))
+
+    def test_an_added_event_changes_the_pairing(self):
+        AddedEvent.objects.create(run=self.a["run"], user=self.owner, frame=10, action="enter",
+                                  reference="reference_1", track_id="")
+        rows = {r["entry_track"]: r for r in self.rows()}
+        self.assertEqual((rows["4"]["source"], rows["4"]["review"]), ("pipeline", "pairing_changed"))
+        self.assertEqual((rows[""]["source"], rows[""]["entry_clip"]), ("review", "a"))
+
+    def test_a_clip_not_marked_reviewed_says_so(self):
+        ClipReview.objects.filter(run=self.b["run"]).delete()
+        self.assertEqual(self.rows()[0]["clip_reviewed"], "false")
+
+    def test_the_file_gives_the_metrics(self):
+        from apps.pipelines import review
+
+        self.reject(self.first)
+        self.answer(self.second, "accepted")
+        kept = [r for r in self.rows() if r["clip_reviewed"] == "true"]
+
+        def count(source, *calls):
+            return sum(r["source"] == source and r["review"] in calls for r in kept)
+
+        t = review.batch_review_summary(self.runs)["trips"]
+        self.assertEqual((count("pipeline", "accepted"),
+                          count("pipeline", "rejected", "event_rejected", "pairing_changed"),
+                          count("review", "accepted")),
+                         (t["right"], t["wrong"], t["missed"]))
+        self.assertEqual((t["wrong"], t["missed"]), (1, 1))
+
+    def test_the_batch_offers_trips_only_with_a_trips_node(self):
+        self.client.force_login(self.owner)
+        url = reverse("pipelines:batch_detail", args=[self.batch])
+        offered = {d["kind"]: d["label"] for d in self.client.get(url).context["downloads"]}
+        self.assertEqual(offered["trips"], "Trips")
+        self.assertEqual(self.download("trips")[0]["device_name"], "Hotel")
+        self.pipeline.steps = []
+        self.pipeline.save()
+        self.assertNotIn("trips", [d["kind"] for d in self.client.get(url).context["downloads"]])
+
+    def test_a_clips_file_has_only_trips_inside_it(self):
+        from apps.pipelines import review
+
+        run = self.a["run"]
+        self.assertEqual(period.trip_rows([run], review.reviewed_runs([run]), review.trip_calls([run])), [])
+        self.client.force_login(self.owner)
+        url = reverse("analysis:results_csv", args=[self.a["job"].pk, "trips"])
+        self.assertEqual(self.client.get(url).status_code, 200)
+        self.pipeline.steps = []
+        self.pipeline.save()
+        self.assertEqual(self.client.get(url).status_code, 404)
+
+    def test_the_events_files_say_whether_the_clip_is_reviewed(self):
+        ClipReview.objects.filter(run=self.b["run"]).delete()
+        by_clip = {r["video_title"]: r["clip_reviewed"] for r in self.download("events")}
+        self.assertEqual(by_clip, {"a": "true", "b": "false"})
+        self.client.force_login(self.owner)
+        body = self.client.get(reverse("analysis:results_csv", args=[self.a["job"].pk, "events"])).content.decode()
+        self.assertEqual(next(csv.DictReader(io.StringIO(body)))["clip_reviewed"], "true")
+
+    def test_the_review_page_has_no_csv(self):
+        self.assertNotContains(self.page(), "Reviewed trips CSV")
 
 
 class TripsOverReviewedEventsTests(PeriodBase):

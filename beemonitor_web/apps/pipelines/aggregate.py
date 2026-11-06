@@ -218,15 +218,12 @@ def available_downloads(sources, runs=()):
                             "analyzed": False,
                             "hint": "One row per track: when it was seen, its species "
                                     "and marker ID (by vote over its crops)."})
-    # Trips reviewers accepted or rejected (memory/62 §4b): only once someone
-    # has reviewed one, since a suggestion alone is not data.
-    from .review import trip_reviews_for
-    if any(getattr(r, "pk", None) for r in runs) and trip_reviews_for(
-            [r for r in runs if getattr(r, "pk", None)]):
-        out.append({"kind": "trips", "label": "Reviewed trips", "clips": len(runs),
-                    "analyzed": False,
-                    "hint": "Exit → entry pairs a reviewer called: accepted, rejected or "
-                            "re-linked. Unreviewed suggestions are never included."})
+    # Trips where the pipeline has the node, with their review, as events.
+    from .period import has_trips
+    if any(has_trips(getattr(r, "pipeline", None)) for r in list(runs)[:1]):
+        out.append({"kind": "trips", "label": "Trips", "clips": len(runs), "analyzed": True,
+                    "hint": "One row per trip the pipeline made or reviewers confirmed, with "
+                            "its review. Pairing runs across the clips of each unit or site."})
     return out
 
 
@@ -268,12 +265,13 @@ def _primitive_fieldnames(kind, rows):
     from . import primitives, tracks
 
     if kind == "events":
-        return PROVENANCE_FIELDS + list(primitives.EVENT_FIELDS) + tracks.IDENTITY_FIELDS
+        return (PROVENANCE_FIELDS + list(primitives.EVENT_FIELDS) + tracks.IDENTITY_FIELDS
+                + ["clip_reviewed"])
     return (PROVENANCE_FIELDS + list(primitives.INTERACTION_FIELDS) + tracks.IDENTITY_FIELDS
             + ["with_species", "with_marker_id"])
 
 
-def primitive_csv(runs, kind):
+def primitive_csv(runs, kind, reviewed=None):
     """(fieldnames, rows) for the events/interactions the ANALYZERS computed.
 
     Not the worker's own CSV. That one matches an insect to a reference by
@@ -285,6 +283,7 @@ def primitive_csv(runs, kind):
     The analyzers ask containment instead, and their rows live in run.context.
     Returns (None, []) when no run in the batch produced this primitive — the
     caller then falls back to the worker's file rather than offering nothing.
+    ``reviewed``: the pks of the clips marked reviewed, if already known.
     """
     from apps.videos.models import Video
 
@@ -292,6 +291,9 @@ def primitive_csv(runs, kind):
     videos = {v.pk: v for v in
               Video.everything.filter(pk__in=video_ids).select_related("device")}
 
+    if reviewed is None and kind == "events":
+        from .review import reviewed_runs
+        reviewed = reviewed_runs(runs)
     all_rows = []
     for run in runs:
         video = videos.get(run_video_id(run))
@@ -317,6 +319,8 @@ def primitive_csv(runs, kind):
                     kind, out.get("rows") or [], tracks.with_groups(tracks.by_track_of(result), run),
                     fps, start,
                     reviews=reviews, added=added_rows(run) if kind == "events" else None):
+                if kind == "events":
+                    row = {**row, "clip_reviewed": "true" if run.pk in reviewed else "false"}
                 all_rows.append({**provenance, **row})
 
     if not all_rows:

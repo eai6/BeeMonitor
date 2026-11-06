@@ -118,14 +118,12 @@ def batch_csv(runs, batch_id, kind):
     # never hold every clip's results, or every clip's rows, at once.
     whole = aggregate.whole_runs
     if kind == "trips":
-        from .models import TripReview
         from .period import TRIP_FIELDS, trip_rows
-        from .review import trip_reviews_for
-        rows = trip_rows(TripReview.objects.filter(
-            pk__in=[t.pk for t in trip_reviews_for(runs)]))
+        from .review import reviewed_runs, trip_calls
+        rows = trip_rows(runs, reviewed_runs(runs), trip_calls(runs))
         if not rows:
-            raise EmptyExport("No reviewed trips in this batch yet.")
-        return stem, TRIP_FIELDS, rows
+            raise EmptyExport("No trips in this batch yet.")
+        return stem, aggregate.PROVENANCE_FIELDS + TRIP_FIELDS, rows
     if kind == "photos":
         rows = (row for run in whole(runs) for row in aggregate.photo_rows([run]))
         fields = ["photo_id", "taken_at", "run_id", "insect", "class", "confidence",
@@ -156,8 +154,10 @@ def batch_csv(runs, batch_id, kind):
     # so a bee inside a large flower never appears in it, and a download that
     # quietly hands back a different answer is worse than one that fails.
     if kind in aggregate.PRIMITIVE_KINDS:
+        from .review import reviewed_runs
+        done = reviewed_runs(runs)
         rows = _nonempty(row for run in whole(runs)
-                         for row in aggregate.primitive_csv([run], kind)[1])
+                         for row in aggregate.primitive_csv([run], kind, done)[1])
         if rows is not None:
             return stem, aggregate._primitive_fieldnames(kind, None), rows
         raise EmptyExport(
