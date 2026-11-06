@@ -43,16 +43,14 @@
     return t.accepted && t.rejected ? 'disputed' : t.accepted ? 'accepted' : t.rejected ? 'rejected' : '';
   }
 
-  // Which trips are shown: the pipeline's, from every detected event, or those
-  // of the reviewed events (rejected out, added in). A trip in both is one trip.
-  var stage = 'before';
-  try { if (localStorage.getItem('pr-stage') === 'after') stage = 'after'; } catch (e) {}
-  function stageTrips() { return P.trips.filter(function (t) { return t[stage]; }); }
+  // One list: the pipeline's trips, from every detected event, and those of the
+  // reviewed events (rejected out, added in). A trip in both is one trip;
+  // ``before`` says which give precision.
   // A trip's type (memory/78): a reviewer's, else the one from the tracks.
   var kind = 'all';
   function tripType(t) { return t.type_set || t.auto_type; }
   function shownTrips() {
-    return stageTrips().filter(function (t) { return kind === 'all' || tripType(t) === kind; });
+    return P.trips.filter(function (t) { return kind === 'all' || tripType(t) === kind; });
   }
 
   function findEvent(ref) {
@@ -290,7 +288,7 @@
     $('[data-pr-trip-title]').textContent = 'Tube ' + tube(t.reference) + ' · out ' + clock(a.clock).slice(11) +
       ' → back ' + clock(b.clock).slice(11);
     $('[data-pr-trip-where]').textContent = tripLength(t.gap_sec) + ' out · trip ' + (i + 1) + ' of ' +
-      trip.list.length + (t.same_marker ? ' · same marker' : '');
+      trip.list.length + (t.same_marker ? ' · same marker' : '') + (t.before ? '' : ' · found after events review');
     var call = tripCall(t), callEl = $('[data-pr-trip-call]');
     callEl.hidden = !call;
     callEl.textContent = call ? 'Already reviewed: ' + TRIP_CALL[call] +
@@ -372,11 +370,10 @@
     b.classList.toggle('bg-white', !on);
   }
   function paintKinds() {
-    var list = stageTrips();
     $$('[data-pr-kind]').forEach(function (b) {
       var name = b.getAttribute('data-pr-kind');
       paintButton(b, name === kind);
-      $('[data-pr-kind-n]', b).textContent = list.filter(function (t) {
+      $('[data-pr-kind-n]', b).textContent = P.trips.filter(function (t) {
         return name === 'all' || tripType(t) === name;
       }).length;
     });
@@ -398,21 +395,6 @@
       .catch(function (err) { status.textContent = String(err.message || err); });
   }
 
-  function paintStage() {
-    $$('[data-pr-list]').forEach(function (b) {
-      var name = b.getAttribute('data-pr-list');
-      paintButton(b, name === stage);
-      $('[data-pr-list-n]', b).textContent = P.trips.filter(function (t) { return t[name]; }).length;
-    });
-  }
-  $$('[data-pr-list]').forEach(function (b) {
-    b.addEventListener('click', function () {
-      stage = b.getAttribute('data-pr-list');
-      try { localStorage.setItem('pr-stage', stage); } catch (e) {}
-      paintStage();
-      showList();
-    });
-  });
   $$('[data-pr-kind]').forEach(function (b) {
     b.addEventListener('click', function () {
       kind = b.getAttribute('data-pr-kind');
@@ -469,7 +451,6 @@
   if ($('[data-pr-place]')) $('[data-pr-place]').addEventListener('change', function () {
     window.location.href = this.value;
   });
-  paintStage();
   paintKinds();
   paintProgress();
   if (!P.clips.length) status.textContent = 'No analysed clips with an Events step in this period.';

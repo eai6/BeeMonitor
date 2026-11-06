@@ -31,7 +31,7 @@
 - The reviewer's choice wins everywhere. On a trip with no call yet, it's saved with the Yes or No. On a called trip, changing it saves straight away.
 
 ## Page (Review trips)
-- A **Show** filter: All, Direct, Tube hop, with counts. It filters within the Before or After list. Progress and Previous/Next follow it.
+- A **Show** filter: All, Direct, Tube hop, with counts. Progress and Previous/Next follow it.
 - A **Trip type** control on each trip, with the reason (for example "track 14 left tube 5 and went into tube 12") or "changed by" a reviewer.
 - `TripReviewView` takes `trip_type`. `period_views` adds `trip_type` and `type_reason` to each trip.
 
