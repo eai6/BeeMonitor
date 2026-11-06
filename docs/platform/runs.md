@@ -116,7 +116,8 @@ type: **Tube hop** when one track links its exit to going into a tube, or its en
 **Direct** when no hop was seen. A hop split across two tracks or clips stays Direct, so a reviewer can change the
 type on the trip, and **All**, **Direct** and **Tube hop** at the top filter the list. Nothing is left out of trips
 because of its type; the batch's metrics show each type. The page opens on
-the first trip not yet reviewed, and **← Previous** and **Next →** step through them. It plays each
+the first trip not yet reviewed, and **← Previous** and **Next →** step through them. **Next unreviewed** (or U)
+skips to the next trip nobody has reviewed. It plays each
 one in the player: 2 seconds either side of the exit, then 2 seconds either side of the entry, following the
 bee each time. **Exit ±2 s**, **Entry ±2 s** and **Whole trip** replay a part (the whole trip runs from the exit
 to the entry across clips, skipping time with no recording), and the trip bar lets you jump to any moment in

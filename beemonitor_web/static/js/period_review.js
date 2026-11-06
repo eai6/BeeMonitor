@@ -298,6 +298,7 @@
     $('[data-pr-trip-to]').max = trip.list.length;
     $('[data-pr-trip-back]').disabled = i === 0;
     $('[data-pr-trip-next]').disabled = i + 1 >= trip.list.length;
+    $('[data-pr-trip-open]').disabled = nextOpen() < 0;
     paintType(t);
     showSide('A', t.exit, a, 'EXIT');
     showSide('B', t.entry, b, 'ENTER');
@@ -312,6 +313,16 @@
     } else {
       tripPlay('moments');
     }
+  }
+  // The next trip nobody has called, from here on and round to the top; -1
+  // with none but this one.
+  function nextOpen() {
+    var n = trip.list.length;
+    for (var step = 1; step < n; step++) {
+      var i = (trip.i + step) % n;
+      if (!tripCall(trip.list[i])) return i;
+    }
+    return -1;
   }
   // After a vote, on to the next trip in the list, called or not; from the
   // last, round to any passed over.
@@ -421,6 +432,10 @@
     });
     $('[data-pr-trip-back]').addEventListener('click', function () { if (trip.i > 0) tripGo(trip.i - 1); });
     $('[data-pr-trip-first]').addEventListener('click', function () { tripGo(0); });
+    $('[data-pr-trip-open]').addEventListener('click', function () {
+      var i = nextOpen();
+      if (i >= 0) tripGo(i);
+    });
     $$('[data-pr-step]').forEach(function (b) {
       b.addEventListener('click', function () {
         tp.on = false;
@@ -446,6 +461,7 @@
       if (k === 'p') tripPlay('moments');
       else if (k === 'y') $('[data-pr-trip-yes]').click();
       else if (k === 'n') $('[data-pr-trip-no]').click();
+      else if (k === 'u') $('[data-pr-trip-open]').click();
       else if (k === ',') $('[data-pr-step="-1"]').click();
       else if (k === '.') $('[data-pr-step="1"]').click();
       else if (ev.key === 'ArrowRight') $('[data-pr-trip-next]').click();
