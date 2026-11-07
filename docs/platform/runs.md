@@ -119,7 +119,9 @@ type on the trip, and **All**, **Direct** and **Tube hop** at the top filter the
 because of its type; the batch's metrics show each type. **Reviewed by** shows the trips one person last called,
 or those nobody has. The page opens on
 the first trip not yet reviewed, and **← Previous** and **Next →** step through them. **Next unreviewed** (or U)
-skips to the next trip nobody has reviewed. **Play** (or space) pauses and carries on from there. It plays each
+skips to the next trip nobody has reviewed. **Play** (or space) pauses and carries on from there.
+**Note** saves with your Yes or No, or with a change of type, or with **Save note** on a trip already answered, and
+is `review_notes` in the Trips CSV. It plays each
 one in the player: 2 seconds either side of the exit, then 2 seconds either side of the entry, following the
 bee each time. **Exit ±2 s**, **Entry ±2 s** and **Whole trip** replay a part (the whole trip runs from the exit
 to the entry across clips, skipping time with no recording), and the trip bar lets you jump to any moment in

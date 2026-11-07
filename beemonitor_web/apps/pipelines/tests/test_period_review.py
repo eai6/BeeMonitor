@@ -559,6 +559,40 @@ class TripScoreTests(PeriodBase):
             self.assertEqual(sum(x[field] for x in t["by_type"]), t[field])
 
 
+class TripCommentTests(PeriodBase):
+    def setUp(self):
+        super().setUp()
+        p = self.payload(self.page())
+        self.trip, self.clips = p["trips"][0], p["clips"]
+
+    def post(self, **body):
+        self.client.force_login(self.owner)
+        body = {"exit_job": self.clips[0]["job"], "exit_key": self.trip["exit"]["key"],
+                "entry_key": self.trip["entry"]["key"], **body}
+        return self.client.post(reverse("analysis:trip_review"), json.dumps(body),
+                                content_type="application/json")
+
+    def vote(self, verdict, user=None, **extra):
+        period.set_trip_vote(user or self.owner, self.a["run"], self.trip["exit"]["key"], self.b["run"],
+                             self.trip["entry"]["key"], verdict, **extra)
+
+    def test_a_yes_can_carry_a_note(self):
+        self.vote("accepted", reason="big bee")
+        self.assertEqual(self.payload(self.page())["trips"][0]["mine"]["reason"], "big bee")
+
+    def test_a_note_on_a_called_trip_keeps_who_called_it(self):
+        self.vote("accepted", user=self.maria)
+        self.assertEqual(self.post(note=" same wing tear ").status_code, 200)
+        t = TripReview.objects.get()
+        self.assertEqual((t.reason, t.user, t.verdict), ("same wing tear", self.maria, "accepted"))
+
+    def test_a_type_change_saves_its_note(self):
+        self.vote("accepted")
+        self.assertEqual(self.post(set_type=True, trip_type="tube_hop", note="went into tube 9").status_code, 200)
+        t = TripReview.objects.get()
+        self.assertEqual((t.trip_type, t.reason), ("tube_hop", "went into tube 9"))
+
+
 class SameTrackTests(TestCase):
     def event(self, action, t, track, tube="reference_1"):
         return {"action": action, "reference": tube, "t": t, "clock": "2024-05-08T10:00:00",

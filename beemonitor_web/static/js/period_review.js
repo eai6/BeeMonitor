@@ -288,7 +288,7 @@
     var panel = $('[data-pr-trip]');
     trip.i = i;
     var t = trip.list[i], a = findEvent(t.exit), b = findEvent(t.entry);
-    $('[data-pr-relink]').hidden = true;
+    paintNote(t);
     $('[data-pr-trip-title]').textContent = 'Tube ' + tube(t.reference) + ' · out ' + clock(a.clock).slice(11) +
       ' → back ' + clock(b.clock).slice(11);
     $('[data-pr-trip-where]').textContent = tripLength(t.gap_sec) + ' out · trip ' + (i + 1) + ' of ' +
@@ -297,7 +297,7 @@
     callEl.hidden = !call;
     callEl.textContent = call ? 'Already reviewed: ' + TRIP_CALL[call] +
       (t.mine && t.mine.by ? ' (' + t.mine.by + ')' : '') + '.' +
-      (t.mine && t.mine.reason ? ' Note: ' + t.mine.reason + '.' : '') + ' Vote again to change it.' : '';
+      ' Vote again to change it.' : '';
     $('[data-pr-trip-first]').disabled = i === 0;
     $('[data-pr-trip-to]').value = i + 1;
     $('[data-pr-trip-to]').max = trip.list.length;
@@ -356,16 +356,36 @@
       paintProgress();
     }).catch(function (err) { status.textContent = String(err.message || err); });
   }
-  // Not this pair: a note on why, in the reviewer's own words, then on.
-  function askWhy(t) {
-    var box = $('[data-pr-relink]'), note = $('[data-pr-trip-note]');
-    note.value = (t.mine && t.mine.reason) || '';
-    box.hidden = false;
-    note.focus();
-    box.onsubmit = function (ev) {
-      ev.preventDefault();
+  // The trip's note, in the reviewer's own words: it goes with the Yes or No,
+  // and on a called trip with a type change or Save note.
+  var rejecting = false;
+  function paintNote(t) {
+    rejecting = false;
+    $('[data-pr-trip-note]').value = (t.mine && t.mine.reason) || '';
+    $('[data-pr-note-label]').textContent = 'Note (optional)';
+    $('[data-pr-note-save]').textContent = 'Save note';
+    $('[data-pr-note-save]').hidden = !t.mine;
+  }
+  // Not this pair: a chance to say why, then on.
+  function askWhy() {
+    rejecting = true;
+    $('[data-pr-note-label]').textContent = 'Why not? (optional)';
+    $('[data-pr-note-save]').textContent = 'Save No';
+    $('[data-pr-note-save]').hidden = false;
+    $('[data-pr-trip-note]').focus();
+  }
+  function saveNote(t) {
+    var note = $('[data-pr-trip-note]');
+    note.blur();
+    if (rejecting) {
       tripVote(t, t.entry, 'rejected', note.value, false).then(function () { tripNext(); });
-    };
+    } else if (t.mine) {
+      var exitClip = P.clips[t.exit.clip];
+      post(P.trip_url, {exit_job: exitClip.job, exit_run: exitClip.run, exit_key: t.exit.key,
+                        entry_key: t.mine.entry_key, note: note.value}).then(function () {
+        t.mine.reason = note.value.trim();
+      }).catch(function (err) { status.textContent = String(err.message || err); });
+    }
   }
   // This page is for reviewing trips: it opens on the first still to do, or
   // with none left, at the top to look them over.
@@ -427,8 +447,10 @@
     paintKinds();
     if (!t.mine) return;
     var exitClip = P.clips[t.exit.clip];
+    var note = $('[data-pr-trip-note]').value;
     post(P.trip_url, {exit_job: exitClip.job, exit_run: exitClip.run, exit_key: t.exit.key,
-                      entry_key: t.mine.entry_key, set_type: true, trip_type: t.type_set})
+                      entry_key: t.mine.entry_key, set_type: true, trip_type: t.type_set, note: note})
+      .then(function () { t.mine.reason = note.trim(); })
       .catch(function (err) { status.textContent = String(err.message || err); });
   }
 
@@ -453,9 +475,13 @@
   if ($('[data-pr-trip]')) {
     $('[data-pr-trip-yes]').addEventListener('click', function () {
       var t = trip.list[trip.i];
-      tripVote(t, t.entry, 'accepted', '', false).then(function () { tripNext(); });
+      tripVote(t, t.entry, 'accepted', $('[data-pr-trip-note]').value, false).then(function () { tripNext(); });
     });
-    $('[data-pr-trip-no]').addEventListener('click', function () { askWhy(trip.list[trip.i]); });
+    $('[data-pr-trip-no]').addEventListener('click', askWhy);
+    $('[data-pr-note-form]').addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      saveNote(trip.list[trip.i]);
+    });
     $$('[data-pr-type]').forEach(function (b) {
       b.addEventListener('click', function () { setType(trip.list[trip.i], b.getAttribute('data-pr-type')); });
     });

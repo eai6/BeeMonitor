@@ -253,9 +253,12 @@ class TripReviewView(LoginRequiredMixin, View):
             if entry_run is None:
                 raise Http404("No such entry.")
         try:
-            if body.get("set_type"):
-                period.set_trip_type(exit_run, str(body.get("exit_key", "")),
-                                     str(body.get("entry_key") or ""), body.get("trip_type") or "")
+            if body.get("set_type") or "note" in body:
+                keys = (exit_run, str(body.get("exit_key", "")), str(body.get("entry_key") or ""))
+                if body.get("set_type"):
+                    period.set_trip_type(*keys, body.get("trip_type") or "")
+                if "note" in body:
+                    period.set_trip_note(*keys, body.get("note"))
                 return JsonResponse({"ok": True})
             verdict = period.set_trip_vote(
                 request.user, exit_run, str(body.get("exit_key", "")), entry_run,

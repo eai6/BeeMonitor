@@ -622,13 +622,25 @@ def set_trip_type(exit_run, exit_key, entry_key, trip_type):
     _same_trip(exit_run, exit_key, entry_key).update(trip_type=trip_type or "")
 
 
+def _trip_note(reason):
+    """The reviewer's own words; the two the metrics know are matched by case."""
+    from .review import TRIP_REASONS
+
+    reason = (reason or "").strip()[:300]
+    return reason.lower() if reason.lower() in TRIP_REASONS else reason
+
+
+def set_trip_note(exit_run, exit_key, entry_key, note):
+    """A note on a trip already called, keeping who called it."""
+    _same_trip(exit_run, exit_key, entry_key).update(reason=_trip_note(note))
+
+
 def set_trip_vote(user, exit_run, exit_key, entry_run, entry_key, verdict, reason="", relinked=False,
                   before_review=True, trip_type=None):
     """Make, change or (verdict None) take back the call on this exit and
     entry, whoever made it before (memory/74). ``trip_type`` None keeps the
     type a reviewer gave it. Raises ValueError on a bad request."""
     from .models import TripReview
-    from .review import TRIP_REASONS
 
     same = _same_trip(exit_run, exit_key, entry_key)
     _check_type(trip_type)
@@ -639,10 +651,7 @@ def set_trip_vote(user, exit_run, exit_key, entry_run, entry_key, verdict, reaso
         return None
     if verdict not in TripReview.Verdict.values:
         raise ValueError("verdict must be accepted or rejected")
-    # The reviewer's own words; the two the metrics know are matched by case.
-    reason = (reason or "").strip()[:300]
-    if reason.lower() in TRIP_REASONS:
-        reason = reason.lower()
+    reason = _trip_note(reason)
     if relinked:
         reason = "relinked"
     if verdict == "accepted" and not entry_key:

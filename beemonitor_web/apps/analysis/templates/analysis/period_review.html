@@ -91,6 +91,13 @@ own page. Logic: pipelines/period.py.
       <div data-pr-trip-bar class="relative h-6 rounded bg-gray-200 cursor-pointer" title="The trip from 2 s before the exit to 2 s after the entry — click to watch that moment"></div>
       <div class="flex justify-between font-mono text-[11px] text-gray-600"><span data-pr-trip-bar-from></span><span data-pr-trip-bar-to></span></div>
     </div>
+    {% comment %}Goes with the Yes or No; on a called trip, with a type change or Save.{% endcomment %}
+    <form data-pr-note-form class="flex flex-wrap items-end gap-2 text-[13px]">
+      <label class="flex-1 min-w-[200px] flex flex-col gap-1"><span data-pr-note-label>Note (optional)</span>
+        <input type="text" data-pr-trip-note maxlength="300" class="h-10 border border-gray-300 rounded-md px-2 text-sm">
+      </label>
+      <button type="submit" data-pr-note-save hidden class="h-10 px-4 rounded bg-amber-700 hover:bg-amber-800 text-white font-semibold">Save note</button>
+    </form>
     <div class="flex flex-wrap gap-2 items-center">
       <button type="button" data-pr-trip-yes class="h-11 px-5 rounded bg-green-700 hover:bg-green-800 text-white font-bold">Yes (Y)</button>
       <button type="button" data-pr-trip-no class="h-11 px-5 rounded bg-red-700 hover:bg-red-800 text-white font-bold">No (N)</button>
@@ -105,12 +112,6 @@ own page. Logic: pipelines/period.py.
       <button type="button" data-pr-trip-next class="h-11 px-3.5 rounded border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50">Next →</button>
       <button type="button" data-pr-trip-open class="h-11 px-3.5 rounded border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50" title="The next trip nobody has reviewed">Next unreviewed (U)</button>
     </div>
-    <form data-pr-relink hidden class="bg-gray-50 border border-gray-200 rounded-md p-3 flex flex-wrap items-center gap-2 text-[13px]">
-      <label class="flex-1 min-w-[240px] flex flex-col gap-1">Why not? (optional)
-        <input type="text" data-pr-trip-note maxlength="300" class="h-10 border border-gray-300 rounded-md px-2 text-sm">
-      </label>
-      <button type="submit" class="h-10 px-4 self-end rounded bg-amber-700 hover:bg-amber-800 text-white font-semibold">Save</button>
-    </form>
     <div class="grid grid-cols-1 gap-4">
       {% for side in "AB" %}
       <div class="flex flex-col gap-1.5 min-w-0" data-pr-side-{{ side }}>
