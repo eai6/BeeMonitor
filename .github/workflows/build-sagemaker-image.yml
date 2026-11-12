@@ -42,6 +42,20 @@ jobs:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # SageMaker takes a single Docker v2 image manifest and refuses an OCI
+      # image index ("Unsupported manifest media type"). Newer runner Docker
+      # keeps images in the containerd store, which pushes an index; dd59749's
+      # image was refused that way (2026-11-12). The classic store pushes the
+      # same manifest every earlier image had.
+      - name: Use the classic Docker image store
+        run: |
+          set -euo pipefail
+          f=/etc/docker/daemon.json
+          cur=$(sudo cat "$f" 2>/dev/null || echo '{}')
+          echo "$cur" | jq '. + {"features": ((.features // {}) + {"containerd-snapshotter": false})}' | sudo tee "$f"
+          sudo systemctl restart docker
+          docker info -f '{{ .DriverStatus }}'
+
       - name: Login to ECR
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
@@ -73,11 +87,18 @@ jobs:
             -f sagemaker_backend/Dockerfile.gpu \
             --secret id=hf_token,env=HF_TOKEN \
             --platform linux/amd64 \
+            --provenance=false --sbom=false \
             -t "${IMAGE}:${SHA_TAG}" \
             -t "${IMAGE}:latest" \
             .
           docker push "${IMAGE}:${SHA_TAG}"
           docker push "${IMAGE}:latest"
+          kind=$(aws ecr batch-get-image --repository-name "${ECR_REPOSITORY}" \
+            --image-ids imageTag="${SHA_TAG}" --query 'images[0].imageManifestMediaType' --output text)
+          if [ "$kind" != "application/vnd.docker.distribution.manifest.v2+json" ]; then
+            echo "Pushed manifest is $kind; SageMaker needs a Docker v2 image manifest." >&2
+            exit 1
+          fi
           echo "Pushed ${IMAGE}:${SHA_TAG} and :latest"
 
   # Fine-tuning trainer image (Dockerfile.training) → its own ECR repo.
@@ -96,6 +117,20 @@ jobs:
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+
+      # SageMaker takes a single Docker v2 image manifest and refuses an OCI
+      # image index ("Unsupported manifest media type"). Newer runner Docker
+      # keeps images in the containerd store, which pushes an index; dd59749's
+      # image was refused that way (2026-11-12). The classic store pushes the
+      # same manifest every earlier image had.
+      - name: Use the classic Docker image store
+        run: |
+          set -euo pipefail
+          f=/etc/docker/daemon.json
+          cur=$(sudo cat "$f" 2>/dev/null || echo '{}')
+          echo "$cur" | jq '. + {"features": ((.features // {}) + {"containerd-snapshotter": false})}' | sudo tee "$f"
+          sudo systemctl restart docker
+          docker info -f '{{ .DriverStatus }}'
 
       - name: Login to ECR
         id: ecr-login
@@ -118,11 +153,18 @@ jobs:
           DOCKER_BUILDKIT=1 docker build \
             -f sagemaker_backend/Dockerfile.training \
             --platform linux/amd64 \
+            --provenance=false --sbom=false \
             -t "${IMAGE}:${SHA_TAG}" \
             -t "${IMAGE}:latest" \
             .
           docker push "${IMAGE}:${SHA_TAG}"
           docker push "${IMAGE}:latest"
+          kind=$(aws ecr batch-get-image --repository-name "${ECR_REPOSITORY}" \
+            --image-ids imageTag="${SHA_TAG}" --query 'images[0].imageManifestMediaType' --output text)
+          if [ "$kind" != "application/vnd.docker.distribution.manifest.v2+json" ]; then
+            echo "Pushed manifest is $kind; SageMaker needs a Docker v2 image manifest." >&2
+            exit 1
+          fi
           echo "Pushed ${IMAGE}:${SHA_TAG} and :latest"
 
   # SAM 3 auto-labeler image (Dockerfile.sam3, GPU) → its own ECR repo. Needs the
@@ -143,6 +185,20 @@ jobs:
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+
+      # SageMaker takes a single Docker v2 image manifest and refuses an OCI
+      # image index ("Unsupported manifest media type"). Newer runner Docker
+      # keeps images in the containerd store, which pushes an index; dd59749's
+      # image was refused that way (2026-11-12). The classic store pushes the
+      # same manifest every earlier image had.
+      - name: Use the classic Docker image store
+        run: |
+          set -euo pipefail
+          f=/etc/docker/daemon.json
+          cur=$(sudo cat "$f" 2>/dev/null || echo '{}')
+          echo "$cur" | jq '. + {"features": ((.features // {}) + {"containerd-snapshotter": false})}' | sudo tee "$f"
+          sudo systemctl restart docker
+          docker info -f '{{ .DriverStatus }}'
 
       - name: Login to ECR
         id: ecr-login
@@ -166,9 +222,16 @@ jobs:
             -f sagemaker_backend/Dockerfile.sam3 \
             --secret id=hf_token,env=HF_TOKEN \
             --platform linux/amd64 \
+            --provenance=false --sbom=false \
             -t "${IMAGE}:${SHA_TAG}" \
             -t "${IMAGE}:latest" \
             .
           docker push "${IMAGE}:${SHA_TAG}"
           docker push "${IMAGE}:latest"
+          kind=$(aws ecr batch-get-image --repository-name "${ECR_REPOSITORY}" \
+            --image-ids imageTag="${SHA_TAG}" --query 'images[0].imageManifestMediaType' --output text)
+          if [ "$kind" != "application/vnd.docker.distribution.manifest.v2+json" ]; then
+            echo "Pushed manifest is $kind; SageMaker needs a Docker v2 image manifest." >&2
+            exit 1
+          fi
           echo "Pushed ${IMAGE}:${SHA_TAG} and :latest"
