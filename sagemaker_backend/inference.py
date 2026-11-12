@@ -221,6 +221,14 @@ def predict_fn(payload, pipeline):
             "execution_seconds": round(time.time() - started, 2),
             **_timings(profiler),
         }
+    finally:
+        # An instance serves clip after clip: a job's video and outputs left in
+        # the work dir filled the disk, and every later clip on that instance
+        # failed with "No space left on device" (748 runs, 2026-11).
+        try:
+            pipeline.cleanup(job_id)
+        except Exception:  # noqa: BLE001
+            logger.warning("predict_fn: could not clean up %s", job_id, exc_info=True)
 
     out = result.to_dict()
     out["status"] = "completed"

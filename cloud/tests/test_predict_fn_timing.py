@@ -79,3 +79,35 @@ def test_a_clip_cancelled_mid_run_returns_cancelled_not_failed():
         out = inference.predict_fn(dict(_PAYLOAD), pipeline)
     assert out["status"] == "cancelled"
     assert pipeline.processed
+
+
+# ── The work dir is emptied after every clip ─────────────────────────────────
+
+class _Cleaning(_Pipeline):
+    def __init__(self, process):
+        super().__init__(cancelled=False, process=process)
+        self.cleaned = []
+
+    def cleanup(self, job_id):
+        self.cleaned.append(job_id)
+
+
+def test_a_clip_that_fails_still_leaves_no_files_behind():
+    def breaks(**kw):
+        raise OSError(28, "No space left on device")
+    pipeline = _Cleaning(process=breaks)
+    with mock.patch.object(inference, "_profiler", return_value=None), \
+            mock.patch.object(inference, "_detect_device", return_value="cuda:T4"):
+        out = inference.predict_fn(dict(_PAYLOAD), pipeline)
+    assert out["status"] == "failed"
+    assert pipeline.cleaned == ["pl_abc-c1"]
+
+
+def test_a_clip_that_completes_leaves_no_files_behind():
+    result = mock.Mock(to_dict=lambda: {"job_id": "pl_abc-c1"})
+    pipeline = _Cleaning(process=lambda **kw: result)
+    with mock.patch.object(inference, "_profiler", return_value=None), \
+            mock.patch.object(inference, "_detect_device", return_value="cuda:T4"):
+        out = inference.predict_fn(dict(_PAYLOAD), pipeline)
+    assert out["status"] == "completed"
+    assert pipeline.cleaned == ["pl_abc-c1"]

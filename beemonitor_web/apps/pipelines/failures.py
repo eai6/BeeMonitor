@@ -73,6 +73,30 @@ CAUSES = [
         "fixed_at": datetime(2026, 9, 10, 23, 0, tzinfo=timezone.utc),
     },
     {
+        "key": "disk_full",
+        "match": ("No space left on device",),
+        "title": "The GPU instance ran out of disk",
+        "detail": (
+            "Each clip's video and outputs stayed on the instance after the "
+            "clip finished, so an instance that ran many clips filled its "
+            "disk and every later clip on it failed. Nothing was wrong with "
+            "the clips."
+        ),
+        "action": "Re-run once the worker that cleans up after each clip is deployed.",
+    },
+    {
+        "key": "unreadable_clip",
+        "match": ("Cannot open video",),
+        "title": "The clip's file can't be played",
+        "detail": (
+            "The file on storage is empty, or the recording stopped before "
+            "the file was closed (no index at its end), so no frame can be "
+            "read. Usually the camera lost power or restarted mid-clip."
+        ),
+        "action": "Re-running will not help: the file itself is broken.",
+        "retryable": False,
+    },
+    {
         "key": "container_failure",
         "match": ("SageMaker inference failed",),
         "title": "The container failed mid-clip",
