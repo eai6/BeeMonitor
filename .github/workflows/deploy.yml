@@ -127,6 +127,17 @@ jobs:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # A Docker v2 manifest, not an OCI index: the recount Lambda runs this
+      # image too (memory/81), as SageMaker does its own (memory/80).
+      - name: Use the classic Docker image store
+        run: |
+          set -euo pipefail
+          f=/etc/docker/daemon.json
+          cur=$(sudo cat "$f" 2>/dev/null || echo '{}')
+          echo "$cur" | jq '. + {"features": ((.features // {}) + {"containerd-snapshotter": false})}' | sudo tee "$f"
+          sudo systemctl restart docker
+          docker info -f '{{ .DriverStatus }}'
+
       - name: Login to ECR
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
@@ -141,9 +152,31 @@ jobs:
         run: |
           set -euo pipefail
           IMAGE="${REGISTRY}/${ECR_REPOSITORY}"
-          docker build --platform linux/amd64 \
+          docker build --platform linux/amd64 --provenance=false --sbom=false \
             -t "${IMAGE}:${SHA_TAG}" \
             -t "${IMAGE}:latest" .
           docker push "${IMAGE}:${SHA_TAG}"
           docker push "${IMAGE}:latest"
+          kind=$(aws ecr batch-get-image --repository-name "${ECR_REPOSITORY}" \
+            --image-ids imageTag="${SHA_TAG}" --query 'images[0].imageManifestMediaType' --output text)
+          if [ "$kind" != "application/vnd.docker.distribution.manifest.v2+json" ]; then
+            echo "Pushed manifest is $kind; Lambda needs a Docker v2 image manifest." >&2
+            exit 1
+          fi
           echo "Pushed ${IMAGE}:${SHA_TAG} and :latest"
+
+      # The recount worker runs this image (memory/81). App Runner follows
+      # :latest by itself; a Lambda keeps the image it was given until told.
+      - name: Point the recount worker at the new image
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          SHA_TAG: ${{ github.sha }}
+          FUNCTION: beemonitor-dev-recount
+        run: |
+          set -euo pipefail
+          if ! aws lambda get-function --function-name "$FUNCTION" >/dev/null 2>&1; then
+            echo "No $FUNCTION yet (pulumi up creates it); nothing to update."
+            exit 0
+          fi
+          aws lambda update-function-code --function-name "$FUNCTION" \
+            --image-uri "${REGISTRY}/${ECR_REPOSITORY}:${SHA_TAG}" --query 'LastUpdateStatus' --output text

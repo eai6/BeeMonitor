@@ -782,6 +782,108 @@ aws.iam.RolePolicyAttachment(
 
 
 # ---------------------------------------------------------------------------
+# Recounts off the web (memory/81): an SQS queue the web sends runs to, and a
+# Lambda in the web's own image that recounts them several at a time. The
+# web's recount loop was one thread a worker on the instance's one vCPU.
+# ---------------------------------------------------------------------------
+
+recount_dlq = aws.sqs.Queue(
+    "recount-dlq",
+    name=f"{prefix}-recount-dlq",
+    message_retention_seconds=14 * 24 * 3600,
+)
+recount_queue = aws.sqs.Queue(
+    "recount-queue",
+    name=f"{prefix}-recount",
+    # Six times the worker's timeout, as Lambda asks for an SQS source.
+    visibility_timeout_seconds=6 * 900,
+    message_retention_seconds=4 * 24 * 3600,
+    redrive_policy=recount_dlq.arn.apply(lambda arn: json.dumps(
+        {"deadLetterTargetArn": arn, "maxReceiveCount": 3})),
+)
+
+# The web sends to it.
+aws.iam.RolePolicy(
+    "apprunner-recount-send",
+    role=apprunner_instance_role.id,
+    name="recount-queue-send",
+    policy=recount_queue.arn.apply(lambda arn: json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [{"Effect": "Allow", "Action": ["sqs:SendMessage"], "Resource": arn}],
+    })),
+)
+
+recount_role = aws.iam.Role(
+    "recount-lambda-role",
+    name=f"{prefix}-recount-lambda-role",
+    assume_role_policy=json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Allow",
+            "Principal": {"Service": "lambda.amazonaws.com"},
+            "Action": "sts:AssumeRole",
+        }],
+    }),
+)
+aws.iam.RolePolicyAttachment(
+    "recount-lambda-vpc",
+    role=recount_role.name,
+    policy_arn="arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole",
+)
+aws.iam.RolePolicy("recount-lambda-s3", role=recount_role.id, name="s3-access",
+                   policy=task_s3_policy_doc)
+aws.iam.RolePolicy("recount-lambda-secrets", role=recount_role.id, name="secrets-read",
+                   policy=task_secrets_policy_doc)
+aws.iam.RolePolicy(
+    "recount-lambda-sqs",
+    role=recount_role.id,
+    name="recount-queue-consume",
+    policy=recount_queue.arn.apply(lambda arn: json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [{"Effect": "Allow",
+                       "Action": ["sqs:ReceiveMessage", "sqs:DeleteMessage",
+                                  "sqs:GetQueueAttributes", "sqs:ChangeMessageVisibility"],
+                       "Resource": arn}],
+    })),
+)
+# Lambda pulls the function's image from the web's repository.
+aws.ecr.RepositoryPolicy(
+    "web-ecr-lambda-pull",
+    repository=ecr_repo.name,
+    policy=json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Sid": "LambdaPull",
+            "Effect": "Allow",
+            "Principal": {"Service": "lambda.amazonaws.com"},
+            "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+            "Condition": {"StringLike": {
+                "aws:sourceArn": f"arn:aws:lambda:{region}:{account_id}:function:*"}},
+        }],
+    }),
+)
+# CI points the function at each new web image (deploy.yml).
+recount_function_name = f"{prefix}-recount"
+aws.iam.RolePolicy(
+    "github-actions-recount-deploy",
+    role=gh_role.id,
+    name="recount-lambda-deploy",
+    policy=json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Allow",
+            "Action": ["lambda:UpdateFunctionCode", "lambda:GetFunction"],
+            "Resource": f"arn:aws:lambda:{region}:{account_id}:function:{recount_function_name}",
+        }],
+    }),
+)
+# Workers at once: the db.t4g.micro's connections and CPU are the limit.
+recount_concurrency = int(config.get("recount-concurrency") or "8")
+
+pulumi.export("recount_queue_url", recount_queue.url)
+
+
+# ---------------------------------------------------------------------------
 # App Runner service — gated on `deploy-service` (two-pass deploy)
 # ---------------------------------------------------------------------------
 # Pass 1: deploy-service=false → everything above gets created (VPC, RDS,
@@ -859,6 +961,9 @@ if deploy_service:
         #   pulumi config set raw-footage-deletion on && pulumi up
         "RAW_FOOTAGE_DELETION": config.get("raw-footage-deletion") or "dry_run",
     })
+    # Recounts go to the queue (memory/81).
+    env_vars = pulumi.Output.all(env_vars, recount_queue.url).apply(
+        lambda args: {**args[0], "BEEMONITOR_RECOUNT_QUEUE_URL": args[1]})
 
     runtime_secrets = pulumi.Output.all(
         django_secret_key.arn,
@@ -916,6 +1021,46 @@ if deploy_service:
     )
 
     pulumi.export("web_service_url", pulumi.Output.concat("https://", web_service.service_url))
+
+    # The recount worker: the web's image, its environment, its network.
+    # Secrets come from Secrets Manager at start (recount_lambda.load_secrets).
+    recount_env = pulumi.Output.all(env_vars, runtime_secrets).apply(lambda args: {
+        **{k: v for k, v in args[0].items() if k != "BEEMONITOR_RECOUNT_QUEUE_URL"},
+        "BEEMONITOR_SECRETS": json.dumps(args[1]),
+        "BEEMONITOR_RECONCILE_DISABLED": "1",
+    })
+    recount_function = aws.lambda_.Function(
+        "recount",
+        name=recount_function_name,
+        package_type="Image",
+        image_uri=image_uri,
+        image_config=aws.lambda_.FunctionImageConfigArgs(
+            entry_points=["python", "-m", "apps.pipelines.recount_lambda"],
+            working_directory="/app/beemonitor_web",
+        ),
+        role=recount_role.arn,
+        architectures=["x86_64"],
+        memory_size=2048,
+        timeout=900,
+        environment=aws.lambda_.FunctionEnvironmentArgs(variables=recount_env),
+        vpc_config=aws.lambda_.FunctionVpcConfigArgs(
+            subnet_ids=[s.id for s in private_subnets],
+            # The App Runner connector's group: RDS and the endpoints let it in.
+            security_group_ids=[app_runner_sg.id],
+        ),
+        # CI moves it to each new image; Pulumi doesn't move it back.
+        opts=pulumi.ResourceOptions(ignore_changes=["image_uri"]),
+    )
+    aws.lambda_.EventSourceMapping(
+        "recount-from-queue",
+        event_source_arn=recount_queue.arn,
+        function_name=recount_function.arn,
+        batch_size=1,
+        function_response_types=["ReportBatchItemFailures"],
+        scaling_config=aws.lambda_.EventSourceMappingScalingConfigArgs(
+            maximum_concurrency=recount_concurrency),
+    )
+    pulumi.export("recount_function", recount_function.name)
 
 
 # ---------------------------------------------------------------------------
