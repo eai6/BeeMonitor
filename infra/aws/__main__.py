@@ -1024,8 +1024,15 @@ if deploy_service:
 
     # The recount worker: the web's image, its environment, its network.
     # Secrets come from Secrets Manager at start (recount_lambda.load_secrets).
+    # Lambda sets AWS_REGION (and the other reserved keys) itself and refuses
+    # a function that sets them (2026-11-15: "reserved keys ... AWS_REGION").
+    lambda_reserved = {"AWS_REGION", "AWS_DEFAULT_REGION", "AWS_ACCESS_KEY_ID",
+                       "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_EXECUTION_ENV",
+                       "LAMBDA_TASK_ROOT", "LAMBDA_RUNTIME_DIR", "_HANDLER", "_X_AMZN_TRACE_ID"}
     recount_env = pulumi.Output.all(env_vars, runtime_secrets).apply(lambda args: {
-        **{k: v for k, v in args[0].items() if k != "BEEMONITOR_RECOUNT_QUEUE_URL"},
+        **{k: v for k, v in args[0].items()
+           if k != "BEEMONITOR_RECOUNT_QUEUE_URL" and k not in lambda_reserved
+           and not k.startswith("AWS_LAMBDA_")},
         "BEEMONITOR_SECRETS": json.dumps(args[1]),
         "BEEMONITOR_RECONCILE_DISABLED": "1",
     })
