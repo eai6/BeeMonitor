@@ -402,12 +402,11 @@ BLOCK_REGISTRY = {
                 # how each node picks its own rows out of the shared GPU result.
                 "name": "label",
                 "label": "Detect what?",
-                # The picked model's classes, ticked (memory/82); free text for
-                # SAM 3, where it is the prompt, and for a model whose classes
-                # aren't known.
+                # A dropdown of the picked model's classes (memory/82); free
+                # text for SAM 3, where it is the prompt, and for a model whose
+                # classes aren't known.
                 "field_type": "model_class",
                 "model_field": "object_model",
-                "multiple": True,
                 "text_when": {"field": "model_family", "value": "sam3"},
                 "required": True,
                 "default": "bee",
@@ -515,7 +514,7 @@ BLOCK_REGISTRY = {
                 "label": "Tube class",
                 "field_type": "model_class",
                 "model_field": "tube_model",
-                "multiple": False,
+                "prefer": "tube",
                 "required": False,
                 "default": "",
                 "choices": None,

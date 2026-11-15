@@ -226,8 +226,10 @@ So no onnxruntime. Default frames a clip lowered from 20 to 8.
   bee "", built-in nest `builtin:nest` -> `v1/nest_detection.pt` with
   `["hotel", "nest"]`, then usable models with `CustomModel.classes`).
   Editor field types `yolo_model` and `model_class` (`model_field`,
-  `multiple`, `text_when`): ticks / a select of the model's classes, a warning
-  for a saved class the model lacks, text for SAM 3 and unknown classes.
+  `prefer`, `text_when`): a plain dropdown of the model's own classes, nothing
+  else (the user's call, 2026-11-15: "I just want to see the labels for that
+  model as a drop down"). A saved name the model lacks is replaced by its
+  class quietly; text only for SAM 3 and unknown classes.
   Detect's `object_model` can be the built-in nest model.
 - **Phase 2.** `apps/pipelines/tubes.py`: `_load` (ONNX + `.onnx.json` from
   the models bucket, cached in /tmp), `boxes_in` (v8/v11/v12 head with NMS,

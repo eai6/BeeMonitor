@@ -20,8 +20,6 @@
   .pl-group-item input { width: 15px; height: 15px; }
   .pl-group-note { font-size: 11px; color: #6b7280; }
   .pl-class { display: flex; flex-direction: column; gap: 2px; }
-  .pl-class-warn { font-size: 11px; color: #92400e; }
-  html.dark .pl-class-warn { color: #fbbf24; }
   .pl-group-rules { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 12px; color: #374151; }
   .pl-group-edit { height: 28px; padding: 0 10px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; font-size: 12px; }
   .pl-group-edit:hover { background: #f9fafb; }
@@ -241,7 +239,7 @@ function ctrl(field, value){
     // Filled by plRenderClasses from the model the node picked.
     const tw = field.text_when || {};
     return `<input type="hidden" ${common} value="${esc(v)}"><div class="pl-class" data-model-field="${esc(field.model_field||'')}"`
-         + ` data-multiple="${field.multiple?'1':''}" data-text-field="${esc(tw.field||'')}" data-text-value="${esc(tw.value||'')}"></div>`;
+         + ` data-prefer="${esc(field.prefer||'')}" data-text-field="${esc(tw.field||'')}" data-text-value="${esc(tw.value||'')}"></div>`;
   }
   if(field.field_type==='group_checklist'){
     // Filled by plRenderGroups: the built-in groups plus the node's own.
@@ -446,9 +444,8 @@ async function plOpenGrouping(nodeEl){
   window.location.href = GROUPING_URL.replace('STEP', encodeURIComponent(sid));
 }
 
-// A YOLO class field: the picked model's classes, as ticks (several) or a
-// select (one); a text box for SAM 3 and for a model whose classes aren't
-// known (memory/82). The value stays a comma list in the hidden input.
+// A YOLO class field: a dropdown of the picked model's own classes; a text
+// box only for SAM 3 and for a model whose classes aren't known (memory/82).
 function plModelClasses(id){
   const m = YOLO_MODELS.find(o => String(o.id) === String(id || ''));
   return m ? (m.classes || []) : null;
@@ -462,9 +459,6 @@ function plRenderClasses(scope){
     const textIn = tf ? nodeEl.querySelector('.pl-inp[data-cfg="' + tf + '"]') : null;
     const free = textIn && String(textIn.value) === box.getAttribute('data-text-value');
     const classes = free ? null : plModelClasses(pick ? pick.value : '');
-    const multiple = box.getAttribute('data-multiple') === '1';
-    const cur = String(hidden.value || '').split(',').map(x => x.trim()).filter(Boolean);
-    const known = (classes || []).map(c => c.toLowerCase());
     box.innerHTML = '';
     if(!box.dataset.wired){ box.dataset.wired = '1'; box.addEventListener('mousedown', e => e.stopPropagation()); }
     if(!classes || !classes.length){
@@ -479,42 +473,21 @@ function plRenderClasses(scope){
       }
       return;
     }
-    if(!multiple && !cur.some(c => known.indexOf(c.toLowerCase()) !== -1)){
-      // A model just picked: its tube-like class, else its first.
-      const guess = classes.find(c => /tube|nest/i.test(c)) || classes[0];
-      if(!cur.length){ hidden.value = guess; cur.push(guess); }
-    }
-    if(multiple){
-      classes.forEach(function(c){
-        const lab = document.createElement('label'); lab.className = 'pl-group-item';
-        const cb = document.createElement('input'); cb.type = 'checkbox'; cb.disabled = READONLY;
-        cb.checked = cur.some(x => x.toLowerCase() === c.toLowerCase());
-        cb.addEventListener('change', function(){
-          const now = String(hidden.value || '').split(',').map(x => x.trim()).filter(x => x && x.toLowerCase() !== c.toLowerCase());
-          if(cb.checked) now.push(c);
-          hidden.value = now.join(', ');
-          plMarkDirty(); plRenderClasses(nodeEl);
-        });
-        lab.appendChild(cb); lab.appendChild(document.createTextNode(' ' + c));
-        box.appendChild(lab);
-      });
-    } else {
-      const sel = document.createElement('select'); sel.disabled = READONLY; sel.className = 'pl-inp';
-      classes.forEach(function(c){
-        const o = document.createElement('option'); o.value = c; o.textContent = c;
-        o.selected = cur.length && cur[0].toLowerCase() === c.toLowerCase();
-        sel.appendChild(o);
-      });
-      sel.addEventListener('change', function(){ hidden.value = sel.value; plMarkDirty(); plRenderClasses(nodeEl); });
-      box.appendChild(sel);
-    }
-    const off = cur.filter(x => known.indexOf(x.toLowerCase()) === -1);
-    if(off.length){
-      const w = document.createElement('span'); w.className = 'pl-class-warn';
-      w.textContent = '⚠ ' + off.map(x => '"' + x + '"').join(', ') + (off.length > 1 ? ' are not classes' : ' is not a class')
-        + ' of this model (' + classes.join(', ') + '): nothing would be found.';
-      box.appendChild(w);
-    }
+    // The saved class when the model has it; else the model's tube-like class
+    // for a reference, its first otherwise. A name typed for another model
+    // isn't kept.
+    const saved = String(hidden.value || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+    const tubes = box.getAttribute('data-prefer') === 'tube';
+    const chosen = classes.find(c => saved.indexOf(c.toLowerCase()) !== -1)
+      || (tubes && classes.find(c => /tube|nest/i.test(c))) || classes[0];
+    hidden.value = chosen;
+    const sel = document.createElement('select'); sel.disabled = READONLY; sel.className = 'pl-inp';
+    classes.forEach(function(c){
+      const o = document.createElement('option'); o.value = c; o.textContent = c; o.selected = c === chosen;
+      sel.appendChild(o);
+    });
+    sel.addEventListener('change', function(){ hidden.value = sel.value; plMarkDirty(); });
+    box.appendChild(sel);
   });
 }
 
