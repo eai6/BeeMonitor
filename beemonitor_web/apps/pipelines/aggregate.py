@@ -487,7 +487,7 @@ def row_attrs(row, photos=False):
     """What the clip filter reads about a row (static/js/clip_filter.js): its
     ``data-f-*`` attributes on the page, and all a big batch sends of the clips
     not on screen (memory/77). Leaves out what a clip doesn't have."""
-    from django.utils import dateformat, timezone
+    from django.utils import timezone
 
     from .failures import classify
 
@@ -502,7 +502,8 @@ def row_attrs(row, photos=False):
         "status": status,
         "text": " ".join(filter(None, [
             video.title if video else "", row["site"], device.name if device else "",
-            dateformat.format(when, "j M Y H:i") if when else "",
+            # strftime, not dateformat: thousands of rows on a big batch (memory/81).
+            f"{when.day} {when:%b %Y %H:%M}" if when else "",
             classify(row["error"])["title"] if failed else ""])),
         "run": str(run.pk), "site": row["site"],
         "reviewed": "yes" if row["reviewed"] else "no",
@@ -513,7 +514,7 @@ def row_attrs(row, photos=False):
     if device:
         attrs["unit"] = device.pk
     if when:
-        attrs["day"] = dateformat.format(when, "Y-m-d")
+        attrs["day"] = f"{when:%Y-%m-%d}"
     if photos:
         if row.get("photo"):
             attrs.update(insects=row["photo"]["insects"], species=row["photo"]["named"])

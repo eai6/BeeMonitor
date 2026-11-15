@@ -21,6 +21,7 @@ move together.
 from __future__ import annotations
 
 import logging
+import threading
 
 from django.utils import timezone
 
@@ -185,33 +186,81 @@ SWEEP_BATCH = 60
 SWEEP_SECONDS = 90
 
 
+# Set when runs are queued, so the recount loop in this process starts on them
+# now instead of after its idle rest (memory/81).
+WAKE = threading.Event()
+
+
+def queue(runs) -> int:
+    """Ask for these runs (a queryset or pks) to be recounted in the
+    background, after the requests already waiting. Returns how many."""
+    from .models import PipelineRun
+
+    from . import recount_queue
+
+    qs = runs if hasattr(runs, "update") else PipelineRun.objects.filter(pk__in=list(runs))
+    pks = list(qs.values_list("pk", flat=True))
+    n = PipelineRun.objects.filter(pk__in=pks).update(counting_rules=0,
+                                                      recount_requested_at=timezone.now())
+    if n and not recount_queue.send(pks):
+        if recount_queue.enabled():
+            # Not sent: the web's loop takes them now, not when they're overdue.
+            from datetime import timedelta
+            PipelineRun.objects.filter(pk__in=pks).update(
+                recount_requested_at=timezone.now() - timedelta(seconds=recount_queue.LEFT_SECONDS + 1))
+        WAKE.set()
+    return n
+
+
 def sweep(batch=SWEEP_BATCH, budget=SWEEP_SECONDS) -> int:
-    """Recount finished runs counted with older rules, newest first, a bounded
-    batch per reconcile pass. Each run is marked whether or not it had
-    anything to recount, so it's visited once."""
+    """Recount finished runs counted with older rules, a bounded batch per
+    pass: the oldest request first, then (a rules bump) newest run first.
+    Each run is marked whether or not it had anything to recount, so it's
+    visited once."""
     import time
+
+    from django.db.models import F
 
     from .models import PipelineRun
 
+    from datetime import timedelta
+
+    from django.db.models import Q
+
+    from . import recount_queue
+
     deadline = time.monotonic() + budget
     done = 0
-    ids = list(PipelineRun.objects.filter(status=PipelineRun.Status.COMPLETED,
-                                          counting_rules__lt=CURRENT_RULES)
-               .order_by("-completed_at").values_list("pk", flat=True)[:batch])
+    todo = PipelineRun.objects.filter(status=PipelineRun.Status.COMPLETED,
+                                      counting_rules__lt=CURRENT_RULES)
+    if recount_queue.enabled():
+        # Sent to the queue's workers: the web takes only what they've left
+        # for a long while, and the rules bumps nobody sent.
+        todo = todo.filter(Q(recount_requested_at=None) | Q(
+            recount_requested_at__lt=timezone.now() - timedelta(seconds=recount_queue.LEFT_SECONDS)))
+    ids = list(todo.order_by(F("recount_requested_at").asc(nulls_last=True), "-completed_at")
+               .values_list("pk", flat=True)[:batch])
     for pk in ids:
         if time.monotonic() > deadline:
             break
-        # Claimed first, so two workers don't recount the same run.
-        if not PipelineRun.objects.filter(pk=pk, counting_rules__lt=CURRENT_RULES).update(
-                counting_rules=CURRENT_RULES):
-            continue
-        run = PipelineRun.objects.get(pk=pk)
-        try:
-            recount_run(run)
-        except Exception:
-            logger.exception("recount of run %s failed", pk)
-        done += 1
+        done += recount_claimed(pk)
     return done
+
+
+def recount_claimed(pk) -> int:
+    """Claim the run (so two workers never recount it both) and recount it.
+    1 when this worker did, 0 when another had. A recount that fails is
+    logged and not tried again, as the sweep always has."""
+    from .models import PipelineRun
+
+    if not PipelineRun.objects.filter(pk=pk, counting_rules__lt=CURRENT_RULES).update(
+            counting_rules=CURRENT_RULES, recount_requested_at=None):
+        return 0
+    try:
+        recount_run(PipelineRun.objects.get(pk=pk))
+    except Exception:
+        logger.exception("recount of run %s failed", pk)
+    return 1
 
 
 # ── After a layout fix (memory/63) ──────────────────────────────────────────
@@ -259,7 +308,7 @@ def recount_clips(videos, now=RECOUNT_NOW) -> dict:
     runs = runs_for_clips(videos)
     out = {"runs": len(runs), "recounted": 0, "queued": 0, "events": 0, "votes_outdated": 0}
     if len(runs) > now:
-        out["queued"] = PipelineRun.objects.filter(pk__in=[r.pk for r in runs]).update(counting_rules=0)
+        out["queued"] = queue([r.pk for r in runs])
         return out
     for run in runs:
         run = PipelineRun.objects.get(pk=run.pk)          # whole, to recount it
@@ -268,7 +317,8 @@ def recount_clips(videos, now=RECOUNT_NOW) -> dict:
         except Exception:
             logger.exception("layout recount of run %s failed", run.pk)
             continue
-        PipelineRun.objects.filter(pk=run.pk).update(counting_rules=CURRENT_RULES)
+        PipelineRun.objects.filter(pk=run.pk).update(counting_rules=CURRENT_RULES,
+                                                     recount_requested_at=None)
         run.refresh_from_db()
         out["recounted"] += 1
         out["events"] += counts.get("events", 0)

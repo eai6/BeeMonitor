@@ -207,6 +207,10 @@ SAGEMAKER_MAX_CONCURRENT = int(os.environ.get("SAGEMAKER_MAX_CONCURRENT", "6"))
 # sends clips in batches to the SAM 3 endpoint, which samples and pre-labels in
 # one pass (memory/38). Set on App Runner via infra/aws env_vars.
 SAMPLING_BACKEND = os.environ.get("SAMPLING_BACKEND", "local").strip().lower()
+
+# Recounts go to this SQS queue, worked by a Lambda (memory/81); without it
+# the web's own recount loop does them.
+RECOUNT_QUEUE_URL = os.environ.get("BEEMONITOR_RECOUNT_QUEUE_URL", "")
 # Batches on the GPU queue at once. The SAM 3 endpoint scales ~1 instance per
 # 5 queued requests (target tracking), so 20 reaches its 4-instance max.
 SAMPLING_MAX_BATCHES_IN_FLIGHT = int(os.environ.get("SAMPLING_MAX_BATCHES_IN_FLIGHT", "20"))

@@ -77,7 +77,9 @@ def set_group(run, user, scope, track, group) -> dict:
 
     runs = [run]
     if run.batch_id:
-        runs = list(PipelineRun.objects.filter(batch_id=run.batch_id, user_id=run.user_id))
+        # Only their steps and status: not every clip's whole results (memory/76).
+        runs = list(PipelineRun.objects.filter(batch_id=run.batch_id, user_id=run.user_id)
+                    .only("pk", "steps", "status"))
     for r in runs:
         steps = [dict(s) for s in r.steps or []]
         hit = False
@@ -104,7 +106,7 @@ def set_group(run, user, scope, track, group) -> dict:
     if scope != "track":
         others = [r.pk for r in runs if r.pk != run.pk
                   and r.status == PipelineRun.Status.COMPLETED]
-        queued = PipelineRun.objects.filter(pk__in=others).update(counting_rules=0)
+        queued = recount.queue(others)
     info = ((run.context or {}).get(sid) or {}).get("track_groups", {}).get(str(track)) or {}
     return {"rule": rule, "track": info, "queued": queued}
 
@@ -225,7 +227,7 @@ def apply_pipeline(batch_id, user, now=APPLY_NOW, only=None) -> dict:
         if retrack.needs_retrack(run):
             # Re-tracking takes seconds a clip: the sweep does it, in the
             # background, a few clips per pass (memory/69).
-            PipelineRun.objects.filter(pk=run.pk).update(counting_rules=0)
+            recount.queue([run.pk])
             out["queued"] += 1
             out["retrack"] = out.get("retrack", 0) + 1
             continue
@@ -237,7 +239,7 @@ def apply_pipeline(batch_id, user, now=APPLY_NOW, only=None) -> dict:
                 continue
             except Exception:
                 logger.exception("apply groups: recount of run %s failed", run.pk)
-        PipelineRun.objects.filter(pk=run.pk).update(counting_rules=0)
+        recount.queue([run.pk])
         out["queued"] += 1
     return out
 

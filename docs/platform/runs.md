@@ -27,6 +27,30 @@ The batch page combines its clips:
   recorded `error`), plus its GPU hours.
 - **Per clip:** each clip's outcome, tracks, events, interactions, length and GPU time.
 
+On a batch of more than 500 clips, the downloads, review metrics and update status are worked out in
+the background and kept until something in the batch changes (a clip finishes or is recounted, a
+review is cast, the pipeline is edited). The page says when they're being worked out again, and
+offers to reload once they are.
+
+### References
+
+**References** (top right, for the batch's launcher) lists the batch's clips by place and day: a frame
+with the day's tubes drawn on it, the layout its clips have (the site's, the day's own, or mixed),
+and how many of its finished runs were counted with that layout. A run is out of date when its events
+were counted against a different layout than its clip has now, for example a day whose layout was saved
+but never recounted.
+
+- **Edit day** opens the layout editor on that day. **Save and go to** the next day saves, recounts
+  the day (the tick is on by default) and opens the next day with the same drawing to check.
+- **Copy** gives the day the layout the day before has.
+- **Use the site's** removes the day's own layouts, so its clips follow the site's layout again.
+- **Recount** recounts a day's out-of-date runs; **Recount everything out of date** does the whole
+  batch. Recounts use the tracks each run saved, with no GPU time, and the page shows how many are
+  left.
+
+Saving a layout for the whole site leaves clips that have their own layout as they are; the editor
+asks whether to apply it to them too.
+
 <figure markdown>
   ![A batch page: outcome, a form to run the clips through another pipeline, the download buttons, and one row per clip](../assets/platform/batch.png)
   <figcaption>A batch of three clips.</figcaption>

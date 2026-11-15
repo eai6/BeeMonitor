@@ -193,6 +193,17 @@ def added_for_job(job):
     return added_rows(run) if run is not None else []
 
 
+def _job_of(run):
+    """The run's GPU job: its column, kept in step with its context (memory/75);
+    a batch listing's rows carry only that (memory/81)."""
+    from .aggregate import run_job_id
+
+    job_id = getattr(run, "gpu_job_id", None)
+    if job_id is None and hasattr(run, "context"):
+        job_id = run_job_id(run)
+    return job_id
+
+
 def shared_job_runs(runs, reviewed_by):
     """``{run pk: the run of ``runs`` it counts for}``: ``runs`` themselves and
     every other run with reviews (``reviewed_by``: "event_reviews",
@@ -201,12 +212,11 @@ def shared_job_runs(runs, reviewed_by):
     A re-run re-uses its clips' GPU jobs, and a period page opened without its
     batch saves votes to the clip's newest run: the same tracks and the same
     event keys, so those votes are this run's too."""
-    from .aggregate import run_job_id
     from .models import PipelineRun
 
     runs = list(runs)
     out = {r.pk: r for r in runs}
-    by_job = {j: r for r in runs if (j := run_job_id(r)) is not None}
+    by_job = {j: r for r in runs if (j := _job_of(r)) is not None}
     if not by_job:
         return out
     # By the indexed job column (memory/75), never by reading contexts.

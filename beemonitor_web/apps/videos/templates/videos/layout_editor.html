@@ -12,8 +12,16 @@
       Draw the <span class="text-green-700 font-medium">ROI</span> (only bees inside it are tracked) and the
       <span class="text-red-600 font-medium">reference objects</span> visits are counted against: nest holes, flags,
       flowers. Name each one with <strong>Rename</strong> so results read "Flag C" rather than "Reference 3".
-      {% if source_label %}<br>Now in use: <strong>{{ source_label }}</strong>.{% endif %}
+      {% if carried %}<br><strong class="text-amber-800">Drawn from {{ carried.title }}'s layout, to check against this frame.</strong> Nothing is saved until you save.
+      {% elif source_label %}<br>Now in use: <strong>{{ source_label }}</strong>.{% endif %}
     </p>
+    {% if nav %}
+    {# A day at a time through a batch (memory/81). #}
+    <nav class="mt-2 flex flex-wrap gap-2 text-sm" aria-label="Days">
+      {% if nav.previous_day %}<a href="{{ nav.previous_day.url }}" class="h-9 inline-flex items-center px-3 rounded-md border border-gray-300 bg-white hover:bg-gray-50">&larr; {{ nav.previous_day.date|date:"D j M" }}</a>{% endif %}
+      {% if nav.next_day %}<a href="{{ nav.next_day.url }}" class="h-9 inline-flex items-center px-3 rounded-md border border-gray-300 bg-white hover:bg-gray-50">{{ nav.next_day.date|date:"D j M" }} &rarr;</a>{% endif %}
+    </nav>
+    {% endif %}
   </div>
 
   <div class="flex flex-col lg:flex-row gap-5 items-start">
@@ -65,11 +73,11 @@
     <fieldset class="bg-white shadow rounded-lg p-4 space-y-2 text-sm">
       <legend class="text-sm font-semibold text-gray-700 mb-1">Save for</legend>
       {% if site_name %}
-      <label class="flex items-start gap-2"><input type="radio" name="scope" value="site" checked class="mt-1">
+      <label class="flex items-start gap-2"><input type="radio" name="scope" value="site" {% if scope != "day" and scope != "clip" %}checked{% endif %} class="mt-1">
         <span>Every clip at <strong>{{ site_name }}</strong>{% if site %} ({{ site_clips }}){% endif %}</span></label>
       {% endif %}
       {% if day and day.count > 1 %}
-      <label class="flex items-start gap-2"><input type="radio" name="scope" value="day" class="mt-1">
+      <label class="flex items-start gap-2"><input type="radio" name="scope" value="day" {% if scope == "day" %}checked{% endif %} class="mt-1">
         <span>Every clip recorded on <strong>{{ day.date|date:"j M Y" }}</strong> ({{ day.count }})</span></label>
       {% endif %}
       <label class="flex items-start gap-2"><input type="radio" name="scope" value="clip" {% if not site_name %}checked{% endif %} class="mt-1"><span>This clip only</span></label>
@@ -77,7 +85,13 @@
       <p class="text-xs text-gray-600">This clip has no site, so there's no "every clip" option.
         <a href="{% url 'videos:sites_page' %}" class="text-amber-700 hover:underline">Sites</a></p>
       {% endif %}
-      <p class="text-xs text-gray-500">New runs use it. Clips already analysed can be recounted against it after you save, with no GPU time.</p>
+      <label class="flex items-start gap-2 pt-1"><input type="checkbox" id="recount-now" checked class="mt-1">
+        <span>Recount the clips already analysed straight away <span class="text-gray-500">(from their saved tracks, no GPU)</span></span></label>
+      {% if nav.next_day %}
+      <button type="button" id="save-next" class="w-full h-10 mt-1 rounded-md bg-amber-700 hover:bg-amber-800 text-white font-semibold" data-next="{{ nav.next_day.carry_url }}">Save and go to {{ nav.next_day.date|date:"D j M" }}</button>
+      <p class="text-xs text-gray-500">The next day opens with this drawing on its own frame, to check and save.</p>
+      {% endif %}
+      <p class="text-xs text-gray-500">New runs use it.</p>
     </fieldset>
     {% endif %}
     <div class="bg-white shadow rounded-lg p-4">
@@ -97,13 +111,24 @@ window.LAYOUT_CFG = {
   extraBody: function () {
     var picked = document.querySelector('input[name=scope]:checked');
     var add = document.getElementById('add-clip');
-    return {scope: picked ? picked.value : 'site', clip: {{ clip.pk|default:'null' }},
-            add_clip: add ? add.checked : true};
+    var now = document.getElementById('recount-now');
+    var scope = picked ? picked.value : 'site';
+    var body = {scope: scope, clip: {{ clip.pk|default:'null' }},
+                add_clip: add ? add.checked : true, recount: now ? now.checked : false};
+    {% if own_at_site.clips %}
+    // A site save passes by clips with their own layout (memory/81).
+    if (scope === 'site') {
+      body.override_own = confirm('{{ own_at_site.clips }} clip{{ own_at_site.clips|pluralize }} on {{ own_at_site.days }} day{{ own_at_site.days|pluralize }} at {{ site_name|escapejs }} have their own layout, which a site layout doesn\u2019t change.\n\nOK: apply this one to them too (their own layouts are removed).\nCancel: keep their own.');
+    }
+    {% endif %}
+    return body;
   },
-  // After a save: offer to recount the clips already analysed (memory/63).
+  // After a save: offer to recount the clips already analysed (memory/63),
+  // unless they're being recounted already.
   onSaved: function (d) {
     var panel = document.getElementById('recount-panel');
-    if (!d.analysed) { panel.hidden = true; return; }
+    if (window.__layoutNext) { window.location = window.__layoutNext; return; }
+    if (!d.analysed || d.queued) { panel.hidden = true; return; }
     var scope = d.scope || 'clip';
     document.getElementById('recount-text').textContent =
       d.analysed + ' finished run' + (d.analysed === 1 ? ' was' : 's were') +
@@ -115,6 +140,10 @@ window.LAYOUT_CFG = {
     panel.hidden = false;
   },
 };
+document.getElementById('save-next') && document.getElementById('save-next').addEventListener('click', function () {
+  window.__layoutNext = this.getAttribute('data-next');
+  document.getElementById('save').click();
+});
 document.getElementById('recount-go') && document.getElementById('recount-go').addEventListener('click', function () {
   var go = this, out = document.getElementById('recount-result');
   go.disabled = true; out.textContent = 'Recounting…';

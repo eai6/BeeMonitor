@@ -247,6 +247,50 @@ class RetrackRunTests(PrimitiveBlockTestCase):
         self.assertEqual(changes["web"][0]["field"], "Lost-track rules")
         self.assertEqual(changes["gpu"], [])
 
+    def _speed_run(self, created=None, stats=None):
+        """A clip whose MOT node has asked for "Follows its speed" since the
+        GPU tracked it: the same settings, under the rules its image had."""
+        from datetime import datetime, timezone as tz
+
+        self.pipeline.steps = self._steps()
+        self.pipeline.steps[2]["config"]["beetrack_lost_search"] = "speed"
+        self.pipeline.save()
+        rt._first_job_on_rules.clear()
+        run, job = self._run()
+        steps = run.steps
+        steps[2]["config"]["beetrack_lost_search"] = "speed"
+        ctx = run.context
+        ctx["m"]["result"]["summary_stats"].update(stats or {})
+        PipelineRun.objects.filter(pk=run.pk).update(steps=steps)
+        PipelineRun.write_context(run.pk, ctx)
+        if created:
+            Job.objects.filter(pk=job.pk).update(created_at=created)
+            # A job from after the cut, for the cut to be found at all.
+            later = Job.objects.create(user=self.user, video=self.video, status=Job.Status.COMPLETED)
+            Job.objects.filter(pk=later.pk).update(created_at=datetime(2026, 11, 2, tzinfo=tz.utc))
+        rt._first_job_on_rules.clear()
+        run.refresh_from_db()
+        return run
+
+    def test_a_clip_tracked_on_the_new_rules_is_not_re_tracked(self):
+        """memory/81: every recount of a 6,306-clip batch re-tracked its clip
+        to get the tracks the GPU had already made."""
+        from datetime import datetime, timezone as tz
+
+        self.assertFalse(rt.needs_retrack(self._speed_run(created=datetime(2026, 11, 10, tzinfo=tz.utc))))
+
+    def test_a_clip_from_before_the_new_rules_is_re_tracked_once(self):
+        from datetime import datetime, timezone as tz
+
+        self.assertTrue(rt.needs_retrack(self._speed_run(created=datetime(2026, 10, 20, tzinfo=tz.utc))))
+
+    def test_the_gpu_result_says_which_rules_it_tracked_under(self):
+        from datetime import datetime, timezone as tz
+
+        run = self._speed_run(created=datetime(2026, 10, 20, tzinfo=tz.utc),
+                              stats={"lost_rules": rt.LOST_RULES})
+        self.assertFalse(rt.needs_retrack(run))
+
     def test_review_votes_follow_their_event(self):
         run, _job = self._run()
         # A vote on an event as the GPU tracks had it, on a track id that the

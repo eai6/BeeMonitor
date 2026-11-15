@@ -71,6 +71,46 @@ def versioned(params):
     return params
 
 
+# The GPU has tracked under LOST_RULES since image 08993f3: its first instance
+# came up 2026-11-01 19:19 UTC, so a job created after 20:00 UTC ran on it.
+# Results from 81 on also say so (summary_stats "lost_rules"); jobs before
+# either are taken as older rules, and re-tracked once (memory/81).
+GPU_RULES_SINCE = "2026-11-01T20:00:00+00:00"
+_first_job_on_rules = []
+
+
+def _first_job_id_on_rules():
+    """The first Job id created after GPU_RULES_SINCE (ids only grow), looked
+    up once a process: the batch page asks this of every clip."""
+    if not _first_job_on_rules:
+        from django.utils.dateparse import parse_datetime
+
+        from apps.analysis.models import Job
+
+        first = (Job.objects.filter(created_at__gte=parse_datetime(GPU_RULES_SINCE))
+                 .order_by("pk").values_list("pk", flat=True).first())
+        if first is None:
+            return None             # nothing since: ask again next time
+        _first_job_on_rules.append(first)
+    return _first_job_on_rules[0]
+
+
+def gpu_lost_rules(run):
+    """The lost-track rules the run's GPU tracks were made under, or None
+    when older than LOST_RULES."""
+    stats = (gpu_result(run) or {}).get("summary_stats") or {}
+    if stats.get("lost_rules") is not None:
+        return stats["lost_rules"]
+    first = _first_job_id_on_rules()
+    job_id = getattr(run, "gpu_job_id", None)
+    if job_id is None:
+        from ..aggregate import run_job_id
+        job_id = run_job_id(run)
+    if first is not None and job_id is not None and int(job_id) >= first:
+        return LOST_RULES
+    return None
+
+
 def settings_of(run):
     """The BeeTracker settings the run's MOT node asks for now."""
     from .. import executors
@@ -104,11 +144,14 @@ def tracked_with(run):
     step = mot_step(run)
     cfg = (step or {}).get("config") or {}
     if isinstance(cfg.get(GPU_MOT_KEY), dict):
-        return tracker_params(executors.tracker_settings(cfg[GPU_MOT_KEY]))
-    # Unchanged since the GPU ran: its settings, under the rules its image had
-    # (not recorded: taken as older, so a clip tracked before memory/72 is
-    # re-tracked once).
-    return {k: v for k, v in settings_of(run).items() if k != "lost_rules"}
+        params = tracker_params(executors.tracker_settings(cfg[GPU_MOT_KEY]))
+    else:
+        # Unchanged since the GPU ran: its settings.
+        params = {k: v for k, v in settings_of(run).items() if k != "lost_rules"}
+    # Under the rules its image had: a clip tracked before memory/72 is
+    # re-tracked once; one tracked since already has today's tracks.
+    rules = gpu_lost_rules(run)
+    return versioned(params) if rules == LOST_RULES else params
 
 
 def needs_retrack(run) -> bool:

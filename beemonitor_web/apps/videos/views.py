@@ -727,6 +727,32 @@ def same_day_clips(user, video):
     return start.date(), sorted(clips, key=lambda v: (local_start(v), v.pk)) or [video]
 
 
+def neighbour_day(user, video, later=True):
+    """The first clip of the next (or the previous) local day with clips at
+    this clip's place, or None (memory/81: "Save and next day")."""
+    from apps.pipelines.period import local_start
+
+    start = local_start(video)
+    if start is None or video.recorded_at is None:
+        return None
+    qs = Video.objects.all() if user.is_superuser else Video.deletable(user)
+    if video.site_id:
+        qs = qs.filter(site_id=video.site_id)
+    elif video.device_id:
+        qs = qs.filter(device_id=video.device_id)
+    elif video.site_name:
+        qs = qs.filter(user=video.user, site__isnull=True, site_name=video.site_name)
+    else:
+        return None
+    qs = (qs.filter(recorded_at__gt=video.recorded_at).order_by("recorded_at", "pk") if later
+          else qs.filter(recorded_at__lt=video.recorded_at).order_by("-recorded_at", "-pk"))
+    for clip in qs.select_related("site", "device")[:500]:
+        s = local_start(clip)
+        if s is not None and (s.date() > start.date() if later else s.date() < start.date()):
+            return same_day_clips(user, clip)[1][0]
+    return None
+
+
 class LayoutEditorView(LoginRequiredMixin, View):
     """Draw the ROI and reference objects for a clip (``video_pk``) or a site
     (``site_pk``), on a full-resolution frame of a clip. Saving from a clip
@@ -771,8 +797,14 @@ class LayoutEditorView(LoginRequiredMixin, View):
         from .models import Layout
 
         site, video, clip = self._target(request, video_pk, site_pk)
+        # Drawn from another clip's layout, e.g. the day before's (memory/81):
+        # shown to check and save, not saved until then.
+        carried = None
+        if video is not None and str(request.GET.get("from") or "").isdigit():
+            clips = Video.objects.all() if request.user.is_superuser else Video.deletable(request.user)
+            carried = clips.select_related("site", "device").filter(pk=request.GET["from"]).first()
         if video is not None:
-            current = layout_for_video(video)
+            current = layout_for_video(carried or video)
             own = Layout.objects.filter(video=video).select_related("saved_by")
             history = _layout_versions(own) if own.exists() else _layout_versions(
                 Layout.objects.filter(site=site).select_related("saved_by")) if site else []
@@ -790,6 +822,28 @@ class LayoutEditorView(LoginRequiredMixin, View):
         back = request.GET.get("back") or ""
         if not (back.startswith(("/analysis/", "/pipelines/batch/")) and "//" not in back):
             back = ""  # only ever back to a results or batch page on this site
+        # The days either side, to go through a batch a day at a time.
+        from urllib.parse import urlencode
+        nav = {}
+        if video is not None:
+            for name, later in (("next_day", True), ("previous_day", False)):
+                other = neighbour_day(request.user, video, later)
+                if other is not None:
+                    from apps.pipelines.period import local_start
+                    query = {"scope": "day", **({"back": back} if back else {})}
+                    nav[name] = {"date": local_start(other).date(),
+                                 "url": reverse("videos:layout", args=[other.pk]) + "?" + urlencode(query),
+                                 "carry_url": reverse("videos:layout", args=[other.pk]) + "?"
+                                              + urlencode({**query, "from": video.pk})}
+        # Clips at the site with a layout of their own: a site save passes
+        # them by (memory/81).
+        own_at_site = {}
+        if site is not None:
+            from apps.pipelines.period import local_start
+            own = Video.objects.filter(site=site, layouts__isnull=False).distinct()
+            own_at_site = {"clips": own.count(),
+                           "days": len({(local_start(v) or v.recorded_at).date() for v in own
+                                        if (local_start(v) or v.recorded_at)})}
         return render(request, self.template_name, {
             "back_url": back,
             "recent_clips": recent,
@@ -804,6 +858,10 @@ class LayoutEditorView(LoginRequiredMixin, View):
             "image_url": (reverse("videos:frame", args=[clip.pk]) + f"?t={t}") if clip else "",
             "t": t,
             "source_label": current.get("source_label", ""),
+            "carried": carried,
+            "scope": request.GET.get("scope") or "",
+            "nav": nav,
+            "own_at_site": own_at_site,
             "roi_json": _json.dumps(_roi_shape(current)),
             "nests_json": _json.dumps(current.get("nest_layout") or []),
             "versions_json": history,
@@ -840,6 +898,9 @@ class LayoutEditorView(LoginRequiredMixin, View):
             rebase_site_clips(site)
         day_clips = []
         if scope == "site":
+            if body.get("override_own"):
+                # Their own copies go, so they follow the site's (memory/81).
+                Layout.objects.filter(video__site=site).delete()
             saved = Layout.save_new(site=site, roi=roi, polygon=polygon, nests=nests, user=request.user)
             versions = _layout_versions(Layout.objects.filter(site=site).select_related("saved_by"))
             n = Video.objects.filter(site=site).count()
@@ -871,12 +932,18 @@ class LayoutEditorView(LoginRequiredMixin, View):
         # tracks (memory/63); the ROI, though, was used by tracking itself.
         from apps.pipelines import recount
         clips = (Video.objects.filter(site=site) if scope == "site" else day_clips or [video])
-        analysed = len(recount.runs_for_clips(clips))
+        runs = recount.runs_for_clips(clips)
         roi_changed = (before.get("roi_override") != saved.roi_override
                        or before.get("roi_polygon") != saved.roi_polygon)
+        # Saving and recounting were two buttons, and a saved day was easily
+        # left counted with its old layout (memory/81).
+        queued = recount.queue([r.pk for r in runs]) if body.get("recount") and runs else 0
+        if queued:
+            message += f" Recounting {queued} analysed run{'s' if queued != 1 else ''} in the background."
         return JsonResponse({"ok": True, "roi": saved.roi_override, "roi_polygon": saved.roi_polygon,
                              "nests": saved.nest_layout, "versions": versions,
-                             "scope": scope, "analysed": analysed, "roi_changed": roi_changed,
+                             "scope": scope, "analysed": len(runs), "queued": queued,
+                             "roi_changed": roi_changed,
                              "message": message + " New runs use it."})
 
 

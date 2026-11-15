@@ -54,6 +54,26 @@ def _needs_probe(video) -> bool:
     return not (getattr(video, "fps", None) and getattr(video, "duration_seconds", None))
 
 
+def unreadable(video) -> bool:
+    """A probe already found no frame and no length in this clip's file: a
+    broken file (memory/80). Pages don't download it again on every load
+    (memory/81); a forced extract (a replaced file) still tries."""
+    return bool((getattr(video, "metadata", None) or {}).get("probe_failed_at"))
+
+
+def _mark_unreadable(video, failed: bool) -> None:
+    meta = dict(video.metadata or {})
+    if failed == bool(meta.get("probe_failed_at")):
+        return
+    if failed:
+        from django.utils import timezone
+        meta["probe_failed_at"] = timezone.now().isoformat()
+    else:
+        meta.pop("probe_failed_at", None)
+    video.metadata = meta
+    type(video).everything.filter(pk=video.pk).update(metadata=meta)
+
+
 def ensure_dimensions(video) -> bool:
     """Make sure this clip's frame size is known, probing now if it is not.
 
@@ -85,7 +105,7 @@ def probe_on_demand(video) -> None:
     """
     import threading
 
-    if not _needs_probe(video) or not (video.storage_key or ""):
+    if not _needs_probe(video) or not (video.storage_key or "") or unreadable(video):
         return
 
     def _run():
@@ -105,6 +125,8 @@ def extract_on_demand(video) -> str:
     """Extract now if a slot is free, else return "" and let the card retry."""
     if not ON_DEMAND or (video.thumbnail_key and not _needs_probe(video)):
         return video.thumbnail_key
+    if unreadable(video):
+        return video.thumbnail_key or ""
     if not _slots.acquire(timeout=ON_DEMAND_WAIT_SECONDS):
         logger.info("thumbnail: busy, deferring video %s", video.pk)
         return ""
@@ -151,6 +173,7 @@ def extract_thumbnail(video, *, force: bool = False) -> str:
         # still does not.
         _store_props(video, props)
         _store_frame_rate_kind(video, tmp.name)
+        _mark_unreadable(video, frame is None and not props.get("duration_seconds"))
         if frame is None:
             logger.info("thumbnail: no decodable frame in video %s", video.pk)
             return ""

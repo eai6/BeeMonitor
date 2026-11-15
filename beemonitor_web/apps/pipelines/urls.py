@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import grouping_views, views
+from . import grouping_views, references_views, views
 
 app_name = "pipelines"
 
@@ -19,6 +19,14 @@ urlpatterns = [
     path("batch/<uuid:batch_id>/retrack-check/", views.batch_retrack_check, name="batch_retrack_check"),
     path("batch/<uuid:batch_id>/review-actions/", views.batch_review_actions, name="batch_review_actions"),
     path("batch/<uuid:batch_id>/rows/", views.batch_rows, name="batch_rows"),
+    path("batch/<uuid:batch_id>/stats/", views.batch_stats, name="batch_stats"),
+    # Its layouts by day (memory/81).
+    path("batch/<uuid:batch_id>/references/", references_views.batch_references,
+         name="batch_references"),
+    path("batch/<uuid:batch_id>/references/progress/", references_views.batch_references_progress,
+         name="batch_references_progress"),
+    path("batch/<uuid:batch_id>/references/do/", references_views.batch_references_action,
+         name="batch_references_action"),
     path("batch/<uuid:batch_id>/review-metrics/", views.batch_review_metrics, name="batch_review_metrics"),
     path("batch/<uuid:batch_id>/remove-clips/", views.batch_remove_clips, name="batch_remove_clips"),
     path("batch/<uuid:batch_id>/combined/<str:kind>.csv", views.batch_combined_csv, name="batch_combined_csv"),

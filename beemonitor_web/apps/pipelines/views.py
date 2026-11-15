@@ -17,6 +17,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db.models import Q
 from django.http import Http404, HttpResponse, JsonResponse
+from django.views.decorators.gzip import gzip_page
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
@@ -1186,26 +1187,83 @@ BIG_BATCH = 500
 CLIPS_PER_PAGE = 100
 
 
+def _batch_listing(request, batch_id):
+    """``(rows, whole)``: listing.rows of the batch's clips this user may see,
+    and whether that is all of them. The same access as _batch_runs."""
+    from apps.videos.models import Video
+
+    from . import listing
+    from .models import BatchMember
+
+    qs = PipelineRun.objects.filter(batch_id=batch_id)
+    rows = listing.rows(qs)
+    if not rows:
+        raise Http404("No such batch.")
+    if all(r["run"].user_id == request.user.id for r in rows) or \
+            BatchMember.objects.filter(batch_id=batch_id, user=request.user).exists():
+        return rows, True
+    accessible = set(Video.accessible(request.user, photos=True)
+                     .filter(pk__in=[r["video"].pk for r in rows if r["video"]])
+                     .values_list("pk", flat=True))
+    seen = [r for r in rows if r["run"].user_id == request.user.id
+            or (r["video"] and r["video"].pk in accessible)]
+    if not seen:
+        raise Http404("No such batch.")
+    return seen, len(seen) == len(rows)
+
+
+# A big batch's page carries every clip's filter values: 2.4 MB for 6,306
+# clips, a tenth of that compressed (memory/81).
+@gzip_page
 @login_required
 def batch_detail(request, batch_id):
     """Aggregate results for runs launched together: per-run status and
     combined CSV downloads."""
-    from . import aggregate
-
-    runs = _batch_runs(request, batch_id)
-    sources, skipped = aggregate.collect_sources(runs)
-    all_done = all(r.is_terminal for r in runs)
+    from . import aggregate, batchstats
 
     # Per-run rows + failures grouped by cause. The page used to show a status
     # pill per run and nothing else, so nine failures of two kinds could only be
     # triaged by opening nine pages.
     from . import failures as failure_taxonomy
     from . import batches as batches_mod
+    from .registry import pipeline_input_kind
+
+    # Every clip, from its listing (memory/81): the filter, the counts and the
+    # failures read no clip's results.
+    rows, whole = _batch_listing(request, batch_id)
+    first = (PipelineRun.objects.select_related("pipeline").defer("context", "summary")
+             .get(pk=rows[0]["run"].pk))
+    kind = pipeline_input_kind(first.steps)
+    paged = len(rows) > BIG_BATCH
 
     # Which actions the review metrics count (memory/70).
     review_actions = batches_mod.review_actions(batch_id)
     counted = None if len(review_actions) == len(batches_mod.ACTIONS) else review_actions
-    rows = aggregate.batch_rows(runs, counted)
+    from . import sharing
+    can_share = sharing.owns_batch(request.user, batch_id)
+
+    # The batch-wide totals read every clip's results. A big batch keeps them
+    # (batchstats) and works them out again in the background when something
+    # changed; a small one, or a view of part of a batch, works them out now.
+    stale = False
+    if paged and whole and kind != "photo":
+        stats, current = batchstats.stored(batch_id, first.pipeline, counted)
+        stale = not current
+        # The clips on screen, as full rows.
+        runs = _batch_runs(request, batch_id, only=[r["run"].pk for r in rows[:CLIPS_PER_PAGE]])
+        shown = aggregate.batch_rows(runs, counted)
+    else:
+        runs = _batch_runs(request, batch_id)
+        shown = aggregate.batch_rows(runs, counted)
+        if kind == "photo":
+            for row in shown:
+                row["photo"] = aggregate.photo_counts(row["run"])
+        stats = batchstats.totals(runs, shown, batch_id, first.pipeline, counted,
+                                  kind == "photo", can_share)
+        if not paged:
+            rows = shown
+    stats = stats or {}
+
     outcome = aggregate.batch_summary(rows)
     # Which units these clips came from. A batch can span devices, so this is a
     # list, not the first row's device wearing the whole batch's name.
@@ -1217,24 +1275,10 @@ def batch_detail(request, batch_id):
         for r in rows if r["status"] == "failed"
     ])
 
-    # The base tables this batch can hand back, combined across its clips. Only
-    # the ones something actually wrote: a button that downloads nothing looks
-    # like a bug rather than a missing pipeline step.
-    _backfill_interactions_paths(sources)
-    downloads = aggregate.available_downloads(sources, runs)
-
-    # What the downloads leave out. collect_sources has always returned this and
-    # the page has always thrown it away, so a clip that could not join an export
-    # vanished from it with nothing on screen to say so — and a download that is
-    # quietly missing clips is worse than one that says which.
-    #
-    # Counted by reason, not listed: a big batch printed every clip id here, a
-    # wall of hundreds of hex strings above the clip list.
-    skipped_sources = skipped
-
-    # Whether a reference reached the analyzer decided every count on this page
-    # and was visible nowhere.
-    references = aggregate.reference_summary(runs, rows)
+    # What the downloads leave out, counted by reason (collect_sources has
+    # always returned this): a download quietly missing clips is worse than
+    # one that says which.
+    skipped_sources = stats.get("skipped_sources") or []
 
     # Running these same clips through a different pipeline. Offered instead of
     # an analyzer swap: a different pipeline may detect a different class,
@@ -1250,41 +1294,33 @@ def batch_detail(request, batch_id):
     # that almost all immediately give up on the semaphore. A few per load
     # drains a backlog over a handful of visits without ever being a spike, and
     # `backfill_video_props` remains the way to do the whole library at once.
-    from apps.videos.thumbnails import probe_on_demand
+    from apps.videos.thumbnails import probe_on_demand, unreadable
     probes = 0
-    for row in rows:
+    for row in shown:
         if probes >= PROBES_PER_RENDER:
             break
-        # A photo has no length to measure.
+        # A photo has no length to measure; a broken file never will.
         if (row["video"] and not row["video"].duration_seconds
-                and row["video"].kind != row["video"].Kind.PHOTO):
+                and row["video"].kind != row["video"].Kind.PHOTO
+                and not unreadable(row["video"])):
             probe_on_demand(row["video"])
             probes += 1
-    # A photo batch (memory/45) has no clips, tracks or tables: each row is a
-    # photo, its insects and species, and its one download is the photos CSV.
-    from .registry import pipeline_input_kind
-    kind = pipeline_input_kind(runs[0].steps) if runs else "video"
-    if kind == "photo":
-        for row in rows:
-            row["photo"] = aggregate.photo_counts(row["run"])
-        skipped_sources = []
-        downloads = [{"kind": "photos", "label": "Photos", "analyzed": False,
-                      "hint": "One row per insect: photo, time taken, box, class, "
-                              "species and its confidence."}]
 
-    for row in rows:
+    for row in shown:
         row["attrs"] = aggregate.row_attrs(row, kind == "photo")
-    paged = len(rows) > BIG_BATCH
+    if paged:
+        for row in rows:
+            row["attrs"] = aggregate.row_attrs(row, kind == "photo")
 
     # Re-runs go through a pipeline that starts from the same kind of input,
     # this batch's own first — re-running it is the commonest choice.
     rerun_pipelines = [p for p in (Pipeline.objects
                                    .filter(Q(user=request.user) | Q(is_template=True))
-                                   .exclude(pk=runs[0].pipeline_id if runs else None)
+                                   .exclude(pk=first.pipeline_id)
                                    .order_by("-is_template", "title"))
                        if pipeline_input_kind(p.steps) == kind]
-    if runs and runs[0].pipeline.usable_by(request.user):
-        rerun_pipelines.insert(0, runs[0].pipeline)
+    if first.pipeline.usable_by(request.user):
+        rerun_pipelines.insert(0, first.pipeline)
 
     # No cross-video aggregation here any more. The page used to pair trips and
     # build activity charts on every load — up to 300 clips' events CSVs read
@@ -1292,21 +1328,17 @@ def batch_detail(request, batch_id):
     # table, and the table is a download.
 
     # The public link (memory/47): only the launcher can turn it on or off.
-    from . import sharing
     from .models import BatchMember
-    can_share = sharing.owns_batch(request.user, batch_id)
     share = sharing.live_share(batch_id) if can_share else None
 
-    from . import review as review_mod
     photos_kind = kind == "photo"
-    from . import regroup as regroup_mod
     from . import batches
     started = [r["run"].started_at for r in rows if r["run"].started_at]
     from django.core.cache import cache
 
     return render(request, "pipelines/batch.html", {
         # Its own name, else its pipeline's (memory/64).
-        "batch_name": batches.title(batch_id, runs[0].pipeline if runs else None),
+        "batch_name": batches.title(batch_id, first.pipeline),
         "named": bool(batches.names([batch_id])),
         "first_started": min(started) if started else None,
         "last_started": max(started) if started else None,
@@ -1319,32 +1351,32 @@ def batch_detail(request, batch_id):
         "share": share,
         "share_url": (request.build_absolute_uri(reverse("public_batch", args=[share.token]))
                       if share else ""),
-        "photos": kind == "photo",
+        "photos": photos_kind,
         "rows": rows,
         # A big batch: the first page of rows, and what the clip filter reads
         # of all of them (memory/77).
-        "shown_rows": rows[:CLIPS_PER_PAGE] if paged else rows,
+        "shown_rows": shown[:CLIPS_PER_PAGE] if paged else shown,
         "clip_index": [r["attrs"] for r in rows] if paged else None,
         "page_size": CLIPS_PER_PAGE,
         "batch_path": request.path,
+        # The totals are being worked out again (memory/81).
+        "stats_stale": stale,
+        "stats_missing": stale and not stats,
+        "stats_url": reverse("pipelines:batch_stats", args=[batch_id]),
         # Events and trips review metrics (memory/62); None until something
         # in the batch has been reviewed.
-        "review_summary": (review_mod.batch_review_summary(
-            [r["run"] for r in rows], {r["run"].pk: r.get("review") for r in rows}, counted)
-            if not photos_kind else None),
+        "review_summary": stats.get("review_summary"),
         "review_actions": review_actions,
         "action_choices": [("exit", "Exits"), ("enter", "Entries"), ("stay", "Stays")],
         # Apply the pipeline's insect groups here, without a re-run (memory/65).
-        "pipeline_groups": (_pipeline_groups(runs[0].pipeline)
-                            if can_share and runs and not photos_kind else None),
+        "pipeline_groups": (_pipeline_groups(first.pipeline)
+                            if can_share and not photos_kind else None),
         # Where an update has got to, and the last replay check (memory/69).
-        "update_status": (_update_status([r["run"] for r in rows])
-                          if can_share and not photos_kind else None),
+        "update_status": stats.get("update_status") if can_share else None,
         "retrack_check": cache.get(f"retrack-check:{batch_id}") if can_share else None,
         # What changed in the pipeline since the batch was counted, for
         # "Update this batch" (memory/68).
-        "changes": (regroup_mod.batch_changes([r["run"] for r in rows], runs[0].pipeline)
-                    if can_share and runs and not photos_kind else None),
+        "changes": stats.get("changes") if can_share else None,
         # A GPU re-run's rough cost (memory/76): the batch's GPU time a clip.
         "gpu_hours_per_clip": (outcome.get("gpu_seconds", 0) / 3600 / max(1, sum(
             1 for r in rows if r["run"].status == PipelineRun.Status.COMPLETED))
@@ -1352,25 +1384,21 @@ def batch_detail(request, batch_id):
         # Which clips to update (memory/72).
         "update_counts": {
             "all": sum(1 for r in rows if r["run"].status == PipelineRun.Status.COMPLETED),
-            "reviewed": sum(1 for r in rows if r["run"].status == PipelineRun.Status.COMPLETED
-                            and review_mod.clip_touched(r.get("review")))},
+            "reviewed": stats.get("reviewed_clips", 0)},
         # What its insect-group filters left out (memory/65).
-        "group_summary": (review_mod.batch_group_summary(
-            [r["run"] for r in rows], {r["run"].pk: r.get("review") for r in rows})
-            if not photos_kind else None),
+        "group_summary": stats.get("group_summary"),
         "outcome": outcome,
         "failure_groups": failure_groups,
-        "downloads": downloads,
-        "references": references,
+        "downloads": stats.get("downloads") or [],
+        "references": stats.get("references") or {"count": 0, "source": "none", "unplaceable": 0},
         "rerun_videos": rerun_videos,
         "rerun_pipelines": rerun_pipelines,
-        "can_rerun": any(r.user_id == request.user.id for r in runs),
+        "can_rerun": any(r["run"].user_id == request.user.id for r in rows),
         "batch_id": batch_id,
-        "pipeline": runs[0].pipeline,
-        "running": sum(1 for r in runs if not r.is_terminal),
-        "sources": sources,
+        "pipeline": first.pipeline,
+        "running": sum(1 for r in rows if r["run"].status not in ("completed", "failed")),
         "skipped_sources": skipped_sources,
-        "skipped_reasons": Counter(s["reason"] for s in skipped_sources).most_common(),
+        "skipped_reasons": stats.get("skipped_reasons") or [],
         "batch_devices": batch_devices,
         "batch_sites": batch_sites,
         "batch_reviewers": batch_reviewers,
@@ -1379,6 +1407,28 @@ def batch_detail(request, batch_id):
         "period_reviews": _period_reviews(rows, batch_id),
         "batch_days": aggregate.batch_days(rows),
     })
+
+
+@login_required
+def batch_stats(request, batch_id):
+    """Whether a big batch's totals are worked out yet (memory/81), for its
+    page to show them once they are. Its launcher and invited people: anyone
+    else sees part of a batch, whose totals are worked out on the page."""
+    from . import batchstats, sharing
+    from . import batches as batches_mod
+    from .models import BatchMember
+
+    if not (sharing.owns_batch(request.user, batch_id)
+            or BatchMember.objects.filter(batch_id=batch_id, user=request.user).exists()):
+        raise Http404("No such batch.")
+    first = (PipelineRun.objects.filter(batch_id=batch_id).select_related("pipeline")
+             .only("pk", "pipeline").order_by("started_at", "id").first())
+    if first is None:
+        raise Http404("No such batch.")
+    review_actions = batches_mod.review_actions(batch_id)
+    counted = None if len(review_actions) == len(batches_mod.ACTIONS) else review_actions
+    _stats, current = batchstats.stored(batch_id, first.pipeline, counted)
+    return JsonResponse({"current": current})
 
 
 def _period_reviews(rows, batch_id):

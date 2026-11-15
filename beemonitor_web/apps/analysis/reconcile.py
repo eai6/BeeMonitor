@@ -216,7 +216,13 @@ def _recount_loop():
                 logger.info("recounted %s runs", done)
         except Exception:
             logger.exception("event recount sweep failed")
-        time.sleep(1 if done else _RECOUNT_IDLE_SECONDS)
+        if done:
+            time.sleep(1)
+        else:
+            # Rests until the idle time is up or runs are queued (memory/81).
+            from apps.pipelines import recount
+            recount.WAKE.wait(_RECOUNT_IDLE_SECONDS)
+            recount.WAKE.clear()
 
 
 # Don't spin up the loop for one-shot management commands.

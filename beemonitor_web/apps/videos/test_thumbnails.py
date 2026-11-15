@@ -202,6 +202,24 @@ class ExtractionTests(TestCase):
         self.assertEqual(self.video.thumbnail_key, "")
 
 
+    def test_a_broken_file_is_downloaded_once_not_on_every_page_load(self):
+        """memory/81: the batch page re-downloaded the same broken clips to
+        probe them on every load."""
+        s3 = MagicMock()
+        with patch("config.storage.get_s3_client", return_value=s3), \
+             patch.dict("sys.modules", {"cv2": MagicMock()}), \
+             patch.object(thumbnails, "_grab_frame", return_value=(None, {})), \
+             patch.object(thumbnails, "_store_frame_rate_kind"):
+            self.assertEqual(thumbnails.extract_thumbnail(self.video), "")
+            self.video.refresh_from_db()
+            self.assertTrue(thumbnails.unreadable(self.video))
+            with patch("threading.Thread") as thread:
+                thumbnails.probe_on_demand(self.video)
+            thread.assert_not_called()
+            self.assertEqual(thumbnails.extract_on_demand(self.video), "")
+        self.assertEqual(s3.download_file.call_count, 1)
+
+
 class OnDemandTests(TestCase):
     """Clips uploaded before stills existed still get one, without a backfill."""
 

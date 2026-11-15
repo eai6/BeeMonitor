@@ -64,6 +64,73 @@ class RecountTests(PrimitiveBlockTestCase):
         self.assertEqual(len(old.context["a"]["rows"]), 2)
         self.assertEqual(running.counting_rules, 1)
 
+    def test_runs_asked_for_are_recounted_first_in_the_order_asked(self):
+        """memory/81: a day's layout fix waited behind the rest of the library."""
+        backlog = self._old_run()                 # a rules bump: no request
+        first, second = self._old_run(), self._old_run()
+        recount.queue([first.pk])
+        recount.queue([second.pk])
+        self.assertTrue(recount.WAKE.is_set())
+
+        self.assertEqual(recount.sweep(batch=1), 1)
+        first.refresh_from_db()
+        self.assertEqual((first.counting_rules, first.recount_requested_at),
+                         (recount.CURRENT_RULES, None))
+        self.assertEqual(recount.sweep(batch=1), 1)
+        second.refresh_from_db()
+        backlog.refresh_from_db()
+        self.assertEqual(second.counting_rules, recount.CURRENT_RULES)
+        self.assertLess(backlog.counting_rules, recount.CURRENT_RULES)
+
+    def test_with_a_queue_runs_go_to_its_workers_not_the_web(self):
+        """memory/81: recounts off the web, to an SQS queue a Lambda works."""
+        import json
+        from unittest import mock
+
+        from django.test import override_settings
+
+        from apps.pipelines import recount_lambda
+
+        runs = [self._old_run() for _ in range(3)]
+        sqs = mock.MagicMock()
+        sqs.send_message_batch.return_value = {"Successful": [{}]}
+        with override_settings(RECOUNT_QUEUE_URL="https://sqs/q"), \
+                mock.patch("boto3.client", return_value=sqs), \
+                mock.patch("apps.pipelines.recount_queue.PER_MESSAGE", 2):
+            recount.WAKE.clear()
+            recount.queue([r.pk for r in runs])
+            self.assertFalse(recount.WAKE.is_set())
+            # The web leaves them to the queue's workers.
+            self.assertEqual(recount.sweep(), 0)
+        entries = sqs.send_message_batch.call_args.kwargs["Entries"]
+        bodies = [json.loads(e["MessageBody"])["runs"] for e in entries]
+        self.assertEqual([len(b) for b in bodies], [2, 1])
+
+        out = recount_lambda.handle({"Records": [
+            {"messageId": str(i), "body": json.dumps({"runs": b})} for i, b in enumerate(bodies)]})
+        self.assertEqual(out, {"batchItemFailures": []})
+        for r in runs:
+            r.refresh_from_db()
+            self.assertEqual(r.counting_rules, recount.CURRENT_RULES)
+            self.assertEqual(len(r.context["a"]["rows"]), 2)
+        # Sent twice, recounted once.
+        self.assertEqual(recount.recount_claimed(runs[0].pk), 0)
+
+    def test_without_the_queue_the_web_recounts(self):
+        from unittest import mock
+
+        from django.test import override_settings
+
+        run = self._old_run()
+        sqs = mock.MagicMock()
+        sqs.send_message_batch.side_effect = RuntimeError("no network")
+        with override_settings(RECOUNT_QUEUE_URL="https://sqs/q"), \
+                mock.patch("boto3.client", return_value=sqs):
+            recount.WAKE.clear()
+            recount.queue([run.pk])
+            self.assertTrue(recount.WAKE.is_set())
+            self.assertEqual(recount.sweep(), 1)
+
     def test_a_clip_tracked_before_the_detected_column_is_backfilled_and_says_so(self):
         run = self._old_run()
         run.context["m"]["result"]["tracking_csv_path"] = self.old_tracking_csv

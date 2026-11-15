@@ -36,6 +36,9 @@ def _stage(name: str):
         yield
 
 
+# 2 = the heading cone and the nearest tube (memory/72).
+LOST_RULES = 2
+
 # Crops per track kept in the job's summary_stats manifest — the job page shows
 # these first, and "Show all" loads the rest from track_crops.csv.
 MANIFEST_CROPS_PER_TRACK = 12
@@ -377,6 +380,10 @@ class CloudPipeline:
             stats.pop(key, None)
 
         stats["video_fps"] = fps
+        # The lost-track rules this image tracks under (the web's
+        # retrack.run.LOST_RULES), so the web doesn't re-track a clip to get
+        # tracks it already has (memory/81).
+        stats["lost_rules"] = LOST_RULES
         # Per-track crop keys ({track_id: [crop S3 keys]}) for later species ID.
         if crops_manifest:
             stats["crops_manifest"] = crops_manifest

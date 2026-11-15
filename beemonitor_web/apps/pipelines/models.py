@@ -15,6 +15,7 @@ import uuid
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class Pipeline(models.Model):
@@ -132,6 +133,13 @@ class PipelineRun(models.Model):
     # ``context`` slimmed for pages that list many clips (runsummary, memory/76),
     # kept in step with it by save() and write_context().
     summary = models.JSONField(default=dict, blank=True)
+    # What a batch page lists of the run (listing.build, memory/81): its clip,
+    # its errors and its counts, kept in step with ``context`` like
+    # ``summary``, so listing thousands of clips reads neither.
+    listing = models.JSONField(default=dict, blank=True)
+    # When ``context`` was last written: a batch's stored totals are redone
+    # when one of its runs changes (batchstats, memory/81).
+    results_at = models.DateTimeField(null=True, blank=True)
     # Re-run in place on the GPU by Update (memory/76): when it completes, its
     # review votes move to the matching new events (retrack.votes).
     rerun_votes = models.BooleanField(default=False)
@@ -147,12 +155,19 @@ class PipelineRun(models.Model):
     # counted with. Older runs are recounted from their saved tracks by the
     # reconcile loop (apps/pipelines/recount.py), no GPU needed.
     counting_rules = models.PositiveSmallIntegerField(default=4)
+    # When someone asked for this run to be recounted (a layout fix, Update
+    # this batch): the sweep takes the oldest request first, so a day just
+    # fixed is counted next rather than after the rest of the library
+    # (memory/81). None for a rules bump, which goes last.
+    recount_requested_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     execution_time_ms = models.IntegerField(null=True, blank=True)
 
     class Meta:
         ordering = ["-started_at", "-id"]
+        indexes = [models.Index(fields=["counting_rules", "recount_requested_at"],
+                                name="run_recount_queue")]
 
     def __str__(self):
         return f"Run {self.id} — {self.pipeline.title} [{self.status}]"
@@ -169,14 +184,20 @@ class PipelineRun(models.Model):
                 raise ValueError("A run read through its summary can't be saved.")
             if "context" in self.get_deferred_fields():
                 fields = [f.attname for f in self._meta.concrete_fields
-                          if f.attname not in ("context", "summary", "gpu_job_id", "id")] \
+                          if f.attname not in ("context", "summary", "gpu_job_id", "id",
+                                               "listing", "results_at")] \
                     if fields is None else [f for f in fields if f != "context"]
                 kwargs["update_fields"] = fields
             else:
+                from . import listing
+
                 self.gpu_job_id = run_job_id(self)
                 self.summary = runsummary.build(self.context)
+                self.listing = listing.build(self)
+                self.results_at = timezone.now()
                 if fields is not None:
-                    kwargs["update_fields"] = list(fields) + ["gpu_job_id", "summary"]
+                    kwargs["update_fields"] = list(fields) + ["gpu_job_id", "summary",
+                                                              "listing", "results_at"]
         super().save(*args, **kwargs)
 
     @classmethod
@@ -186,9 +207,13 @@ class PipelineRun(models.Model):
         from . import runsummary
         from .aggregate import run_job_id
 
-        run = cls(pk=pk, context=context)
+        from . import listing
+
+        steps = cls.objects.filter(pk=pk).values_list("steps", flat=True).first()
+        run = cls(pk=pk, context=context, steps=steps or [])
         cls.objects.filter(pk=pk).update(context=context, gpu_job_id=run_job_id(run),
-                                         summary=runsummary.build(context))
+                                         summary=runsummary.build(context),
+                                         listing=listing.build(run), results_at=timezone.now())
 
     # ── Convenience accessors used by the engine + templates ──────────────────
     def step_state(self, step_id):
@@ -282,6 +307,18 @@ class Batch(models.Model):
 
     def __str__(self):
         return self.name or str(self.batch_id)[:8]
+
+
+class BatchStats(models.Model):
+    """A big batch's totals, worked out in the background and kept until one
+    of its runs, reviews or its pipeline changes (batchstats, memory/81): the
+    batch page used to work them out from every clip's results on every load."""
+
+    batch_id = models.UUIDField(primary_key=True)
+    # What the totals were worked out from; a different one means redo them.
+    fingerprint = models.CharField(max_length=64)
+    data = models.JSONField(default=dict)
+    computed_at = models.DateTimeField()
 
 
 class BatchMember(models.Model):

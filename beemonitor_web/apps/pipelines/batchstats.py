@@ -1,0 +1,158 @@
+"""A big batch's totals, worked out apart from its page (memory/81).
+
+The downloads on offer, the reference summary, the review metrics, what the
+insect groups left out, where an update has got to and what changed in the
+pipeline all read every clip's results. On a 6,306-clip batch that was most
+of a 24 s page load, repeated on every load. They are worked out once here,
+in the background, stored on ``BatchStats`` with a fingerprint of what they
+were worked out from, and worked out again only when that changes: a run of
+the batch finished, was recounted or re-run, a review was cast, the pipeline
+or the batch's counted actions were edited.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import sys
+import threading
+
+from django.core.serializers.json import DjangoJSONEncoder
+
+logger = logging.getLogger(__name__)
+
+# Bump when what is worked out changes: every batch's totals are redone.
+VERSION = 1
+
+_working = set()
+_lock = threading.Lock()
+
+
+def totals(runs, rows, batch_id, pipeline, counted, photos, can_share=True) -> dict:
+    """The batch page's totals from ``runs`` (slim) and their ``rows``
+    (aggregate.batch_rows)."""
+    from collections import Counter
+
+    from . import aggregate, regroup
+    from . import review as review_mod
+    from .views import _backfill_interactions_paths, _update_status
+
+    sources, skipped = aggregate.collect_sources(runs)
+    _backfill_interactions_paths(sources)
+    downloads = aggregate.available_downloads(sources, runs)
+    if photos:
+        skipped = []
+        downloads = [{"kind": "photos", "label": "Photos", "analyzed": False,
+                      "hint": "One row per insect: photo, time taken, box, class, "
+                              "species and its confidence."}]
+    plain = [r["run"] for r in rows]
+    per_run = {r["run"].pk: r.get("review") for r in rows}
+    return {
+        "downloads": downloads,
+        "skipped_sources": skipped,
+        "skipped_reasons": Counter(s["reason"] for s in skipped).most_common(),
+        "references": aggregate.reference_summary(runs, rows),
+        "review_summary": (review_mod.batch_review_summary(plain, per_run, counted)
+                           if not photos else None),
+        "group_summary": (review_mod.batch_group_summary(plain, per_run)
+                          if not photos else None),
+        "update_status": _update_status(plain) if can_share and not photos else None,
+        "changes": (regroup.batch_changes(plain, pipeline)
+                    if can_share and pipeline is not None and not photos else None),
+        "reviewed_clips": sum(1 for r in rows if r["status"] == "completed"
+                              and review_mod.clip_touched(r.get("review"))),
+    }
+
+
+def fingerprint(batch_id, pipeline, counted) -> str:
+    """What the totals depend on, as a hash: a few aggregate queries."""
+    from django.db.models import Count, Max, Q, Sum
+
+    from .models import AddedEvent, ClipReview, EventReview, PipelineRun, TripReview
+
+    runs = PipelineRun.objects.filter(batch_id=batch_id)
+    parts = [VERSION, str(batch_id), sorted(counted) if counted is not None else None,
+             getattr(pipeline, "pk", None), getattr(pipeline, "updated_at", None)]
+    parts.append(runs.aggregate(
+        n=Count("id"), done=Count("id", filter=Q(status=PipelineRun.Status.COMPLETED)),
+        failed=Count("id", filter=Q(status=PipelineRun.Status.FAILED)),
+        results=Max("results_at"), started=Max("started_at"), completed=Max("completed_at"),
+        rules=Sum("counting_rules")))
+    # Reviews of these clips' GPU jobs, from whichever run they were cast on
+    # (review.shared_job_runs).
+    jobs = runs.exclude(gpu_job_id=None).values("gpu_job_id")
+    for model, run_field, when in ((EventReview, "run", "updated_at"),
+                                   (TripReview, "exit_run", "updated_at"),
+                                   (AddedEvent, "run", "created_at"),
+                                   (ClipReview, "run", "created_at")):
+        parts.append(model.objects.filter(**{f"{run_field}__gpu_job_id__in": jobs})
+                     .aggregate(n=Count("id"), last=Max(when), top=Max("id")))
+    return hashlib.sha256(json.dumps(parts, cls=DjangoJSONEncoder, sort_keys=True)
+                          .encode()).hexdigest()
+
+
+def stored(batch_id, pipeline, counted):
+    """``(totals or None, current)``: the batch's stored totals and whether
+    they still match it. Starts working them out when they don't."""
+    from .models import BatchStats
+
+    fp = fingerprint(batch_id, pipeline, counted)
+    row = BatchStats.objects.filter(batch_id=batch_id).first()
+    if row is not None and row.fingerprint == fp:
+        return row.data, True
+    done = start(batch_id, counted, fp)
+    if done is not None:
+        return done, True
+    return (row.data if row is not None else None), False
+
+
+def start(batch_id, counted, fp):
+    """Work the totals out in a thread of this process, once at a time; in
+    the test run, now (its database is one connection's), returning them."""
+    if sys.argv[1:2] == ["test"]:
+        return compute(batch_id, counted, fp)
+    key = str(batch_id)
+    with _lock:
+        if key in _working:
+            return None
+        _working.add(key)
+    threading.Thread(target=_work, args=(batch_id, counted, fp),
+                     name=f"batchstats-{key[:8]}", daemon=True).start()
+    return None
+
+
+def _work(batch_id, counted, fp):
+    from django.db import connection
+
+    try:
+        compute(batch_id, counted, fp)
+    except Exception:
+        logger.exception("batch totals for %s failed", batch_id)
+    finally:
+        with _lock:
+            _working.discard(str(batch_id))
+        connection.close()
+
+
+def compute(batch_id, counted, fp=None) -> dict:
+    """Work out and store the totals of the whole batch."""
+    from django.utils import timezone
+
+    from . import aggregate, runsummary
+    from .models import BatchStats, PipelineRun
+    from .registry import pipeline_input_kind
+
+    qs = PipelineRun.objects.filter(batch_id=batch_id).defer("context").order_by("started_at", "id")
+    runs = runsummary.use_slim(runsummary.share_steps(qs))
+    if not runs:
+        return {}
+    pipeline = runs[0].pipeline
+    fp = fp or fingerprint(batch_id, pipeline, counted)
+    rows = aggregate.batch_rows(runs, counted)
+    data = totals(runs, rows, batch_id, pipeline, counted,
+                  pipeline_input_kind(runs[0].steps) == "photo")
+    data = json.loads(json.dumps(data, cls=DjangoJSONEncoder))
+    BatchStats.objects.update_or_create(batch_id=batch_id, defaults={
+        "fingerprint": fp, "data": data, "computed_at": timezone.now()})
+    return data

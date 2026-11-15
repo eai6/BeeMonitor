@@ -65,6 +65,10 @@ their reason.
       Add {% if photos %}photos{% else %}clips{% endif %}
     </a>
     {% endif %}
+    {% if can_share and not photos %}
+    {# Its layouts by day, and what's counted with an older one (memory/81). #}
+    <a href="{% url 'pipelines:batch_references' batch_id %}" class="inline-flex items-center h-10 px-4 rounded-md text-sm font-semibold border border-gray-300 bg-white text-gray-800 hover:bg-gray-50">References</a>
+    {% endif %}
     {% if can_share and running %}{% include "pipelines/_cancel_batch.html" %}{% endif %}
     {% if can_share %}{% include "pipelines/_people_panel.html" %}{% include "pipelines/_share_panel.html" %}{% endif %}
     {% if period_reviews and not photos %}
@@ -290,6 +294,31 @@ their reason.
 <div class="bg-blue-50 border border-blue-200 rounded p-3 mb-4 text-sm text-blue-800">
   {{ running }} run(s) still in progress — results below cover the completed videos so far. {% if not clip_index %}This page refreshes automatically.{% else %}Reload the page to see the latest.{% endif %}
 </div>
+{% endif %}
+
+{% if stats_stale %}
+<div id="stats-note" data-stats-url="{{ stats_url }}" data-stats-missing="{{ stats_missing|yesno:'1,' }}" class="bg-gray-50 border border-gray-200 rounded p-3 mb-4 text-sm text-gray-700" role="status">
+  {% if stats_missing %}Working out this batch's downloads, review metrics and update status. They appear here by themselves in a minute or two.{% else %}Some clips changed since the totals below were worked out; they're being worked out again.{% endif %}
+  <a href="" data-stats-ready hidden class="font-medium text-amber-800 underline">Newer totals are ready: reload</a>
+</div>
+<script>
+(function () {
+  // memory/81: the totals of a big batch are worked out in the background.
+  var note = document.getElementById('stats-note');
+  var tries = 0;
+  function check() {
+    fetch(note.getAttribute('data-stats-url'), {credentials: 'same-origin'})
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+      .then(function (d) {
+        if (!d.current) { if (++tries < 60) setTimeout(check, 5000); return; }
+        if (note.getAttribute('data-stats-missing')) { window.location.reload(); return; }
+        note.querySelector('[data-stats-ready]').hidden = false;
+      })
+      .catch(function () { if (++tries < 60) setTimeout(check, 10000); });
+  }
+  setTimeout(check, 3000);
+})();
+</script>
 {% endif %}
 
 <span hidden>{% csrf_token %}</span>
