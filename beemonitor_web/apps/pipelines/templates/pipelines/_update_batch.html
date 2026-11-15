@@ -8,7 +8,7 @@
       <p class="text-sm text-gray-600">Up to date: every clip was counted with the pipeline as it is now.</p>
       {% else %}
       {% if changes.web %}
-      <p class="text-sm text-gray-700">Changed since {% if changes.behind == 1 %}a clip{% else %}{{ changes.behind }} clips{% endif %} here {% if changes.behind == 1 %}was{% else %}were{% endif %} counted:</p>
+      <p class="text-sm text-gray-700">{% if changes.behind is None %}Changed since this batch's clips were counted:{% else %}Changed since {% if changes.behind == 1 %}a clip{% else %}{{ changes.behind }} clips{% endif %} here {% if changes.behind == 1 %}was{% else %}were{% endif %} counted:{% endif %}</p>
       <ul class="text-sm text-gray-700 list-disc pl-5">
         {% for c in changes.web %}<li>{{ c.step }}{% if c.field %} · {{ c.field }}{% endif %}{% if c.before %}: {{ c.before }} → {{ c.after }}{% elif c.after %}: {{ c.after }}{% endif %}</li>{% endfor %}
       </ul>

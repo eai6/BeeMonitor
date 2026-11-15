@@ -350,7 +350,7 @@ def _effective(block_type, config):
 _GPU_FIELDS = {"identify.species": {"model"}}
 
 
-def pipeline_changes(run, pipeline) -> dict:
+def pipeline_changes(run, pipeline, retracks=True) -> dict:
     """``{"web": [...], "gpu": [...]}``: what differs between the steps this
     run was counted with and the pipeline's now. ``web`` changes a recount
     applies (no GPU); ``gpu`` ones need tracking again. Each item is
@@ -411,7 +411,7 @@ def pipeline_changes(run, pipeline) -> dict:
             (gpu if gpu_side else web).append(item)
         if (step.get("inputs") or {}) != (src.get("inputs") or {}) and block.get("backend") != "gpu":
             web.append({"step": name, "field": "Wiring", "before": "", "after": "changed"})
-        if bt == "track.mot" and not any(c["step"] == name for c in web + gpu):
+        if retracks and bt == "track.mot" and not any(c["step"] == name for c in web + gpu):
             # Same settings, newer lost-track rules (memory/72), or new tubes
             # to stay at (memory/82).
             from .retrack.run import retrack_reason
@@ -423,6 +423,27 @@ def pipeline_changes(run, pipeline) -> dict:
                 web.append({"step": name, "field": "Lost-track rules", "before": "",
                             "after": "updated (tracks again on the web)"})
     return {"web": web, "gpu": gpu}
+
+
+# Clips the quick check reads: the newest finished ones.
+QUICK_SAMPLE = 20
+
+
+def quick_changes(batch_id, pipeline) -> dict | None:
+    """The changes card from the batch's newest finished clips, in a fraction
+    of a second: for a big batch whose stored totals are being worked out
+    again (memory/81), so a pipeline just saved shows at once instead of
+    "Up to date" until they're done. ``behind`` is None: not counted. Update
+    works the real split out over every clip when pressed."""
+    from .models import PipelineRun
+
+    runs = (PipelineRun.objects.filter(batch_id=batch_id, status=PipelineRun.Status.COMPLETED)
+            .order_by("-completed_at").only("pk", "steps", "status")[:QUICK_SAMPLE])
+    for run in runs:
+        changes = pipeline_changes(run, pipeline, retracks=False)
+        if changes["web"] or changes["gpu"]:
+            return {**changes, "behind": None}
+    return None
 
 
 def batch_changes(runs, pipeline) -> dict | None:

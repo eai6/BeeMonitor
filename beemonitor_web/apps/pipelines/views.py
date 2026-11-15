@@ -1336,6 +1336,13 @@ def batch_detail(request, batch_id):
     share = sharing.live_share(batch_id) if can_share else None
 
     photos_kind = kind == "photo"
+    # What changed in the pipeline: the stored totals' answer, or while
+    # they're being worked out again, a quick look at the newest clips, so a
+    # pipeline just saved can be applied at once (memory/82).
+    changes = stats.get("changes") if can_share else None
+    if stale and can_share and not photos_kind and first.pipeline is not None:
+        from . import regroup
+        changes = regroup.quick_changes(batch_id, first.pipeline) or changes
     from . import batches
     started = [r["run"].started_at for r in rows if r["run"].started_at]
     from django.core.cache import cache
@@ -1380,7 +1387,7 @@ def batch_detail(request, batch_id):
         "retrack_check": cache.get(f"retrack-check:{batch_id}") if can_share else None,
         # What changed in the pipeline since the batch was counted, for
         # "Update this batch" (memory/68).
-        "changes": stats.get("changes") if can_share else None,
+        "changes": changes,
         # A GPU re-run's rough cost (memory/76): the batch's GPU time a clip.
         "gpu_hours_per_clip": (outcome.get("gpu_seconds", 0) / 3600 / max(1, sum(
             1 for r in rows if r["run"].status == PipelineRun.Status.COMPLETED))

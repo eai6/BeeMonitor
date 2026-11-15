@@ -110,6 +110,23 @@ class BigBatchPageTests(Base):
         res = self._get()
         self.assertEqual(res.context["review_summary"]["events"]["accepted"], 1)
 
+    def test_a_pipeline_just_saved_can_be_applied_before_the_totals_are_redone(self):
+        """memory/82: the card read "Up to date" with Update greyed out while a
+        6,305-clip batch's totals were worked out again."""
+        self._get()                                   # totals stored: up to date
+        pipeline = self.run.pipeline
+        steps = json.loads(json.dumps(self.run.steps))
+        ev = next(s for s in steps if s["block_type"] == "analyze.events")
+        ev["config"] = {**(ev.get("config") or {}), "exit_settle_seconds": 0.9}
+        pipeline.steps = steps
+        pipeline.save()
+        with mock.patch.object(batchstats, "start", return_value=None):   # still working
+            res = self._get()
+        self.assertTrue(res.context["stats_stale"])
+        self.assertTrue(res.context["changes"]["web"])
+        self.assertIsNone(res.context["changes"]["behind"])
+        self.assertContains(res, "Changed since this batch's clips were counted")
+
     def test_a_big_batch_page_is_compressed(self):
         res = self.client.get(self.page_url, headers={"Accept-Encoding": "gzip"})
         self.assertEqual(res.headers.get("Content-Encoding"), "gzip")
