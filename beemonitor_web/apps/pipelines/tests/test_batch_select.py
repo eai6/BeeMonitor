@@ -99,6 +99,23 @@ class BatchSelectTests(FilterBase):
         self.assertEqual((self.run_b.batch_id, self.run_b.removed_from_batch), (self.batch, None))
         self.assertTrue(ClipReview.objects.filter(run=self.run_b).exists())
 
+    def test_taking_a_clip_out_never_reads_the_batchs_results(self):
+        """It read every run whole to pick out the few asked for, which ran a
+        6,306-clip batch out of memory."""
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        with CaptureQueriesContext(connection) as q:
+            self.client.post(reverse("pipelines:batch_remove_clips", args=[self.batch]),
+                             {"run": [self.run_b.pk]})
+        whole = [s["sql"] for s in q.captured_queries
+                 if '"pipelines_pipelinerun"."context"' in s["sql"]]
+        self.assertEqual(whole, [])
+        self.run_b.refresh_from_db()
+        self.assertIsNone(self.run_b.batch_id)
+        self.run_a.refresh_from_db()
+        self.assertEqual(self.run_a.batch_id, self.batch)     # only the one asked for
+
     def test_a_running_clip_stays_in(self):
         PipelineRun.objects.filter(pk=self.run_b.pk).update(status=PipelineRun.Status.RUNNING)
         self.client.post(reverse("pipelines:batch_remove_clips", args=[self.batch]),

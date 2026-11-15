@@ -1517,9 +1517,11 @@ def batch_remove_clips(request, batch_id):
 
     if not sharing.owns_batch(request.user, batch_id):
         raise Http404("No such batch.")
-    wanted = {str(pk) for pk in request.POST.getlist("run")}
-    runs = [r for r in PipelineRun.objects.filter(batch_id=batch_id, user=request.user)
-            if str(r.pk) in wanted]
+    # Just the runs asked for, and only their status: reading every run of the
+    # batch whole to pick a few out ran a 6,306-clip batch out of memory.
+    runs = list(PipelineRun.objects.filter(
+        batch_id=batch_id, user=request.user, pk__in=_uuids(request.POST.getlist("run")),
+    ).only("pk", "status"))
     running = [r for r in runs if not r.is_terminal]
     done = [r.pk for r in runs if r.is_terminal]
     if done:
