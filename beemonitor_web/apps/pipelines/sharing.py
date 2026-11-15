@@ -117,6 +117,9 @@ def batch_csv(runs, batch_id, kind):
     # (memory/76): ``runs`` may be slim copies, and a batch's export must
     # never hold every clip's results, or every clip's rows, at once.
     whole = aggregate.whole_runs
+    if kind == "files":
+        from . import files_list
+        return stem, files_list.FIELDS, files_list.rows(runs)
     if kind == "trips":
         from .period import TRIP_FIELDS, trip_rows
         from .review import reviewed_runs, trip_calls

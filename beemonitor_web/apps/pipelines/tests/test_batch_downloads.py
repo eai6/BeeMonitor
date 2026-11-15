@@ -40,8 +40,10 @@ class AvailableDownloadTests(SimpleTestCase):
 
         kinds = [d["kind"] for d in aggregate.available_downloads(sources, [Run()])]
 
-        # The four base tables plus Tracks (one row per track, with identity).
-        self.assertEqual(kinds, ["detections", "tracking", "tracks", "events", "interactions"])
+        # The four base tables plus Tracks (one row per track, with identity),
+        # and the Files list of every clip.
+        self.assertEqual(kinds, ["detections", "tracking", "tracks", "events", "interactions",
+                                 "files"])
 
     def test_a_worker_events_file_is_not_offered_without_the_step(self):
         sources = [source(tracking_csv_path="t.csv", events_csv_path="e.csv")]

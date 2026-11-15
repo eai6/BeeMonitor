@@ -20,6 +20,11 @@ The batch page combines its clips:
 - **Download batch data:** one CSV per table for every clip in the batch, each row labelled with its clip,
   device, site and the clip's recorded start: **Detections**, **Tracking**, **Tracks**, **Events** and
   **Interactions**, plus **Photos** for a photo batch. Only tables the batch produced are offered.
+- **Files list:** one row per clip in the batch, whatever became of it. It gives the clip's date, start and end
+  time in its site's zone (`time_zone`, blank when the site has none), where that time came from
+  (`time_source`), and the time written in the file name. It also gives whether the run completed, failed or
+  was cancelled, and for those that didn't finish, why (`failure_cause`, `failure_detail`, `next_step` and the
+  recorded `error`), plus its GPU hours.
 - **Per clip:** each clip's outcome, tracks, events, interactions, length and GPU time.
 
 <figure markdown>

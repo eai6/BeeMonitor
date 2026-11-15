@@ -224,6 +224,12 @@ def available_downloads(sources, runs=()):
         out.append({"kind": "trips", "label": "Trips", "clips": len(runs), "analyzed": True,
                     "hint": "One row per trip the pipeline made or reviewers confirmed, with "
                             "its review. Pairing runs across the clips of each unit or site."})
+    # Every clip, failed and cancelled ones too (memory/80).
+    if runs:
+        out.append({"kind": "files", "label": "Files list", "clips": len(runs), "analyzed": False,
+                    "hint": "One row per clip in this batch, whatever became of it: its date, "
+                            "start and end time and where that time came from, and whether "
+                            "it completed, failed or was cancelled, and why."})
     return out
 
 
