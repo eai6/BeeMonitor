@@ -397,6 +397,13 @@ def _finalize_if_terminal(run, steps, status):
             sync_job_counts(run)
         except Exception:  # noqa: BLE001 - a count must never fail a run
             logger.exception("could not copy run %s counts to its job", run.pk)
+        if any(isinstance(out, dict) and (out.get("tubes") or {}).get("state") == "pending"
+               for out in (run.context or {}).values()):
+            # Its tubes are found by the recount worker, which then counts it
+            # (memory/82): queued once this run is saved.
+            from . import recount
+            pk = run.pk
+            transaction.on_commit(lambda: recount.queue([pk]))
     if run.rerun_votes and run.status in (PipelineRun.Status.COMPLETED, PipelineRun.Status.FAILED):
         # Re-run on the GPU by Update (memory/76): its votes were cast on the
         # old tracks, so they follow by time to the new events.

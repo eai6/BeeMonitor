@@ -20,6 +20,7 @@ move together.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import threading
 
@@ -34,6 +35,9 @@ _REFERENCES = ("reference.", "roi.")
 # Re-run before the analyzers: its groups decide which tracks they count
 # (memory/65), and they are worked out on the web from saved crop readings.
 _GROUPS = "identify.species"
+# Set while recounting: a reference node with detected tubes finds a clip's
+# tubes then (memory/82), on the recount worker; a fresh run's waits for it.
+DETECTING = contextvars.ContextVar("detecting_tubes", default=False)
 
 
 def dependency_order(steps):
@@ -61,17 +65,37 @@ def dependency_order(steps):
 def recount_run(run) -> dict:
     """Recount one run in place. Returns ``{kind: count}`` for what was
     recounted; an analyzer that errors keeps its old output."""
+    token = DETECTING.set(True)
+    try:
+        return _recount_run(run)
+    finally:
+        DETECTING.reset(token)
+
+
+def _recount_run(run) -> dict:
     from . import executors
 
     steps = run.steps or []
     if not any(s.get("block_type") in RECOUNTED + (_GROUPS,) for s in steps):
         return {}
-    # The MOT node's settings changed since the run's tracks were made: track
-    # its saved detections again first, on the web (memory/69).
+    # The references first: the current layout (or detected tubes), which a
+    # re-track that keeps lost tracks at their tube needs (memory/82).
+    context = dict(run.context or {})
+    order = dependency_order(steps)
+    for i in order:
+        step = steps[i]
+        if str(step.get("block_type", "")).startswith(_REFERENCES):
+            out = executors.run_local_step(step, run, context, i)
+            if out and not out.get("error"):
+                context[step.get("id")] = out
+    run.context = context
+    # The MOT node's settings (or the tubes it stays at) changed since the
+    # run's tracks were made: track its saved detections again first, on the
+    # web (memory/69).
     retracked = _retrack_if_needed(run)
     context = dict(run.context or {})
     counts, grouped = {}, False
-    for i in dependency_order(steps):
+    for i in order:
         step = steps[i]
         bt = str(step.get("block_type", ""))
         sid = step.get("id")
@@ -80,10 +104,6 @@ def recount_run(run) -> dict:
             if out and not out.get("error"):
                 context[sid] = out
                 grouped = True
-        elif bt.startswith(_REFERENCES):
-            out = executors.run_local_step(step, run, context, i)
-            if out and not out.get("error"):
-                context[sid] = out
         elif bt in RECOUNTED:
             out = executors.run_local_step(step, run, context, i)
             if not out or out.get("error"):
@@ -189,6 +209,15 @@ SWEEP_SECONDS = 90
 # Set when runs are queued, so the recount loop in this process starts on them
 # now instead of after its idle rest (memory/81).
 WAKE = threading.Event()
+
+
+def detects_tubes(run) -> bool:
+    """Whether the run's references are tubes a model finds (memory/82): its
+    recount may detect them first, half a minute or so, so it goes to the
+    worker rather than run inside a page request."""
+    return any(s.get("block_type") == "reference.layout"
+               and (s.get("config") or {}).get("source") == "detected"
+               for s in run.steps or [])
 
 
 def queue(runs) -> int:
@@ -307,7 +336,7 @@ def recount_clips(videos, now=RECOUNT_NOW) -> dict:
 
     runs = runs_for_clips(videos)
     out = {"runs": len(runs), "recounted": 0, "queued": 0, "events": 0, "votes_outdated": 0}
-    if len(runs) > now:
+    if len(runs) > now or any(detects_tubes(r) for r in runs):
         out["queued"] = queue([r.pk for r in runs])
         return out
     for run in runs:

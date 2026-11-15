@@ -155,7 +155,9 @@ def applied_steps(run_steps, pipeline):
         src_step = by_id.get(s.get("id"))
         if src_step is None or src_step.get("block_type") != s.get("block_type"):
             continue
-        if s.get("block_type") in ANALYZERS:
+        if s.get("block_type") in ANALYZERS or s.get("block_type") == "reference.layout":
+            # The reference node too: saved layout or detected tubes, and the
+            # model that finds them (memory/82). No GPU either way.
             s["config"] = dict(src_step.get("config") or {})
             changed = True
         elif s.get("block_type") == "track.mot":
@@ -213,6 +215,7 @@ def apply_pipeline(batch_id, user, now=APPLY_NOW, only=None) -> dict:
     # whole results, and those are read one at a time.
     runs = runsummary.slim_runs(qs.select_related("pipeline").order_by("started_at"))
     out = {"applied": 0, "recounted": 0, "queued": 0, "skipped": 0}
+    later = []          # sent to the worker together, after the loop
     for i, run in enumerate(runs):
         applied = applied_steps(run.steps, run.pipeline)
         if applied is None:
@@ -224,12 +227,13 @@ def apply_pipeline(batch_id, user, now=APPLY_NOW, only=None) -> dict:
         PipelineRun.objects.filter(pk=run.pk).update(steps=steps)
         out["applied"] += 1
         run.steps = steps
-        if retrack.needs_retrack(run):
-            # Re-tracking takes seconds a clip: the sweep does it, in the
-            # background, a few clips per pass (memory/69).
-            recount.queue([run.pk])
-            out["queued"] += 1
-            out["retrack"] = out.get("retrack", 0) + 1
+        tubes = recount.detects_tubes(run)
+        if tubes or retrack.needs_retrack(run):
+            # Re-tracking takes seconds a clip, finding its tubes half a
+            # minute: the worker does it, in the background (memory/69, 82).
+            later.append(run.pk)
+            if not tubes:
+                out["retrack"] = out.get("retrack", 0) + 1
             continue
         if out["recounted"] < now:
             try:
@@ -239,8 +243,9 @@ def apply_pipeline(batch_id, user, now=APPLY_NOW, only=None) -> dict:
                 continue
             except Exception:
                 logger.exception("apply groups: recount of run %s failed", run.pk)
-        recount.queue([run.pk])
-        out["queued"] += 1
+        later.append(run.pk)
+    if later:
+        out["queued"] += recount.queue(later)
     return out
 
 
@@ -407,9 +412,14 @@ def pipeline_changes(run, pipeline) -> dict:
         if (step.get("inputs") or {}) != (src.get("inputs") or {}) and block.get("backend") != "gpu":
             web.append({"step": name, "field": "Wiring", "before": "", "after": "changed"})
         if bt == "track.mot" and not any(c["step"] == name for c in web + gpu):
-            # Same settings, newer lost-track rules (memory/72).
-            from .retrack.run import needs_retrack
-            if needs_retrack(run):
+            # Same settings, newer lost-track rules (memory/72), or new tubes
+            # to stay at (memory/82).
+            from .retrack.run import retrack_reason
+            why = retrack_reason(run)
+            if why == "tubes":
+                web.append({"step": name, "field": "Tubes it stays at", "before": "",
+                            "after": "changed (tracks again on the web)"})
+            elif why:
                 web.append({"step": name, "field": "Lost-track rules", "before": "",
                             "after": "updated (tracks again on the web)"})
     return {"web": web, "gpu": gpu}

@@ -81,6 +81,20 @@ def layout_for_video(video) -> dict:
     return _device_layout(video)
 
 
+def shared_layout_for_video(video) -> dict:
+    """The layout a clip shares with its site's (or unit's) other clips:
+    ``layout_for_video`` without the clip's own. It numbers the tubes a model
+    finds in the clip (memory/82)."""
+    from apps.videos.models import Layout
+
+    site = getattr(video, "site", None)
+    if site is not None:
+        at_site = Layout.current(site=site)
+        if at_site is not None:
+            return _as_dict(at_site, "site", f"site {site.name} (v{at_site.number})")
+    return _device_layout(video)
+
+
 def _as_dict(layout, source, label):
     return {"roi_override": layout.roi_override, "roi_polygon": layout.roi_polygon,
             "nest_layout": layout.nest_layout or [], "source": source, "source_label": label}

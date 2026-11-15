@@ -142,6 +142,20 @@ def resolve_reference(step, run, context, index):
             "source": "detected",
         }
 
+    if source == "detected":
+        # Tubes found by a model in the clip, numbered from its site's layout;
+        # the ROI stays the saved one (memory/82). Found on the recount worker:
+        # a run that gets here first counts once its tubes are in.
+        video_out = find_artifact("video", run.steps, index, context)
+        if video_out:
+            from apps.videos.models import Video
+
+            from . import recount, tubes
+            video = Video.everything.select_related("device", "site").filter(
+                pk=video_out.get("video_id")).first()
+            if video is not None:
+                return tubes.layout_for(video, run.user, cfg, detect_now=recount.DETECTING.get())
+
     # "device_layout" — the hotel ROI + nest tubes drawn in the ROI editor.
     # hotel_polygon (and a nest's "points") is the traced outline of a shape the
     # user drew as a polygon; the box is its bounding box, so a consumer that
@@ -1458,7 +1472,12 @@ def _resolve_custom_models(cfg, run, config):
         raw = next((cfg[f] for f in fields if cfg.get(f)), None)
         if not raw:
             continue
+        from apps.training import model_classes
         from apps.training.models import CustomModel
+        if raw == model_classes.BUILTIN_NEST:
+            # The worker's own nest model, picked on a Detect node (memory/82).
+            config[config_key] = model_classes.BUILTIN_NEST_KEY
+            continue
         try:
             model_pk = int(raw)
         except (TypeError, ValueError):

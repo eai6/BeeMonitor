@@ -11,7 +11,9 @@ that read a clip through its job get the run's view with ``effective_result``.
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
+import json
 import logging
 import os
 import tempfile
@@ -112,12 +114,43 @@ def gpu_lost_rules(run):
 
 
 def settings_of(run):
-    """The BeeTracker settings the run's MOT node asks for now."""
+    """The BeeTracker settings the run's MOT node asks for now. With "stays at
+    that tube" on, the tubes it tracks against are part of them (``tubes``):
+    a day whose tubes were fixed, or detected, is tracked again (memory/82)."""
     from .. import executors
     from .replay import tracker_params
 
     step = mot_step(run)
-    return versioned(tracker_params(executors.tracker_settings((step or {}).get("config") or {})))
+    params = versioned(tracker_params(executors.tracker_settings((step or {}).get("config") or {})))
+    if params.get("stay_in_reference"):
+        params["tubes"] = tubes_now(run)
+    return params
+
+
+def tubes_key(roi):
+    """A short fingerprint of a reference's tube boxes, or None with no tubes."""
+    from .. import ops
+
+    boxes = sorted([round(float(v), 4) for v in r["box"]] for r in ops.roi_references(roi))
+    return hashlib.sha1(json.dumps(boxes).encode()).hexdigest()[:12] if boxes else None
+
+
+def tubes_now(run):
+    """The fingerprint of the tubes the run's Events step counts against (the
+    ones a re-track keeps a lost track at, ``_reference_boxes``)."""
+    from .. import executors
+
+    steps = run.steps or []
+    for i, step in enumerate(steps):
+        if step.get("block_type") == "analyze.events":
+            return tubes_key(executors.find_reference(steps, i, run.context or {}, run))
+    return None
+
+
+def _gpu_tubes(run):
+    """The fingerprint of the tubes the GPU job was sent (its ``nest_layout``)."""
+    job = _job(run)
+    return tubes_key({"nest_layout": ((job.config or {}) if job else {}).get("nest_layout")})
 
 
 # Where "Update this batch" keeps the MOT settings the GPU tracked with, when
@@ -140,18 +173,26 @@ def tracked_with(run):
     for sid in tracking_outputs(run):
         retracked = (run.context[sid].get("result") or {}).get("retracked")
         if retracked:
-            return retracked["settings"]
+            done = dict(retracked["settings"])
+            if done.get("stay_in_reference") and "tubes" not in done:
+                # Re-tracked before the tubes were recorded: taken as the
+                # ones it counts with now, so there is no wave of re-tracks.
+                done["tubes"] = tubes_now(run)
+            return done
     step = mot_step(run)
     cfg = (step or {}).get("config") or {}
     if isinstance(cfg.get(GPU_MOT_KEY), dict):
         params = tracker_params(executors.tracker_settings(cfg[GPU_MOT_KEY]))
     else:
         # Unchanged since the GPU ran: its settings.
-        params = {k: v for k, v in settings_of(run).items() if k != "lost_rules"}
+        params = {k: v for k, v in settings_of(run).items() if k not in ("lost_rules", "tubes")}
     # Under the rules its image had: a clip tracked before memory/72 is
     # re-tracked once; one tracked since already has today's tracks.
     rules = gpu_lost_rules(run)
-    return versioned(params) if rules == LOST_RULES else params
+    params = versioned(params) if rules == LOST_RULES else params
+    if params.get("stay_in_reference"):
+        params["tubes"] = _gpu_tubes(run)
+    return params
 
 
 def needs_retrack(run) -> bool:
@@ -161,6 +202,21 @@ def needs_retrack(run) -> bool:
     if step is None or ((step.get("config") or {}).get("tracker") or "beetrack") != "beetrack":
         return False
     return settings_of(run) != tracked_with(run)
+
+
+def retrack_reason(run):
+    """Why the run tracks again: "tubes" when only the tubes it stays at
+    changed, "rules" when only the lost-track rules did, else "settings";
+    None when it doesn't."""
+    now, done = settings_of(run), tracked_with(run)
+    if now == done:
+        return None
+    rest = lambda p, *keys: {k: v for k, v in p.items() if k not in keys}  # noqa: E731
+    if rest(now, "tubes") == rest(done, "tubes"):
+        return "tubes"
+    if rest(now, "tubes", "lost_rules") == rest(done, "tubes", "lost_rules"):
+        return "rules"
+    return "settings"
 
 
 # ── Reading and writing ─────────────────────────────────────────────────────

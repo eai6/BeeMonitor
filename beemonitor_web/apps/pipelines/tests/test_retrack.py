@@ -223,6 +223,73 @@ class RetrackRunTests(PrimitiveBlockTestCase):
         self.assertEqual(done["settings"]["lost_search"], "speed")
         self.assertTrue(rt._reference_boxes(run, self.video))
 
+    def _staying_run(self, stay="on"):
+        """A clip re-tracked once with "stays at that tube" set as given."""
+        batch = uuid.uuid4()
+        run, _job = self._run(batch)
+        steps = self._steps()
+        steps[2]["config"]["beetrack_stay_in_reference"] = stay
+        steps[2]["config"]["beetrack_max_age_seconds"] = 2.0
+        self.pipeline.steps = steps
+        self.pipeline.save()
+        regroup.apply_pipeline(batch, self.user)
+        recount.sweep()
+        run.refresh_from_db()
+        return run
+
+    def _move_the_tubes(self):
+        from apps.videos.models import Layout
+        Layout.save_new(video=self.video, roi=[0.0, 0.0, 0.6, 0.6], polygon=None,
+                        nests=[{"id": 1, "box": [0.2, 0.2, 0.4, 0.4]}], user=self.user)
+
+    def test_new_tubes_re_track_a_clip_that_stays_at_its_tube(self):
+        """memory/82: a day's tubes fixed (or detected) was recounted with the
+        tracks that stayed at the old tubes."""
+        run = self._staying_run()
+        first = run.context["m"]["result"]["retracked"]["settings"]["tubes"]
+        self.assertTrue(first)
+        self.assertFalse(rt.needs_retrack(run))
+        self._move_the_tubes()
+        recount.recount_run(PipelineRun.objects.get(pk=run.pk))
+        run.refresh_from_db()
+        again = run.context["m"]["result"]["retracked"]["settings"]["tubes"]
+        self.assertNotEqual(again, first)
+        self.assertEqual(again, rt.tubes_now(run))
+        self.assertFalse(rt.needs_retrack(run))
+
+    def test_new_tubes_only_recount_a_clip_that_doesnt_stay(self):
+        run = self._staying_run(stay="")
+        at = run.context["m"]["result"]["retracked"]["at"]
+        self._move_the_tubes()
+        recount.recount_run(PipelineRun.objects.get(pk=run.pk))
+        run.refresh_from_db()
+        self.assertEqual(run.context["m"]["result"]["retracked"]["at"], at)
+
+    def test_a_clip_re_tracked_before_tubes_were_recorded_is_left_alone(self):
+        run = self._staying_run()
+        ctx = run.context
+        ctx["m"]["result"]["retracked"]["settings"].pop("tubes")
+        PipelineRun.write_context(run.pk, ctx)
+        run.refresh_from_db()
+        self.assertFalse(rt.needs_retrack(run))
+
+    def test_the_gpus_tubes_are_the_ones_it_was_sent(self):
+        run, job = self._run()
+        steps = run.steps
+        steps[2]["config"]["beetrack_stay_in_reference"] = "on"
+        PipelineRun.objects.filter(pk=run.pk).update(steps=steps)
+        run.refresh_from_db()
+        Job.objects.filter(pk=job.pk).update(config={**job.config, "nest_layout": [
+            {"id": 1, "box": [0.1, 0.1, 0.3, 0.3]}], "tracker_params": {
+            **job.config["tracker_params"], "stay_in_reference": True}})
+        self.assertEqual(rt.tracked_with(run)["tubes"], rt.tubes_now(run))
+        self._move_the_tubes()
+        self.assertEqual(rt.retrack_reason(run), "tubes")
+        self.pipeline.steps = run.steps
+        self.pipeline.save()
+        changes = regroup.pipeline_changes(run, self.pipeline)
+        self.assertEqual(changes["web"][0]["field"], "Tubes it stays at")
+
     def test_tracks_made_under_older_lost_track_rules_are_offered_again(self):
         # memory/72: same settings, newer rules behind them.
         batch = uuid.uuid4()

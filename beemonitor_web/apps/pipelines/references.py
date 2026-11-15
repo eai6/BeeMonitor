@@ -25,16 +25,26 @@ def geometry_key(roi, polygon, nests) -> str:
 
 def counted(run):
     """``{key, label}`` of the layout the run's analyzers counted against, or
-    None when it has no reference step from a layout."""
+    None when it has no reference step from a layout. With detected tubes
+    (memory/82) also ``tubes``: how the detection was numbered, and the
+    template's key it was numbered from."""
     for step in run.steps or []:
         if step.get("block_type") not in _REFERENCE_BLOCKS:
             continue
         out = (run.context or {}).get(step.get("id")) or {}
-        if out.get("artifact") != "roi" or out.get("source") == "detected":
+        if out.get("artifact") != "roi":
             continue
-        return {"key": geometry_key(out.get("hotel_roi"), out.get("hotel_polygon"),
-                                    out.get("nest_layout")),
-                "label": out.get("source_label") or ""}
+        tubes = out.get("tubes")
+        if out.get("source") == "detected" and not tubes:
+            continue                      # a Detect node's boxes, not a layout
+        entry = {"key": geometry_key(out.get("hotel_roi"), out.get("hotel_polygon"),
+                                     out.get("nest_layout")),
+                 "label": out.get("source_label") or ""}
+        if tubes:
+            entry["tubes"] = {k: tubes.get(k) for k in (
+                "state", "flag", "matched", "kept", "new", "found", "shift", "scale",
+                "template_key", "detection", "error", "marks") if tubes.get(k) is not None}
+        return entry
     return None
 
 
@@ -55,6 +65,15 @@ def current_for(videos) -> dict:
         site.setdefault(lay.site_id, lay)
     out = {}
     for v in videos:
+        # The layout it shares with its site's other clips: what detected
+        # tubes are numbered from (memory/82).
+        if v.site_id in site:
+            shared = site[v.site_id].nest_layout
+        elif v.pk in own:
+            from apps.devices.layouts import shared_layout_for_video
+            shared = shared_layout_for_video(v)["nest_layout"]
+        else:
+            shared = None
         if v.pk in own:
             lay = own[v.pk]
             out[v.pk] = _entry(lay.roi_override, lay.roi_polygon, lay.nest_layout, "video",
@@ -67,6 +86,9 @@ def current_for(videos) -> dict:
             d = layout_for_video(v)
             out[v.pk] = _entry(d["roi_override"], d["roi_polygon"], d["nest_layout"],
                                d["source"], d["source_label"], None)
+            shared = d["nest_layout"]
+        out[v.pk]["shared_key"] = geometry_key(None, None, shared if shared is not None
+                                               else out[v.pk]["nests"])
     return out
 
 
@@ -97,17 +119,22 @@ def days(rows) -> list[dict]:
         key = (place, start.date() if start else None)
         day = out.setdefault(key, {
             "place": place, "date": key[1], "clips": 0, "videos": [], "layouts": {},
-            "analysed": 0, "up_to_date": 0, "unknown": 0, "stale_runs": [], "own": 0})
+            "analysed": 0, "up_to_date": 0, "unknown": 0, "stale_runs": [], "own": 0,
+            "detected": 0, "waiting": 0, "errors": 0, "flagged": [], "worst": None})
         day["clips"] += 1
         day["videos"].append(video)
         cur = now[video.pk]
-        day["layouts"].setdefault(cur["key"], cur)
         day["own"] += cur["source"] == "video"
         lay = (r.get("layout") or {})
+        tubes = lay.get("tubes")
+        if not tubes:
+            day["layouts"].setdefault(cur["key"], cur)
         if r["status"] != "completed" or not lay:
             continue
         day["analysed"] += 1
-        if not lay.get("key"):
+        if tubes:
+            _detected_row(day, r, lay, tubes, cur)
+        elif not lay.get("key"):
             day["unknown"] += 1
         elif lay["key"] == cur["key"]:
             day["up_to_date"] += 1
@@ -119,4 +146,57 @@ def days(rows) -> list[dict]:
         day["mixed"] = len(layouts) > 1
         day["layout"] = layouts[0] if len(layouts) == 1 else None
         day["stale"] = len(day["stale_runs"])
+        day["kind"] = _kind(day)
+        parts = sorted(day.pop("flag_parts", []) + [f"e{day['errors']}"])
+        day["flag_key"] = hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
     return sorted(out.values(), key=lambda d: (d["place"], d["date"] is None, d["date"]))
+
+
+# How bad a detected clip's numbering is, worst last (memory/82).
+_FLAGS = ("", "moved", "kept", "new", "no_template", "none_found", "error")
+
+
+def _detected_row(day, row, lay, tubes, cur):
+    """One run counted with detected tubes, into its day."""
+    state = tubes.get("state")
+    if state == "pending":
+        day["waiting"] += 1
+        return
+    if state == "error":
+        day["errors"] += 1
+    if state == "drawn":
+        # Counted with the clip's own drawing: current while it is the one.
+        if cur["source"] == "video" and lay["key"] == cur["key"]:
+            day["up_to_date"] += 1
+        else:
+            day["stale_runs"].append(row["run"].pk)
+        return
+    if cur["source"] == "video":
+        day["stale_runs"].append(row["run"].pk)    # drawn since: the drawing wins
+        return
+    if tubes.get("template_key") and tubes["template_key"] != cur.get("shared_key"):
+        day["stale_runs"].append(row["run"].pk)    # the site's numbering changed
+        return
+    day["detected"] += 1
+    day["up_to_date"] += state != "error"
+    flag = tubes.get("flag") or ""
+    if flag:
+        day["flagged"].append(row["run"].pk)
+        day.setdefault("flag_parts", []).append(
+            f'{row["run"].pk}:{tubes.get("detection")}:{tubes.get("template_key")}:{flag}')
+    worst = day["worst"]
+    if worst is None or _FLAGS.index(flag if flag in _FLAGS else "error") > \
+            _FLAGS.index(worst["flag"] if worst["flag"] in _FLAGS else "error"):
+        day["worst"] = {"flag": flag, "run": row["run"].pk, "video": row["video"], **{
+            k: tubes.get(k) for k in ("matched", "kept", "new", "found", "shift", "error")}}
+
+
+def _kind(day) -> str:
+    """The day's line on the References page."""
+    if day["flagged"] or day["errors"]:
+        return "look"
+    if day["waiting"]:
+        return "waiting"
+    if day["detected"]:
+        return "hand" if day["own"] else "detected"
+    return "hand" if day["own"] else "saved"

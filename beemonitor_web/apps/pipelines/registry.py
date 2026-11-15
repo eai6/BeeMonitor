@@ -402,7 +402,13 @@ BLOCK_REGISTRY = {
                 # how each node picks its own rows out of the shared GPU result.
                 "name": "label",
                 "label": "Detect what?",
-                "field_type": "text",
+                # The picked model's classes, ticked (memory/82); free text for
+                # SAM 3, where it is the prompt, and for a model whose classes
+                # aren't known.
+                "field_type": "model_class",
+                "model_field": "object_model",
+                "multiple": True,
+                "text_when": {"field": "model_family", "value": "sam3"},
                 "required": True,
                 "default": "bee",
                 "choices": None,
@@ -410,7 +416,8 @@ BLOCK_REGISTRY = {
             {
                 "name": "object_model",
                 "label": "Model (YOLO)",
-                "field_type": "bee_model",  # custom-model picker, populated at render
+                # Built-in bee and nest models, then the user's (memory/82).
+                "field_type": "yolo_model",
                 "required": False,
                 "default": "",
                 "choices": None,
@@ -467,15 +474,14 @@ BLOCK_REGISTRY = {
     # finds — wired to the analyzer's reference port. There is no drawing in the
     # pipeline: the "drawn" source stays only so pipelines saved with it run.
     "reference.layout": {
-        "display_name": "Reference — Saved Layout",
-        "description": "Each clip's saved layout: its ROI and reference objects "
-                       "(nest holes, flags, tubes, flowers…). The clip's own layout "
-                       "if it has one, else its site's, else its unit's (the "
-                       "version in use when it was recorded). Draw them from the "
-                       "clip page or Videos → Sites, or on the unit page. No GPU. "
-                       "For objects that move, detect the reference instead: a "
-                       "Detect node for that class wired to the analyzer's "
-                       "reference input.",
+        "display_name": "Reference — Tubes and ROI",
+        "description": "Each clip's ROI and reference objects (nest holes, flags, "
+                       "tubes, flowers…). Saved: the clip's own layout if it has "
+                       "one, else its site's, else its unit's (the version in use "
+                       "when it was recorded). Detected: the tubes a YOLO model "
+                       "finds in a few frames of each clip, numbered from the "
+                       "site's layout; the ROI stays the saved one. No GPU "
+                       "either way (memory/82).",
         "category": "roi",
         "icon": "📐",
         "input_type": "video",
@@ -492,7 +498,60 @@ BLOCK_REGISTRY = {
                 "choices": [
                     # Value kept: saved pipelines use it. memory/52.
                     {"value": "device_layout", "label": "The clip's saved ROI + reference objects (clip, site or unit)"},
+                    {"value": "detected", "label": "Tubes found by a model, numbered from the site's layout"},
                 ],
+            },
+            {
+                "name": "tube_model",
+                "label": "Tube model",
+                "field_type": "yolo_model",
+                "required": False,
+                "default": "builtin:nest",
+                "choices": None,
+                "show_if": {"field": "source", "value": "detected"},
+            },
+            {
+                "name": "tube_class",
+                "label": "Tube class",
+                "field_type": "model_class",
+                "model_field": "tube_model",
+                "multiple": False,
+                "required": False,
+                "default": "",
+                "choices": None,
+                "show_if": {"field": "source", "value": "detected"},
+            },
+            {
+                "name": "tube_frames",
+                "label": "Frames a clip",
+                "help": "Tubes don't move: a few frames spread over the clip are enough. "
+                        "More frames, longer on CPU.",
+                "field_type": "number",
+                "required": False,
+                "default": 8,
+                "choices": None,
+                "show_if": {"field": "source", "value": "detected"},
+            },
+            {
+                "name": "tube_confidence",
+                "label": "Confidence",
+                "field_type": "number",
+                "required": False,
+                "default": 0.4,
+                "choices": None,
+                "show_if": {"field": "source", "value": "detected"},
+            },
+            {
+                "name": "drawn_wins",
+                "label": "A clip drawn by hand",
+                "field_type": "select",
+                "required": False,
+                "default": "on",
+                "choices": [
+                    {"value": "on", "label": "keeps its drawing"},
+                    {"value": "off", "label": "uses the detection too"},
+                ],
+                "show_if": {"field": "source", "value": "detected"},
             },
             {
                 "name": "regions",

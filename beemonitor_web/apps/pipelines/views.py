@@ -150,9 +150,13 @@ def pipeline_editor(request, pk):
         {"id": str(m.pk), "name": m.name}
         for m in ready_models.filter(model_type__in=["nest_detection", "custom"])
     ]
+    from apps.training import model_classes
+    yolo_models = [{k: m[k] for k in ("id", "name", "classes")}
+                   for m in model_classes.yolo_models(request.user)]
     ctx = {
         "pipeline": pipeline,
         "categories": get_categories(),
+        "yolo_models_json": json.dumps(yolo_models),
         "blocks_json": json.dumps(serialize_blocks()),
         "initial_steps_json": json.dumps(_with_groupings(build_initial_steps(pipeline))),
         "saved_graph_json": json.dumps(pipeline.graph or {}),

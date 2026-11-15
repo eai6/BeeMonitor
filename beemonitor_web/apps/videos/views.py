@@ -753,6 +753,24 @@ def neighbour_day(user, video, later=True):
     return None
 
 
+def _detected_tubes(request, video, run_pk):
+    """``{nests, label}``: the tubes a model found for this clip in one of the
+    user's runs (its reference step's), or None (memory/82)."""
+    if video is None or not run_pk:
+        return None
+    from apps.pipelines.models import PipelineRun
+
+    try:
+        run = PipelineRun.objects.filter(user=request.user, pk=run_pk).only("context", "steps").first()
+    except (ValueError, Exception):  # noqa: BLE001 - a bad id is no tubes
+        return None
+    for out in ((run.context or {}).values() if run else []):
+        if isinstance(out, dict) and (out.get("tubes") or {}).get("state") == "detected":
+            return {"nests": out.get("nest_layout") or [],
+                    "label": f"the tubes found by {out.get('source_label') or 'the model'}"}
+    return None
+
+
 class LayoutEditorView(LoginRequiredMixin, View):
     """Draw the ROI and reference objects for a clip (``video_pk``) or a site
     (``site_pk``), on a full-resolution frame of a clip. Saving from a clip
@@ -803,8 +821,13 @@ class LayoutEditorView(LoginRequiredMixin, View):
         if video is not None and str(request.GET.get("from") or "").isdigit():
             clips = Video.objects.all() if request.user.is_superuser else Video.deletable(request.user)
             carried = clips.select_related("site", "device").filter(pk=request.GET["from"]).first()
+        detected = _detected_tubes(request, video, request.GET.get("tubes_of"))
         if video is not None:
             current = layout_for_video(carried or video)
+            if detected:
+                # The tubes a model found, to fix and save (memory/82).
+                current = {**current, "nest_layout": detected["nests"],
+                           "source_label": detected["label"]}
             own = Layout.objects.filter(video=video).select_related("saved_by")
             history = _layout_versions(own) if own.exists() else _layout_versions(
                 Layout.objects.filter(site=site).select_related("saved_by")) if site else []
@@ -859,6 +882,7 @@ class LayoutEditorView(LoginRequiredMixin, View):
             "t": t,
             "source_label": current.get("source_label", ""),
             "carried": carried,
+            "detected": detected,
             "scope": request.GET.get("scope") or "",
             "nav": nav,
             "own_at_site": own_at_site,

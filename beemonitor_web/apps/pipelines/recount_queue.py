@@ -15,8 +15,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Runs a message: a few minutes of a worker's time.
-PER_MESSAGE = 20
+# Runs a message: a few minutes of a worker's time. A run whose tubes are
+# detected first takes ~30-60 s (memory/82), and a message must finish inside
+# the worker's 15 minutes.
+PER_MESSAGE = 5
 # A run asked for this long ago and still not recounted is the web's again.
 LEFT_SECONDS = 30 * 60
 

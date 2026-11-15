@@ -51,6 +51,43 @@ but never recounted.
 Saving a layout for the whole site leaves clips that have their own layout as they are; the editor
 asks whether to apply it to them too.
 
+#### Tubes found by a model
+
+The pipeline's **Reference** node can take its tubes from a model instead of a saved layout: set
+**Source** to *Tubes found by a model*, pick the model (the built-in nest model, or one trained here)
+and its tube class from the model's own classes. Each clip's tubes are found on a few frames spread
+over it (8 by default), on CPU, with no GPU-hours. The ROI is still the saved one, since tracking
+runs inside it.
+
+A model's boxes have no numbers, so they are matched to the **site's saved layout**: the camera's
+shift (and zoom) is worked out first, then each tube the model found takes the number, and the name,
+of the site's tube it lines up with. Tube 7 is the same tube on every day, which keeps per-tube
+totals, trips, hops and review votes on the right tube.
+
+- A tube the model missed (a bee sitting on it, say) keeps the site's box, moved with the camera.
+- A tube it found that the site's layout doesn't have gets the next free number.
+- Either of these, or a camera that moved more than a tube's width, puts the day under
+  **To look at**.
+
+**Look at this day** shows a frame with the tubes as numbered: green matched, dashed amber kept from
+the site's layout, blue new, and the site's layout in thin white. From there:
+
+- **Looks right** takes the day off the list.
+- **Fix in the editor** opens the editor with the found tubes, to correct and save for the day.
+- **Make these the site's numbering** saves them as the site's layout, and every clip there is
+  numbered from them and recounted.
+
+A clip drawn by hand keeps its drawing over the detection (the node can turn that off), and
+**Use the detection** removes a day's drawing.
+
+Switching a batch to found tubes is an **Update this batch** change with no GPU time. Each clip's
+tubes are found, then it is recounted from its saved tracks. A clip whose MOT node keeps a lost
+track at its tube ("stays at that tube") is tracked again on the web first, since its tracks depend
+on where the tubes are; this also happens when a day's tubes are fixed by hand.
+
+Models need a CPU copy to be used this way. Models trained from now on get one at the end of
+training; for the built-in models and models trained before, run `scripts/export_onnx.py` once.
+
 <figure markdown>
   ![A batch page: outcome, a form to run the clips through another pipeline, the download buttons, and one row per clip](../assets/platform/batch.png)
   <figcaption>A batch of three clips.</figcaption>

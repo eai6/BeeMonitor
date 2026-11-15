@@ -23,6 +23,8 @@ urlpatterns = [
     # Its layouts by day (memory/81).
     path("batch/<uuid:batch_id>/references/", references_views.batch_references,
          name="batch_references"),
+    path("batch/<uuid:batch_id>/references/day/<int:clip_pk>/", references_views.batch_references_day,
+         name="batch_references_day"),
     path("batch/<uuid:batch_id>/references/progress/", references_views.batch_references_progress,
          name="batch_references_progress"),
     path("batch/<uuid:batch_id>/references/do/", references_views.batch_references_action,

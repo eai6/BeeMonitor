@@ -491,6 +491,44 @@ class PendingDeviceDeletion(models.Model):
         return f"pending device-delete dev={self.device_id} video={self.video_id}"
 
 
+class TubeDetection(models.Model):
+    """The tubes a model found in one clip (memory/82): the same clip, model,
+    class and sampling give the same tubes in every pipeline and batch, so
+    they are found once. ``boxes`` are the objects seen on enough of the
+    frames read, ``[{box: [x1, y1, x2, y2] 0..1, confidence, seen}]``, not yet
+    numbered: pipelines.tubes.match numbers them from the site's layout.
+    ``error`` says why there are none (no frame read, no CPU copy of the
+    model, a class it doesn't have)."""
+
+    # A failed detection is tried again after this long (the model may have
+    # been exported since, the clip's file restored).
+    RETRY_SECONDS = 15 * 60
+
+    video = models.ForeignKey("Video", on_delete=models.CASCADE, related_name="tube_detections")
+    model_key = models.CharField(max_length=500)
+    label = models.CharField(max_length=100)
+    settings_key = models.CharField(max_length=40)
+    boxes = models.JSONField(default=list, blank=True)
+    frames = models.PositiveSmallIntegerField(default=0)
+    frame_width = models.PositiveIntegerField(null=True, blank=True)
+    frame_height = models.PositiveIntegerField(null=True, blank=True)
+    error = models.CharField(max_length=300, blank=True, default="")
+    detected_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["video", "model_key", "label", "settings_key"],
+                                               name="tube_detection_once")]
+
+    def __str__(self):
+        return f"{self.video_id} {self.label}: {len(self.boxes or [])} tubes"
+
+    def retry(self) -> bool:
+        from django.utils import timezone
+
+        return bool(self.error) and (self.detected_at is None or (
+            timezone.now() - self.detected_at).total_seconds() > self.RETRY_SECONDS)
+
+
 class Layout(models.Model):
     """A ROI and reference objects drawn for a **site** (every clip recorded
     there) or for **one clip** (overrides its site), memory/52.
