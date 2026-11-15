@@ -6,6 +6,7 @@
 | `cross_validation_classifier.py` | Leave-one-video-out cross-validation of that classifier |
 | `camera-flip-test.sh` | Checks on a unit whether the camera's 180° rotation actually reaches the picture |
 | `switch-to-ov5647.sh` | Switches a unit's camera overlay from the OwlSight to the OV5647 module |
+| `export_onnx.py` | Writes the ONNX copy (and class names) beside YOLO models in the models bucket, so the recount worker can find tubes on CPU (memory/82) |
 | `sync-claude-memory.sh` | Backs up or restores the device runbook notes in `hardware/claude-memory/` |
 
 The two classifier scripts expect the evaluation videos and manual annotations in `data/`, which is not

@@ -7,3 +7,6 @@ boto3>=1.28.0
 pyyaml>=6.0
 numpy
 Pillow
+# The trained model's ONNX copy, for finding tubes on CPU (memory/82).
+onnx>=1.16
+onnxslim>=0.1.30

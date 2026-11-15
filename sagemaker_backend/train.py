@@ -336,6 +336,25 @@ def _save_val_predictions(best: Path, ds_dir: Path, model_key: str) -> list[str]
     return keys
 
 
+def _export_onnx(best: Path, model_key: str) -> None:
+    """The model's CPU copy beside best.pt (memory/82): ``best.onnx`` and
+    ``best.onnx.json`` with its class names and input size. The web's recount
+    worker runs it with OpenCV to find a clip's tubes, without the GPU. Same
+    as scripts/export_onnx.py, which does it for models trained before."""
+    from ultralytics import YOLO
+
+    model = YOLO(str(best))
+    names = [model.names[i] for i in sorted(model.names)]
+    imgsz = (getattr(model.model, "args", None) or {}).get("imgsz") or 640
+    imgsz = int(imgsz[0] if isinstance(imgsz, (list, tuple)) else imgsz)
+    path = model.export(format="onnx", imgsz=imgsz, opset=17, simplify=True)
+    base = model_key[:-3] if model_key.endswith(".pt") else model_key
+    _s3.upload_file(str(path), MODELS_BUCKET, base + ".onnx")
+    _s3.put_object(Bucket=MODELS_BUCKET, Key=base + ".onnx.json", ContentType="application/json",
+                   Body=json.dumps({"names": names, "imgsz": imgsz, "source": model_key}).encode())
+    log(f"uploaded ONNX copy -> s3://{MODELS_BUCKET}/{base}.onnx ({len(names)} classes)")
+
+
 def main() -> int:
     t0 = time.time()
     WORK.mkdir(parents=True, exist_ok=True)
@@ -364,6 +383,10 @@ def main() -> int:
         shutil.copy(str(out["best"]), str(MODEL_DIR / "best.pt"))
         _s3.upload_file(str(out["best"]), MODELS_BUCKET, model_key)
         log(f"uploaded best.pt -> s3://{MODELS_BUCKET}/{model_key}")
+        try:
+            _export_onnx(out["best"], model_key)
+        except Exception as e:  # noqa: BLE001 - the model is usable without it
+            log(f"ONNX export failed (non-fatal; scripts/export_onnx.py can redo it): {e}")
 
         result = {
             "status": "completed",

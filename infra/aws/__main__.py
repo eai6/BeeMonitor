@@ -1040,7 +1040,10 @@ if deploy_service:
         ),
         role=recount_role.arn,
         architectures=["x86_64"],
-        memory_size=2048,
+        # Detecting a clip's tubes runs a YOLO model on a few frames on CPU
+        # (memory/82): more memory is more CPU. /tmp holds the model's ONNX copy.
+        memory_size=3072,
+        ephemeral_storage=aws.lambda_.FunctionEphemeralStorageArgs(size=2048),
         timeout=900,
         environment=aws.lambda_.FunctionEnvironmentArgs(variables=recount_env),
         vpc_config=aws.lambda_.FunctionVpcConfigArgs(
