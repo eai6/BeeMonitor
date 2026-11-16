@@ -336,6 +336,17 @@ class BatchPageTests(DetectedReferenceBase):
         page = self.client.get(self.page)
         self.assertEqual(page.context["tube_summary"]["placed"], 1)
         self.assertContains(page, "Numbered by model")
+        # Each clip carries its numbering for the References filter, and the
+        # counts say which sites they come from.
+        self.assertContains(page, 'data-f-tubes="placed"')
+        self.assertEqual([n for _, n in page.context["tube_summary"]["sites"]["placed"]], [1])
+
+    def test_clips_not_placed_are_listed_by_site(self):
+        self.count([])
+        page = self.client.get(self.page)
+        self.assertEqual(page.context["tube_summary"]["unplaced"], 1)
+        self.assertContains(page, 'data-f-tubes="unplaced"')
+        self.assertContains(page, "Not placed by site")
 
     def test_clips_numbered_the_old_way_are_renumbered_by_update(self):
         """No Renumber button: Update this batch sees them (memory/83)."""

@@ -17,10 +17,12 @@ STATES = {"placed": "placed", "borrowed": "borrowed", "unplaced": "unplaced",
 
 
 def summary(rows) -> dict | None:
-    """``{placed, borrowed, unplaced, waiting, errors, old, label}`` over the
-    batch's finished runs counted with a model's references, from their
-    listings; None when none were."""
+    """``{placed, borrowed, unplaced, waiting, errors, old, label, sites}`` over
+    the batch's finished runs counted with a model's references, from their
+    listings; None when none were. ``sites``: each state's ``[(site, n)]``,
+    most first."""
     out = dict.fromkeys(("placed", "borrowed", "unplaced", "waiting", "errors", "old"), 0)
+    sites = {}
     label, seen = "", False
     for r in rows:
         tubes = (r.get("layout") or {}).get("tubes") or {}
@@ -29,10 +31,13 @@ def summary(rows) -> dict | None:
             continue
         seen = True
         out[key] += 1
+        place = sites.setdefault(key, {})
+        place[r.get("site") or "No site"] = place.get(r.get("site") or "No site", 0) + 1
         label = label or (r.get("layout") or {}).get("label") or ""
     if not seen:
         return None
     out["label"] = label
+    out["sites"] = {k: sorted(v.items(), key=lambda kv: (-kv[1], kv[0])) for k, v in sites.items()}
     return out
 
 

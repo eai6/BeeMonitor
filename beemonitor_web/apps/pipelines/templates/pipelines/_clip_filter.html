@@ -2,7 +2,8 @@
   Filter and sort a batch's clips in the page (static/js/clip_filter.js).
   Shared by the batch page and its public share page. Takes:
     units   - the batch's devices ({pk, name}); the Unit menu shows for two or more
-    sites   - the batch's site names; the Site menu shows for two or more (memory/73)
+    sites   - the batch's site names; the Sites menu shows for two or more (memory/73)
+    tubes   - how a model's references numbered the clips (tube_views.summary): a References menu
     reviewed_filter - offer "Reviewed / Not reviewed" (the batch page)
     reviewers - usernames for "Reviewed by" (with reviewed_filter; memory/74)
     select  - offer "Select" (tick clips to update or remove; the launcher)
@@ -37,9 +38,14 @@
     {% endif %}
     {% if sites|length > 1 %}
     {% comment %}Any number of sites; none ticked is all of them (static/js/clip_filter.js).{% endcomment %}
-    <div class="flex flex-wrap items-center gap-1.5 text-xs text-gray-700" role="group" aria-label="Sites">Site
+    <div class="flex items-center gap-1.5 text-xs text-gray-700">Site
       <input type="hidden" data-filter="site">
-      {% for s in sites %}<label class="flex items-center gap-1.5 h-9 px-2 border border-gray-300 rounded-md bg-white text-[13px]"><input type="checkbox" data-site-pick value="{{ s }}"> {{ s }}</label>{% endfor %}
+      <details data-site-menu class="relative">
+        <summary class="list-none cursor-pointer flex items-center gap-1.5 h-9 border border-gray-300 rounded-md px-2 text-[13px] bg-white"><span data-site-label>All sites</span><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></summary>
+        <div class="absolute z-20 mt-1 min-w-full max-h-72 overflow-auto p-1 border border-gray-300 rounded-md bg-white shadow-lg" role="group" aria-label="Sites">
+          {% for s in sites %}<label class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 text-[13px] whitespace-nowrap"><input type="checkbox" data-site-pick value="{{ s }}"> {{ s }}</label>{% endfor %}
+        </div>
+      </details>
     </div>
     {% endif %}
     {% if batch_days|length > 1 %}
@@ -47,6 +53,19 @@
       <select data-filter="day" class="h-9 border border-gray-300 rounded-md px-2 text-[13px] bg-white">
         <option value="">Any day</option>
         {% for d in batch_days %}<option value="{{ d|date:"Y-m-d" }}">{{ d|date:"j M Y" }}</option>{% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    {% if tubes %}
+    <label class="flex items-center gap-1.5 text-xs text-gray-700">References
+      <select data-filter="tubes" class="h-9 border border-gray-300 rounded-md px-2 text-[13px] bg-white">
+        <option value="">Any</option>
+        <option value="placed">Placed ({{ tubes.placed }})</option>
+        {% if tubes.borrowed %}<option value="borrowed">From a nearby clip ({{ tubes.borrowed }})</option>{% endif %}
+        {% if tubes.unplaced %}<option value="unplaced">Not placed ({{ tubes.unplaced }})</option>{% endif %}
+        {% if tubes.waiting %}<option value="waiting">Waiting ({{ tubes.waiting }})</option>{% endif %}
+        {% if tubes.errors %}<option value="errors">Failed ({{ tubes.errors }})</option>{% endif %}
+        {% if tubes.old %}<option value="old">Numbered the old way ({{ tubes.old }})</option>{% endif %}
       </select>
     </label>
     {% endif %}

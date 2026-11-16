@@ -1237,6 +1237,8 @@ def batch_detail(request, batch_id):
     rows, whole = _batch_listing(request, batch_id)
     # How a model's references numbered the clips, from the listings (memory/83).
     tube_summary = tube_views.summary(rows)
+    # Each clip's for the References filter: in its listing, not its full row.
+    layouts = {r["run"].pk: r.get("layout") for r in rows}
     first = (PipelineRun.objects.select_related("pipeline").defer("context", "summary")
              .get(pk=rows[0]["run"].pk))
     kind = pipeline_input_kind(first.steps)
@@ -1313,6 +1315,7 @@ def batch_detail(request, batch_id):
             probes += 1
 
     for row in shown:
+        row["layout"] = row.get("layout") or layouts.get(row["run"].pk)
         row["attrs"] = aggregate.row_attrs(row, kind == "photo")
     if paged:
         for row in rows:

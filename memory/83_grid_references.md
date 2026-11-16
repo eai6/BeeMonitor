@@ -79,6 +79,15 @@ again. To try a few clips first: filter the clip list (or Select), then
 Update "Clips the filter shows"; no new buttons. The card was cut down: no replay check button, no stored (stale) "N still to
 do" count, no long explanation.
 
+## Finding the clips (2026-11-16)
+
+"428 not placed: which sites?" The batch page's counts are buttons that filter
+the clip list; a **References** menu in the filter bar (placed / from a nearby
+clip / not placed / waiting / failed / old way, with counts) filters on each
+row's `data-f-tubes`; a "Not placed by site" line under the counts. Then
+Select or "Clips the filter shows" + Update reruns just those. Site is now a
+dropdown of checkboxes (any number), not a row of them.
+
 ## Removed
 
 - References page, its day page, actions and progress URL

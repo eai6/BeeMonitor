@@ -4,7 +4,7 @@
 // place: no request, and it keeps up as you type.
 //
 // Rows carry what they can be filtered on as data-f-* attributes; controls
-// carry data-filter (q, unit, site, day, reviewed, by, sort), data-filter-min (a row attribute to
+// carry data-filter (q, unit, site, day, reviewed, tubes, by, sort), data-filter-min (a row attribute to
 // be at least) or data-filter-status. The filter lives in the address bar, so
 // a filtered view survives the running batch's auto-refresh and can be sent on.
 //
@@ -91,7 +91,7 @@
         var words = el.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
         var text = (row.getAttribute('data-f-text') || '').toLowerCase();
         for (var w = 0; w < words.length; w++) if (text.indexOf(words[w]) < 0) return false;
-      } else if (name === 'unit' || name === 'day' || name === 'reviewed') {
+      } else if (name === 'unit' || name === 'day' || name === 'reviewed' || name === 'tubes') {
         if (el.value && row.getAttribute('data-f-' + name) !== el.value) return false;
       } else if (name === 'site') {
         if (el.value && el.value.split('|').indexOf(row.getAttribute('data-f-site')) < 0) return false;
@@ -214,15 +214,34 @@
     });
   });
 
-  // Sites: any number, in the filter bar and above the metrics, held in the one
-  // hidden control as "a|b".
+  // Sites: any number, ticked in a menu, held in the one hidden control as "a|b".
   var siteEl = bar.querySelector('[data-filter="site"]');
+  var siteMenu = bar.querySelector('[data-site-menu]');
   function sitePicks() { return Array.prototype.slice.call(document.querySelectorAll('[data-site-pick]')); }
   function paintSites() {
     if (!siteEl) return;
     var on = siteEl.value ? siteEl.value.split('|') : [];
     sitePicks().forEach(function (b) { b.checked = on.indexOf(b.value) >= 0; });
+    var label = siteMenu && siteMenu.querySelector('[data-site-label]');
+    if (label) label.textContent = !on.length ? 'All sites' : on.length <= 2 ? on.join(', ') : on.length + ' sites';
   }
+  if (siteMenu) {
+    document.addEventListener('click', function (ev) {
+      if (siteMenu.open && !siteMenu.contains(ev.target)) siteMenu.open = false;
+    });
+  }
+
+  // A count elsewhere on the page that shows its clips ("428 not placed").
+  document.querySelectorAll('[data-filter-set]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var kv = b.getAttribute('data-filter-set').split('=');
+      var el = bar.querySelector('[data-filter="' + kv[0] + '"]');
+      if (!el) return;
+      el.value = kv[1];
+      fresh();
+      bar.scrollIntoView({behavior: 'smooth', block: 'start'});
+    });
+  });
   document.addEventListener('change', function (ev) {
     if (!siteEl || !ev.target.matches('[data-site-pick]')) return;
     var on = siteEl.value ? siteEl.value.split('|') : [];

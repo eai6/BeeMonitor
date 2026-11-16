@@ -528,6 +528,11 @@ def row_attrs(row, photos=False):
             attrs["length"] = video.duration_seconds
     if status in ("completed", "failed"):
         attrs["pick"] = "done" if status == "completed" else "failed"
+    # How a model's references numbered it (memory/83), for the References filter.
+    from .tube_views import STATES
+    tubes = STATES.get(((row.get("layout") or {}).get("tubes") or {}).get("state"))
+    if tubes and status == "completed":
+        attrs["tubes"] = tubes
     return attrs
 
 

@@ -162,8 +162,11 @@ their reason.
     {% endcomment %}
     <div class="flex justify-between gap-3 text-xs py-0.5">
       <span class="text-gray-500 shrink-0" title="{{ tube_summary.label }}">Numbered by model</span>
-      <span class="text-gray-900 text-right">{{ tube_summary.placed }} placed{% if tube_summary.borrowed %} · <span title="Their own grid couldn't be told, so they use the nearest clip's at their site.">{{ tube_summary.borrowed }} from a nearby clip</span>{% endif %}{% if tube_summary.unplaced %} · <span class="text-amber-700" title="No grid of their own or from a nearby clip: counted with no references rather than wrong ones.">{{ tube_summary.unplaced }} not placed</span>{% endif %}{% if tube_summary.waiting %} · {{ tube_summary.waiting }} waiting{% endif %}{% if tube_summary.errors %} · <span class="text-red-700">{{ tube_summary.errors }} failed</span>{% endif %}{% if tube_summary.old %} · <span class="text-amber-700" title="Numbered before references were arranged by rows and columns: Update this batch renumbers them.">{{ tube_summary.old }} numbered the old way</span>{% endif %}</span>
+      <span class="text-gray-900 text-right"><button type="button" data-filter-set="tubes=placed" class="hover:underline">{{ tube_summary.placed }} placed</button>{% if tube_summary.borrowed %} · <button type="button" data-filter-set="tubes=borrowed" class="hover:underline" title="Their own grid couldn't be told, so they use the nearest clip's at their site.{% for s, n in tube_summary.sites.borrowed %} {{ s }} {{ n }}{% if not forloop.last %} ·{% endif %}{% endfor %}">{{ tube_summary.borrowed }} from a nearby clip</button>{% endif %}{% if tube_summary.unplaced %} · <button type="button" data-filter-set="tubes=unplaced" class="text-amber-700 hover:underline" title="No grid of their own or from a nearby clip: counted with no references rather than wrong ones.">{{ tube_summary.unplaced }} not placed</button>{% endif %}{% if tube_summary.waiting %} · {{ tube_summary.waiting }} waiting{% endif %}{% if tube_summary.errors %} · <span class="text-red-700">{{ tube_summary.errors }} failed</span>{% endif %}{% if tube_summary.old %} · <span class="text-amber-700" title="Numbered before references were arranged by rows and columns: Update this batch renumbers them.">{{ tube_summary.old }} numbered the old way</span>{% endif %}</span>
     </div>
+    {% if tube_summary.unplaced %}
+    <div class="flex justify-between gap-3 text-xs pb-0.5"><span class="text-gray-500">Not placed by site</span><span class="text-gray-900 text-right">{% for s, n in tube_summary.sites.unplaced %}{{ s }} {{ n }}{% if not forloop.last %} · {% endif %}{% endfor %}</span></div>
+    {% endif %}
     {% endif %}
     <div class="flex justify-between text-xs py-0.5"><span class="text-gray-500">GPU time</span><span class="text-gray-900">{{ outcome.gpu_seconds|duration_min }}</span></div>
     {% if outcome.gpu_seconds_failed %}
@@ -345,7 +348,7 @@ their reason.
     Tracks, events and interactions are what every pipeline produces; trips,
     visits and dwell are reads over them, and the reader can do their own.
   {% endcomment %}
-  {% if rows|length > 1 %}{% include "pipelines/_clip_filter.html" with units=batch_devices sites=batch_sites reviewers=batch_reviewers reviewed_filter=True select=can_share rerun=can_rerun %}{% endif %}
+  {% if rows|length > 1 %}{% include "pipelines/_clip_filter.html" with units=batch_devices sites=batch_sites reviewers=batch_reviewers tubes=tube_summary reviewed_filter=True select=can_share rerun=can_rerun %}{% endif %}
 
   {% comment %}
     A clip's row opens its results page, where its events are reviewed. A photo
