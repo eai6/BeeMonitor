@@ -71,12 +71,15 @@ def fill(pks) -> dict:
     return out
 
 
-_refilling = set()
-_refill_lock = threading.Lock()
+_refilling = threading.Lock()
 
 
 def refill(pks):
-    """``fill`` these in a thread of this process, once at a time per set."""
+    """``fill`` these in one thread of this process. One at a time, whatever
+    page asked: the set of out-of-date listings changes with every recount,
+    and a thread per page load ran several over a 6,000-clip batch at once
+    and starved the web (memory/82). The thread reads the ones still out of
+    date as it goes, so it picks up the rest too."""
     import sys
 
     pks = list(pks)
@@ -85,21 +88,27 @@ def refill(pks):
     if sys.argv[1:2] == ["test"]:
         fill(pks)
         return
-    key = (pks[0], len(pks))
-    with _refill_lock:
-        if key in _refilling:
-            return
-        _refilling.add(key)
+    if not _refilling.acquire(blocking=False):
+        return                                   # one is running already
 
     def work():
+        import time
+
         from django.db import connection
+
+        from .models import PipelineRun
         try:
-            fill(pks)
+            todo = pks
+            while todo:
+                for i in range(0, len(todo), 200):
+                    fill(todo[i:i + 200])
+                    time.sleep(0.5)          # leave the web its one vCPU
+                todo = [pk for pk, lst in PipelineRun.objects.filter(pk__in=todo)
+                        .values_list("pk", "listing") if not is_current(lst)]
         except Exception:
             logger.exception("refilling %s listings failed", len(pks))
         finally:
-            with _refill_lock:
-                _refilling.discard(key)
+            _refilling.release()
             connection.close()
 
     threading.Thread(target=work, name="listing-refill", daemon=True).start()
