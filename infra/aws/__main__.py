@@ -649,7 +649,9 @@ db_instance = aws.rds.Instance(
     identifier=f"{prefix}-db",
     engine="postgres",
     engine_version="16",
-    instance_class="db.t4g.micro",
+    # 2 GB: the 1 GB micro swapped, then Postgres went down for 17 minutes
+    # with the recount workers and the web on it (2026-11-16, memory/82).
+    instance_class="db.t4g.small",
     allocated_storage=20,
     storage_encrypted=True,
     db_name="beemonitor",
@@ -877,7 +879,7 @@ aws.iam.RolePolicy(
         }],
     }),
 )
-# Workers at once: the db.t4g.micro's connections and CPU are the limit.
+# Workers at once: the database's memory and connections are the limit.
 recount_concurrency = int(config.get("recount-concurrency") or "8")
 
 pulumi.export("recount_queue_url", recount_queue.url)

@@ -281,6 +281,14 @@ class UpdatingABatchTests(DetectedReferenceBase):
         self.assertEqual(run.context["r"]["source"], "detected")
         self.assertEqual(run.counting_rules, recount.CURRENT_RULES)
         self.assertIsNone(regroup.batch_changes([run], self.pipeline))
+        # The player draws the tubes the events were counted against.
+        from apps.analysis.models import Job
+        job = Job.objects.create(user=self.user, video=self.video, status="completed",
+                                 modal_job_id=uuid.uuid4().hex)
+        with mock.patch.object(executors, "_job_run", return_value=run), \
+                mock.patch.object(Job, "result", create=True, new=object()):
+            drawn = executors.geometry_for_job(job)
+        self.assertEqual(drawn["tubes"]["state"], "detected")
         # The References page reads the new node, not the old one first in the steps.
         self.assertEqual(references.counted(run)["tubes"]["state"], "detected")
         from apps.pipelines import listing
@@ -442,6 +450,14 @@ class NewReferenceNodeTests(DetectedReferenceBase):
         changes = regroup.batch_changes([PipelineRun.objects.get(pk=run.pk)], self.pipeline)
         self.assertEqual(changes["gpu"], [])
         regroup.apply_pipeline(run.batch_id, self.user)
+        # Not recounted yet: the player still draws the layout it was counted with.
+        waiting = PipelineRun.objects.get(pk=run.pk)
+        from apps.analysis.models import Job
+        job0 = Job.objects.create(user=self.user, video=self.video, status="completed",
+                                  modal_job_id=uuid.uuid4().hex)
+        with mock.patch.object(executors, "_job_run", return_value=waiting), \
+                mock.patch.object(Job, "result", create=True, new=object()):
+            self.assertEqual(executors.geometry_for_job(job0)["source"], "site")
         with self.model(), mock.patch("apps.videos.frames.frame_jpeg", return_value=frame()):
             recount.sweep()
         run.refresh_from_db()

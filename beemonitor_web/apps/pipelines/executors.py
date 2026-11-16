@@ -758,8 +758,20 @@ def geometry_for_job(job):
     index = next((i for i in range(len(steps) - 1, -1, -1)
                   if str(steps[i].get("block_type", "")).startswith("analyze.")),
                  max(len(steps) - 1, 0))
+    # What the events were counted against: the wired reference's saved
+    # output; a reference node Update added that hasn't run yet has none, and
+    # the clip's events are still the old reference's (memory/82).
+    context = run.context or {}
+    wired = [(s.get("inputs") or {}).get("rois") for s in steps
+             if str(s.get("block_type", "")).startswith("analyze.")]
+    for sid in [w for w in wired if w] + [s.get("id") for s in steps
+                                          if s.get("block_type") in _REFERENCE_BLOCKS]:
+        out = context.get(sid) or {}
+        if out.get("artifact") == "roi" and (out.get("nest_layout") or out.get("regions")
+                                             or out.get("hotel_roi")):
+            return out
     try:
-        return find_reference(steps, index, run.context or {}, run) or {}
+        return find_reference(steps, index, context, run) or {}
     except Exception:  # noqa: BLE001 - a half-built graph draws nothing
         logger.exception("geometry_for_job: could not resolve job %s", job.pk)
         return {}
