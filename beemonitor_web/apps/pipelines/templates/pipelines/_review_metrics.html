@@ -1,7 +1,7 @@
-{% comment %}The batch's review metrics (memory/62, 70). The batch page renders it for every clip; batch_review_metrics renders it for the clips the filter shows (memory/73), with ``scope`` saying which.{% endcomment %}
+{% comment %}The batch's review metrics (memory/62, 70), on its review page only (memory/84): its own reviews, every day and place of it.{% endcomment %}
 {% with ev=review_summary.events tr=review_summary.trips %}
 <section class="bg-white shadow rounded-lg p-4 mb-6 grid grid-cols-1 md:grid-cols-2 gap-4" aria-label="Review">
-  {% if scope %}<p class="md:col-span-2 text-xs rounded border border-amber-300 bg-amber-50 text-amber-900 px-2 py-1.5">For the {{ scope.clips }} clip{{ scope.clips|pluralize }} the filter shows, not the whole batch. <button type="button" data-filter-clear class="underline">Clear filters</button></p>{% endif %}
+  {% if not metrics_current %}<p class="md:col-span-2 text-xs text-gray-600">Being brought up to date with the latest reviews; reload in a minute.</p>{% endif %}
   {% comment %}Only once someone has reviewed (memory/62): how far the review got, and how far to trust the system here.{% endcomment %}
   <div class="flex flex-col gap-1.5" id="review">
     <div class="flex flex-wrap items-center justify-between gap-2">
@@ -10,6 +10,7 @@
       {% if can_share %}
       <form method="post" action="{% url 'pipelines:batch_review_actions' batch_id %}" class="flex flex-wrap items-center gap-1.5 text-xs" data-review-actions>
         {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.get_full_path }}">
         <span class="text-gray-600">Count in metrics</span>
         {% for a, label in action_choices %}
         <label class="inline-flex items-center gap-1 h-8 px-2 rounded border cursor-pointer {% if a in review_actions %}border-green-600 bg-green-50 text-green-800 font-semibold{% else %}border-gray-300 bg-white text-gray-600{% endif %}">
@@ -47,7 +48,7 @@
     </div>
     <p class="text-xs text-gray-600">Direct means no tube hop was seen. A hop split across two tracks or clips stays Direct until a reviewer changes it.</p>
     {% else %}
-    <p class="text-sm text-gray-600">No trips reviewed yet. Open Review trips at the top of this page.</p>
+    <p class="text-sm text-gray-600">No trips reviewed yet.</p>
     {% endif %}
   </div>
 </section>

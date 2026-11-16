@@ -69,11 +69,11 @@ their reason.
     {% if can_share %}{% include "pipelines/_people_panel.html" %}{% include "pipelines/_share_panel.html" %}{% endif %}
     {% if period_reviews and not photos %}
     {% if period_reviews|length == 1 %}
-    <a href="{{ period_reviews.0.url }}" class="inline-flex items-center h-10 px-4 rounded-md text-sm font-semibold border border-gray-300 bg-white text-gray-800 hover:bg-gray-50" title="Every analysed clip of this batch's unit or site on one time axis: review events and trips across clips">Review trips</a>
+    <a href="{{ period_reviews.0.url }}" class="inline-flex items-center h-10 px-4 rounded-md text-sm font-semibold border border-gray-300 bg-white text-gray-800 hover:bg-gray-50" title="A day at a time: review its events and trips, and see the batch's metrics">Review</a>
     {% else %}
     {% comment %}Clips from several units or sites: a period is one place, so one review per place.{% endcomment %}
     <details class="relative">
-      <summary class="list-none cursor-pointer inline-flex items-center h-10 px-4 rounded-md text-sm font-semibold border border-gray-300 bg-white text-gray-800 hover:bg-gray-50">Review trips ▾</summary>
+      <summary class="list-none cursor-pointer inline-flex items-center h-10 px-4 rounded-md text-sm font-semibold border border-gray-300 bg-white text-gray-800 hover:bg-gray-50">Review ▾</summary>
       <div class="absolute right-0 mt-1 z-20 w-64 bg-white border border-gray-200 rounded-md shadow-lg p-1 flex flex-col">
         <span class="px-3 py-1.5 text-xs text-gray-600">This batch's clips come from {{ period_reviews|length }} places; pick one.</span>
         {% for p in period_reviews %}
@@ -351,59 +351,7 @@ their reason.
 {% endif %}
 
 <span hidden>{% csrf_token %}</span>
-{% if review_summary and batch_sites|length > 1 %}
-{% comment %}The same sites as the clip filter's: ticking one here filters both.{% endcomment %}
-<div class="flex flex-wrap items-center gap-1.5 mb-2 text-xs text-gray-700" role="group" aria-label="Sites in the metrics">
-  <span class="font-semibold mr-1">Metrics for</span>
-  {% for s in batch_sites %}<label class="flex items-center gap-1.5 h-9 px-2 border border-gray-300 rounded-md bg-white text-[13px]"><input type="checkbox" data-site-pick value="{{ s }}"> {{ s }}</label>{% endfor %}
-  <span class="ml-1 text-gray-600">None ticked = all sites. The clip list follows.</span>
-</div>
-{% endif %}
-<div id="review-metrics" data-url="{% url 'pipelines:batch_review_metrics' batch_id %}">
-{% if review_summary %}{% include "pipelines/_review_metrics.html" %}{% endif %}
-</div>
-<script>
-  // Wires the review section; again each time the filter swaps it (memory/73).
-  function initReviewMetrics(root) {
-  // Count in metrics (memory/70): saving on change.
-  root.querySelectorAll('[data-review-actions] input').forEach(function (cb) {
-    cb.addEventListener('change', function () { cb.form.submit(); });
-  });
-  }
-  initReviewMetrics(document.getElementById('review-metrics'));
-  // The metrics follow the clip filter (memory/73): the clips shown are sent
-  // and the section comes back computed for them; no filter, the whole batch.
-  (function () {
-    var box = document.getElementById('review-metrics');
-    var whole = box.innerHTML, timer = null, seq = 0;
-    function csrf() { var el = document.querySelector('[name=csrfmiddlewaretoken]'); return el ? el.value : ''; }
-    document.addEventListener('clipfilter:change', function (e) {
-      clearTimeout(timer);
-      timer = setTimeout(function () {
-        var mine = ++seq;
-        if (!e.detail.filtered) { box.innerHTML = whole; initReviewMetrics(box); return; }
-        var body = new URLSearchParams();
-        e.detail.visible.forEach(function (r) { body.append('run', r.getAttribute('data-f-run')); });
-        box.setAttribute('aria-busy', 'true');
-        fetch(box.getAttribute('data-url'), {method: 'POST', credentials: 'same-origin',
-          headers: {'X-CSRFToken': csrf()}, body: body})
-          .then(function (r) { return r.ok ? r.text() : Promise.reject(r.status); })
-          .then(function (html) {
-            if (mine !== seq) return;
-            box.innerHTML = html;
-            initReviewMetrics(box);
-            box.querySelectorAll('[data-filter-clear]').forEach(function (b) {
-              b.addEventListener('click', function () {
-                document.querySelector('#clip-filter [data-filter-clear]').click();
-              });
-            });
-          })
-          .catch(function () {})
-          .then(function () { box.removeAttribute('aria-busy'); });
-      }, 250);
-    });
-  })();
-</script>
+{% comment %}Review metrics are on the review page only (memory/84).{% endcomment %}
 
 {% if group_summary or pipeline_groups %}
 {% with gs=group_summary pg=pipeline_groups %}

@@ -1552,6 +1552,10 @@ def batch_review_actions(request, batch_id):
     if not sharing.owns_batch(request.user, batch_id):
         raise Http404("No such batch.")
     batches.set_review_actions(batch_id, request.user, request.POST.getlist("actions"))
+    # From the review page, back to it (memory/84).
+    nxt = request.POST.get("next") or ""
+    if nxt.startswith("/analysis/review/") and "//" not in nxt:
+        return redirect(nxt + "#review")
     return redirect(reverse("pipelines:batch_detail", args=[batch_id]) + "#review")
 
 
@@ -1631,35 +1635,6 @@ def batch_rows(request, batch_id):
         "rows": rows, "photos": photos, "pipeline": runs[0].pipeline,
         "can_share": sharing.owns_batch(request.user, batch_id),
         "batch_path": reverse("pipelines:batch_detail", args=[batch_id]),
-    })
-
-
-@login_required
-@require_POST
-def batch_review_metrics(request, batch_id):
-    """The review section for some of the batch's clips: the ones the clip
-    filter shows (memory/73). Anyone who can open the batch."""
-    from . import batches as batches_mod
-    from . import review as review_mod
-    from . import sharing
-
-    wanted = {str(pk) for pk in request.POST.getlist("run")}
-    runs = _batch_runs(request, batch_id, only=_uuids(wanted))
-    review_actions = batches_mod.review_actions(batch_id)
-    counted = None if len(review_actions) == len(batches_mod.ACTIONS) else review_actions
-    per_run = review_mod.batch_review_counts(runs, counted)
-    rows = [{"run": r, "review": per_run.get(r.pk)} for r in runs]
-    summary = review_mod.batch_review_summary(runs, per_run, counted) if runs else None
-    if summary is None:
-        return HttpResponse(
-            '<p class="bg-white shadow rounded-lg p-4 mb-6 text-sm text-gray-600">'
-            f"Nothing reviewed among the {len(runs)} clip{'' if len(runs) == 1 else 's'} "
-            "the filter shows.</p>")
-    return render(request, "pipelines/_review_metrics.html", {
-        "review_summary": summary, "scope": {"clips": len(runs)},
-        "review_actions": review_actions, "batch_id": batch_id,
-        "action_choices": [("exit", "Exits"), ("enter", "Entries"), ("stay", "Stays")],
-        "can_share": sharing.owns_batch(request.user, batch_id),
     })
 
 

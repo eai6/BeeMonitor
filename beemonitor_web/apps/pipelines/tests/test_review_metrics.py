@@ -52,14 +52,16 @@ class ReviewActionsTests(PeriodBase):
         # The stay vote is still there to see in review.
         self.assertTrue(EventReview.objects.filter(action="stay").exists())
 
-    def test_the_batch_page_saves_the_choice(self):
+    def test_the_review_page_saves_the_choice(self):
         self.client.force_login(self.owner)
+        review_page = reverse("analysis:period_review") + f"?batch={self.batch}"
         url = reverse("pipelines:batch_review_actions", args=[self.batch])
-        self.client.post(url, {"actions": ["exit", "enter"]})
-        page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
-        self.assertEqual(page.context["review_actions"], ["exit", "enter"])
+        res = self.client.post(url, {"actions": ["exit", "enter"], "next": review_page})
+        self.assertEqual(res["Location"], review_page + "#review")
+        page = self.client.get(review_page)
+        self.assertEqual(page.context["metrics"]["actions"], ["exit", "enter"])
         self.assertContains(page, "left out of these numbers")
-        self.assertEqual(page.context["review_summary"]["events"]["rejected"], 0)
+        self.assertEqual(page.context["metrics"]["summary"]["events"]["rejected"], 0)
 
     def test_others_cannot_change_it(self):
         self.client.force_login(self.stranger)

@@ -128,6 +128,9 @@ class BatchReviewSummaryTests(EventReviewTests):
         # Trips are scored in test_period_review.TripScoreTests.
         self.assertEqual(s["trips"]["reviewed"], 3)
         self.client.force_login(self.owner)
-        page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
+        # On the review page only (memory/84).
+        page = self.client.get(reverse("analysis:period_review"), {"batch": str(self.batch)})
         self.assertContains(page, "Events review")
         self.assertContains(page, "Trips review")
+        batch = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
+        self.assertNotContains(batch, "Events review")

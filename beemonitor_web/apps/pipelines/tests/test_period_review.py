@@ -333,7 +333,8 @@ class SharedJobTests(PeriodBase):
         self.assertContains(page, reverse("analysis:results", args=[self.a["job"].pk])
                             + f"?run={self.a['run'].pk}")
 
-    def test_votes_saved_on_the_clips_newer_run_count_for_the_batch(self):
+    def test_votes_saved_on_another_batchs_run_dont_count_here(self):
+        """memory/84: a batch counts its own reviews."""
         # Period opened from the unit (no batch): votes land on the later runs.
         p = self.payload(self.page())
         self.assertEqual(p["clips"][0]["run"], str(self.later_runs[0].pk))
@@ -346,13 +347,8 @@ class SharedJobTests(PeriodBase):
         self.assertEqual(TripReview.objects.get().exit_run_id, self.later_runs[0].pk)
         self.pipeline.steps = [{"id": "t", "block_type": "analyze.trips", "config": {}}]
         self.pipeline.save()
-        page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
-        summary = page.context["review_summary"]
-        self.assertEqual((summary["trips"]["reviewed"], summary["events"]["reviewed"]), (1, 1))
-        self.assertIn("trips", [d["kind"] for d in page.context["downloads"]])
-        body = self.client.get(reverse("pipelines:batch_combined_csv", kwargs={
-            "batch_id": self.batch, "kind": "trips"})).getvalue().decode()
-        self.assertEqual(len(list(csv.DictReader(io.StringIO(body)))), 1)
+        page = self.client.get(reverse("analysis:period_review"), {"batch": str(self.batch)})
+        self.assertIsNone(page.context["metrics"]["summary"])
 
     def test_a_reviewers_latest_call_wins_across_runs(self):
         self.vote("accepted", exit_run=self.clips[0]["run"])
@@ -384,11 +380,17 @@ class ClipNavigationTests(PeriodBase):
 class TripsOnlyPageTests(PeriodBase):
     """Events are reviewed on each clip's page; this page is for trips."""
 
-    def test_it_offers_trips_and_a_speed_control_and_no_event_review(self):
+    def test_it_offers_events_and_trips_and_a_speed_control(self):
+        """memory/84: one review page for both."""
         self.client.force_login(self.owner)
         r = self.client.get(reverse("analysis:period_review"), {"batch": str(self.batch)})
         self.assertContains(r, "data-pr-trip-next")
+        self.assertContains(r, "data-pr-event-yes")
+        self.assertContains(r, 'data-pr-mode="events"')
         self.assertContains(r, "data-pr-speeds")
+        clip = r.context["payload"]["clips"][0]
+        self.assertIn(reverse("analysis:clip_reviewed", args=[clip["job"]]), clip["reviewed_url"])
+        self.assertFalse(clip["reviewed"])
         self.assertNotContains(r, 'data-pr-list')
         for gone in ("data-pr-review-events", "data-pr-review-trips", "data-am-open", "data-pr-card",
                      "add_missed.js"):
@@ -773,15 +775,30 @@ class WholePlaceTests(PeriodBase):
         return self.client.get(reverse("analysis:period_review"),
                                {"batch": str(self.batch), **params})
 
-    def test_no_limit_on_dates_or_clips(self):
+    def test_one_day_at_a_time(self):
+        """memory/84: a whole place at once ran the web out of memory."""
         Video.objects.filter(pk=self.b["video"].pk).update(
             recorded_at=datetime(2026, 7, 15, 11, 0, tzinfo=dt_timezone.utc))
         with mock.patch("apps.pipelines.period.MAX_CLIPS", 1):
             r = self.open()
         p = r.context["payload"]
-        self.assertEqual([c["title"] for c in p["clips"]], ["a", "b"])
+        self.assertEqual([c["title"] for c in p["clips"]], ["a"])
+        self.assertEqual([d["clips"] for d in r.context["days"]], [1, 1])
         self.assertFalse(r.context["data"]["notes"])
         self.assertEqual(p["clips"][0]["fps"], self.payload(self.page())["clips"][0]["fps"])
+        self.assertIsNone(r.context["previous_day"])
+        later = self.client.get(r.context["next_day"]["url"].replace("?", reverse("analysis:period_review") + "?"))
+        self.assertEqual([c["title"] for c in later.context["payload"]["clips"]], ["b"])
+        self.assertContains(later, "data-pr-day")
+
+    def test_it_opens_on_the_first_day_with_a_clip_to_review(self):
+        from apps.pipelines.models import ClipReview
+        Video.objects.filter(pk=self.b["video"].pk).update(
+            recorded_at=datetime(2026, 7, 15, 11, 0, tzinfo=dt_timezone.utc))
+        ClipReview.objects.create(run=self.a["run"], user=self.owner)
+        r = self.open()
+        self.assertEqual([c["title"] for c in r.context["payload"]["clips"]], ["b"])
+        self.assertEqual([d["reviewed"] for d in r.context["days"]], [1, 0])
 
     def test_clips_of_other_places_are_left_out_and_offered(self):
         other = Device.objects.create(owner=self.owner, name="Second", key_hash="hpr4",

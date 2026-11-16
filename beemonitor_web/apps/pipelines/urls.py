@@ -23,7 +23,6 @@ urlpatterns = [
     # References a model found, and recounts left (memory/83).
     path("batch/<uuid:batch_id>/recount-progress/", tube_views.batch_recount_progress,
          name="batch_recount_progress"),
-    path("batch/<uuid:batch_id>/review-metrics/", views.batch_review_metrics, name="batch_review_metrics"),
     path("batch/<uuid:batch_id>/remove-clips/", views.batch_remove_clips, name="batch_remove_clips"),
     path("batch/<uuid:batch_id>/combined/<str:kind>.csv", views.batch_combined_csv, name="batch_combined_csv"),
     path("<uuid:pk>/", views.pipeline_editor, name="editor"),

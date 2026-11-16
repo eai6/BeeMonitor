@@ -28,7 +28,7 @@ from django.core.serializers.json import DjangoJSONEncoder
 logger = logging.getLogger(__name__)
 
 # Bump when what is worked out changes: every batch's totals are redone.
-VERSION = 2   # 2: what counts as a pipeline change (memory/82)
+VERSION = 3   # 3: a batch counts its own reviews (memory/84)
 
 _working = set()
 _lock = threading.Lock()
@@ -89,14 +89,12 @@ def fingerprint(batch_id, pipeline, counted) -> str:
         failed=Count("id", filter=Q(status=PipelineRun.Status.FAILED)),
         results=Max("results_at"), started=Max("started_at"), completed=Max("completed_at"),
         rules=Sum("counting_rules")))
-    # Reviews of these clips' GPU jobs, from whichever run they were cast on
-    # (review.shared_job_runs).
-    jobs = runs.exclude(gpu_job_id=None).values("gpu_job_id")
+    # This batch's reviews (review.shared_job_runs, memory/84).
     for model, run_field, when in ((EventReview, "run", "updated_at"),
                                    (TripReview, "exit_run", "updated_at"),
                                    (AddedEvent, "run", "created_at"),
                                    (ClipReview, "run", "created_at")):
-        parts.append(model.objects.filter(**{f"{run_field}__gpu_job_id__in": jobs})
+        parts.append(model.objects.filter(**{f"{run_field}__batch_id": batch_id})
                      .aggregate(n=Count("id"), last=Max(when), top=Max("id")))
     return hashlib.sha256(json.dumps(parts, cls=DjangoJSONEncoder, sort_keys=True)
                           .encode()).hexdigest()

@@ -206,12 +206,12 @@ def _job_of(run):
 
 def shared_job_runs(runs, reviewed_by):
     """``{run pk: the run of ``runs`` it counts for}``: ``runs`` themselves and
-    every other run with reviews (``reviewed_by``: "event_reviews",
-    "trip_exits" or "added_events") that shares one of their GPU jobs.
+    every other run **of the same batch** with reviews (``reviewed_by``:
+    "event_reviews", "trip_exits" or "added_events") that shares one of their
+    GPU jobs: a clip run again on the GPU in its batch keeps its votes.
 
-    A re-run re-uses its clips' GPU jobs, and a period page opened without its
-    batch saves votes to the clip's newest run: the same tracks and the same
-    event keys, so those votes are this run's too."""
+    A batch counts its own reviews only (memory/84): a clip reviewed in one
+    batch isn't reviewed in another made from the same GPU runs."""
     from .models import PipelineRun
 
     runs = list(runs)
@@ -219,11 +219,15 @@ def shared_job_runs(runs, reviewed_by):
     by_job = {j: r for r in runs if (j := _job_of(r)) is not None}
     if not by_job:
         return out
+    batch_of = dict(PipelineRun.objects.filter(pk__in=[r.pk for r in by_job.values()])
+                    .values_list("pk", "batch_id"))
     # By the indexed job column (memory/75), never by reading contexts.
-    for pk, job_id in (PipelineRun.objects
-                       .filter(gpu_job_id__in=list(by_job), **{f"{reviewed_by}__isnull": False})
-                       .exclude(pk__in=list(out)).values_list("pk", "gpu_job_id").distinct()):
-        out[pk] = by_job[job_id]
+    for pk, job_id, batch_id in (PipelineRun.objects
+                                 .filter(gpu_job_id__in=list(by_job), **{f"{reviewed_by}__isnull": False})
+                                 .exclude(pk__in=list(out))
+                                 .values_list("pk", "gpu_job_id", "batch_id").distinct()):
+        if batch_id == batch_of.get(by_job[job_id].pk):
+            out[pk] = by_job[job_id]
     return out
 
 

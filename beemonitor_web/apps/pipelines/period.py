@@ -175,13 +175,16 @@ def gather(user, device=None, site=None, start=None, end=None, prefer=None):
     return {"clips": clips, "skipped": skipped, "notes": notes, "start": start, "end": end}
 
 
-def gather_batch(user, batch_id, device=None, site=None):
-    """Every clip of one unit or site in a batch, as ``gather`` but with no
-    limit on dates or clips: trips are reviewed across all of them. Light: read
-    the clips whole a few at a time, with ``whole_clips``."""
+def gather_batch(user, batch_id, device=None, site=None, day=None):
+    """One day of one unit or site in a batch, as ``gather``: the day asked
+    for (a ``date``), else the first with a clip not marked reviewed, else the
+    first. A whole place at once (thousands of clips) ran the web out of
+    memory (memory/84); a day is tens. Trips don't cross midnight. Also
+    ``days``: ``[{date, clips, reviewed}]`` for the place, and ``day``. Light:
+    read the clips whole a few at a time, with ``whole_clips``."""
     from apps.videos.models import Video
 
-    from .review import can_review
+    from .review import can_review, reviewed_runs
 
     chosen = batch_runs(batch_id, light=True)
     qs = Video.objects.select_related("device", "site").filter(pk__in=list(chosen))
@@ -197,6 +200,17 @@ def gather_batch(user, batch_id, device=None, site=None):
         else:
             placed.append((s, v))
     placed.sort(key=lambda p: (p[0], p[1].pk))
+    done = reviewed_runs([chosen[v.pk][1] for _s, v in placed])
+    days = {}
+    for s, v in placed:
+        d = days.setdefault(s.date(), {"date": s.date(), "clips": 0, "reviewed": 0})
+        d["clips"] += 1
+        d["reviewed"] += chosen[v.pk][1].pk in done
+    days = list(days.values())
+    if day not in {d["date"] for d in days}:
+        day = next((d["date"] for d in days if d["reviewed"] < d["clips"]),
+                   days[0]["date"] if days else None)
+    placed = [(s, v) for s, v in placed if s.date() == day]
     start = placed[0][0] if placed else datetime.now()
     clips = []
     for s, v in placed:
@@ -204,10 +218,11 @@ def gather_batch(user, batch_id, device=None, site=None):
         clips.append({"video": v, "job": job, "run": run, "start": s,
                       "offset": (s - start).total_seconds(),
                       "duration": float(v.duration_seconds or 0), "fps": 25.0,
-                      "can_review": can_review(user, run)})
+                      "can_review": can_review(user, run),
+                      "reviewed": run.pk in done})
     end = placed[-1][0] + timedelta(hours=1) if placed else start
     return {"clips": clips, "skipped": skipped, "notes": [], "start": start, "end": end,
-            "light": True}
+            "light": True, "days": days, "day": day}
 
 
 def whole_clips(data, chunk=25):

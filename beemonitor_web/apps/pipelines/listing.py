@@ -123,10 +123,11 @@ def rows(qs) -> list[dict]:
     from apps.videos.models import Video
 
     runs = [SimpleNamespace(pk=pk, status=status, error_message=msg, listing=lst or {},
-                            user_id=user_id, started_at=started, gpu_job_id=job_id)
-            for pk, status, msg, lst, user_id, started, job_id
+                            user_id=user_id, started_at=started, gpu_job_id=job_id,
+                            batch_id=batch_id)
+            for pk, status, msg, lst, user_id, started, job_id, batch_id
             in qs.values_list("pk", "status", "error_message", "listing", "user_id",
-                              "started_at", "gpu_job_id").iterator(chunk_size=1000)]
+                              "started_at", "gpu_job_id", "batch_id").iterator(chunk_size=1000)]
     # None yet: built now. An older version: shown as it is, and rebuilt in
     # the background, as a version bump touches every clip of a 6,000-clip
     # batch, longer than a request may take (memory/82).
@@ -176,15 +177,21 @@ def rows(qs) -> list[dict]:
 
 
 def _reviewers(qs, runs) -> dict:
-    """review.reviewers_by_run for the runs of ``qs``, by their GPU jobs in
-    one query a kind of review, not by lists of thousands of run ids."""
+    """review.reviewers_by_run for the runs of ``qs``, in one query a kind of
+    review, not by lists of thousands of run ids: each clip's reviewers in its
+    batch, by its GPU job (a clip run again in the batch keeps them), never
+    another batch's (memory/84)."""
     from .models import AddedEvent, ClipReview, EventReview, TripReview
 
     jobs = qs.exclude(gpu_job_id=None).values("gpu_job_id")
+    batches = qs.values("batch_id")
     names = {}
     for model, field in ((EventReview, "run"), (AddedEvent, "run"),
                          (ClipReview, "run"), (TripReview, "exit_run")):
-        for job_id, name in (model.objects.filter(**{f"{field}__gpu_job_id__in": jobs})
-                             .values_list(f"{field}__gpu_job_id", "user__username").distinct()):
-            names.setdefault(job_id, set()).add(name)
-    return {r.pk: sorted(names.get(r.gpu_job_id, ()), key=str.lower) for r in runs}
+        for job_id, batch_id, name in (
+                model.objects.filter(**{f"{field}__gpu_job_id__in": jobs,
+                                        f"{field}__batch_id__in": batches})
+                .values_list(f"{field}__gpu_job_id", f"{field}__batch_id", "user__username")
+                .distinct()):
+            names.setdefault((job_id, batch_id), set()).add(name)
+    return {r.pk: sorted(names.get((r.gpu_job_id, r.batch_id), ()), key=str.lower) for r in runs}

@@ -43,8 +43,7 @@ def _place(request):
     ``batch=<uuid>`` fills in what's missing: the batch's one device (or one
     site) and its clips' time range."""
     from apps.devices.models import Device
-    from apps.pipelines.aggregate import run_video_id
-    from apps.pipelines.models import PipelineRun
+    from apps.pipelines.aggregate import batch_video_ids
     from apps.videos.models import Site, Video
 
     g = request.GET
@@ -55,7 +54,8 @@ def _place(request):
             batch = uuid.UUID(g["batch"])
         except ValueError:
             raise Http404("No such batch.")
-        vids = [v for r in PipelineRun.objects.filter(batch_id=batch) if (v := run_video_id(r))]
+        # Its clips from the runs' steps: never every run's results (memory/84).
+        vids = [v for v in batch_video_ids(batch) if v]
         videos = list(Video.objects.filter(pk__in=vids).select_related("device", "site"))
         if not videos:
             raise Http404("No such batch.")
@@ -98,7 +98,12 @@ def _gather(request):
     device, site, start, end = _place(request)
     # Opened from a batch: its clips show (and take votes on) the batch's runs.
     if request.GET.get("batch") and not request.GET.get("from") and not request.GET.get("to"):
-        data = period.gather_batch(request.user, request.GET["batch"], device=device, site=site)
+        try:
+            day = datetime.strptime(request.GET.get("day") or "", "%Y-%m-%d").date()
+        except ValueError:
+            day = None
+        data = period.gather_batch(request.user, request.GET["batch"], device=device, site=site,
+                                   day=day)
     else:
         prefer = period.batch_runs(request.GET["batch"]) if request.GET.get("batch") else None
         data = period.gather(request.user, device=device, site=site, start=start, end=end,
@@ -131,6 +136,36 @@ def _trip_votes(runs, user):
     return out
 
 
+# A batch this big has its metrics worked out in the background (batchstats).
+BIG_BATCH = 500
+
+
+def _metrics(batch_id, user):
+    """The batch's review metrics (memory/84): ``{summary, current, actions,
+    choices, can_share}``, its own reviews only. A big batch's from the totals
+    worked out in the background; a small one's now."""
+    from apps.pipelines import batches, batchstats, runsummary, sharing
+    from apps.pipelines.models import PipelineRun
+
+    actions = batches.review_actions(batch_id)
+    counted = None if len(actions) == len(batches.ACTIONS) else actions
+    finished = PipelineRun.objects.filter(batch_id=batch_id, status=PipelineRun.Status.COMPLETED)
+    first = finished.select_related("pipeline").only("pk", "pipeline").first()
+    if first is None:
+        return None
+    if finished.count() > BIG_BATCH:
+        stats, current = batchstats.stored(batch_id, first.pipeline, counted)
+        summary = (stats or {}).get("review_summary")
+    else:
+        runs = runsummary.use_slim(list(finished.defer("context")))
+        summary = event_review.batch_review_summary(
+            runs, event_review.batch_review_counts(runs, counted), counted)
+        current = True
+    return {"summary": summary, "current": current, "actions": actions,
+            "choices": [("exit", "Exits"), ("enter", "Entries"), ("stay", "Stays")],
+            "can_share": sharing.owns_batch(user, batch_id)}
+
+
 class PeriodReviewView(LoginRequiredMixin, View):
     def get(self, request):
         from apps.pipelines import review as event_review
@@ -150,7 +185,8 @@ class PeriodReviewView(LoginRequiredMixin, View):
                 "job": job.pk, "run": str(c["run"].pk), "title": c["video"].title, "offset": c["offset"],
                 "duration": c["duration"], "fps": c["fps"],
                 "start": c["start"].isoformat(timespec="seconds"),
-                "can_review": c["can_review"],
+                "can_review": c["can_review"], "reviewed": bool(c.get("reviewed")),
+                "reviewed_url": reverse("analysis:clip_reviewed", args=[job.pk]) + run_q,
                 "overlay_url": reverse("analysis:track_overlay", args=[job.pk]) + run_q,
                 "stream_url": reverse("analysis:period_stream", args=[job.pk]),
                 # The run is named so votes land on the run shown here.
@@ -188,7 +224,7 @@ class PeriodReviewView(LoginRequiredMixin, View):
         query = request.GET.copy()
         # Opened from a batch: name it and link back (memory/64), and offer its
         # other units and sites.
-        batch, places = None, []
+        batch, places, days, metrics = None, [], [], None
         if request.GET.get("batch"):
             from apps.pipelines import batches
             from apps.pipelines.aggregate import batch_video_ids
@@ -197,7 +233,7 @@ class PeriodReviewView(LoginRequiredMixin, View):
             first = (PipelineRun.objects.filter(batch_id=request.GET["batch"])
                      .select_related("pipeline").first())
             if first is not None:
-                batch = {"name": batches.title(first.batch_id, first.pipeline),
+                batch = {"name": batches.title(first.batch_id, first.pipeline), "id": first.batch_id,
                          "url": reverse("pipelines:batch_detail", args=[first.batch_id])}
                 places = _batch_places(
                     Video.objects.filter(pk__in=batch_video_ids(first.batch_id))
@@ -205,8 +241,19 @@ class PeriodReviewView(LoginRequiredMixin, View):
                 for place in places:
                     place["on"] = (place["device"] == data["device"]
                                    and place["site"] == (None if data["device"] else data["site"]))
+                here = next((p["url"] for p in places if p["on"]), "")
+                # One day at a time (memory/84): the place's days, to step through.
+                for d in data.get("days") or []:
+                    d["url"] = f"{here}&day={d['date'].isoformat()}"
+                    d["on"] = d["date"] == data.get("day")
+                days = data.get("days") or []
+                metrics = _metrics(first.batch_id, request.user)
+        on = next((i for i, d in enumerate(days) if d["on"]), None)
         return render(request, "analysis/period_review.html", {
-            "batch": batch, "places": places,
+            "batch": batch, "places": places, "days": days, "metrics": metrics,
+            "day": data.get("day"),
+            "previous_day": days[on - 1] if on else None,
+            "next_day": days[on + 1] if on is not None and on + 1 < len(days) else None,
             "data": data, "payload": payload,
             "any_review": any(c["can_review"] for c in data["clips"]),
         })

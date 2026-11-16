@@ -1,17 +1,17 @@
 {% extends "base.html" %}
 {% load static %}
-{% block title %}Review trips - BeeMonitor{% endblock %}
+{% block title %}Review - BeeMonitor{% endblock %}
 
 {% block content %}
 {% comment %}
-Trip review (memory/62): all the trips of one unit or site in a batch, one
-after another in one player, across clips. Events are reviewed on each clip's
-own page. Logic: pipelines/period.py.
+Review (memory/62, 84): one day of one unit or site in a batch, in one player
+across its clips: its events, then its trips. The batch's metrics are here
+and nowhere else. Logic: pipelines/period.py.
 {% endcomment %}
 <div id="period-review" class="flex flex-col gap-3">
   {% csrf_token %}
   <div class="flex flex-wrap items-center gap-3 bg-white border border-gray-200 rounded-lg px-4 py-3 text-[13px] text-gray-700">
-    <h1 class="text-lg font-semibold text-gray-900">Review trips{% if batch %} · <a href="{{ batch.url }}" class="text-amber-700 hover:underline">{{ batch.name }}</a>{% endif %}</h1>
+    <h1 class="text-lg font-semibold text-gray-900">Review{% if batch %} · <a href="{{ batch.url }}" class="text-amber-700 hover:underline">{{ batch.name }}</a>{% endif %}</h1>
     {% if places|length > 1 %}
     <label class="flex items-center gap-1.5 text-xs">Unit or site
       <select data-pr-place class="h-10 border border-gray-300 rounded-md px-2 text-sm">
@@ -19,16 +19,36 @@ own page. Logic: pipelines/period.py.
       </select>
     </label>
     {% endif %}
+    {% if days %}
+    {% comment %}One day at a time (memory/84): a whole place at once ran the web out of memory.{% endcomment %}
+    <span class="flex items-center gap-1.5 text-xs" role="group" aria-label="Day">
+      {% if previous_day %}<a href="{{ previous_day.url }}" class="h-10 px-3 inline-flex items-center rounded-md border border-gray-300 bg-white hover:bg-gray-50" title="The day before">◀</a>{% endif %}
+      <select data-pr-day class="h-10 border border-gray-300 rounded-md px-2 text-sm" aria-label="Day">
+        {% for d in days %}<option value="{{ d.url }}" {% if d.on %}selected{% endif %}>{{ d.date|date:"D j M Y" }} · {{ d.clips }} clip{{ d.clips|pluralize }}{% if d.reviewed %} · {{ d.reviewed }} reviewed{% endif %}</option>{% endfor %}
+      </select>
+      {% if next_day %}<a href="{{ next_day.url }}" class="h-10 px-3 inline-flex items-center rounded-md border border-gray-300 bg-white hover:bg-gray-50" title="The next day">▶</a>{% endif %}
+    </span>
+    {% endif %}
+    <span class="flex rounded-md border border-gray-300 overflow-hidden" role="group" aria-label="What to review">
+      <button type="button" data-pr-mode="events" class="h-10 px-3 bg-white">Events (<span data-pr-mode-n></span>)</button>
+      <button type="button" data-pr-mode="trips" class="h-10 px-3 bg-white border-l border-gray-300">Trips (<span data-pr-mode-n></span>)</button>
+    </span>
     <span><span data-pr-progress></span>{% if data.skipped %} · {{ data.skipped|length }} clip{{ data.skipped|length|pluralize }} with no recording time left out{% endif %}</span>
-    <span class="flex rounded-md border border-gray-300 overflow-hidden" role="group" aria-label="Which trip type"
+    <span data-pr-trips-only class="flex rounded-md border border-gray-300 overflow-hidden" role="group" aria-label="Which trip type"
           title="Tube hop: one track links the exit or entry to a tube. Direct: no hop seen.">
       <button type="button" data-pr-kind="all" class="h-10 px-3 bg-white">All (<span data-pr-kind-n></span>)</button>
       <button type="button" data-pr-kind="direct" class="h-10 px-3 bg-white border-l border-gray-300">Direct (<span data-pr-kind-n></span>)</button>
       <button type="button" data-pr-kind="tube_hop" class="h-10 px-3 bg-white border-l border-gray-300">Tube hop (<span data-pr-kind-n></span>)</button>
     </span>
-    <label class="flex items-center gap-1.5 text-xs">Reviewed by
+    <label data-pr-trips-only class="flex items-center gap-1.5 text-xs">Reviewed by
       <select data-pr-who class="h-10 border border-gray-300 rounded-md px-2 text-sm"></select>
     </label>
+    <span data-pr-events-only class="flex rounded-md border border-gray-300 overflow-hidden" role="group" aria-label="Which events">
+      <button type="button" data-pr-action="all" class="h-10 px-3 bg-white">All</button>
+      <button type="button" data-pr-action="exit" class="h-10 px-3 bg-white border-l border-gray-300">Exits</button>
+      <button type="button" data-pr-action="enter" class="h-10 px-3 bg-white border-l border-gray-300">Entries</button>
+      <button type="button" data-pr-action="stay" class="h-10 px-3 bg-white border-l border-gray-300">Stays</button>
+    </span>
   </div>
 
   {% comment %}Player and review panel side by side, as on the clip page.{% endcomment %}
@@ -49,8 +69,62 @@ own page. Logic: pipelines/period.py.
         <label class="flex items-center gap-1.5"><input type="checkbox" data-pr-opt="events" checked> Events (exit, enter, stay)</label>
         <label class="flex items-center gap-1.5"><input type="checkbox" data-pr-opt="interactions" checked> Interactions</label>
       </div>
+      {% comment %}Shared by events and trips.{% endcomment %}
+      <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label="Playback speed">
+        <span class="text-[13px] text-gray-600 mr-1">Speed</span>
+        <span data-pr-speeds class="flex flex-wrap gap-1.5"></span>
+        <span class="flex items-center gap-1.5 ml-3" role="group" aria-label="Step one frame">
+          <button type="button" data-pr-toggle title="Play or pause (space)" class="h-10 w-20 rounded border border-gray-300 bg-white hover:bg-gray-50">Play</button>
+          <span class="text-[13px] text-gray-600">Frame</span>
+          <button type="button" data-pr-step="-1" aria-label="Back one frame" title="Back one frame (,)" class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">‹</button>
+          <button type="button" data-pr-step="1" aria-label="Forward one frame" title="Forward one frame (.)" class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">›</button>
+        </span>
+      </div>
       <p data-pr-status class="text-xs text-gray-600"></p>
   </div>
+
+  {% if any_review %}
+  {% comment %}Events (memory/84): each of the day's events in turn, Yes or No, as on the clip page.{% endcomment %}
+  <section data-pr-event hidden class="bg-white border border-gray-200 rounded-lg p-4 flex flex-col gap-3" style="flex: 1 1 360px; min-width: 0" aria-label="Review this event">
+    <div class="flex flex-wrap items-baseline justify-between gap-2">
+      <strong data-pr-event-title class="text-base"></strong>
+      <span data-pr-event-where class="font-mono text-[13px] text-gray-700"></span>
+    </div>
+    <p data-pr-event-who class="text-[13px] text-gray-700 m-0"></p>
+    <p data-pr-event-call hidden class="text-[13px] font-semibold text-amber-800 m-0"></p>
+    <div class="flex flex-wrap gap-2 items-center">
+      <button type="button" data-pr-event-play class="h-10 px-3.5 rounded bg-gray-900 hover:bg-gray-700 text-white font-semibold">Play ±2 s (P)</button>
+      <span data-pr-event-now class="text-[13px] text-gray-600"></span>
+    </div>
+    <div class="flex flex-wrap gap-2 items-center">
+      <button type="button" data-pr-event-yes class="h-11 px-5 rounded bg-green-700 hover:bg-green-800 text-white font-bold">Yes (Y)</button>
+      <button type="button" data-pr-event-no class="h-11 px-5 rounded bg-red-700 hover:bg-red-800 text-white font-bold">No (N)</button>
+      <button type="button" data-pr-event-back class="h-11 px-3.5 rounded border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50">← Previous</button>
+      <button type="button" data-pr-event-next class="h-11 px-3.5 rounded border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50">Next →</button>
+      <button type="button" data-pr-event-open class="h-11 px-3.5 rounded border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50" title="The next event nobody has reviewed">Next unreviewed (U)</button>
+    </div>
+    <div class="flex flex-col gap-2 border-t border-gray-200 pt-3 text-[13px]">
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="font-semibold text-gray-900">This clip</span>
+        <span data-pr-clip-name class="text-gray-700"></span>
+        <button type="button" data-pr-clip-done class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50"></button>
+      </div>
+      {% comment %}A missed exit or entry, at the frame the player shows (memory/62 §3b).{% endcomment %}
+      <form data-pr-add class="flex flex-wrap items-end gap-2">
+        <label class="flex flex-col gap-1">Missed
+          <select data-pr-add-action class="h-10 border border-gray-300 rounded-md px-2 text-sm">
+            <option value="exit">exit</option><option value="enter">entry</option>
+          </select>
+        </label>
+        <label class="flex flex-col gap-1">Tube
+          <input type="text" data-pr-add-tube required class="h-10 w-20 border border-gray-300 rounded-md px-2 text-sm">
+        </label>
+        <button type="submit" class="h-10 px-3 rounded bg-amber-700 hover:bg-amber-800 text-white font-semibold">Add at this frame</button>
+        <span data-pr-add-out class="text-gray-600"></span>
+      </form>
+    </div>
+  </section>
+  {% endif %}
 
   {% if any_review %}
   <section data-pr-trip hidden class="bg-white border border-gray-200 rounded-lg p-4 flex flex-col gap-3" style="flex: 1 1 360px; min-width: 0" aria-label="Review this trip">
@@ -76,16 +150,6 @@ own page. Logic: pipelines/period.py.
       <button type="button" data-pr-trip-play="entry" class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">Entry ±2 s</button>
       <button type="button" data-pr-trip-play="whole" class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">Whole trip</button>
       <span data-pr-trip-now class="text-[13px] text-gray-600"></span>
-    </div>
-    <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label="Playback speed">
-      <span class="text-[13px] text-gray-600 mr-1">Speed</span>
-      <span data-pr-speeds class="flex flex-wrap gap-1.5"></span>
-      <span class="flex items-center gap-1.5 ml-3" role="group" aria-label="Step one frame">
-        <button type="button" data-pr-toggle title="Play or pause (space)" class="h-10 w-20 rounded border border-gray-300 bg-white hover:bg-gray-50">Play</button>
-        <span class="text-[13px] text-gray-600">Frame</span>
-        <button type="button" data-pr-step="-1" aria-label="Back one frame" title="Back one frame (,)" class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">‹</button>
-        <button type="button" data-pr-step="1" aria-label="Forward one frame" title="Forward one frame (.)" class="h-10 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50">›</button>
-      </span>
     </div>
     <div class="flex flex-col gap-1">
       <div data-pr-trip-bar class="relative h-6 rounded bg-gray-200 cursor-pointer" title="The trip from 2 s before the exit to 2 s after the entry — click to watch that moment"></div>
@@ -124,6 +188,13 @@ own page. Logic: pipelines/period.py.
   </section>
   {% endif %}
   </div>
+  {% if metrics %}
+  {% if metrics.summary %}
+  {% include "pipelines/_review_metrics.html" with review_summary=metrics.summary review_actions=metrics.actions action_choices=metrics.choices can_share=metrics.can_share batch_id=batch.id metrics_current=metrics.current %}
+  {% else %}
+  <p class="text-sm text-gray-600" id="review">Metrics: nothing reviewed in this batch yet{% if not metrics.current %} (or being brought up to date; reload in a minute){% endif %}.</p>
+  {% endif %}
+  {% endif %}
 </div>
 {% include "analysis/_crop_viewer.html" %}
 {{ payload|json_script:"period-data" }}

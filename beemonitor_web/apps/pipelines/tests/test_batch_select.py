@@ -56,26 +56,6 @@ class BatchSelectTests(FilterBase):
         self.assertContains(page, f'value="!pat">Not by pat')
         self.assertContains(page, f'>You ({self.user.username})<')
 
-    def test_review_metrics_for_the_clips_shown(self):
-        event = self.run_a.context["a"]["rows"][0]
-        from apps.pipelines.review import event_key
-        EventReview.objects.create(run=self.run_a, event_key=event_key(event), action="enter",
-                                   reference="x", track_id="1", frame=1,
-                                   user=self.user, verdict="accepted")
-        url = reverse("pipelines:batch_review_metrics", args=[self.batch])
-        shown = self.client.post(url, {"run": [self.run_a.pk]})
-        self.assertContains(shown, "For the 1 clip the filter shows")
-        self.assertContains(shown, "1 accepted")
-        other = self.client.post(url, {"run": [self.run_b.pk]})
-        self.assertContains(other, "Nothing reviewed among the 1 clip the filter shows")
-
-    def test_metrics_need_access_to_the_batch(self):
-        from django.contrib.auth.models import User
-        self.client.force_login(User.objects.create_user("nosy", password="x"))
-        res = self.client.post(reverse("pipelines:batch_review_metrics", args=[self.batch]),
-                               {"run": [self.run_a.pk]})
-        self.assertEqual(res.status_code, 404)
-
     def test_taking_a_clip_out_and_putting_it_back(self):
         ClipReview.objects.create(run=self.run_b, user=self.user)
         res = self.client.post(reverse("pipelines:batch_remove_clips", args=[self.batch]),
@@ -137,9 +117,10 @@ class BatchSelectTests(FilterBase):
 
 
 class MetricsBySiteTests(BatchSelectTests):
-    def test_sites_can_be_ticked_above_the_metrics_and_in_the_filter(self):
+    def test_sites_are_picked_in_the_filter_and_metrics_are_on_the_review_page(self):
+        """memory/84: no metrics, nor sites above them, on the batch page."""
         ClipReview.objects.create(run=self.run_a, user=self.user)
         html = self.page().content.decode()
-        self.assertEqual(html.count('data-site-pick value="mendels"'), 2)
-        self.assertEqual(html.count('data-site-pick value="natalies"'), 2)
-        self.assertLess(html.index("Metrics for"), html.index('id="review-metrics"'))
+        self.assertEqual(html.count('data-site-pick value="mendels"'), 1)
+        self.assertNotIn("Metrics for", html)
+        self.assertNotIn('id="review-metrics"', html)

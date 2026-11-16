@@ -47,8 +47,7 @@ class EventsBatchSummaryTests(SameAsWhole, EventReviewTests):
                                   reference="reference_1")
         self.client.force_login(self.owner)
         self.assert_same(reverse("pipelines:batch_detail", args=[self.batch]))
-        self.assert_same(reverse("pipelines:batch_review_metrics", args=[self.batch]),
-                         "post", {"run": [self.run.pk]})
+        self.assert_same(reverse("analysis:period_review") + f"?batch={self.batch}")
 
     def test_the_slim_copy_is_small_and_keeps_the_event_keys(self):
         ctx = PipelineRun.objects.get(pk=self.run.pk).context
@@ -196,9 +195,8 @@ class ScaleTests(EventReviewTests):
         share = sharing.turn_on(self.owner, self.batch)
         pages = {
             "batch page": lambda: self.client.get(reverse("pipelines:batch_detail", args=[self.batch])),
-            "review metrics": lambda: self.client.post(
-                reverse("pipelines:batch_review_metrics", args=[self.batch]),
-                {"run": list(PipelineRun.objects.values_list("pk", flat=True))}),
+            "review page": lambda: self.client.get(
+                reverse("analysis:period_review"), {"batch": str(self.batch)}),
             "share page": lambda: self.client.get(reverse("public_batch", args=[share.token])),
             "interactions CSV": lambda: self.client.get(reverse(
                 "pipelines:batch_combined_csv", kwargs={"batch_id": self.batch, "kind": "interactions"})),

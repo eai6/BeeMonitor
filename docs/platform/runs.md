@@ -173,8 +173,15 @@ vote back. Watch the whole clip as you go, so you catch what the system missed, 
 when you're done. Reviewed marks on the tube lanes get a ring:
 green accepted, red rejected, amber where reviewers disagree.
 
-**Trips.** **Review trips** on a batch shows every trip of one unit or site in that batch; pick another from the
-menu at the top. An exit pairs with the next event at its tube when that is an entry, on the same day, and each
+**The review page.** **Review** on a batch opens one day of one unit or site in that batch, in one player
+across its clips. Pick another place from the menu at the top, and another day with ◀ ▶ or the day menu; it
+opens on the first day with a clip not marked reviewed. **Events** steps through the day's events: **Play ±2 s**
+(P), then **Yes** (Y) or **No** (N), with **Next unreviewed** (U), **Mark clip reviewed** for the clip shown,
+and **Add at this frame** for a missed exit or entry at the tube you type. **Trips** steps through its trips,
+as below. The batch's metrics are at the bottom of this page, and nowhere else. A batch counts only its own
+reviews: a clip reviewed in another batch made from the same GPU runs isn't reviewed in this one.
+
+**Trips.** On the review page's **Trips**, An exit pairs with the next event at its tube when that is an entry, on the same day, and each
 entry ends one trip. The list holds the trips from reviewed events: rejected ones left out, added ones in. Your Yes
 answers are the true trips, and the batch's metrics compare the pipeline's own trips, from every detected event, with
 them. A pipeline trip is right when it is a true trip and wrong when it isn't; a true trip the pipeline didn't make is
@@ -209,9 +216,9 @@ detected ones. Whoever added one, or the batch owner, can remove it.
 
 **Detection quality.** From the reviews: **precision** is accepted ÷ (accepted + rejected), the share of
 checked events that were right; **recall** is accepted ÷ (accepted + added), the share of real events the
-system found. Once anything in a batch has been reviewed, the batch page shows an **Events review** panel
+system found. Once anything in a batch has been reviewed, its review page shows an **Events review** panel
 (reviewed, accepted, rejected, disputed, added, precision, recall) and a **Trips review** panel (reviewed,
-precision and recall, overall and by trip type).
+precision and recall, overall and by trip type), for the whole batch.
 
 **What it adds to the data.**
 
@@ -219,7 +226,8 @@ precision and recall, overall and by trip type).
 |---|---|
 | Events CSV (clip and batch) | `review` (accepted, rejected, disputed when reviewers disagree, blank if unreviewed), `reviewed_by`, `review_notes`, `clip_reviewed` (the clip is marked reviewed); an added event is its own row with `review = added`, `reviewed_by` = who added it and `review_notes` = their note |
 | Clip page | "12 reviewed · 9 accepted · 3 rejected" under Events |
-| Batch page | a **Reviewed** column (with "+N" added), and the Events review and Trips review panels once something is reviewed |
+| Batch page | a **Reviewed** column (with "+N" added) |
+| Review page | the Events review and Trips review panels once something in the batch is reviewed |
 | **Trips** CSV (batch, share link and clip, with a Trips node) | one row per trip: `reference, exit_time, entry_time, duration_sec, exit_clip, exit_track, entry_clip, entry_track, species, marker_id, source, review, reviewed_by, review_notes, trip_type, trip_type_set_by, clip_reviewed`, after the site and device columns |
 
 The Trips CSV holds every trip the pipeline made (`source` = pipeline) and every trip that exists only after

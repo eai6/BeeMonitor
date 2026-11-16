@@ -1,8 +1,8 @@
-// Trip review (memory/62 §4b): every trip of one unit or site, one after
-// another, in one player that moves from clip to clip.
+// Review (memory/62 §4b, 84): one day of one unit or site, in one player that
+// moves from clip to clip: its events one after another, and its trips.
 //
 // The page carries them as JSON (#period-data): clips (each with its offset,
-// frame rate, overlay and stream URLs and events) and the trips.
+// frame rate, overlay, stream and review URLs and events) and the trips.
 (function () {
   'use strict';
   var root = document.getElementById('period-review');
@@ -66,6 +66,11 @@
 
   function paintProgress() {
     var el = $('[data-pr-progress]');
+    if (typeof mode !== 'undefined' && mode === 'events') {
+      var evs = shownEvents(), evDone = evs.filter(function (x) { return eventCall(x.e); }).length;
+      el.textContent = evs.length + ' events · ' + evDone + ' reviewed · ' + (evs.length - evDone) + ' to go';
+      return;
+    }
     var shown = shownTrips(), tripsDone = shown.filter(tripCall).length;
     el.textContent = shown.length + ' trips · ' + tripsDone + ' reviewed · ' +
       (shown.length - tripsDone) + ' to go';
@@ -468,6 +473,7 @@
   function showList() {
     paintKinds();
     paintProgress();
+    if (mode !== 'trips') return;
     status.textContent = startTrips() ? '' : 'No trips in this list.';
   }
 
@@ -493,22 +499,6 @@
     $('[data-pr-trip-open]').addEventListener('click', function () {
       var i = nextOpen();
       if (i >= 0) tripGo(i);
-    });
-    // Pauses where it is: a trip's playback carries on from there.
-    var toggle = $('[data-pr-toggle]');
-    toggle.addEventListener('click', function () {
-      if (!video.paused) { video.pause(); return; }
-      var p = video.play();
-      if (p && p.catch) p.catch(function () {});
-    });
-    ['play', 'pause'].forEach(function (name) {
-      video.addEventListener(name, function () { toggle.textContent = video.paused ? 'Play' : 'Pause'; });
-    });
-    $$('[data-pr-step]').forEach(function (b) {
-      b.addEventListener('click', function () {
-        tp.on = false;
-        if (ov) ov.step(Number(b.getAttribute('data-pr-step')));
-      });
     });
     $('[data-pr-trip-jump]').addEventListener('submit', function (ev) {
       ev.preventDefault();
@@ -540,14 +530,235 @@
     }, true);
   }
 
-  if ($('[data-pr-place]')) $('[data-pr-place]').addEventListener('change', function () {
-    window.location.href = this.value;
+  // Pauses where it is: a trip's or an event's playback carries on from there.
+  var toggle = $('[data-pr-toggle]');
+  if (toggle) {
+    toggle.addEventListener('click', function () {
+      if (!video.paused) { video.pause(); return; }
+      var p = video.play();
+      if (p && p.catch) p.catch(function () {});
+    });
+    ['play', 'pause'].forEach(function (name) {
+      video.addEventListener(name, function () { toggle.textContent = video.paused ? 'Play' : 'Pause'; });
+    });
+  }
+  $$('[data-pr-step]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      tp.on = false;
+      if (ov) ov.step(Number(b.getAttribute('data-pr-step')));
+    });
   });
-  paintKinds();
-  paintProgress();
-  if (!P.clips.length) status.textContent = 'No analysed clips with an Events step in this period.';
-  else if (!startTrips()) {
-    loadClip(0, 0, false);
-    status.textContent = 'No suggested trips in this period.';
+
+  // ── Event review (memory/84): the day's events in turn, Yes or No ────────
+  var evr = {on: false, i: 0, list: [], action: 'all'};
+  var EVENT_CALL = {accepted: 'right', rejected: 'not an event', disputed: 'reviewers disagree'};
+  var ACTION_NAME = {exit: 'Exit', enter: 'Entry', stay: 'Stay'};
+  function eventCall(e) {
+    if (e.mine) return e.mine;
+    return e.accepted && e.rejected ? 'disputed' : e.accepted ? 'accepted' : e.rejected ? 'rejected' : '';
+  }
+  function allEvents() {
+    var out = [];
+    P.clips.forEach(function (c, ci) {
+      if (!c.can_review) return;
+      c.events.forEach(function (e) { out.push({c: ci, e: e}); });
+    });
+    out.sort(function (a, b) { return a.e.t - b.e.t; });
+    return out;
+  }
+  function shownEvents() {
+    return allEvents().filter(function (x) { return evr.action === 'all' || x.e.action === evr.action; });
+  }
+  function eventPlay() {
+    var x = evr.list[evr.i];
+    if (!x) return;
+    var c = P.clips[x.c];
+    var from = Math.max(0, Math.round((x.e.t - c.offset - PAD) * c.fps));
+    tp.on = false;
+    $('[data-pr-event-now]').textContent = 'Playing 2 s either side.';
+    loadClip(x.c, from, true).then(function () {
+      if (ov) ov.focus(x.e.track_id != null && x.e.track_id !== '' ? Number(x.e.track_id) : null);
+    });
+  }
+  function paintClip(ci) {
+    var c = P.clips[ci], btn = $('[data-pr-clip-done]');
+    if (!c || !btn) return;
+    $('[data-pr-clip-name]').textContent = c.title + ' · ' + clock(c.start).slice(11, 16);
+    btn.textContent = c.reviewed ? 'Reviewed ✓ (undo)' : 'Mark clip reviewed';
+  }
+  function eventGo(i, still) {
+    evr.i = i;
+    var x = evr.list[i], e = x.e, c = P.clips[x.c];
+    $('[data-pr-event-title]').textContent = (ACTION_NAME[e.action] || e.action) + ' · tube ' +
+      tube(e.reference) + ' · ' + clock(e.clock).slice(11);
+    $('[data-pr-event-where]').textContent = 'event ' + (i + 1) + ' of ' + evr.list.length;
+    $('[data-pr-event-who]').textContent = 'Clip ' + clock(c.start).slice(11, 16) +
+      (e.track_id !== '' && e.track_id != null ? ' · track ' + e.track_id : '') +
+      (e.species ? ' · ' + e.species : '') + (e.marker ? ' · marker ' + e.marker : '');
+    var call = eventCall(e), callEl = $('[data-pr-event-call]');
+    callEl.hidden = !call;
+    callEl.textContent = call ? 'Already reviewed: ' + EVENT_CALL[call] +
+      (e.called_by ? ' (' + e.called_by + ')' : '') + '. Vote again to change it.' : '';
+    $('[data-pr-event-back]').disabled = i === 0;
+    $('[data-pr-event-next]').disabled = i + 1 >= evr.list.length;
+    $('[data-pr-event-open]').disabled = nextOpenEvent() < 0;
+    paintClip(x.c);
+    if (still) {
+      var from = Math.max(0, Math.round((e.t - c.offset - PAD) * c.fps));
+      $('[data-pr-event-now]').textContent = 'Press P to play it.';
+      loadClip(x.c, from, false);
+    } else {
+      eventPlay();
+    }
+  }
+  function nextOpenEvent() {
+    var n = evr.list.length;
+    for (var step = 1; step < n; step++) {
+      var i = (evr.i + step) % n;
+      if (!eventCall(evr.list[i].e)) return i;
+    }
+    return -1;
+  }
+  function eventVote(verdict) {
+    var x = evr.list[evr.i];
+    if (!x) return;
+    post(P.clips[x.c].review_url, {event_key: x.e.key, verdict: verdict}).then(function (d) {
+      x.e.mine = d.verdict || null;
+      x.e.called_by = d.verdict ? 'you' : '';
+      x.e.accepted = d.verdict === 'accepted' ? 1 : 0;
+      x.e.rejected = d.verdict === 'rejected' ? 1 : 0;
+      paintProgress();
+      if (evr.i + 1 < evr.list.length) eventGo(evr.i + 1);
+      else eventGo(evr.i, true);
+    }).catch(function (err) { status.textContent = String(err.message || err); });
+  }
+  function startEvents() {
+    evr.list = shownEvents();
+    var panel = $('[data-pr-event]');
+    if (panel) panel.hidden = !evr.list.length;
+    if (!panel || !evr.list.length) { evr.on = false; return false; }
+    evr.on = true;
+    applySpeed(speed);
+    eventGo(Math.max(0, evr.list.findIndex(function (x) { return !eventCall(x.e); })), true);
+    return true;
+  }
+
+  if ($('[data-pr-event]')) {
+    $('[data-pr-event-yes]').addEventListener('click', function () { eventVote('accepted'); });
+    $('[data-pr-event-no]').addEventListener('click', function () { eventVote('rejected'); });
+    $('[data-pr-event-play]').addEventListener('click', eventPlay);
+    $('[data-pr-event-next]').addEventListener('click', function () {
+      if (evr.i + 1 < evr.list.length) eventGo(evr.i + 1);
+    });
+    $('[data-pr-event-back]').addEventListener('click', function () { if (evr.i > 0) eventGo(evr.i - 1); });
+    $('[data-pr-event-open]').addEventListener('click', function () {
+      var i = nextOpenEvent();
+      if (i >= 0) eventGo(i);
+    });
+    $('[data-pr-clip-done]').addEventListener('click', function () {
+      var c = P.clips[cur];
+      if (!c) return;
+      post(c.reviewed_url, {reviewed: !c.reviewed}).then(function (d) {
+        c.reviewed = d.reviewed;
+        paintClip(cur);
+      }).catch(function (err) { status.textContent = String(err.message || err); });
+    });
+    // A missed exit or entry at the frame the player shows.
+    $('[data-pr-add]').addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      var c = P.clips[cur], out = $('[data-pr-add-out]');
+      if (!c) return;
+      var body = {frame: Math.round(video.currentTime * c.fps), action: $('[data-pr-add-action]').value,
+                  reference: $('[data-pr-add-tube]').value};
+      var send = function (force) {
+        body.force = !!force;
+        return fetch(c.add_url, {method: 'POST', credentials: 'same-origin',
+          headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrf()},
+          body: JSON.stringify(body)}).then(function (r) { return r.json(); });
+      };
+      send(false).then(function (d) {
+        if (d.duplicate && window.confirm(d.error + ' Add it anyway?')) return send(true);
+        return d;
+      }).then(function (d) {
+        if (!d) return;
+        out.textContent = d.ok ? 'Added at ' + clock(c.start).slice(11, 16) + ' clip, frame ' + body.frame + '.'
+                               : (d.error || 'Not added.');
+      }).catch(function () { out.textContent = 'Not added.'; });
+    });
+    $$('[data-pr-action]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        evr.action = b.getAttribute('data-pr-action');
+        paintActions();
+        paintProgress();
+        status.textContent = startEvents() ? '' : 'No events in this list.';
+      });
+    });
+    document.addEventListener('keydown', function (ev) {
+      if (!evr.on || /^(INPUT|TEXTAREA|SELECT)$/.test((ev.target || {}).tagName || '')) return;
+      var viewer = document.getElementById('crop-viewer');
+      if (viewer && !viewer.classList.contains('hidden')) return;
+      var k = ev.key.toLowerCase(), hit = true;
+      if (k === 'p') eventPlay();
+      else if (k === 'y') $('[data-pr-event-yes]').click();
+      else if (k === 'n') $('[data-pr-event-no]').click();
+      else if (k === 'u') $('[data-pr-event-open]').click();
+      else if (k === ' ') $('[data-pr-toggle]').click();
+      else if (k === ',') $('[data-pr-step="-1"]').click();
+      else if (k === '.') $('[data-pr-step="1"]').click();
+      else if (ev.key === 'ArrowRight') $('[data-pr-event-next]').click();
+      else if (ev.key === 'ArrowLeft') $('[data-pr-event-back]').click();
+      else hit = false;
+      if (hit) { ev.preventDefault(); ev.stopPropagation(); }
+    }, true);
+  }
+  function paintActions() {
+    $$('[data-pr-action]').forEach(function (b) { paintButton(b, b.getAttribute('data-pr-action') === evr.action); });
+  }
+
+  // ── Events or trips ──────────────────────────────────────────────────────
+  var mode = 'events';
+  try { mode = localStorage.getItem('pr-mode') === 'trips' ? 'trips' : 'events'; } catch (e) {}
+  function paintModes() {
+    var counts = {events: allEvents().length, trips: P.trips.length};
+    $$('[data-pr-mode]').forEach(function (b) {
+      var name = b.getAttribute('data-pr-mode');
+      paintButton(b, name === mode);
+      $('[data-pr-mode-n]', b).textContent = counts[name];
+    });
+    $$('[data-pr-trips-only]').forEach(function (el) { el.hidden = mode !== 'trips'; });
+    $$('[data-pr-events-only]').forEach(function (el) { el.hidden = mode !== 'events'; });
+  }
+  function setMode(name) {
+    mode = name;
+    try { localStorage.setItem('pr-mode', name); } catch (e) {}
+    paintModes();
+    paintProgress();
+    if (mode === 'events') {
+      trip.on = false;
+      if ($('[data-pr-trip]')) $('[data-pr-trip]').hidden = true;
+      if (!startEvents()) status.textContent = 'No events to review on this day.';
+      else status.textContent = '';
+    } else {
+      evr.on = false;
+      if ($('[data-pr-event]')) $('[data-pr-event]').hidden = true;
+      paintKinds();
+      if (!startTrips()) status.textContent = 'No suggested trips on this day.';
+      else status.textContent = '';
+    }
+  }
+  $$('[data-pr-mode]').forEach(function (b) {
+    b.addEventListener('click', function () { setMode(b.getAttribute('data-pr-mode')); });
+  });
+
+  ['[data-pr-place]', '[data-pr-day]'].forEach(function (sel) {
+    if ($(sel)) $(sel).addEventListener('change', function () { window.location.href = this.value; });
+  });
+  paintActions();
+  if (!P.clips.length) {
+    paintModes();
+    status.textContent = 'No analysed clips with an Events step on this day.';
+  } else {
+    setMode(mode);
+    if (!evr.on && !trip.on) loadClip(0, 0, false);
   }
 })();
