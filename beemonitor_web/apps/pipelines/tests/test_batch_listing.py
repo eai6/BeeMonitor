@@ -124,7 +124,7 @@ class BigBatchPageTests(Base):
         self.assertTrue(res.context["stats_stale"])
         self.assertTrue(res.context["changes"]["web"])
         self.assertIsNone(res.context["changes"]["behind"])
-        self.assertContains(res, "What changed (no GPU)")
+        self.assertContains(res, "Changed in ")
 
     def test_one_web_process_at_a_time_works_the_totals_out(self):
         """memory/82: both web workers held the whole batch at once."""

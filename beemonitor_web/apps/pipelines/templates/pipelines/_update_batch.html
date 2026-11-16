@@ -1,14 +1,13 @@
 {% comment %}Update this batch with the pipeline as it is now (memory/68): a recount from the tracking it saved, in place, no GPU. Changes that need the GPU (detection, most tracking settings) run the chosen clips again on the GPU, in this batch (memory/76).{% endcomment %}
 {% if can_share and not photos %}
-<section class="flex flex-col gap-2 pb-4 mb-4 border-b border-gray-200" aria-labelledby="update-title">
+<section data-run-pane="update" class="flex flex-col gap-2" aria-label="Update this batch">
   <div class="flex flex-wrap items-start justify-between gap-3">
     <div class="flex flex-col gap-1 min-w-0">
-      <h2 id="update-title" class="text-sm font-semibold text-gray-900">Update this batch with {{ pipeline.title }} as it is now</h2>
       {% if not changes %}
-      <p class="text-sm text-gray-600">Up to date: every clip was counted with the pipeline as it is now.</p>
+      <p class="text-sm text-gray-600">Up to date with {{ pipeline.title }}.</p>
       {% else %}
       {% if changes.web %}
-      <p class="text-sm text-gray-700">What changed{% if changes.behind %} for {{ changes.behind }} clip{{ changes.behind|pluralize }}{% endif %} (no GPU):</p>
+      <p class="text-sm text-gray-700">Changed in {{ pipeline.title }}{% if changes.behind %} for {{ changes.behind }} clip{{ changes.behind|pluralize }}{% endif %} (no GPU):</p>
       <ul class="text-sm text-gray-700 list-disc pl-5">
         {% for c in changes.web %}<li>{{ c.step }}{% if c.field %} · {{ c.field }}{% endif %}{% if c.before %}: {{ c.before }} → {{ c.after }}{% elif c.after %}: {{ c.after }}{% endif %}</li>{% endfor %}
       </ul>
@@ -21,7 +20,6 @@
       {% if update_status.not_replayable %}
       <p class="text-sm text-yellow-800">{{ update_status.not_replayable }} clip{{ update_status.not_replayable|pluralize }} can't be re-tracked on the web (no saved detections): {% if update_status.not_replayable == 1 %}it keeps its{% else %}they keep their{% endif %} tracks until run on the GPU again.</p>
       {% endif %}
-      <p class="text-xs text-gray-500">Same batch, from each clip's saved detections; review votes move to the matching new events.</p>
     </div>
     {% comment %}Which clips (memory/72): all or the ones reviewed. Some clips: Select in the clip list, then Update these (memory/73).{% endcomment %}
     <form method="post" action="{% url 'pipelines:batch_apply_groups' batch_id %}" id="update-form"{% if changes.gpu %} data-gpu{% endif %}{% if gpu_hours_per_clip %} data-gpu-per-clip="{{ gpu_hours_per_clip|stringformat:'.4f' }}"{% endif %} class="shrink-0 flex flex-col gap-2 items-stretch">

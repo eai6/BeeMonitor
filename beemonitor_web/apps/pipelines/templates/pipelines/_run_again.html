@@ -1,0 +1,69 @@
+{% comment %}Run the clips again (memory/84): in this batch (Update: the pipeline as it is now, from the saved tracking) or as a new batch through any pipeline. One card, one choice.{% endcomment %}
+<div class="flex flex-col gap-3" data-run-again>
+  <div class="flex flex-wrap items-center gap-3">
+    <h2 class="text-sm font-semibold text-gray-900">Run again</h2>
+    {% if can_share and not photos %}
+    <span class="flex rounded-md border border-gray-300 overflow-hidden text-sm" role="group" aria-label="Where">
+      <button type="button" data-run-mode="update" class="h-9 px-3 bg-white">In this batch</button>
+      <button type="button" data-run-mode="new" class="h-9 px-3 bg-white border-l border-gray-300">As a new batch</button>
+    </span>
+    {% endif %}
+  </div>
+  {% include "pipelines/_update_batch.html" %}
+  <form method="post" action="{% url 'pipelines:run_on_videos' %}" id="rerun" data-rerun-form data-run-pane="new"
+        {% if can_share and not photos %}hidden{% endif %} class="flex items-end gap-3 flex-wrap scroll-mt-4">
+    {% csrf_token %}
+    {% comment %} The clip filter swaps these for the clips it shows. {% endcomment %}
+    <span data-rerun-ids>{% for vid in rerun_videos %}<input type="hidden" name="video_ids" value="{{ vid }}">{% endfor %}</span>
+    {% if photos %}<input type="hidden" name="kind" value="photo">{% endif %}
+    <label class="flex flex-col gap-1 text-sm text-gray-700 min-w-[240px]">
+      <span>Run <span data-rerun-count data-rerun-noun="{% if photos %}photo{% else %}clip{% endif %}">{{ rerun_videos|length }} {% if photos %}photo{% else %}clip{% endif %}{{ rerun_videos|length|pluralize }}</span> through</span>
+      <select name="pipeline" id="rerun-pipeline" class="h-10 border border-gray-300 rounded px-2 text-[13px]">
+        {% for p in rerun_pipelines %}
+        <option value="{{ p.pk }}">{{ p.title }}{% if p.pk == pipeline.pk %} (this batch's){% elif p.is_template %} (template){% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="flex flex-col gap-1 text-sm text-gray-700">Name
+      <input type="text" name="batch_name" maxlength="120" placeholder="The pipeline's name"
+             class="h-10 w-56 border border-gray-300 rounded px-2 text-[13px]">
+    </label>
+    {% comment %}The cache is keyed on clip + config, not on the build: re-running the same pipeline after a fix would otherwise hand back the old result.{% endcomment %}
+    <label class="flex items-center gap-1.5 text-sm text-gray-700 h-10"
+           title="Detection and tracking are reused when the pipeline asks for the same thing; this runs them again on the GPU">
+      <input type="checkbox" name="fresh" value="1"> From scratch
+    </label>
+    <button type="submit" class="h-10 bg-amber-600 hover:bg-amber-700 text-white rounded px-4 text-sm font-semibold">Run</button>
+  </form>
+</div>
+{% if can_share and not photos %}
+<script>
+  // In this batch or as a new one: one pane at a time, remembered.
+  (function () {
+    var box = document.querySelector('[data-run-again]');
+    if (!box) return;
+    var mode = 'update';
+    try { mode = localStorage.getItem('run-again') === 'new' ? 'new' : 'update'; } catch (e) {}
+    function paint() {
+      box.querySelectorAll('[data-run-pane]').forEach(function (p) { p.hidden = p.getAttribute('data-run-pane') !== mode; });
+      box.querySelectorAll('[data-run-mode]').forEach(function (b) {
+        var on = b.getAttribute('data-run-mode') === mode;
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        b.classList.toggle('bg-amber-700', on); b.classList.toggle('text-white', on); b.classList.toggle('bg-white', !on);
+      });
+    }
+    box.querySelectorAll('[data-run-mode]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        mode = b.getAttribute('data-run-mode');
+        try { localStorage.setItem('run-again', mode); } catch (e) {}
+        paint();
+      });
+    });
+    // "Re-run these" in the clip filter opens the new-batch pane.
+    document.querySelectorAll('[data-rerun-jump]').forEach(function (a) {
+      a.addEventListener('click', function () { mode = 'new'; paint(); });
+    });
+    paint();
+  })();
+</script>
+{% endif %}
