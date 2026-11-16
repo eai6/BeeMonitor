@@ -371,3 +371,26 @@ class ModelPickerTests(PrimitiveBlockTestCase):
                                        classes=["nest tube", "hotel"],
                                        status=CustomModel.Status.READY, is_active=True)
         self.assertEqual(model_classes.resolve(str(m.pk), self.user)["classes"], ["nest tube", "hotel"])
+
+
+class DetectLabelTests(PrimitiveBlockTestCase):
+    def test_the_models_own_name_for_its_one_class_is_not_a_gpu_change(self):
+        """memory/82: "insect" saved for another model, "insects" picked from
+        this one's dropdown: the same detections, not 894 GPU-hours."""
+        from apps.training.models import CustomModel
+
+        m = CustomModel.objects.create(user=self.user, name="Insects", storage_key="custom/1/10/best.pt",
+                                       classes=["insects"], status=CustomModel.Status.READY,
+                                       is_active=True)
+        steps = self._steps("analyze.events")
+        steps[1]["config"] = {"label": "insect", "object_model": str(m.pk)}
+        run = PipelineRun(pipeline=self.pipeline, user=self.user, steps=steps)
+        after = json.loads(json.dumps(steps))
+        after[1]["config"]["label"] = "insects"
+        self.pipeline.steps = after
+        self.assertEqual(regroup.pipeline_changes(run, self.pipeline, retracks=False)["gpu"], [])
+        # Another class of a two-class model is a real change.
+        m.classes = ["insects", "flower"]
+        m.save()
+        after[1]["config"]["label"] = "flower"
+        self.assertTrue(regroup.pipeline_changes(run, self.pipeline, retracks=False)["gpu"])

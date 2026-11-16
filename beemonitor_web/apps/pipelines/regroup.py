@@ -350,6 +350,35 @@ def _effective(block_type, config):
 _GPU_FIELDS = {"identify.species": {"model"}}
 
 
+def _detected_classes(cfg, model):
+    """The classes a YOLO Detect node's label takes from its model's detections,
+    as ops.resolve_taxa reads them: the named ones the model has; a one-class
+    model's only class whatever the node calls it. None when it can't be told."""
+    names = [c.lower() for c in (model or {}).get("classes") or []]
+    wanted = {p.strip().lower() for p in str((cfg or {}).get("label") or "").split(",") if p.strip()}
+    if not names or not wanted:
+        return None
+    hit = wanted & set(names)
+    return hit or (set(names) if len(names) == 1 else set())
+
+
+def _same_classes(before_cfg, after_cfg, pipeline) -> bool:
+    """A Detect node's label changed, but not what it takes from the model:
+    e.g. "insect" saved for another model, now the model's own "insects"
+    picked from its dropdown (memory/82). Same model, YOLO, every frame."""
+    from apps.training import model_classes
+
+    keys = ("object_model", "model_family", "analyse")
+    b, a = before_cfg or {}, after_cfg or {}
+    if any(str(b.get(k) or "") != str(a.get(k) or "") for k in keys):
+        return False
+    if (a.get("model_family") or "yolo") != "yolo" or a.get("analyse") == "sampled":
+        return False
+    model = model_classes.resolve(a.get("object_model"), getattr(pipeline, "user", None))
+    then, now = _detected_classes(b, model), _detected_classes(a, model)
+    return then is not None and then == now
+
+
 def pipeline_changes(run, pipeline, retracks=True) -> dict:
     """``{"web": [...], "gpu": [...]}``: what differs between the steps this
     run was counted with and the pipeline's now. ``web`` changes a recount
@@ -380,6 +409,9 @@ def pipeline_changes(run, pipeline, retracks=True) -> dict:
                 continue
             if json.dumps(before.get(key), sort_keys=True, default=str) == \
                     json.dumps(after.get(key), sort_keys=True, default=str):
+                continue
+            if bt == "detect.objects" and key == "label" and _same_classes(
+                    step.get("config"), src.get("config"), pipeline):
                 continue
             if key == "leave_out":
                 from . import taxon_groups
