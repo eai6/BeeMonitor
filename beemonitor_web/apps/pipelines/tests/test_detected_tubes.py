@@ -281,6 +281,11 @@ class UpdatingABatchTests(DetectedReferenceBase):
         self.assertEqual(run.context["r"]["source"], "detected")
         self.assertEqual(run.counting_rules, recount.CURRENT_RULES)
         self.assertIsNone(regroup.batch_changes([run], self.pipeline))
+        # The References page reads the new node, not the old one first in the steps.
+        self.assertEqual(references.counted(run)["tubes"]["state"], "detected")
+        from apps.pipelines import listing
+        self.assertEqual(listing.rows(PipelineRun.objects.filter(pk=run.pk))[0]["layout"]
+                         ["tubes"]["state"], "detected")
 
 
 class ReferencesPageTests(DetectedReferenceBase):

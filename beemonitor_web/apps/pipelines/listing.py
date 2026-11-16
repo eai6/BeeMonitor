@@ -12,10 +12,15 @@ that do need every clip's results are worked out apart (batchstats).
 
 from __future__ import annotations
 
+import logging
+import threading
+
 from types import SimpleNamespace
 
+logger = logging.getLogger(__name__)
+
 # Bump when what is kept changes: pages fill older ones from the summary.
-VERSION = 1
+VERSION = 2   # 2: the reference the analyzers are wired to (memory/82)
 # A long traceback is no use in a list; the run's page has it whole.
 ERROR_CHARS = 2000
 
@@ -66,6 +71,40 @@ def fill(pks) -> dict:
     return out
 
 
+_refilling = set()
+_refill_lock = threading.Lock()
+
+
+def refill(pks):
+    """``fill`` these in a thread of this process, once at a time per set."""
+    import sys
+
+    pks = list(pks)
+    if not pks:
+        return
+    if sys.argv[1:2] == ["test"]:
+        fill(pks)
+        return
+    key = (pks[0], len(pks))
+    with _refill_lock:
+        if key in _refilling:
+            return
+        _refilling.add(key)
+
+    def work():
+        from django.db import connection
+        try:
+            fill(pks)
+        except Exception:
+            logger.exception("refilling %s listings failed", len(pks))
+        finally:
+            with _refill_lock:
+                _refilling.discard(key)
+            connection.close()
+
+    threading.Thread(target=work, name="listing-refill", daemon=True).start()
+
+
 def rows(qs) -> list[dict]:
     """The batch page's rows (aggregate.batch_rows's keys) for every run of
     ``qs``, read from the listings, oldest clip first. A row's ``run`` and
@@ -79,7 +118,11 @@ def rows(qs) -> list[dict]:
             for pk, status, msg, lst, user_id, started, job_id
             in qs.values_list("pk", "status", "error_message", "listing", "user_id",
                               "started_at", "gpu_job_id").iterator(chunk_size=1000)]
-    filled = fill([r.pk for r in runs if not is_current(r.listing)])
+    # None yet: built now. An older version: shown as it is, and rebuilt in
+    # the background, as a version bump touches every clip of a 6,000-clip
+    # batch, longer than a request may take (memory/82).
+    filled = fill([r.pk for r in runs if not r.listing])
+    refill([r.pk for r in runs if r.listing and not is_current(r.listing)])
     for r in runs:
         r.listing = filled.get(r.pk, r.listing)
     video_ids = [v for r in runs if (v := r.listing.get("video")) is not None]

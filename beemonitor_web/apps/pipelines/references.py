@@ -28,7 +28,11 @@ def counted(run):
     None when it has no reference step from a layout. With detected tubes
     (memory/82) also ``tubes``: how the detection was numbered, and the
     template's key it was numbered from."""
-    for step in run.steps or []:
+    steps = run.steps or []
+    # The reference an analyzer is wired to first: a run Update gave a new
+    # Reference node keeps its old one too, earlier in its steps (memory/82).
+    wired = {(s.get("inputs") or {}).get("rois") for s in steps}
+    for step in sorted(steps, key=lambda s: s.get("id") not in wired):
         if step.get("block_type") not in _REFERENCE_BLOCKS:
             continue
         out = (run.context or {}).get(step.get("id")) or {}
