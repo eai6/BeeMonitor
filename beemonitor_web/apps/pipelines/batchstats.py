@@ -28,7 +28,7 @@ from django.core.serializers.json import DjangoJSONEncoder
 logger = logging.getLogger(__name__)
 
 # Bump when what is worked out changes: every batch's totals are redone.
-VERSION = 1
+VERSION = 2   # 2: what counts as a pipeline change (memory/82)
 
 _working = set()
 _lock = threading.Lock()

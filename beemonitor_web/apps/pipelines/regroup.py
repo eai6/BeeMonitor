@@ -151,6 +151,26 @@ def applied_steps(run_steps, pipeline):
     steps = [dict(s) for s in run_steps or []]
     by_id = {s.get("id"): s for s in (pipeline.steps or []) if pipeline}
     changed = False
+    # A reference node the pipeline gained (e.g. tubes found by a model in
+    # place of the saved layout) runs on the web: it joins the run, and the
+    # analyzers take their references from it as the pipeline wires them
+    # (memory/82). Its own inputs must be steps the run has.
+    have = {s.get("id") for s in steps}
+    for src_step in (pipeline.steps or []) if pipeline else []:
+        if src_step.get("block_type") != "reference.layout" or src_step.get("id") in have:
+            continue
+        if all(v in have for v in (src_step.get("inputs") or {}).values()):
+            steps.append({k: v for k, v in src_step.items() if k in ("id", "block_type", "config", "inputs")})
+            have.add(src_step.get("id"))
+            changed = True
+    for s in steps:
+        src_step = by_id.get(s.get("id"))
+        if s.get("block_type") not in ANALYZERS or src_step is None:
+            continue
+        rois = (src_step.get("inputs") or {}).get("rois")
+        if rois and rois in have and (s.get("inputs") or {}).get("rois") != rois:
+            s["inputs"] = {**(s.get("inputs") or {}), "rois": rois}
+            changed = True
     for s in steps:
         src_step = by_id.get(s.get("id"))
         if src_step is None or src_step.get("block_type") != s.get("block_type"):
@@ -418,6 +438,16 @@ def _effective(block_type, config):
 _GPU_FIELDS = {"identify.species": {"model"}}
 
 
+def _same_number(a, b) -> bool:
+    """Both numbers (or number strings) and equal."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return False
+    try:
+        return float(a) == float(b)
+    except (TypeError, ValueError):
+        return False
+
+
 def _detected_classes(cfg, model):
     """The classes a YOLO Detect node's label takes from its model's detections,
     as ops.resolve_taxa reads them: the named ones the model has; a one-class
@@ -437,7 +467,9 @@ def _same_classes(before_cfg, after_cfg, pipeline) -> bool:
     from apps.training import model_classes
 
     keys = ("object_model", "model_family", "analyse")
-    b, a = before_cfg or {}, after_cfg or {}
+    # With the node's defaults: a step saved before a setting existed has it
+    # blank, and blank is the default (memory/82).
+    b, a = _effective("detect.objects", before_cfg), _effective("detect.objects", after_cfg)
     if any(str(b.get(k) or "") != str(a.get(k) or "") for k in keys):
         return False
     if (a.get("model_family") or "yolo") != "yolo" or a.get("analyse") == "sampled":
@@ -483,6 +515,8 @@ def pipeline_changes(run, pipeline, retracks=True) -> dict:
             if json.dumps(before.get(key), sort_keys=True, default=str) == \
                     json.dumps(after.get(key), sort_keys=True, default=str):
                 continue
+            if _same_number(before.get(key), after.get(key)):
+                continue      # the editor saves 0.4 as "0.4"
             if bt == "detect.objects" and key == "label" and _same_classes(
                     step.get("config"), src.get("config"), pipeline):
                 continue

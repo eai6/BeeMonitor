@@ -387,6 +387,9 @@ class DetectLabelTests(PrimitiveBlockTestCase):
         run = PipelineRun(pipeline=self.pipeline, user=self.user, steps=steps)
         after = json.loads(json.dumps(steps))
         after[1]["config"]["label"] = "insects"
+        # The editor saves every field; the clip's step predates some of them.
+        after[1]["config"].update({"model_family": "yolo", "analyse": "every_frame",
+                                   "confidence": "0.4"})
         self.pipeline.steps = after
         self.assertEqual(regroup.pipeline_changes(run, self.pipeline, retracks=False)["gpu"], [])
         # Another class of a two-class model is a real change.
@@ -416,3 +419,28 @@ class BigBatchUpdateTests(DetectedReferenceBase):
         self.assertEqual(run.steps[3]["config"]["source"], "detected")
         self.assertEqual(run.counting_rules, 0)
         self.assertIsNotNone(run.recount_requested_at)
+
+
+class NewReferenceNodeTests(DetectedReferenceBase):
+    def test_a_reference_node_added_and_wired_in_joins_the_clips_on_update(self):
+        """memory/82: a new Reference node wired to Events was listed as a
+        change, but Update only carried settings onto nodes the clips had."""
+        run = self.run_with(self._steps("analyze.events"))
+        recount.recount_run(run)
+        PipelineRun.objects.filter(pk=run.pk).update(counting_rules=recount.CURRENT_RULES)
+        steps = self._steps("analyze.events")
+        steps.append({"id": "t", "block_type": "reference.layout", "config": self.ref_config(),
+                      "inputs": {"video": "v"}})
+        steps[4]["inputs"] = {"tracks": "m", "rois": "t"}
+        self.pipeline.steps = steps
+        self.pipeline.save()
+        changes = regroup.batch_changes([PipelineRun.objects.get(pk=run.pk)], self.pipeline)
+        self.assertEqual(changes["gpu"], [])
+        regroup.apply_pipeline(run.batch_id, self.user)
+        with self.model(), mock.patch("apps.videos.frames.frame_jpeg", return_value=frame()):
+            recount.sweep()
+        run.refresh_from_db()
+        self.assertEqual(run.steps[4]["inputs"]["rois"], "t")
+        self.assertEqual(run.context["t"]["tubes"]["state"], "detected")
+        self.assertEqual(run.context["a"]["reference_source"], "detect:nest")
+        self.assertIsNone(regroup.batch_changes([run], self.pipeline))
