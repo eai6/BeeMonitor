@@ -1,6 +1,7 @@
 # 82 · Tube references from a detection model
 
-Status: **built** (2026-11-15), not yet committed. Design canvas: https://claude.ai/artifact/PtktntnxpGJUyuUdeY9HuN
+Status: **built** (2026-11-15). Numbering from the site's layout, day flags and the
+References page **replaced by memory/83** (grid by rows and columns, no day checks). Design canvas: https://claude.ai/artifact/PtktntnxpGJUyuUdeY9HuN
 
 ## The ask
 

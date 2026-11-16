@@ -1,5 +1,5 @@
-"""Tubes found by a model in each clip, on CPU, numbered from the site's
-layout (memory/82).
+"""Tubes found by a model in each clip, on CPU (memory/82), numbered as the
+Reference node says (memory/83).
 
 Fixing a 6,306-clip batch's tube boxes by hand went a day at a time. A
 trained tube model finds them instead: a few frames of each clip (ffmpeg
@@ -11,12 +11,13 @@ every box within IoU 0.95, ~0.8 s a frame on a laptop CPU.
 
 A detector's boxes have no identities, and tube numbers must mean the same
 tube on every day: per-tube totals, trips (an exit paired with the next entry
-at that tube), hops and review votes are all keyed on them. So the boxes are
-matched to the site's saved layout: the camera's shift (and zoom) worked out
-first, then each detected tube paired with the nearest template tube. A tube
-the model missed keeps the template's box, moved by the shift; one it found
-that the template lacks gets the next free number. Either, or a camera that
-moved more than a tube's width, flags the day to look at.
+at that tube), hops and review votes are all keyed on them. The Reference node
+says how they are numbered (memory/83): as a grid of its rows and columns,
+row by row from the top left (beemonitor.references.arrange.grid: extra boxes
+dropped, missed ones placed from their row and column), or as found, in
+reading order. A clip whose grid can't be told borrows the nearest clip's at
+its site; else it is counted with no tubes, never wrong ones. No drawing is
+compared with, and no person checks days.
 
 The ONNX file sits beside the model's weights: ``x/best.pt`` ->
 ``x/best.onnx`` plus ``x/best.onnx.json`` (``{"names": [...], "imgsz": 640}``),
@@ -45,14 +46,12 @@ MIN_SEEN = 0.5
 FROM, TO = 0.05, 0.95
 # Boxes of one tube on two frames overlap at least this much.
 SAME_TUBE_IOU = 0.5
-# Matching: a detected tube pairs with a template tube whose centre is within
-# this many tube widths once the camera's shift is taken out.
-PAIR_WITHIN = 0.5
-# A day to look at: any tube new, more than this share kept from the
-# template, or the camera moved more than a tube's width (or zoomed > 10 %).
-KEPT_SHARE = 0.10
-MOVED_TUBES = 1.0
-ZOOMED = 0.10
+DEFAULT_ROWS, DEFAULT_COLUMNS = 6, 10
+MAX_CELLS = 2000
+ARRANGEMENTS = ("grid", "found")
+# A clip whose grid fails borrows one from a clip this close at its site.
+NEIGHBOUR_DAYS = 3
+NEIGHBOURS_TRIED = 12
 
 CACHE_DIR = os.environ.get("BEEMONITOR_TUBE_MODELS", "/tmp/beemonitor_tube_models")
 _nets: dict = {}
@@ -248,157 +247,14 @@ def detect(video, model_key, label, frames=DEFAULT_FRAMES, confidence=DEFAULT_CO
     return row
 
 
-# ── Numbering from the site's layout ────────────────────────────────────────
+# ── Numbering: the Reference node's arrangement (memory/83) ─────────────────
 
 def _centre(box):
     return ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
 
 
-def _by_position(boxes):
-    """Boxes in reading order: rows top to bottom (a row is boxes whose
-    centres are within half a tube's height), then left to right."""
-    import statistics
-
-    if not boxes:
-        return []
-    h = statistics.median(b[3] - b[1] for b in boxes) or 0.01
-    rows = []
-    for b in sorted(boxes, key=lambda b: _centre(b)[1]):
-        if rows and abs(_centre(b)[1] - _centre(rows[-1][-1])[1]) <= h / 2:
-            rows[-1].append(b)
-        else:
-            rows.append([b])
-    return [b for row in rows for b in sorted(row, key=lambda b: _centre(b)[0])]
-
-
-def _fit(pairs):
-    """Least-squares ``(scale, dx, dy)`` taking template centres onto the
-    detected ones: x' = s·x + dx, y' = s·y + dy."""
-    import numpy as np
-
-    t = np.array([p[0] for p in pairs], float)
-    f = np.array([p[1] for p in pairs], float)
-    if len(pairs) < 3:
-        d = (f - t).mean(0)
-        return 1.0, float(d[0]), float(d[1])
-    tc, fc = t.mean(0), f.mean(0)
-    var = ((t - tc) ** 2).sum()
-    s = float(((t - tc) * (f - fc)).sum() / var) if var > 0 else 1.0
-    if not 0.5 < s < 2.0:
-        s = 1.0
-    d = fc - s * tc
-    return s, float(d[0]), float(d[1])
-
-
-def match(template, found):
-    """The detected tubes numbered from the template layout.
-
-    ``template``: ``[{id, box, name?, points?}]`` (0..1), ``found``: ``[{box,
-    ...}]``. Returns ``{nests, matched, kept, new, shift, scale, flag}``:
-    ``nests`` is a layout (``[{id, box, name?, kept?, new?}]``), ``shift`` the
-    camera's move in tube widths/heights, ``flag`` why the day is worth a look
-    ("" when it isn't)."""
-    import numpy as np
-    from scipy.optimize import linear_sum_assignment
-
-    tmpl = [t for t in template or [] if isinstance(t, dict) and len(t.get("box") or []) == 4]
-    boxes = [list(map(float, f["box"])) for f in found or []]
-    if not tmpl:
-        nests = [{"id": i, "box": b} for i, b in enumerate(_by_position(boxes), 1)]
-        return {"nests": nests, "matched": 0, "kept": 0, "new": len(nests),
-                "shift": [0.0, 0.0], "scale": 1.0, "flag": "no_template" if nests else "none_found"}
-    tb = [list(map(float, t["box"])) for t in tmpl]
-    tw = float(np.median([b[2] - b[0] for b in tb])) or 0.01
-    th = float(np.median([b[3] - b[1] for b in tb])) or 0.01
-    if not boxes:
-        return {"nests": [{**_ref(t), "kept": True} for t in tmpl], "matched": 0,
-                "kept": len(tmpl), "new": 0, "shift": [0.0, 0.0], "scale": 1.0,
-                "flag": "none_found"}
-    T = np.array([_centre(b) for b in tb])
-    F = np.array([_centre(b) for b in boxes])
-    unit = np.array([tw, th])
-
-    def paired_at(s, dx, dy, within):
-        moved = T * s + np.array([dx, dy])
-        cost = np.linalg.norm((moved[:, None, :] - F[None, :, :]) / unit, axis=2)
-        rows, cols = linear_sum_assignment(cost)
-        keep = [(r, c) for r, c in zip(rows, cols) if cost[r, c] <= within]
-        return keep, sum(cost[r, c] for r, c in keep)
-
-    def refined(s, dx, dy):
-        for _ in range(4):
-            keep, _cost = paired_at(s, dx, dy, PAIR_WITHIN * 2)
-            if not keep:
-                break
-            s, dx, dy = _fit([(T[r], F[c]) for r, c in keep])
-        keep, cost = paired_at(s, dx, dy, PAIR_WITHIN)
-        return len(keep), -cost, (s, dx, dy)
-
-    # The camera's shift: the commonest template -> detected offsets, on a
-    # grid of half a tube (robust to a few missed or extra tubes), each
-    # refined (with the zoom) and the one that pairs the most tubes kept. A
-    # regular block of tubes offers a lattice of near-ties, so not just one.
-    diffs = (F[None, :, :] - T[:, None, :]).reshape(-1, 2) / unit
-    cells = np.round(diffs * 2).astype(int)
-    keys, counts = np.unique(cells, axis=0, return_counts=True)
-    tries = [keys[i] / 2.0 for i in np.argsort(-counts)[:12]] + [np.zeros(2)]
-    best = max((refined(1.0, float(k[0] * tw), float(k[1] * th)) for k in tries),
-               key=lambda r: (r[0], r[1]))
-    s, dx, dy = best[2]
-    moved = T * s + np.array([dx, dy])
-    cost = np.linalg.norm((moved[:, None, :] - F[None, :, :]) / unit, axis=2)
-    rows, cols = linear_sum_assignment(cost)
-    paired = {int(r): int(c) for r, c in zip(rows, cols) if cost[r, c] <= PAIR_WITHIN}
-
-    nests, used = [], set(paired.values())
-    for i, t in enumerate(tmpl):
-        if i in paired:
-            nests.append({**_ref(t), "box": [round(v, 5) for v in boxes[paired[i]]]})
-        else:
-            b = tb[i]
-            cx, cy = _centre(b)
-            hw, hh = (b[2] - b[0]) * s / 2, (b[3] - b[1]) * s / 2
-            ncx, ncy = cx * s + dx, cy * s + dy
-            nests.append({**_ref(t), "box": [round(v, 5) for v in (ncx - hw, ncy - hh, ncx + hw, ncy + hh)],
-                          "kept": True})
-    next_id = max([_int(t.get("id")) for t in tmpl] + [0]) + 1
-    extra = _by_position([boxes[j] for j in range(len(boxes)) if j not in used])
-    for k, b in enumerate(extra):
-        nests.append({"id": next_id + k, "box": [round(v, 5) for v in b], "new": True})
-    kept = len(tmpl) - len(paired)
-    # The shift in tube sizes: where the template's middle went.
-    mid = T.mean(0)
-    shift = ((mid * s + np.array([dx, dy])) - mid) / unit
-    flag = ""
-    if extra:
-        flag = "new"
-    elif kept > KEPT_SHARE * len(tmpl):
-        flag = "kept"
-    elif float(np.abs(shift).max()) > MOVED_TUBES or abs(s - 1) > ZOOMED:
-        flag = "moved"
-    return {"nests": nests, "matched": len(paired), "kept": kept, "new": len(extra),
-            "shift": [round(float(shift[0]), 3), round(float(shift[1]), 3)],
-            "scale": round(s, 4), "flag": flag}
-
-
-def _ref(t):
-    out = {"id": t.get("id"), "box": list(t["box"])}
-    if t.get("name"):
-        out["name"] = t["name"]
-    return out
-
-
-def _int(v):
-    try:
-        return int(v)
-    except (TypeError, ValueError):
-        return 0
-
-
-# ── For a clip: what a reference node with detected tubes counts with ───────
-
 def tube_settings(cfg) -> dict:
-    """The detected-tubes settings of a reference node's config."""
+    """The model settings of a reference node's config."""
     def num(name, default, lo, hi, kind=float):
         try:
             v = kind(float(cfg.get(name)))
@@ -406,69 +262,122 @@ def tube_settings(cfg) -> dict:
             return default
         return max(lo, min(hi, v))
 
+    arrangement = str(cfg.get("arrangement") or "grid").strip().lower()
     return {"model": str(cfg.get("tube_model") or "").strip(),
-            "label": str(cfg.get("tube_class") or "").strip(),
-            "frames": num("tube_frames", DEFAULT_FRAMES, 1, MAX_FRAMES, int),
-            "confidence": num("tube_confidence", DEFAULT_CONFIDENCE, 0.05, 0.95),
-            "drawn_wins": str(cfg.get("drawn_wins", "on")).lower() not in ("", "0", "false", "off", "no")}
+           "label": str(cfg.get("tube_class") or "").strip(),
+           "frames": num("tube_frames", DEFAULT_FRAMES, 1, MAX_FRAMES, int),
+           "confidence": num("tube_confidence", DEFAULT_CONFIDENCE, 0.05, 0.95),
+           "arrangement": arrangement if arrangement in ARRANGEMENTS else "grid",
+           "rows": num("rows", DEFAULT_ROWS, 1, MAX_CELLS, int),
+           "columns": num("columns", DEFAULT_COLUMNS, 1, MAX_CELLS, int)}
+    return out
 
+
+def arrangement_label(s) -> str:
+    if s["arrangement"] == "found":
+        return "as found"
+    return f'{s["rows"]} × {s["columns"]} grid'
+
+
+def arrange(boxes, s) -> dict:
+    """``boxes`` (``[{box}]``) numbered as the node says: ``{ok, reason,
+    nests, filled, dropped}``, ``nests`` a layout (``[{id, box}]``)."""
+    from beemonitor.references.arrange import grid, reading_order
+
+    raw = [list(map(float, b["box"])) for b in boxes or []]
+    if s["arrangement"] == "found":
+        ordered = reading_order(raw)
+        return {"ok": bool(ordered), "reason": "" if ordered else "None found.",
+                "nests": [{"id": i, "box": [round(v, 5) for v in b]} for i, b in enumerate(ordered, 1)],
+                "filled": 0, "dropped": 0}
+    g = grid(raw, s["rows"], s["columns"])
+    return {"ok": g["ok"], "reason": g["reason"],
+            "nests": [{"id": i, "box": [round(v, 5) for v in b]} for i, b in enumerate(g["boxes"], 1)],
+            "filled": g["filled"], "dropped": g["dropped"]}
+
+
+def _in_roi(boxes, roi):
+    """Only boxes inside the ROI: what tracking runs over."""
+    if not (roi and len(roi) == 4):
+        return list(boxes or [])
+    return [b for b in boxes or [] if roi[0] <= _centre(b["box"])[0] <= roi[2]
+            and roi[1] <= _centre(b["box"])[1] <= roi[3]]
+
+
+def _neighbour(video, found, s, roi):
+    """``(video pk, arranged)`` of the nearest clip in time at the clip's site
+    (else unit) whose same detection arranges, within NEIGHBOUR_DAYS; or None."""
+    from datetime import timedelta
+
+    from apps.videos.models import TubeDetection
+
+    t = video.recorded_at
+    place = ({"video__site_id": video.site_id} if video.site_id else
+             {"video__device_id": video.device_id} if video.device_id else None)
+    if t is None or place is None:
+        return None
+    qs = (TubeDetection.objects.filter(model_key=found.model_key, label=found.label,
+                                       settings_key=found.settings_key, error="", **place)
+          .exclude(video_id=video.pk).values("video_id", "video__recorded_at", "boxes"))
+    span = timedelta(days=NEIGHBOUR_DAYS)
+    near = [*qs.filter(video__recorded_at__lte=t, video__recorded_at__gte=t - span)
+            .order_by("-video__recorded_at")[:NEIGHBOURS_TRIED],
+            *qs.filter(video__recorded_at__gt=t, video__recorded_at__lte=t + span)
+            .order_by("video__recorded_at")[:NEIGHBOURS_TRIED]]
+    near.sort(key=lambda r: abs((r["video__recorded_at"] - t).total_seconds()))
+    for row in near[:NEIGHBOURS_TRIED]:
+        got = arrange(_in_roi(row["boxes"], roi), s)
+        if got["ok"]:
+            return row["video_id"], got
+    return None
+
+
+# ── For a clip: what a reference node with a model counts with ──────────────
 
 def layout_for(video, user, cfg, detect_now=False) -> dict:
-    """What a reference node set to detected tubes gives this clip:
+    """What a reference node set to a model gives this clip:
     ``{hotel_roi, hotel_polygon, nest_layout, source, source_label, tubes}``.
 
-    The ROI is always the saved one. A clip with its own drawn layout keeps it
-    when the node says a drawing wins. Otherwise the clip's detection, matched
-    to its site's (or unit's) layout. With no detection yet: found now when
+    The ROI is the saved one; the tubes are the model's, arranged as the node
+    says, whatever was drawn. With no detection yet: found now when
     ``detect_now`` (the recount worker), else ``tubes.pending`` and no tubes,
-    and the run is queued for the worker."""
-    from apps.devices.layouts import layout_for_video, shared_layout_for_video
+    and the run is queued for the worker. ``tubes.state``: placed, borrowed
+    (a nearby clip's grid), unplaced (none: counted without tubes), pending
+    or error."""
+    from apps.devices.layouts import layout_for_video
     from apps.training import model_classes
-
-    from .references import geometry_key
 
     s = tube_settings(cfg)
     saved = layout_for_video(video)
     base = {"artifact": "roi", "hotel_roi": saved["roi_override"],
-            "hotel_polygon": saved["roi_polygon"], "label": s["label"]}
-    if saved["source"] == "video" and s["drawn_wins"]:
-        return {**base, "nest_layout": saved["nest_layout"] or None, "source": "video",
-                "source_label": saved["source_label"],
-                "tubes": {"state": "drawn", "flag": ""}}
+            "hotel_polygon": saved["roi_polygon"], "label": s["label"], "source": "detected"}
     picked = model_classes.resolve(s["model"], user)
     if picked is None or not s["label"]:
-        return {**base, "nest_layout": None, "source": "detected", "source_label": "",
-                "tubes": {"state": "error", "flag": "error",
-                          "error": "Pick the tube model and its class on the Reference node."}}
+        return {**base, "nest_layout": None, "source_label": "",
+                "tubes": {"state": "error",
+                          "error": "Pick the model and its class on the Reference node."}}
     from apps.videos.models import TubeDetection
 
     found = TubeDetection.objects.filter(video=video, model_key=picked["key"], label=s["label"],
                                          settings_key=settings_key(s["frames"], s["confidence"])).first()
     if (found is None or found.retry()) and detect_now:
         found = detect(video, picked["key"], s["label"], s["frames"], s["confidence"])
-    label = f'{picked["name"]}: {s["label"]}'
+    label = f'{picked["name"]}: {s["label"]}, {arrangement_label(s)}'
     if found is None:
-        return {**base, "nest_layout": None, "source": "detected", "source_label": label,
-                "tubes": {"state": "pending", "flag": ""}}
+        return {**base, "nest_layout": None, "source_label": label, "tubes": {"state": "pending"}}
     if found.error:
-        return {**base, "nest_layout": None, "source": "detected", "source_label": label,
-                "tubes": {"state": "error", "flag": "error", "error": found.error,
-                          "detection": found.pk}}
-    template = shared_layout_for_video(video)
-    boxes = found.boxes
+        return {**base, "nest_layout": None, "source_label": label,
+                "tubes": {"state": "error", "error": found.error, "detection": found.pk}}
+    tubes = {"state": "placed", "detection": found.pk, "frames": found.frames,
+             "found": len(found.boxes), "arrangement": arrangement_label(s)}
     roi = saved["roi_override"]
-    if roi and len(roi) == 4:
-        # Only tubes inside the ROI: what tracking runs over.
-        boxes = [b for b in boxes if roi[0] <= _centre(b["box"])[0] <= roi[2]
-                 and roi[1] <= _centre(b["box"])[1] <= roi[3]]
-    m = match(template["nest_layout"] or [], boxes)
-    return {**base, "nest_layout": [{k: v for k, v in n.items() if k not in ("kept", "new")}
-                                    for n in m["nests"]] or None,
-            "source": "detected", "source_label": label,
-            "tubes": {"state": "detected", "detection": found.pk, "frames": found.frames,
-                      "found": len(found.boxes), "matched": m["matched"], "kept": m["kept"],
-                      "new": m["new"], "shift": m["shift"], "scale": m["scale"],
-                      "flag": m["flag"], "template": template["source_label"],
-                      "template_key": geometry_key(None, None, template["nest_layout"]),
-                      "marks": {str(n["id"]): ("kept" if n.get("kept") else "new")
-                                for n in m["nests"] if n.get("kept") or n.get("new")}}}
+    got = arrange(_in_roi(found.boxes, roi), s)
+    if not got["ok"]:
+        near = _neighbour(video, found, s, roi)
+        if near is None:
+            return {**base, "nest_layout": None, "source_label": label,
+                    "tubes": {**tubes, "state": "unplaced", "reason": got["reason"]}}
+        tubes.update(state="borrowed", from_video=near[0], reason=got["reason"])
+        got = near[1]
+    tubes.update(filled=got["filled"], dropped=got["dropped"])
+    return {**base, "nest_layout": got["nests"] or None, "source_label": label, "tubes": tubes}

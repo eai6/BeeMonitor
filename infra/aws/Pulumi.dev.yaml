@@ -10,6 +10,7 @@ config:
     secure: v1:1A9VIOq3J9tDjDWo:x+PmRxbScymnO3WiT6PjeYDfrLTzqQpgYQ/V77uOcJSsrH8R63YUnHoK5nMUB9wDrLjmAeYJZphB0gfXy5qDEztyB53dPmDGJQLpBZoD3Bx8LqsDXabqF74p70E69BFcRhM+1Ta1W5fufpFr60Nt2JbDGBtwXpVxBTXJaQ==
   beemonitor-aws:sampling-backend: sagemaker
   # Recount workers at once (memory/82). 20 ran the db.t4g.micro (1 GB) out
-  # of memory on 2026-11-16 (swap, then Postgres down 17 min); 8 is safe.
-  beemonitor-aws:recount-concurrency: "8"
+  # of memory on 2026-11-16 (swap, then Postgres down 17 min); on the
+  # db.t4g.small (2 GB) 32 (no swap, ~670 MB free at 16).
+  beemonitor-aws:recount-concurrency: "32"
 encryptionsalt: v1:1huR4eChGFU=:v1:VxO/rgntZ3q7Mris:+R5uPh88GXJO3+O70ge2cuO0SCQP+A==

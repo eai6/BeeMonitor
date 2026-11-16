@@ -765,7 +765,7 @@ def _detected_tubes(request, video, run_pk):
     except (ValueError, Exception):  # noqa: BLE001 - a bad id is no tubes
         return None
     for out in ((run.context or {}).values() if run else []):
-        if isinstance(out, dict) and (out.get("tubes") or {}).get("state") == "detected":
+        if isinstance(out, dict) and (out.get("tubes") or {}).get("state") in ("placed", "borrowed", "detected"):
             return {"nests": out.get("nest_layout") or [],
                     "label": f"the tubes found by {out.get('source_label') or 'the model'}"}
     return None

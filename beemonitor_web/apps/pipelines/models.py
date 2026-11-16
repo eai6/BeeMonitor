@@ -325,25 +325,6 @@ class BatchStats(models.Model):
     working_since = models.DateTimeField(null=True, blank=True)
 
 
-class TubeDayCheck(models.Model):
-    """A batch's day whose detected tubes its launcher looked at and found
-    right (memory/82): it leaves "To look at" until its tubes are found again
-    differently (a new numbering, another model)."""
-
-    batch_id = models.UUIDField(db_index=True)
-    place = models.CharField(max_length=200, blank=True, default="")
-    day = models.DateField(null=True, blank=True)
-    # The day's detected numbering when it was checked: a new one is looked at again.
-    checked_key = models.CharField(max_length=64, blank=True, default="")
-    checked_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
-                                   on_delete=models.SET_NULL, related_name="+")
-    checked_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        constraints = [models.UniqueConstraint(fields=["batch_id", "place", "day"],
-                                               name="tube_day_checked_once")]
-
-
 class BatchMember(models.Model):
     """Someone the batch's launcher invited (memory/62), like an annotation
     project's ``ProjectShare``. A reviewer watches, votes on events and trips,

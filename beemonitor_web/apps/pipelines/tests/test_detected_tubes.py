@@ -1,13 +1,14 @@
-"""Tube references found by a model in each clip, numbered from the site's
-layout (memory/82).
+"""References found by a model in each clip (memory/82), numbered as the
+Reference node says: a grid of rows and columns, or as found (memory/83).
 
 Fixing a 6,306-clip batch's tubes by hand went a day at a time; a model finds
-them instead, on CPU in the recount worker. Tube numbers must mean the same
-tube on every day, so the boxes are matched to the site's layout.
+them instead, on CPU in the recount worker. Matching them to a drawing made
+days to check by hand; a grid numbers them with nothing to check.
 """
 
 import json
 import uuid
+from datetime import datetime, timezone as dt_timezone
 from unittest import mock
 
 import numpy as np
@@ -15,7 +16,7 @@ from django.test import SimpleTestCase
 from django.urls import reverse
 
 from apps.pipelines import executors, recount, references, regroup, tubes
-from apps.pipelines.models import PipelineRun, TubeDayCheck
+from apps.pipelines.models import PipelineRun
 from apps.pipelines.tests.test_primitive_blocks import PrimitiveBlockTestCase
 from apps.training import model_classes
 from apps.videos.models import Layout, Site, TubeDetection, Video
@@ -37,48 +38,40 @@ def found(nests):
     return [{"box": n["box"], "confidence": 0.9, "seen": 8} for n in nests]
 
 
-class MatchTests(SimpleTestCase):
-    def test_a_missed_tube_keeps_its_number_and_a_new_one_gets_the_next(self):
-        template = grid()
-        moved = grid(dx=0.3 * W)
-        seen = [n for n in moved if n["id"] != 9] + [{"id": 0, "box": [0.85, 0.3, 0.85 + W, 0.3 + H]}]
-        m = tubes.match(template, found(seen))
-        by_id = {n["id"]: n for n in m["nests"]}
-        self.assertEqual((m["matched"], m["kept"], m["new"], m["flag"]), (23, 1, 1, "new"))
-        self.assertTrue(by_id[9]["kept"])
-        self.assertAlmostEqual(by_id[9]["box"][0], moved[8]["box"][0], places=3)   # moved with the rest
-        self.assertTrue(by_id[25]["new"])
-        self.assertAlmostEqual(by_id[2]["box"][0], moved[1]["box"][0], places=5)
+GRID = {"arrangement": "grid", "rows": 4, "columns": 6}
 
-    def test_a_camera_moved_by_more_than_a_tube_still_numbers_right(self):
-        """Position order would renumber everything; the shift is found first."""
-        m = tubes.match(grid(), found(grid(dx=2.4 * W, dy=-0.5 * H)))
-        self.assertEqual((m["matched"], m["kept"], m["new"]), (24, 0, 0))
-        self.assertEqual(m["flag"], "moved")
-        by_id = {n["id"]: n for n in m["nests"]}
-        self.assertAlmostEqual(by_id[7]["box"][0], grid(dx=2.4 * W)[6]["box"][0], places=5)
 
-    def test_a_zoom_is_taken_out_too(self):
-        m = tubes.match(grid(), found(grid(scale=1.04, dx=0.01)))
-        self.assertEqual(m["matched"], 24)
-        self.assertEqual(m["flag"], "")
+class ArrangeTests(SimpleTestCase):
+    def settings(self, **cfg):
+        return tubes.tube_settings({**GRID, **cfg})
 
-    def test_names_come_from_the_template(self):
-        template = grid(rows=1, cols=3)
-        template[1]["name"] = "Flag B"
-        m = tubes.match(template, found(grid(rows=1, cols=3)))
-        self.assertEqual(m["nests"][1]["name"], "Flag B")
+    def test_numbered_row_by_row_with_a_false_box_left_out_and_a_missed_one_placed(self):
+        seen = [n for n in grid() if n["id"] != 9] + [{"id": 0, "box": [0.15, 0.85, 0.15 + W, 0.85 + H]}]
+        out = tubes.arrange(found(seen), self.settings())
+        self.assertTrue(out["ok"], out["reason"])
+        self.assertEqual([n["id"] for n in out["nests"]], list(range(1, 25)))
+        self.assertEqual((out["filled"], out["dropped"]), (1, 1))
+        for want, got in zip(grid(), out["nests"]):
+            self.assertAlmostEqual(got["box"][0], want["box"][0], places=3)
+            self.assertAlmostEqual(got["box"][1], want["box"][1], places=3)
 
-    def test_with_no_template_tubes_are_numbered_by_position(self):
+    def test_a_grid_that_cant_be_told_says_why(self):
+        out = tubes.arrange(found(grid(rows=3)), self.settings())
+        self.assertFalse(out["ok"])
+        self.assertIn("3 rows of 4", out["reason"])
+        self.assertEqual(out["nests"], [])
+
+    def test_as_found_is_reading_order_with_no_count(self):
         boxes = found(grid(rows=2, cols=2))[::-1]
-        m = tubes.match([], boxes)
-        self.assertEqual([n["id"] for n in m["nests"]], [1, 2, 3, 4])
-        self.assertLess(m["nests"][0]["box"][0], m["nests"][1]["box"][0])
-        self.assertEqual(m["flag"], "no_template")
+        out = tubes.arrange(boxes, self.settings(arrangement="found"))
+        self.assertEqual([n["id"] for n in out["nests"]], [1, 2, 3, 4])
+        self.assertLess(out["nests"][0]["box"][0], out["nests"][1]["box"][0])
+        self.assertFalse(tubes.arrange([], self.settings(arrangement="found"))["ok"])
 
-    def test_nothing_found_keeps_the_template(self):
-        m = tubes.match(grid(rows=1, cols=2), [])
-        self.assertEqual((m["kept"], m["flag"]), (2, "none_found"))
+    def test_settings_default_to_a_six_by_ten_grid(self):
+        s = tubes.tube_settings({"source": "detected"})
+        self.assertEqual((s["arrangement"], s["rows"], s["columns"]), ("grid", 6, 10))
+        self.assertEqual(tubes.tube_settings({"rows": "3", "columns": "0"})["columns"], 1)
 
 
 class ObjectsTests(SimpleTestCase):
@@ -147,7 +140,8 @@ class DetectedReferenceBase(PrimitiveBlockTestCase):
         super().setUp()
         self.site = Site.objects.create(user=self.user, name="mendels", tz_name="UTC")
         Video.objects.filter(pk=self.video.pk).update(
-            site=self.site, site_name="mendels", width=640, height=360, duration_seconds=60.0)
+            site=self.site, site_name="mendels", width=640, height=360, duration_seconds=60.0,
+            recorded_at=datetime(2024, 5, 8, 9, tzinfo=dt_timezone.utc))
         self.video.refresh_from_db()
         self.template = grid(rows=2, cols=3)
         Layout.save_new(site=self.site, roi=[0.0, 0.0, 1.0, 1.0], polygon=None,
@@ -156,16 +150,16 @@ class DetectedReferenceBase(PrimitiveBlockTestCase):
 
     def ref_config(self, **extra):
         return {"source": "detected", "tube_model": model_classes.BUILTIN_NEST,
-                "tube_class": "nest", **extra}
+                "tube_class": "nest", "arrangement": "grid", "rows": 2, "columns": 3, **extra}
 
     def steps(self, **extra):
         steps = self._steps("analyze.events")
         steps[3]["config"] = self.ref_config(**extra)
         return steps
 
-    def stored(self, nests=None):
+    def stored(self, nests=None, video=None):
         return TubeDetection.objects.create(
-            video=self.video, model_key=model_classes.BUILTIN_NEST_KEY, label="nest",
+            video=video or self.video, model_key=model_classes.BUILTIN_NEST_KEY, label="nest",
             settings_key=tubes.settings_key(tubes.DEFAULT_FRAMES, tubes.DEFAULT_CONFIDENCE),
             boxes=found(nests if nests is not None else self.seen), frames=8)
 
@@ -194,21 +188,46 @@ class DetectedReferenceTests(DetectedReferenceBase):
         context = {"v": {"artifact": "video", "video_id": self.video.pk}}
         return executors.resolve_reference(run.steps[3], run, context, 3)
 
-    def test_the_detected_tubes_take_the_sites_numbers(self):
-        self.stored()
+    def test_the_tubes_are_numbered_as_the_nodes_grid(self):
+        self.stored(list(reversed(self.seen)))
         out = self.resolve()
         self.assertEqual(out["source"], "detected")
         self.assertEqual([n["id"] for n in out["nest_layout"]], [1, 2, 3, 4, 5, 6])
         self.assertAlmostEqual(out["nest_layout"][0]["box"][0], self.seen[0]["box"][0])
         self.assertEqual(out["hotel_roi"], [0.0, 0.0, 1.0, 1.0])        # the saved ROI
-        self.assertEqual((out["tubes"]["state"], out["tubes"]["matched"]), ("detected", 6))
+        self.assertEqual((out["tubes"]["state"], out["tubes"]["filled"]), ("placed", 0))
+        self.assertIn("2 × 3 grid", out["source_label"])
 
-    def test_a_clip_drawn_by_hand_keeps_its_drawing(self):
+    def test_a_drawing_doesnt_replace_the_model(self):
+        """The pipeline decides: set to a model, the model's tubes count."""
         self.stored()
         Layout.save_new(video=self.video, roi=None, polygon=None,
                         nests=[{"id": 1, "box": [0.5, 0.5, 0.6, 0.6]}], user=self.user)
-        self.assertEqual(self.resolve()["tubes"]["state"], "drawn")
-        self.assertEqual(self.resolve(drawn_wins="off")["tubes"]["state"], "detected")
+        out = self.resolve()
+        self.assertEqual((out["tubes"]["state"], len(out["nest_layout"])), ("placed", 6))
+
+    def test_a_grid_that_cant_be_told_borrows_the_nearest_clips_at_its_site(self):
+        from datetime import timedelta
+
+        self.stored(self.seen[:3])                      # one row of two
+        when = self.video.recorded_at
+        for hours, nests in ((5, self.seen), (30, grid(rows=2, cols=3, dx=0.1))):
+            other = Video.objects.create(user=self.user, site=self.site, site_name="mendels",
+                                         title=f"{hours}h", storage_key=f"t/{hours}.mp4",
+                                         file_size_bytes=1, status=Video.Status.READY,
+                                         recorded_at=when + timedelta(hours=hours))
+            self.stored(nests, video=other)
+        out = self.resolve()
+        self.assertEqual(out["tubes"]["state"], "borrowed")
+        self.assertEqual(out["tubes"]["from_video"], Video.objects.get(title="5h").pk)
+        self.assertIn("1 rows of 2", out["tubes"]["reason"])
+        self.assertAlmostEqual(out["nest_layout"][5]["box"][0], self.seen[5]["box"][0])
+
+    def test_with_no_grid_near_it_is_counted_without_tubes(self):
+        self.stored(self.seen[:3])
+        out = self.resolve()
+        self.assertEqual(out["tubes"]["state"], "unplaced")
+        self.assertIsNone(out["nest_layout"])
 
     def test_without_a_detection_a_fresh_run_waits_for_the_worker(self):
         out = self.resolve()
@@ -224,7 +243,7 @@ class DetectedReferenceTests(DetectedReferenceBase):
         det = TubeDetection.objects.get(video=self.video)
         self.assertEqual((len(det.boxes), det.frames, det.error), (6, 8, ""))
         run.refresh_from_db()
-        self.assertEqual(run.context["r"]["tubes"]["matched"], 6)
+        self.assertEqual(run.context["r"]["tubes"]["state"], "placed")
         self.assertEqual({r["reference"] for r in run.context["a"]["rows"]} - {"reference_1"}, set())
         # Found once: the next recount reads it.
         with self.model() as _m, mock.patch("apps.videos.frames.frame_jpeg") as again:
@@ -288,21 +307,23 @@ class UpdatingABatchTests(DetectedReferenceBase):
         with mock.patch.object(executors, "_job_run", return_value=run), \
                 mock.patch.object(Job, "result", create=True, new=object()):
             drawn = executors.geometry_for_job(job)
-        self.assertEqual(drawn["tubes"]["state"], "detected")
-        # The References page reads the new node, not the old one first in the steps.
-        self.assertEqual(references.counted(run)["tubes"]["state"], "detected")
+        self.assertEqual(drawn["tubes"]["state"], "placed")
+        # The listing reads the new node, not the old one first in the steps.
+        self.assertEqual(references.counted(run)["tubes"]["state"], "placed")
         from apps.pipelines import listing
         self.assertEqual(listing.rows(PipelineRun.objects.filter(pk=run.pk))[0]["layout"]
-                         ["tubes"]["state"], "detected")
+                         ["tubes"]["state"], "placed")
 
 
-class ReferencesPageTests(DetectedReferenceBase):
+class BatchPageTests(DetectedReferenceBase):
+    """No References page: one line on the batch page (memory/83)."""
+
     def setUp(self):
         super().setUp()
         self.client.force_login(self.user)
         self.run = self.run_with(self.steps())
         self.batch = self.run.batch_id
-        self.page = reverse("pipelines:batch_references", args=[self.batch])
+        self.page = reverse("pipelines:batch_detail", args=[self.batch])
 
     def count(self, nests):
         TubeDetection.objects.all().delete()
@@ -310,48 +331,38 @@ class ReferencesPageTests(DetectedReferenceBase):
         recount.recount_run(PipelineRun.objects.get(pk=self.run.pk))
         PipelineRun.objects.filter(pk=self.run.pk).update(counting_rules=recount.CURRENT_RULES)
 
-    def days(self):
-        from apps.pipelines import listing
-
-        return references.days(listing.rows(PipelineRun.objects.filter(batch_id=self.batch)))
-
-    def test_a_day_numbered_cleanly_is_detected(self):
+    def test_the_batch_page_says_how_the_clips_were_numbered(self):
         self.count(self.seen)
-        day = self.days()[0]
-        self.assertEqual((day["kind"], day["detected"], day["up_to_date"]), ("detected", 1, 1))
-        self.assertContains(self.client.get(self.page), "days detected")
+        page = self.client.get(self.page)
+        self.assertEqual(page.context["tube_summary"]["placed"], 1)
+        self.assertContains(page, "Numbered by model")
+        self.assertNotContains(page, "Renumber")
 
-    def test_a_day_with_a_new_tube_is_to_look_at_until_it_is_checked(self):
-        self.count(self.seen + [{"id": 0, "box": [0.8, 0.6, 0.88, 0.7]}])
-        day = self.days()[0]
-        self.assertEqual(day["kind"], "look")
-        page = self.client.get(self.page + "?show=look")
-        self.assertContains(page, "Look at this day")
-        day_url = reverse("pipelines:batch_references_day", args=[self.batch, self.video.pk])
-        res = self.client.get(day_url)
-        self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.context["tubes"]["new"], 1)
-        self.assertEqual([s["mark"] for s in res.context["shapes"]].count("new"), 1)
-        self.assertIn("tubes_of=", res.context["edit_url"])
-
-        self.client.post(reverse("pipelines:batch_references_action", args=[self.batch]),
-                         {"action": "checked", "day": self.video.pk})
-        self.assertTrue(TubeDayCheck.objects.exists())
-        self.assertNotContains(self.client.get(self.page + "?show=look"), "Look at this day")
-
-    def test_a_days_detection_can_become_the_sites_numbering(self):
-        extra = self.seen + [{"id": 0, "box": [0.8, 0.6, 0.88, 0.7]}]
-        self.count(extra)
-        self.client.post(reverse("pipelines:batch_references_action", args=[self.batch]),
-                         {"action": "numbering", "day": self.video.pk, "run": self.run.pk})
-        site = Layout.current(site=self.site)
-        self.assertEqual(len(site.nest_layout), 7)
-        self.assertEqual(site.roi_override, [0.0, 0.0, 1.0, 1.0])
+    def test_clips_not_placed_or_numbered_the_old_way_are_renumbered(self):
+        self.count(self.seen[:3])
+        page = self.client.get(self.page)
+        self.assertEqual(page.context["tube_summary"]["unplaced"], 1)
+        self.assertContains(page, "Renumber 1 clip")
+        # Fixed by a nearby clip at the site, then renumbered from the page.
+        from datetime import timedelta
+        other = Video.objects.create(user=self.user, site=self.site, site_name="mendels", title="n",
+                                     storage_key="t/n.mp4", file_size_bytes=1,
+                                     status=Video.Status.READY,
+                                     recorded_at=self.video.recorded_at + timedelta(hours=1))
+        self.stored(self.seen, video=other)
+        self.client.post(reverse("pipelines:batch_tubes_recount", args=[self.batch]))
         self.run.refresh_from_db()
-        self.assertEqual(self.run.counting_rules, 0)          # renumbered and recounted
-        recount.recount_run(PipelineRun.objects.get(pk=self.run.pk))
-        PipelineRun.objects.filter(pk=self.run.pk).update(counting_rules=recount.CURRENT_RULES)
-        self.assertEqual(self.days()[0]["kind"], "detected")
+        self.assertLess(self.run.counting_rules, recount.CURRENT_RULES)
+        self.assertEqual(self.client.get(reverse("pipelines:batch_recount_progress",
+                                                 args=[self.batch])).json()["pending"], 1)
+        recount.sweep()
+        self.assertEqual(self.client.get(self.page).context["tube_summary"]["borrowed"], 1)
+
+    def test_only_the_launcher_renumbers(self):
+        other = type(self.user).objects.create_user("someone", password="x")
+        self.client.force_login(other)
+        res = self.client.post(reverse("pipelines:batch_tubes_recount", args=[self.batch]))
+        self.assertEqual(res.status_code, 404)
 
     def test_the_editor_opens_with_the_detected_tubes(self):
         self.count(self.seen)
@@ -462,6 +473,6 @@ class NewReferenceNodeTests(DetectedReferenceBase):
             recount.sweep()
         run.refresh_from_db()
         self.assertEqual(run.steps[4]["inputs"]["rois"], "t")
-        self.assertEqual(run.context["t"]["tubes"]["state"], "detected")
+        self.assertEqual(run.context["t"]["tubes"]["state"], "placed")
         self.assertEqual(run.context["a"]["reference_source"], "detect:nest")
         self.assertIsNone(regroup.batch_changes([run], self.pipeline))

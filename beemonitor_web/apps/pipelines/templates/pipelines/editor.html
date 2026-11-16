@@ -505,7 +505,10 @@ function plApplyShowIf(scope){
     var val = ctrlInput ? ctrlInput.value : '';
     // A comma-separated value shows the field for any of them (e.g. "bytetrack,botsort").
     var wanted = fieldEl.getAttribute('data-showif-value').split(',');
-    fieldEl.style.display = (wanted.indexOf(String(val)) !== -1) ? '' : 'none';
+    // Hidden with the field it depends on (Rows: only with Numbered shown).
+    var ctrlField = ctrlInput && ctrlInput.closest('.pl-field');
+    var ctrlShown = !ctrlField || ctrlField.style.display !== 'none';
+    fieldEl.style.display = (ctrlShown && wanted.indexOf(String(val)) !== -1) ? '' : 'none';
   });
 }
 

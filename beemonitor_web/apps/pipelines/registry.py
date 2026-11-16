@@ -477,10 +477,11 @@ BLOCK_REGISTRY = {
         "description": "Each clip's ROI and reference objects (nest holes, flags, "
                        "tubes, flowers…). Saved: the clip's own layout if it has "
                        "one, else its site's, else its unit's (the version in use "
-                       "when it was recorded). Detected: the tubes a YOLO model "
-                       "finds in a few frames of each clip, numbered from the "
-                       "site's layout; the ROI stays the saved one. No GPU "
-                       "either way (memory/82).",
+                       "when it was recorded). Found by a model: what a YOLO model "
+                       "finds in a few frames of each clip, numbered as a grid of "
+                       "rows and columns (row by row from the top left) or as "
+                       "found; no drawing is used. The ROI stays the saved one. "
+                       "No GPU either way (memory/83).",
         "category": "roi",
         "icon": "📐",
         "input_type": "video",
@@ -497,7 +498,7 @@ BLOCK_REGISTRY = {
                 "choices": [
                     # Value kept: saved pipelines use it. memory/52.
                     {"value": "device_layout", "label": "The clip's saved ROI + reference objects (clip, site or unit)"},
-                    {"value": "detected", "label": "Tubes found by a model, numbered from the site's layout"},
+                    {"value": "detected", "label": "Found by a model"},
                 ],
             },
             {
@@ -541,16 +542,37 @@ BLOCK_REGISTRY = {
                 "show_if": {"field": "source", "value": "detected"},
             },
             {
-                "name": "drawn_wins",
-                "label": "A clip drawn by hand",
+                "name": "arrangement",
+                "label": "Numbered",
+                "help": "Grid: row by row from the top left; extra boxes are left out and a "
+                        "missed one is placed from its row and column. As found: every box, "
+                        "in reading order, for references that aren't a grid.",
                 "field_type": "select",
                 "required": False,
-                "default": "on",
+                "default": "grid",
                 "choices": [
-                    {"value": "on", "label": "keeps its drawing"},
-                    {"value": "off", "label": "uses the detection too"},
+                    {"value": "grid", "label": "As a grid of rows and columns"},
+                    {"value": "found", "label": "As found (not a grid)"},
                 ],
                 "show_if": {"field": "source", "value": "detected"},
+            },
+            {
+                "name": "rows",
+                "label": "Rows",
+                "field_type": "number",
+                "required": False,
+                "default": 6,
+                "choices": None,
+                "show_if": {"field": "arrangement", "value": "grid"},
+            },
+            {
+                "name": "columns",
+                "label": "Columns",
+                "field_type": "number",
+                "required": False,
+                "default": 10,
+                "choices": None,
+                "show_if": {"field": "arrangement", "value": "grid"},
             },
             {
                 "name": "regions",

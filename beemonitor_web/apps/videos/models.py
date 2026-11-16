@@ -496,7 +496,8 @@ class TubeDetection(models.Model):
     class and sampling give the same tubes in every pipeline and batch, so
     they are found once. ``boxes`` are the objects seen on enough of the
     frames read, ``[{box: [x1, y1, x2, y2] 0..1, confidence, seen}]``, not yet
-    numbered: pipelines.tubes.match numbers them from the site's layout.
+    numbered: pipelines.tubes.arrange numbers them as the Reference node says
+    (memory/83).
     ``error`` says why there are none (no frame read, no CPU copy of the
     model, a class it doesn't have)."""
 

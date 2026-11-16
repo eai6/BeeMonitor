@@ -12,7 +12,7 @@
       Draw the <span class="text-green-700 font-medium">ROI</span> (only bees inside it are tracked) and the
       <span class="text-red-600 font-medium">reference objects</span> visits are counted against: nest holes, flags,
       flowers. Name each one with <strong>Rename</strong> so results read "Flag C" rather than "Reference 3".
-      {% if carried %}<br><strong class="text-amber-800">Drawn from {{ carried.title }}'s layout, to check against this frame.</strong> Nothing is saved until you save.{% elif detected %}<br><strong class="text-amber-800">Showing {{ detected.label }}, numbered from the site's layout.</strong> Fix them and save for this day: a day drawn by hand keeps its drawing over the detection.
+      {% if carried %}<br><strong class="text-amber-800">Drawn from {{ carried.title }}'s layout, to check against this frame.</strong> Nothing is saved until you save.{% elif detected %}<br><strong class="text-amber-800">Showing {{ detected.label }}.</strong> Saving makes them a drawing, used by pipelines whose Reference node is set to the saved layout.
       {% elif source_label %}<br>Now in use: <strong>{{ source_label }}</strong>.{% endif %}
     </p>
     {% if nav %}

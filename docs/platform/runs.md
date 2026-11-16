@@ -53,37 +53,39 @@ asks whether to apply it to them too.
 
 #### Tubes found by a model
 
-The pipeline's **Reference** node can take its tubes from a model instead of a saved layout: set
-**Source** to *Tubes found by a model*, pick the model (the built-in nest model, or one trained here)
-and its tube class from the model's own classes. Each clip's tubes are found on a few frames spread
-over it (8 by default), on CPU, with no GPU-hours. The ROI is still the saved one, since tracking
-runs inside it.
+The pipeline's **Reference** node can take its tubes, or other reference objects, from a model
+instead of a saved layout. Set **Source** to *Found by a model*, then pick the model (the built-in
+nest model, or one trained here) and its class from the model's own classes. Each clip's objects
+are found on a few frames spread over it (8 by default), on CPU, with no GPU-hours. The ROI is still
+the saved one, since tracking runs inside it.
 
-A model's boxes have no numbers, so they are matched to the **site's saved layout**: the camera's
-shift (and zoom) is worked out first, then each tube the model found takes the number, and the name,
-of the site's tube it lines up with. Tube 7 is the same tube on every day, which keeps per-tube
-totals, trips, hops and review votes on the right tube.
+The pipeline decides which is used: set to a model, every clip uses the model's tubes, even a clip
+that has a drawing. Set to the saved layout, the drawing is used exactly as drawn.
 
-- A tube the model missed (a bee sitting on it, say) keeps the site's box, moved with the camera.
-- A tube it found that the site's layout doesn't have gets the next free number.
-- Either of these, or a camera that moved more than a tube's width, puts the day under
-  **To look at**.
+A model's boxes have no numbers. **Numbered** on the node says how to number them:
 
-**Look at this day** shows a frame with the tubes as numbered: green matched, dashed amber kept from
-the site's layout, blue new, and the site's layout in thin white. From there:
+- **As a grid of rows and columns** (6 × 10 by default). Tubes are numbered row by row from the top
+  left: 1 to 10 on the top row, 11 to 20 on the next, and so on. Boxes that aren't on the grid
+  (a shadow on the board, say) are left out. A tube the model missed is placed where its row and
+  column cross. Tube 7 is the same tube on every day, which keeps per-tube totals, trips, hops and
+  review votes on the right tube.
+- **As found**: every box, in reading order, with no fixed count. Use this for references that
+  aren't a grid.
 
-- **Looks right** takes the day off the list.
-- **Fix in the editor** opens the editor with the found tubes, to correct and save for the day.
-- **Make these the site's numbering** saves them as the site's layout, and every clip there is
-  numbered from them and recounted.
+When a clip's grid can't be worked out for certain (fewer than half the tubes found, or a whole row
+or edge column missing), the clip uses the grid of the nearest clip in time at the same site,
+within 3 days. If there is none, the clip is counted with no tubes rather than wrong ones. Nobody
+has to check days.
 
-A clip drawn by hand keeps its drawing over the detection (the node can turn that off), and
-**Use the detection** removes a day's drawing.
+The batch page shows one line on how the clips were numbered: placed, from a nearby clip, not
+placed. **Renumber** recounts the ones not placed (a nearby clip may fit now) and any numbered
+before grids existed.
 
 Switching a batch to found tubes is an **Update this batch** change with no GPU time. Each clip's
 tubes are found, then it is recounted from its saved tracks. A clip whose MOT node keeps a lost
 track at its tube ("stays at that tube") is tracked again on the web first, since its tracks depend
-on where the tubes are; this also happens when a day's tubes are fixed by hand.
+on where the tubes are. Changing the rows or columns needs no new detection: the clips are
+renumbered and recounted. A **Recounting: N clips to go** bar on the batch page shows progress.
 
 Models need a CPU copy to be used this way. Models trained from now on get one at the end of
 training; for the built-in models and models trained before, run `scripts/export_onnx.py` once.

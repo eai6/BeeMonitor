@@ -1223,7 +1223,7 @@ def _batch_listing(request, batch_id):
 def batch_detail(request, batch_id):
     """Aggregate results for runs launched together: per-run status and
     combined CSV downloads."""
-    from . import aggregate, batchstats
+    from . import aggregate, batchstats, tube_views
 
     # Per-run rows + failures grouped by cause. The page used to show a status
     # pill per run and nothing else, so nine failures of two kinds could only be
@@ -1235,6 +1235,8 @@ def batch_detail(request, batch_id):
     # Every clip, from its listing (memory/81): the filter, the counts and the
     # failures read no clip's results.
     rows, whole = _batch_listing(request, batch_id)
+    # How a model's references numbered the clips, from the listings (memory/83).
+    tube_summary = tube_views.summary(rows)
     first = (PipelineRun.objects.select_related("pipeline").defer("context", "summary")
              .get(pk=rows[0]["run"].pk))
     kind = pipeline_input_kind(first.steps)
@@ -1402,6 +1404,9 @@ def batch_detail(request, batch_id):
         "failure_groups": failure_groups,
         "downloads": stats.get("downloads") or [],
         "references": stats.get("references") or {"count": 0, "source": "none", "unplaceable": 0},
+        # References a model found: how the clips were numbered (memory/83).
+        "tube_summary": tube_summary if not photos_kind else None,
+        "recount_pending": tube_views.pending(batch_id) if can_share and not photos_kind else 0,
         "rerun_videos": rerun_videos,
         "rerun_pipelines": rerun_pipelines,
         "can_rerun": any(r["run"].user_id == request.user.id for r in rows),

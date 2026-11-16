@@ -1,9 +1,8 @@
-"""A big batch's page from its clips' listings and stored totals, and its
-References page (memory/81).
+"""A big batch's page from its clips' listings and stored totals, and the
+layout editor's day saves (memory/81).
 
 A 6,306-clip batch page took 24 s on average: it read every clip's results
-and counted every event's review on every load. Fixing the batch's tube
-references went a clip at a time, with nothing to say which days were done.
+and counted every event's review on every load.
 """
 
 import json
@@ -16,7 +15,7 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from apps.analysis.models import Job, JobResult
-from apps.pipelines import batchstats, listing, recount, references
+from apps.pipelines import batchstats, listing, recount
 from apps.pipelines.models import BatchStats, EventReview, PipelineRun
 from apps.pipelines.tests import test_event_review
 from apps.videos.models import Layout, Site, Video
@@ -167,63 +166,6 @@ class RefBase(Base):
             recorded_at=self.day1 + timedelta(days=1))
         recount.recount_run(PipelineRun.objects.get(pk=self.run.pk))
         self.client.force_login(self.owner)
-        self.page_url = reverse("pipelines:batch_references", args=[self.batch])
-
-    def _days(self):
-        return references.days(listing.rows(PipelineRun.objects.filter(batch_id=self.batch)))
-
-
-class ReferencesTests(RefBase):
-    """The References page."""
-
-    def test_a_run_counted_with_the_layout_its_clip_has_is_up_to_date(self):
-        day = self._days()[0]
-        self.assertEqual((day["clips"], day["analysed"], day["up_to_date"], day["stale"]),
-                         (1, 1, 1, 0))
-        self.assertEqual(day["layout"]["source"], "site")
-
-    def test_a_layout_fixed_but_not_recounted_shows_as_out_of_date(self):
-        """memory/81: days saved but never recounted, with nothing to say so."""
-        Layout.save_new(video=self.video, roi=None, polygon=None,
-                        nests=[{"id": 1, "box": MOVED}], user=self.owner)
-        day = self._days()[0]
-        self.assertEqual((day["stale"], day["own"]), (1, 1))
-        page = self.client.get(self.page_url)
-        self.assertContains(page, "Recount everything out of date (1)")
-
-        self.client.post(reverse("pipelines:batch_references_action", args=[self.batch]),
-                         {"action": "recount"})
-        self.run.refresh_from_db()
-        self.assertLess(self.run.counting_rules, recount.CURRENT_RULES)
-        recount.sweep()
-        self.assertEqual(self._days()[0]["stale"], 0)
-
-    def test_a_day_goes_back_on_its_sites_layout(self):
-        Layout.save_new(video=self.video, roi=None, polygon=None,
-                        nests=[{"id": 1, "box": MOVED}], user=self.owner)
-        self.client.post(reverse("pipelines:batch_references_action", args=[self.batch]),
-                         {"action": "site", "day": self.video.pk})
-        self.assertFalse(Layout.objects.filter(video=self.video).exists())
-        self.assertEqual(self._days()[0]["layout"]["source"], "site")
-
-    def test_a_day_takes_the_day_befores_layout(self):
-        Layout.save_new(video=self.video, roi=None, polygon=None,
-                        nests=[{"id": 1, "box": MOVED}], user=self.owner)
-        # The next day's clip, in the batch.
-        steps = json.loads(json.dumps(self.run.steps))
-        steps[0]["config"]["video_id"] = str(self.next_clip.pk)
-        PipelineRun.objects.create(pipeline=self.run.pipeline, user=self.owner, status="failed",
-                                   batch_id=self.batch, steps=steps,
-                                   context={"v": {"artifact": "video", "video_id": self.next_clip.pk}})
-        page = self.client.get(self.page_url)
-        self.assertContains(page, "Copy 17 Apr's")
-        self.client.post(reverse("pipelines:batch_references_action", args=[self.batch]),
-                         {"action": "copy", "day": self.next_clip.pk, "from": self.video.pk})
-        self.assertEqual(Layout.current(video=self.next_clip).nest_layout, [{"id": 1, "box": MOVED}])
-
-    def test_only_the_launcher_sees_it(self):
-        self.client.force_login(self.stranger)
-        self.assertEqual(self.client.get(self.page_url).status_code, 404)
 
 
 class EditorTests(RefBase):
