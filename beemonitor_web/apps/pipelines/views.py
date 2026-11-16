@@ -1755,7 +1755,10 @@ def batch_apply_groups(request, batch_id):
     if first is None:
         messages.error(request, "No finished clips to update.")
         return redirect("pipelines:batch_detail", batch_id=batch_id)
-    web, gpu = regroup.split_by_change(runsummary.slim_runs(chosen), first.pipeline)
+    # Only their steps: what changed is read from them (memory/82).
+    web, gpu = regroup.split_by_change(chosen.only("pk", "steps", "status", "pipeline_id",
+                                                   "batch_id", "user_id", "started_at")
+                                       .iterator(chunk_size=200), first.pipeline)
     rerun = 0
     if gpu:
         from apps.accounts import quota
@@ -1771,6 +1774,14 @@ def batch_apply_groups(request, batch_id):
         if not web:
             return redirect("pipelines:batch_detail", batch_id=batch_id)
         only = [r.pk for r in web]
+    if len(web) > regroup.BACKGROUND_FROM:
+        # A big batch: in the background, every clip to the recount worker.
+        regroup.apply_in_background(batch_id, request.user, only=only)
+        messages.success(request, f"Updating {len(web)} clips with the pipeline as it is now, in "
+                                  "the background: each is recounted (tracked again on the web, "
+                                  "and its tubes found, where the pipeline asks) by the recount "
+                                  "workers. Refresh to see progress. No GPU-hours.")
+        return redirect("pipelines:batch_detail", batch_id=batch_id)
     done = regroup.apply_pipeline(batch_id, request.user, only=only)
     if not done["applied"] and rerun:
         pass

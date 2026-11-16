@@ -249,12 +249,80 @@ def apply_pipeline(batch_id, user, now=APPLY_NOW, only=None) -> dict:
     return out
 
 
+# Above this many clips, Update applies the pipeline in the background: a
+# 5,930-clip batch took longer than a request may (memory/82).
+BACKGROUND_FROM = 500
+
+
+def _apply_and_queue(batch_id, user, only=None) -> dict:
+    """``apply_pipeline`` for a big batch: each finished run's steps updated,
+    200 at a time, reading only its steps, and every one queued for the
+    recount worker (which re-tracks and finds tubes where needed). Nothing is
+    recounted here and nothing per clip is asked of the database."""
+    from . import recount
+    from .models import Pipeline, PipelineRun
+
+    qs = PipelineRun.objects.filter(batch_id=batch_id, user=user, status=PipelineRun.Status.COMPLETED)
+    if only is not None:
+        qs = qs.filter(pk__in=list(only))
+    first = qs.only("pipeline_id").first()
+    pipeline = Pipeline.objects.filter(pk=first.pipeline_id).first() if first else None
+    out = {"applied": 0, "queued": 0, "skipped": 0}
+    pks, batch = [], []
+
+    def flush():
+        PipelineRun.objects.bulk_update(batch, ["steps"])
+        batch.clear()
+
+    for run in qs.only("pk", "steps").order_by("started_at").iterator(chunk_size=200):
+        applied = applied_steps(run.steps, pipeline)
+        if applied is None:
+            out["skipped"] += 1
+            continue
+        steps, grouped = applied
+        out["skipped"] += not grouped
+        batch.append(PipelineRun(pk=run.pk, steps=steps))
+        pks.append(run.pk)
+        if len(batch) >= 200:
+            flush()
+    if batch:
+        flush()
+    out["applied"] = len(pks)
+    if pks:
+        out["queued"] = recount.queue(pks)
+    return out
+
+
+def apply_in_background(batch_id, user, only=None):
+    """``apply_pipeline`` for a big batch, in a thread of this process, every
+    clip queued for the recount worker."""
+    import threading
+
+    def work():
+        from django.db import connection
+        try:
+            done = _apply_and_queue(batch_id, user, only)
+            logger.info("update of batch %s: %s", batch_id, done)
+        except Exception:
+            logger.exception("update of batch %s failed", batch_id)
+        finally:
+            connection.close()
+
+    import sys
+    if sys.argv[1:2] == ["test"]:
+        work()
+        return
+    threading.Thread(target=work, name=f"apply-{str(batch_id)[:8]}", daemon=True).start()
+
+
 def split_by_change(runs, pipeline):
     """``(web, gpu)``: the runs a recount brings up to the pipeline, and the
     ones whose changes need the GPU (a new detector, a new threshold...)."""
     web, gpu = [], []
     for run in runs:
-        (gpu if pipeline_changes(run, pipeline)["gpu"] else web).append(run)
+        # Re-tracking is on the web either way: not asked here, which saved a
+        # few queries a clip on a 6,000-clip batch (memory/82).
+        (gpu if pipeline_changes(run, pipeline, retracks=False)["gpu"] else web).append(run)
     return web, gpu
 
 
@@ -374,7 +442,12 @@ def _same_classes(before_cfg, after_cfg, pipeline) -> bool:
         return False
     if (a.get("model_family") or "yolo") != "yolo" or a.get("analyse") == "sampled":
         return False
-    model = model_classes.resolve(a.get("object_model"), getattr(pipeline, "user", None))
+    # Once a pipeline: a batch asks this of every clip.
+    seen = pipeline.__dict__.setdefault("_model_classes", {}) if pipeline is not None else {}
+    key = str(a.get("object_model") or "")
+    if key not in seen:
+        seen[key] = model_classes.resolve(key, getattr(pipeline, "user", None))
+    model = seen[key]
     then, now = _detected_classes(b, model), _detected_classes(a, model)
     return then is not None and then == now
 

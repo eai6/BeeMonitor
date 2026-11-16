@@ -473,20 +473,26 @@ function plRenderClasses(scope){
       }
       return;
     }
-    // The saved class when the model has it; else the model's tube-like class
-    // for a reference, its first otherwise. A name typed for another model
-    // isn't kept.
+    // Shown: the saved class when the model has it; else the model's
+    // tube-like class for a reference, its first otherwise. The saved value
+    // itself is left as it is until the user picks one: rewriting it on load
+    // changed pipelines nobody edited ("insect" -> "insects" read as a new
+    // detector, memory/82). An empty one takes the shown class.
     const saved = String(hidden.value || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
     const tubes = box.getAttribute('data-prefer') === 'tube';
     const chosen = classes.find(c => saved.indexOf(c.toLowerCase()) !== -1)
       || (tubes && classes.find(c => /tube|nest/i.test(c))) || classes[0];
-    hidden.value = chosen;
+    if(!saved.length) hidden.value = chosen;
     const sel = document.createElement('select'); sel.disabled = READONLY; sel.className = 'pl-inp';
     classes.forEach(function(c){
       const o = document.createElement('option'); o.value = c; o.textContent = c; o.selected = c === chosen;
       sel.appendChild(o);
     });
     sel.addEventListener('change', function(){ hidden.value = sel.value; plMarkDirty(); });
+    if(box.dataset.model !== undefined && box.dataset.model !== String(pick ? pick.value : '')){
+      hidden.value = chosen;          // the model was changed: its class
+    }
+    box.dataset.model = String(pick ? pick.value : '');
     box.appendChild(sel);
   });
 }

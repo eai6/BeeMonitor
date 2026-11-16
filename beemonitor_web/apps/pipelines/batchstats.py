@@ -8,6 +8,11 @@ in the background, stored on ``BatchStats`` with a fingerprint of what they
 were worked out from, and worked out again only when that changes: a run of
 the batch finished, was recounted or re-run, a review was cast, the pipeline
 or the batch's counted actions were edited.
+
+One web process at a time works a batch's totals out (``working_since``),
+and not again within ``REST_SECONDS`` of the last time: while the recount
+worker goes through a batch every recount changes it, and redoing them after
+each one kept two copies of the whole batch in memory (memory/82).
 """
 
 from __future__ import annotations
@@ -27,6 +32,11 @@ VERSION = 1
 
 _working = set()
 _lock = threading.Lock()
+# Totals worked out this recently are shown (marked as being redone) rather
+# than worked out again.
+REST_SECONDS = 10 * 60
+# A process that died while working: its claim is given up after this long.
+CLAIM_SECONDS = 15 * 60
 
 
 def totals(runs, rows, batch_id, pipeline, counted, photos, can_share=True) -> dict:
@@ -97,10 +107,15 @@ def stored(batch_id, pipeline, counted):
     they still match it. Starts working them out when they don't."""
     from .models import BatchStats
 
+    from django.utils import timezone
+
     fp = fingerprint(batch_id, pipeline, counted)
     row = BatchStats.objects.filter(batch_id=batch_id).first()
     if row is not None and row.fingerprint == fp:
         return row.data, True
+    if row is not None and row.data and not _testing() and \
+            (timezone.now() - row.computed_at).total_seconds() < REST_SECONDS:
+        return row.data, False                   # redone once they've rested
     done = start(batch_id, counted, fp)
     if done is not None:
         return done, True
@@ -110,13 +125,17 @@ def stored(batch_id, pipeline, counted):
 def start(batch_id, counted, fp):
     """Work the totals out in a thread of this process, once at a time; in
     the test run, now (its database is one connection's), returning them."""
-    if sys.argv[1:2] == ["test"]:
+    if _testing():
         return compute(batch_id, counted, fp)
     key = str(batch_id)
     with _lock:
         if key in _working:
             return None
         _working.add(key)
+    if not _claim(batch_id):
+        with _lock:
+            _working.discard(key)
+        return None                              # another process is on it
     threading.Thread(target=_work, args=(batch_id, counted, fp),
                      name=f"batchstats-{key[:8]}", daemon=True).start()
     return None
@@ -125,6 +144,8 @@ def start(batch_id, counted, fp):
 def _work(batch_id, counted, fp):
     from django.db import connection
 
+    from .models import BatchStats
+
     try:
         compute(batch_id, counted, fp)
     except Exception:
@@ -132,7 +153,32 @@ def _work(batch_id, counted, fp):
     finally:
         with _lock:
             _working.discard(str(batch_id))
-        connection.close()
+        try:
+            BatchStats.objects.filter(batch_id=batch_id).update(working_since=None)
+        finally:
+            connection.close()
+
+
+def _testing() -> bool:
+    return sys.argv[1:2] == ["test"]
+
+
+def _claim(batch_id) -> bool:
+    """Claim working the batch's totals out, for this process: no other web
+    process is, or the one that was gave up long ago."""
+    from datetime import timedelta
+
+    from django.db.models import Q
+    from django.utils import timezone
+
+    from .models import BatchStats
+
+    now = timezone.now()
+    BatchStats.objects.get_or_create(batch_id=batch_id, defaults={
+        "fingerprint": "", "data": {}, "computed_at": now})
+    return bool(BatchStats.objects.filter(batch_id=batch_id).filter(
+        Q(working_since=None) | Q(working_since__lt=now - timedelta(seconds=CLAIM_SECONDS)))
+        .update(working_since=now))
 
 
 def compute(batch_id, counted, fp=None) -> dict:

@@ -127,6 +127,23 @@ class BigBatchPageTests(Base):
         self.assertIsNone(res.context["changes"]["behind"])
         self.assertContains(res, "Changed since this batch's clips were counted")
 
+    def test_one_web_process_at_a_time_works_the_totals_out(self):
+        """memory/82: both web workers held the whole batch at once."""
+        self.assertTrue(batchstats._claim(self.batch))
+        self.assertFalse(batchstats._claim(self.batch))
+        BatchStats.objects.filter(batch_id=self.batch).update(working_since=None)
+        self.assertTrue(batchstats._claim(self.batch))
+
+    def test_fresh_totals_rest_before_being_redone(self):
+        self._get()
+        BatchStats.objects.filter(batch_id=self.batch).update(fingerprint="old")
+        with mock.patch.object(batchstats, "_testing", return_value=False), \
+                mock.patch.object(batchstats, "start") as start:
+            data, current = batchstats.stored(self.batch, self.run.pipeline, None)
+        start.assert_not_called()
+        self.assertFalse(current)
+        self.assertTrue(data)
+
     def test_a_big_batch_page_is_compressed(self):
         res = self.client.get(self.page_url, headers={"Accept-Encoding": "gzip"})
         self.assertEqual(res.headers.get("Content-Encoding"), "gzip")

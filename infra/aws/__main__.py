@@ -34,7 +34,7 @@ github_repo = config.require("github-repo")  # e.g. "owner/repo"
 image_tag = config.get("image-tag") or "latest"
 deploy_service = config.get_bool("deploy-service") or False
 instance_cpu = config.get("instance-cpu") or "1024"   # 1 vCPU
-instance_memory = config.get("instance-memory") or "2048"  # 2 GB
+instance_memory = config.get("instance-memory") or "4096"  # 4 GB: big batches (memory/82)
 # Auto-analysis toggle. When false, the app gets an empty SAGEMAKER_ENDPOINT_NAME
 # so Pi uploads do NOT spawn analysis jobs (useful while testing the pipeline).
 _analysis_enabled = config.get_bool("analysis-enabled")

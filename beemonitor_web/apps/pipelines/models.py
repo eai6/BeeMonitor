@@ -319,6 +319,10 @@ class BatchStats(models.Model):
     fingerprint = models.CharField(max_length=64)
     data = models.JSONField(default=dict)
     computed_at = models.DateTimeField()
+    # Set while a web process works them out: one at a time across the web's
+    # workers, each of which held the whole batch (memory/82: two at once ran
+    # a 2 GB instance out of memory).
+    working_since = models.DateTimeField(null=True, blank=True)
 
 
 class TubeDayCheck(models.Model):

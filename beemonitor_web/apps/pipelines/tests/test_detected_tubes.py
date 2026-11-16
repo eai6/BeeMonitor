@@ -392,5 +392,27 @@ class DetectLabelTests(PrimitiveBlockTestCase):
         # Another class of a two-class model is a real change.
         m.classes = ["insects", "flower"]
         m.save()
+        self.pipeline.__dict__.pop("_model_classes", None)     # read once a pipeline
         after[1]["config"]["label"] = "flower"
         self.assertTrue(regroup.pipeline_changes(run, self.pipeline, retracks=False)["gpu"])
+
+
+class BigBatchUpdateTests(DetectedReferenceBase):
+    def test_a_big_batch_updates_in_the_background_every_clip_to_the_worker(self):
+        """memory/82: Update on 5,930 clips ran longer than a request may."""
+        run = self.run_with(self._steps("analyze.events"))
+        recount.recount_run(run)
+        PipelineRun.objects.filter(pk=run.pk).update(counting_rules=recount.CURRENT_RULES)
+        self.pipeline.steps = self.steps()
+        self.pipeline.save()
+        self.client.force_login(self.user)
+        with mock.patch.object(regroup, "BACKGROUND_FROM", 0), \
+                mock.patch("apps.pipelines.recount.recount_run") as inline:
+            res = self.client.post(reverse("pipelines:batch_apply_groups", args=[run.batch_id]),
+                                   {"which": "all"}, follow=True)
+        inline.assert_not_called()
+        self.assertContains(res, "in the background")
+        run.refresh_from_db()
+        self.assertEqual(run.steps[3]["config"]["source"], "detected")
+        self.assertEqual(run.counting_rules, 0)
+        self.assertIsNotNone(run.recount_requested_at)
