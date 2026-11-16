@@ -14,8 +14,8 @@ from django.test import TestCase
 from django.urls import reverse
 
 from apps.analysis.models import Job
-from apps.pipelines import files_list
-from apps.pipelines.models import Pipeline, PipelineRun
+from apps.pipelines import files_list, review
+from apps.pipelines.models import ClipReview, EventReview, Pipeline, PipelineRun
 from apps.videos.models import Site, Video
 
 User = get_user_model()
@@ -120,3 +120,34 @@ class FilesListTests(TestCase):
         self.assertEqual(files_list.filename_time("natalies_2024-05-22_19_50_00"),
                          "2024-05-22 19:50:00")
         self.assertEqual(files_list.filename_time("Jill · 3df2b768c516"), "")
+
+    def test_it_says_which_clips_were_reviewed_and_how(self):
+        # memory/84: the clips the metrics are scored over, even one with no
+        # events, which no other download lists.
+        when = datetime(2024, 5, 8, 10, 0, tzinfo=dt_timezone.utc)
+        rows = [{"action": "exit", "reference": "reference_1", "track_id": 1, "frame": 10},
+                {"action": "enter", "reference": "reference_1", "track_id": 2, "frame": 90}]
+        busy = self._run("natalies_2024-05-08_10_00_00", when, "completed",
+                         {"e": {"table_kind": "events", "rows": rows}})
+        empty = self._run("natalies_2024-05-08_10_10_00", when.replace(minute=10), "completed",
+                          {"e": {"table_kind": "events", "rows": []}})
+        self._run("natalies_2024-05-08_10_20_00", when.replace(minute=20), "completed",
+                  {"e": {"table_kind": "events", "rows": rows}})
+        maria = User.objects.create_user("maria", password="x")
+        EventReview.objects.create(run=busy, event_key=review.event_key(rows[0]), user=self.user,
+                                   verdict="accepted")
+        EventReview.objects.create(run=busy, event_key=review.event_key(rows[1]), user=maria,
+                                   verdict="rejected")
+        ClipReview.objects.create(run=busy, user=self.user)
+        ClipReview.objects.create(run=empty, user=maria)
+
+        busy_row, empty_row, untouched = self._download()
+
+        self.assertEqual(
+            [busy_row[k] for k in ("clip_reviewed", "reviewed_by", "events", "events_reviewed",
+                                   "events_accepted", "events_rejected", "events_added")],
+            ["true", "fl;maria", "2", "2", "1", "1", "0"])
+        self.assertEqual((empty_row["clip_reviewed"], empty_row["reviewed_by"], empty_row["events"]),
+                         ("true", "maria", "0"))
+        self.assertEqual((untouched["clip_reviewed"], untouched["reviewed_by"],
+                          untouched["events_reviewed"]), ("false", "", "0"))

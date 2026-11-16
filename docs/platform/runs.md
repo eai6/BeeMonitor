@@ -24,7 +24,9 @@ The batch page combines its clips:
   time in its site's zone (`time_zone`, blank when the site has none), where that time came from
   (`time_source`), and the time written in the file name. It also gives whether the run completed, failed or
   was cancelled, and for those that didn't finish, why (`failure_cause`, `failure_detail`, `next_step` and the
-  recorded `error`), plus its GPU hours.
+  recorded `error`), plus its GPU hours. And its review: `clip_reviewed` (marked reviewed: the clips the
+  review metrics are scored over, including those with no events, which no other download lists),
+  `reviewed_by`, and its `events` with how many were reviewed, accepted, rejected and added as missed.
 - **Per clip:** each clip's outcome, tracks, events, interactions, length and GPU time.
 
 On a batch of more than 500 clips, the downloads, review metrics and update status are worked out in

@@ -4,7 +4,8 @@ The other downloads only carry clips that produced rows, so a clip that failed,
 was cancelled or found nothing left no trace in them. This one lists every
 clip in the batch with when it was recorded, how that time was worked out, and
 what happened to its run, so the dates and times of everything processed can
-be checked in one place.
+be checked in one place. And whether it was reviewed: a clip marked reviewed
+with no events is in the evaluation, yet is in no other download (memory/84).
 
 Read from the slim runs and a few hundred clips at a time (memory/76, 77).
 """
@@ -24,10 +25,14 @@ FIELDS = [
     "clip_start", "clip_end", "time_source", "filename_time",
     "duration_min", "fps", "size_mb",
     "run_status", "failure_cause", "failure_detail", "next_step", "error", "gpu_hours",
+    "clip_reviewed", "reviewed_by",
+    "events", "events_reviewed", "events_accepted", "events_rejected", "events_added",
     "run_id", "video_id",
 ]
 
 CHUNK = 500
+# Review counts read a clip's whole results: this many at a time.
+REVIEW_CHUNK = 50
 
 # site_YYYY-MM-DD_HH_MM_SS, the recorder's file names.
 _NAME_TIME = re.compile(r"(\d{4}-\d{2}-\d{2})_(\d{2})_(\d{2})_(\d{2})")
@@ -53,7 +58,34 @@ def run_status(run, error: str) -> str:
     return run.status
 
 
-def _row(run, video, job):
+def _reviews(chunk) -> dict:
+    """``{run pk: columns}``: whether the clip is marked reviewed, by whom, and
+    its events' calls, as the batch page's Reviewed column; this batch's
+    reviews only (review.shared_job_runs)."""
+    from . import review
+
+    out = {}
+    for i in range(0, len(chunk), REVIEW_CHUNK):
+        runs = list(aggregate.whole_runs(chunk[i:i + REVIEW_CHUNK], chunk=REVIEW_CHUNK))
+        counts = review.batch_review_counts(runs)
+        done = review.reviewed_runs(runs)
+        names = review.reviewers_by_run(runs)
+        for run in runs:
+            c = counts.get(run.pk)
+            out[run.pk] = {
+                "clip_reviewed": "true" if run.pk in done else "false",
+                "reviewed_by": ";".join(names.get(run.pk, [])),
+                # Blank when the pipeline makes no events.
+                "events": c["events"] if c else "",
+                "events_reviewed": c["reviewed"] if c else "",
+                "events_accepted": c["accepted"] if c else "",
+                "events_rejected": c["rejected"] if c else "",
+                "events_added": c["added"] if c else "",
+            }
+    return out
+
+
+def _row(run, video, job, reviews=None):
     error = aggregate.run_error(run)
     status = run_status(run, error)
     # Why it didn't finish, in the words of the batch page's failures panel.
@@ -85,6 +117,7 @@ def _row(run, video, job):
         "error": error,
         "gpu_hours": (round(float(job.execution_seconds) / 3600, 3)
                       if job and job.execution_seconds else 0),
+        **(reviews or {"clip_reviewed": "false"}),
         "run_id": str(run.pk),
         "video_id": video.pk if video else "",
     }
@@ -107,5 +140,7 @@ def rows(runs):
             pk__in=[vid_of[r.pk] for r in chunk if vid_of[r.pk]]).select_related("device", "site")}
         job_ids = [j for r in chunk if (j := aggregate.run_job_id(r))]
         jobs = {j.pk: j for j in Job.objects.filter(pk__in=job_ids).only("pk", "execution_seconds")}
+        reviews = _reviews(chunk)
         for run in chunk:
-            yield _row(run, videos.get(vid_of[run.pk]), jobs.get(aggregate.run_job_id(run)))
+            yield _row(run, videos.get(vid_of[run.pk]), jobs.get(aggregate.run_job_id(run)),
+                       reviews.get(run.pk))
