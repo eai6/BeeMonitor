@@ -525,7 +525,8 @@ BLOCK_REGISTRY = {
                 "name": "tube_frames",
                 "label": "Frames a clip",
                 "help": "Tubes don't move: a few frames spread over the clip are enough. "
-                        "More frames, longer on CPU.",
+                        "More frames, longer on CPU; at most 30. Changing it finds every "
+                        "clip's tubes again.",
                 "field_type": "number",
                 "required": False,
                 "default": 8,

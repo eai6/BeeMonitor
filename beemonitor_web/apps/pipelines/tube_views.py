@@ -1,16 +1,12 @@
 """A batch's references a model found, from its page (memory/83): how many
-clips were numbered, borrowed a nearby clip's grid or couldn't be placed,
-recounting the ones that couldn't (or were numbered the old way), and how
-many recounts are left. No day by day check: the References page is gone."""
+clips were numbered, borrowed a nearby clip's grid or couldn't be placed, and
+how many recounts are left. No day by day check: the References page is gone;
+renumbering is Update this batch."""
 
 from __future__ import annotations
 
-from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.http import Http404, JsonResponse
-from django.shortcuts import redirect
-from django.urls import reverse
-from django.views.decorators.http import require_POST
 
 from .models import PipelineRun
 
@@ -37,7 +33,6 @@ def summary(rows) -> dict | None:
     if not seen:
         return None
     out["label"] = label
-    out["redo"] = out["unplaced"] + out["old"]
     return out
 
 
@@ -56,22 +51,3 @@ def batch_recount_progress(request, batch_id):
     if not sharing.owns_batch(request.user, batch_id):
         raise Http404("No such batch.")
     return JsonResponse({"pending": pending(batch_id)})
-
-
-@login_required
-@require_POST
-def batch_tubes_recount(request, batch_id):
-    """Recount, from the saved tracks, the runs whose references couldn't be
-    placed (a nearby clip may fit now) or were numbered the old way."""
-    from . import listing, recount, sharing
-
-    if not sharing.owns_batch(request.user, batch_id):
-        raise Http404("No such batch.")
-    redo = {"unplaced", "old"}
-    runs = [r["run"].pk for r in listing.rows(PipelineRun.objects.filter(batch_id=batch_id))
-            if r["run"].status == PipelineRun.Status.COMPLETED
-            and STATES.get((((r.get("layout") or {}).get("tubes")) or {}).get("state")) in redo]
-    n = recount.queue(runs)
-    messages.success(request, f"Recounting {n} clip{'s' if n != 1 else ''} from their saved "
-                              "tracks: no GPU.")
-    return redirect(reverse("pipelines:batch_detail", args=[batch_id]))

@@ -336,33 +336,25 @@ class BatchPageTests(DetectedReferenceBase):
         page = self.client.get(self.page)
         self.assertEqual(page.context["tube_summary"]["placed"], 1)
         self.assertContains(page, "Numbered by model")
-        self.assertNotContains(page, "Renumber")
 
-    def test_clips_not_placed_or_numbered_the_old_way_are_renumbered(self):
-        self.count(self.seen[:3])
+    def test_clips_numbered_the_old_way_are_renumbered_by_update(self):
+        """No Renumber button: Update this batch sees them (memory/83)."""
+        self.count(self.seen)
+        from apps.pipelines import listing
+        run = PipelineRun.objects.get(pk=self.run.pk)
+        run.context["r"]["tubes"] = {"state": "detected", "flag": "kept"}    # memory/82's
+        PipelineRun.objects.filter(pk=run.pk).update(context=run.context)
+        run.listing = listing.build(run)
+        run.save(update_fields=["listing"])
+        self.pipeline.steps = self.steps()
+        self.pipeline.save()
         page = self.client.get(self.page)
-        self.assertEqual(page.context["tube_summary"]["unplaced"], 1)
-        self.assertContains(page, "Renumber 1 clip")
-        # Fixed by a nearby clip at the site, then renumbered from the page.
-        from datetime import timedelta
-        other = Video.objects.create(user=self.user, site=self.site, site_name="mendels", title="n",
-                                     storage_key="t/n.mp4", file_size_bytes=1,
-                                     status=Video.Status.READY,
-                                     recorded_at=self.video.recorded_at + timedelta(hours=1))
-        self.stored(self.seen, video=other)
-        self.client.post(reverse("pipelines:batch_tubes_recount", args=[self.batch]))
-        self.run.refresh_from_db()
-        self.assertLess(self.run.counting_rules, recount.CURRENT_RULES)
-        self.assertEqual(self.client.get(reverse("pipelines:batch_recount_progress",
-                                                 args=[self.batch])).json()["pending"], 1)
+        self.assertEqual(page.context["tube_summary"]["old"], 1)
+        self.assertEqual([(c["step"], c["field"]) for c in page.context["changes"]["web"]],
+                         [("Reference", "Tubes")])
+        self.client.post(reverse("pipelines:batch_apply_groups", args=[self.batch]), {"which": "all"})
         recount.sweep()
-        self.assertEqual(self.client.get(self.page).context["tube_summary"]["borrowed"], 1)
-
-    def test_only_the_launcher_renumbers(self):
-        other = type(self.user).objects.create_user("someone", password="x")
-        self.client.force_login(other)
-        res = self.client.post(reverse("pipelines:batch_tubes_recount", args=[self.batch]))
-        self.assertEqual(res.status_code, 404)
+        self.assertEqual(self.client.get(self.page).context["tube_summary"]["placed"], 1)
 
     def test_the_editor_opens_with_the_detected_tubes(self):
         self.count(self.seen)

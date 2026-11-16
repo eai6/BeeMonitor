@@ -93,7 +93,7 @@ their reason.
   breakdown earns that space instead, and the re-run control moves below.
 {% endcomment %}
 {% if recount_pending %}
-{# Recounts from the saved tracks still to start (Update, Renumber), memory/83. #}
+{# Clips Update sent to the recount workers, not yet started (memory/83). #}
 <section id="recount-progress" data-url="{% url 'pipelines:batch_recount_progress' batch_id %}"
          class="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 mb-4 flex flex-wrap items-center gap-3 text-sm" role="status">
   <span class="font-medium">Recounting: <span data-left class="tabular-nums">{{ recount_pending }}</span> clips to go</span>
@@ -162,14 +162,8 @@ their reason.
     {% endcomment %}
     <div class="flex justify-between gap-3 text-xs py-0.5">
       <span class="text-gray-500 shrink-0" title="{{ tube_summary.label }}">Numbered by model</span>
-      <span class="text-gray-900 text-right">{{ tube_summary.placed }} placed{% if tube_summary.borrowed %} · <span title="Their own grid couldn't be told, so they use the nearest clip's at their site.">{{ tube_summary.borrowed }} from a nearby clip</span>{% endif %}{% if tube_summary.unplaced %} · <span class="text-amber-700" title="No grid of their own or from a nearby clip: counted with no references rather than wrong ones.">{{ tube_summary.unplaced }} not placed</span>{% endif %}{% if tube_summary.waiting %} · {{ tube_summary.waiting }} waiting{% endif %}{% if tube_summary.errors %} · <span class="text-red-700">{{ tube_summary.errors }} failed</span>{% endif %}{% if tube_summary.old %} · <span class="text-amber-700" title="Numbered before references were arranged by rows and columns.">{{ tube_summary.old }} numbered the old way</span>{% endif %}</span>
+      <span class="text-gray-900 text-right">{{ tube_summary.placed }} placed{% if tube_summary.borrowed %} · <span title="Their own grid couldn't be told, so they use the nearest clip's at their site.">{{ tube_summary.borrowed }} from a nearby clip</span>{% endif %}{% if tube_summary.unplaced %} · <span class="text-amber-700" title="No grid of their own or from a nearby clip: counted with no references rather than wrong ones.">{{ tube_summary.unplaced }} not placed</span>{% endif %}{% if tube_summary.waiting %} · {{ tube_summary.waiting }} waiting{% endif %}{% if tube_summary.errors %} · <span class="text-red-700">{{ tube_summary.errors }} failed</span>{% endif %}{% if tube_summary.old %} · <span class="text-amber-700" title="Numbered before references were arranged by rows and columns: Update this batch renumbers them.">{{ tube_summary.old }} numbered the old way</span>{% endif %}</span>
     </div>
-    {% if can_share and tube_summary.redo %}
-    <form method="post" action="{% url 'pipelines:batch_tubes_recount' batch_id %}" class="flex justify-end py-1">
-      {% csrf_token %}
-      <button type="submit" class="h-8 px-3 rounded-md border border-amber-600 text-amber-900 bg-amber-50 hover:bg-amber-100 text-xs font-semibold">Renumber {{ tube_summary.redo }} clip{{ tube_summary.redo|pluralize }} (no GPU)</button>
-    </form>
-    {% endif %}
     {% endif %}
     <div class="flex justify-between text-xs py-0.5"><span class="text-gray-500">GPU time</span><span class="text-gray-900">{{ outcome.gpu_seconds|duration_min }}</span></div>
     {% if outcome.gpu_seconds_failed %}

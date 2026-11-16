@@ -288,7 +288,7 @@ class RetrackRunTests(PrimitiveBlockTestCase):
         self.pipeline.steps = run.steps
         self.pipeline.save()
         changes = regroup.pipeline_changes(run, self.pipeline)
-        self.assertEqual(changes["web"][0]["field"], "Tubes it stays at")
+        self.assertEqual((changes["web"][0]["step"], changes["web"][0]["field"]), ("Reference", "Tubes"))
 
     def test_tracks_made_under_older_lost_track_rules_are_offered_again(self):
         # memory/72: same settings, newer rules behind them.

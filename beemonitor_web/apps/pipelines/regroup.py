@@ -556,12 +556,31 @@ def pipeline_changes(run, pipeline, retracks=True) -> dict:
             from .retrack.run import retrack_reason
             why = retrack_reason(run)
             if why == "tubes":
-                web.append({"step": name, "field": "Tubes it stays at", "before": "",
-                            "after": "changed (tracks again on the web)"})
+                web.append({"step": "Reference", "field": "Tubes", "before": "",
+                            "after": "placed differently now (e.g. numbered as a grid): "
+                                     "tracked again on the web, since lost tracks stay at their tube"})
             elif why:
                 web.append({"step": name, "field": "Lost-track rules", "before": "",
                             "after": "updated (tracks again on the web)"})
+        if bt == "reference.layout" and (src.get("config") or {}).get("source") == "detected" \
+                and not any(c["step"] == "Reference" and c["field"] == "Tubes" for c in web) \
+                and _numbered_the_old_way(run):
+            web.append({"step": "Reference", "field": "Tubes", "before": "",
+                         "after": "numbered as the node says now (rows and columns)"})
+    # One line for the tubes: re-tracking for them says it all.
+    tubes = [c for c in web if c["step"] == "Reference" and c["field"] == "Tubes"]
+    if len(tubes) > 1:
+        web.remove(next(c for c in tubes if "tracked again" not in c["after"]))
     return {"web": web, "gpu": gpu}
+
+
+def _numbered_the_old_way(run) -> bool:
+    """The run's model-found tubes were matched to a drawing, or a drawing
+    kept (memory/82), not arranged as its node says (memory/83). From its
+    listing, so no clip's results are read."""
+    listing = run.__dict__.get("listing") or {}
+    state = (((listing.get("layout") or {}).get("tubes")) or {}).get("state")
+    return state in ("detected", "drawn")
 
 
 # Clips the quick check reads: the newest finished ones.
@@ -577,7 +596,7 @@ def quick_changes(batch_id, pipeline) -> dict | None:
     from .models import PipelineRun
 
     runs = (PipelineRun.objects.filter(batch_id=batch_id, status=PipelineRun.Status.COMPLETED)
-            .order_by("-completed_at").only("pk", "steps", "status")[:QUICK_SAMPLE])
+            .order_by("-completed_at").only("pk", "steps", "status", "listing")[:QUICK_SAMPLE])
     for run in runs:
         changes = pipeline_changes(run, pipeline, retracks=False)
         if changes["web"] or changes["gpu"]:

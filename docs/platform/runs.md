@@ -78,8 +78,8 @@ within 3 days. If there is none, the clip is counted with no tubes rather than w
 has to check days.
 
 The batch page shows one line on how the clips were numbered: placed, from a nearby clip, not
-placed. **Renumber** recounts the ones not placed (a nearby clip may fit now) and any numbered
-before grids existed.
+placed. Clips numbered before grids existed show up in **Update this batch**. To check a few first,
+filter the clip list (a day, a site) and update **Clips the filter shows**.
 
 Switching a batch to found tubes is an **Update this batch** change with no GPU time. Each clip's
 tubes are found, then it is recounted from its saved tracks. A clip whose MOT node keeps a lost

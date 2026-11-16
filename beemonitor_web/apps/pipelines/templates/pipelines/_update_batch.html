@@ -8,32 +8,20 @@
       <p class="text-sm text-gray-600">Up to date: every clip was counted with the pipeline as it is now.</p>
       {% else %}
       {% if changes.web %}
-      <p class="text-sm text-gray-700">{% if changes.behind is None %}Changed since this batch's clips were counted:{% else %}Changed since {% if changes.behind == 1 %}a clip{% else %}{{ changes.behind }} clips{% endif %} here {% if changes.behind == 1 %}was{% else %}were{% endif %} counted:{% endif %}</p>
+      <p class="text-sm text-gray-700">What changed{% if changes.behind %} for {{ changes.behind }} clip{{ changes.behind|pluralize }}{% endif %} (no GPU):</p>
       <ul class="text-sm text-gray-700 list-disc pl-5">
         {% for c in changes.web %}<li>{{ c.step }}{% if c.field %} · {{ c.field }}{% endif %}{% if c.before %}: {{ c.before }} → {{ c.after }}{% elif c.after %}: {{ c.after }}{% endif %}</li>{% endfor %}
       </ul>
       {% endif %}
       {% if changes.gpu %}
-      <p class="text-sm text-yellow-800">Need the GPU again:
-        {% for c in changes.gpu %}{{ c.step }}{% if c.field %} · {{ c.field }}{% endif %}{% if c.before %} ({{ c.before }} → {{ c.after }}){% endif %}{% if not forloop.last %}; {% endif %}{% endfor %}.
-        Update runs the clips you choose again on the GPU, in this batch{% if gpu_hours_per_clip %} (about {{ gpu_hours_per_clip|floatformat:2 }} GPU-hours a clip){% endif %}; their review votes move to the matching new events.</p>
+      <p class="text-sm text-yellow-800">Needs the GPU again:
+        {% for c in changes.gpu %}{{ c.step }}{% if c.field %} · {{ c.field }}{% endif %}{% if c.before %} ({{ c.before }} → {{ c.after }}){% endif %}{% if not forloop.last %}; {% endif %}{% endfor %}{% if gpu_hours_per_clip %} (about {{ gpu_hours_per_clip|floatformat:2 }} GPU-hours a clip){% endif %}.</p>
       {% endif %}
-      {% endif %}
-      {% if update_status.pending %}
-      <p class="text-sm text-blue-800">Updating: {{ update_status.pending }} clip{{ update_status.pending|pluralize }} still to do, a few at a time in the background. Refresh to see progress; clips keep their old counts until theirs is done.</p>
-      {% endif %}
-      {% if update_status.retracked %}
-      <p class="text-sm text-gray-700">{{ update_status.retracked }} clip{{ update_status.retracked|pluralize }} re-tracked on the web{% if update_status.exact %} ({{ update_status.exact }} exactly, from the worker's frame log){% endif %}.</p>
       {% endif %}
       {% if update_status.not_replayable %}
       <p class="text-sm text-yellow-800">{{ update_status.not_replayable }} clip{{ update_status.not_replayable|pluralize }} can't be re-tracked on the web (no saved detections): {% if update_status.not_replayable == 1 %}it keeps its{% else %}they keep their{% endif %} tracks until run on the GPU again.</p>
       {% endif %}
-      <p class="text-xs text-gray-500">Loads each clip's saved detections and tracking and works them out again with the pipeline's current tracking time windows, Events, Interactions and insect groups. Only detection and the species reading need the GPU. Same batch; review votes move to the matching new events; no GPU-hours. The Trips node needs no Update: Review trips uses its rules as soon as the pipeline is saved.</p>
-      <div class="flex flex-wrap items-center gap-2 text-sm" data-retrack-check>
-        <button type="button" data-retrack-check-run data-url="{% url 'pipelines:batch_retrack_check' batch_id %}"
-                class="h-9 px-3 rounded border border-gray-300 bg-white hover:bg-gray-50 text-gray-800">How close is the web re-tracking?</button>
-        <span data-retrack-check-out class="text-gray-700">{% if retrack_check %}Last check, {{ retrack_check.clips }} clip{{ retrack_check.clips|pluralize }} replayed with the GPU's own settings: {{ retrack_check.boxes }}% of the GPU's boxes tracked, {{ retrack_check.same_track }}% kept together as the same track{% if retrack_check.events_pct is not None %}, {{ retrack_check.events_pct }}% of its events the same{% endif %}{% if not retrack_check.exact %} (close replay: clips from before the frame log){% endif %}.{% endif %}</span>
-      </div>
+      <p class="text-xs text-gray-500">Same batch, from each clip's saved detections; review votes move to the matching new events.</p>
     </div>
     {% comment %}Which clips (memory/72): all or the ones reviewed. Some clips: Select in the clip list, then Update these (memory/73).{% endcomment %}
     <form method="post" action="{% url 'pipelines:batch_apply_groups' batch_id %}" id="update-form"{% if changes.gpu %} data-gpu{% endif %}{% if gpu_hours_per_clip %} data-gpu-per-clip="{{ gpu_hours_per_clip|stringformat:'.4f' }}"{% endif %} class="shrink-0 flex flex-col gap-2 items-stretch">
@@ -48,7 +36,6 @@
       <span data-update-shown-ids></span>
       <button type="submit" {% if not changes %}disabled{% endif %}
               class="h-10 px-4 rounded-md text-sm font-semibold bg-green-700 hover:bg-green-800 text-white disabled:bg-gray-300 disabled:text-gray-600 disabled:cursor-not-allowed">Update</button>
-      <p class="text-xs text-gray-500 max-w-[16rem]">For some clips, filter the clip list, or use Select there. Clips left out keep their counts and stay listed as behind; until they're updated, batch totals mix the two.{% if changes.gpu %} Uses GPU-hours for the clips that run again.{% endif %}</p>
     </form>
   </div>
 </section>
@@ -106,29 +93,5 @@
     });
   })();
 
-  // How close the web re-tracking is (memory/69): replays a couple of clips
-  // with the GPU's own settings and compares; takes a little while.
-  (function () {
-    var btn = document.querySelector('[data-retrack-check-run]');
-    if (!btn) return;
-    var out = document.querySelector('[data-retrack-check-out]');
-    btn.addEventListener('click', function () {
-      btn.disabled = true;
-      out.textContent = 'Replaying two clips with the GPU\u2019s own settings and comparing…';
-      var token = (document.querySelector('[name=csrfmiddlewaretoken]') || {}).value || '';
-      fetch(btn.getAttribute('data-url'), {method: 'POST', credentials: 'same-origin', headers: {'X-CSRFToken': token}})
-        .then(function (r) { return r.json(); })
-        .then(function (res) {
-          btn.disabled = false;
-          var c = res.check;
-          if (!c) { out.textContent = 'No clip here could be replayed (no saved detections).'; return; }
-          out.textContent = c.clips + ' clip' + (c.clips === 1 ? '' : 's') + ' replayed with the GPU\u2019s own settings: '
-            + c.boxes + '% of the GPU\u2019s boxes tracked, ' + c.same_track + '% kept together as the same track'
-            + (c.events_pct != null ? ', ' + c.events_pct + '% of its events the same' : '')
-            + (c.exact ? ' (exact replay).' : ' (close replay: clips from before the frame log).');
-        })
-        .catch(function () { btn.disabled = false; out.textContent = 'The check failed; try again.'; });
-    });
-  })();
 </script>
 {% endif %}

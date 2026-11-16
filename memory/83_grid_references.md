@@ -70,10 +70,14 @@ nearest clip in time at the same site (same model, class and sampling; within
 than wrong ones. The ROI stays the saved one (as in memory/82): changing it
 would change what was tracked.
 
-**What the batch page shows instead of the References page:** one line,
-"Tubes — 6,212 placed · 18 from a nearby clip · 3 not placed · 40 waiting",
-a "Recount the N not placed" button, and the "Recounting: N runs to go" bar
-that lived on the References page.
+**What the batch page shows instead of the References page:** one read-only
+line, "Numbered by model — 6,212 placed · 18 from a nearby clip · 3 not placed
+· 40 waiting", and a live "Recounting: N clips to go" bar. Renumbering is
+**Update this batch** (no separate button): a run numbered the old way shows as
+"Reference · Tubes" there, and with "stays at that tube" on, as tubes to track
+again. To try a few clips first: filter the clip list (or Select), then
+Update "Clips the filter shows"; no new buttons. The card was cut down: no replay check button, no stored (stale) "N still to
+do" count, no long explanation.
 
 ## Removed
 

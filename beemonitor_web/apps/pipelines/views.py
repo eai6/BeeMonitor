@@ -1762,7 +1762,7 @@ def batch_apply_groups(request, batch_id):
         return redirect("pipelines:batch_detail", batch_id=batch_id)
     # Only their steps: what changed is read from them (memory/82).
     web, gpu = regroup.split_by_change(chosen.only("pk", "steps", "status", "pipeline_id",
-                                                   "batch_id", "user_id", "started_at")
+                                                   "batch_id", "user_id", "started_at", "listing")
                                        .iterator(chunk_size=200), first.pipeline)
     rerun = 0
     if gpu:
