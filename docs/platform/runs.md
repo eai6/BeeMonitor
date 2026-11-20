@@ -24,7 +24,7 @@ The batch page combines its clips:
   time in its site's zone (`time_zone`, blank when the site has none), where that time came from
   (`time_source`), and the time written in the file name. It also gives whether the run completed, failed or
   was cancelled, and for those that didn't finish, why (`failure_cause`, `failure_detail`, `next_step` and the
-  recorded `error`), plus its GPU hours. And its review: `clip_reviewed` (marked reviewed: the clips the
+  recorded `error`), plus its GPU hours. And its review: `clip_reviewed` (marked reviewed with every event called: the clips the
   review metrics are scored over, including those with no events, which no other download lists),
   `reviewed_by`, and its `events` with how many were reviewed, accepted, rejected and added as missed.
 - **Per clip:** each clip's outcome, tracks, events, interactions, length and GPU time.
@@ -172,8 +172,11 @@ appear under **Runs › Shared with me**. The public link stays view-only.
 
 **On a clip.** Next to each event in **Events near now**, click **Yes** or **No**; click again to take your
 vote back. Watch the whole clip as you go, so you catch what the system missed, and press **Mark clip reviewed**
-when you're done. Reviewed marks on the tube lanes get a ring:
-green accepted, red rejected, amber where reviewers disagree.
+when you're done. **Mark clip reviewed** is refused while any event has no call: a clip is reviewed only when
+every event is called Yes or No, and taking a call back makes it unreviewed again. Each event has one call,
+the most recent: a reviewer who calls an event someone else called replaces that call. Reviewed marks on the
+tube lanes get a ring: green accepted, red rejected. On the batch page a clip marked reviewed with events still
+open shows "N to call" and doesn't count as reviewed.
 
 **The review page.** **Review** on a batch opens one day of one unit or site in that batch, in one player
 across its clips. Pick another place from the menu at the top, and another day with ◀ ▶ or the day menu; it
@@ -187,7 +190,7 @@ reviews: a clip reviewed in another batch made from the same GPU runs isn't revi
 entry ends one trip. The list holds the trips from reviewed events: rejected ones left out, added ones in. Your Yes
 answers are the true trips, and the batch's metrics compare the pipeline's own trips, from every detected event, with
 them. A pipeline trip is right when it is a true trip and wrong when it isn't; a true trip the pipeline didn't make is
-missed. Only trips with both ends in clips marked reviewed count, and a trip still without an answer counts for
+missed. Only trips with both ends in reviewed clips (marked, every event called) count, and a trip still without an answer counts for
 nothing. Each trip has a
 type (one track leaving a tube and going back in is no trip at all: the bee turned round in view, and the exit and
 enter stay in the events): **Tube hop** when one track links its exit to going into a tube, or its entry to coming out of one, and
@@ -219,21 +222,21 @@ detected ones. Whoever added one, or the batch owner, can remove it.
 **Detection quality.** From the reviews: **precision** is accepted ÷ (accepted + rejected), the share of
 checked events that were right; **recall** is accepted ÷ (accepted + added), the share of real events the
 system found. Once anything in a batch has been reviewed, its review page shows an **Events review** panel
-(reviewed, accepted, rejected, disputed, added, precision, recall) and a **Trips review** panel (reviewed,
+(reviewed, accepted, rejected, added, precision, recall) and a **Trips review** panel (reviewed,
 precision and recall, overall and by trip type), for the whole batch.
 
 **What it adds to the data.**
 
 | Where | What |
 |---|---|
-| Events CSV (clip and batch) | `review` (accepted, rejected, disputed when reviewers disagree, blank if unreviewed), `reviewed_by`, `review_notes`, `clip_reviewed` (the clip is marked reviewed); an added event is its own row with `review = added`, `reviewed_by` = who added it and `review_notes` = their note |
+| Events CSV (clip and batch) | `review` (accepted or rejected: the most recent call; blank if unreviewed), `reviewed_by`, `review_notes`, `clip_reviewed` (the clip is marked reviewed and every event called); an added event is its own row with `review = added`, `reviewed_by` = who added it and `review_notes` = their note |
 | Clip page | "12 reviewed · 9 accepted · 3 rejected" under Events |
 | Batch page | a **Reviewed** column (with "+N" added) |
 | Review page | the Events review and Trips review panels once something in the batch is reviewed |
 | **Trips** CSV (batch, share link and clip, with a Trips node) | one row per trip: `reference, exit_time, entry_time, duration_sec, exit_clip, exit_track, entry_clip, entry_track, species, marker_id, source, review, reviewed_by, review_notes, trip_type, trip_type_set_by, clip_reviewed`, after the site and device columns |
 
 The Trips CSV holds every trip the pipeline made (`source` = pipeline) and every trip that exists only after
-review (`source` = review). `review` is accepted, rejected, disputed or blank. A pipeline trip the reviewed events
+review (`source` = review). `review` is accepted, rejected or blank (the most recent call). A pipeline trip the reviewed events
 don't make says why: `event_rejected`, or `pairing_changed` when both its events stand but a rejected or added
 event changed what pairs with what. A clip's file has only trips inside that clip; the batch's pairs across clips.
 

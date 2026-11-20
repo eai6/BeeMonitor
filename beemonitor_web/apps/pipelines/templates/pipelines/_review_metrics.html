@@ -23,7 +23,7 @@
     </div>
     {% if ev.actions %}<p class="text-xs text-gray-600">{% for a, label in action_choices %}{% if a in ev.actions %}{{ label|lower }}{% if not forloop.last %} {% endif %}{% endif %}{% endfor %} only — {% for a, label in action_choices %}{% if a not in ev.actions %}{{ label|lower }} {% endif %}{% endfor %}left out of these numbers (still reviewable).</p>{% endif %}
     <p class="text-sm text-gray-700">{{ ev.reviewed }} of {{ ev.events }} detected events reviewed, in {{ ev.clips }} clip{{ ev.clips|pluralize }}</p>
-    <p class="text-sm"><span class="text-green-700">{{ ev.accepted }} accepted</span> · <span class="text-red-700">{{ ev.rejected }} rejected</span>{% if ev.disputed %} · <span class="text-amber-800">{{ ev.disputed }} disputed</span>{% endif %} · {{ ev.added }} added as missed</p>
+    <p class="text-sm"><span class="text-green-700">{{ ev.accepted }} accepted</span> · <span class="text-red-700">{{ ev.rejected }} rejected</span> · {{ ev.added }} added as missed</p>
     <div class="flex gap-6 mt-1">
       <div><div class="text-xs text-gray-600">Precision</div><div class="text-xl font-bold text-gray-900">{% if ev.precision is not None %}{{ ev.precision }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">right among the events checked</div></div>
       <div><div class="text-xs text-gray-600">Recall</div><div class="text-xl font-bold text-gray-900">{% if ev.recall is not None %}{{ ev.recall }}%{% else %}—{% endif %}</div><div class="text-xs text-gray-600">found among the events confirmed or added</div></div>

@@ -37,10 +37,10 @@
   }
 
   // A trip's call, whoever made it: what review resumes by.
-  var TRIP_CALL = {accepted: 'same bee', rejected: 'not this pair', disputed: 'reviewers disagree'};
+  var TRIP_CALL = {accepted: 'same bee', rejected: 'not this pair'};
   function tripCall(t) {
     if (t.mine) return t.mine.verdict;
-    return t.accepted && t.rejected ? 'disputed' : t.accepted ? 'accepted' : t.rejected ? 'rejected' : '';
+    return t.accepted ? 'accepted' : t.rejected ? 'rejected' : '';
   }
 
   // One list: the trips of the reviewed events, rejected out and added in
@@ -551,11 +551,11 @@
 
   // ── Event review (memory/84): the day's events in turn, Yes or No ────────
   var evr = {on: false, i: 0, list: [], action: 'all'};
-  var EVENT_CALL = {accepted: 'right', rejected: 'not an event', disputed: 'reviewers disagree'};
+  var EVENT_CALL = {accepted: 'right', rejected: 'not an event'};
   var ACTION_NAME = {exit: 'Exit', enter: 'Entry', stay: 'Stay'};
   function eventCall(e) {
     if (e.mine) return e.mine;
-    return e.accepted && e.rejected ? 'disputed' : e.accepted ? 'accepted' : e.rejected ? 'rejected' : '';
+    return e.accepted ? 'accepted' : e.rejected ? 'rejected' : '';
   }
   function allEvents() {
     var out = [];

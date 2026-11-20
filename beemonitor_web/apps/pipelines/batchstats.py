@@ -28,7 +28,7 @@ from django.core.serializers.json import DjangoJSONEncoder
 logger = logging.getLogger(__name__)
 
 # Bump when what is worked out changes: every batch's totals are redone.
-VERSION = 3   # 3: a batch counts its own reviews (memory/84)
+VERSION = 4   # 4: the latest call wins (no disputed); reviewed = marked + every event called
 
 _working = set()
 _lock = threading.Lock()

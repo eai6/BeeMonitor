@@ -537,8 +537,9 @@ def _trip_sets(places):
 
 
 def _trip_call(mine):
-    """The trip's call from its ``TripReview``s: accepted, rejected, disputed,
-    or blank for none or "can't tell"."""
+    """The trip's call from its ``TripReview`` (the most recent,
+    ``trip_reviews_for``): accepted, rejected, or blank for none or "can't
+    tell"."""
     from .review import combined
 
     if any(c.reason == "can't tell" for c in mine):
@@ -565,7 +566,8 @@ def _hops_cache(places):
 def trip_scores(runs, reviewed, calls):
     """The pipeline's trips against the trips reviewers confirmed.
 
-    ``runs`` read slim; ``reviewed``: the pks of the clips marked reviewed;
+    ``runs`` read slim; ``reviewed``: the pks of the reviewed clips
+    (``review.reviewed_runs``: marked, every event called);
     ``calls``: ``{(run pk, exit key, entry key): [TripReview]}``. Pairing runs
     over every clip of a unit or site, then only trips with both ends in
     reviewed clips count. The true trips are those of the reviewed events that
@@ -598,8 +600,7 @@ def trip_scores(runs, reviewed, calls):
             out["types"][kind][field] += 1
 
     def answer(k):
-        call = _trip_call(calls.get((k[0], k[1], k[3]), []))
-        return "" if call == "disputed" else call
+        return _trip_call(calls.get((k[0], k[1], k[3]), []))
 
     for pipeline, listed, _kept in _trip_sets(places):
         pipeline, listed = in_reviewed(pipeline), in_reviewed(listed)

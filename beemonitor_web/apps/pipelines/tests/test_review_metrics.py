@@ -125,19 +125,32 @@ class MarkedClipWithVotesTests(PeriodBase):
         return self.client.post(self.url, json.dumps({"reviewed": on}),
                                 content_type="application/json")
 
-    def test_a_marked_clip_with_votes_shows_it_in_the_list(self):
-        key = review.event_key(next(r for o in [self.run.context[k] for k in self.run.context]
-                                    if isinstance(o, dict) and o.get("table_kind") == "events"
-                                    for r in o["rows"]))
-        EventReview.objects.create(run=self.run, user=self.owner, event_key=key, verdict="accepted")
-        self.mark(self.owner)
+    def test_a_clip_is_marked_only_once_every_event_is_called(self):
+        res = self.mark(self.owner)                    # its events have no call yet
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("no call", res.json()["error"])
+        self.call_every_event(self.run)
+        self.assertTrue(self.mark(self.owner).json()["reviewed"])
         page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
-        self.assertContains(page, 'title="Marked reviewed">✓</span> 1 / ')
+        self.assertContains(page, 'title="Reviewed: marked, every event called">✓</span> ')
+
+    def test_a_marked_clip_with_events_left_to_call_isnt_reviewed(self):
+        from apps.pipelines.models import ClipReview
+
+        ClipReview.objects.create(run=self.run, user=self.owner)   # marked before the rule
+        counts = review.batch_review_counts([self.run])[self.run.pk]
+        self.assertTrue(counts["marked"])
+        self.assertFalse(counts["clip_reviewed"])
+        self.assertGreater(counts["open"], 0)
+        self.client.force_login(self.owner)
+        page = self.client.get(reverse("pipelines:batch_detail", args=[self.batch]))
+        self.assertContains(page, f"{counts['open']} to call")
 
     def test_the_mark_is_shared_by_the_reviewers(self):
         from apps.pipelines.models import BatchMember, ClipReview
 
         BatchMember.objects.create(batch_id=self.batch, user=self.maria, role="reviewer")
+        self.call_every_event(self.run)
         self.mark(self.owner)
         self.client.force_login(self.maria)
         page = self.client.get(reverse("analysis:results", args=[self.job.pk]) + f"?run={self.run.pk}")

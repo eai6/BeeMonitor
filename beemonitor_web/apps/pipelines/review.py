@@ -10,8 +10,11 @@ batch as reviewers (``BatchMember``). Viewers and the public link watch only.
 
 An event (or a trip) has one call, the team's (memory/74): any reviewer may
 make it, change one someone else made, or take it back, and it carries who
-made it last. Calls from before then, when each reviewer kept their own, can
-still disagree ("disputed") until someone calls the event again.
+made it last. Calls from before then, when each reviewer kept their own,
+count as the most recent one: there is no "disputed".
+
+A clip is reviewed when someone marked it done **and** every one of its events
+has a call (``reviewed_runs``): taking a call back un-reviews it.
 """
 
 from __future__ import annotations
@@ -92,54 +95,43 @@ def set_event_vote(run, user, key, verdict, reason=""):
 
 
 def combined(verdicts):
-    """accepted / rejected / disputed (reviewers disagree) / "" (none)."""
-    kinds = set(verdicts)
-    if not kinds:
-        return ""
-    return kinds.pop() if len(kinds) == 1 else "disputed"
+    """The call from ``verdicts`` (oldest first): the most recent one, or ""
+    for none. Votes are read latest-only, so there is one at most."""
+    return verdicts[-1] if verdicts else ""
 
 
-def event_summaries(run):
-    """``{event_key: {review, reviewed_by, review_notes, accepted, rejected,
-    votes: {username: verdict}}}`` for every reviewed event of the run."""
+def _latest_votes(run):
+    """``{event_key: EventReview}``: the most recent vote on each event of the
+    run, whoever made it."""
     from .models import EventReview
 
     out = {}
-    for r in (EventReview.objects.filter(run=run).select_related("user")
-              .order_by("user__username")):
-        s = out.setdefault(r.event_key, {"votes": {}, "notes": []})
-        s["votes"][r.user.username] = r.verdict
-        if r.reason and r.reason not in s["notes"]:
-            s["notes"].append(r.reason)
-    for s in out.values():
-        verdicts = list(s["votes"].values())
-        s.update(review=combined(verdicts),
-                 reviewed_by=";".join(s["votes"]),
-                 review_notes="; ".join(s.pop("notes")),
-                 accepted=verdicts.count("accepted"),
-                 rejected=verdicts.count("rejected"))
+    for r in EventReview.objects.filter(run=run).select_related("user").order_by("updated_at", "pk"):
+        out[r.event_key] = r
     return out
+
+
+def event_summaries(run):
+    """``{event_key: {review, reviewed_by, review_notes, accepted, rejected}}``
+    for every reviewed event of the run: its one call, the most recent."""
+    return {key: {"review": r.verdict, "reviewed_by": r.user.username,
+                  "review_notes": r.reason or "",
+                  "accepted": int(r.verdict == "accepted"),
+                  "rejected": int(r.verdict == "rejected")}
+            for key, r in _latest_votes(run).items()}
 
 
 def current_calls(run, user=None):
     """``{event_key: (verdict, by)}``: each event's call and who made it ("you"
-    for ``user``), from this run's votes. A disputed event (older votes that
-    disagree) has none until someone calls it again."""
-    from .models import EventReview
-
-    verdicts, by = {}, {}
-    for key, verdict, uid, name in (EventReview.objects.filter(run=run)
-                                    .order_by("updated_at")
-                                    .values_list("event_key", "verdict", "user_id",
-                                                 "user__username")):
-        verdicts.setdefault(key, set()).add(verdict)
-        by[key] = "you" if user is not None and uid == getattr(user, "pk", None) else name
-    return {k: (combined(v) if len(v) == 1 else None, by[k]) for k, v in verdicts.items()}
+    for ``user``), from this run's votes: the most recent."""
+    uid = getattr(user, "pk", None) if user is not None else None
+    return {key: (r.verdict, "you" if uid is not None and r.user_id == uid else r.user.username)
+            for key, r in _latest_votes(run).items()}
 
 
 def event_review_counts(run, rows=None):
     """How many of the run's current events are reviewed: ``{events,
-    reviewed, accepted, rejected, disputed, gone}`` — ``gone`` counts votes on
+    reviewed, accepted, rejected, gone}`` — ``gone`` counts votes on
     events a recount removed."""
     if rows is None:
         from .aggregate import analyzer_outputs
@@ -156,7 +148,7 @@ def event_review_counts(run, rows=None):
     precision, recall = quality(calls.count("accepted"), calls.count("rejected"), added)
     return {"events": len(keys), "reviewed": len(current),
             "accepted": calls.count("accepted"), "rejected": calls.count("rejected"),
-            "disputed": calls.count("disputed"), "added": added,
+            "added": added,
             "precision": precision, "recall": recall,
             "gone": len(summaries) - len(current)}
 
@@ -241,7 +233,7 @@ def _event_keys(run):
 def trip_reviews_for(runs):
     """Trip calls on exits in these runs, wherever they were saved
     (``shared_job_runs``; from another run only if this run has that exit): the
-    latest per reviewer and exit. Each carries ``own_run``, the run of ``runs`` it counts for."""
+    latest per exit and entry, whoever made it. Each carries ``own_run``, the run of ``runs`` it counts for."""
     from .models import TripReview
 
     owners = shared_job_runs(runs, "trip_exits")
@@ -253,43 +245,64 @@ def trip_reviews_for(runs):
                 keys[own.pk] = _event_keys(own)
             if t.exit_key not in keys[own.pk]:
                 continue
-        k = (own.pk, t.exit_key, t.entry_key, t.user_id)
-        if k not in latest or t.updated_at > latest[k].updated_at:
+        k = (own.pk, t.exit_key, t.entry_key)
+        if k not in latest or (t.updated_at, t.pk) > (latest[k].updated_at, latest[k].pk):
             t.own_run = own
             latest[k] = t
     return list(latest.values())
 
 
 def review_votes(runs):
-    """``{run pk: {event_key: [verdict per reviewer]}}`` for these runs.
+    """``{run pk: {event_key: [verdict]}}`` for these runs: the event's one
+    call, the most recent whoever made it.
 
     Votes saved on another run of the same GPU job count too
-    (shared_job_runs); each reviewer's latest call on an event wins."""
+    (shared_job_runs)."""
     from .models import EventReview
 
     runs = list(runs)
     owners = shared_job_runs(runs, "event_reviews")
     latest = {}
-    for run_id, key, user_id, verdict, when in (
+    for run_id, key, verdict, when, pk in (
             EventReview.objects.filter(run_id__in=list(owners))
-            .values_list("run_id", "event_key", "user_id", "verdict", "updated_at")):
-        k = (owners[run_id].pk, key, user_id)
-        if k not in latest or when > latest[k][1]:
-            latest[k] = (verdict, when)
+            .values_list("run_id", "event_key", "verdict", "updated_at", "pk")):
+        k = (owners[run_id].pk, key)
+        if k not in latest or (when, pk) > latest[k][1]:
+            latest[k] = (verdict, (when, pk))
     votes = {}
-    for (run_pk, key, _u), (verdict, _w) in latest.items():
-        votes.setdefault(run_pk, {}).setdefault(key, []).append(verdict)
+    for (run_pk, key), (verdict, _w) in latest.items():
+        votes.setdefault(run_pk, {})[key] = [verdict]
     return votes
 
 
-def reviewed_runs(runs):
-    """The pks of ``runs`` a reviewer marked done (ClipReview): counted as
-    reviewed even with nothing to vote on."""
+def marked_runs(runs):
+    """The pks of ``runs`` a reviewer marked done (ClipReview), whether or not
+    every event has a call."""
     from .models import ClipReview
 
     owners = shared_job_runs(runs, "clip_reviews")
     return {owners[r].pk for r in ClipReview.objects.filter(
         run_id__in=list(owners)).values_list("run_id", flat=True)}
+
+
+def open_events(run, votes=None) -> int:
+    """How many of the run's current events have no call. ``votes``: the
+    run's ``review_votes`` entry, read when not given."""
+    if votes is None:
+        votes = review_votes([run]).get(run.pk, {})
+    return len(_event_keys(run) - set(votes))
+
+
+def reviewed_runs(runs):
+    """The pks of ``runs`` that are reviewed: marked done (ClipReview) with
+    every event called. A clip with nothing to vote on counts once marked."""
+    runs = list(runs)
+    marked = marked_runs(runs)
+    if not marked:
+        return set()
+    chosen = [r for r in runs if r.pk in marked]
+    votes = review_votes(chosen)
+    return {r.pk for r in chosen if not open_events(r, votes.get(r.pk, {}))}
 
 
 def trip_calls(runs):
@@ -324,7 +337,7 @@ def batch_review_counts(runs, actions=None):
                       .values_list("run_id", "n")):
         own = added_owners[run_id].pk
         added[own] = added.get(own, 0) + n
-    done = reviewed_runs(runs)
+    marked = marked_runs(runs)
     out = {}
     for run in runs:
         outs = [o for k, o in analyzer_outputs(run) if k == "events"]
@@ -339,14 +352,19 @@ def batch_review_counts(runs, actions=None):
         # Votes on events whose action the metrics leave out (e.g. stays).
         other_votes = sum(1 for k in mine if k in all_keys and k not in keys)
         calls = [combined(v) for k, v in mine.items() if k in keys]
+        # Events with no call yet, of every action: a clip marked done with
+        # any of these isn't reviewed.
+        still_open = len(all_keys - set(mine))
         # Reviewed events on tracks an insect-group filter now leaves out
         # (memory/65): how the reviewers called what the filter took away.
         gone = {k for o in outs for k in ((o.get("filtered_out") or {}).get("event_keys") or [])}
         left = [combined(v) for k, v in mine.items() if k in gone]
         out[run.pk] = {"events": len(keys), "reviewed": len(calls),
                        "accepted": calls.count("accepted"), "rejected": calls.count("rejected"),
-                       "disputed": calls.count("disputed"), "added": added.get(run.pk, 0),
-                       "clip_reviewed": run.pk in done, "other_votes": other_votes,
+                       "added": added.get(run.pk, 0),
+                       "clip_reviewed": run.pk in marked and not still_open,
+                       "marked": run.pk in marked, "open": still_open,
+                       "other_votes": other_votes,
                        "left_out": {"reviewed": len(left), "accepted": left.count("accepted"),
                                     "rejected": left.count("rejected")}}
     return out
@@ -355,7 +373,7 @@ def batch_review_counts(runs, actions=None):
 def clip_touched(counts) -> bool:
     """Whether a clip has been reviewed at all: an event called, a missed one
     added, or the clip marked reviewed. ``counts``: batch_review_counts's."""
-    return bool(counts and (counts["reviewed"] or counts["added"] or counts.get("clip_reviewed")))
+    return bool(counts and (counts["reviewed"] or counts["added"] or counts.get("marked")))
 
 
 def batch_group_summary(runs, per_run=None):
@@ -422,13 +440,13 @@ def batch_review_summary(runs, per_run=None, actions=None):
     nothing in the batch has been reviewed."""
     runs = list(runs)
     per_run = per_run if per_run is not None else batch_review_counts(runs, actions)
-    ev = {"accepted": 0, "rejected": 0, "disputed": 0, "added": 0, "reviewed": 0,
+    ev = {"accepted": 0, "rejected": 0, "added": 0, "reviewed": 0,
           "events": 0, "clips": 0}
     for counts in per_run.values():
         if not counts:
             continue
         ev["events"] += counts["events"]
-        for k in ("accepted", "rejected", "disputed", "added", "reviewed"):
+        for k in ("accepted", "rejected", "added", "reviewed"):
             ev[k] += counts[k]
         if clip_touched(counts):
             ev["clips"] += 1

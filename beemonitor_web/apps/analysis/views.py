@@ -1697,12 +1697,11 @@ class JobResultsView(LoginRequiredMixin, TemplateView):
         from apps.pipelines.executors import pin_run
         pinned = pin_run(job, self.request.GET.get("run"))
         ctx["run_q"] = f"?run={pinned.pk}" if pinned else ""
-        # Whether anyone marked the clip done: one shared call (memory/74).
-        from apps.pipelines.models import ClipReview
-        from apps.pipelines.review import run_for_review, shared_job_runs
+        # Whether the clip is reviewed: marked done, one shared call
+        # (memory/74), with every event called.
+        from apps.pipelines.review import reviewed_runs, run_for_review
         _rv = run_for_review(job, self.request.GET.get("run"))
-        ctx["clip_reviewed"] = bool(_rv and ClipReview.objects.filter(
-            run_id__in=list(shared_job_runs([_rv], "clip_reviews"))).exists())
+        ctx["clip_reviewed"] = bool(_rv and _rv.pk in reviewed_runs([_rv]))
         # Previous / next clip of the batch, for reviewing clip after clip.
         from apps.pipelines import batches as pipeline_batches
         ctx["batch_nav"] = pipeline_batches.neighbours(pinned)
@@ -2349,7 +2348,8 @@ class TrackGroupView(LoginRequiredMixin, View):
 class ClipReviewedView(LoginRequiredMixin, View):
     """Mark the clip reviewed, or take it back, whoever marked it (memory/74):
     JSON ``{"reviewed": true|false}``. A clip with nothing to vote on counts as
-    reviewed only this way."""
+    reviewed only this way. Refused (``open``: how many) while any of its
+    events has no call: reviewed means every event is called."""
 
     def post(self, request, pk):
         import json as _json
@@ -2366,6 +2366,12 @@ class ClipReviewedView(LoginRequiredMixin, View):
         except ValueError:
             return JsonResponse({"ok": False, "error": "Bad JSON."}, status=400)
         if done:
+            still_open = event_review.open_events(run)
+            if still_open:
+                return JsonResponse({"ok": False, "open": still_open, "error": (
+                    f"{still_open} event{'s' if still_open != 1 else ''} still "
+                    f"{'have' if still_open != 1 else 'has'} no call. Call every event "
+                    "Yes or No before marking the clip reviewed.")}, status=400)
             ClipReview.objects.get_or_create(run=run, user=request.user)
         else:
             ClipReview.objects.filter(

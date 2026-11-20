@@ -53,6 +53,14 @@ class PeriodBase(TestCase):
         self.b = self.clip("b", t0 + timedelta(hours=1), ENTER_ROWS,
                            {"4": {"marker": "blue"}, "6": {"marker": "red"}})
 
+    def call_every_event(self, run, verdict="accepted"):
+        """Call the clip's events nobody called: a clip is reviewed only when
+        marked with every event called."""
+        from apps.pipelines import review
+
+        for key in review._event_keys(run) - set(review.review_votes([run]).get(run.pk, {})):
+            EventReview.objects.create(run=run, user=self.maria, event_key=key, verdict=verdict)
+
     def clip(self, name, when, rows, by_track):
         video = Video.objects.create(
             user=self.owner, device=self.device, title=name, storage_key=f"pr/{name}.mp4",
@@ -502,6 +510,7 @@ class TripScoreTests(PeriodBase):
         self.exit = "exit|reference_1|3|0"
         self.first, self.second = "enter|reference_1|4|39", "enter|reference_1|6|79"
         for clip in (self.a, self.b):
+            self.call_every_event(clip["run"])
             ClipReview.objects.create(run=clip["run"], user=self.owner)
 
     def answer(self, entry, verdict, **extra):
@@ -631,6 +640,7 @@ class TripCsvTests(PeriodBase):
         self.exit = "exit|reference_1|3|0"
         self.first, self.second = "enter|reference_1|4|39", "enter|reference_1|6|79"
         for clip in (self.a, self.b):
+            self.call_every_event(clip["run"])
             ClipReview.objects.create(run=clip["run"], user=self.owner)
 
     def rows(self):
@@ -795,6 +805,7 @@ class WholePlaceTests(PeriodBase):
         from apps.pipelines.models import ClipReview
         Video.objects.filter(pk=self.b["video"].pk).update(
             recorded_at=datetime(2026, 7, 15, 11, 0, tzinfo=dt_timezone.utc))
+        self.call_every_event(self.a["run"])
         ClipReview.objects.create(run=self.a["run"], user=self.owner)
         r = self.open()
         self.assertEqual([c["title"] for c in r.context["payload"]["clips"]], ["b"])

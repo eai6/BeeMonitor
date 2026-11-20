@@ -112,14 +112,54 @@ class EventReviewTests(TestCase):
         self.assertIsNone(self.vote(self.maria, None).json()["verdict"])
         self.assertFalse(EventReview.objects.exists())
 
-    def test_older_calls_that_disagree_stay_disputed_until_called_again(self):
+    def test_older_calls_that_disagree_count_as_the_most_recent(self):
+        # No "disputed": an event has one call, the latest whoever made it.
         EventReview.objects.create(run=self.run, event_key=self.key, user=self.owner, verdict="accepted")
         EventReview.objects.create(run=self.run, event_key=self.key, user=self.maria, verdict="rejected")
         row = [r for r in self.csv_rows() if r["review"]][0]
-        self.assertEqual((row["review"], row["reviewed_by"]), ("disputed", "maria;owner"))
-        self.assertIsNone(review.current_calls(self.run)[self.key][0])
+        self.assertEqual((row["review"], row["reviewed_by"]), ("rejected", "maria"))
+        self.assertEqual(review.current_calls(self.run)[self.key], ("rejected", "maria"))
+        self.assertEqual(review.review_votes([self.run])[self.run.pk][self.key], ["rejected"])
+        counts = review.batch_review_counts([self.run])[self.run.pk]
+        self.assertEqual((counts["accepted"], counts["rejected"]), (0, 1))
+        self.assertNotIn("disputed", counts)
         self.vote(self.owner, "accepted")
         self.assertEqual(EventReview.objects.get().user, self.owner)
+
+    def mark(self, user, on=True):
+        self.client.force_login(user)
+        return self.client.post(reverse("analysis:clip_reviewed", args=[self.job.pk]),
+                                json.dumps({"reviewed": on}), content_type="application/json")
+
+    def test_a_clip_cannot_be_marked_reviewed_with_events_uncalled(self):
+        from apps.pipelines.models import ClipReview
+
+        self.assertGreater(len(self.events), 1)
+        self.vote(self.owner, "accepted")
+        r = self.mark(self.owner)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["open"], len(self.events) - 1)
+        self.assertFalse(ClipReview.objects.exists())
+        for e in self.events[1:]:
+            self.vote(self.owner, "rejected", key=review.event_key(e))
+        self.assertTrue(self.mark(self.owner).json()["reviewed"])
+        self.assertEqual(review.reviewed_runs([self.run]), {self.run.pk})
+        counts = review.batch_review_counts([self.run])[self.run.pk]
+        self.assertEqual((counts["clip_reviewed"], counts["open"]), (True, 0))
+
+    def test_taking_a_call_back_unreviews_a_marked_clip(self):
+        from apps.pipelines.models import ClipReview
+
+        for e in self.events:
+            self.vote(self.owner, "accepted", key=review.event_key(e))
+        self.mark(self.owner)
+        self.vote(self.owner, None)
+        self.assertTrue(ClipReview.objects.exists())          # still marked
+        self.assertEqual(review.reviewed_runs([self.run]), set())
+        counts = review.batch_review_counts([self.run])[self.run.pk]
+        self.assertEqual((counts["clip_reviewed"], counts["marked"], counts["open"]), (False, True, 1))
+        self.vote(self.owner, "accepted")                      # called again: reviewed again
+        self.assertEqual(review.reviewed_runs([self.run]), {self.run.pk})
 
     def test_only_the_launcher_and_invited_reviewers_may_vote(self):
         self.assertEqual(self.vote(self.stranger, "accepted").status_code, 404)

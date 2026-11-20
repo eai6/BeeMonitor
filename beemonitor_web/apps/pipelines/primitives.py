@@ -24,8 +24,8 @@ logger = logging.getLogger(__name__)
 # are added around these by the exporters.
 EVENT_FIELDS = ("timestamp", "clip_sec", "track_id", "action", "reference",
                 "duration_sec", "at_edge",
-                # Reviewers' calls (memory/62): accepted / rejected / disputed,
-                # who, and the reasons given. Blank when nobody reviewed it.
+                # Reviewers' calls (memory/62): accepted / rejected (the most
+                # recent call), who made it, and the reasons given. Blank when nobody reviewed it.
                 "review", "reviewed_by", "review_notes")
 
 INTERACTION_FIELDS = ("start_time", "end_time", "start_clip_sec", "end_clip_sec",

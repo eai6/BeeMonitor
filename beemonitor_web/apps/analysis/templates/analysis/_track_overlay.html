@@ -350,7 +350,7 @@
     if (!el || !d) return;
     var evs = d.events || [];
     var reviewed = evs.filter(function (e) { return (e[8] || 0) + (e[9] || 0) > 0; });
-    var rejected = reviewed.filter(function (e) { return (e[9] || 0) > 0 && !(e[8] || 0); }).length;
+    var rejected = reviewed.filter(function (e) { return (e[9] || 0) > 0; }).length;
     var added = (d.added || []).length;
     el.textContent = reviewed.length + ' of ' + evs.length + ' events reviewed' +
       (rejected ? ' · ' + rejected + ' rejected' : '') + (added ? ' · ' + added + ' added' : '');
@@ -367,15 +367,23 @@
       e[8] = d.verdict === 'accepted' ? 1 : 0;
       e[9] = d.verdict === 'rejected' ? 1 : 0;
       e[10] = d.verdict ? 'you' : null;
-      paintProgress(); nearKey = ''; renderNear(ov.frame()); renderMarks();
+      paintProgress(); nearKey = ''; renderNear(ov.frame()); renderMarks(); paintDone();
       return d.verdict;
     }).catch(function (err) { status.textContent = String(err.message || err); });
   }
 
   // Mark the clip reviewed (or not): a clip with no events counts this way.
+  // Reviewed means marked AND every event called: taking a call back
+  // un-reviews it, and the server refuses the mark while any is open.
   var doneBtn = root.querySelector('[data-rv-done]');
-  function paintDone(on) {
+  var marked = !!doneBtn && doneBtn.getAttribute('aria-pressed') === 'true';
+  function openEvents() {
+    var d = ov.data();
+    return ((d && d.events) || []).filter(function (e) { return !e[7]; }).length;
+  }
+  function paintDone() {
     if (!doneBtn) return;
+    var on = marked && !openEvents();
     doneBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
     doneBtn.textContent = on ? '\u2713 Clip reviewed' : 'Mark clip reviewed';
     doneBtn.className = 'h-10 px-3 rounded border font-semibold ' + (on
@@ -388,7 +396,10 @@
       headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
       body: JSON.stringify({reviewed: on})})
       .then(function (r) { return r.json(); })
-      .then(function (res) { if (res.ok) paintDone(res.reviewed); })
+      .then(function (res) {
+        if (res.ok) { marked = res.reviewed; paintDone(); }
+        else status.textContent = res.error || 'Could not mark the clip reviewed';
+      })
       .catch(function () {});
   }
   if (doneBtn) doneBtn.addEventListener('click', function () {
@@ -409,7 +420,7 @@
           d.group_options = live.group_options || [];
           d.can_regroup = !!live.can_regroup;
         }
-        nearKey = ''; renderNear(ov.frame()); renderMarks(); paintProgress();
+        nearKey = ''; renderNear(ov.frame()); renderMarks(); paintProgress(); paintDone();
         ov.set({});
       }).catch(function () {});
   }
@@ -521,11 +532,11 @@
     } else { m.style.width = '3px'; m.style.background = c; }
     var acc = e[8] || 0, rej = e[9] || 0;
     if (acc || rej) {
-      // Reviewed: green accepted, red rejected, amber where reviewers disagree.
-      m.style.boxShadow = '0 0 0 2px #fff, 0 0 0 4px ' + (acc && rej ? '#b45309' : rej ? '#b91c1c' : '#15803d');
+      // Reviewed: green accepted, red rejected.
+      m.style.boxShadow = '0 0 0 2px #fff, 0 0 0 4px ' + (rej ? '#b91c1c' : '#15803d');
     }
     m.title = fmt(sec(e[0])) + ' ' + eventText(e) +
-      (acc || rej ? ' · ' + (acc ? acc + ' accepted' : '') + (acc && rej ? ', ' : '') + (rej ? rej + ' rejected' : '') : '');
+      (acc || rej ? ' · ' + (rej ? 'rejected' : 'accepted') : ' · no call yet');
     m.setAttribute('aria-label', m.title);
     m.addEventListener('click', function (ev) { ev.stopPropagation(); seekTo(e[0]); });
     track.appendChild(m);
